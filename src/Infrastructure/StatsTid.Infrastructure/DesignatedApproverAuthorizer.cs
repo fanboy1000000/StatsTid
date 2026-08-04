@@ -139,6 +139,8 @@ public sealed class DesignatedApproverAuthorizer
         IReportingLineDataSource? source, IAuthorityFactsSource? facts,
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
+        EnsureContextIsSnapshotBound(ctx, conn, tx);
+
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
             return false;
 
@@ -298,6 +300,8 @@ public sealed class DesignatedApproverAuthorizer
         IAuthorityFactsSource? facts,
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
+        EnsureContextIsSnapshotBound(ctx, conn, tx);
+
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
             return UnitLeaderApprovalKind.None;
 
@@ -365,7 +369,7 @@ public sealed class DesignatedApproverAuthorizer
               -- approver of their OWN period. The unit-leader edge covers OTHER direct members only;
               -- a leader's own period routes to their primary edge / HR-Admin (never self-approval).
               AND e.user_id <> @actorId
-            """, conn);
+            """, conn, tx);
         cmd.Parameters.AddWithValue("actorId", actorId);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("asOf", asOf);
@@ -432,6 +436,43 @@ public sealed class DesignatedApproverAuthorizer
     /// BOTH deny. Collapsing them into a bool at this single site keeps the fail-closed rule in one
     /// place rather than duplicated in each caller.</para>
     /// </summary>
+    /// <summary>
+    /// S126 / W3 — the ONE place the memo's snapshot precondition is enforced. Called from BOTH
+    /// terminal funnels (<see cref="IsEffectiveDesignatedApproverAsync(NpgsqlConnection, NpgsqlTransaction?, ApprovalAuthorityContext?, IReportingLineDataSource?, IAuthorityFactsSource?, string, string, DateOnly?, CancellationToken)"/>
+    /// and <see cref="ResolveUnitLeaderApprovalKindAsync(NpgsqlConnection, NpgsqlTransaction?, ApprovalAuthorityContext?, IAuthorityFactsSource?, string, string, DateOnly?, CancellationToken)"/>);
+    /// the combined predicate delegates to both, so every ctx-bearing path passes through here.
+    ///
+    /// <para>Guarding only one funnel would let the other bypass it silently — which is why this is a
+    /// shared helper and not an inline check.</para>
+    ///
+    /// <para><b>Why a null tx is rejected rather than tolerated.</b> The memo is sound because a
+    /// REPEATABLE READ snapshot makes "ask once" and "ask every time" the same answer. With no
+    /// transaction there is no snapshot, so the memo becomes an accepted-staleness trade nobody ruled
+    /// on. Serializable is accepted too — it is strictly stronger.</para>
+    /// </summary>
+    private static void EnsureContextIsSnapshotBound(
+        ApprovalAuthorityContext? ctx, NpgsqlConnection conn, NpgsqlTransaction? tx)
+    {
+        if (ctx is null) return;
+
+        if (tx is null)
+            throw new InvalidOperationException(
+                "An ApprovalAuthorityContext was supplied without a transaction. The memo is only " +
+                "equivalent to re-querying inside a REPEATABLE READ snapshot; outside one it would " +
+                "serve answers from before a mid-request role revocation, edge reassignment, " +
+                "deactivation or transfer. Pass the projection's transaction, or pass ctx: null.");
+
+        if (tx.IsolationLevel is not (System.Data.IsolationLevel.RepeatableRead
+                                      or System.Data.IsolationLevel.Serializable))
+            throw new InvalidOperationException(
+                $"An ApprovalAuthorityContext was supplied under isolation level {tx.IsolationLevel}. " +
+                "Memoizing authority answers requires REPEATABLE READ (or stronger) — at READ " +
+                "COMMITTED the underlying rows can change mid-projection and the memo would authorize " +
+                "against state that no longer exists.");
+
+        ctx.BindTo(conn);
+    }
+
     private Task<bool> SameOrganisationAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
         IAuthorityFactsSource? facts, string employeeId, string actorId, CancellationToken ct)
@@ -502,7 +543,7 @@ public sealed class DesignatedApproverAuthorizer
               AND (ra.expires_at IS NULL OR ra.expires_at > NOW())
               AND r.hierarchy_level <= 4
             LIMIT 1
-            """, conn);
+            """, conn, tx);
         cmd.Parameters.AddWithValue("userId", userId);
         var result = await cmd.ExecuteScalarAsync(ct);
         return result is not null && result is not DBNull;

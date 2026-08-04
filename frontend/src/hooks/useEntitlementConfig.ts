@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
 import type { components } from '../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
@@ -102,9 +102,14 @@ export function useEntitlementConfigList() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const latestAllRequestId = useRef(0)
+
   const fetchAll = useCallback(async () => {
+    const requestId = ++latestAllRequestId.current
     setLoading(true)
     const result = await apiClient.get('/api/admin/entitlement-configs')
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestAllRequestId.current) return
     if (result.ok) {
       setConfigs(result.data.map(decorateRow))
       setError(null)
@@ -131,7 +136,10 @@ export function useEntitlementConfig(configId: string | null) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestConfigRequestId = useRef(0)
+
   const fetchConfig = useCallback(async () => {
+    const requestId = ++latestConfigRequestId.current
     if (!configId) {
       setConfig(null)
       return
@@ -142,6 +150,8 @@ export function useEntitlementConfig(configId: string | null) {
       method: 'GET',
       params: { path: { configId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestConfigRequestId.current) return
     if (result.ok) {
       const { data, etag } = result.data
       const { etag: resolvedEtag } = resolveEtag(etag, data)

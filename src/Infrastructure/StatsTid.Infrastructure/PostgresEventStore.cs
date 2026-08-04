@@ -110,6 +110,88 @@ public sealed class PostgresEventStore : IEventStore, IOutboxEnqueue
         return events;
     }
 
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    //  S126 / F5 — the LATEST-OF-TYPE reads. Two shapes of ONE rule ("the highest stream_version
+    //  row of this event_type"), in one place, so a fifth caller cannot invent a sixth encoding.
+    //
+    //  Before this, four call sites answered the same question four ways: three replayed the whole
+    //  employee stream in memory (BalanceEndpoints /summary + year-overview, TimeEndpoints
+    //  /flex-balance) and one hand-rolled a DISTINCT ON with per-field JSON extraction and its own
+    //  NumberStyles parse (ApprovalEndpoints). The inline fourth is the reason this is an extraction
+    //  rather than a new helper beside the old ones.
+    //
+    //  Both shapes select `data` and go through EventSerializer, NOT `data->>'field'`. That keeps
+    //  the JSON key names and the camelCase convention inside the serializer (ADR-018), where the
+    //  write path already owns them — per-field extraction in a caller is a second encoding of the
+    //  wire format, and it silently mis-parses culture-sensitive decimals.
+    // ════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <inheritdoc />
+    public async Task<T?> ReadLatestOfTypeAsync<T>(string streamId, CancellationToken ct = default)
+        where T : class, IDomainEvent
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        return await ReadLatestOfTypeAsync<T>(conn, tx: null, streamId, ct);
+    }
+
+    /// <summary>Connection-reusing sibling — the self-contained overload above delegates here, so the
+    /// rule has exactly one implementation (the S125 overload-pair pattern).</summary>
+    public static async Task<T?> ReadLatestOfTypeAsync<T>(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string streamId, CancellationToken ct = default)
+        where T : class, IDomainEvent
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT event_type, data FROM events
+            WHERE stream_id = @streamId AND event_type = @eventType
+            ORDER BY stream_version DESC
+            LIMIT 1
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("streamId", streamId);
+        cmd.Parameters.AddWithValue("eventType", EventSerializer.EventTypeNameOf<T>());
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+
+        return (T)EventSerializer.Deserialize(reader.GetString(0), reader.GetString(1));
+    }
+
+    /// <summary>
+    /// The BATCH shape: the latest event of type <typeparamref name="T"/> for each of many streams,
+    /// in ONE round-trip. Streams with no such event are simply absent from the result — the same
+    /// "absent means none" convention as the single-stream form returning null.
+    ///
+    /// <para>Used by the team/period-status reads, where the single-stream form would reintroduce a
+    /// per-employee round-trip — the F1 defect in a new place.</para>
+    /// </summary>
+    public static async Task<Dictionary<string, T>> ReadLatestOfTypePerStreamAsync<T>(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        IReadOnlyCollection<string> streamIds, CancellationToken ct = default)
+        where T : class, IDomainEvent
+    {
+        var result = new Dictionary<string, T>(StringComparer.Ordinal);
+        if (streamIds.Count == 0)
+            return result;
+
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT DISTINCT ON (stream_id) stream_id, event_type, data
+            FROM events
+            WHERE stream_id = ANY(@streamIds) AND event_type = @eventType
+            ORDER BY stream_id, stream_version DESC
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("streamIds", streamIds.ToArray());
+        cmd.Parameters.AddWithValue("eventType", EventSerializer.EventTypeNameOf<T>());
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            result[reader.GetString(0)] = (T)EventSerializer.Deserialize(reader.GetString(1), reader.GetString(2));
+
+        return result;
+    }
+
     public async Task<IReadOnlyList<IDomainEvent>> ReadAllAsync(int fromPosition = 0, int maxCount = 1000, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();

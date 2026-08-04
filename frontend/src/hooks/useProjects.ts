@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
 import type { components } from '../lib/api-types'
 
@@ -47,13 +47,18 @@ export function useProjects(orgId: string): UseProjectsResult {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  const latestProjectsRequestId = useRef(0)
+
   const fetchProjects = useCallback(async () => {
     if (!orgId) return
+    const requestId = ++latestProjectsRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/projects/{orgId}', {
       params: { path: { orgId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestProjectsRequestId.current) return
     if (result.ok) {
       setProjects(result.data)
     } else {

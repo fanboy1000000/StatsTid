@@ -262,10 +262,12 @@ public static class TimeEndpoints
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
             }
 
+            // S126 / F5 — one row, not the whole consolidated stream. This handler reads FOUR fields
+            // off the event plus a distinct no-history branch, which is why it deserializes through
+            // EventSerializer rather than extracting `data->>'…'` per field: the wire shape stays
+            // owned by the serializer and the null branch below is unchanged.
             var streamId = $"employee-{employeeId}";
-            var events = await eventStore.ReadStreamAsync(streamId, ct);
-
-            var latest = events.OfType<FlexBalanceUpdated>().LastOrDefault();
+            var latest = await eventStore.ReadLatestOfTypeAsync<FlexBalanceUpdated>(streamId, ct);
 
             // S120 / TASK-12000 — OWNER RULING #1 (branch-normalization class, 1st instance,
             // ruled 2026-07-21): the no-history branch serves the ONE 5-member shape with the

@@ -47,6 +47,7 @@
 - `idx_events_stream_id` on (stream_id)
 - `idx_events_event_type` on (event_type)
 - `idx_events_occurred_at` on (occurred_at)
+- `idx_events_stream_type_version` on (stream_id, event_type, stream_version DESC)
 - `idx_events_actor_id` on (actor_id)
 - `idx_events_correlation_id` on (correlation_id)
 

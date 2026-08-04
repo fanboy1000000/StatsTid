@@ -10,6 +10,17 @@ export default defineConfig({
       '/api': 'http://localhost:5100'
     }
   },
+  // S126 / F6 — `preview` needs its OWN proxy block; the `server` one above does not apply to it.
+  // Without this, the production build cannot be driven against the real API at all, so any
+  // route-transition timing had to be taken against the dev server — where unminified, on-demand
+  // module transform inflates exactly the chunk-load interval F6 is trying to measure. Measuring the
+  // artifact users actually receive is the point.
+  preview: {
+    port: 3001,
+    proxy: {
+      '/api': 'http://localhost:5100'
+    }
+  },
   test: {
     globals: true,
     environment: 'jsdom',

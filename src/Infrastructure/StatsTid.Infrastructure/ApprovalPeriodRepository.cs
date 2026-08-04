@@ -583,8 +583,23 @@ public sealed class ApprovalPeriodRepository
         //     outstanding (SUBMITTED/EMPLOYEE_APPROVED, any period) row awaiting a manager.
         //     One round-trip: every active employee in the styrelse LEFT-JOINed to their
         //     greatest closed period and a pending-existence flag.
+        //
+        // S126 / N6a — SET TRANSACTION READ ONLY is PREFIXED onto this command rather than issued as
+        // its own statement, for two reasons. (a) It must cover phase (1) itself, so it has to run
+        // before this SELECT. (b) DbCommandCounter counts one activity per NpgsqlCommand execution
+        // regardless of statement count, so batching keeps the "zero pending costs exactly 1 command"
+        // guard intact — that guard has a proven catch (it found a prefetch being built for an empty
+        // pending set) and re-baselining it to absorb a bookkeeping statement would weaken it.
+        //
+        // The read-only declaration is what makes the memoization argument ENFORCED rather than
+        // commented: ApprovalAuthorityContext is an equivalence only because nothing in this
+        // transaction writes. COUPLING: PostgreSQL rejects SELECT … FOR UPDATE inside a read-only
+        // transaction, so this is safe only because the same-Organisation check runs lockRows: false
+        // (see the note above). Re-introducing row locks on this path would now fail at runtime.
         await using var cmd = new NpgsqlCommand(
             """
+            SET TRANSACTION READ ONLY;
+
             SELECT
                 u.user_id            AS employee_id,
                 u.display_name       AS display_name,
@@ -619,6 +634,14 @@ public sealed class ApprovalPeriodRepository
         var pendingEmployeeIds = new List<string>();
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
+            // S126 / N6a — NO NextResultAsync here, deliberately, and the reason is worth recording
+            // because both review lenses predicted otherwise. The internal lens argued the batched
+            // `SET TRANSACTION READ ONLY` would surface as resultset #0 with zero columns, so that
+            // GetOrdinal below (which runs before any ReadAsync) would throw IndexOutOfRangeException
+            // without an advance. MEASURED: it does not. Npgsql does not expose a non-row-returning
+            // statement as a traversable resultset, so the reader lands directly on the SELECT.
+            // Adding the advance moved PAST the only resultset and produced
+            // "No resultset is currently being traversed" on all four tests in this class.
             var statusOrd = reader.GetOrdinal("last_closed_status");
             var pendingOrd = reader.GetOrdinal("has_pending");
             while (await reader.ReadAsync(ct))
@@ -673,7 +696,11 @@ public sealed class ApprovalPeriodRepository
         //
         // Its lifetime is THIS CALL ONLY — never hoist it to a field. Outside the snapshot it would
         // serve answers from before a mid-request revocation/reassignment/deactivation.
-        var authorityMemo = new ApprovalAuthorityContext(today);
+        // S126 Step-7a — `using`: the memo is spent when this projection call returns. That is what
+        // makes "lifetime is ONE projection call" enforced rather than documented; a context that
+        // escaped this scope (hoisted to a field, a DI singleton, a future batch approve) throws on
+        // its next use instead of quietly serving authority facts from a snapshot that has ended.
+        using var authorityMemo = new ApprovalAuthorityContext(today);
 
         // S125 / TASK-12501 step 3b — the resolver's INPUTS, prefetched in three set-based reads.
         // The resolution ALGORITHM is untouched and still lives in ReportingLineRepository; only the

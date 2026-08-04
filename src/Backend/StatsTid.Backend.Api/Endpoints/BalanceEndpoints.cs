@@ -167,9 +167,12 @@ public static class BalanceEndpoints
             // Flex balance still comes from the event stream — flex projection is out of scope
             // for S27 (Phase 4c.6 Assumption #4). The employee event stream is retained ONLY for
             // this FlexBalanceUpdated read.
+            //
+            // S126 / F5: this used to be ReadStreamAsync + .OfType<>().LastOrDefault(), i.e. load
+            // and deserialize the employee's ENTIRE consolidated stream to read two decimals. The
+            // stream grows with every time registration, so that cost grew with employment length.
             var streamId = $"employee-{employeeId}";
-            var allEvents = await eventStore.ReadStreamAsync(streamId, ct);
-            var latestFlex = allEvents.OfType<FlexBalanceUpdated>().LastOrDefault();
+            var latestFlex = await eventStore.ReadLatestOfTypeAsync<FlexBalanceUpdated>(streamId, ct);
             var flexBalance = latestFlex?.NewBalance ?? 0m;
             var flexDelta = latestFlex?.Delta ?? 0m;
 
@@ -1182,10 +1185,10 @@ public static class BalanceEndpoints
 
             // ── Tiles (the designed 6 — NO 7th tile for Feriefridage; matrix-only) ──
             // Live "current" balances anchored at TODAY (the entitlement year containing today).
-            // flexBalance = latest FlexBalanceUpdated (same read as /summary).
+            // flexBalance = latest FlexBalanceUpdated (same read as /summary). S126 / F5 — bounded.
             var streamId = $"employee-{employeeId}";
-            var allEvents = await eventStore.ReadStreamAsync(streamId, ct);
-            var flexBalance = allEvents.OfType<FlexBalanceUpdated>().LastOrDefault()?.NewBalance ?? 0m;
+            var flexBalance =
+                (await eventStore.ReadLatestOfTypeAsync<FlexBalanceUpdated>(streamId, ct))?.NewBalance ?? 0m;
 
             // Eligibility (display affordance). childSick = S59 opt-in eligibility as of today.
             // (seniorDayEligible is computed ABOVE the category loop — S123 / TASK-12302 — so the

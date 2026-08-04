@@ -284,8 +284,13 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
     //  the happy path the K=10/K=20 perf scenario already covers.
     //
     //  Deliberately a SEPARATE prefix ('perf_o3_x') with its own add/clear pair: adding a vikar or an
-    //  extra candidate to the SHARED base scenario would change the candidate fan-out and so move the
-    //  27.0 per-pending multiplier the existing perf assertions depend on.
+    //  extra candidate to the SHARED base scenario would change the candidate fan-out, and so would
+    //  change the EXACT tile map the two characterisation baselines pin.
+    //
+    //  S126 / N3: this used to say it would "move the 27.0 per-pending multiplier the existing perf
+    //  assertions depend on". No assertion depends on that multiplier — S125 made the projection flat
+    //  in K, and S126 deleted the last (tautological) assertion that referenced it. The isolation
+    //  still matters, but for the characterisation maps, not for a multiplier.
     // ════════════════════════════════════════════════════════════════════════
 
     public const string ShapePrefix = "perf_o3_x";
@@ -435,8 +440,10 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
     }
 
     /// <summary>Removes the shape matrix — FK-safe order. MUST run in a finally: leaving these rows
-    /// behind changes the candidate fan-out and would move the 27.0 per-pending multiplier the
-    /// perf assertions in this class depend on.</summary>
+    /// behind changes the candidate fan-out, which would break the EXACT tile maps the two
+    /// characterisation baselines pin. (S126 / N3 — this previously cited "the 27.0 per-pending
+    /// multiplier the perf assertions depend on"; no assertion depends on it, see the note at the
+    /// shape-matrix constants above.)</summary>
     public async Task ClearShapeMatrixAsync()
     {
         await using var conn = new NpgsqlConnection(ConnectionString);

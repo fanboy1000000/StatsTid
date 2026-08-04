@@ -34,6 +34,22 @@ CREATE INDEX IF NOT EXISTS idx_events_stream_id ON events(stream_id);
 CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type);
 CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at);
 
+-- S126 / F5 — "the latest event of type T on stream S", the shape behind
+-- IEventStore.ReadLatestOfTypeAsync. Neither existing index serves it: (stream_id, stream_version)
+-- forces a backward scan of the WHOLE stream filtering event_type, and idx_events_event_type is
+-- only selective while a type is rare — which FlexBalanceUpdated stops being as soon as employees
+-- accumulate flex history.
+--
+-- MEASURED on a 1,100-event stream whose one FlexBalanceUpdated sits at version 5, with 18,001
+-- FlexBalanceUpdated rows across 300 streams (i.e. the type NOT selective, as in production):
+--   without this index: Index Scan Backward on (stream_id, stream_version),
+--                       Rows Removed by Filter: 1095, Buffers: 782      -- O(stream length)
+--   with this index:    Index Cond covers BOTH predicates, no filter,
+--                       Buffers: 4                                       -- O(1)
+-- The DESC matches the ORDER BY so the first index entry is the answer.
+CREATE INDEX IF NOT EXISTS idx_events_stream_type_version
+    ON events (stream_id, event_type, stream_version DESC);
+
 -- =========================================================================
 -- S22 / ADR-018 — outbox_events: transactional outbox for state-change +
 -- event-store atomicity. State-change endpoints INSERT here inside the

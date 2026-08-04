@@ -36,9 +36,12 @@ namespace StatsTid.Tests.Regression.Performance;
 ///   <item>SEARCH — scope-bounded: a single-Organisation actor's results are confined to that
 ///     Organisation (no cross-scope / global scan), on a CONSTANT 4 commands.</item>
 ///   <item>TILE-COUNT — <see cref="ApprovalPeriodRepository.GetPeriodStatusProjectionForTreeAsync"/>
-///     carries a PRE-EXISTING per-pending-employee N+1 (S105 / the plan's documented shape). This pins
-///     that it scales with the PENDING set, NOT total org size: a 2000-user Organisation with ZERO
-///     pending periods issues exactly ONE command; the per-pending cost is a small constant multiplier.</item>
+///     is FLAT in the pending count. S126 / N3: this used to describe "a PRE-EXISTING
+///     per-pending-employee N+1 … the per-pending cost is a small constant multiplier", which was
+///     accurate at S106 and became a lie at S125 — TASK-12501 removed that N+1 (27,001 commands /
+///     13.8s at K=1000 → 9 commands / 79ms). The pin is now the stronger claim: the command count is
+///     independent of K (asserted over a 20x span, K=10 vs K=200) AND of org size (a 2000-user
+///     Organisation with ZERO pending periods issues exactly ONE command).</item>
 /// </list>
 /// If any read were to scale with total org size, the constant-command or wall-clock assertions fail
 /// LOUDLY — that is the point.</para>
@@ -239,21 +242,25 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             Assert.True(proj.PendingCountByManager.Count >= 1, "Expected populated tiles for the pending set.");
         }
 
-        // ── K=20 pending → command count grows ~linearly in K, bounded by the pending set. ──
-        await _fx.AddPendingScenarioAsync(20);
-        int count20;
+        // ── K=200 pending. S126 / N1: the span was K=10 vs K=20; a 2x span is a weak flatness claim
+        //    when the defect this replaced was LINEAR in K. A 20x span separates "flat" from "grows
+        //    slowly" by an order of magnitude. AddPendingScenarioAsync clears and re-seeds absolutely,
+        //    and inserts its own perf_o3_p{i} users, so Org3's bulk 250 never constrains K; its seed
+        //    round-trips fall outside the counter/stopwatch window below. ──
+        await _fx.AddPendingScenarioAsync(200);
+        int count200;
         var sw = Stopwatch.StartNew();
         using (var counter = new DbCommandCounter(_fx.Port))
         {
             var proj = await repo.GetPeriodStatusProjectionForTreeAsync(S106SeedScalePerfFixture.Org3Path);
-            count20 = counter.Count;
+            count200 = counter.Count;
             sw.Stop();
-            _out.WriteLine($"TILE (Org3, pending=20): {count20} commands, {sw.ElapsedMilliseconds} ms");
+            _out.WriteLine($"TILE (Org3, pending=200): {count200} commands, {sw.ElapsedMilliseconds} ms");
         }
 
         var perPending10 = (count10 - 1) / 10.0;
-        var perPending20 = (count20 - 1) / 20.0;
-        _out.WriteLine($"TILE per-pending multiplier: ~{perPending10:0.0} (K=10), ~{perPending20:0.0} (K=20); org size {org3Users} is irrelevant to the slope.");
+        var perPending200 = (count200 - 1) / 200.0;
+        _out.WriteLine($"TILE per-pending multiplier: ~{perPending10:0.0} (K=10), ~{perPending200:0.0} (K=200); org size {org3Users} is irrelevant to the slope.");
 
         // ── S125 / TASK-12501: THIS ASSERTION WAS INVERTED, and that inversion is the deliverable ──
         //
@@ -265,7 +272,7 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
         //
         // The premise failed at month-end: pending → org size, and the two converge. Measured at
         // K=1000 the projection issued 27,001 commands and took 13.8 SECONDS. The old assertion could
-        // never catch that — it tops out at K=20 under an 8s budget and asserts the very property
+        // never catch that — it topped out at K=20 under an 8s budget and asserted the very property
         // (linear growth in K) that makes K=1,925 catastrophic. It proved the defect.
         //
         // The projection is now FLAT in K: the resolver's inputs and the authorizer's facts are
@@ -274,14 +281,33 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
         //
         // Flatness is asserted DIRECTLY rather than via a shrinking multiplier, because "smaller" and
         // "independent of K" are different claims and only the second one survives month-end.
-        Assert.Equal(count10, count20);
-        Assert.True(count20 <= 12, $"Expected a small constant command count independent of K, saw {count20} at K=20.");
+        Assert.Equal(count10, count200);
+        Assert.True(count200 <= 12, $"Expected a small constant command count independent of K, saw {count200} at K=200.");
         // Zero pending still costs exactly the phase-(1) scan — the prefetch must not be built for an
         // empty pending set (it was, briefly, and this guard caught it: Expected 1, Actual 4).
+        // S126 / N6a: the SET TRANSACTION READ ONLY is BATCHED onto phase (1), so this stays 1. If it
+        // ever reads 2, someone split the SET into its own command and weakened this guard.
         Assert.Equal(1, small0);
-        // Per-pending multiplier now trends to ZERO as K grows — the signature of O(1), where the old
-        // shape held it at a constant ~27.
-        Assert.True(perPending20 < perPending10, $"Expected the per-pending multiplier to FALL with K (O(1)); saw {perPending10:0.0} → {perPending20:0.0}.");
+
+        // S126 / N1 — the assertion that stood here (`perPending200 < perPending10`) was DELETED, not
+        // re-parameterised. Given `Assert.Equal(count10, count200)` directly above, the ratio
+        // comparison reduces to (c-1)/200 < (c-1)/10, which is arithmetically implied at every K>0 and
+        // therefore cannot fail. It read as independent corroboration of the flatness win while
+        // carrying none — the fifth instance of that class found in this sprint's own work, and the
+        // only one inside the test written to PROVE the win. The multiplier is still computed and
+        // logged above, where it is evidence for a human rather than a self-satisfying assertion.
+
+        // S126 / N4+N6b — the prefetch's own statement budget, asserted rather than declared.
+        // BuildStatementCount was a public const read NOWHERE (the same defect as the deleted
+        // MemoHits). Tying it to the observed count is what makes "the key-bounded reads did not add
+        // a round-trip" a checkable claim: bounding reads (3) and (4) by @unitIds/@leaderIds must
+        // change WHICH ROWS come back, never HOW MANY STATEMENTS run.
+        Assert.Equal(4, PrefetchedAuthorityFacts.BuildStatementCount);
+        Assert.True(
+            count200 >= PrefetchedAuthorityFacts.BuildStatementCount,
+            $"The projection issued {count200} commands, fewer than the {PrefetchedAuthorityFacts.BuildStatementCount} " +
+            "the authority prefetch alone must run — the prefetch is not being built at all.");
+
         Assert.True(sw.ElapsedMilliseconds < TileBudgetMs, $"Tile-count took {sw.ElapsedMilliseconds} ms (budget {TileBudgetMs} ms).");
 
         await _fx.ClearPendingScenarioAsync();
@@ -377,8 +403,11 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     }
 
     /// <summary>
-    /// Baseline 2 — the SHAPE MATRIX, which is where the authorization invariants actually live. Four
-    /// pending employees with structurally different candidate sets, and the exact map they produce:
+    /// Baseline 2 — the SHAPE MATRIX, which is where the authorization invariants actually live.
+    /// SEVEN pending employees with structurally different candidate sets, and the exact map they
+    /// produce. (S126 / N3: this docblock previously said "Four pending employees" and listed five
+    /// shapes while the assertions below covered seven — three different counts in one comment. The
+    /// two cross-Organisation shapes were added at the S125 close and never written up here.)
     ///
     /// <list type="table">
     /// <item><term>x1 — leaf unit + edge</term><description>EdgeManager, Leader1, Leader2, VikarOfLeader1</description></item>
@@ -390,6 +419,12 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     /// <item><term>x5 — edge to an INACTIVE manager</term><description>the escalation walk runs, finds
     /// the inactive manager has no PRIMARY of their own, and yields NO edge; the unit leaders alone
     /// tally it, and the inactive manager must be absent from the map</description></item>
+    /// <item><term>x6 — edge THROUGH a manager to their active in-Org stand-in</term><description>the
+    /// R3 vikar branch, resolving to StandIn (=1) — the positive control proving the branch is live,
+    /// so x7's denial below is a same-Organisation bound and not a dead path</description></item>
+    /// <item><term>x7 — edge to a manager whose vikar is CROSS-Organisation</term><description>live SQL
+    /// resolves the edge TO that vikar and then DENIES on same-Organisation, so NEITHER the cross-Org
+    /// stand-in NOR x7's own manager may appear (the S125 close BLOCKER)</description></item>
     /// </list>
     ///
     /// <para>Expected map: EdgeManager=2 (x1, x2); Leader1=6, Leader2=6 and VikarOfLeader1=6 (the six
@@ -437,9 +472,11 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             Assert.Contains(S106SeedScalePerfFixture.ShapeOrphan, submitted);
             Assert.Contains(S106SeedScalePerfFixture.ShapeNullUnit, submitted);
             // The escalation shape: its manager is INACTIVE, so no edge resolves and only the unit
-            // leaders tally it — which is why l1/l2/xv are 4 while the edge manager stays at 2. This
-            // shape is also what makes the differential test discriminating: an is_active divergence
-            // in the prefetched source shows up here and nowhere else.
+            // leaders tally it — which is why l1/l2/xv run AHEAD of the edge manager (6 vs 2; S126 /
+            // N3 corrects "are 4", which predated the two cross-Organisation shapes and contradicted
+            // the =6 assertion 20 lines above). This shape is also what makes the differential test
+            // discriminating: an is_active divergence in the prefetched source shows up here and
+            // nowhere else.
             Assert.Contains(S106SeedScalePerfFixture.ShapeEscalates, submitted);
             Assert.DoesNotContain(S106SeedScalePerfFixture.ShapeInactiveMgr, proj.PendingCountByManager.Keys);
 
@@ -641,6 +678,21 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
                 S106SeedScalePerfFixture.ShapeVikarOfLeader1,
                 S106SeedScalePerfFixture.ShapeRoleRevokedMgr,
                 S106SeedScalePerfFixture.ShapeInactiveMgr,
+                // ── S126 / W2 — OUT-OF-SCOPE ACTORS ──────────────────────────────────────────────
+                // Until S126 every id on BOTH sides of this comparison lived under /PERF_MAO/PERF_O3/,
+                // so the claim that the prefetch and live SQL agree for actors OUTSIDE the prefetched
+                // path was argued in a comment and never executed.
+                //
+                // ShapeCrossOrgStandIn is homed in a DIFFERENT Organisation, which is the only id here
+                // that exercises the cross-Organisation ACTOR direction. It belongs in the CANDIDATE
+                // set specifically: as an *employee* it would prove nothing, because its unit has none
+                // of these candidates as leader.
+                //
+                // Both sides must DENY it — the prefetched home-org map is path-scoped so the actor is
+                // absent (deny), and live SQL raises CrossOrganisationAssignmentException (deny). The
+                // value is that the two now agree BY TEST rather than by assertion.
+                S106SeedScalePerfFixture.ShapeCrossOrgStandIn,
+                S106SeedScalePerfFixture.ShapeCrossVikaredMgr,
             };
             var employees = new List<string>
             {
@@ -649,6 +701,9 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
                 S106SeedScalePerfFixture.ShapeOrphan,
                 S106SeedScalePerfFixture.ShapeRevokedEdge,
                 S106SeedScalePerfFixture.ShapeEscalates,
+                // The employee whose manager holds a cross-Organisation vikar — the shape the S125
+                // close BLOCKER was found in. Its edge resolves THROUGH the manager to that vikar.
+                S106SeedScalePerfFixture.ShapeUnderCrossVikar,
             };
             employees.AddRange(Enumerable.Range(1, 10)
                 .Select(i => $"{S106SeedScalePerfFixture.PendingPrefix}{i}"));

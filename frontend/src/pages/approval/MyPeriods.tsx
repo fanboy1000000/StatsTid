@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type FormEvent } from 'react'
+import { useState, useEffect, useCallback, type FormEvent, useRef } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { apiClient } from '../../lib/api'
 import type { components } from '../../lib/api-types'
@@ -70,13 +70,18 @@ export function MyPeriods() {
   // Track which row is being resubmitted
   const [resubmittingId, setResubmittingId] = useState<string | null>(null)
 
-  const fetchPeriods = useCallback(async () => {
+    const latestPeriodsRequestId = useRef(0)
+
+const fetchPeriods = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestPeriodsRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/approval/{employeeId}', {
       params: { path: { employeeId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestPeriodsRequestId.current) return
     if (result.ok) {
       setPeriods(result.data)
     } else {

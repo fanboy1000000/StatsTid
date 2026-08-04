@@ -83,7 +83,6 @@ test('every lazy route resolves, renders, and never blanks the shell', async ({ 
   await login(page, 'admin01')
 
   const failures: string[] = []
-  const gated: string[] = []
   for (const { path } of ROUTES) {
     await page.goto(path)
     const main = page.locator('main').first()
@@ -109,25 +108,42 @@ test('every lazy route resolves, renders, and never blanks the shell', async ({ 
         // that lazy mapping would otherwise go unexercised.
         if (!body.includes(NOT_FOUND)) failures.push(`${path}: expected NotFoundPage, got "${body.slice(0, 60)}"`)
       } else if (body.includes(FORBIDDEN)) {
-        // NOT a failure, and the reason is worth stating. A 403 here does NOT reliably mean the chunk
-        // failed to load: `/global/overenskomster` renders while `/global/overenskomster/new` shows
-        // Forbidden under the SAME RequireRole guard, so these are the PAGE COMPONENTS' own capability
-        // checks — i.e. the lazy import resolved and the component mounted, which is exactly what this
-        // spec tests. A route-GUARD 403 would short-circuit before the chunk, but the two are
-        // indistinguishable from outside the app.
+        // ── S126 / N2 — this branch is now a FAILURE, and the reason it used to be tolerated was
+        //    factually wrong.
         //
-        // The load-bearing detector is the chunkErrors listener, which was PROVEN to catch a broken
-        // mapping (a deliberately mis-mapped page produced "Element type is invalid"). This line is
-        // reported so reduced coverage is visible rather than silently assumed away.
-        gated.push(path)
+        // The old comment argued: "`/global/overenskomster` renders while `/global/overenskomster/new`
+        // shows Forbidden under the SAME RequireRole guard, so these are the PAGE COMPONENTS' own
+        // capability checks — the lazy import resolved and the component mounted." Three checks in
+        // the code contradict every part of that:
+        //
+        //   1. Both paths sit under ONE guard element (`App.tsx:121-123`,
+        //      `<Route element={<RequireRole minRole="GlobalAdmin"/>}>`). Two routes under the same
+        //      guard cannot diverge for the same actor, so the observation that motivated this
+        //      escape hatch cannot have been a guard effect.
+        //   2. `ForbiddenPage` has exactly ONE caller in the entire frontend —
+        //      `components/guards/RequireRole.tsx:14`, which returns it INSTEAD OF `<Outlet/>`. So a
+        //      Forbidden body proves the opposite of what the comment claimed: the route element was
+        //      never rendered and the lazy chunk was never fetched. No page component renders this
+        //      literal itself.
+        //   3. This spec logs in as admin01, whose JWT role claim is `StatsTidRoles.GlobalAdmin`
+        //      ("GlobalAdmin"), and `lib/roles.ts` gives that level 1, which clears every `minRole`
+        //      in `App.tsx`. So for THIS actor nothing is guard-gated and this branch never fires.
+        //
+        // Net: the escape hatch was dead code justified by a false premise, and it silently
+        // authorised unbounded coverage loss — if a future role change gated 15 of 19 routes the run
+        // still reported `failures: 0`. Asserting emptiness is what makes the coverage claim real.
+        // If this ever fires, the route genuinely has ZERO lazy-chunk coverage and the fix is to give
+        // the spec an actor who can reach it, not to re-add the tolerance.
+        failures.push(
+          `${path}: rendered ForbiddenPage — the route guard short-circuited, so this route's lazy ` +
+          `chunk was NEVER loaded and it has no coverage in this spec.`)
       }
     } catch (e) {
       failures.push(`${path}: ${(e as Error).message.split('\n')[0]}`)
     }
   }
 
-  console.log(`LAZY ROUTES: ${ROUTES.length} checked | failures: ${failures.length} | chunk errors: ${chunkErrors.length} | capability-gated for this actor: ${gated.length}`)
-  gated.forEach(g => console.log('  GATED (page-level capability check, chunk still mounted) ' + g))
+  console.log(`LAZY ROUTES: ${ROUTES.length} checked | failures: ${failures.length} | chunk errors: ${chunkErrors.length}`)
   failures.forEach(f => console.log('  FAIL ' + f))
   chunkErrors.forEach(e => console.log('  CHUNK-ERR ' + e))
 

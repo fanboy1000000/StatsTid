@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
 import type { components } from '../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
@@ -127,7 +127,10 @@ export function useOrganizations() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestOrganizationsRequestId = useRef(0)
+
   const fetchOrganizations = useCallback(async () => {
+    const requestId = ++latestOrganizationsRequestId.current
     setLoading(true)
     setError(null)
     // S111 / TASK-11102 — typed via the OpenAPI path key (response type DERIVED
@@ -135,6 +138,8 @@ export function useOrganizations() {
     // `OrgListItem[]`, DIRECTLY assignable to the `Organization[]` view (S113 —
     // a dropped/renamed spec field is a `tsc` error here).
     const result = await apiClient.get('/api/admin/organizations')
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestOrganizationsRequestId.current) return
     if (result.ok) {
       setOrganizations(result.data)
     } else {
@@ -237,8 +242,11 @@ export function useOrgUsers(orgId: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestUsersRequestId = useRef(0)
+
   const fetchUsers = useCallback(async () => {
     if (!orgId) return
+    const requestId = ++latestUsersRequestId.current
     setLoading(true)
     setError(null)
     // S115 / TASK-11502 — SWITCHED (the S112 survivor closes): the backend
@@ -248,6 +256,8 @@ export function useOrgUsers(orgId: string) {
     const result = await apiClient.get('/api/admin/organizations/{orgId}/users', {
       params: { path: { orgId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestUsersRequestId.current) return
     if (result.ok) {
       setUsers(result.data)
     } else {
@@ -357,8 +367,11 @@ export function useUserRoles(userId: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestRolesRequestId = useRef(0)
+
   const fetchRoles = useCallback(async () => {
     if (!userId) return
+    const requestId = ++latestRolesRequestId.current
     setLoading(true)
     setError(null)
     // S112 — typed via the spec path key (the strict bare
@@ -366,6 +379,8 @@ export function useUserRoles(userId: string) {
     const result = await apiClient.get('/api/admin/users/{userId}/roles', {
       params: { path: { userId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestRolesRequestId.current) return
     if (result.ok) {
       setRoles(result.data)
     } else {

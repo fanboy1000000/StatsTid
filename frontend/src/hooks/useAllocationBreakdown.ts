@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
 import type { components } from '../lib/api-types'
 
@@ -46,14 +46,19 @@ export function useAllocationBreakdown(
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestDataRequestId = useRef(0)
+
   const fetchData = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestDataRequestId.current
     setLoading(true)
     setError(null)
     const res = await apiClient.get('/api/approval/{employeeId}/allocation-breakdown', {
       params: { path: { employeeId } },
       query: { year, month },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestDataRequestId.current) return
     if (res.ok) {
       setData(res.data)
     } else {

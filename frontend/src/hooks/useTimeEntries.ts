@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { components } from '../lib/api-types'
 import type { TimeEntry } from '../types'
 import { apiClient } from '../lib/api'
@@ -24,13 +24,18 @@ export function useTimeEntries(employeeId: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestEntriesRequestId = useRef(0)
+
   const fetchEntries = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestEntriesRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/time-entries/{employeeId}', {
       params: { path: { employeeId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestEntriesRequestId.current) return
     if (result.ok) {
       setEntries(result.data)
     } else {

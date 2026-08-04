@@ -46,6 +46,7 @@ This file is the hub. It defines the priority order and points to deeper sources
 |----------|---------|
 | [docs/SYSTEM_DOCUMENTATION.md](docs/SYSTEM_DOCUMENTATION.md) | Long-form onboarding guide (product + architecture + process). Human-facing; verify against the canonical docs above before trusting specifics |
 | [docs/operations/legacy-db-upgrade-runbook.md](docs/operations/legacy-db-upgrade-runbook.md) | Operational runbook: upgrading pre-existing (non-greenfield) databases |
+| [docs/operations/performance-finding-register.md](docs/operations/performance-finding-register.md) | The F-series performance findings (F1–F6+): status, disposition, and the sweep method. **Record new performance analysis here as it is produced** — S125's F4 was lost because the analysis lived only in a conversation |
 | [docs/operations/audit-projection-catalog.md](docs/operations/audit-projection-catalog.md) | `IAuditProjectionMapper` family catalog (ADR-026) |
 | [docs/operations/audit-projection-caller-census.md](docs/operations/audit-projection-caller-census.md) | Cross-process caller census for the audit-projection cutover |
 | [docs/references/agreement-source-register.md](docs/references/agreement-source-register.md) | DRAFT S36 agreement source-cell register (Phase A) |

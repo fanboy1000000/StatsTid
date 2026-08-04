@@ -145,13 +145,18 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const [absenceCapError, setAbsenceCapError] = useState<AbsenceCapError | null>(null)
   const [approvalValidationError, setApprovalValidationError] = useState<ApprovalValidationError | null>(null)
 
+  const latestDataRequestId = useRef(0)
+
   const fetchData = useCallback(async () => {
+    const requestId = ++latestDataRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/skema/{employeeId}/month', {
       params: { path: { employeeId } },
       query: { year, month },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestDataRequestId.current) return
     if (result.ok) {
       setData(result.data)
     } else {

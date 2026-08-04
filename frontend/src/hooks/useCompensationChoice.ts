@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { components } from '../lib/api-types'
 import { apiClient } from '../lib/api'
 
@@ -30,14 +30,19 @@ export function useCompensationChoice(employeeId: string, periodYear: number): U
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestChoiceRequestId = useRef(0)
+
   const fetchChoice = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestChoiceRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/overtime/{employeeId}/compensation-choice', {
       params: { path: { employeeId } },
       query: { periodYear },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestChoiceRequestId.current) return
     if (result.ok) {
       setChoice(result.data)
     } else {

@@ -437,6 +437,157 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     //  D4 regression case (2) — cross-MAO edge → BLOCKED (different tree_root, D2)
     // ════════════════════════════════════════════════════════════════════════════════
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  S126 / W3 — the ApprovalAuthorityContext snapshot precondition, ENFORCED.
+    //
+    //  S125 introduced a per-projection memo whose soundness rests entirely on running inside ONE
+    //  REPEATABLE READ snapshot: there, "ask once and remember" and "ask every time" are the same
+    //  answer BY CONSTRUCTION. Outside a snapshot the same memo serves answers from before a
+    //  mid-request role revocation, edge reassignment, deactivation or transfer — i.e. it authorizes
+    //  against state that no longer exists.
+    //
+    //  That precondition was documented in a <para> block and enforced by nothing. The S125 close
+    //  review (W3) flagged it: the class is public with a public ctor, and the authorizer's public
+    //  overloads accept `tx: null` alongside a live context. A future batch-approve hoisting one
+    //  context across a request would compile, pass every test, and quietly widen authority.
+    //
+    //  These three tests are what make the prose load-bearing.
+    // ════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task AuthorityContext_WithoutTransaction_Throws_BecauseTheMemoNeedsASnapshot()
+    {
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        var ctx = new ApprovalAuthorityContext(DateOnly.FromDateTime(DateTime.UtcNow));
+
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync();
+
+        // No transaction at all: there is no snapshot, so memoization would be an unruled staleness
+        // trade rather than an equivalence.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            authorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                conn, tx: null, ctx, Mgr, Emp, asOf: DateOnly.FromDateTime(DateTime.UtcNow)));
+        Assert.Contains("without a transaction", ex.Message);
+    }
+
+    [Fact]
+    public async Task AuthorityContext_UnderReadCommitted_Throws_BecauseRowsCanChangeMidProjection()
+    {
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        var ctx = new ApprovalAuthorityContext(DateOnly.FromDateTime(DateTime.UtcNow));
+
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync();
+        // A transaction is present but at the WRONG isolation level — the case a tx-identity-only
+        // guard would wave through, and the one that actually reintroduces the staleness.
+        await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            authorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                conn, tx, ctx, Mgr, Emp, asOf: DateOnly.FromDateTime(DateTime.UtcNow)));
+        Assert.Contains("REPEATABLE READ", ex.Message);
+    }
+
+    /// <summary>
+    /// The hoisting scenario W3 describes: one context outliving its snapshot.
+    ///
+    /// <para><b>Why this binds on the CONNECTION and not the transaction.</b> The first implementation
+    /// compared <see cref="NpgsqlTransaction"/> by reference and this test FAILED against it — Npgsql
+    /// RECYCLES the transaction instance per connection, so two sequential
+    /// <c>BeginTransactionAsync</c> calls hand back the same object and compare equal. A guard that
+    /// waves through the exact case it was written for is worse than none, so the discriminator moved
+    /// to the connection, which is stable and is what a genuinely hoisted context (a batch approve, a
+    /// DI singleton) actually changes. Two sequential transactions on ONE connection stay
+    /// indistinguishable without a <c>txid_current()</c> round-trip this path cannot afford — see the
+    /// remarks on <see cref="ApprovalAuthorityContext"/>.</para>
+    /// </summary>
+    [Fact]
+    public async Task AuthorityContext_ReusedAcrossConnections_Throws_AndIsFineWithinOneSnapshot()
+    {
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        var ctx = new ApprovalAuthorityContext(DateOnly.FromDateTime(DateTime.UtcNow));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync();
+
+        // Repeated use WITHIN one snapshot is the supported path and must not throw — otherwise the
+        // guard would break the very projection it exists to protect. Asserting a TRUE verdict here
+        // also stops the throw below from passing for the trivial reason that the guard rejects
+        // everything, and stops the memo from being exercised only on its deny path.
+        await using (var snapshot = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead))
+        {
+            var first = await authorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                conn, snapshot, ctx, Mgr, Emp, asOf: today);
+            var second = await authorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                conn, snapshot, ctx, Mgr, Emp, asOf: today);
+            Assert.Equal(first, second);
+            Assert.True(first, "Mgr is Emp's PRIMARY edge — a false here would make the memo path vacuous.");
+            await snapshot.RollbackAsync();
+        }
+
+        // A SECOND CONNECTION with the same context — the shape a hoisted/singleton context takes,
+        // since it picks up a different pooled connection.
+        await using var conn2 = _dbFactory.Create();
+        await conn2.OpenAsync();
+        await using var other = await conn2.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            authorizer.IsEffectiveApproverOrUnitLeaderAsync(conn2, other, ctx, Mgr, Emp, asOf: today));
+        Assert.Contains("reused across two connections", ex.Message);
+        await other.RollbackAsync();
+    }
+
+    /// <summary>
+    /// S126 Step-7a BLOCKER — the case the two earlier guard designs BOTH missed: one context reused
+    /// across two SEQUENTIAL REPEATABLE READ snapshots on the SAME connection.
+    ///
+    /// <para>Transaction-identity binding passed it (Npgsql recycles the instance per connection);
+    /// connection binding passed it too (same connection by construction). Both were inferring the
+    /// lifetime from an ADO.NET object. The single-use latch enforces the real rule — one projection
+    /// call — so this now throws, and it throws for a reason no pooling behaviour can change.</para>
+    ///
+    /// <para>This is the load-bearing test of the three: it is the ONLY one that would have gone green
+    /// against both previous implementations.</para>
+    /// </summary>
+    [Fact]
+    public async Task AuthorityContext_ReusedInASecondSnapshotOnTheSameConnection_Throws()
+    {
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var ctx = new ApprovalAuthorityContext(today);
+
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync();
+
+        // Snapshot 1 — the supported path. A TRUE verdict, so the throw below cannot pass merely
+        // because the guard rejects everything.
+        await using (var first = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead))
+        {
+            Assert.True(await authorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                conn, first, ctx, Mgr, Emp, asOf: today));
+            await first.RollbackAsync();
+        }
+
+        // The projection call ends — the owner disposes its memo. In production this is the `using`
+        // in GetPeriodStatusProjectionForTreeAsync.
+        ctx.Dispose();
+
+        // Snapshot 2 on the SAME connection, reusing the spent context.
+        await using var second = await conn.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            authorizer.IsEffectiveApproverOrUnitLeaderAsync(conn, second, ctx, Mgr, Emp, asOf: today));
+        Assert.Contains("after its projection call ended", ex.Message);
+        await second.RollbackAsync();
+    }
+
+    // S126 Step-7a Reviewer W2 — the direct-memo path (`ApprovalPeriodRepository` calls
+    // `ResolveEdgeAsync` before any authorizer call) IS covered: the latch lives on the memo methods
+    // themselves, not only on the authorizer funnels. It is not unit-tested from here because those
+    // methods are `internal` and `InternalsVisibleTo` covers only StatsTid.Tests.Unit — widening it
+    // to expose a guard would be a worse trade than the gap. The production `using` in
+    // GetPeriodStatusProjectionForTreeAsync exercises the same latch on every projection call.
+
     [Fact]
     public async Task CrossStyrelse_Manager_CannotSee_NorApprove_NorIsEffectiveApprover()
     {

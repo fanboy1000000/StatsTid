@@ -9,7 +9,7 @@
 //
 // Scope: TASK-2109 frontend rework. Basic-functional only per the user's
 // "no Phase-5 polish" decision.
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
 import type { components } from '../lib/api-types'
 import { parseVersionFromETag } from '../lib/etag'
@@ -210,12 +210,17 @@ export function useConfigConstraints() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestConstraintsRequestId = useRef(0)
+
   const fetchConstraints = useCallback(async () => {
+    const requestId = ++latestConstraintsRequestId.current
     setLoading(true)
     setError(null)
     // S119 — the typed spec-keyed read (the response type is DERIVED from the
     // path key; no hand-written type argument).
     const result = await apiClient.get('/api/config/constraints')
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestConstraintsRequestId.current) return
     if (result.ok) {
       setConstraints(result.data)
     } else {

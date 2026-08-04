@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient } from '../../lib/api'
 import type { components } from '../../lib/api-types'
 import { Spinner } from '../../components/ui'
@@ -45,8 +45,16 @@ export function AuditLogView() {
   // Expanded details rows
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
 
+  // S126 / F2 — stale-response guard. This page fetches IMPERATIVELY on paging and on Search, not
+  // from a dependency-keyed effect, so rapid ← / → clicks (or Search while a page load is in flight)
+  // put two requests in the air and the last to ARRIVE wins. Without this, an abandoned page's rows
+  // can land after the one the user asked for — and because the handler also calls setPage from the
+  // response, the pager itself would jump back to the stale page.
+  const latestAuditRequestId = useRef(0)
+
   const fetchAudit = useCallback(
     async (p: number) => {
+      const requestId = ++latestAuditRequestId.current
       setLoading(true)
       setError(null)
       try {
@@ -65,6 +73,8 @@ export function AuditLogView() {
             targetOrgId: targetOrgId.trim() || undefined,
           },
         })
+        // A newer request superseded this one while it was in flight — drop it.
+        if (requestId !== latestAuditRequestId.current) return
         if (!result.ok) {
           throw new Error(result.error)
         }
@@ -72,9 +82,12 @@ export function AuditLogView() {
         setTotalCount(result.data.totalCount)
         setPage(result.data.page)
       } catch (err) {
+        if (requestId !== latestAuditRequestId.current) return
         setError(err instanceof Error ? err.message : String(err))
       } finally {
-        setLoading(false)
+        // Only the current request may clear the spinner; a superseded one settling would report
+        // "done" while the request the user is waiting on is still running.
+        if (requestId === latestAuditRequestId.current) setLoading(false)
       }
     },
     [eventTypes, dateFrom, dateTo, actorId, targetOrgId]

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { components } from '../lib/api-types'
 import { apiClient } from '../lib/api'
 import { computeDayDiffs, computeMonthDiffTotal, type MonthDiffInputs } from './useSkema'
@@ -36,14 +36,23 @@ export function useBalanceSummary(employeeId: string, year: number, month: numbe
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // S126 / F2 — stale-response guard. Month/year navigation fires overlapping requests that can
+  // resolve out of order; without this, an older month's response can land last and overwrite the
+  // balance the user is actually looking at. Same pattern (and same reason) as useYearOverview.
+  const latestRequestId = useRef(0)
+
   const fetchBalance = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/balance/{employeeId}/summary', {
       params: { path: { employeeId } },
       query: { year, month },
     })
+    // A newer request superseded this one while it was in flight — drop the result. Also covers the
+    // unmount case: nothing is committed after the component is gone.
+    if (requestId !== latestRequestId.current) return
     if (result.ok) {
       setData(result.data)
     } else {

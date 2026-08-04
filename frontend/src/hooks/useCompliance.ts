@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { components } from '../lib/api-types'
 import { apiClient } from '../lib/api'
 
@@ -79,14 +79,19 @@ export function useCompliance(employeeId: string, year: number, month: number): 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestDataRequestId = useRef(0)
+
   const fetchData = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestDataRequestId.current
     setLoading(true)
     setError(null)
     const res = await apiClient.get('/api/compliance/{employeeId}/period', {
       params: { path: { employeeId } },
       query: { year, month },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestDataRequestId.current) return
     if (res.ok) {
       setResult(res.data)
     } else {
@@ -106,12 +111,17 @@ export function useCompensatoryRest(employeeId: string) {
   const [entries, setEntries] = useState<CompensatoryRestEntry[]>([])
   const [loading, setLoading] = useState(false)
 
+  const latestDataRequestId = useRef(0)
+
   const fetchData = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestDataRequestId.current
     setLoading(true)
     const res = await apiClient.get('/api/compliance/{employeeId}/compensatory-rest', {
       params: { path: { employeeId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestDataRequestId.current) return
     if (res.ok) {
       setEntries(res.data)
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient, apiFetchWithEtag } from '../lib/api'
 import type { components } from '../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../lib/etag'
@@ -96,12 +96,17 @@ export function useAgreementConfigs(statusFilter?: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestConfigsRequestId = useRef(0)
+
   const fetchConfigs = useCallback(async () => {
+    const requestId = ++latestConfigsRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/agreement-configs', {
       query: statusFilter ? { status: statusFilter } : undefined,
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestConfigsRequestId.current) return
     if (result.ok) {
       setConfigs(result.data.map(decorateRow))
     } else {
@@ -120,8 +125,11 @@ export function useAgreementConfig(configId: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestConfigRequestId = useRef(0)
+
   const fetchConfig = useCallback(async () => {
     if (!configId) return
+    const requestId = ++latestConfigRequestId.current
     setLoading(true)
     setError(null)
     // Use header-aware fetch so we capture the by-id ETag header rather than
@@ -131,6 +139,8 @@ export function useAgreementConfig(configId: string) {
       method: 'GET',
       params: { path: { configId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestConfigRequestId.current) return
     if (result.ok) {
       const { data, etag } = result.data
       const { etag: resolvedEtag } = resolveEtag(etag, data)

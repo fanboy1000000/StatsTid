@@ -71,6 +71,18 @@ public sealed class SqlAuthorityFactsSource : IAuthorityFactsSource
 /// NOT a leader; a user absent from the home-org map denies the same-Organisation check; a unit with
 /// no leaders yields None. Every "absent" answer is the denying answer, matching what the SQL returns
 /// when its joins produce no row.</para>
+///
+/// <para><b>S126 / N6b — the parity above holds at the VERDICT level, not the FACT level, and the
+/// difference is worth stating.</b> Read (2) requires <c>o.is_active = TRUE</c>, while the projection's
+/// phase (1) joins <c>organizations</c> with no such filter
+/// (<see cref="ApprovalPeriodRepository"/>) and the live-SQL unit-leader query filters neither. So an
+/// employee under an INACTIVE home Organisation is enumerated as pending, is absent from
+/// <c>_unitOfUser</c>, and gets <c>None</c> here where live SQL would say Direct/Vikar. The two agree
+/// anyway because the same-Organisation gate independently denies that whole population — but that is
+/// a COINCIDENCE BETWEEN TWO UNRELATED PREDICATES, not a guarantee this class enforces. Anything that
+/// loosens the same-Organisation gate (the deferred HR/GlobalAdmin <c>ORG_SCOPE_FALLBACK</c> ruling is
+/// the likely candidate) must re-check this, because the differential test compares verdicts only and
+/// would not catch it.</para>
 /// </summary>
 public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
 {
@@ -151,11 +163,26 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
             }
         }
 
-        // (3) unit → its designated leaders.
+        // (3) unit → its designated leaders, bounded to the units employees are actually homed in.
+        //
+        // S126 / N6b — KEY-BOUNDED, not org-scoped. `leadersOfUnit` is only ever indexed by
+        // `unitOfUser[employeeId]` (see GetUnitLeaderKindAsync), so restricting the read to exactly
+        // those unit ids removes only rows no lookup could reach. That makes this answer-identical BY
+        // CONSTRUCTION rather than by test — the property survives someone editing the query later.
+        //
+        // Why NOT the path-prefix scope the sibling reads use: the ACTOR dimension must stay global.
+        // Scoping by the leader's home Organisation would drop an in-Organisation vikar covering a
+        // cross-Organisation leader, whom live SQL admits (QueryUnitLeaderKindAsync carries no org
+        // bound) — locking out a legitimate approver. This read is a GATE, not a resolver: a miss can
+        // only deny. The direction that could fail OPEN lives in PrefetchedReportingLineDataSource,
+        // which picks a winner and can fall through.
         var leadersOfUnit = new Dictionary<Guid, HashSet<string>>();
+        var unitIds = unitOfUser.Values.Distinct().ToArray();
         await using (var cmd = new NpgsqlCommand(
-            "SELECT ul.unit_id, ul.user_id FROM unit_leaders ul", conn, tx))
+            "SELECT ul.unit_id, ul.user_id FROM unit_leaders ul WHERE ul.unit_id = ANY(@unitIds)",
+            conn, tx))
         {
+            cmd.Parameters.AddWithValue("unitIds", unitIds);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
@@ -168,15 +195,22 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
 
         // (4) Active vikar coverage, keyed by the STAND-IN. Coverage is the same inclusive predicate:
         //     effective_to IS NULL AND until_date >= asOf.
+        //
+        // S126 / N6b — bounded by the leaders read (3) actually found, for the same reason: a
+        // coversLeaders entry only matters when the covered leader passes `leaders.Contains(...)`, so
+        // rows for any other absent approver are unreachable. The VIKAR (actor) side stays unbounded.
         var coversLeaders = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var leaderIds = leadersOfUnit.Values.SelectMany(s => s).Distinct().ToArray();
         await using (var cmd = new NpgsqlCommand(
             """
             SELECT mv.vikar_user_id, mv.absent_approver_id
             FROM manager_vikar mv
             WHERE mv.effective_to IS NULL AND mv.until_date >= @asOf
+              AND mv.absent_approver_id = ANY(@leaderIds)
             """, conn, tx))
         {
             cmd.Parameters.AddWithValue("asOf", asOf);
+            cmd.Parameters.AddWithValue("leaderIds", leaderIds);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {

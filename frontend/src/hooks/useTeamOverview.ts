@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
 import type { components } from '../lib/api-types'
 
@@ -47,12 +47,17 @@ export function useTeamOverview(year: number, month: number): UseTeamOverviewRes
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestOverviewRequestId = useRef(0)
+
   const fetchOverview = useCallback(async () => {
+    const requestId = ++latestOverviewRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/approval/team-overview', {
       query: { year, month },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestOverviewRequestId.current) return
     if (result.ok) {
       setRows(result.data.employees)
     } else {

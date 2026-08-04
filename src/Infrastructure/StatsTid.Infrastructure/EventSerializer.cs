@@ -222,4 +222,25 @@ public static class EventSerializer
 
         return (IDomainEvent)JsonSerializer.Deserialize(json, type, Options)!;
     }
+
+    /// <summary>
+    /// S126 / F5 — the reverse of <see cref="EventTypeMap"/>: the stored <c>event_type</c>
+    /// discriminator for a CLR event type.
+    ///
+    /// <para>Exists so a query that filters on <c>event_type</c> does not re-encode the string
+    /// literal at the call site. This map is already the single source of truth for the
+    /// name↔type binding on the WRITE and replay paths; a filtered read that hard-codes
+    /// <c>"FlexBalanceUpdated"</c> separately would be a second encoding, and a rename would turn it
+    /// into an always-empty read that fails silently rather than loudly.</para>
+    /// </summary>
+    public static string EventTypeNameOf<T>() where T : IDomainEvent
+    {
+        foreach (var (name, type) in EventTypeMap)
+            if (type == typeof(T))
+                return name;
+
+        throw new InvalidOperationException(
+            $"Event type {typeof(T).Name} is not registered in EventTypeMap — it cannot be read back " +
+            "by type. Register it alongside its serialization key.");
+    }
 }

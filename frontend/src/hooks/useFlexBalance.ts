@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { FlexBalanceInfo } from '../types'
 import { apiClient } from '../lib/api'
 
@@ -14,13 +14,18 @@ export function useFlexBalance(employeeId: string) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const latestBalanceRequestId = useRef(0)
+
   const fetchBalance = useCallback(async () => {
     if (!employeeId) return
+    const requestId = ++latestBalanceRequestId.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/flex-balance/{employeeId}', {
       params: { path: { employeeId } },
     })
+    // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
+    if (requestId !== latestBalanceRequestId.current) return
     if (result.ok) {
       setFlexBalance(result.data)
     } else {

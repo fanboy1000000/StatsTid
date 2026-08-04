@@ -1,3 +1,5 @@
+using Npgsql;
+
 namespace StatsTid.Infrastructure;
 
 /// <summary>
@@ -29,8 +31,36 @@ namespace StatsTid.Infrastructure;
 /// exists. It is deliberately not thread-safe: the tally loop is sequential, and making it concurrent
 /// would need more thought than a lock.</para>
 /// </summary>
-public sealed class ApprovalAuthorityContext
+public sealed class ApprovalAuthorityContext : IDisposable
 {
+    // ── S126 Step-7a BLOCKER — the SINGLE-USE LATCH ─────────────────────────────────────────────
+    // The first guard bound to the NpgsqlTransaction by reference; Npgsql recycles that instance per
+    // connection, so it silently passed the reuse case. The second bound to the CONNECTION, which
+    // catches a cross-connection hoist but still lets two SEQUENTIAL snapshots on ONE connection share
+    // the memo — the exact hazard, left uncovered.
+    //
+    // Both attempts were trying to INFER the lifetime from an ADO.NET object. The rule is not about
+    // connections or transactions: it is "lifetime is ONE projection call". So enforce that directly —
+    // the owner disposes the context when the call ends and the context is permanently spent. This is
+    // independent of Npgsql's object reuse, needs no round-trip to txid_current(), and cannot be
+    // defeated by pooling.
+    private bool _spent;
+
+    /// <summary>Ends this context's life. After this every memo access throws, so a context hoisted
+    /// beyond its projection call fails loudly instead of serving pre-snapshot authority facts.</summary>
+    public void Dispose() => _spent = true;
+
+    private void ThrowIfSpent()
+    {
+        if (_spent)
+            throw new InvalidOperationException(
+                "ApprovalAuthorityContext was used after its projection call ended. Its memoized " +
+                "authority answers are equivalent to re-querying ONLY inside the single snapshot they " +
+                "were taken in; reused later they can authorize against state that no longer exists " +
+                "(a role revocation, edge reassignment, deactivation or transfer since). Construct one " +
+                "context per projection call.");
+    }
+
     /// <summary>The single authority date for the whole projection (invariant 7 — computed once, so a
     /// projection cannot straddle a date boundary mid-loop). Memo keys do NOT include it precisely
     /// because it cannot vary within one context.</summary>
@@ -42,18 +72,53 @@ public sealed class ApprovalAuthorityContext
 
     public ApprovalAuthorityContext(DateOnly asOf) => AsOf = asOf;
 
-    /// <summary>Statements SAVED by this memo, for the perf assertions and for logging. Counts cache
-    /// HITS, so a projection can report how much re-derivation it avoided.</summary>
-    public int MemoHits { get; private set; }
+    /// <summary>The connection this context was first used on. Set on first use rather than in the
+    /// constructor so the public ctor keeps its signature (tests construct one without a live tx).</summary>
+    private NpgsqlConnection? _boundConn;
+
+    /// <summary>
+    /// S126 / W3 — makes the "lifetime is ONE projection call" rule above partially ENFORCEABLE
+    /// instead of merely documented. The prose said "never promote this to a field or a DI
+    /// singleton"; nothing failed if someone did.
+    ///
+    /// <para>The hazard is not hypothetical bookkeeping: outside one snapshot the memo serves answers
+    /// from before a mid-request role revocation, edge reassignment, deactivation or transfer — i.e.
+    /// it authorizes against state that no longer exists.</para>
+    ///
+    /// <para><b>What this catches, and what it CANNOT — measured, not assumed.</b> The first design
+    /// bound to the <see cref="NpgsqlTransaction"/> and compared by reference. That does not work:
+    /// <b>Npgsql RECYCLES the transaction instance per connection</b>, so two sequential
+    /// <c>BeginTransactionAsync</c> calls on one connection hand back the SAME object and compare
+    /// equal. The guard silently passed the exact case it was written for, and the test that proved
+    /// it is the reason this comment exists rather than a false claim of coverage.</para>
+    ///
+    /// <para><b>Superseded as the primary mechanism (S126 Step-7a).</b> Connection binding catches a
+    /// cross-connection hoist but NOT two sequential snapshots on one connection — so it was never
+    /// sufficient on its own. The single-use latch at the top of this class enforces the actual rule
+    /// ("one projection call") directly and is what closes that gap. This binding is retained as
+    /// defence in depth: it catches a hoist that never reaches Dispose.</para>
+    /// </summary>
+    internal void BindTo(NpgsqlConnection conn)
+    {
+        if (_boundConn is null)
+        {
+            _boundConn = conn;
+            return;
+        }
+        if (!ReferenceEquals(_boundConn, conn))
+            throw new InvalidOperationException(
+                "ApprovalAuthorityContext was reused across two connections. Its memoized authority " +
+                "answers are only equivalent to re-querying INSIDE the single snapshot they were taken " +
+                "in; outside it they can authorize against state that no longer exists. " +
+                "Construct one context per projection call.");
+    }
 
     internal async Task<(string? ManagerId, string? Method, int Depth)> ResolveEdgeAsync(
         string employeeId, Func<Task<(string? ManagerId, string? Method, int Depth)>> resolve)
     {
+        ThrowIfSpent();
         if (_edges.TryGetValue(employeeId, out var cached))
-        {
-            MemoHits++;
             return cached;
-        }
         var value = await resolve();
         _edges[employeeId] = value;
         return value;
@@ -61,11 +126,9 @@ public sealed class ApprovalAuthorityContext
 
     internal async Task<bool> RoleFloorAsync(string userId, Func<Task<bool>> query)
     {
+        ThrowIfSpent();
         if (_roleFloor.TryGetValue(userId, out var cached))
-        {
-            MemoHits++;
             return cached;
-        }
         var value = await query();
         _roleFloor[userId] = value;
         return value;
@@ -83,12 +146,10 @@ public sealed class ApprovalAuthorityContext
     internal async Task<bool> SameOrganisationAsync(
         string employeeId, string actorId, Func<Task<bool>> check)
     {
+        ThrowIfSpent();
         var key = (employeeId, actorId);
         if (_sameOrg.TryGetValue(key, out var cached))
-        {
-            MemoHits++;
             return cached;
-        }
         var value = await check();
         _sameOrg[key] = value;
         return value;

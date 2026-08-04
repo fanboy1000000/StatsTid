@@ -946,30 +946,22 @@ public static class ApprovalEndpoints
             //      projection (it lives ONLY in the employee-{id} event stream), so this is a BOUNDED,
             //      set-based read: DISTINCT ON (stream_id) over the team's streams, picking the highest
             //      stream_version FlexBalanceUpdated row — NOT a per-employee full-stream replay loop.
-            //      The stored JSON is camelCase (EventSerializer) → data->>'newBalance'.
+            //
+            //      S126 / F5 — this WAS that query, hand-rolled inline with a `data->>'newBalance'`
+            //      extraction and its own NumberStyles/InvariantCulture parse. It is now the batch
+            //      shape of the shared reader, so the four flex readers in this codebase share ONE
+            //      encoding of "latest event of this type" and the camelCase JSON key stays inside
+            //      EventSerializer instead of being restated here.
             var flexByEmployee = new Dictionary<string, decimal>(StringComparer.Ordinal);
             var flexStreamIds = employeeIds.Select(id => $"employee-{id}").ToArray();
-            await using (var cmd = new NpgsqlCommand(
-                """
-                SELECT DISTINCT ON (stream_id) stream_id, (data->>'newBalance') AS new_balance
-                FROM events
-                WHERE stream_id = ANY(@streamIds) AND event_type = 'FlexBalanceUpdated'
-                ORDER BY stream_id, stream_version DESC
-                """, conn))
+            var latestFlexByStream = await PostgresEventStore
+                .ReadLatestOfTypePerStreamAsync<FlexBalanceUpdated>(conn, tx: null, flexStreamIds, ct);
+            foreach (var (streamId, flexEvent) in latestFlexByStream)
             {
-                cmd.Parameters.AddWithValue("streamIds", flexStreamIds);
-                await using var reader = await cmd.ExecuteReaderAsync(ct);
-                while (await reader.ReadAsync(ct))
-                {
-                    var streamId = reader.GetString(0);
-                    var empId = streamId.StartsWith("employee-", StringComparison.Ordinal)
-                        ? streamId.Substring("employee-".Length)
-                        : streamId;
-                    if (!reader.IsDBNull(1) && decimal.TryParse(reader.GetString(1),
-                            System.Globalization.NumberStyles.Number,
-                            System.Globalization.CultureInfo.InvariantCulture, out var bal))
-                        flexByEmployee[empId] = bal;
-                }
+                var empId = streamId.StartsWith("employee-", StringComparison.Ordinal)
+                    ? streamId.Substring("employee-".Length)
+                    : streamId;
+                flexByEmployee[empId] = flexEvent.NewBalance;
             }
 
             // (2g) awayToday = an absence covering TODAY. PER-EMPLOYEE FAULT-ISOLATED: a failure of

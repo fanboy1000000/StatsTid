@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ChangeEvent } from 'react'
+import { useState, useEffect, useCallback, type ChangeEvent, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { apiFetchWithEtag } from '../../lib/api'
 import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
@@ -163,8 +163,15 @@ export function AgreementConfigEditor() {
 
   const isReadOnly = config !== null && config.status !== 'DRAFT'
 
+  // S126 / F2 — stale-response guard. Keyed on [configId, isNew]: navigating between config rows
+  // while a load is in flight would otherwise let the abandoned config's response win, and this
+  // handler also sets the ETag — so a stale landing would arm the NEXT If-Match with the wrong
+  // version, turning a display race into a failed or misdirected write.
+  const latestConfigRequestId = useRef(0)
+
   const fetchConfig = useCallback(async () => {
     if (isNew || !configId) return
+    const requestId = ++latestConfigRequestId.current
     setLoading(true)
     setError(null)
     // S25 / TASK-2506: capture the by-id ETag header for the next If-Match
@@ -175,6 +182,8 @@ export function AgreementConfigEditor() {
       method: 'GET',
       params: { path: { configId } },
     })
+    // A newer request superseded this one while it was in flight — drop it.
+    if (requestId !== latestConfigRequestId.current) return
     if (result.ok) {
       const { data, etag: rawEtag } = result.data
       const { etag: resolvedEtag } = resolveEtag(rawEtag, data)
