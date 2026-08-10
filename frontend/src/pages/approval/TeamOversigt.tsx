@@ -300,12 +300,13 @@ function TeamRowDetail({
             </div>
           ))
         )}
-        {/* Begrundelse for afvisning. */}
-        {row.status === 'REJECTED' && row.rejectionReason && (
-          <div className={`${styles.detailAlert} ${styles.detailAlertError}`} role="status">
-            <strong>Begrundelse for afvisning:</strong> {row.rejectionReason}
-          </div>
-        )}
+        {/* S127 / TASK-12713 (owner ruling R7) — "Begrundelse for afvisning" USED to render here.
+            It was production-dead: R1 withholds `normRegistered` for a REJECTED month and the page
+            keys `canExpand` on exactly that field, so this panel cannot open for any row that
+            carries a reason. Promoted to row level (see the `rejectionReason` sub-row in the table
+            body) rather than duplicated — one field, one render site (S91). Do not re-add it here:
+            the row-level site renders whether or not a panel is open, so a copy here could only
+            ever be dead or a second source of truth. */}
 
         {/* S124 / TASK-12403 — the skema is the DEFAULT view: summary above, the full day-by-day
             grid below it, decision buttons after. Approving without seeing which days carried the
@@ -810,6 +811,19 @@ export function TeamOversigt() {
                 const canExpand = row.normRegistered !== null
                 const isExpanded = canExpand && expanded === row.employeeId
                 const detailId = `team-detail-${row.employeeId}`
+                // S127 / TASK-12713 — owner ruling R7. The rejection reason is the leader's own
+                // PAST DECISION, not the month's in-progress content, so R1 does not withhold it:
+                // the server still serves `rejectionReason` on a REJECTED row. But its only render
+                // site sat INSIDE the detail panel, and `canExpand` above is keyed on one of the
+                // five figures R1 withholds — so for exactly the rows that carry a reason the
+                // panel can no longer open and that branch was production-dead (found by
+                // TASK-12707). It is read here instead, at row level, OUTSIDE `isExpanded`.
+                //
+                // `canExpand` is deliberately NOT relaxed to rescue the old site: re-opening the
+                // panel for a rejected row would hand back all five withheld figures and partially
+                // undo R1. Nothing on this sub-row reads a withheld field — only `status` and
+                // `rejectionReason`, both of which the server still sends.
+                const rejectionReason = row.status === 'REJECTED' ? row.rejectionReason : null
                 return (
                   <Fragment key={row.employeeId}>
                     {/* The whole-row click is gated on `canExpand` alongside the chevron. Left
@@ -818,7 +832,7 @@ export function TeamOversigt() {
                         to an id that can never render, silently COLLAPSING whichever row was
                         open, and armed the Escape handler on an id with no toggleRef. */}
                     <tr
-                      className={`${styles.bodyRow} ${canExpand ? styles.clickableRow : ''} ${checked || isExpanded ? styles.rowSelected : ''}`}
+                      className={`${styles.bodyRow} ${canExpand ? styles.clickableRow : ''} ${checked || isExpanded ? styles.rowSelected : ''} ${rejectionReason ? styles.rowWithReason : ''}`}
                       data-testid={`team-row-${row.employeeId}`}
                       onClick={canExpand ? () => toggleExpand(row.employeeId) : undefined}
                     >
@@ -937,6 +951,20 @@ export function TeamOversigt() {
                         )}
                       </td>
                     </tr>
+                    {/* The reason strip. Rendered from the row map, not from the panel, so it is
+                        on screen with everything collapsed; the row above drops its own bottom
+                        border (`rowWithReason`) so the two read as one unit. */}
+                    {rejectionReason && (
+                      <tr className={styles.reasonRow} data-testid={`team-rejection-${row.employeeId}`}>
+                        <td className={styles.checkboxCell} />
+                        <td colSpan={8} className={styles.reasonCell}>
+                          <div className={styles.reasonInner}>
+                            <span className={styles.reasonLabel}>Begrundelse for afvisning:</span>{' '}
+                            {rejectionReason}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                     {isExpanded && (
                       <tr className={styles.detailRow} data-testid={`team-detail-row-${row.employeeId}`}>
                         <TeamRowDetail

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type FormEvent, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { apiClient } from '../../lib/api'
 import type { components } from '../../lib/api-types'
@@ -11,19 +11,32 @@ import styles from './MyPeriods.module.css'
 type ApprovalPeriod =
   components['schemas']['StatsTid.Backend.Api.Contracts.EmployeePeriodItem']
 
+// S127 / TASK-12707 (owner ruling R3) — the free-range "Indsend periode" form is
+// GONE, and `AGREEMENT_CODES` went with it: an employee never picked their own
+// overenskomst, and the server has always resolved it. `PERIOD_TYPES` survives as
+// the read-only display mapping for the `Type` column — legacy WEEKLY rows still
+// exist, and `/api/approval/send` produces MONTHLY only.
 const PERIOD_TYPES = [
   { value: 'WEEKLY', label: 'Ugentlig' },
   { value: 'MONTHLY', label: 'Maanedlig' },
 ]
 
-// (S116: `as const` dropped — the lint tier bans every TSAsExpression; the
-// explicit readonly annotation carries the same immutability for this use.)
-const AGREEMENT_CODES: readonly string[] = ['AC', 'HK', 'PROSA']
-
+// S127 / TASK-12707 — `EMPLOYEE_APPROVED` added to BOTH switches. It was missing
+// from each and fell through to `default`, which returned the raw enum string; a
+// live bug the moment sending began landing rows in that state (before S127 the
+// two-step Skema flow reached it too, so this was already wrong here).
+// The badge is `badgeWarning`, the same "with someone else, not yet decided" tone
+// as SUBMITTED. The label is "Indsendt" — from the EMPLOYEE'S side this month has
+// been sent and is awaiting their leader, which is exactly what SUBMITTED meant
+// to them; the distinction between the two states is a backend/manager concern
+// and inventing a second Danish word for it here would be a distinction without a
+// difference for this reader. (`SkemaPage`'s footer already says "Indsendt" for
+// EMPLOYEE_APPROVED, so this keeps the two employee surfaces consistent.)
 function statusBadgeClass(status: string): string {
   switch (status) {
     case 'DRAFT': return styles.badgeDefault
     case 'SUBMITTED': return styles.badgeWarning
+    case 'EMPLOYEE_APPROVED': return styles.badgeWarning
     case 'APPROVED': return styles.badgeSuccess
     case 'REJECTED': return styles.badgeError
     default: return styles.badgeDefault
@@ -34,6 +47,7 @@ function statusLabel(status: string): string {
   switch (status) {
     case 'DRAFT': return 'Kladde'
     case 'SUBMITTED': return 'Indsendt'
+    case 'EMPLOYEE_APPROVED': return 'Indsendt'
     case 'APPROVED': return 'Godkendt'
     case 'REJECTED': return 'Afvist'
     default: return status
@@ -50,7 +64,7 @@ function formatDate(dateStr: string | null): string {
 }
 
 export function MyPeriods() {
-  const { user, orgId } = useAuth()
+  const { user } = useAuth()
   const employeeId = user?.employeeId ?? ''
 
   const [periods, setPeriods] = useState<ApprovalPeriod[]>([])
@@ -58,14 +72,11 @@ export function MyPeriods() {
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
 
-  // Form state
-  const [periodType, setPeriodType] = useState('WEEKLY')
-  const [periodStart, setPeriodStart] = useState('')
-  const [periodEnd, setPeriodEnd] = useState('')
-  const [agreementCode, setAgreementCode] = useState('AC')
-  const [okVersion] = useState('OK24')
-  const [submitting, setSubmitting] = useState(false)
-  const [formError, setFormError] = useState<string | null>(null)
+  // S127 / TASK-12707 (R3) — the form state is GONE: periodType / periodStart /
+  // periodEnd / agreementCode / okVersion / submitting / formError, plus the
+  // `orgId` read that fed the retired body. This page no longer originates a
+  // send; Skema does, over the month it is showing. `useAuth` stays for
+  // `user.employeeId`, which the list read is keyed on.
 
   // Track which row is being resubmitted
   const [resubmittingId, setResubmittingId] = useState<string | null>(null)
@@ -92,23 +103,11 @@ const fetchPeriods = useCallback(async () => {
 
   useEffect(() => { fetchPeriods() }, [fetchPeriods])
 
-  const submitPeriod = async (payload: {
-    employeeId: string
-    orgId: string
-    periodStart: string
-    periodEnd: string
-    periodType: string
-    agreementCode: string
-    okVersion: string
-  }) => {
-    // S116 (L1 fix) — the legacy call overclaimed `<ApprovalPeriod>`; the
-    // backend returns only `{periodId, status}` (the spec PeriodActionResponse,
-    // derived by the typed form). Callers discard the return value, so no
-    // consumer ever read the phantom fields.
-    const result = await apiClient.post('/api/approval/submit', { body: payload })
-    if (!result.ok) throw new Error(result.error)
-    return result.data
-  }
+  // S127 / TASK-12707 (R3) — `submitPeriod` DELETED with its route. The
+  // caller-supplied date range it posted to `POST /api/approval/submit` was the
+  // defect S127 closes: it let an employee certify an arbitrary window that no
+  // coverage or allocation rule was written for. The one remaining send from
+  // this page is the by-id arm below, over a period that already exists.
 
   const resubmitPeriod = async (periodId: string) => {
     // S116 (L1 fix) — same overclaim corrected: the typed form derives the
@@ -118,45 +117,6 @@ const fetchPeriods = useCallback(async () => {
     })
     if (!result.ok) throw new Error(result.error)
     return result.data
-  }
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault()
-    setFormError(null)
-    setSuccessMsg(null)
-
-    if (!periodStart || !periodEnd) {
-      setFormError('Udfyld venligst start- og slutdato.')
-      return
-    }
-
-    // The submit endpoint requires the period's owning org (SubmitPeriodRequest.OrgId);
-    // an employee submits for their own primary org, taken from the auth context.
-    if (!orgId) {
-      setFormError('Kunne ikke fastslaa organisation. Log ind igen.')
-      return
-    }
-
-    setSubmitting(true)
-    try {
-      await submitPeriod({
-        employeeId,
-        orgId,
-        periodStart,
-        periodEnd,
-        periodType,
-        agreementCode,
-        okVersion,
-      })
-      setSuccessMsg('Periode indsendt.')
-      setPeriodStart('')
-      setPeriodEnd('')
-      await fetchPeriods()
-    } catch (e) {
-      setFormError(String(e instanceof Error ? e.message : e))
-    } finally {
-      setSubmitting(false)
-    }
   }
 
   const handleResubmit = async (periodId: string) => {
@@ -181,96 +141,12 @@ const fetchPeriods = useCallback(async () => {
         <div className={styles.alertSuccess}>{successMsg}</div>
       )}
 
-      {/* Submit period form */}
-      <div className={styles.card}>
-        <h3 className={styles.cardHeader}>Indsend periode</h3>
-        <form className={styles.form} onSubmit={handleSubmit}>
-          <div className={styles.formRow}>
-            <label className={`${styles.formLabel} required`} htmlFor="periodType">
-              Periodetype
-            </label>
-            <select
-              id="periodType"
-              className={styles.formSelect}
-              value={periodType}
-              onChange={e => setPeriodType(e.target.value)}
-            >
-              {PERIOD_TYPES.map(t => (
-                <option key={t.value} value={t.value}>{t.label}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className={styles.formRow}>
-            <label className={`${styles.formLabel} required`} htmlFor="periodStart">
-              Startdato
-            </label>
-            <input
-              id="periodStart"
-              type="date"
-              className={styles.formInput}
-              value={periodStart}
-              onChange={e => setPeriodStart(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className={styles.formRow}>
-            <label className={`${styles.formLabel} required`} htmlFor="periodEnd">
-              Slutdato
-            </label>
-            <input
-              id="periodEnd"
-              type="date"
-              className={styles.formInput}
-              value={periodEnd}
-              onChange={e => setPeriodEnd(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className={styles.formRow}>
-            <label className={styles.formLabel} htmlFor="agreementCode">
-              Overenskomst
-            </label>
-            <select
-              id="agreementCode"
-              className={styles.formSelect}
-              value={agreementCode}
-              onChange={e => setAgreementCode(e.target.value)}
-            >
-              {AGREEMENT_CODES.map(c => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className={styles.formRow}>
-            <label className={styles.formLabel} htmlFor="okVersion">
-              OK version
-            </label>
-            <input
-              id="okVersion"
-              type="text"
-              className={styles.formInput}
-              value={okVersion}
-              disabled
-            />
-          </div>
-
-          {formError && (
-            <div className={styles.alert}>{formError}</div>
-          )}
-
-          <button
-            type="submit"
-            className={styles.submitButton}
-            disabled={submitting}
-          >
-            {submitting ? 'Indsender...' : 'Indsend periode'}
-          </button>
-        </form>
-      </div>
+      {/* S127 / TASK-12707 (owner ruling R3) — the "Indsend periode" card is
+          REMOVED. It let an employee send an arbitrary date range typed into two
+          date inputs; the send command validates a whole month, so the form could
+          only ever produce rows the new rule was not written for. Sending now
+          happens on Skema, over the month being looked at. What stays is this
+          page's honest job: the list, and re-sending a month that came back. */}
 
       {/* Periods table */}
       <div className={styles.card}>

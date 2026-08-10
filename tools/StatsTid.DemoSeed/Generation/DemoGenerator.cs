@@ -113,17 +113,65 @@ public sealed class DemoGenerator
         //     unitPlans section at all.
         DeriveUnitPlans(users, manifest);
 
+        // 3c. S127 / TASK-12701a — the project catalogue + the allocated-month POST-PASS.
+        //     EVERY org gets projects (owner ruling B), the MAO included: demo_admin homes there,
+        //     projects are strictly org-scoped, and a project-less org's employees can never
+        //     allocate. The month fill then makes every activity month coverage-complete and
+        //     per-day balanced. Like 3b this is a POST-PASS — but stricter: it consumes NO Random
+        //     at all (pure derivation), so not one pre-existing draw moves.
+        var projects = ProjectCatalog.ForOrgs(orgs.Select(o => o.OrgId));
+        FillAllocatedMonths(manifest, projects);
+
         // 4. Disjointness assertion (NOTE-1 — ON CONFLICT silently drops collisions).
         AssertDisjointFromBaseline(orgs, users, manifest);
+        AssertEveryOrgHasProjects(orgs, projects);
 
         return new DemoDataset
         {
             Orgs = orgs,
             Users = users,
+            Projects = projects,
             EmployeeRoles = employeeRoles,
             PrivilegedRoles = privilegedRoles,
             Manifest = manifest,
         };
+    }
+
+    /// <summary>
+    /// S127 — completes every activity month with work time + matching allocations. The activity's
+    /// own <c>OrgId</c> selects the project catalogue, because projects are org-scoped: booking a
+    /// sibling org's code would produce a row the employee cannot see and cannot edit.
+    /// </summary>
+    private static void FillAllocatedMonths(DemoManifest manifest, IReadOnlyList<DemoProject> projects)
+    {
+        var codesByOrg = projects
+            .GroupBy(p => p.OrgId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<string>)g.Select(p => p.ProjectCode).ToList(),
+                StringComparer.Ordinal);
+
+        foreach (var activity in manifest.Activity)
+        {
+            if (!codesByOrg.TryGetValue(activity.OrgId, out var codes))
+                throw new InvalidOperationException(
+                    $"[S127 allocation] activity for {activity.EmployeeId} names org '{activity.OrgId}', " +
+                    "which has no project catalogue. Generation FAILED (never the load).");
+            AllocatedMonthBuilder.Fill(activity, codes);
+        }
+    }
+
+    /// <summary>
+    /// S127 / AC-14a — the generation-time invariant behind owner ruling B: EVERY generated org
+    /// carries at least one project. Fails generation loudly (never the load), matching the
+    /// disjointness assertion's posture.
+    /// </summary>
+    internal static void AssertEveryOrgHasProjects(IReadOnlyList<DemoOrg> orgs, IReadOnlyList<DemoProject> projects)
+    {
+        var withProjects = projects.Select(p => p.OrgId).ToHashSet(StringComparer.Ordinal);
+        foreach (var o in orgs)
+            if (!withProjects.Contains(o.OrgId))
+                throw new InvalidOperationException(
+                    $"Demo org '{o.OrgId}' has NO projects. Projects are org-scoped, so its employees " +
+                    "could never allocate their hours and could never send a month. FAIL.");
     }
 
     private void GenerateTree(
@@ -439,7 +487,12 @@ public sealed class DemoGenerator
         var activityMonth = _referenceDate.AddMonths(-1);
         var year = activityMonth.Year;
         var month = activityMonth.Month;
-        string[] outcomes = { "NONE", "SUBMITTED", "APPROVED", "REJECTED" };
+        // S127 / TASK-12701b — the outcome vocabulary. "SUBMITTED" became "EMPLOYEE_APPROVED" when
+        // the loader moved onto POST /api/approval/send, which transitions straight to
+        // EMPLOYEE_APPROVED; the manifest now names the state the row actually ends in. The array's
+        // LENGTH is unchanged, so _rng.Next(outcomes.Length) draws exactly the same indices as before
+        // — the flip moves no draw and no other manifest field.
+        string[] outcomes = { "NONE", "EMPLOYEE_APPROVED", "APPROVED", "REJECTED" };
 
         foreach (var u in active)
         {

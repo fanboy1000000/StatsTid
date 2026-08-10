@@ -10,7 +10,18 @@ namespace StatsTid.Tools.DemoSeed.Loading;
 /// trees, grant privileged roles, set part-time profiles, create the activity slice + vikars,
 /// and apply the messy-case steps. IDEMPOTENT: every write is skip-if-present (the import is a
 /// TRUE no-op on re-run; profile PUT skips when already at the target fraction; vikar create
-/// probes the GET first; activity submit is conflict-tolerant).
+/// probes the GET first; the period send is conflict-tolerant).
+///
+/// <para>S127 / TASK-12701a — the activity stage now writes a COMPLETE month: absences, self-recorded
+/// work time, and the project allocations that reconcile against it day by day. Before this it wrote
+/// absences ONLY, which is why exactly one of the demo world's 375 approval periods passed the
+/// workday-coverage check.</para>
+///
+/// <para>S127 / TASK-12701b — the period call is <c>POST /api/approval/send</c> (the retired
+/// <c>/submit</c> is gone), and a period that does NOT reach its manifest outcome is counted in
+/// <see cref="LoadResult.PeriodOutcomeFailures"/> so it can fail the process. A warning alone never
+/// could: warnings do not affect the exit code, so before this the loader returned 0 having failed
+/// all 374 sends.</para>
 /// </summary>
 public sealed class DemoLoader
 {
@@ -36,9 +47,37 @@ public sealed class DemoLoader
         public int ProfilesSet { get; set; }
         public int ProfilesSkipped { get; set; }
         public int AbsencesSaved { get; set; }
-        public int PeriodsSubmitted { get; set; }
+
+        /// <summary>S127 — project-allocation rows written (Skema <c>entries</c>).</summary>
+        public int AllocationsSaved { get; set; }
+
+        /// <summary>S127 — self-recorded work days written (Skema <c>workTime</c>).</summary>
+        public int WorkDaysSaved { get; set; }
+
+        /// <summary>S127 — activity months skipped whole because all three collections were already
+        /// present (the re-run path).</summary>
+        public int MonthsAlreadyComplete { get; set; }
+
+        /// <summary>S127 / TASK-12701b — periods SENT this run (POST /api/approval/send → 200).</summary>
+        public int PeriodsSent { get; set; }
+
+        /// <summary>S127 / TASK-12701b — sends that 409'd because the row was already past a sendable
+        /// source state (the re-run path). A skip, NOT a success: on a first load a period that never
+        /// landed has no row and therefore cannot 409.</summary>
+        public int PeriodsAlreadySent { get; set; }
+
         public int PeriodsApproved { get; set; }
         public int PeriodsRejected { get; set; }
+
+        /// <summary>
+        /// S127 / TASK-12701b (AC-14b) — activity periods that did NOT reach their manifest outcome:
+        /// a non-200/409 send, or a failed approve/reject after a successful send.
+        ///
+        /// <para>This exists because a WARNING is invisible to a caller: warnings never affected the
+        /// exit code, so the loader used to return 0 having failed every single send. Program.cs
+        /// turns a non-zero count here into a non-zero exit.</para>
+        /// </summary>
+        public int PeriodOutcomeFailures { get; set; }
         public int VikarsCreated { get; set; }
         public int VikarsSkipped { get; set; }
         public int MessyApplied { get; set; }
@@ -453,25 +492,45 @@ public sealed class DemoLoader
         catch (JsonException) { return false; }
     }
 
-    // ── Activity: skema absences + a period transition ──
+    // ── Activity: the complete skema month (absences + allocations + work time) + a period
+    //    transition. S127 / TASK-12701a added the allocation + work-time collections;
+    //    TASK-12701b converted the period call to POST /api/approval/send. ──
     private async Task CreateActivityAsync(LoadResult result, CancellationToken ct)
     {
         _log($"Creating activity for {_manifest.Activity.Count} employees ...");
         foreach (var a in _manifest.Activity)
         {
-            var monthStart = new DateOnly(a.Year, a.Month, 1);
-            var monthEnd = new DateOnly(a.Year, a.Month, DateTime.DaysInMonth(a.Year, a.Month));
+            // 1. Save the month — absences, project allocations and self-recorded work time — but
+            //    IDEMPOTENTLY, and PER COLLECTION.
+            //
+            //    The skema save is event-sourced: absences and time entries APPEND a fresh event
+            //    per call (their projections key on event_id, not on (employee, date)), so a blind
+            //    re-save accumulates duplicates. For entries that is not merely untidy — doubling
+            //    the allocations while work time stays put (it is a latest-wins upsert under the
+            //    outbox_id guard) leaves every day UNBALANCED, which is exactly what the S127
+            //    submit-time gate rejects. So the month is probed first and each collection is sent
+            //    only if it is short. The save is one atomic transaction, so a collection is either
+            //    fully present or fully absent — the count comparison is exact, never partial.
+            // Null ⇒ an unfilled month (a pre-S127 manifest, which must still load).
+            var allocations = a.Allocations ?? new List<DemoAllocation>();
+            var workDays = a.WorkTime ?? new List<DemoWorkDay>();
+            var wantAbsences = a.Absences.Count;
+            var wantAllocations = allocations.Count;
+            var wantWorkDays = workDays.Count;
 
-            // 1. Save absences — but IDEMPOTENTLY: the skema save is event-sourced and APPENDS a
-            //    fresh AbsenceRegistered per call (the absences_projection keys on event_id, not
-            //    on (employee,date)), so a blind re-save would accumulate duplicate projection rows.
-            //    Probe the month first and skip when absences are already present.
-            if (a.Absences.Count > 0)
+            if (wantAbsences + wantAllocations + wantWorkDays > 0)
             {
-                var (probeStatus, existingCount) = await _api.GetSkemaMonthAbsenceCountAsync(a.EmployeeId, a.Year, a.Month, ct);
-                if (probeStatus == HttpStatusCode.OK && existingCount >= a.Absences.Count)
+                var (probeStatus, haveAbsences, haveEntries, haveWorkDays) =
+                    await _api.GetSkemaMonthCountsAsync(a.EmployeeId, a.Year, a.Month, ct);
+                var probed = probeStatus == HttpStatusCode.OK;
+
+                var sendAbsences = !(probed && haveAbsences >= wantAbsences);
+                var sendAllocations = !(probed && haveEntries >= wantAllocations);
+                var sendWorkDays = !(probed && haveWorkDays >= wantWorkDays);
+
+                if (!sendAbsences && !sendAllocations && !sendWorkDays)
                 {
-                    // Already recorded on a prior run — idempotent skip.
+                    result.MonthsAlreadyComplete++;
                 }
                 else
                 {
@@ -479,15 +538,44 @@ public sealed class DemoLoader
                     {
                         year = a.Year,
                         month = a.Month,
-                        absences = a.Absences.Select(ab => new
-                        {
-                            date = ab.Date,
-                            absenceType = ab.AbsenceType,
-                            hours = ab.Hours,
-                        }).ToList(),
+                        absences = sendAbsences
+                            ? a.Absences.Select(ab => new
+                            {
+                                date = ab.Date,
+                                absenceType = ab.AbsenceType,
+                                hours = ab.Hours,
+                            }).ToList<object>()
+                            : new List<object>(),
+                        // The allocation side of the gate: NORMAL entries with a non-null TaskId.
+                        // The server takes TaskId from projectCode (SkemaEndpoints.cs:1609), so the
+                        // code must name a project in the employee's OWN org — the generator picks
+                        // from that org's catalogue.
+                        entries = sendAllocations
+                            ? allocations.Select(al => new
+                            {
+                                date = al.Date,
+                                projectCode = al.ProjectCode,
+                                hours = al.Hours,
+                            }).ToList<object>()
+                            : new List<object>(),
+                        // The worked side of the gate: interval hours + manual hours. Intervals
+                        // only, so the persisted total is exactly the interval duration.
+                        workTime = sendWorkDays
+                            ? workDays.Select(w => new
+                            {
+                                date = w.Date,
+                                intervals = new[] { new { start = w.Start, end = w.End } },
+                                manualHours = 0m,
+                            }).ToList<object>()
+                            : new List<object>(),
                     }, ct);
+
                     if (skStatus == HttpStatusCode.OK)
-                        result.AbsencesSaved += a.Absences.Count;
+                    {
+                        if (sendAbsences) result.AbsencesSaved += wantAbsences;
+                        if (sendAllocations) result.AllocationsSaved += wantAllocations;
+                        if (sendWorkDays) result.WorkDaysSaved += wantWorkDays;
+                    }
                     else if (skStatus == HttpStatusCode.Conflict)
                         { /* period already locked (APPROVED) on a prior run — idempotent skip */ }
                     else
@@ -495,49 +583,68 @@ public sealed class DemoLoader
                 }
             }
 
-            // 2. Period transition.
+            // 2. The SEND act (S127 / TASK-12701b — POST /api/approval/send).
+            //
+            //    Month-keyed: {employeeId, year, month}. The server derives [monthStart, monthEnd]
+            //    and resolves org / agreement / okVersion itself, so the manifest's stored OrgId /
+            //    AgreementCode / OkVersion are NOT sent — they are generation-time values and a
+            //    caller-supplied dimension is the P4 hole the send command closed.
             if (a.PeriodOutcome == "NONE")
                 continue;
 
-            var (subStatus, periodId, subBody) = await _api.SubmitPeriodAsync(new
-            {
-                employeeId = a.EmployeeId,
-                orgId = a.OrgId,
-                periodStart = monthStart.ToString("yyyy-MM-dd"),
-                periodEnd = monthEnd.ToString("yyyy-MM-dd"),
-                periodType = "MONTHLY",
-                agreementCode = a.AgreementCode,
-                okVersion = a.OkVersion,
-            }, ct);
+            var (sendStatus, periodId, sendBody) = await _api.SendPeriodAsync(a.EmployeeId, a.Year, a.Month, ct);
 
-            if (subStatus == HttpStatusCode.Conflict)
+            if (sendStatus == HttpStatusCode.Conflict)
             {
-                // Already SUBMITTED/APPROVED on a prior run — idempotent skip.
+                // The row is already past a sendable source state (EMPLOYEE_APPROVED or APPROVED) —
+                // the genuine re-run path, and the ONLY status treated as a skip.
+                //
+                // ⚠ A 409 is a skip and NOT evidence of success. On a FIRST load a period that never
+                // landed produces no row at all, so it cannot 409 — it re-attempts and fails again.
+                // The proof that the world is right is the verifier's manifest-derived status-count
+                // check (DemoVerifier check 21), never this branch.
+                result.PeriodsAlreadySent++;
                 continue;
             }
-            if (subStatus != HttpStatusCode.OK || periodId is null)
+            if (sendStatus != HttpStatusCode.OK || periodId is null)
             {
-                result.Warnings.Add($"submit {a.EmployeeId} → {(int)subStatus} {Trunc(subBody)}");
+                // 422 = coverage or allocation refused the month; 403 = the floor; anything else is
+                // worse. None of them is a skip: the manifest says this month must reach a
+                // manager-visible state and it did not.
+                result.PeriodOutcomeFailures++;
+                result.Warnings.Add($"send {a.EmployeeId} {a.Year}-{a.Month:00} → {(int)sendStatus} {Trunc(sendBody)}");
                 continue;
             }
-            result.PeriodsSubmitted++;
+            result.PeriodsSent++;
 
             switch (a.PeriodOutcome)
             {
                 case "APPROVED":
                     var (apStatus, apBody) = await _api.ApprovePeriodAsync(periodId.Value, ct);
                     if (apStatus == HttpStatusCode.OK) result.PeriodsApproved++;
-                    else result.Warnings.Add($"approve {a.EmployeeId} → {(int)apStatus} {Trunc(apBody)}");
+                    else
+                    {
+                        result.PeriodOutcomeFailures++;
+                        result.Warnings.Add($"approve {a.EmployeeId} → {(int)apStatus} {Trunc(apBody)}");
+                    }
                     break;
                 case "REJECTED":
                     var (rjStatus, rjBody) = await _api.RejectPeriodAsync(periodId.Value, "Demo: returneret til korrektion.", ct);
                     if (rjStatus == HttpStatusCode.OK) result.PeriodsRejected++;
-                    else result.Warnings.Add($"reject {a.EmployeeId} → {(int)rjStatus} {Trunc(rjBody)}");
+                    else
+                    {
+                        result.PeriodOutcomeFailures++;
+                        result.Warnings.Add($"reject {a.EmployeeId} → {(int)rjStatus} {Trunc(rjBody)}");
+                    }
                     break;
-                // "SUBMITTED" → leave as-is.
+                // "EMPLOYEE_APPROVED" → the send already put it there; leave as-is. (A legacy
+                // manifest's "SUBMITTED" lands here too and means the same thing: no further act.)
             }
         }
-        _log($"  absences={result.AbsencesSaved}, submitted={result.PeriodsSubmitted}, approved={result.PeriodsApproved}, rejected={result.PeriodsRejected}");
+        _log($"  absences={result.AbsencesSaved}, allocations={result.AllocationsSaved}, workDays={result.WorkDaysSaved}, " +
+             $"monthsAlreadyComplete={result.MonthsAlreadyComplete}, sent={result.PeriodsSent}, " +
+             $"alreadySent={result.PeriodsAlreadySent}, approved={result.PeriodsApproved}, " +
+             $"rejected={result.PeriodsRejected}, outcomeFailures={result.PeriodOutcomeFailures}");
     }
 
     // ── Vikars: probe the GET first (idempotent), then create ──

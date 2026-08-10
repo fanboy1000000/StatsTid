@@ -11,7 +11,7 @@
 -- API has a product defect; see SPRINT-84) + a demo GLOBAL_ADMIN bootstrap.
 --
 -- scale=full  seed=42  referenceDate=2026-06-15
--- orgs=6  users=3350 (+1 demo_admin)  employeeRoles=3350  privilegedRoles=457
+-- orgs=6  users=3350 (+1 demo_admin)  employeeRoles=3350  privilegedRoles=457  projects=24
 -- ============================================================================
 
 -- ── Organisations (S92 / ADR-035 flatten: 1 demo MAO root + N ORGANISATIONs under it; ──
@@ -7203,6 +7203,40 @@ INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
     ('demo_styx5_0248', 'EMPLOYEE', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx5_0249', 'EMPLOYEE', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx5_0250', 'EMPLOYEE', 'STYX5', 'ORG_ONLY', 'DEMO_SEED')
+ON CONFLICT DO NOTHING;
+
+-- ── Projects, one catalogue per org INCLUDING the MAO root (S127 / TASK-12701a; owner
+--    ruling B). Projects are strictly ORG-SCOPED, so an employee in a project-less org has
+--    an EMPTY project set — not a filtered one — and could never allocate their hours, which
+--    the S127 submit-time gate makes a hard precondition for sending a month. demo_admin
+--    homes on the MAO, which is why the MAO is in here too. project_id is omitted
+--    deliberately: the column defaults to gen_random_uuid(), nothing references a project by
+--    id (allocations key on project_code), and omitting it keeps this artifact byte-stable. ──
+INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by) VALUES
+    ('MINX', 'DRIFT-01', 'Daglig drift', 1, 'DEMO_SEED'),
+    ('MINX', 'UDV-01', 'Udvikling og implementering', 2, 'DEMO_SEED'),
+    ('MINX', 'ADM-01', 'Administration og ledelse', 3, 'DEMO_SEED'),
+    ('MINX', 'PROJ-01', 'Tvaergaaende projekt', 4, 'DEMO_SEED'),
+    ('STYX1', 'DRIFT-01', 'Daglig drift', 1, 'DEMO_SEED'),
+    ('STYX1', 'UDV-01', 'Udvikling og implementering', 2, 'DEMO_SEED'),
+    ('STYX1', 'ADM-01', 'Administration og ledelse', 3, 'DEMO_SEED'),
+    ('STYX1', 'PROJ-01', 'Tvaergaaende projekt', 4, 'DEMO_SEED'),
+    ('STYX2', 'DRIFT-01', 'Daglig drift', 1, 'DEMO_SEED'),
+    ('STYX2', 'UDV-01', 'Udvikling og implementering', 2, 'DEMO_SEED'),
+    ('STYX2', 'ADM-01', 'Administration og ledelse', 3, 'DEMO_SEED'),
+    ('STYX2', 'PROJ-01', 'Tvaergaaende projekt', 4, 'DEMO_SEED'),
+    ('STYX3', 'DRIFT-01', 'Daglig drift', 1, 'DEMO_SEED'),
+    ('STYX3', 'UDV-01', 'Udvikling og implementering', 2, 'DEMO_SEED'),
+    ('STYX3', 'ADM-01', 'Administration og ledelse', 3, 'DEMO_SEED'),
+    ('STYX3', 'PROJ-01', 'Tvaergaaende projekt', 4, 'DEMO_SEED'),
+    ('STYX4', 'DRIFT-01', 'Daglig drift', 1, 'DEMO_SEED'),
+    ('STYX4', 'UDV-01', 'Udvikling og implementering', 2, 'DEMO_SEED'),
+    ('STYX4', 'ADM-01', 'Administration og ledelse', 3, 'DEMO_SEED'),
+    ('STYX4', 'PROJ-01', 'Tvaergaaende projekt', 4, 'DEMO_SEED'),
+    ('STYX5', 'DRIFT-01', 'Daglig drift', 1, 'DEMO_SEED'),
+    ('STYX5', 'UDV-01', 'Udvikling og implementering', 2, 'DEMO_SEED'),
+    ('STYX5', 'ADM-01', 'Administration og ledelse', 3, 'DEMO_SEED'),
+    ('STYX5', 'PROJ-01', 'Tvaergaaende projekt', 4, 'DEMO_SEED')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================================

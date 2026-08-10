@@ -511,15 +511,25 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         Assert.Equal(25m, row.GetProperty("ferieTotal").GetDecimal());
     }
 
-    /// <summary>The regression guard in the other direction: once the employee SUBMITS, every field
-    /// is released. The rule must not become "leaders see less of what they are asked to approve".
-    /// REJECTED is asserted too — the leader decided on those very numbers, so withholding them
-    /// afterwards would erase the basis of the decision.</summary>
+    /// <summary>The regression guard in the other direction: once the employee SUBMITS (or the month
+    /// reaches EMPLOYEE_APPROVED / APPROVED), every field is released. The rule must not become
+    /// "leaders see less of what they are asked to approve".
+    ///
+    /// <para>S127 / TASK-12712 (owner ruling R1): REJECTED is NO LONGER in this releasing set — 12706
+    /// removed it from <c>ApprovalVisibility.IsSubmittedToManager</c>. The S124 rationale that once
+    /// stood here ("REJECTED is asserted too — the leader decided on those very numbers, so
+    /// withholding them afterwards would erase the basis of the decision") is <b>answered, not
+    /// deleted</b>: a REJECTED month is not a frozen decision record, it is one the employee is
+    /// editing again — both <c>/api/time-entries</c> and Skema accept writes into a REJECTED period,
+    /// and only EMPLOYEE_APPROVED / APPROVED lock the grid — so the figures a manager would read off it
+    /// are in-progress work, NOT "those very numbers". The basis of the decision is preserved by what
+    /// stays on the row (status / submittedAt / decisionAt / rejectionReason) and by the audit trail.
+    /// The REJECTED withholding is pinned by
+    /// <see cref="RejectedPeriod_WithholdsMonthDerivedFields_ButKeepsDecisionRecord"/>.</para></summary>
     [Theory]
     [InlineData("SUBMITTED")]
     [InlineData("EMPLOYEE_APPROVED")]
     [InlineData("APPROVED")]
-    [InlineData("REJECTED")]
     public async Task SubmittedOrDecidedPeriod_ReleasesMonthDerivedFields(string status)
     {
         await InsertPeriodAsync(Emp, "STY02", status);
@@ -537,6 +547,48 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         // because they can carry the employee's own registrations.
         Assert.Equal(JsonValueKind.Number, row.GetProperty("ferieUsed").ValueKind);
         Assert.Equal(JsonValueKind.Number, row.GetProperty("flexBalance").ValueKind);
+    }
+
+    /// <summary>S127 / TASK-12712 (owner ruling R1) — the inversion of the deleted REJECTED arm above,
+    /// and its verification. A REJECTED month is withheld exactly like a DRAFT: the FIVE month-derived
+    /// figures (normRegistered, overtime, hasWarning, flexBalance, ferieUsed) are null — NOT 0 — while
+    /// the decision record the leader authored SURVIVES: status, submittedAt, decisionAt and
+    /// rejectionReason. Real registered hours + a flex event + a vacation balance are seeded first, so
+    /// a leak would surface as the seeded value (40 / 3.5 / 7) rather than pass trivially against an
+    /// employee who simply has no data — the same discipline the DRAFT test uses. This test would go
+    /// RED on the pre-12706 code (where REJECTED released the figures): every null assertion below was
+    /// a `== 40 / == 3.5 / == 7` assertion in the arm this replaced.</summary>
+    [Fact]
+    public async Task RejectedPeriod_WithholdsMonthDerivedFields_ButKeepsDecisionRecord()
+    {
+        await InsertPeriodAsync(Emp, "STY02", "REJECTED", rejectionReason: "rettelser nødvendige");
+        await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
+        await InsertFlexEventAsync(Emp, 3.5m);
+
+        var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
+
+        Assert.Equal("REJECTED", row.GetProperty("status").GetString());
+
+        // WITHHELD — and specifically NOT 0: a REJECTED month is one the employee is editing again,
+        // so its live figures are in-progress work, not a submission (ruling R1). Seeded as 40 / 7 /
+        // 3.5 above precisely so a leak would surface as those values rather than as null.
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("normRegistered").ValueKind);
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("overtime").ValueKind);
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("hasWarning").ValueKind);
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("ferieUsed").ValueKind);
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalance").ValueKind);
+
+        // SURVIVES — the decision record the leader authored. R1 withholds in-progress content, not the
+        // leader's own past decision; that answer to the S124 rationale is what these keep alive.
+        Assert.Equal(JsonValueKind.String, row.GetProperty("submittedAt").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, row.GetProperty("decisionAt").ValueKind);
+        Assert.Equal("rettelser nødvendige", row.GetProperty("rejectionReason").GetString());
+
+        // STILL VISIBLE — the denominators, which no registration can move.
+        Assert.True(row.GetProperty("normExpected").GetDecimal() > 0m);
+        Assert.Equal(25m, row.GetProperty("ferieTotal").GetDecimal());
     }
 
     // ════════════════════════════════════════════════════════════════════════════════

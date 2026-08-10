@@ -62,6 +62,14 @@ public sealed class ApprovalPeriodRepository
         return await ReadPeriodsAsync(cmd, ct);
     }
 
+    /// <summary>
+    /// Self-managed overload of
+    /// <see cref="GetByEmployeeAndPeriodAsync(NpgsqlConnection, NpgsqlTransaction, string, DateOnly, DateOnly, CancellationToken)"/>:
+    /// opens its own connection (no transaction). A caller that already holds a transaction —
+    /// notably anything that must read AFTER acquiring <c>EmployeeConsumptionLock</c> — MUST use the
+    /// in-transaction sibling, because this overload's private connection sits outside the caller's
+    /// transaction and therefore outside the lock's protection.
+    /// </summary>
     public async Task<ApprovalPeriod?> GetByEmployeeAndPeriodAsync(
         string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct = default)
     {
@@ -69,6 +77,42 @@ public sealed class ApprovalPeriodRepository
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
             "SELECT * FROM approval_periods WHERE employee_id = @employeeId AND period_start = @periodStart AND period_end = @periodEnd", conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("periodStart", periodStart);
+        cmd.Parameters.AddWithValue("periodEnd", periodEnd);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadPeriod(reader) : null;
+    }
+
+    /// <summary>
+    /// S127 / TASK-12702 — in-transaction sibling overload of
+    /// <see cref="GetByEmployeeAndPeriodAsync(string, DateOnly, DateOnly, CancellationToken)"/>.
+    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/>; the caller commits
+    /// or rolls back, this method does NOT.
+    ///
+    /// <para>
+    /// <b>Why the natural key rather than a by-id read.</b> This is the AUTHORITATIVE in-lock read for
+    /// the send command and for Skema's in-transaction re-read: both hold
+    /// <c>EmployeeConsumptionLock</c> (<c>pg_advisory_xact_lock</c>, per-employee) and then need to
+    /// know what row exists for (employee, month) — including the case where NO row existed at
+    /// pre-transaction read time and a concurrent transaction has since committed one. A by-id read
+    /// cannot express that question: the loser of a create race has no id to read by. Callers
+    /// re-resolve by natural key inside the lock; no <c>GetByIdAsync</c> overload is provided.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Isolation prerequisite.</b> Seeing a concurrently-committed row requires the caller's
+    /// transaction to be <c>ReadCommitted</c> — under <c>RepeatableRead</c> the snapshot is pinned
+    /// before the advisory lock is granted and this read would still miss the winner's INSERT.
+    /// </para>
+    /// </summary>
+    public async Task<ApprovalPeriod?> GetByEmployeeAndPeriodAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT * FROM approval_periods WHERE employee_id = @employeeId AND period_start = @periodStart AND period_end = @periodEnd",
+            conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("periodStart", periodStart);
         cmd.Parameters.AddWithValue("periodEnd", periodEnd);
@@ -1471,6 +1515,64 @@ public sealed class ApprovalPeriodRepository
         return periodId;
     }
 
+    /// <summary>
+    /// S127 / TASK-12702 — the RACE-SAFE create. Inserts the period with
+    /// <c>ON CONFLICT (employee_id, period_start, period_end) DO NOTHING RETURNING period_id</c>
+    /// and returns the new id on a first write, or <c>null</c> when a concurrent transaction already
+    /// committed a row on that natural key. The conflict target is the exact UNIQUE constraint
+    /// declared on the table (<c>docker/postgres/init.sql:892</c>).
+    ///
+    /// <para>
+    /// <b>Why the existing <see cref="CreateAsync(NpgsqlConnection, NpgsqlTransaction, ApprovalPeriod, CancellationToken)"/>
+    /// cannot serve.</b> Both <c>CreateAsync</c> overloads are plain INSERTs that return the
+    /// CLIENT-generated <see cref="Guid.NewGuid"/> — a value that exists whether or not the row was
+    /// written. "No id means someone else won" is structurally inexpressible through them.
+    /// <paramref name="period"/>'s own <c>PeriodId</c> is ignored here for the same reason it is
+    /// ignored by <c>CreateAsync</c>: the id is minted by this call.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why <c>ON CONFLICT DO NOTHING</c> and not <c>catch (PostgresException 23505)</c>.</b> A
+    /// unique-violation ABORTS the PostgreSQL transaction: every subsequent statement fails with
+    /// 25P02 until rollback. The send command must keep working in the same transaction after losing
+    /// the race (it re-reads by natural key and takes the transition arm), so the conflict must never
+    /// raise. This is asserted directly — the AC-7c test issues further database work on the same
+    /// transaction after the conflicting call and requires it to succeed.
+    /// </para>
+    ///
+    /// <para>
+    /// Mirrors the proven shape at
+    /// <c>StatsTid.Integrations.Payroll/Services/PayrollExportService.cs:278-312</c>. The caller
+    /// commits or rolls back; this method does NOT.
+    /// </para>
+    /// </summary>
+    /// <returns>The newly written <c>period_id</c>, or <c>null</c> when the natural key already existed.</returns>
+    public async Task<Guid?> TryCreateIfAbsentAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        ApprovalPeriod period, CancellationToken ct = default)
+    {
+        var periodId = Guid.NewGuid();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO approval_periods (period_id, employee_id, org_id, period_start, period_end, period_type, status, agreement_code, ok_version)
+            VALUES (@periodId, @employeeId, @orgId, @periodStart, @periodEnd, @periodType, @status, @agreementCode, @okVersion)
+            ON CONFLICT (employee_id, period_start, period_end) DO NOTHING
+            RETURNING period_id
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("periodId", periodId);
+        cmd.Parameters.AddWithValue("employeeId", period.EmployeeId);
+        cmd.Parameters.AddWithValue("orgId", period.OrgId);
+        cmd.Parameters.AddWithValue("periodStart", period.PeriodStart);
+        cmd.Parameters.AddWithValue("periodEnd", period.PeriodEnd);
+        cmd.Parameters.AddWithValue("periodType", period.PeriodType);
+        cmd.Parameters.AddWithValue("status", period.Status);
+        cmd.Parameters.AddWithValue("agreementCode", period.AgreementCode);
+        cmd.Parameters.AddWithValue("okVersion", period.OkVersion);
+
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is null or DBNull ? null : (Guid)result;
+    }
+
     public async Task UpdateStatusAsync(
         Guid periodId, string status, string? actorId = null,
         string? rejectionReason = null,
@@ -1596,6 +1698,61 @@ public sealed class ApprovalPeriodRepository
         if (conditional)
             cmd.Parameters.AddWithValue("allowedSourceStates", allowedSourceStates!.ToArray());
         return cmd;
+    }
+
+    /// <summary>
+    /// S127 / TASK-12702 — the send command's FOLLOW-UP UPDATE. Stamps the send act
+    /// (<c>submitted_at</c> = <c>NOW()</c>, <c>submitted_by</c>) together with the three
+    /// SERVER-RESOLVED dimensions (<c>org_id</c>, <c>agreement_code</c>, <c>ok_version</c>) on a row
+    /// already identified by <paramref name="periodId"/>. Both send adapters run it, so a re-send
+    /// after a reopen re-stamps, and a legacy row carrying wrong caller-supplied dimensions is
+    /// corrected in place.
+    ///
+    /// <para>
+    /// <b>Why this is a SEPARATE statement and not another branch of
+    /// <c>BuildUpdateStatusCommand</c>'s <c>status switch</c>.</b> That switch is load-bearing in two
+    /// directions: its <c>EMPLOYEE_APPROVED</c> branch deliberately does NOT touch
+    /// <c>submitted_at</c>, and its <c>DRAFT</c> branch NULLs it. That pairing is exactly what makes a
+    /// reopened month's null-submitted state reachable. Folding the stamp into the switch would
+    /// destroy the reopen semantics to gain nothing; a second statement leaves the switch untouched.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>No source-state guard, and that is safe — not an omission.</b> The caller runs this
+    /// IMMEDIATELY after
+    /// <see cref="TryUpdateStatusConditionalAsync"/> returned a non-null previous status, in the SAME
+    /// transaction. That statement both takes <c>FOR UPDATE</c> in its subselect and row-locks via its
+    /// own UPDATE, and PostgreSQL holds row locks to END OF TRANSACTION. So between the guarded
+    /// transition and this statement no other transaction can modify the row: re-asserting the source
+    /// state here could not fail, and would only add a second way to be wrong. Ordering is the
+    /// contract — calling this WITHOUT a preceding successful conditional transition in the same
+    /// transaction is a misuse.
+    /// </para>
+    ///
+    /// <para>
+    /// In-transaction only, by design: there is no self-managed overload, because a self-managed
+    /// connection could not inherit the row lock that makes the missing guard safe. The caller
+    /// commits or rolls back; this method does NOT.
+    /// </para>
+    /// </summary>
+    public async Task StampSendAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        Guid periodId, string actorId, string orgId, string agreementCode, string okVersion,
+        CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE approval_periods
+               SET submitted_at = NOW(), submitted_by = @actorId,
+                   org_id = @orgId, agreement_code = @agreementCode, ok_version = @okVersion
+             WHERE period_id = @periodId
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("periodId", periodId);
+        cmd.Parameters.AddWithValue("actorId", actorId);
+        cmd.Parameters.AddWithValue("orgId", orgId);
+        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
+        cmd.Parameters.AddWithValue("okVersion", okVersion);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task UpdateDeadlinesAsync(

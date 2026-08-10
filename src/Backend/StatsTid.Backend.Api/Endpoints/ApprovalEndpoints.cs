@@ -4,7 +4,9 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
+using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
@@ -17,14 +19,13 @@ namespace StatsTid.Backend.Api.Endpoints;
 
 public static class ApprovalEndpoints
 {
-    /// <summary>
-    /// Single shared tolerance for the TASK-5604 allocation-reconciliation gate.
-    /// worked and allocated are both rounded to 2 decimals BEFORE comparing; at
-    /// that scale the smallest real mismatch is 0.01, so a &lt; 0.005 threshold
-    /// treats only pure rounding noise as balanced (7.40 vs 7.4 passes) while a
-    /// genuine 0.01 mismatch blocks the approval.
-    /// </summary>
-    private const decimal AllocationTolerance = 0.005m;
+    // S127 / TASK-12705 — the allocation-reconciliation tolerance and the per-day predicate that
+    // used to live here as a private const plus three hand-copied inline expressions now live in
+    // StatsTid.Backend.Api.AllocationBalance. The three call sites below (the send command's gate,
+    // the team-overview hasWarning chip, the allocation-breakdown imbalance flag) all evaluate the
+    // rule through AllocationBalance.Evaluate; each still builds its OWN set of days to compare,
+    // because the shapes they hold differ and hoisting that loop would cost the read surfaces a
+    // roster-wide scan per employee. See AllocationBalance's summary for the full argument.
 
     /// <summary>
     /// S87-8701 — camelCase JSON options matching the <c>work_time_projection.intervals</c> JSONB
@@ -128,119 +129,64 @@ public static class ApprovalEndpoints
 
     public static WebApplication MapApprovalEndpoints(this WebApplication app)
     {
-        // ── Submit Period ──
-
-        app.MapPost("/api/approval/submit", async (
-            SubmitPeriodRequest request,
+        // ── Send Period (S127 / TASK-12703) ──
+        //
+        // POST /api/approval/send — the MONTH-KEYED send act, and the FIRST of the two adapters over
+        // the one shared command (<see cref="ExecuteSendAsync"/>).
+        //
+        // RETIRED HERE: POST /api/approval/submit. It took a caller-supplied {periodStart, periodEnd}
+        // and wrote SUBMITTED — manager-visible — with NEITHER the workday-coverage check NOR the
+        // allocation-reconciliation gate. Two defects fell out of that shape:
+        //   • defect 1 — an employee could make a month manager-visible without allocating an hour;
+        //   • defect 3 — period identity is the exact tuple (employee_id, period_start, period_end)
+        //     (init.sql:892), but the manager's team-overview resolves a period by OVERLAP
+        //     (ApprovalPeriodRepository.cs:493-494) while Skema resolves the EXACT month
+        //     (SkemaEndpoints.cs:502). A caller-supplied range therefore let a single balanced
+        //     weekday stand in for a whole month in the manager's view.
+        // The server deriving [monthStart, monthEnd] from (year, month) is what closes defect 3 on
+        // the create path; the by-id adapter's whole-month guard closes it on the transition path.
+        //
+        // Also retired with it: caller-supplied org_id / agreement_code / ok_version / period_type
+        // (the old request carried all four). They are SERVER-RESOLVED now — see §3.3 in
+        // ExecuteSendAsync — which is a P4 (version-correctness) fix, not a convenience.
+        //
+        // PeriodSubmitted is RETAINED for replay but is NO LONGER EMITTED by any route: one user
+        // action, one event (ADR-012:60) — the send emits PeriodEmployeeApproved only.
+        app.MapPost("/api/approval/send", async (
+            SendPeriodRequest request,
             ApprovalPeriodRepository approvalRepo,
+            UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
+            TimeEntryProjectionRepository timeEntryRepo,
+            AbsenceProjectionRepository absenceRepo,
+            WorkTimeProjectionRepository workTimeRepo,
             IOutboxEnqueue outbox,
-            IAuditProjectionMapper<PeriodSubmitted> auditMapper,
+            IAuditProjectionMapper<PeriodEmployeeApproved> auditMapper,
             AuditProjectionRepository auditRepo,
-            UserRepository userRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
-            var actor = context.GetActorContext();
+            // Same (year, month) admission the month-keyed READ surfaces use (:657-659, :1150-1152).
+            if (request.Year < 2020 || request.Year > 2100)
+                return Results.BadRequest(new { error = "Invalid year. Must be between 2020 and 2100." });
+            if (request.Month < 1 || request.Month > 12)
+                return Results.BadRequest(new { error = "Invalid month. Must be between 1 and 12." });
 
-            // Employee can only submit own periods
-            if (actor.ActorRole == StatsTidRoles.Employee && request.EmployeeId != actor.ActorId)
-                return Results.Json(new { error = "Access denied", reason = "Employee can only submit own periods" }, statusCode: 403);
+            // (1) THE ADAPTER'S period resolution. The range is derived HERE, from (year, month) —
+            //     never accepted from the caller. By construction it is a whole calendar month, which
+            //     is why this adapter carries no whole-month guard: it cannot produce a partial range.
+            var monthStart = new DateOnly(request.Year, request.Month, 1);
+            var monthEnd = new DateOnly(request.Year, request.Month,
+                DateTime.DaysInMonth(request.Year, request.Month));
 
-            // Higher roles: validate scope covers the employee
-            if (actor.ActorRole != StatsTidRoles.Employee)
-            {
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, request.EmployeeId, ct);
-                if (!allowed)
-                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-            }
-
-            // Check if period already exists (read-only — outside the write transaction).
-            var existing = await approvalRepo.GetByEmployeeAndPeriodAsync(
-                request.EmployeeId, request.PeriodStart, request.PeriodEnd, ct);
-
-            // Only DRAFT or REJECTED periods can be (re-)submitted; reject early.
-            if (existing is not null && existing.Status is "SUBMITTED" or "APPROVED")
-                return Results.Conflict(new { error = $"Period already exists with status {existing.Status}" });
-
-            // Atomic state-change + audit + outbox enqueue (ADR-018 D3 atomic-outbox shape).
-            // Repo writes, audit insert and outbox enqueue commit together; the per-service
-            // OutboxPublisher drains outbox_events to the canonical event store at-least-once
-            // (ADR-018 D4) under its own ReadCommitted transaction with FOR UPDATE per-stream
-            // serialization — replaces the prior post-commit eventStore.AppendAsync shape.
-            Guid periodId;
-            await using var conn = connectionFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
-
-            if (existing is not null)
-            {
-                // DRAFT or REJECTED -> transition to SUBMITTED
-                await approvalRepo.UpdateStatusAsync(conn, tx, existing.PeriodId, "SUBMITTED", actor.ActorId, ct: ct);
-                periodId = existing.PeriodId;
-            }
-            else
-            {
-                // Create new period with DRAFT status, then immediately submit
-                var newPeriod = new ApprovalPeriod
-                {
-                    PeriodId = Guid.NewGuid(),
-                    EmployeeId = request.EmployeeId,
-                    OrgId = request.OrgId,
-                    PeriodStart = request.PeriodStart,
-                    PeriodEnd = request.PeriodEnd,
-                    PeriodType = request.PeriodType,
-                    Status = "DRAFT",
-                    AgreementCode = request.AgreementCode,
-                    OkVersion = request.OkVersion
-                };
-
-                periodId = await approvalRepo.CreateAsync(conn, tx, newPeriod, ct);
-
-                // Immediately transition to SUBMITTED
-                await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "SUBMITTED", actor.ActorId, ct: ct);
-            }
-
-            // Write approval audit (in-tx).
-            await approvalRepo.AppendAuditAsync(
-                conn, tx, periodId, "SUBMITTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.Employee, null, ct);
-
-            // Enqueue PeriodSubmitted event in the same transaction.
-            var streamId = $"approval-{request.EmployeeId}-{request.PeriodStart:yyyy-MM-dd}";
-            var @event = new PeriodSubmitted
-            {
-                PeriodId = periodId,
-                EmployeeId = request.EmployeeId,
-                OrgId = request.OrgId,
-                PeriodStart = request.PeriodStart,
-                PeriodEnd = request.PeriodEnd,
-                PeriodType = request.PeriodType,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-            // S44 TASK-4413: capture outbox_id for audit_projection insert
-            // (ADR-026 D2 sync-in-tx projection write — atomic with the
-            // approval_periods row + outbox row per ADR-018 D3/D13).
-            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
-
-            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
-            var auditCtx = new AuditProjectionContext(
-                ActorId: actor.ActorId,
-                ActorPrimaryOrgId: actor.OrgId,
-                CorrelationId: actor.CorrelationId,
-                OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
-                        ?? throw new InvalidOperationException(
-                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
-            var auditRow = auditMapper.Map(@event, auditCtx);
-            await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
-
-            await tx.CommitAsync(ct);
-
-            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON).
-            return Results.Ok(new PeriodActionResponse(PeriodId: periodId, Status: "SUBMITTED"));
+            return await ExecuteSendAsync(
+                context.GetActorContext(), request.EmployeeId, monthStart, monthEnd,
+                new SendCommandServices(
+                    approvalRepo, userRepo, userAgreementCodeRepo, scopeValidator, connectionFactory,
+                    timeEntryRepo, absenceRepo, workTimeRepo, outbox, auditMapper, auditRepo),
+                ct);
         }).RequireAuthorization("EmployeeOrAbove")
         .Produces<PeriodActionResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
@@ -1074,8 +1020,37 @@ public static class ApprovalEndpoints
                 // STATUS, not on `r.PeriodId`: a REAL DRAFT period row (created-but-not-submitted, or
                 // one that came back to DRAFT) must be blanked exactly like the synthetic zero-period
                 // row. Keying on periodId would blank only the synthetic case and leak the real one.
-                // REJECTED counts as submitted: the employee DID send it, the leader decided on these
-                // very numbers, and hiding them afterwards would erase the basis of that decision.
+                //
+                // ── S127 / TASK-12703 — AMENDING THE S124 REJECTED RULING (owner ruling R1) ──
+                // S124 decided the opposite of what this code now does, and its reasoning was written
+                // here verbatim:
+                //
+                //     "REJECTED counts as submitted: the employee DID send it, the leader decided on
+                //      these very numbers, and hiding them afterwards would erase the basis of that
+                //      decision."
+                //
+                // That is answered, not deleted. The answer is that a REJECTED month is not a decided
+                // month — it is one the employee is actively editing again. `/api/time-entries` and
+                // Skema both accept writes into a REJECTED period (only EMPLOYEE_APPROVED and APPROVED
+                // lock the grid), so the figures a manager reads off a rejected row are NOT "these very
+                // numbers" the decision was taken on; they are whatever the employee has typed since.
+                // Showing them presents in-progress work as if it were a submission, which is exactly
+                // what ruling R1 forbids ("a manager never sees a month the employee could not
+                // certify"). The BASIS of the decision is preserved by what stays visible on the row —
+                // the row still carries Status, SubmittedAt, DecisionAt and RejectionReason (see the
+                // TeamOverviewEmployeeRow construction below, where only the five month-derived
+                // figures are gated on `submittedToManager`) — and by the audit trail, which is the
+                // durable record of what was decided. What is withheld is only the live,
+                // still-moving month figures.
+                //
+                // Scope of the reversal, stated because it is narrower than it looks (ruling R5): this
+                // predicate governs TWO display surfaces — this row and the Skema leader tier
+                // (SkemaEndpoints.cs:515). The sibling read endpoints (allocation-breakdown,
+                // compliance, balance, raw time entries, absences) authorize the same manager
+                // population and read the projections with NO period-status gate, so a manager who
+                // calls them directly still sees a rejected month's current figures. That gap is
+                // RECORDED in RES-002 as its open follow-up — it is deliberately not closed here, and
+                // this change must not be described as access-control enforcement.
                 var submittedToManager = ApprovalVisibility.IsSubmittedToManager(status);
 
                 var normRegistered = registeredByEmployee.GetValueOrDefault(r.EmployeeId, 0m);
@@ -1089,11 +1064,19 @@ public static class ApprovalEndpoints
                 // exists for this employee + (year, month)). The FE gates the reopen control on this.
                 var payrollExported = payrollExportedByEmployee.TryGetValue(r.EmployeeId, out var exportedAt);
 
-                // hasWarning = the cheap allocation-imbalance warning (|worked − allocated| > tol on
-                // ANY day in the month). Mirrors the allocation arm of the approve gate SYMMETRICALLY
-                // (the gate flags Math.Abs(worked − allocated) ≥ tol — both under- AND over-allocation
-                // are un-approvable; S87 Step-7a), — NO rule-engine / compliance call. A named P1
-                // narrowing: it does NOT mirror the coverage/uncovered-days arm, so false ≠ submittable.
+                // hasWarning = the cheap allocation-imbalance warning (ANY day in the month is
+                // imbalanced by the shared per-day predicate). Mirrors the allocation arm of the send
+                // gate SYMMETRICALLY — both under- AND over-allocation are un-sendable (S87 Step-7a) —
+                // and since S127/TASK-12705 that is no longer a claim about two copies agreeing: the
+                // verdict comes from AllocationBalance.Evaluate, the same call the gate makes. NO
+                // rule-engine / compliance call. A named P1 narrowing: it does NOT mirror the
+                // coverage/uncovered-days arm, so false ≠ sendable.
+                //
+                // The day-set construction stays local and stays SHAPED FOR THIS SURFACE: the two
+                // dictionaries are keyed by (employeeId, date) because they were batched across the
+                // whole roster in one query, so the cheap probe is to walk the month's ~31 days and
+                // look each candidate up. Asking a shared helper for "the days either map mentions for
+                // this employee" would mean scanning the roster-wide key set once per employee.
                 var hasWarning = false;
                 var daysWithEither = new HashSet<DateOnly>();
                 for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
@@ -1104,9 +1087,10 @@ public static class ApprovalEndpoints
                 }
                 foreach (var d in daysWithEither)
                 {
-                    var worked = Math.Round(workedByEmployeeDay.GetValueOrDefault((r.EmployeeId, d), 0m), 2);
-                    var allocated = Math.Round(allocatedByEmployeeDay.GetValueOrDefault((r.EmployeeId, d), 0m), 2);
-                    if (Math.Abs(worked - allocated) > AllocationTolerance)
+                    var day = AllocationBalance.Evaluate(
+                        workedByEmployeeDay.GetValueOrDefault((r.EmployeeId, d), 0m),
+                        allocatedByEmployeeDay.GetValueOrDefault((r.EmployeeId, d), 0m));
+                    if (day.IsImbalanced)
                     {
                         hasWarning = true;
                         break;
@@ -1155,9 +1139,10 @@ public static class ApprovalEndpoints
         //
         // The figures REPLICATE the S87 aggregate's per-(employee,day) worked/allocated maps for THIS
         // employee (a per-employee slice of :910-957) so the result is PROVABLY identical to the row:
-        //   hasAllocationImbalance — the AUTHORITATIVE per-day ANY check, computed IDENTICALLY to the
-        //     aggregate's hasWarning loop (:1102-1119): iterate the days with either worked or allocated;
-        //     true iff ANY day has Math.Abs(round(worked_d,2) − round(allocated_d,2)) > AllocationTolerance.
+        //   hasAllocationImbalance — the AUTHORITATIVE per-day ANY check: iterate the days with either
+        //     worked or allocated and ask AllocationBalance.Evaluate — the SAME call the aggregate's
+        //     hasWarning loop and the send gate make (S127/TASK-12705; before that it was a third
+        //     hand-copy of the expression, held to the other two by this comment alone).
         //     It MUST NOT be derived from the under/over sums — summing sub-tolerance daily deltas could
         //     trip a sum past tol where the per-day ANY check (and thus the table chip) would not.
         //   underAllocated / overAllocated — DISPLAY-only directional sums over the per-rounded-day deltas.
@@ -1263,6 +1248,12 @@ public static class ApprovalEndpoints
             }
 
             // (d) The month totals + the per-day directional sums + the AUTHORITATIVE per-day ANY check.
+            //
+            // ⚠ The two month totals are reported RAW — summed before any rounding — and TASK-12700's
+            // characterization baseline PINS them that way (case C5 is the only row where raw and
+            // rounded diverge). Rounding happens per day, inside the comparison below, and must stay
+            // there: routing these two sums through the shared per-day predicate would change the wire
+            // response and turn that baseline red.
             var worked = workedByDay.Values.Sum();
             var allocated = allocatedByDay.Values.Sum();
 
@@ -1275,13 +1266,16 @@ public static class ApprovalEndpoints
             var hasAllocationImbalance = false;
             foreach (var d in daysWithEither)
             {
-                var workedD = Math.Round(workedByDay.GetValueOrDefault(d, 0m), 2);
-                var allocatedD = Math.Round(allocatedByDay.GetValueOrDefault(d, 0m), 2);
-                underAllocated += Math.Max(0m, workedD - allocatedD);
-                overAllocated += Math.Max(0m, allocatedD - workedD);
-                // AUTHORITATIVE imbalance = the SAME per-day ANY check the table hasWarning uses (the
-                // approve gate, both directions). NOT derived from the summed under/over (B1 drift).
-                if (Math.Abs(workedD - allocatedD) > AllocationTolerance)
+                // AUTHORITATIVE imbalance = the SAME per-day call the table hasWarning and the send
+                // gate make (both directions). NOT derived from the summed under/over (B1 drift) —
+                // which is why the directional sums are taken from the SAME evaluated day rather than
+                // recomputed: one rounding, one verdict, three figures.
+                var day = AllocationBalance.Evaluate(
+                    workedByDay.GetValueOrDefault(d, 0m),
+                    allocatedByDay.GetValueOrDefault(d, 0m));
+                underAllocated += day.UnderAllocated;
+                overAllocated += day.OverAllocated;
+                if (day.IsImbalanced)
                     hasAllocationImbalance = true;
             }
 
@@ -1343,12 +1337,20 @@ public static class ApprovalEndpoints
         }).RequireAuthorization("EmployeeOrAbove")
         .Produces<IEnumerable<EmployeePeriodItem>>(StatusCodes.Status200OK); // S116 / TASK-11600 — a BARE ARRAY
 
-        // ── Employee Approve Period ──
-
+        // ── Employee Approve Period — the BY-ID send adapter (S127 / TASK-12703) ──
+        //
+        // The SECOND adapter over the same command, not a second implementation. Its only job is to
+        // turn a period_id into the (employeeId, monthStart, monthEnd) triple the command is keyed on,
+        // and to refuse ranges the command cannot honestly represent.
+        //
+        // Its caller is the re-send button on *Mine perioder*, which renders on DRAFT or REJECTED
+        // (MyPeriods.tsx:324) — SUBMITTED rows reach it too, because a legacy row's only route to the
+        // certified state is through this command (§3.2).
         app.MapPost("/api/approval/{periodId}/employee-approve", async (
             Guid periodId,
             ApprovalPeriodRepository approvalRepo,
             UserRepository userRepo,
+            UserAgreementCodeRepository userAgreementCodeRepo,
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             TimeEntryProjectionRepository timeEntryRepo,
@@ -1360,203 +1362,52 @@ public static class ApprovalEndpoints
             HttpContext context,
             CancellationToken ct) =>
         {
-            var actor = context.GetActorContext();
-
+            // (1) THE ADAPTER PRE-READ. /send carries employeeId in the body; this route carries only
+            //     a period_id, so it must read the row to learn (a) the employee — the ADVISORY LOCK
+            //     KEY, which must be known BEFORE the lock is taken — and (b) the range, for the
+            //     whole-month guard below.
+            //
+            //     This read is deliberately OUTSIDE the lock and needs NO drift guard, and that is a
+            //     property of the schema rather than an assumption: employee_id, period_start and
+            //     period_end are written ONLY by an INSERT. No production UPDATE touches them —
+            //     BuildUpdateStatusCommand's status switch writes status/timestamps/decision fields,
+            //     StampSendAsync writes the send stamp + the three resolved dimensions, and
+            //     UpdateDeadlinesAsync writes the two deadlines. There is no production DELETE at all.
+            //     So the triple this read yields cannot go stale, and the AUTHORITATIVE read of
+            //     everything that CAN change (status, and the row's existence) happens inside the lock
+            //     in the shared command.
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
-
             if (period is null)
-            {
-                // Period doesn't exist — cannot employee-approve a non-existent period
                 return Results.NotFound(new { error = "Period not found" });
-            }
 
-            // Employee can only approve own periods
-            if (actor.ActorRole == StatsTidRoles.Employee && period.EmployeeId != actor.ActorId)
-                return Results.Json(new { error = "Access denied", reason = "Employee can only approve own periods" }, statusCode: 403);
-
-            if (actor.ActorRole != StatsTidRoles.Employee)
-            {
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, ct);
-                if (!allowed)
-                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-            }
-
-            if (period.Status is not ("DRAFT" or "SUBMITTED" or "REJECTED"))
-                return Results.Conflict(new { error = $"Cannot employee-approve period with status {period.Status}. Only DRAFT, SUBMITTED, or REJECTED periods can be employee-approved." });
-
-            // ── Workday coverage validation ──
-            // Before allowing employee approval, verify all expected workdays in the
-            // period have at least one time entry or absence registration. This is a
-            // read-only check — outside the write transaction.
-
-            // 1. Query Danish public holidays in the period range.
-            var holidays = new HashSet<DateOnly>();
-            await using var holidayConn = connectionFactory.Create();
-            await holidayConn.OpenAsync(ct);
-            await using var holidayCmd = new NpgsqlCommand(
-                "SELECT holiday_date FROM danish_public_holidays WHERE holiday_date >= @start AND holiday_date <= @end",
-                holidayConn);
-            holidayCmd.Parameters.AddWithValue("start", period.PeriodStart);
-            holidayCmd.Parameters.AddWithValue("end", period.PeriodEnd);
-            await using var holidayReader = await holidayCmd.ExecuteReaderAsync(ct);
-            while (await holidayReader.ReadAsync(ct))
-                holidays.Add(holidayReader.GetFieldValue<DateOnly>(0));
-
-            // 2. Build list of expected workdays (weekdays minus public holidays).
-            var expectedWorkdays = new List<DateOnly>();
-            for (var d = period.PeriodStart; d <= period.PeriodEnd; d = d.AddDays(1))
-            {
-                if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-                    continue;
-                if (holidays.Contains(d))
-                    continue;
-                expectedWorkdays.Add(d);
-            }
-
-            // 3. Query time entries and absences for the employee + date range.
-            var timeEntries = await timeEntryRepo.GetByEmployeeAndDateRangeAsync(
-                period.EmployeeId, period.PeriodStart, period.PeriodEnd, ct);
-            var absences = await absenceRepo.GetByEmployeeAndDateRangeAsync(
-                period.EmployeeId, period.PeriodStart, period.PeriodEnd, ct);
-
-            // 4. Determine which workdays have at least one registration.
-            var entryDates = new HashSet<DateOnly>(
-                timeEntries.Select(e => e.Date));
-            var absenceDates = new HashSet<DateOnly>(
-                absences.Select(a => a.Date));
-
-            var uncoveredDays = expectedWorkdays
-                .Where(d => !entryDates.Contains(d) && !absenceDates.Contains(d))
-                .ToList();
-
-            // 5. Reject if any workdays are uncovered.
-            if (uncoveredDays.Count > 0)
-            {
-                var coveredCount = expectedWorkdays.Count - uncoveredDays.Count;
-                return Results.UnprocessableEntity(new
+            // (1b) THE WHOLE-MONTH GUARD (defect 3, transition path). Exact-tuple uniqueness
+            //      (init.sql:892) lets a canonical full-month row and an overlapping partial row
+            //      coexist, and the manager's overlap join takes ORDER BY ap.period_start DESC
+            //      (ApprovalPeriodRepository.cs:493-495) — so a partial row that transitioned would
+            //      be what the manager sees for the whole month.
+            //
+            //      A BOUNDARY check, deliberately NOT a period_type check: a WEEKLY row that happens
+            //      to span an exact calendar month is ACCEPTED. Checking the type instead would make
+            //      every legacy WEEKLY row permanently unsendable, which is a different decision with
+            //      its own migration cost (refinement AC-10).
+            //
+            //      This guard runs BEFORE the command's role floor, because it is part of resolving
+            //      the period rather than of deciding it. The body therefore echoes NO period data:
+            //      the 404 above is pre-existing pre-authorization disclosure, and there is no reason
+            //      to widen it. The only caller already holds the row it is sending.
+            if (!IsWholeCalendarMonth(period.PeriodStart, period.PeriodEnd))
+                return Results.Conflict(new
                 {
-                    error = "Ikke alle arbejdsdage er dækket",
-                    message = "Følgende arbejdsdage mangler registreringer",
-                    missingDays = uncoveredDays.Select(d => d.ToString("yyyy-MM-dd")).ToList(),
-                    coveredDays = coveredCount,
-                    totalWorkdays = expectedWorkdays.Count,
+                    error = "Cannot send a period that is not a whole calendar month.",
+                    kind = "not-whole-month",
                 });
-            }
 
-            // ── Allocation-reconciliation gate (TASK-5604) ──
-            // HARD precondition ALONGSIDE coverage: for EVERY day in the period,
-            // the recorded worked hours (work_time_projection: interval hours +
-            // manual_hours) must match the allocated project hours (NORMAL time
-            // entries with a non-null TaskId) within rounding tolerance. This is
-            // a deterministic, read-only check on projections — no events, no
-            // rule-engine call (P2). Absences are excluded (not in time_entries).
-            // The NORMAL + non-null-TaskId allowlist mirrors the grid's allocation
-            // predicate so this backend gate and the frontend "Ikke fordelt" row
-            // agree (historical activity_type='timer' and null-TaskId rows excluded).
-
-            // worked(day): interval hours + manual_hours from work_time_projection.
-            var workTimeRows = await workTimeRepo.GetByEmployeeAndDateRangeAsync(
-                period.EmployeeId, period.PeriodStart, period.PeriodEnd, ct);
-            var workedByDay = new Dictionary<DateOnly, decimal>();
-            foreach (var row in workTimeRows)
-            {
-                var worked = SumIntervalHours(row.Intervals) + row.ManualHours;
-                workedByDay[row.Date] = workedByDay.TryGetValue(row.Date, out var existing)
-                    ? existing + worked
-                    : worked;
-            }
-
-            // allocated(day): reuse the time-entry list already loaded for the
-            // coverage check (no re-query); filter to NORMAL + non-null TaskId.
-            var allocatedByDay = new Dictionary<DateOnly, decimal>();
-            foreach (var entry in timeEntries)
-            {
-                if (entry.ActivityType != "NORMAL" || entry.TaskId is null)
-                    continue;
-                allocatedByDay[entry.Date] = allocatedByDay.TryGetValue(entry.Date, out var existing)
-                    ? existing + entry.Hours
-                    : entry.Hours;
-            }
-
-            // Compare every day that has either worked or allocated hours. Days
-            // with worked==0 AND allocated==0 are implicitly balanced (skipped).
-            var unbalancedDays = new List<object>();
-            foreach (var day in workedByDay.Keys.Union(allocatedByDay.Keys).OrderBy(d => d))
-            {
-                var worked = Math.Round(workedByDay.GetValueOrDefault(day), 2);
-                var allocated = Math.Round(allocatedByDay.GetValueOrDefault(day), 2);
-                if (Math.Abs(worked - allocated) < AllocationTolerance)
-                    continue;
-                unbalancedDays.Add(new
-                {
-                    date = day.ToString("yyyy-MM-dd"),
-                    worked,
-                    allocated,
-                    direction = worked > allocated ? "under" : "over",
-                });
-            }
-
-            if (unbalancedDays.Count > 0)
-            {
-                return Results.UnprocessableEntity(new
-                {
-                    kind = "allocation",
-                    unbalancedDays,
-                });
-            }
-
-            // Atomic state-change + deadlines + audit + outbox enqueue (ADR-018 D3).
-            await using var conn = connectionFactory.Create();
-            await conn.OpenAsync(ct);
-            await using var tx = await conn.BeginTransactionAsync(ct);
-
-            // Transition to EMPLOYEE_APPROVED
-            await approvalRepo.UpdateStatusAsync(conn, tx, periodId, "EMPLOYEE_APPROVED", actor.ActorId, ct: ct);
-
-            // Calculate and set deadlines (in-tx).
-            var lastDayOfMonth = new DateOnly(period.PeriodEnd.Year, period.PeriodEnd.Month,
-                DateTime.DaysInMonth(period.PeriodEnd.Year, period.PeriodEnd.Month));
-            var employeeDeadline = lastDayOfMonth.AddDays(2);
-            var managerDeadline = lastDayOfMonth.AddDays(5);
-            await approvalRepo.UpdateDeadlinesAsync(conn, tx, periodId, employeeDeadline, managerDeadline, ct);
-
-            // Write audit trail (in-tx).
-            await approvalRepo.AppendAuditAsync(
-                conn, tx, periodId, "SUBMITTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.Employee,
-                "Employee self-approval", ct);
-
-            // Enqueue PeriodEmployeeApproved event in the same transaction.
-            var streamId = $"approval-{period.EmployeeId}-{period.PeriodStart:yyyy-MM-dd}";
-            var @event = new PeriodEmployeeApproved
-            {
-                PeriodId = periodId,
-                EmployeeId = period.EmployeeId,
-                OrgId = period.OrgId,
-                PeriodStart = period.PeriodStart,
-                PeriodEnd = period.PeriodEnd,
-                ActorId = actor.ActorId,
-                ActorRole = actor.ActorRole,
-                CorrelationId = actor.CorrelationId
-            };
-            // S44 TASK-4413: capture outbox_id for audit_projection insert
-            var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
-
-            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
-            var auditCtx = new AuditProjectionContext(
-                ActorId: actor.ActorId,
-                ActorPrimaryOrgId: actor.OrgId,
-                CorrelationId: actor.CorrelationId,
-                OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
-                        ?? throw new InvalidOperationException(
-                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
-            var auditRow = auditMapper.Map(@event, auditCtx);
-            await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
-
-            await tx.CommitAsync(ct);
-
-            // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the shared action receipt).
-            return Results.Ok(new PeriodActionResponse(PeriodId: periodId, Status: "EMPLOYEE_APPROVED"));
+            return await ExecuteSendAsync(
+                context.GetActorContext(), period.EmployeeId, period.PeriodStart, period.PeriodEnd,
+                new SendCommandServices(
+                    approvalRepo, userRepo, userAgreementCodeRepo, scopeValidator, connectionFactory,
+                    timeEntryRepo, absenceRepo, workTimeRepo, outbox, auditMapper, auditRepo),
+                ct);
         }).RequireAuthorization("EmployeeOrAbove")
         .Produces<PeriodActionResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
 
@@ -1773,6 +1624,442 @@ public static class ApprovalEndpoints
         return app;
     }
 
+    // ── The shared send command (S127 / TASK-12703) ──────────────────────────────────────────────
+
+    /// <summary>
+    /// S127 / TASK-12703 — the source states a send may transition FROM.
+    ///
+    /// <para><c>SUBMITTED</c> is a member deliberately: it is the ONLY route the 138 legacy rows
+    /// written by the retired <c>/submit</c> have to the certified state, and admitting them is also
+    /// what makes the follow-up UPDATE's dimension correction (§3.3) reach them. It introduces no
+    /// downgrade — <c>EMPLOYEE_APPROVED</c> and <c>APPROVED</c> stay excluded, so a second send of an
+    /// already-sent month is a 409, never a walk backwards.</para>
+    /// </summary>
+    private static readonly string[] AllowedSendSourceStates = { "DRAFT", "SUBMITTED", "REJECTED" };
+
+    /// <summary>
+    /// Is <paramref name="start"/>..<paramref name="end"/> exactly one calendar month — first day to
+    /// last day, same month? A BOUNDARY predicate: it says nothing about <c>period_type</c>, so a
+    /// WEEKLY row spanning an exact month passes (refinement AC-10).
+    /// </summary>
+    private static bool IsWholeCalendarMonth(DateOnly start, DateOnly end) =>
+        start.Day == 1
+        && end.Year == start.Year
+        && end.Month == start.Month
+        && end.Day == DateTime.DaysInMonth(start.Year, start.Month);
+
+    /// <summary>
+    /// The services <see cref="ExecuteSendAsync"/> needs, bundled so the two adapters can hand the
+    /// command one argument instead of eleven. Each adapter builds it from its OWN injected minimal-API
+    /// parameters — this record is never model-bound, so it is invisible to the OpenAPI generator.
+    /// </summary>
+    private sealed record SendCommandServices(
+        ApprovalPeriodRepository ApprovalRepo,
+        UserRepository UserRepo,
+        UserAgreementCodeRepository UserAgreementCodeRepo,
+        OrgScopeValidator ScopeValidator,
+        DbConnectionFactory ConnectionFactory,
+        TimeEntryProjectionRepository TimeEntryRepo,
+        AbsenceProjectionRepository AbsenceRepo,
+        WorkTimeProjectionRepository WorkTimeRepo,
+        IOutboxEnqueue Outbox,
+        IAuditProjectionMapper<PeriodEmployeeApproved> AuditMapper,
+        AuditProjectionRepository AuditRepo);
+
+    /// <summary>
+    /// S127 / TASK-12703 — THE send command. Both routes end here: <c>POST /api/approval/send</c>
+    /// (month-keyed) and <c>POST /api/approval/{periodId}/employee-approve</c> (by id). Everything
+    /// after period resolution — lock, floor, validation, transition, timestamps, resolved dimensions,
+    /// event, audit — is this one code path, with NO route-specific branches.
+    ///
+    /// <para><b>The invariant it exists to hold:</b> every transition into a manager-visible state
+    /// goes through one validated command, keyed on a whole month, executed under the per-employee
+    /// advisory lock that every request-path projection writer holds. Three qualifications, each
+    /// stated because leaving one out would overclaim: <c>ProjectionBackfillService</c> is NOT
+    /// enrolled (a deliberate carve-out, refinement §3.4); legacy <c>SUBMITTED</c> rows stay
+    /// manager-approvable WITHOUT validation (owner ruling R6 — the hole is accepted, not closed);
+    /// and <c>POST /api/time-entries</c> has no approval-status check, so the lock stops a write
+    /// racing INSIDE a send but not one landing AFTER it.</para>
+    ///
+    /// <para><b>Ordering is the contract.</b> The by-id route's checks all used to run BEFORE its
+    /// transaction opened, which made them advisory. Required order, both adapters:
+    /// (1) adapter pre-read → (2) tx at READ COMMITTED → (3) advisory lock, first statement →
+    /// (4) authoritative re-read by natural key → (5) role floor, then coverage, then allocation →
+    /// (6) conditional transition, follow-up UPDATE, event, audit.</para>
+    /// </summary>
+    /// <param name="monthStart">The first day of the month. Server-derived on both adapters.</param>
+    /// <param name="monthEnd">The last day of that same month.</param>
+    private static async Task<IResult> ExecuteSendAsync(
+        ActorContext actor,
+        string employeeId,
+        DateOnly monthStart,
+        DateOnly monthEnd,
+        SendCommandServices svc,
+        CancellationToken ct)
+    {
+        // ── (2) THE TRANSACTION — ISOLATION PINNED EXPLICITLY, NOT THE DEFAULT OVERLOAD ──────────
+        //
+        // READ COMMITTED (not RepeatableRead) is load-bearing, and the whole concurrency argument
+        // below rests on it: the tx's first statement is a pg_advisory_xact_lock that BLOCKS until the
+        // lock is granted, and the loser of a create race must, on the very next read, SEE the
+        // winner's committed INSERT. A RepeatableRead snapshot is pinned BEFORE the lock is granted,
+        // so the loser would still miss that row, take the create arm, and collide. READ COMMITTED
+        // gives each post-lock statement a fresh snapshot — correct for a lock-serialized critical
+        // section. Same hazard, same pin, as ReportingLineEndpoints.cs:1787 / :2470,
+        // ReportingLineRepository.cs:216-223 and SettlementCloseService.cs:363-367.
+        //
+        // Corollary, and a real trap: NEVER pass an ApprovalAuthorityContext on this transaction.
+        // DesignatedApproverAuthorizer.EnsureContextIsSnapshotBound (:465) THROWS unless it is given
+        // RepeatableRead or stronger, because memoized authority answers are only equivalent to
+        // re-querying inside a pinned snapshot. This command therefore resolves no approval authority
+        // at all — its authorization is org-scope + the role floor, which is a per-request verdict.
+        await using var conn = svc.ConnectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+
+        // ── (3) THE PER-EMPLOYEE ADVISORY LOCK — FIRST STATEMENT IN THE TRANSACTION ──────────────
+        //
+        // The SAME lock Skema's writer takes (ADR-032 D4). Not a second lock: a second advisory key
+        // would add a lock-order edge for nothing. Held to commit.
+        //
+        // What it buys: every read this command makes afterwards observes state that no enrolled
+        // request-path writer can move before we commit. The projection reads below run on their
+        // repositories' OWN connections, which is fine and is the same reasoning ADR-032 D4 records
+        // for the profile resolver — the lock serializes the WRITERS, and because it is acquired
+        // BEFORE those reads are issued, whatever they see committed is still what is committed when
+        // this transaction commits.
+        await EmployeeConsumptionLock.AcquireAsync(conn, tx, employeeId, ct);
+
+        // ── (4) THE AUTHORITATIVE RE-READ, INSIDE THE LOCK, BY NATURAL KEY ───────────────────────
+        //
+        // By natural key and not by id, on BOTH adapters. The loser of a create race has no id to
+        // read by — "what row exists for (employee, month)?" is the only question that survives the
+        // race, and it is the question the unique constraint answers (init.sql:892).
+        var existing = await svc.ApprovalRepo.GetByEmployeeAndPeriodAsync(
+            conn, tx, employeeId, monthStart, monthEnd, ct);
+
+        // ── (5a) THE ROLE FLOOR (owner ruling R4) ────────────────────────────────────────────────
+        //
+        // "A leader may not send for another employee." Self, or LocalHR-and-above acting for
+        // another. A LocalLeader sending for someone else gets 403 — an AUTHORIZATION decision, not a
+        // 422: they are not permitted to perform the act at all, which is a different statement from
+        // "the month is not ready".
+        //
+        // Mechanism: the per-scope roleFloor parameter (OrgScopeValidator.cs:56-112) — a scope below
+        // the floor never admits, so a mixed-role actor's LEADER scope cannot carry the send while
+        // their HR scope, if any, still can. SELF IS EXEMPT and that exemption is load-bearing: a
+        // LocalLeader is also an employee who sends their OWN month; they are not Employee-role, so
+        // they fall through to this branch, and an unconditional floor would lock every leader out of
+        // their own timesheet. The live idiom is SkemaEndpoints.cs:637-641.
+        if (actor.ActorRole == StatsTidRoles.Employee && employeeId != actor.ActorId)
+            return Results.Json(
+                new { error = "Access denied", reason = "Employee can only send own periods" },
+                statusCode: 403);
+
+        if (actor.ActorRole != StatsTidRoles.Employee)
+        {
+            var sendFloor = string.Equals(employeeId, actor.ActorId, StringComparison.Ordinal)
+                ? null
+                : StatsTidRoles.LocalHR;
+            var (allowed, reason) = await svc.ScopeValidator.ValidateEmployeeAccessAsync(
+                actor, employeeId, sendFloor, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+        }
+
+        // ── (5b) THE SOURCE-STATE GATE ───────────────────────────────────────────────────────────
+        //
+        // Read off the AUTHORITATIVE in-lock row, so the message names the status that is really
+        // there. This is NOT the enforcement point — the conditional UPDATE at (6) is, and it stays
+        // load-bearing: writers that do NOT hold the employee- advisory (manager approve/reject, the
+        // leader arm of reopen) can still commit a status change between this read and that UPDATE.
+        // This gate exists to give the common case an honest 409 instead of the generic one.
+        if (existing is not null && !AllowedSendSourceStates.Contains(existing.Status))
+            return Results.Conflict(new
+            {
+                error = $"Cannot send period with status {existing.Status}. " +
+                        "Only DRAFT, SUBMITTED, or REJECTED periods can be sent.",
+            });
+
+        // ── (5c) THE SERVER-RESOLVED DIMENSIONS (P4) ─────────────────────────────────────────────
+        //
+        // org_id / agreement_code / ok_version are resolved HERE and carried through the follow-up
+        // UPDATE at (6), so they are written on the create arm AND corrected on the transition arm.
+        // That second half is the point: the retired /submit took all three straight off the request
+        // body and INSERTed them, and AllowedSendSourceStates admits exactly those rows (SUBMITTED) as
+        // sources — so a re-send now REPAIRS a wrong stored value rather than preserving it.
+        //
+        //   • agreement_code — AT THE MONTH BEING SENT, mirroring Skema (SkemaEndpoints.cs:675-677).
+        //     users.agreement_code is a live-only cache; reading it would stamp today's agreement onto
+        //     a March month sent in April. The dated lookup is the authority, with the cache as the
+        //     documented graceful fallback (ADR-023 D3) for a user created after the period.
+        //   • ok_version   — OkVersionResolver at monthStart, NOT today. The OK24→OK26 boundary is
+        //     2026-04-01, so a March 2026 month sent in April must record OK24.
+        //   • org_id       — the employee's CURRENT primary org (deliberate). It is the same value the
+        //     audit projection resolves as ResolvedTargetOrgId, so the row and its audit trail cannot
+        //     disagree about which organisation the month belongs to.
+        var user = await svc.UserRepo.GetByIdAsync(conn, tx, employeeId, ct);
+        if (user is null)
+            return Results.NotFound(new { error = "Employee not found" });
+
+        var orgId = user.PrimaryOrgId;
+        var agreementCode =
+            await svc.UserAgreementCodeRepo.GetByUserIdAtAsync(employeeId, monthStart, ct)
+            ?? user.AgreementCode;
+        var okVersion = OkVersionResolver.ResolveVersion(monthStart);
+
+        // ── (5d) WORKDAY COVERAGE VALIDATION ─────────────────────────────────────────────────────
+        // Every expected workday in the month must carry at least one time entry or absence
+        // registration. Fires BEFORE the allocation gate; its {missingDays} 422 shape is unchanged.
+
+        // 1. Danish public holidays in range. On the tx connection — static reference data, and it
+        //    saves a pooled connection.
+        var holidays = new HashSet<DateOnly>();
+        await using (var holidayCmd = new NpgsqlCommand(
+            "SELECT holiday_date FROM danish_public_holidays WHERE holiday_date >= @start AND holiday_date <= @end",
+            conn, tx))
+        {
+            holidayCmd.Parameters.AddWithValue("start", monthStart);
+            holidayCmd.Parameters.AddWithValue("end", monthEnd);
+            await using var holidayReader = await holidayCmd.ExecuteReaderAsync(ct);
+            while (await holidayReader.ReadAsync(ct))
+                holidays.Add(holidayReader.GetFieldValue<DateOnly>(0));
+        }
+
+        // 2. Expected workdays (weekdays minus public holidays).
+        var expectedWorkdays = new List<DateOnly>();
+        for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                continue;
+            if (holidays.Contains(d))
+                continue;
+            expectedWorkdays.Add(d);
+        }
+
+        // 3. Time entries and absences for the employee + month.
+        var timeEntries = await svc.TimeEntryRepo.GetByEmployeeAndDateRangeAsync(
+            employeeId, monthStart, monthEnd, ct);
+        var absences = await svc.AbsenceRepo.GetByEmployeeAndDateRangeAsync(
+            employeeId, monthStart, monthEnd, ct);
+
+        // 4. Which workdays carry at least one registration.
+        var entryDates = new HashSet<DateOnly>(timeEntries.Select(e => e.Date));
+        var absenceDates = new HashSet<DateOnly>(absences.Select(a => a.Date));
+
+        var uncoveredDays = expectedWorkdays
+            .Where(d => !entryDates.Contains(d) && !absenceDates.Contains(d))
+            .ToList();
+
+        // 5. Reject if any workday is uncovered.
+        if (uncoveredDays.Count > 0)
+        {
+            var coveredCount = expectedWorkdays.Count - uncoveredDays.Count;
+            return Results.UnprocessableEntity(new
+            {
+                error = "Ikke alle arbejdsdage er dækket",
+                message = "Følgende arbejdsdage mangler registreringer",
+                missingDays = uncoveredDays.Select(d => d.ToString("yyyy-MM-dd")).ToList(),
+                coveredDays = coveredCount,
+                totalWorkdays = expectedWorkdays.Count,
+            });
+        }
+
+        // ── (5e) ALLOCATION-RECONCILIATION GATE (TASK-5604; the owner's reported defect) ─────────
+        // HARD precondition ALONGSIDE coverage: for EVERY day in the month, recorded worked hours
+        // (work_time_projection: interval hours + manual_hours) must match allocated project hours
+        // (NORMAL time entries with a non-null TaskId) within rounding tolerance. Deterministic and
+        // read-only over projections — no events, no rule-engine call (P2). Absences are excluded
+        // (they are not time_entries). The NORMAL + non-null-TaskId allowlist mirrors the grid's
+        // allocation predicate so this gate and the frontend "Ikke fordelt" row agree (historical
+        // activity_type='timer' and null-TaskId rows excluded).
+
+        // worked(day): interval hours + manual_hours from work_time_projection.
+        var workTimeRows = await svc.WorkTimeRepo.GetByEmployeeAndDateRangeAsync(
+            employeeId, monthStart, monthEnd, ct);
+        var workedByDay = new Dictionary<DateOnly, decimal>();
+        foreach (var row in workTimeRows)
+        {
+            var worked = SumIntervalHours(row.Intervals) + row.ManualHours;
+            workedByDay[row.Date] = workedByDay.TryGetValue(row.Date, out var existingWorked)
+                ? existingWorked + worked
+                : worked;
+        }
+
+        // allocated(day): reuse the time-entry list already loaded for coverage (no re-query);
+        // filter to NORMAL + non-null TaskId.
+        var allocatedByDay = new Dictionary<DateOnly, decimal>();
+        foreach (var entry in timeEntries)
+        {
+            if (entry.ActivityType != "NORMAL" || entry.TaskId is null)
+                continue;
+            allocatedByDay[entry.Date] = allocatedByDay.TryGetValue(entry.Date, out var existingAlloc)
+                ? existingAlloc + entry.Hours
+                : entry.Hours;
+        }
+
+        // Compare every day with either worked or allocated hours. Days with worked==0 AND
+        // allocated==0 are implicitly balanced (skipped). The verdict, the rounded figures the 422
+        // echoes back and the direction all come from ONE AllocationBalance.Evaluate call — the same
+        // call the team-overview chip and the allocation-breakdown flag make, so a month that shows a
+        // warning to the manager is exactly a month this gate refuses (S127/TASK-12705).
+        var unbalancedDays = new List<object>();
+        foreach (var date in workedByDay.Keys.Union(allocatedByDay.Keys).OrderBy(d => d))
+        {
+            var day = AllocationBalance.Evaluate(
+                workedByDay.GetValueOrDefault(date),
+                allocatedByDay.GetValueOrDefault(date));
+            if (day.IsBalanced)
+                continue;
+            unbalancedDays.Add(new
+            {
+                date = date.ToString("yyyy-MM-dd"),
+                worked = day.Worked,
+                allocated = day.Allocated,
+                direction = day.Direction,
+            });
+        }
+
+        if (unbalancedDays.Count > 0)
+        {
+            return Results.UnprocessableEntity(new
+            {
+                kind = "allocation",
+                unbalancedDays,
+            });
+        }
+
+        // ── (6) THE STATE CHANGE — create-if-absent, then ONE conditional transition ─────────────
+        //
+        // Nothing above this line has mutated anything, so every rejection path leaves the row (or
+        // the absence of a row) exactly as it found it: the transaction is disposed without a commit
+        // and rolls back, and no audit or outbox row was written either.
+        Guid periodId;
+        if (existing is null)
+        {
+            // The create arm. The row is born DRAFT and transitions below, so there is exactly ONE
+            // transition statement for both arms rather than two spellings of the same rule.
+            //
+            // ON CONFLICT … DO NOTHING RETURNING, never catch(23505)-and-continue: a unique violation
+            // ABORTS the PostgreSQL transaction (25P02 on every subsequent statement), and this
+            // command must keep working after losing a race — it still has audit and outbox rows to
+            // write. PAT-013.
+            //
+            // Because the existence read at (4) is INSIDE the lock, a null here is defence in depth
+            // rather than the primary loser path: after this change the only production writer of
+            // approval_periods rows is this command, and it holds the lock. The honest disposition
+            // for a null is a 409 — some other transaction owns that natural key now.
+            var created = await svc.ApprovalRepo.TryCreateIfAbsentAsync(conn, tx, new ApprovalPeriod
+            {
+                PeriodId = Guid.NewGuid(), // ignored — TryCreateIfAbsentAsync mints the id it returns
+                EmployeeId = employeeId,
+                OrgId = orgId,
+                PeriodStart = monthStart,
+                PeriodEnd = monthEnd,
+                PeriodType = "MONTHLY",
+                Status = "DRAFT",
+                AgreementCode = agreementCode,
+                OkVersion = okVersion,
+            }, ct);
+
+            if (created is null)
+                return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
+
+            periodId = created.Value;
+        }
+        else
+        {
+            periodId = existing.PeriodId;
+        }
+
+        // THE conditional transition. Replaces the unconditional UpdateStatusAsync the by-id route
+        // used to call: the guard is what makes a concurrent decision a clean 409 instead of a silent
+        // overwrite of someone else's transition. It row-locks (FOR UPDATE in its subselect, plus the
+        // UPDATE itself) and PostgreSQL holds row locks to end-of-transaction — which is what lets
+        // the follow-up UPDATE below carry no source-state guard of its own.
+        //
+        // On the create arm this transitions the row this transaction just INSERTed; FOR UPDATE on
+        // one's own uncommitted row is legal and returns 'DRAFT'.
+        var previousStatus = await svc.ApprovalRepo.TryUpdateStatusConditionalAsync(
+            conn, tx, periodId, "EMPLOYEE_APPROVED", AllowedSendSourceStates, actor.ActorId, ct: ct);
+        if (previousStatus is null)
+            return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
+
+        // THE FOLLOW-UP UPDATE. Two jobs the status switch cannot do:
+        //   (a) the EMPLOYEE_APPROVED SET branch leaves submitted_at NULL (it writes only
+        //       employee_approved_at/by), and submitted_at means THE SEND ACT, not "the old endpoint
+        //       ran" — ADR-012:60 makes the employee's self-approval the submission act, and the
+        //       deadlines a few lines down already re-stamp on every send. BOTH adapters stamp,
+        //       including a reopen → re-send: reopen NULLs the whole decision record and DRAFT is not
+        //       manager-visible, so a re-send is a genuinely new send.
+        //   (b) it carries the three server-resolved dimensions onto the transition arm, where they
+        //       would otherwise be computed and discarded (§3.3).
+        // No source-state guard here is correct, not an omission: the conditional statement above
+        // holds this row's lock to end-of-transaction.
+        await svc.ApprovalRepo.StampSendAsync(
+            conn, tx, periodId, actor.ActorId!, orgId, agreementCode, okVersion, ct);
+
+        // Deadlines (in-tx). monthEnd IS the month's last day — both adapters guarantee it — so this
+        // is the same +2 / +5 the by-id route has always written.
+        await svc.ApprovalRepo.UpdateDeadlinesAsync(
+            conn, tx, periodId, monthEnd.AddDays(2), monthEnd.AddDays(5), ct);
+
+        // Audit trail (in-tx). The action stays the LITERAL "SUBMITTED": approval_audit.action's
+        // CHECK (init.sql:903) has no EMPLOYEE_APPROVED member, and this route has always written
+        // "SUBMITTED" here. A new vocabulary would need the CHECK widened first.
+        //
+        // The COMMENT is conditional, and only because R4 makes the non-self case a SANCTIONED path:
+        // an HR user may now legitimately send for another employee, and writing the unconditional
+        // "Employee self-approval" onto that row would be a false audit statement (P3). The self
+        // comment is unchanged, so the dominant path stays byte-stable.
+        var isSelfSend = string.Equals(employeeId, actor.ActorId, StringComparison.Ordinal);
+        await svc.ApprovalRepo.AppendAuditAsync(
+            conn, tx, periodId, "SUBMITTED", actor.ActorId!, actor.ActorRole ?? StatsTidRoles.Employee,
+            isSelfSend
+                ? "Employee self-approval"
+                : $"Sent on behalf of {employeeId}",
+            ct);
+
+        // ONE outbox event: PeriodEmployeeApproved. One user action, one event (ADR-012:60).
+        // PeriodSubmitted is retained for replay and no longer emitted. PeriodType is deliberately
+        // NOT added to this event — nothing consumes details.periodType, and adding it would make the
+        // audit-detail shape non-uniform across replayed history.
+        var streamId = $"approval-{employeeId}-{monthStart:yyyy-MM-dd}";
+        var @event = new PeriodEmployeeApproved
+        {
+            PeriodId = periodId,
+            EmployeeId = employeeId,
+            // The RESOLVED org, matching the row this transaction just corrected — not a stale
+            // caller-supplied value read back off a legacy row.
+            OrgId = orgId,
+            PeriodStart = monthStart,
+            PeriodEnd = monthEnd,
+            ActorId = actor.ActorId,
+            ActorRole = actor.ActorRole,
+            CorrelationId = actor.CorrelationId
+        };
+        // S44 TASK-4413: capture outbox_id for the audit_projection insert (ADR-026 D2 sync-in-tx
+        // projection write — atomic with the approval_periods row + outbox row per ADR-018 D3/D13).
+        var outboxId = await svc.Outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
+
+        var auditCtx = new AuditProjectionContext(
+            ActorId: actor.ActorId,
+            ActorPrimaryOrgId: actor.OrgId,
+            CorrelationId: actor.CorrelationId,
+            OccurredAt: new DateTimeOffset(@event.OccurredAt),
+            // The employee row was read in-tx at (5c) and its absence already returned 404, so this
+            // is the same value org_id was just set to — no second lookup, no way to disagree.
+            ResolvedTargetOrgId: user.PrimaryOrgId);
+        var auditRow = svc.AuditMapper.Map(@event, auditCtx);
+        await svc.AuditRepo.InsertAsync(
+            conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+        await tx.CommitAsync(ct);
+
+        // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the shared action receipt).
+        return Results.Ok(new PeriodActionResponse(PeriodId: periodId, Status: "EMPLOYEE_APPROVED"));
+    }
+
     // ── Request DTOs ──
 
     private sealed class ReopenPeriodRequest
@@ -1780,15 +2067,19 @@ public static class ApprovalEndpoints
         public string? Reason { get; init; }
     }
 
-    private sealed class SubmitPeriodRequest
+    /// <summary>
+    /// S127 / TASK-12703 — the <c>POST /api/approval/send</c> body. Replaces the retired
+    /// <c>SubmitPeriodRequest</c>, which carried SEVEN caller-supplied fields; five of them are gone
+    /// because the server is the authority on all five:
+    /// <c>periodStart</c>/<c>periodEnd</c> → derived from (year, month); <c>orgId</c>,
+    /// <c>agreementCode</c>, <c>okVersion</c> → resolved in <see cref="ExecuteSendAsync"/>;
+    /// <c>periodType</c> → always MONTHLY on a created row.
+    /// </summary>
+    private sealed class SendPeriodRequest
     {
         public required string EmployeeId { get; init; }
-        public required string OrgId { get; init; }
-        public required DateOnly PeriodStart { get; init; }
-        public required DateOnly PeriodEnd { get; init; }
-        public required string PeriodType { get; init; }  // WEEKLY, MONTHLY
-        public required string AgreementCode { get; init; }
-        public required string OkVersion { get; init; }
+        public required int Year { get; init; }
+        public required int Month { get; init; }
     }
 
     private sealed class RejectPeriodRequest

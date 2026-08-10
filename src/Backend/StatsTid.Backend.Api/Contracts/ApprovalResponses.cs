@@ -14,11 +14,17 @@ namespace StatsTid.Backend.Api.Contracts;
 // type = the approval_periods period_type CHECK (init.sql:866 — WEEKLY / MONTHLY).
 
 /// <summary>The shared <c>{ periodId, status }</c> action receipt — serialized by
-/// <c>POST /api/approval/submit</c> (SUBMITTED), <c>POST .../{periodId}/approve</c> (APPROVED),
-/// <c>POST .../{periodId}/employee-approve</c> (EMPLOYEE_APPROVED) and
-/// <c>POST .../{periodId}/reopen</c> (DRAFT). Sibling handlers emitting the identical shape share
-/// ONE record (PAT-012 paved road step 1). Reject is NOT a member — it adds <c>reason</c>
-/// (<see cref="PeriodRejectResponse"/>).</summary>
+/// <c>POST /api/approval/send</c> and <c>POST .../{periodId}/employee-approve</c> (both
+/// EMPLOYEE_APPROVED — the two adapters over the S127 send command),
+/// <c>POST .../{periodId}/approve</c> (APPROVED) and <c>POST .../{periodId}/reopen</c> (DRAFT).
+/// Sibling handlers emitting the identical shape share ONE record (PAT-012 paved road step 1).
+/// Reject is NOT a member — it adds <c>reason</c> (<see cref="PeriodRejectResponse"/>).
+/// <para>S127 / TASK-12703: <c>POST /api/approval/submit</c> is RETIRED, so no production route
+/// serializes <c>"SUBMITTED"</c> into this record any more. The literal stays in the
+/// <c>[AllowedValues]</c> set below because it stays a legal <c>approval_periods.status</c> value —
+/// the enum's authority is the DB CHECK, not the set of statuses a handler happens to emit — and the
+/// 138 legacy rows carrying it are still served by every read op that shares this vocabulary.</para>
+/// </summary>
 public sealed record PeriodActionResponse(
     Guid PeriodId,
     // Authority: approval_periods status CHECK, init.sql:1103 (5-state).

@@ -284,8 +284,11 @@ function installFetchMock() {
       putBodies.push(body)
       return jsonResponse(applyPrefsPut(body))
     }
-    if (url.includes('/api/approval/submit') && method === 'POST') {
-      return jsonResponse({ periodId: 'per-1' })
+    // S127 / TASK-12707 — `POST /api/approval/submit` is RETIRED. The month with no period sends
+    // via `POST /api/approval/send` in ONE call, so `approveResponder` (the 422 injector) must hang
+    // off THIS route as well: on the old two-call flow the gate rejection arrived on the second leg.
+    if (url.includes('/api/approval/send') && method === 'POST') {
+      return approveResponder ? approveResponder() : jsonResponse({ periodId: 'per-1', status: 'EMPLOYEE_APPROVED' })
     }
     if (url.includes('/employee-approve') && method === 'POST') {
       return approveResponder ? approveResponder() : jsonResponse({})
@@ -1288,5 +1291,78 @@ describe('SkemaPage — R5 full-day snap (served basis)', () => {
     fireEvent.change(input, { target: { value: '3,7' } })
     fireEvent.blur(input)
     expect(input.value).toBe('3,7') // ferie keeps the partial — no snap
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// S127 / TASK-12707 — AC-15: BOTH 422 shapes surface through the REAL Skema send.
+//
+// Why this describe exists as written: the pre-existing coverage of these two
+// bodies (`hooks/__tests__/approvalValidationError.test.ts`) is a VERBATIM MIRROR
+// of the private `formatApprovalValidationError`, feeding it already-parsed
+// objects. It cannot see the wire, the hook, or the route — so it stayed green
+// through every version of this flow, including the one where the create leg
+// called `setError` with no parse at all and the allocation 422 never reached the
+// alert. AC-15 names that exact failure mode ("Fails if: tested only against
+// parseApprovalValidationError"), so these drive the button, over the real
+// `POST /api/approval/send`, and assert the rendered Danish text.
+//
+// The fixture month has `approval: null`, which is what routes the click to
+// `submitAndApprove` (the send arm) rather than `employeeApprove` (the by-id arm).
+// ═══════════════════════════════════════════════════════════════════════════════
+describe('SkemaPage — AC-15: the send 422s surface through the real flow', () => {
+  it('the COVERAGE shape ({missingDays}) renders Danish guidance, not raw JSON', async () => {
+    await renderLoaded()
+    approveResponder = () =>
+      jsonResponse(
+        { missingDays: ['2026-03-05', '2026-03-06'], coveredDays: 20, totalWorkdays: 22 },
+        422,
+      )
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' }))
+
+    expect(await screen.findByText(/Ikke alle arbejdsdage er dækket \(20 af 22\)/)).toBeInTheDocument()
+    // The raw body must not leak — this is the half that goes red when the parse
+    // is missing, because `setError` on the send leg renders the JSON verbatim.
+    expect(screen.queryByText(/"missingDays"/)).toBeNull()
+  })
+
+  it('the ALLOCATION shape ({kind, unbalancedDays}) renders directional Danish guidance', async () => {
+    await renderLoaded()
+    approveResponder = () =>
+      jsonResponse(
+        {
+          kind: 'allocation',
+          unbalancedDays: [
+            { date: '2026-03-05', worked: 7.4, allocated: 5, direction: 'under' },
+            { date: '2026-03-06', worked: 3, allocated: 5, direction: 'over' },
+          ],
+        },
+        422,
+      )
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' }))
+
+    // Both directions, from ONE response — the formatter's two arms.
+    expect(await screen.findByText(/Fordel de resterende 2,4 t på projekter/)).toBeInTheDocument()
+    expect(screen.getByText(/Registrér arbejdstid for de 2 t/)).toBeInTheDocument()
+    expect(screen.queryByText(/"unbalancedDays"/)).toBeNull()
+  })
+
+  it('sends EXACTLY ONE POST, to /api/approval/send, with {employeeId, year, month}', async () => {
+    await renderLoaded()
+    const before = fetchLog.length
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' }))
+    await waitFor(() => {
+      expect(fetchLog.some((e, i) => i >= before && e.includes('/api/approval/send'))).toBe(true)
+    })
+    // The retired two-call flow would have produced a /submit POST followed by an
+    // /employee-approve POST. Neither route may be touched.
+    expect(fetchLog.some((e, i) => i >= before && e.includes('/api/approval/submit'))).toBe(false)
+    expect(fetchLog.some((e, i) => i >= before && e.includes('/employee-approve'))).toBe(false)
+
+    const sendCall = mockFetch.mock.calls.find((c: unknown[]) =>
+      typeof c[0] === 'string' && (c[0] as string).includes('/api/approval/send'))
+    expect(sendCall).toBeDefined()
+    expect(JSON.parse(String((sendCall![1] as RequestInit).body)))
+      .toEqual({ employeeId: 'emp001', year: 2026, month: 3 })
   })
 })

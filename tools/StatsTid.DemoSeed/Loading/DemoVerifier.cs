@@ -13,6 +13,13 @@ namespace StatsTid.Tools.DemoSeed.Loading;
 /// leader-is-member, homing totality, the EXACT deliberate-messiness ledger). These need the
 /// manifest's expected counts, so the verifier now optionally takes the loaded manifest; the
 /// unit checks are skipped when it (or its <c>unitPlans</c> section) is absent.</para>
+///
+/// <para>S127 / TASK-12701a — check 20: every organisation carrying an active user carries an active
+/// project. S127 / TASK-12701b — check 21: the approval periods are EXACTLY the manifest's, status by
+/// status (AC-14b). Check 21 is the one that makes a silently-failing loader impossible to miss: the
+/// loader records a failed send as a warning, warnings do not affect the exit code, and a re-run
+/// treats a 409 as an idempotent skip — so nothing in the loader's own output distinguishes a world
+/// that was built from one that was not. The database does.</para>
 /// </summary>
 public sealed class DemoVerifier
 {
@@ -115,10 +122,21 @@ public sealed class DemoVerifier
 
         // 6. Flatten parity (S92 / ADR-035): every demo user's primary_org is an ORGANISATION
         //    (never a MAO, never a removed AFDELING/TEAM); no demo org row carries a retired type.
+        //
+        //    EXCEPT the demo GLOBAL_ADMIN, which homes at the MAO root BY DESIGN (see check 17,
+        //    which already carves it out of homing totality for the same reason). S127 / TASK-12701b:
+        //    this exemption is a PRECONDITION for AC-14b, not tidiness. The check fired on every
+        //    single run — `--verify` printed VERIFICATION FAILED and exited 5 always, documented as
+        //    "known-benign" in the launch skill — which made the verifier's exit code carry no
+        //    information at all. A status-count assertion whose failure signal is already stuck at
+        //    FAIL would prove nothing.
+        var adminUserId = _manifest?.AdminUserId;
         var demoUsersOffOrganisation = await ScalarLongAsync(conn,
             "SELECT COUNT(*) FROM users u WHERE u.user_id LIKE 'demo\\_%' " +
+            (string.IsNullOrEmpty(adminUserId) ? "" : $"AND u.user_id <> '{adminUserId}' ") +
             "AND NOT EXISTS (SELECT 1 FROM organizations o WHERE o.org_id = u.primary_org_id AND o.org_type='ORGANISATION')", ct);
-        ok &= Check("demo users' primary_org is an ORGANISATION", demoUsersOffOrganisation == 0, $"found {demoUsersOffOrganisation} off-Organisation");
+        ok &= Check("demo users' primary_org is an ORGANISATION (admin at the MAO exempt)",
+            demoUsersOffOrganisation == 0, $"found {demoUsersOffOrganisation} off-Organisation");
 
         var demoOrgsBadType = await ScalarLongAsync(conn,
             "SELECT COUNT(*) FROM organizations WHERE (org_id LIKE 'STYX%' OR org_id = 'MINX') " +
@@ -152,8 +170,163 @@ public sealed class DemoVerifier
         // 14-19. S114 / TASK-11400 — the unit-spine checks (require the manifest's unit plans).
         ok &= await VerifyUnitSpineAsync(conn, ct);
 
+        // 20. S127 / TASK-12701a (AC-14a) — EVERY organisation carrying an active user must carry an
+        //     active project. Projects are org-scoped, so an employee in a project-less org sees an
+        //     EMPTY project set and can never allocate their hours; under the S127 submit-time gate
+        //     that employee can never send a month. This is the DB-level proof that the emitted rows
+        //     actually landed — the generator's assertion only proves what it planned to emit.
+        //     Deliberately spans BOTH seed layers (init.sql baseline AND the demo file): the demo is
+        //     always loaded on top of the baseline, and a baseline gap strands baseline users just as
+        //     hard.
+        await using (var cmd = new NpgsqlCommand(
+            """
+            SELECT o.org_id,
+                   (SELECT COUNT(*) FROM users u WHERE u.primary_org_id = o.org_id AND u.is_active) AS active_users
+            FROM organizations o
+            WHERE EXISTS (SELECT 1 FROM users u WHERE u.primary_org_id = o.org_id AND u.is_active)
+              AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.org_id = o.org_id AND p.is_active)
+            ORDER BY o.org_id
+            """, conn))
+        {
+            var stranded = new List<string>();
+            await using var rdr = await cmd.ExecuteReaderAsync(ct);
+            while (await rdr.ReadAsync(ct))
+                stranded.Add($"{rdr.GetString(0)}({rdr.GetInt64(1)} users)");
+            ok &= Check("every org with active users has an active project", stranded.Count == 0,
+                stranded.Count == 0 ? "" : "project-less: " + string.Join(", ", stranded));
+        }
+
+        // 21. S127 / TASK-12701b (AC-14b) — MANIFEST-DERIVED EXACT PERIOD STATUS COUNTS.
+        ok &= await VerifyPeriodStatusCountsAsync(conn, ct);
+
         return ok;
     }
+
+    /// <summary>
+    /// S127 / TASK-12701b (AC-14b) — the demo world's approval periods must be EXACTLY what the
+    /// manifest says, status by status.
+    ///
+    /// <para><b>Why this exists, stated as the thing it detects.</b> "The loader completed" proves
+    /// nothing about the periods: a failed send is recorded as a WARNING, warnings never affected the
+    /// exit code, and the program returned 0. Before this sprint the loader could — and did — fail
+    /// 374 of 375 sends and report success. Nor does a re-run rescue the signal: a send whose row is
+    /// already past a sendable state returns 409, which the loader treats as an idempotent skip, so a
+    /// re-run over a world that was never built can look just as quiet as one over a world that was.
+    /// The ONLY honest question is "does the database hold the rows the manifest describes", and it
+    /// is asked here, on a fresh load and on a re-run alike (both run this same check).</para>
+    ///
+    /// <para>Keyed on the natural key <c>(employee_id, period_start, period_end)</c> — the same tuple
+    /// the unique constraint uses. Keying on the month rather than counting per status is what makes
+    /// a WRONG-MONTH send (the new request body is <c>{employeeId, year, month}</c>, so an off-by-one
+    /// there is a live failure mode) fail as a MISSING row instead of quietly balancing out.</para>
+    /// </summary>
+    private async Task<bool> VerifyPeriodStatusCountsAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        if (_manifest?.Activity is not { Count: > 0 } activity)
+        {
+            _log("  [SKIP] period status counts (no activity in the manifest)");
+            return true;
+        }
+
+        // (a) What the manifest says must exist. A null value means "NO row may exist for this month".
+        var expected = new Dictionary<(string Employee, DateOnly Start, DateOnly End), string?>();
+        foreach (var a in activity)
+        {
+            var start = new DateOnly(a.Year, a.Month, 1);
+            var end = new DateOnly(a.Year, a.Month, DateTime.DaysInMonth(a.Year, a.Month));
+            expected[(a.EmployeeId, start, end)] = ExpectedPeriodStatus(a.PeriodOutcome);
+        }
+
+        // (b) What the database holds for those employees. Every period, not only the manifest's
+        //     months, so a send that landed on the WRONG month is visible as a stray rather than
+        //     merely as a hole.
+        var employeeIds = expected.Keys.Select(k => k.Employee).Distinct(StringComparer.Ordinal).ToArray();
+        var actual = new Dictionary<(string Employee, DateOnly Start, DateOnly End), string>();
+        await using (var cmd = new NpgsqlCommand(
+            "SELECT employee_id, period_start, period_end, status FROM approval_periods WHERE employee_id = ANY(@ids)",
+            conn))
+        {
+            cmd.Parameters.AddWithValue("ids", employeeIds);
+            await using var rdr = await cmd.ExecuteReaderAsync(ct);
+            while (await rdr.ReadAsync(ct))
+                actual[(rdr.GetString(0), rdr.GetFieldValue<DateOnly>(1), rdr.GetFieldValue<DateOnly>(2))] = rdr.GetString(3);
+        }
+
+        var ok = true;
+        var mismatches = new List<string>();
+
+        // (c) One check per expected status: the number of manifest months actually CARRYING that
+        //     status must equal the number the manifest asks for.
+        foreach (var status in new[] { "EMPLOYEE_APPROVED", "APPROVED", "REJECTED" })
+        {
+            var wanted = expected.Where(kv => kv.Value == status).Select(kv => kv.Key).ToList();
+            var matched = 0;
+            foreach (var key in wanted)
+            {
+                var present = actual.TryGetValue(key, out var found);
+                if (present && found == status)
+                    matched++;
+                else if (mismatches.Count < 10)
+                    mismatches.Add($"{key.Employee} {key.Start:yyyy-MM}: want {status}, got {(present ? found : "NO ROW")}");
+            }
+            ok &= Check($"approval_periods {status} == manifest", matched == wanted.Count,
+                $"{matched} of {wanted.Count}");
+        }
+
+        // (d) The NONE arm — a month the manifest says was never sent must carry NO row. Without
+        //     this a loader that sent EVERY month would still satisfy (c).
+        var noneKeys = expected.Where(kv => kv.Value is null).Select(kv => kv.Key).ToList();
+        var strayNone = noneKeys.Where(k => actual.ContainsKey(k)).ToList();
+        foreach (var k in strayNone.Take(5))
+            mismatches.Add($"{k.Employee} {k.Start:yyyy-MM}: want NO ROW, got {actual[k]}");
+        ok &= Check("approval_periods absent for every NONE month", strayNone.Count == 0,
+            $"{strayNone.Count} of {noneKeys.Count} unsent months carry a row");
+
+        // (e) The WRONG-MONTH tell: a manifest employee carrying a period on a month the manifest
+        //     does not describe. Paired with (c) this is what makes an off-by-one in the send's
+        //     {year, month} body unmissable — the expected month reads MISSING and the month that
+        //     was actually written reads STRAY.
+        //
+        //     SCOPED to the manifest's own employees, deliberately: `actual` was read for those ids
+        //     only. Widening it to every approval period in the database would flag the baseline
+        //     init.sql fixture rows, which this verifier's job is to leave alone (check 1). The
+        //     corollary, stated so it is not mistaken for more than it is: dropping an employee from
+        //     the manifest entirely hides their rows from this arm — verified by falsification, and
+        //     harmless, because the loader only ever writes for employees the manifest names.
+        var strayMonths = actual.Keys.Where(k => !expected.ContainsKey(k)).ToList();
+        foreach (var k in strayMonths.Take(5))
+            mismatches.Add($"{k.Employee} {k.Start:yyyy-MM-dd}..{k.End:yyyy-MM-dd}: month not in the manifest, status {actual[k]}");
+        ok &= Check("no approval_periods outside the manifest's months (its own employees)",
+            strayMonths.Count == 0, $"found {strayMonths.Count} stray");
+
+        foreach (var m in mismatches.Take(15))
+            _log($"      ↳ {m}");
+        if (mismatches.Count > 15)
+            _log($"      ↳ … and {mismatches.Count - 15} more");
+
+        return ok;
+    }
+
+    /// <summary>
+    /// S127 / TASK-12701b — manifest outcome ⇒ the <c>approval_periods.status</c> the row must END in.
+    /// Null ⇒ no row at all.
+    ///
+    /// <para><c>"SUBMITTED"</c> is the PRE-S127 spelling and maps to EMPLOYEE_APPROVED, because that
+    /// is where <c>POST /api/approval/send</c> actually leaves the row — an old manifest on disk
+    /// still describes the world truthfully. An UNKNOWN outcome throws rather than defaulting to "no
+    /// expectation": a silent default is how a whole class of months would drop out of the check.</para>
+    /// </summary>
+    private static string? ExpectedPeriodStatus(string outcome) => outcome switch
+    {
+        "NONE" => null,
+        "EMPLOYEE_APPROVED" => "EMPLOYEE_APPROVED",
+        "SUBMITTED" => "EMPLOYEE_APPROVED",
+        "APPROVED" => "APPROVED",
+        "REJECTED" => "REJECTED",
+        _ => throw new InvalidOperationException(
+            $"Unknown manifest periodOutcome '{outcome}'. The status-count check cannot be derived, " +
+            "and defaulting it to 'no expectation' would silently drop those months from verification."),
+    };
 
     /// <summary>S114 — unit-spine verification: per plan org — all 5 unit types present, unit count
     /// exact, the leaderless count EXACTLY the deliberate ledger count, the sideways count EXACTLY

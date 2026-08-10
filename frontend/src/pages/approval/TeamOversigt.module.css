@@ -245,6 +245,41 @@
   background: var(--color-gray-50);
 }
 
+/* ── S127 / TASK-12713 — the rejection reason, at ROW level (owner ruling R7) ──
+   R1 withholds a rejected month's five figures, and `canExpand` is keyed on one of them, so the
+   detail panel that used to render this can never open for a rejected row. The reason is the
+   leader's own past decision rather than the month's content, so it is surfaced here — a strip
+   directly under the row, on screen with everything collapsed.
+
+   `.rowWithReason` removes the parent row's own bottom border and `.reasonRow` carries it
+   instead, so the pair reads as ONE row rather than as the next employee's header. Full width
+   because this is prose the leader typed, not a column value — sizing it into the narrow Status
+   column would wrap two words per line and push every other column around. */
+.rowWithReason {
+  border-bottom: none;
+}
+
+.reasonRow {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.reasonCell {
+  padding: 0 12px 12px 12px;
+}
+
+.reasonInner {
+  border-left: 3px solid var(--color-error);
+  background: var(--color-error-light);
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+.reasonLabel {
+  font-weight: 600;
+}
+
 .empName {
   font-weight: 500;
   color: var(--color-text);
@@ -790,12 +825,9 @@
   color: var(--color-text);
 }
 
-.detailAlertError {
-  border-color: var(--color-error);
-  border-left: 4px solid var(--color-error);
-  background: var(--color-error-light);
-  color: var(--color-text);
-}
+/* S127 / TASK-12713 — `.detailAlertError` deleted with its only consumer. It styled the in-panel
+   "Begrundelse for afvisning", which moved to `.reasonInner` at row level; nothing else in the
+   panel is an error-severity alert (the compliance and allocation alerts are all `Warn`). */
 
 /* Footer. */
 .detailFooter {

@@ -1,20 +1,22 @@
-// S82 TASK-8202 dual-lens follow-up — the unit-tier REGRESSION PIN for the
-// MyPeriods /api/approval/submit `orgId` bug.
+// MyPeriods — the employee's period list.
 //
-// The bug (fixed in S82-8202): MyPeriods.tsx omitted the server-`required` `orgId`
-// from its POST /api/approval/submit body, so EVERY new-period submission 400'd
-// ("OrgId is required", SubmitPeriodRequest.OrgId). The fix sources `orgId` from
-// useAuth() and guards on a missing value (MyPeriods.tsx:60/127/134-142).
+// ⚠ S127 / TASK-12707 (owner ruling R3) — THIS FILE WAS BUILT AROUND A PAGE
+// FEATURE THAT NO LONGER EXISTS. Its original subject was the S82-8202 pin for
+// the `POST /api/approval/submit` `orgId` bug: MyPeriods omitted the required
+// `orgId` from the submit body, so every submission 400'd. That route is retired
+// and the free-range "Indsend periode" form is removed, so both tests in the old
+// `submit wire contract` describe — the orgId body pin and the missing-orgId
+// guard — were deleted rather than adapted. There is nothing left of that bug to
+// regress: the field, the form and the endpoint are all gone.
 //
-// The load-bearing test below is DISCRIMINATING for that fix: it asserts the
-// captured submit body carries `orgId` with the auth-context value (proven
-// RED-on-old: dropping orgId from the payload makes the assertion fail).
+// What this file covers NOW: the mount read, the by-id re-send (the page's only
+// remaining write), the ABSENCE of the send form, and the status vocabulary.
 //
 // Mirrors the SIBLING ApprovalDashboard.test.tsx harness: mock the AuthContext
 // module (the useAuth re-export resolves through it), stub globalThis.fetch +
 // localStorage, render, interact, assert the wire contract.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MyPeriods } from '../MyPeriods'
 
@@ -70,17 +72,17 @@ function jsonResponse(body: unknown, status = 200) {
   }
 }
 
-/** A successfully-submitted period the /submit POST returns on 200. */
-const submittedPeriod = {
+/** One element of GET /api/approval/{employeeId} (the EmployeePeriodItem shape). */
+const periodItem = {
   periodId: 'p-new-1',
   employeeId: 'EMP_SELF',
   orgId: 'STY01',
   periodStart: '2026-07-01',
-  periodEnd: '2026-07-07',
-  periodType: 'WEEKLY',
-  status: 'SUBMITTED',
+  periodEnd: '2026-07-31',
+  periodType: 'MONTHLY',
+  status: 'EMPLOYEE_APPROVED',
   agreementCode: 'AC',
-  okVersion: 'OK24',
+  okVersion: 'OK26',
   submittedAt: '2026-06-17T10:00:00Z',
   approvedBy: null,
   approvedAt: null,
@@ -88,31 +90,19 @@ const submittedPeriod = {
   createdAt: '2026-06-17T10:00:00Z',
 }
 
-/**
- * Route the mount read (GET /api/approval/{employeeId}) to an empty list and
- * the submit POST (POST /api/approval/submit) to a 200. Records all calls so
- * the test can inspect the submit body.
- */
-function mockFetches() {
-  mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
-    if (typeof url === 'string' && url.includes('/api/approval/submit') && init?.method === 'POST') {
-      return jsonResponse(submittedPeriod)
-    }
-    // The mount read of the employee's existing periods.
+/** Route the mount read (GET /api/approval/{employeeId}) to `rows`; everything else → {}. */
+function mockFetches(rows: unknown[] = []) {
+  mockFetch.mockImplementation(async (url: string) => {
     if (typeof url === 'string' && /\/api\/approval\/[^/]+$/.test(url)) {
-      return jsonResponse([])
+      return jsonResponse(rows)
     }
     return jsonResponse({})
   })
 }
 
-/** Find the recorded POST /api/approval/submit call (if any). */
-function findSubmitCall() {
-  return mockFetch.mock.calls.find((call: unknown[]) => {
-    const u = call[0] as string
-    const init = call[1] as RequestInit | undefined
-    return typeof u === 'string' && u.includes('/api/approval/submit') && init?.method === 'POST'
-  })
+/** Every recorded POST, whatever the route. */
+function postCalls() {
+  return mockFetch.mock.calls.filter((call: unknown[]) => (call[1] as RequestInit | undefined)?.method === 'POST')
 }
 
 beforeEach(() => {
@@ -123,72 +113,66 @@ beforeEach(() => {
   mockAuth.orgId = 'STY01'
 })
 
-describe('MyPeriods — submit wire contract (S82-8202 orgId regression pin)', () => {
-  it('POST /api/approval/submit carries orgId from the auth context (plus employeeId + dates)', async () => {
-    const user = userEvent.setup()
+describe('MyPeriods — the free-range send form is GONE (S127 / TASK-12707, owner ruling R3)', () => {
+  it('renders NO send form: no date inputs, no periodetype/overenskomst selects, no "Indsend periode" button', async () => {
     mockFetches()
-
     render(<MyPeriods />)
+    // Mount read settled — the list card is up.
+    await waitFor(() => expect(screen.getByText('Ingen perioder fundet.')).toBeInTheDocument())
 
-    // Wait for the form to be present (mount read resolves to an empty list).
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Indsend periode/ })).toBeDefined()
-    })
-
-    // Fill the required dates (periodType + agreementCode + okVersion default to
-    // WEEKLY / AC / OK24).
-    fireEvent.change(screen.getByLabelText('Startdato'), { target: { value: '2026-07-01' } })
-    fireEvent.change(screen.getByLabelText('Slutdato'), { target: { value: '2026-07-07' } })
-
-    await user.click(screen.getByRole('button', { name: /Indsend periode/ }))
-
-    // The submit POST fired with the full body.
-    await waitFor(() => {
-      expect(findSubmitCall()).toBeDefined()
-    })
-    const submitCall = findSubmitCall()!
-    const init = submitCall[1] as RequestInit
-    const body = JSON.parse(init.body as string)
-
-    // The DISCRIMINATING assertion: orgId is present and equals the auth-context
-    // value (this is what the S82-8202 fix added; dropping it makes the test RED).
-    expect(body.orgId).toBe('STY01')
-    // ...alongside the rest of the SubmitPeriodRequest contract.
-    expect(body.employeeId).toBe('EMP_SELF')
-    expect(body.periodStart).toBe('2026-07-01')
-    expect(body.periodEnd).toBe('2026-07-07')
-    expect(body.periodType).toBe('WEEKLY')
-    expect(body.agreementCode).toBe('AC')
-
-    // The success banner confirms the 200 path ran end-to-end.
-    await waitFor(() => {
-      expect(screen.getByText('Periode indsendt.')).toBeDefined()
-    })
+    // Each of these existed and was interactive before this task.
+    expect(screen.queryByRole('button', { name: /Indsend periode/ })).toBeNull()
+    expect(screen.queryByLabelText('Startdato')).toBeNull()
+    expect(screen.queryByLabelText('Slutdato')).toBeNull()
+    expect(screen.queryByLabelText('Periodetype')).toBeNull()
+    expect(screen.queryByLabelText('Overenskomst')).toBeNull()
+    expect(screen.queryByLabelText('OK version')).toBeNull()
+    // The banner the form raised on success is gone with it.
+    expect(screen.queryByText('Periode indsendt.')).toBeNull()
+    // And the page keeps its title + list card.
+    expect(screen.getByText('Mine perioder')).toBeInTheDocument()
+    expect(screen.getByText('Perioder')).toBeInTheDocument()
   })
 
-  it('blocks submit with a user-facing error when orgId is missing (the auth guard)', async () => {
-    const user = userEvent.setup()
-    mockFetches()
-    // Simulate a logged-in employee whose auth context lacks an org (the guard
-    // at MyPeriods.tsx:127 must short-circuit BEFORE any POST fires).
-    mockAuth.orgId = null
-
+  it('issues NO write on mount — the page is read-only until a re-send is pressed', async () => {
+    mockFetches([{ ...periodItem, status: 'REJECTED', rejectionReason: 'Mangler' }])
     render(<MyPeriods />)
+    await waitFor(() => expect(screen.getByText('Afvist', { selector: '.badge' })).toBeInTheDocument())
+    expect(postCalls()).toHaveLength(0)
+  })
+})
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Indsend periode/ })).toBeDefined()
-    })
+// ── S127 / TASK-12707 — the status vocabulary ────────────────────────────────
+// `statusBadgeClass` and `statusLabel` had NO `EMPLOYEE_APPROVED` case and both
+// fell through to `default: return status`, so the employee saw the raw enum
+// string. Every period sent through `/api/approval/send` lands in that state, so
+// this is the state the page will show most often.
+describe('MyPeriods — status vocabulary', () => {
+  // NOTE the `{ selector: '.badge' }` scoping throughout: the table's own column
+  // header is also the word "Indsendt", so an unscoped query matches two nodes.
+  it('EMPLOYEE_APPROVED renders the Danish label, never the raw enum', async () => {
+    mockFetches([periodItem])
+    render(<MyPeriods />)
+    await waitFor(() => expect(screen.getByText('Indsendt', { selector: '.badge' })).toBeInTheDocument())
+    // The discriminating half: before the fix this cell read "EMPLOYEE_APPROVED".
+    expect(screen.queryByText('EMPLOYEE_APPROVED')).toBeNull()
+    // `statusBadgeClass` too — its `default` arm also returned a class, so assert the
+    // SPECIFIC one, not merely that some badge class is present.
+    expect(screen.getByText('Indsendt', { selector: '.badge' }).className).toMatch(/badgeWarning/)
+  })
 
-    fireEvent.change(screen.getByLabelText('Startdato'), { target: { value: '2026-07-01' } })
-    fireEvent.change(screen.getByLabelText('Slutdato'), { target: { value: '2026-07-07' } })
-
-    await user.click(screen.getByRole('button', { name: /Indsend periode/ }))
-
-    // The guard surfaces a Danish error and NO submit POST is issued.
-    await waitFor(() => {
-      expect(screen.getByText(/Kunne ikke fastslaa organisation/)).toBeDefined()
-    })
-    expect(findSubmitCall()).toBeUndefined()
+  it('the other four states keep their labels', async () => {
+    mockFetches([
+      { ...periodItem, periodId: 'p-d', status: 'DRAFT' },
+      { ...periodItem, periodId: 'p-s', status: 'SUBMITTED' },
+      { ...periodItem, periodId: 'p-a', status: 'APPROVED' },
+      { ...periodItem, periodId: 'p-r', status: 'REJECTED' },
+    ])
+    render(<MyPeriods />)
+    await waitFor(() => expect(screen.getByText('Kladde', { selector: '.badge' })).toBeInTheDocument())
+    expect(screen.getByText('Indsendt', { selector: '.badge' })).toBeInTheDocument()
+    expect(screen.getByText('Godkendt', { selector: '.badge' })).toBeInTheDocument()
+    expect(screen.getByText('Afvist', { selector: '.badge' })).toBeInTheDocument()
   })
 })
 
@@ -202,8 +186,10 @@ describe('MyPeriods — S116 typed-switch wire pins', () => {
   it('the mount read hits GET /api/approval/{employeeId} (interpolated, exact)', async () => {
     mockFetches()
     render(<MyPeriods />)
+    // S127: the form button this used to wait on is gone; the empty-state marks the
+    // same moment (the mount read has resolved and the list card has rendered).
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Indsend periode/ })).toBeDefined()
+      expect(screen.getByText('Ingen perioder fundet.')).toBeInTheDocument()
     })
     const mountRead = mockFetch.mock.calls.find((call: unknown[]) => {
       const init = call[1] as RequestInit | undefined
@@ -225,7 +211,7 @@ describe('MyPeriods — S116 typed-switch wire pins', () => {
         return jsonResponse({ periodId: 'p-rej-1', status: 'EMPLOYEE_APPROVED' })
       }
       if (typeof url === 'string' && /\/api\/approval\/[^/]+$/.test(url)) {
-        return jsonResponse([{ ...submittedPeriod, periodId: 'p-rej-1', status: 'REJECTED', rejectionReason: 'Mangler' }])
+        return jsonResponse([{ ...periodItem, periodId: 'p-rej-1', status: 'REJECTED', rejectionReason: 'Mangler' }])
       }
       return jsonResponse({})
     })

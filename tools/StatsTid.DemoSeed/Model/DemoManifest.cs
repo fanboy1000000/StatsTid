@@ -116,10 +116,70 @@ public sealed class DemoActivity
     public List<DemoAbsence> Absences { get; set; } = new();
 
     /// <summary>
-    /// Period lifecycle: "NONE" | "SUBMITTED" | "APPROVED" | "REJECTED".
-    /// SUBMITTED leaves the period in SUBMITTED; APPROVED submits then approves; REJECTED submits then rejects.
+    /// S127 / TASK-12701a — the month's PROJECT ALLOCATIONS (Skema <c>entries</c>). One or more rows
+    /// per worked day; the day's rows sum EXACTLY to that day's <see cref="WorkTime"/> total, which is
+    /// what the submit-time allocation gate reconciles (<c>ApprovalEndpoints.cs:1446-1506</c>).
+    /// <para>NULL (hence ABSENT from the JSON, mirroring <see cref="DemoManifest.UnitPlans"/>) when
+    /// the month has not been filled — which is what lets the pre-S127 legacy pin compare
+    /// byte-for-byte against an unfilled manifest, and lets an old manifest deserialize.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<DemoAllocation>? Allocations { get; set; }
+
+    /// <summary>
+    /// S127 / TASK-12701a — the month's self-recorded work time (Skema <c>workTime</c>), one row per
+    /// worked day. Together with <see cref="Absences"/> these cover EVERY expected workday of the
+    /// month, which is what the submit-time coverage gate requires
+    /// (<c>ApprovalEndpoints.cs:1387-1444</c>). Null ⇒ absent, as for <see cref="Allocations"/>.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<DemoWorkDay>? WorkTime { get; set; }
+
+    /// <summary>
+    /// Period lifecycle: "NONE" | "EMPLOYEE_APPROVED" | "APPROVED" | "REJECTED" — the status the
+    /// <c>approval_periods</c> row must END in, which is what makes the verifier's status-count check
+    /// derivable from this manifest (AC-14b).
+    ///
+    /// <para>NONE writes no row at all; EMPLOYEE_APPROVED sends and stops; APPROVED sends then the
+    /// manager approves; REJECTED sends then the manager rejects.</para>
+    ///
+    /// <para>S127 / TASK-12701b — this vocabulary was <c>"SUBMITTED"</c> until the loader moved from
+    /// the retired <c>POST /api/approval/submit</c> onto <c>POST /api/approval/send</c>, which
+    /// transitions straight to EMPLOYEE_APPROVED. A pre-S127 manifest carrying <c>"SUBMITTED"</c>
+    /// still loads and still means "send and stop" — the loader's switch has no case for either
+    /// spelling, and the verifier maps both to an expected EMPLOYEE_APPROVED row.</para>
     /// </summary>
     public string PeriodOutcome { get; set; } = "NONE";
+}
+
+/// <summary>S127 — one project allocation row: <c>hours</c> of the day booked to <c>projectCode</c>
+/// (a code from the employee's OWN org catalogue — projects are org-scoped).</summary>
+public sealed class DemoAllocation
+{
+    /// <summary>ISO yyyy-MM-dd.</summary>
+    public string Date { get; set; } = "";
+
+    public string ProjectCode { get; set; } = "";
+
+    public decimal Hours { get; set; }
+}
+
+/// <summary>S127 — one day of self-recorded work time: wall-clock intervals only (no manual hours),
+/// so the persisted total is exactly <c>SumIntervalHours</c> of the intervals.</summary>
+public sealed class DemoWorkDay
+{
+    /// <summary>ISO yyyy-MM-dd.</summary>
+    public string Date { get; set; } = "";
+
+    /// <summary>HH:mm start (inclusive).</summary>
+    public string Start { get; set; } = "";
+
+    /// <summary>HH:mm end (exclusive).</summary>
+    public string End { get; set; } = "";
+
+    /// <summary>The interval's duration in hours — carried so the manifest is self-describing and the
+    /// allocation/work-time balance is auditable without re-parsing clock strings.</summary>
+    public decimal Hours { get; set; }
 }
 
 public sealed class DemoAbsence

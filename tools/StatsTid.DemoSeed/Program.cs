@@ -15,7 +15,13 @@
 //     --verify (or --db-conn alone) runs the post-load tree-invariant + isolation checks.
 //
 // Exit codes: 0 success · 2 usage error · 3 generation/disjointness failure ·
-//             4 load failure · 5 verification failed
+//             4 load failure · 5 verification failed ·
+//             6 activity periods did not reach their manifest outcome (S127 / TASK-12701b)
+//
+// 6 exists because 0 used to be returned in that case. A failed period send is recorded as a
+// WARNING, warnings never affected the exit code, and the loader therefore reported success having
+// failed every send in the manifest. "The loader completed" is not evidence — the exit code and the
+// verifier's status-count check are.
 // =============================================================================
 
 using System.Text;
@@ -90,6 +96,9 @@ static async Task<int> RunGenerateAsync(Dictionary<string, string> opts)
     Console.WriteLine($"  orgs={dataset.Orgs.Count} users={dataset.Users.Count} employeeRoles={dataset.EmployeeRoles.Count} privilegedRoles={dataset.PrivilegedRoles.Count}");
     Console.WriteLine($"  reportingEdges={dataset.Manifest.ReportingEdges.Count} apiRoleGrants={dataset.Manifest.RoleGrants.Count} (privileged roles are SQL-seeded — grant API has a product bug)");
     Console.WriteLine($"  profileEdits={dataset.Manifest.ProfileEdits.Count} activity={dataset.Manifest.Activity.Count} vikars={dataset.Manifest.Vikars.Count} messyCases={dataset.Manifest.MessyCases.Count}");
+    // S127 / TASK-12701a — the seeding precondition for the submit-time allocation gate.
+    Console.WriteLine($"  projects={dataset.Projects.Count} (orgs with projects={dataset.Projects.Select(p => p.OrgId).Distinct().Count()}/{dataset.Orgs.Count})" +
+                      $" allocations={dataset.Manifest.Activity.Sum(a => a.Allocations?.Count ?? 0)} workDays={dataset.Manifest.Activity.Sum(a => a.WorkTime?.Count ?? 0)}");
     foreach (var t in dataset.Manifest.Trees)
         Console.WriteLine($"  tree {t.OrganisationId}: orgs={t.OrgCount} users={t.UserCount} managers={t.ManagerCount} maxDepth={t.MaxDepth} root={t.RootEmployeeId}");
     Console.WriteLine($"  wrote SQL → {outSql}");
@@ -138,7 +147,10 @@ static async Task<int> RunLoadAsync(Dictionary<string, string> opts)
     Console.WriteLine($"  edges: imported={result.EdgesImported} skipped={result.EdgesSkipped}");
     Console.WriteLine($"  roles: granted={result.RolesGranted} skipped={result.RolesSkipped}");
     Console.WriteLine($"  profiles: set={result.ProfilesSet} skipped={result.ProfilesSkipped}");
-    Console.WriteLine($"  activity: absences={result.AbsencesSaved} submitted={result.PeriodsSubmitted} approved={result.PeriodsApproved} rejected={result.PeriodsRejected}");
+    Console.WriteLine($"  activity: absences={result.AbsencesSaved} allocations={result.AllocationsSaved} workDays={result.WorkDaysSaved} monthsAlreadyComplete={result.MonthsAlreadyComplete}");
+    Console.WriteLine($"  periods: sent={result.PeriodsSent} alreadySent(409)={result.PeriodsAlreadySent} approved={result.PeriodsApproved} rejected={result.PeriodsRejected}");
+    Console.WriteLine($"  period outcome failures: {result.PeriodOutcomeFailures}" +
+                      (result.PeriodOutcomeFailures == 0 ? "" : "  ← the manifest's outcome was NOT reached for these"));
     Console.WriteLine($"  vikars: created={result.VikarsCreated} skipped={result.VikarsSkipped}");
     Console.WriteLine($"  messyCases: {result.MessyApplied}");
     // S114 — the unit-spine stages (units → homing → leaders); ZERO 4xx expected on any run.
@@ -155,21 +167,38 @@ static async Task<int> RunLoadAsync(Dictionary<string, string> opts)
             Console.WriteLine($"    … and {result.Warnings.Count - 40} more");
     }
 
-    // Optional post-load verification.
+    // Optional post-load verification. Runs BEFORE the send-failure verdict below on purpose: when
+    // sends failed, the verifier's per-check FAIL lines name which months are missing, and returning
+    // early would throw that evidence away.
+    var verifyOk = true;
+    var verifyRan = false;
     if (opts.TryGetValue("db-conn", out var connStr) || opts.ContainsKey("verify"))
     {
         connStr ??= "Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev";
         Console.WriteLine("── post-load verification ──");
         // S114: the manifest supplies the unit-spine expected counts (the deliberate-messiness ledger).
+        // S127 / TASK-12701b: and the expected approval-period statuses (AC-14b).
         var verifier = new DemoVerifier(connStr, manifest, Console.WriteLine);
-        var verifyOk = await verifier.VerifyAsync(cts.Token);
-        if (!verifyOk)
-        {
+        verifyRan = true;
+        verifyOk = await verifier.VerifyAsync(cts.Token);
+        if (verifyOk)
+            Console.WriteLine("verification: ALL CHECKS PASSED");
+        else
             Console.Error.WriteLine("VERIFICATION FAILED");
-            return 5;
-        }
-        Console.WriteLine("verification: ALL CHECKS PASSED");
     }
+
+    // S127 / TASK-12701b (AC-14b) — a send that never reached its manifest outcome FAILS the process.
+    // Ranked above the verification code because it is the more specific diagnosis: it says the
+    // loader could not build the world, where 5 only says the world is wrong.
+    if (result.PeriodOutcomeFailures > 0)
+    {
+        Console.Error.WriteLine(
+            $"LOAD INCOMPLETE: {result.PeriodOutcomeFailures} activity period(s) did not reach their " +
+            "manifest outcome (see the WARNINGS above). Exit 6.");
+        return 6;
+    }
+    if (verifyRan && !verifyOk)
+        return 5;
 
     return 0;
 }

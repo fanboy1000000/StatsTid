@@ -19,13 +19,39 @@ namespace StatsTid.Backend.Api;
 /// <para>FAIL-CLOSED by construction: a null status (no period exists, so nothing was ever sent) and
 /// any future status not named here are both NOT sent. <c>DRAFT</c> is deliberately absent — and
 /// since the create path transitions to <c>SUBMITTED</c> inside the same transaction, every
-/// persistent <c>DRAFT</c> is a REOPENED month, so this is the reopen disposition too.</para>
+/// persistent <c>DRAFT</c> is a REOPENED month, so this is the reopen disposition too.
+/// <c>REJECTED</c> is deliberately absent as well; that one reverses a prior decision, so it is
+/// argued in full below rather than left to look like an oversight.</para>
+///
+/// <para><b>S127 / TASK-12706 — owner ruling R1 REMOVED <c>REJECTED</c> from this set.</b> S124 put it
+/// here on purpose, and its reasoning is recorded in code at <c>ApprovalEndpoints.cs:1077-1078</c>:
+/// <i>"REJECTED counts as submitted: the employee DID send it, the leader decided on these very
+/// numbers, and hiding them afterwards would erase the basis of that decision."</i> That is sound as
+/// far as it goes and R1 does not call it wrong — R1 answers it with a rule that outranks it: a
+/// manager never sees a month the employee could not certify, and there is no in-progress
+/// visibility. The gap in the S124 argument is that a REJECTED month does not stay frozen at "these
+/// very numbers". It is editable again — only <c>EMPLOYEE_APPROVED</c> and <c>APPROVED</c> lock a
+/// period — so while the employee repairs it the manager was watching its contents CHANGE: the
+/// team-overview released recomputed figures and the Skema leader tier served the full day-by-day
+/// grid. That live in-progress state is exactly what R1 rules out, and it is not the thing S124 was
+/// protecting. What S124 actually cared about survives by other means: the team-overview withholds
+/// only the month-derived figures — the ones moving under the leader — while status, submittedAt,
+/// decisionAt and rejectionReason are all still served, so the leader keeps WHY they rejected. The
+/// month becomes visible again the moment the employee re-sends it.</para>
+///
+/// <para><b>NOT an access-control boundary (owner ruling R5).</b> This predicate governs the two
+/// DISPLAY surfaces named above and nothing else. A manager authorized for the same employee can
+/// still read the same underlying figures directly via <c>allocation-breakdown</c> and the compliance
+/// endpoints, neither of which has a period-status gate. <c>RES-002</c> records those plus the
+/// balance, raw-time-entry and absence siblings as unenforced; closing them is RES-002's open
+/// follow-up and was explicitly OUT of S127's scope. Do not cite this member as evidence that a
+/// rejected month's figures are unreachable — it makes them un-DISPLAYED, not unreadable.</para>
 /// </summary>
 internal static class ApprovalVisibility
 {
     /// <summary>True when the employee has sent the period to their manager — i.e. the manager may
-    /// see its content. Statuses are the <c>approval_periods.status</c> CHECK set (init.sql:1103)
-    /// minus <c>DRAFT</c>.</summary>
+    /// see its content. Statuses are the <c>approval_periods.status</c> CHECK set
+    /// (<c>docker/postgres/init.sql:1118-1119</c>) minus <c>DRAFT</c> and <c>REJECTED</c>.</summary>
     internal static bool IsSubmittedToManager(string? status) =>
-        status is "SUBMITTED" or "EMPLOYEE_APPROVED" or "APPROVED" or "REJECTED";
+        status is "SUBMITTED" or "EMPLOYEE_APPROVED" or "APPROVED";
 }

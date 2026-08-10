@@ -72,7 +72,22 @@ function row(over: Partial<Record<string, unknown>> = {}) {
 const team = [
   row({ periodId: 'p-1', employeeId: 'emp001', displayName: 'Anna Berg', status: 'SUBMITTED', flexBalance: 5.0, normRegistered: 147, hasWarning: false }),
   row({ periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl', status: 'APPROVED', flexBalance: -2.0, normRegistered: 120, awayToday: true, hasWarning: true }),
-  row({ periodId: 'p-3', employeeId: 'emp003', displayName: 'Carla Eng', status: 'REJECTED', flexBalance: 0, normRegistered: 100, rejectionReason: 'Mangler fordeling' }),
+  // S127 / TASK-12706 (owner ruling R1) — a REJECTED row now arrives with the SAME five fields
+  // withheld as an un-submitted one. The employee could not certify this month, so the manager does
+  // not see its figures; `ApprovalVisibility.IsSubmittedToManager` dropped REJECTED, and the server
+  // sends null for normRegistered / flexBalance / overtime / ferieUsed / hasWarning.
+  // ⚠ THE OLD FIXTURE PINNED `normRegistered: 100` AND `flexBalance: 0`. Those literals are why the
+  // R1-reversal tests below stayed GREEN through the backend change: this suite is hermetic
+  // (`vi.stubGlobal('fetch', mockFetch)`), so no `.cs` edit can reach it, and a fixture that
+  // hardcodes a withheld field asserts a wire shape the server no longer produces. Green was not
+  // evidence — it was the FE-mock-masks-backend-shape class (S97→S99→S100).
+  // What SURVIVES for a rejected row: status, submittedAt, decisionAt, rejectionReason, and the two
+  // standing denominators (normExpected, ferieTotal).
+  row({
+    periodId: 'p-3', employeeId: 'emp003', displayName: 'Carla Eng', status: 'REJECTED',
+    decisionAt: '2026-04-01T08:00:00Z', rejectionReason: 'Mangler fordeling',
+    normRegistered: null, flexBalance: null, overtime: null, ferieUsed: null, hasWarning: null,
+  }),
   // S124 / TASK-12402 — an un-submitted row arrives with FIVE fields WITHHELD (null): the hours,
   // the derived overtime + warning, the flex balance and the ferie USED count. The old fixture said
   // `normRegistered: 0` — the server no longer sends that, and the fabricated zero was the very lie
@@ -215,15 +230,147 @@ describe('TeamOversigt — render + status mapping', () => {
       .getByRole('button', { name: /detaljer for Anna Berg/ })).toBeInTheDocument()
   })
 
-  it('leaves every SUBMITTED / decided row FULLY visible (the rule must not over-reach)', async () => {
+  it('leaves every row the employee CERTIFIED fully visible (the rule must not over-reach)', async () => {
     mockOverview()
     renderPage()
     await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
-    // A manager must keep seeing everything about what they are asked to approve — and about what
-    // they already decided (REJECTED included: those numbers are the basis of the decision).
+    // A manager must keep seeing everything about what they are asked to approve, and about what
+    // they approved. SUBMITTED (legacy), EMPLOYEE_APPROVED and APPROVED all stay whole.
     expect(within(screen.getByTestId('team-row-emp001')).getByText(/147,0\s*\/\s*147,0 t/)).toBeInTheDocument()
-    expect(within(screen.getByTestId('team-row-emp003')).getByText(/100,0\s*\/\s*147,0 t/)).toBeInTheDocument()
+    expect(within(screen.getByTestId('team-row-emp002')).getByText(/120,0\s*\/\s*147,0 t/)).toBeInTheDocument()
     expect(within(screen.getByTestId('team-row-emp005')).getByText(/130,0\s*\/\s*147,0 t/)).toBeInTheDocument()
+  })
+
+  // ── S127 / TASK-12706 — owner ruling R1, THE REVERSAL ────────────────────────
+  // This test previously asserted the OPPOSITE, on emp003, with `100,0 / 147,0 t`: S124 deliberately
+  // counted REJECTED as submitted ("the leader decided on these very numbers"). R1 outranks it — a
+  // manager never sees a month the employee could not certify, and a rejected month is EDITABLE
+  // again, so what the manager was watching was live in-progress content, not the decided numbers.
+  it('R1: a REJECTED row is withheld exactly like an un-submitted one — figures, bar and expander', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Carla Eng')).toBeInTheDocument())
+    const rejected = screen.getByTestId('team-row-emp003')
+
+    // The month-derived hours are gone; the standing denominator survives, so the cell reads "— / 147,0 t".
+    expect(within(rejected).queryByText(/100,0\s*\/\s*147,0 t/)).toBeNull()
+    expect(within(rejected).getByText(/—\s*\/\s*147,0 t/)).toBeInTheDocument()
+    // …and so is the flex balance (it was `0` — a number that renders, hence a real assertion).
+    expect(rejected.querySelector('[class*="flexCell"]')?.textContent?.trim()).toBe('—')
+    // No progress bar: a 0% bar would state the employee registered nothing.
+    expect(rejected.querySelector('[class*="barTrack"]')).toBeNull()
+    // No expander: the detail panel is built from the withheld figures plus two further fetches.
+    expect(within(rejected).queryByRole('button', { name: /detaljer for Carla Eng/ })).toBeNull()
+
+    // The decision context the leader keeps: the status badge and the ferie DENOMINATOR.
+    expect(within(rejected).getByText('Afvist')).toBeInTheDocument()
+    expect(within(rejected).getByText(/—\s*\/\s*25 dage/)).toBeInTheDocument()
+  })
+})
+
+// ===================================================================================
+// S127 / TASK-12713 — owner ruling R7: the rejection reason lives on the ROW.
+//
+// R1 (TASK-12706) withheld five month-derived figures on a REJECTED row, and this page keys
+// `canExpand` on one of them (`normRegistered !== null`). The reason's only render site sat INSIDE
+// that panel, so it became unreachable and its branch production-dead — a leader could no longer
+// read why they rejected a month. R7 promotes it to row level.
+//
+// R1 is untouched by this: it governs the month's in-progress CONTENT (figures that move while the
+// employee repairs the month), whereas the reason is the leader's own past DECISION, which the
+// server never stopped sending. The tests below therefore assert BOTH halves — the reason present
+// AND the five figures still absent — because a promotion that dragged a figure back with it would
+// be an R1 regression wearing an R7 label.
+//
+// ⚠ Fixture discipline: the REJECTED fixtures here send `normRegistered` / `flexBalance` /
+// `overtime` / `ferieUsed` / `hasWarning` as NULL, which is what the server now produces. This
+// suite is hermetic (`vi.stubGlobal('fetch', mockFetch)`), so a fixture that hardcoded one of those
+// would make these pass against a wire shape that no longer exists — the exact way the three stale
+// R1 tests stayed green through the backend change.
+// ===================================================================================
+describe('TeamOversigt — the rejection reason at row level (S127 / TASK-12713, ruling R7)', () => {
+  it('R7: the reason is on screen for a REJECTED row with NOTHING expanded', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Carla Eng')).toBeInTheDocument())
+
+    // Nothing has been clicked: no detail panel is mounted anywhere on the page.
+    expect(screen.queryByTestId('team-detail-row-emp003')).toBeNull()
+    expect(screen.queryByText('Overblik')).toBeNull()
+
+    // …and the reason is readable regardless.
+    const strip = screen.getByTestId('team-rejection-emp003')
+    expect(within(strip).getByText('Begrundelse for afvisning:')).toBeInTheDocument()
+    expect(within(strip).getByText(/Mangler fordeling/)).toBeInTheDocument()
+  })
+
+  it('R7 did not re-open the panel: `canExpand` is untouched and the five figures stay withheld', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Carla Eng')).toBeInTheDocument())
+    const rejected = screen.getByTestId('team-row-emp003')
+
+    // The guard on the promotion. Surfacing the reason by making the row expandable again would
+    // have handed back all five figures — R1 partially undone. It did not: still no chevron, and
+    // clicking the row body opens nothing.
+    expect(within(rejected).queryByRole('button', { name: /detaljer for Carla Eng/ })).toBeNull()
+    const user = userEvent.setup()
+    await user.click(rejected)
+    expect(screen.queryByTestId('team-detail-row-emp003')).toBeNull()
+
+    // And no withheld figure came along for the ride — the strip carries `rejectionReason` only.
+    const strip = screen.getByTestId('team-rejection-emp003')
+    expect(strip.textContent).toBe('Begrundelse for afvisning: Mangler fordeling')
+    // The row's own cells are still the withheld renderings, unchanged by the promotion.
+    expect(within(rejected).getByText(/—\s*\/\s*147,0 t/)).toBeInTheDocument()
+    expect(rejected.querySelector('[class*="flexCell"]')?.textContent?.trim()).toBe('—')
+    expect(rejected.querySelector('[class*="barTrack"]')).toBeNull()
+  })
+
+  it('no strip on a row that is not REJECTED, even when a stale reason rides along', async () => {
+    // A reason survives a re-submit → re-approve round trip in the row payload. The gate is the
+    // STATUS, not the presence of the field, so an approved month must not show why it was once
+    // rejected. (Also pins that the strip is not simply "render whatever the server sent".)
+    mockOverview([
+      row({
+        periodId: 'p-9', employeeId: 'emp009', displayName: 'Hanne Ibsen',
+        status: 'APPROVED', decisionAt: '2026-04-02T08:00:00Z',
+        rejectionReason: 'Mangler fordeling',
+      }),
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Hanne Ibsen')).toBeInTheDocument())
+    expect(screen.queryByTestId('team-rejection-emp009')).toBeNull()
+    expect(screen.queryByText('Begrundelse for afvisning:')).toBeNull()
+  })
+
+  it('ONE render site: the panel no longer renders the reason, so it cannot appear twice', async () => {
+    // ⚠ DELIBERATELY OFF-CONTRACT FIXTURE, and the only one in this file. Under R1 the server never
+    // sends a REJECTED row with `normRegistered` populated — but that combination is the ONLY state
+    // in which a second render site could show itself, because it is what makes `canExpand` true
+    // and lets the panel mount on a row that carries a reason. This asserts the S91 "one field, one
+    // place" property by construction; it makes no claim about the wire (the three tests above do
+    // that, on the real shape). Restore the deleted in-panel branch and this reds with
+    // "found multiple elements".
+    const user = userEvent.setup()
+    mockOverview([
+      row({
+        periodId: 'p-8', employeeId: 'emp008', displayName: 'Gitte Juhl',
+        status: 'REJECTED', decisionAt: '2026-04-01T08:00:00Z',
+        rejectionReason: 'Mangler fordeling',
+        normRegistered: 140,
+      }),
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Gitte Juhl')).toBeInTheDocument())
+    expect(screen.getAllByText('Begrundelse for afvisning:')).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: /detaljer for Gitte Juhl/ }))
+    await screen.findByTestId('team-detail-row-emp008')
+    // Panel open — still exactly one, and it is the row-level strip, not a panel copy.
+    expect(screen.getAllByText('Begrundelse for afvisning:')).toHaveLength(1)
+    expect(within(screen.getByTestId('team-rejection-emp008'))
+      .getByText('Begrundelse for afvisning:')).toBeInTheDocument()
   })
 })
 
@@ -262,8 +409,11 @@ describe('TeamOversigt — KPI band (full team)', () => {
     mockOverview()
     renderPage()
     await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
-    // 4 of the 5 fixture rows carry a figure (David Friis is withheld).
-    expect(screen.getByText(/4 af 5 indsendt/)).toBeInTheDocument()
+    // 3 of the 5 fixture rows carry a figure. S127 / R1: TWO are withheld now — David Friis
+    // (never sent) and Carla Eng (REJECTED). This count is the second, independent witness that
+    // the REJECTED row really is withheld: it is computed from `normRegistered !== null` over the
+    // whole roster, so it moves 4 → 3 on the fixture change alone.
+    expect(screen.getByText(/3 af 5 indsendt/)).toBeInTheDocument()
   })
 
   it('Norm-opfyldelse shows — not 0% when NOBODY has submitted (early in every month)', async () => {

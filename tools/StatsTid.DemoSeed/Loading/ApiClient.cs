@@ -64,30 +64,66 @@ public sealed class ApiClient : IDisposable
     public Task<(HttpStatusCode Status, string Body)> SkemaSaveAsync(string employeeId, object payload, CancellationToken ct)
         => SendAsync(HttpMethod.Post, $"/api/skema/{employeeId}/save", payload, null, ct);
 
-    /// <summary>GET /api/skema/{id}/month?year=&amp;month= → (status, count-of-absences-already-recorded).</summary>
-    public async Task<(HttpStatusCode Status, int AbsenceCount)> GetSkemaMonthAbsenceCountAsync(string employeeId, int year, int month, CancellationToken ct)
+    /// <summary>
+    /// GET /api/skema/{id}/month?year=&amp;month= → (status, already-recorded row counts).
+    ///
+    /// <para>S127 — the probe now reports ALL THREE month collections, not just absences, because
+    /// the loader writes all three. <c>entries</c> is the one that MUST be probed: the skema save is
+    /// event-sourced and APPENDS a fresh TimeEntryRegistered per call (time_entries_projection keys
+    /// on event_id, not on (employee, date, project)), so a blind re-save would double every
+    /// allocation and leave the month UNBALANCED against unchanged work time — turning a re-run into
+    /// a broken demo world. Work time is latest-wins (upsert under the outbox_id guard) and absences
+    /// append like entries.</para>
+    /// </summary>
+    public async Task<(HttpStatusCode Status, int AbsenceCount, int EntryCount, int WorkTimeCount)> GetSkemaMonthCountsAsync(
+        string employeeId, int year, int month, CancellationToken ct)
     {
         var req = new HttpRequestMessage(HttpMethod.Get, $"/api/skema/{employeeId}/month?year={year}&month={month}");
         var resp = await _http.SendAsync(req, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
-        var count = 0;
+        var absences = 0;
+        var entries = 0;
+        var workTime = 0;
         if (resp.StatusCode == HttpStatusCode.OK)
         {
             try
             {
                 using var doc = JsonDocument.Parse(body);
-                if (doc.RootElement.TryGetProperty("absences", out var abs) && abs.ValueKind == JsonValueKind.Array)
-                    count = abs.GetArrayLength();
+                absences = ArrayLength(doc.RootElement, "absences");
+                entries = ArrayLength(doc.RootElement, "entries");
+                workTime = ArrayLength(doc.RootElement, "workTime");
             }
             catch (JsonException) { /* leave 0 */ }
         }
-        return (resp.StatusCode, count);
+        return (resp.StatusCode, absences, entries, workTime);
     }
 
-    /// <summary>POST /api/approval/submit → (status, periodId-from-body).</summary>
-    public async Task<(HttpStatusCode Status, Guid? PeriodId, string Body)> SubmitPeriodAsync(object payload, CancellationToken ct)
+    private static int ArrayLength(JsonElement root, string property)
+        => root.TryGetProperty(property, out var el) && el.ValueKind == JsonValueKind.Array
+            ? el.GetArrayLength()
+            : 0;
+
+    /// <summary>
+    /// S127 / TASK-12701b — POST /api/approval/send → (status, periodId-from-body).
+    ///
+    /// <para>Replaces the retired <c>POST /api/approval/submit</c> (TASK-12703). The body is
+    /// MONTH-KEYED — <c>{employeeId, year, month}</c> and nothing else. The five fields the old
+    /// request carried are deliberately NOT sent because the server is the authority on all five:
+    /// <c>periodStart</c>/<c>periodEnd</c> are derived from (year, month), and
+    /// <c>orgId</c>/<c>agreementCode</c>/<c>okVersion</c> are resolved in the command. Sending them
+    /// would not be ignored-but-harmless — the manifest's stored <c>orgId</c>/<c>agreementCode</c>/
+    /// <c>okVersion</c> are generation-time values, and a caller-supplied dimension is exactly the
+    /// P4 correctness hole the send command closed.</para>
+    ///
+    /// <para>Outcomes the loader must distinguish: 200 (sent, row now EMPLOYEE_APPROVED),
+    /// 409 (already past a sendable source state — the idempotent re-run path), 422 (coverage or
+    /// allocation refused the month — a REAL failure of the seeded world, never a skip).</para>
+    /// </summary>
+    public async Task<(HttpStatusCode Status, Guid? PeriodId, string Body)> SendPeriodAsync(
+        string employeeId, int year, int month, CancellationToken ct)
     {
-        var (status, body) = await SendAsync(HttpMethod.Post, "/api/approval/submit", payload, null, ct);
+        var (status, body) = await SendAsync(HttpMethod.Post, "/api/approval/send",
+            new { employeeId, year, month }, null, ct);
         Guid? periodId = null;
         if (status == HttpStatusCode.OK)
         {

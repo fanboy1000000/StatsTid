@@ -121,9 +121,43 @@ public static class TimeEndpoints
             await using (var conn = connectionFactory.Create())
             {
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
+                // ── S127 / TASK-12704 — PIN ReadCommitted EXPLICITLY (PAT-015) ────────────────
+                // NOT the default overload. This transaction's first statement is the blocking
+                // `SELECT pg_advisory_xact_lock(...)` below. Under REPEATABLE READ the snapshot is
+                // taken BEFORE the lock is granted, so a winner that commits while we wait — the
+                // exact thing we were waiting for — stays invisible and we would proceed on
+                // pre-lock state: execution serialized, data un-serialized. ReadCommitted gives
+                // each post-lock statement a fresh snapshot, which is what a lock-serialized
+                // critical section requires. Same discipline and same comment as the other pinned
+                // sites (ReportingLineEndpoints, ReportingLineRepository, SettlementCloseService,
+                // ApprovalEndpoints' send/reopen transactions).
+                //
+                // Corollary (PAT-015): never pass an `ApprovalAuthorityContext` on this
+                // transaction — DesignatedApproverAuthorizer.EnsureContextIsSnapshotBound throws
+                // unless it gets RepeatableRead or stronger. This handler passes none.
+                await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
                 try
                 {
+                    // ── S127 / TASK-12704 — the per-employee advisory lock, FIRST STATEMENT ────
+                    // Before ANY read or write in this transaction. `time_entries_projection` is
+                    // the ALLOCATED side of the submit-time allocation gate (refinement §1
+                    // defect 4): without this lock an unallocated time entry could commit AFTER a
+                    // send validates and BEFORE it commits, leaving a month in a manager-visible
+                    // state that is already invalid. Enrolling this writer in the SAME
+                    // per-employee lock the send command and the Skema save take makes the S127
+                    // invariant true for the request path (§2).
+                    //
+                    // The SAME lock, deliberately — EmployeeConsumptionLock
+                    // (`pg_advisory_xact_lock(hashtext('employee-' || id))`, transaction-scoped).
+                    // A second advisory lock acquired in a different order by two paths is a
+                    // deadlock; there is exactly one.
+                    //
+                    // NOT in scope here: an approval-status check. The lock stops this write
+                    // racing INSIDE a send; it does not stop it writing AFTER one. That second
+                    // defect is deliberately carried (refinement §2 qualification 3, §4).
+                    await StatsTid.Backend.Api.Services.EmployeeConsumptionLock.AcquireAsync(
+                        conn, tx, request.EmployeeId, ct);
+
                     var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
                     await timeProjectionRepo.InsertAsync(conn, tx, @event, outboxId, ct);
                     await tx.CommitAsync(ct);

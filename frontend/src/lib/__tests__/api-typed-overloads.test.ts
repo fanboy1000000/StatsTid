@@ -439,7 +439,10 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/reporting-lines/import'
       | '/api/admin/reporting-lines/{employeeId}/remove'
       | '/api/admin/reporting-lines/{managerId}/vikar'
-      | '/api/approval/submit'
+      // S127 / TASK-12703 — `/api/approval/submit` RETIRED, `/api/approval/send`
+      // added. This is a TYPE-level union member, so a stale entry here is a
+      // `tsc --noEmit` failure, not a red assertion.
+      | '/api/approval/send'
       | '/api/approval/{periodId}/approve'
       | '/api/approval/{periodId}/employee-approve'
       | '/api/approval/{periodId}/reject'

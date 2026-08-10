@@ -19,6 +19,11 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 /// unit tree + the units CRUD ship in S104 / Phase 3 (the modest demo unit tree under STY02 lives in
 /// init.sql).
 ///
+/// S127 / TASK-12701a: a per-org PROJECT catalogue is emitted too (every org, MAO included). It is
+/// SQL-seeded rather than loaded via the admin API for the same reason the org/user rows are —
+/// projects are structural reference data the loader's activity stage already depends on: the
+/// allocations it posts name project CODES, so the rows must exist before the first skema save.
+///
 /// Only the reporting TREE + activity are LOADED POST-BOOT via the API (event-emitting; OQ-4)
 /// and so are NOT in this file.
 ///
@@ -132,6 +137,27 @@ public static class SqlEmitter
         sb.AppendLine("ON CONFLICT DO NOTHING;");
         sb.AppendLine();
 
+        // ── 7. S127 / TASK-12701a — the per-org project catalogue ──
+        sb.AppendLine("-- ── Projects, one catalogue per org INCLUDING the MAO root (S127 / TASK-12701a; owner");
+        sb.AppendLine("--    ruling B). Projects are strictly ORG-SCOPED, so an employee in a project-less org has");
+        sb.AppendLine("--    an EMPTY project set — not a filtered one — and could never allocate their hours, which");
+        sb.AppendLine("--    the S127 submit-time gate makes a hard precondition for sending a month. demo_admin");
+        sb.AppendLine("--    homes on the MAO, which is why the MAO is in here too. project_id is omitted");
+        sb.AppendLine("--    deliberately: the column defaults to gen_random_uuid(), nothing references a project by");
+        sb.AppendLine("--    id (allocations key on project_code), and omitting it keeps this artifact byte-stable. ──");
+        sb.AppendLine("INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by) VALUES");
+        AppendRows(sb, dataset.Projects, (rb, p) =>
+        {
+            rb.Append('(')
+              .Append(Lit(p.OrgId)).Append(", ")
+              .Append(Lit(p.ProjectCode)).Append(", ")
+              .Append(Lit(p.ProjectName)).Append(", ")
+              .Append(p.SortOrder.ToString(CultureInfo.InvariantCulture)).Append(", ")
+              .Append(Lit("DEMO_SEED")).Append(')');
+        });
+        sb.AppendLine("ON CONFLICT DO NOTHING;");
+        sb.AppendLine();
+
         sb.AppendLine("-- ============================================================================");
         sb.AppendLine("-- End of generated demo seed.");
         sb.AppendLine("-- ============================================================================");
@@ -157,7 +183,8 @@ public static class SqlEmitter
             "--\n" +
             $"-- scale={m.Scale}  seed={m.Seed}  referenceDate={m.ReferenceDate}\n" +
             $"-- orgs={dataset.Orgs.Count}  users={dataset.Users.Count} (+1 demo_admin)  " +
-            $"employeeRoles={dataset.EmployeeRoles.Count}  privilegedRoles={dataset.PrivilegedRoles.Count}\n" +
+            $"employeeRoles={dataset.EmployeeRoles.Count}  privilegedRoles={dataset.PrivilegedRoles.Count}  " +
+            $"projects={dataset.Projects.Count}\n" +
             "-- ============================================================================\n\n";
     }
 

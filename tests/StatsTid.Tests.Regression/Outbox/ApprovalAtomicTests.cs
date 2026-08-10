@@ -7,7 +7,7 @@ using StatsTid.SharedKernel.Models;
 namespace StatsTid.Tests.Regression.Outbox;
 
 /// <summary>
-/// S24 TASK-2408 forced-rollback tests for Phase 2 / TASK-2402's 5 converted approval
+/// S24 TASK-2408 forced-rollback tests for Phase 2 / TASK-2402's converted approval
 /// endpoints (Pattern B — endpoint emits an audit row in the same tx). Each test mirrors
 /// the converted endpoint's orchestration verbatim with
 /// <see cref="ForcedRollbackHarness.ThrowingOutboxEnqueue"/> wired in for
@@ -17,14 +17,21 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// audit row, canonical event row, and outbox row are all absent on a fresh connection.
 ///
 /// <para>
-/// Phase 2 endpoints under test:
+/// Endpoints under test:
 /// <list type="bullet">
-///   <item><c>POST /api/approval/submit</c> (<see cref="Submit_OutboxFails_RollsBackEntireTransaction"/>)</item>
 ///   <item><c>POST /api/approval/{periodId}/approve</c> (<see cref="ManagerApprove_OutboxFails_RollsBack"/>)</item>
 ///   <item><c>POST /api/approval/{periodId}/reject</c> (<see cref="Reject_OutboxFails_RollsBack"/>)</item>
-///   <item><c>POST /api/approval/{periodId}/employee-approve</c> (<see cref="EmployeeApprove_OutboxFails_RollsBack"/>)</item>
 ///   <item><c>POST /api/approval/{periodId}/reopen</c> (<see cref="Reopen_OutboxFails_RollsBack"/>)</item>
 /// </list>
+/// </para>
+///
+/// <para>
+/// S127 / TASK-12708 (AC-17): the former <c>Submit_OutboxFails_RollsBackEntireTransaction</c> (the
+/// retired <c>POST /api/approval/submit</c>) and <c>EmployeeApprove_OutboxFails_RollsBack</c> (a stale
+/// inline mirror of the by-id path) were REMOVED. Both mirrored the endpoint orchestration inline and
+/// stayed green after <c>/submit</c> was retired and the send path was rewritten into the one shared
+/// <c>ExecuteSendAsync</c> command. Their replacement drives the REAL send routes (both adapters)
+/// through a throwing-outbox host in <see cref="Approval.SendAtomicityTests"/>.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -48,50 +55,6 @@ public sealed class ApprovalAtomicTests : IAsyncLifetime
     }
 
     public async Task DisposeAsync() => await _harness.DisposeAsync();
-
-    [Fact]
-    public async Task Submit_OutboxFails_RollsBackEntireTransaction()
-    {
-        // Arrange: no pre-seeded period — Submit creates + transitions in one tx.
-        var period = NewPeriod();
-        var streamId = $"approval-{period.EmployeeId}-{period.PeriodStart:yyyy-MM-dd}";
-
-        // Act: invoke the converted endpoint's orchestration; expect the throw to escape
-        // the using-blocks before tx.CommitAsync runs, which forces tx rollback.
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            await using var conn = _harness.Factory.Create();
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-
-            var periodId = await _repo.CreateAsync(conn, tx, period);
-            await _repo.UpdateStatusAsync(conn, tx, periodId, "SUBMITTED", "tester");
-            await _repo.AppendAuditAsync(conn, tx, periodId, "SUBMITTED", "tester", "EMPLOYEE", null);
-
-            var @event = new PeriodSubmitted
-            {
-                PeriodId = periodId,
-                EmployeeId = period.EmployeeId,
-                OrgId = period.OrgId,
-                PeriodStart = period.PeriodStart,
-                PeriodEnd = period.PeriodEnd,
-                PeriodType = period.PeriodType,
-            };
-            await _outbox.EnqueueAsync(conn, tx, streamId, @event);
-            await tx.CommitAsync();
-        });
-        Assert.Equal(ForcedRollbackHarness.ThrowingOutboxEnqueue.ThrowMessage, ex.Message);
-
-        // Assert: no state, no audit, no event, no outbox row.
-        await ForcedRollbackHarness.AssertNoStateMutationAsync(
-            _harness.ConnectionString, "approval_periods",
-            $"employee_id = '{period.EmployeeId}' AND period_start = '{period.PeriodStart:yyyy-MM-dd}'");
-        await ForcedRollbackHarness.AssertNoAuditRowAsync(
-            _harness.ConnectionString, "approval_audit",
-            $"actor_id = 'tester' AND action = 'SUBMITTED'");
-        await ForcedRollbackHarness.AssertNoEventRowAsync(_harness.ConnectionString, streamId);
-        await ForcedRollbackHarness.AssertNoOutboxRowAsync(_harness.ConnectionString, streamId);
-    }
 
     [Fact]
     public async Task ManagerApprove_OutboxFails_RollsBack()
@@ -175,51 +138,6 @@ public sealed class ApprovalAtomicTests : IAsyncLifetime
         await ForcedRollbackHarness.AssertNoAuditRowAsync(
             _harness.ConnectionString, "approval_audit",
             $"period_id = '{periodId}' AND action = 'REJECTED'");
-        await ForcedRollbackHarness.AssertNoEventRowAsync(_harness.ConnectionString, streamId);
-        await ForcedRollbackHarness.AssertNoOutboxRowAsync(_harness.ConnectionString, streamId);
-    }
-
-    [Fact]
-    public async Task EmployeeApprove_OutboxFails_RollsBack()
-    {
-        // Arrange: a DRAFT period (the only state the employee-approve handler accepts).
-        var period = NewPeriod();
-        var periodId = await _repo.CreateAsync(period);
-        var streamId = $"approval-{period.EmployeeId}-{period.PeriodStart:yyyy-MM-dd}";
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            await using var conn = _harness.Factory.Create();
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-
-            await _repo.UpdateStatusAsync(conn, tx, periodId, "EMPLOYEE_APPROVED", period.EmployeeId);
-            // Endpoint also stamps deadlines in-tx — mirror that.
-            var lastDayOfMonth = new DateOnly(period.PeriodEnd.Year, period.PeriodEnd.Month,
-                DateTime.DaysInMonth(period.PeriodEnd.Year, period.PeriodEnd.Month));
-            await _repo.UpdateDeadlinesAsync(conn, tx, periodId, lastDayOfMonth.AddDays(2), lastDayOfMonth.AddDays(5));
-            await _repo.AppendAuditAsync(
-                conn, tx, periodId, "SUBMITTED", period.EmployeeId, "EMPLOYEE", "Employee self-approval");
-
-            var @event = new PeriodEmployeeApproved
-            {
-                PeriodId = periodId,
-                EmployeeId = period.EmployeeId,
-                OrgId = period.OrgId,
-                PeriodStart = period.PeriodStart,
-                PeriodEnd = period.PeriodEnd,
-            };
-            await _outbox.EnqueueAsync(conn, tx, streamId, @event);
-            await tx.CommitAsync();
-        });
-        Assert.Equal(ForcedRollbackHarness.ThrowingOutboxEnqueue.ThrowMessage, ex.Message);
-
-        await ForcedRollbackHarness.AssertNoStateMutationAsync(
-            _harness.ConnectionString, "approval_periods",
-            $"period_id = '{periodId}' AND status = 'EMPLOYEE_APPROVED'");
-        await ForcedRollbackHarness.AssertNoAuditRowAsync(
-            _harness.ConnectionString, "approval_audit",
-            $"period_id = '{periodId}' AND comment = 'Employee self-approval'");
         await ForcedRollbackHarness.AssertNoEventRowAsync(_harness.ConnectionString, streamId);
         await ForcedRollbackHarness.AssertNoOutboxRowAsync(_harness.ConnectionString, streamId);
     }

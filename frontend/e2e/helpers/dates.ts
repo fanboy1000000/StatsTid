@@ -11,13 +11,22 @@
  * Re-run tolerance: each run derives a per-run nonce from Date.now(); the nonce
  * selects a UNIQUE future month within a bounded forward window. Two consecutive
  * runs therefore target DIFFERENT months, so a re-run can never:
- *   • 409 on the POST /api/approval/submit existing-SUBMITTED guard
- *     (ApprovalEndpoints.cs:109 — the guard keys on employeeId+periodStart+periodEnd),
+ *   • collide with a period a prior run left on the same (employee, month) —
+ *     `approval_periods` is unique on (employee_id, period_start, period_end)
+ *     (init.sql:892) and the send command refuses any source state outside
+ *     {DRAFT, SUBMITTED, REJECTED},
  *   • go green-but-weak against state a prior run left in the persistent local
  *     Postgres volume.
  *
- * The bounded window keeps the ApprovalDashboard month-nav (one "Naeste" click per
- * month, internal state, no URL param) to a deterministic, small click count.
+ * The bounded window keeps the month-nav (one "Naeste" click per month, internal
+ * state) to a deterministic, small click count on the surfaces that have no month
+ * URL param — the leader Teamoversigt. The employee Skema page DOES take
+ * `?year=&month=` (the Årsoversigt drill-in), so that side navigates directly.
+ *
+ * S127 / TASK-12709 — the nonce is a first line of defence, not the whole story:
+ * `slot = (nonce + offset) % 18` recycles, so approval.spec.ts walks forward from
+ * its nonce month until it finds one no prior run has already consumed. That walk
+ * is what `monthWeekdays` + `targetMonth` feed.
  */
 
 /** How far ahead the nonce window reaches, in months. A run picks one slot in
@@ -75,8 +84,10 @@ export function targetMonth(nonce: number, offset = 0): TargetMonth {
  * Pick a NON-boundary weekday inside the given month: a mid-month day that is
  * Monday–Friday, computed in UTC and never near the month edges. `which`
  * selects among the mid-month weekday candidates so two distinct, isolated
- * periods can live in the SAME month on DIFFERENT days (different days ⇒
- * different periods ⇒ no submit-409). Returns an ISO `YYYY-MM-DD` string.
+ * registrations can live in the SAME month on DIFFERENT days. Returns an ISO
+ * `YYYY-MM-DD` string. (S127: the old "⇒ no submit-409" rationale went with the
+ * retired `POST /api/approval/submit`; the remaining caller registers absences,
+ * which are keyed by day, not by period.)
  */
 export function nonBoundaryWeekday(year: number, month: number, which = 0): string {
   const candidates = midMonthWeekdays(year, month)
@@ -101,9 +112,13 @@ function midMonthWeekdays(year: number, month: number): number[] {
  * Combining this with the nonce's month rotation spreads each run across the full
  * (month × day) slot space (≈ 18 × 9 ≈ 160 slots), so consecutive re-runs land on
  * DIFFERENT days even when the bounded month window recycles — a re-run can never
- * collide with an APPROVED/REJECTED period a PRIOR run left on a recurring day
- * (the /submit guard refuses re-submit over SUBMITTED/APPROVED — ApprovalEndpoints.cs:109).
+ * collide with state a PRIOR run left on a recurring day.
  * `offset` lets one run carve out a second, distinct day in the same month.
+ *
+ * S127 — this used to cite `POST /api/approval/submit`'s existing-period guard
+ * (`ApprovalEndpoints.cs:109`). That route is RETIRED (owner ruling R3) and the line
+ * had drifted; the remaining caller (skema-registration) only needs "a fresh day",
+ * which is what this function still delivers.
  */
 export function nonceWeekdayIndex(nonce: number, year: number, month: number, offset = 0): number {
   const count = midMonthWeekdays(year, month).length
@@ -111,22 +126,44 @@ export function nonceWeekdayIndex(nonce: number, year: number, month: number, of
 }
 
 /**
- * The full set of mid-month non-boundary weekdays for a month as ISO date strings,
- * ROTATED to start at `startIndex` (nonce-derived). A resilient submit walks this
- * ordered list, trying each day until one yields a clean SUBMITTED period — so an
- * accumulated APPROVED/REJECTED period on a recurring slot (local persistent volume)
- * is simply stepped over. CI runs against a fresh ephemeral volume, so the first
- * candidate always wins there.
+ * S127 / TASK-12709 — EVERY Mon–Fri day of the month, in calendar order, as ISO
+ * `YYYY-MM-DD` strings.
+ *
+ * This is the day set the submit-time COVERAGE gate expects, deliberately taken as
+ * a SUPERSET: the gate builds `expectedWorkdays` as weekdays MINUS the rows in
+ * `danish_public_holidays` (ApprovalEndpoints, the coverage block of the send
+ * command), so registering on a seeded holiday too is harmless — coverage asks that
+ * every expected workday carries a registration, never that no other day does. The
+ * converse would matter and does not arise here: a day this helper SKIPS while the
+ * gate expects it would fail the send, and the only days skipped are Saturdays and
+ * Sundays, which the gate skips first. `DanishHolidays` (the demo generator) records
+ * the same drift direction for the same reason.
+ *
+ * Weekday resolution is UTC-based, but the calendar date is what carries: the grid
+ * derives its own day keys from LOCAL `new Date(year, month-1, d)` and the backend
+ * from `DateOnly`, and all three agree on which weekday a given calendar date is.
+ *
+ * NOTE (deleted sibling): `rotatedWeekdays` lived here until S127. It served the old
+ * approval journey's single-day fixture, walking mid-month days until one was free —
+ * and that single-day period is precisely the defect S127 closed (period identity is
+ * the exact date tuple, but the manager's overview resolves by overlap). Its last
+ * caller went with it, so it went too rather than sit as a dead export.
  */
-export function rotatedWeekdays(year: number, month: number, startIndex: number): string[] {
-  const candidates = midMonthWeekdays(year, month)
-  const n = candidates.length
-  const start = ((startIndex % n) + n) % n
+export function monthWeekdays(year: number, month: number): string[] {
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate()
   const out: string[] = []
-  for (let i = 0; i < n; i++) {
-    out.push(isoDate(year, month, candidates[(start + i) % n]))
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay() // 0=Sun..6=Sat
+    if (dow === 0 || dow === 6) continue
+    out.push(isoDate(year, month, day))
   }
   return out
+}
+
+/** Add `delta` whole months to a (year, 1-based month) pair. */
+export function addMonths(year: number, month: number, delta: number): { year: number; month: number } {
+  const total = year * 12 + (month - 1) + delta
+  return { year: Math.floor(total / 12), month: (total % 12) + 1 }
 }
 
 /** Format a (year, 1-based month, day) tuple as a zero-padded ISO date string. */

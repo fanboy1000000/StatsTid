@@ -16,10 +16,12 @@ import { runNonce, targetMonth, nonBoundaryWeekday, nonceWeekdayIndex } from './
  *
  * Re-run tolerance: the per-run nonce targets a UNIQUE future (month, day) slot, so
  * a re-run registers into a fresh slot and can never go green-but-weak against state
- * left in the persistent local Postgres volume. Distinct month-offset from the
- * approval journey (which runs in parallel and locks ITS month on approve) — the two
- * never share a month, so this save never 409s on a period-locked month
- * (SkemaEndpoints.cs:604).
+ * left in the persistent local Postgres volume. The approval journey runs in PARALLEL
+ * against the SAME employee and locks the whole month it sends, so the two must not
+ * share a month — S127 made that separation structural (see SKEMA_MONTH_OFFSET below).
+ * The save-side lock is `SkemaEndpoints.IsPeriodLockedForSave`, located by name: the
+ * line number this comment used to carry (`:604`) had drifted onto the route
+ * registration.
  */
 
 const ABSENCE_LABEL = 'Sygedag' // SICK_DAY — the cell aria-label is `${label} dag ${dayOfMonth}`
@@ -29,18 +31,19 @@ const ABSENCE_LABEL = 'Sygedag' // SICK_DAY — the cell aria-label is `${label}
 // (a fresh onChange → a scheduled debounced save) instead of a no-op over the prefill.
 const HOURS_DISPLAY = '3,7'
 
-// Per-SPEC month offset: the skema + approval journeys both mutate emp001 and run
-// in PARALLEL. The offset (skema uses 0, approval uses 7) is a best-effort spread,
-// NOT a guarantee that the two journeys land on different months: each spec calls
-// runNonce() independently (its own per-spec wall-clock nonce), so distinct offsets
-// do NOT prove distinct slots mod 18.
+// Per-SPEC month offset. The skema + approval journeys both mutate emp001 and run in
+// PARALLEL (Playwright runs files across workers).
 //
-// Same-month is nonetheless BENIGN: the approval journey only APPROVES SINGLE-DAY
-// periods (periodStart == periodEnd), while the skema period-lock (SkemaEndpoints.cs:604)
-// rejects a save only when an APPROVED period covers that exact period span. This
-// journey registers a mid-month single-day SICK_DAY absence, and the two single-day
-// periods land on distinct days, so the lock can't fire across the two specs even in
-// a shared month. See approval.spec.ts's offset constant for the matching note.
+// S127 / TASK-12709 — THE OLD SAFETY ARGUMENT HERE IS VOID AND WAS REPLACED. It read:
+// "same-month is benign, because the approval journey only approves SINGLE-DAY periods
+// and the skema period-lock keys on the exact period span, so the two never collide."
+// The approval journey now sends a WHOLE MONTH — which is exactly the span this page's
+// save looks up — and sending locks it (the backend locks EMPLOYEE_APPROVED; it never
+// locked SUBMITTED), so a shared month WOULD make this save fail.
+//
+// The separation is now structural rather than argued: approval.spec.ts takes its month
+// from its OWN window starting 19 months out and never re-enters `targetMonth`'s [1, 18]
+// slots, which this spec keeps to itself. See approval.spec.ts's MONTH_WINDOW_START.
 const SKEMA_MONTH_OFFSET = 0
 
 /** Drive the SkemaPage month-nav (internal year/month state, no URL param) FORWARD

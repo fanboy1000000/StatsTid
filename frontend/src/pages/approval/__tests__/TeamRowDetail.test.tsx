@@ -447,13 +447,52 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
 })
 
 describe('TeamRowDetail — rejection reason', () => {
-  it('shows "Begrundelse for afvisning" for a REJECTED row with a reason', async () => {
+  // ── S127 / TASK-12707 — a THIRD stale R1 test, not on the task list, same class ──
+  // It asserted that expanding a REJECTED row shows "Begrundelse for afvisning". Its fixture set
+  // only `status` / `decisionAt` / `rejectionReason` and inherited `row()`'s `normRegistered: 140`,
+  // so like the two named cases it stayed green over a wire shape the server no longer produces.
+  //
+  // ⚠ FINDING for the Orchestrator, recorded here because this is where it is provable: the
+  // refinement (§3.7 / ApprovalVisibility.cs) argues that "the leader keeps WHY they rejected"
+  // because `rejectionReason` is still SERVED. That holds on the wire and NOT in this UI. The only
+  // site that renders it — `TeamOversigt.tsx`'s detail panel, gated `row.status === 'REJECTED' &&
+  // row.rejectionReason` — sits inside the panel `canExpand = row.normRegistered !== null` now
+  // closes for exactly those rows. So on Teamoversigt the reason became UNREACHABLE, and that
+  // render branch is production-dead. Left in place deliberately: re-surfacing the reason at row
+  // level is a design decision (S91 dead-affordance discipline would say remove or promote it), and
+  // UX may not take it unilaterally. This test pinned the gap so it stayed visible rather than
+  // being masked by a green assertion of the old behaviour.
+  //
+  // ── S127 / TASK-12713 — owner ruling R7 CLOSED that gap, so the pin inverts ──
+  // The reason is now rendered from the row map at row level, outside `isExpanded`, and the
+  // in-panel branch this describe block was named after is DELETED. `canExpand` was NOT relaxed —
+  // that would have handed back the five withheld figures — so everything this test said about the
+  // panel still holds; only the conclusion "therefore the reason is unreachable" no longer does.
+  // The row-level behaviour is owned by `TeamOversigt.test.tsx`; what is asserted here is the part
+  // this file is about: THE PANEL is not the site, and does not become the site by being opened.
+  it('R7: the reason is reachable WITHOUT the panel — and the panel is no longer its render site', async () => {
     const user = userEvent.setup()
-    mockRoutes({ overview: [row({ status: 'REJECTED', decisionAt: '2026-04-01T08:00:00Z', rejectionReason: 'Mangler fordeling' })] })
+    mockRoutes({
+      overview: [row({
+        status: 'REJECTED', decisionAt: '2026-04-01T08:00:00Z', rejectionReason: 'Mangler fordeling',
+        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, ferieUsed: null,
+      })],
+    })
     renderPage()
-    await expandFirstRow(user)
-    expect(screen.getByText('Begrundelse for afvisning:')).toBeInTheDocument()
-    expect(screen.getByText(/Mangler fordeling/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    // The status IS displayed — the leader still sees THAT they rejected it…
+    expect(screen.getByText('Afvist')).toBeInTheDocument()
+    // …and now also WHY, with no panel open anywhere on the page.
+    expect(screen.queryByTestId('team-detail-row-emp001')).toBeNull()
+    const strip = screen.getByTestId('team-rejection-emp001')
+    expect(within(strip).getByText('Begrundelse for afvisning:')).toBeInTheDocument()
+    expect(within(strip).getByText(/Mangler fordeling/)).toBeInTheDocument()
+
+    // R1 intact: the row still cannot be expanded, so the panel is still not reachable — and the
+    // reason did not arrive by re-opening it.
+    await user.click(screen.getByTestId('team-row-emp001'))
+    expect(screen.queryByTestId('team-detail-row-emp001')).toBeNull()
+    expect(screen.getAllByText('Begrundelse for afvisning:')).toHaveLength(1)
   })
 })
 
@@ -625,12 +664,30 @@ describe("TeamRowDetail - the inline read-only employee skema (S124 / TASK-12403
     expect(screen.queryByTestId("manager-skema-emp009")).toBeNull()
   })
 
-  it("stays available AFTER a decision - a rejected month can be re-read", async () => {
+  // ── S127 / TASK-12706 — owner ruling R1, THE REVERSAL ──────────────────────────
+  // This test asserted the OPPOSITE: "stays available AFTER a decision - a rejected month can be
+  // re-read", expanding the row and finding the grid. It survived the backend change because the
+  // suite is hermetic (`vi.stubGlobal('fetch', mockFetch)`) and its fixture came from `row()`,
+  // whose default `normRegistered: 140` overrode nothing here — the case set only `status` and
+  // `rejectionReason`. A hardcoded value for a field the server now withholds cannot self-report.
+  it("R1: a REJECTED month can NO LONGER be re-read - withheld figures, so no expander, so no grid", async () => {
     const user = userEvent.setup()
-    mockRoutes({ overview: [row({ status: "REJECTED", rejectionReason: "Mangler fordeling" })] })
+    mockRoutes({
+      overview: [row({
+        status: "REJECTED", decisionAt: "2026-04-01T08:00:00Z", rejectionReason: "Mangler fordeling",
+        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, ferieUsed: null,
+      })],
+    })
     renderPage()
-    await expandFirstRow(user)
-    await waitFor(() => expect(screen.getByTestId("manager-skema-emp001")).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText("Anna Berg")).toBeInTheDocument())
+    // Same composition as the un-submitted case above: withheld figures remove the expander, and
+    // the grid lives inside the panel the expander opens.
+    expect(screen.queryByRole("button", { name: /detaljer for Anna Berg/ })).toBeNull()
+    await user.click(screen.getByTestId("team-row-emp001"))
+    expect(screen.queryByTestId("manager-skema-emp001")).toBeNull()
+    // No day-level read fires either — the panel is what triggers it.
+    expect(mockFetch.mock.calls.some((c: unknown[]) =>
+      typeof c[0] === "string" && (c[0] as string).includes("/api/skema/"))).toBe(false)
   })
 })
 

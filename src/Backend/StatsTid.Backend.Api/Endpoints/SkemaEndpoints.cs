@@ -123,6 +123,35 @@ public static class SkemaEndpoints
         // (Null / non-positive pass through; positive ⇒ 2-dec AwayFromZero, ADR-032 D1.)
         => StatsTid.Backend.Api.Services.ConsumptionCalculator.RoundBasisTwoDp(fullDayHours);
 
+    /// <summary>
+    /// S127 / TASK-12704 — THE single spelling of "this month is closed to Skema writes".
+    ///
+    /// <para>
+    /// The save handler asks this question TWICE and the two askings must not be able to drift: once
+    /// pre-transaction (the cheap fast path, unchanged) and once INSIDE the write transaction after
+    /// <c>EmployeeConsumptionLock</c> is held. Two hand-copied status literals bound only by a comment
+    /// is exactly the shape S124/TASK-12405 removed on the read side; this is the write side of the
+    /// same lesson.
+    /// </para>
+    ///
+    /// <para>
+    /// The set is the one the pre-transaction check has always used — <c>EMPLOYEE_APPROVED</c> and
+    /// <c>APPROVED</c>, the two manager-visible/locked states. A null period (no row for the month)
+    /// is NOT locked: nothing has been sent.
+    /// </para>
+    /// </summary>
+    private static bool IsPeriodLockedForSave(ApprovalPeriod? period)
+        => period is not null && period.Status is "EMPLOYEE_APPROVED" or "APPROVED";
+
+    /// <summary>
+    /// S127 / TASK-12704 — THE single construction site for the save handler's period-locked 409, so
+    /// the in-transaction re-read returns byte-identically what the pre-transaction conflict path
+    /// returns (same status code, same body shape, same message). Callers must have established
+    /// <see cref="IsPeriodLockedForSave"/>.
+    /// </summary>
+    private static IResult PeriodLockedForSaveConflict(ApprovalPeriod period)
+        => Results.Conflict(new { error = $"Cannot save entries for a period with status {period.Status}" });
+
     // S61 / TASK-6101 — the Backend-local EarnedToDate/MonthIndex mirror was removed. The pure
     // earned-to-date math is now the single shared copy in StatsTid.SharedKernel.Calendar.AccrualMath
     // (already imported via the `using StatsTid.SharedKernel.Calendar;` above). PAT-005 is unaffected:
@@ -676,9 +705,14 @@ public static class SkemaEndpoints
                 employeeId, monthStart, ct);
             var agreementCode = pastEffectiveAgreementCode ?? user.AgreementCode;
 
+            // S127 / TASK-12704 — this is the PRE-TRANSACTION fast path, and it is advisory: it reads
+            // on its own connection, outside the write transaction and outside EmployeeConsumptionLock,
+            // so a send that commits between here and the write is invisible to it. The AUTHORITATIVE
+            // check is the in-lock re-read inside the transaction below. Both route through
+            // IsPeriodLockedForSave / PeriodLockedForSaveConflict so they cannot drift.
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
-            if (period is not null && period.Status is "EMPLOYEE_APPROVED" or "APPROVED")
-                return Results.Conflict(new { error = $"Cannot save entries for a period with status {period.Status}" });
+            if (IsPeriodLockedForSave(period))
+                return PeriodLockedForSaveConflict(period!);
 
             // ── Work-time date-range validation (S56 / Step 7a BLOCKER fix) ──
             // The approval-lock check above is scoped to the REQUESTED month. Reject any
@@ -1418,7 +1452,17 @@ public static class SkemaEndpoints
             {
                 await using var conn = connectionFactory.Create();
                 await conn.OpenAsync(ct);
-                await using var tx = await conn.BeginTransactionAsync(ct);
+                // ── S127 / TASK-12704 — PIN ReadCommitted EXPLICITLY (PAT-015) ────────────────────
+                // Behaviour-neutral (this is what the default overload already resolves to), but the
+                // in-lock re-reads below now DEPEND on it and must not depend on a default. This tx's
+                // first statement is the blocking `SELECT pg_advisory_xact_lock(...)`; under
+                // REPEATABLE READ the snapshot would be taken BEFORE the lock is granted, so the
+                // winner's commit — the exact thing we blocked for — would be invisible, and BOTH
+                // in-lock re-reads (the S127 approval-status re-read and the S66/D2 authoritative
+                // feriedage re-derive) would silently read pre-lock state. ReadCommitted gives each
+                // post-lock statement a fresh snapshot. Corollary: never pass an
+                // ApprovalAuthorityContext on this transaction (it throws unless RepeatableRead).
+                await using var tx = await conn.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
                 try
                 {
                     // ── S66 / TASK-6603 — ADR-032 D2/D4 two-phase consumption cutover ──
@@ -1428,6 +1472,36 @@ public static class SkemaEndpoints
                     // (TASK-6604, which reuses this same helper).
                     await StatsTid.Backend.Api.Services.EmployeeConsumptionLock.AcquireAsync(
                         conn, tx, employeeId, ct);
+
+                    // ── S127 / TASK-12704 — THE AUTHORITATIVE APPROVAL-STATUS RE-READ ─────────────
+                    // After the lock, before ANY write. Holding the lock is necessary but NOT
+                    // sufficient: the pre-transaction check above ran on its own connection, outside
+                    // this transaction and outside the lock. A send command — which takes THIS SAME
+                    // lock — can have validated and committed EMPLOYEE_APPROVED while we blocked on
+                    // the acquire; without re-reading we would commit entries into a month that is
+                    // already manager-visible, on a read that is now stale. That is the write half of
+                    // refinement §1 defect 4.
+                    //
+                    // The (conn, tx) overload is REQUIRED (TASK-12702): the connection-owning overload
+                    // opens a private connection, which sits outside this transaction and therefore
+                    // outside the lock's protection — it would re-introduce the same staleness.
+                    //
+                    // Exact month, natural key ([monthStart, monthEnd]) — identical arguments to the
+                    // pre-transaction read, so the two askings resolve the same row. It sees the
+                    // winner's commit only because this transaction pins ReadCommitted above
+                    // (PAT-015) — under RepeatableRead this re-read would be a no-op.
+                    //
+                    // Returns the pre-transaction path's 409 verbatim via the shared construction site
+                    // — the frontend sees one contract regardless of which check fired. Returning here
+                    // rather than throwing leaves the transaction uncommitted; `await using var tx`
+                    // disposes on the way out and rolls back, before any write has been issued.
+                    var inLockPeriod = await approvalRepo.GetByEmployeeAndPeriodAsync(
+                        conn, tx, employeeId, monthStart, monthEnd, ct);
+                    if (IsPeriodLockedForSave(inLockPeriod))
+                    {
+                        await tx.RollbackAsync(ct);
+                        return PeriodLockedForSaveConflict(inLockPeriod!);
+                    }
 
                     // THEN re-derive the AUTHORITATIVE per-row feriedage INSIDE the lock. This
                     // re-read is the whole point of D2's two phases: a profile PUT that committed

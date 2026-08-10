@@ -15,6 +15,16 @@ namespace StatsTid.Tests.DemoSeed;
 /// golden bytes: people, edges, activity, roles and profiles are untouched by the S114 unit work,
 /// and override-absence is the byte-exact legacy path. A pin captured after the change, or one
 /// comparing the changed code to itself, would verify nothing — this one does.
+///
+/// <para><b>S127 / TASK-12701a — DELIBERATE REGENERATION.</b> This sprint adds project emission to
+/// <see cref="SqlEmitter"/> and an allocated-month post-pass to the manifest, so the byte-exact
+/// artifacts below were REGENERATED on purpose. The assertion itself was NOT loosened — it is still
+/// whole-file <c>Assert.Equal</c> on both artifacts; only the reference bytes moved.
+/// A regenerated golden proves nothing about what the regeneration changed, so the evidence that
+/// S127 perturbed only what it claims lives in <see cref="LegacyUnchangedByS127Tests"/>, which pins
+/// the CURRENT output — minus exactly the S127 additions — against the untouched PRE-S127 bytes
+/// (<c>Golden/pre-s127-legacy-smoke.*</c>, sha256 202edbb5… / 8705ee87…, the same artifacts this
+/// class pinned before the regeneration). Those two files are the S114 golden, kept.</para>
 /// </summary>
 public sealed class GoldenLegacyPinTests
 {
@@ -22,7 +32,7 @@ public sealed class GoldenLegacyPinTests
 
     /// <summary>The PRE-S114 shipped smoke scale, verbatim — crucially WITHOUT the S114 override
     /// knobs (UnitSpanOverride / ManagerCountOverride both absent).</summary>
-    private static ScaleConfig LegacySmokeClone() => new()
+    internal static ScaleConfig LegacySmokeClone() => new()
     {
         Name = "smoke",
         MinistryId = "MINX",
@@ -44,12 +54,12 @@ public sealed class GoldenLegacyPinTests
         },
     };
 
-    private static string GoldenPath(string file)
+    internal static string GoldenPath(string file)
         => Path.Combine(AppContext.BaseDirectory, "Golden", file);
 
     /// <summary>Line-ending normalization mirroring Program's deterministic write (LF, no BOM) —
     /// robust against git autocrlf on the checked-out golden files.</summary>
-    private static string Normalize(string s) => s.Replace("\r\n", "\n");
+    internal static string Normalize(string s) => s.Replace("\r\n", "\n");
 
     [Fact]
     public void NoOverrideConfig_Sql_IsByteIdenticalToPreChangeGolden()

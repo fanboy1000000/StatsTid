@@ -80,11 +80,43 @@ public sealed class DemoRoleRow
     public required string ScopeType { get; init; }
 }
 
+/// <summary>
+/// S127 / TASK-12701a — a generated <c>projects</c> row (maps 1:1 to the projects INSERT).
+///
+/// <para><b>Why this exists.</b> S127 makes a month un-sendable unless every worked hour is
+/// allocated to a project, and projects are strictly ORG-SCOPED
+/// (<c>ProjectRepository.GetByOrgAsync</c>). A user in a project-less org therefore has an EMPTY
+/// project set — not a filtered one — and can never allocate. Owner ruling B (REFINEMENT
+/// submit-allocation-gate §7): <i>all organisations should have projects</i>. So the generator
+/// emits a project catalogue for EVERY org it creates, the MAO included (<c>demo_admin</c> homes
+/// there).</para>
+///
+/// <para><c>project_id</c> is deliberately NOT carried: the column defaults to
+/// <c>gen_random_uuid()</c>, nothing in the seed or the loader references a project by id (the
+/// Skema save keys allocations on <c>project_code</c> — <c>SkemaEndpoints.cs:1609</c> writes
+/// <c>TaskId = entry.ProjectCode</c>), and omitting it keeps the emitted SQL byte-stable.</para>
+/// </summary>
+public sealed class DemoProject
+{
+    public required string OrgId { get; init; }
+
+    /// <summary>Unique within the org (the <c>projects</c> UNIQUE (org_id, project_code)).</summary>
+    public required string ProjectCode { get; init; }
+
+    public required string ProjectName { get; init; }
+
+    /// <summary>1-based display order within the org.</summary>
+    public required int SortOrder { get; init; }
+}
+
 /// <summary>The full generated dataset (the SQL artifact + the manifest are both derived from this).</summary>
 public sealed class DemoDataset
 {
     public required List<DemoOrg> Orgs { get; init; }
     public required List<DemoUser> Users { get; init; }
+
+    /// <summary>S127 — the per-org project catalogue (every org, MAO included; see <see cref="DemoProject"/>).</summary>
+    public required List<DemoProject> Projects { get; init; }
 
     /// <summary>Bulk EMPLOYEE rows (every demo user).</summary>
     public required List<DemoRoleRow> EmployeeRoles { get; init; }

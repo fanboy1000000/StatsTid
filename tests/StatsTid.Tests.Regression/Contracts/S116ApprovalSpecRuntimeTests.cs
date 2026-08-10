@@ -23,12 +23,20 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// <c>{periodId, status}</c> record; reject adds the echoed <c>reason</c>).
 ///
 /// <para><b>REAL state machine (the S116 AC):</b> every asserted period status is driven through
-/// the REAL API transitions (submit → employee-approve → approve; submit → reject; submit →
-/// employee-approve → reopen) — NEVER an SQL-faked status. The fixture periods span a WEEKEND
-/// (Sat 2026-03-07 – Sun 2026-03-08) so the employee-approve coverage gate (weekdays only) and the
-/// allocation-reconciliation gate (no entries) pass trivially. The null-submittedAt pending state
-/// is reached honestly: submit → employee-approve → reopen (DRAFT nulls submitted_at) →
-/// employee-approve again ⇒ an EMPLOYEE_APPROVED row whose submittedAt is genuinely null.</para>
+/// the REAL API transitions — NEVER an SQL-faked status. S127 / TASK-12712 retired
+/// <c>POST /api/approval/submit</c>; the month-keyed <c>POST /api/approval/send</c> now creates the
+/// period AND transitions it straight to EMPLOYEE_APPROVED (SUBMITTED is no longer producible by any
+/// route). The transitions are: send → approve ⇒ APPROVED; send → reject ⇒ REJECTED; send ⇒
+/// EMPLOYEE_APPROVED; send → reopen ⇒ DRAFT. Because <c>/send</c> gates on workday coverage and
+/// allocation, each driven employee's whole March 2026 month is first covered with a full-day absence
+/// per expected weekday (the vacuous-month recipe — coverage passes, and with no work-time / NORMAL
+/// rows the allocation gate is vacuously balanced).</para>
+///
+/// <para><b>The submittedAt states.</b> Both send adapters stamp <c>submitted_at</c>, so the
+/// null-submittedAt state is no longer reachable on a pending (EMPLOYEE_APPROVED) row. It is reached
+/// honestly by a reopened DRAFT (send → reopen NULLs submitted_at), surfaced on
+/// <c>/api/approval/by-month</c> because that read does not filter by status. The populated state is
+/// the e4 EMPLOYEE_APPROVED row.</para>
 ///
 /// <para><b>Seed disjointness (an explicit S116 acceptance criterion):</b> every Organisation
 /// (S116AMAO + S116A01–S116A06) and user (s116a_*) is FRESH — no id overlaps with the
@@ -47,16 +55,13 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
 
     private const string Mao = "S116AMAO";
     private const string RosterOrg = "S116A01";   // the fixture-driven read org (mgr + e1..e5)
-    private const string SubmitOrg = "S116A02";
-    private const string ApproveOrg = "S116A03";
-    private const string EmpApproveOrg = "S116A04";
-    private const string RejectOrg = "S116A05";
-    private const string ReopenOrg = "S116A06";
+    // The per-op employees m1..m5 live in S116A02..S116A06 (seeded in SeedAsync); /send resolves the
+    // org server-side, so no per-op org constant is needed.
 
     private const string GlobalAdminId = "s116a_gadmin";
     private const string ManagerId = "s116a_mgr";
-    private const string PeriodStart = "2026-03-07"; // Saturday — zero expected workdays
-    private const string PeriodEnd = "2026-03-08";   // Sunday
+    private const int SendYear = 2026;   // the month-keyed /send target; the read tests query month=3
+    private const int SendMonth = 3;
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
@@ -65,8 +70,8 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     // Fixture-driven period ids (REAL state machine, driven in InitializeAsync).
     private Guid _e1Approved;         // s116a_e1 → APPROVED
     private Guid _e2Rejected;         // s116a_e2 → REJECTED
-    private Guid _e4Submitted;        // s116a_e4 → SUBMITTED (submittedAt POPULATED)
-    private Guid _e5EmpApprovedNull;  // s116a_e5 → EMPLOYEE_APPROVED with NULL submittedAt
+    private Guid _e4EmpApproved;      // s116a_e4 → EMPLOYEE_APPROVED (submittedAt POPULATED)
+    private Guid _e5ReopenedDraft;    // s116a_e5 → send then reopen ⇒ DRAFT with NULL submittedAt
 
     public async Task InitializeAsync()
     {
@@ -83,29 +88,32 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
 
         _spec = SpecRuntimeTestSupport.LoadCommittedSpec();
 
-        // Drive the FIXTURE periods through the REAL state machine (no SQL-faked statuses).
+        // Drive the FIXTURE periods through the REAL state machine (no SQL-faked statuses). SendAsync
+        // covers each employee's month first, then posts /send (→ EMPLOYEE_APPROVED).
+
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
 
-        // e1: submit → employee-approve → approve ⇒ APPROVED (approvedBy/approvedAt populated).
-        _e1Approved = await SubmitAsync(admin, "s116a_e1", RosterOrg);
-        await PostActionAsync(admin, $"/api/approval/{_e1Approved}/employee-approve", jsonBody: null);
+        // e1: send → approve ⇒ APPROVED (approvedBy/approvedAt populated; /send already reached
+        // EMPLOYEE_APPROVED, and approve accepts it).
+        _e1Approved = await SendAsync(admin, "s116a_e1");
         await PostActionAsync(admin, $"/api/approval/{_e1Approved}/approve", jsonBody: null);
 
-        // e2: submit → reject ⇒ REJECTED (rejectionReason populated; decisionAt written).
-        _e2Rejected = await SubmitAsync(admin, "s116a_e2", RosterOrg);
+        // e2: send → reject ⇒ REJECTED (rejectionReason populated; decisionAt written; reject accepts
+        // EMPLOYEE_APPROVED).
+        _e2Rejected = await SendAsync(admin, "s116a_e2");
         await PostActionAsync(admin, $"/api/approval/{_e2Rejected}/reject",
             """{ "reason": "S116 afvist — dokumentation mangler" }""");
 
-        // e4: submit ⇒ SUBMITTED (submittedAt POPULATED — the pending/by-month populated state).
-        _e4Submitted = await SubmitAsync(admin, "s116a_e4", RosterOrg);
+        // e4: send ⇒ EMPLOYEE_APPROVED (submittedAt POPULATED — the pending/by-month populated state;
+        // the reachable manager-visible state now that SUBMITTED is un-producible).
+        _e4EmpApproved = await SendAsync(admin, "s116a_e4");
 
-        // e5: submit → employee-approve → reopen (DRAFT nulls submitted_at) → employee-approve
-        // ⇒ EMPLOYEE_APPROVED with a GENUINELY null submittedAt (the pending null state).
-        _e5EmpApprovedNull = await SubmitAsync(admin, "s116a_e5", RosterOrg);
-        await PostActionAsync(admin, $"/api/approval/{_e5EmpApprovedNull}/employee-approve", jsonBody: null);
-        await PostActionAsync(admin, $"/api/approval/{_e5EmpApprovedNull}/reopen",
-            """{ "reason": "S116 genåbnet for null-submittedAt state" }""");
-        await PostActionAsync(admin, $"/api/approval/{_e5EmpApprovedNull}/employee-approve", jsonBody: null);
+        // e5: send → reopen ⇒ DRAFT (reopen NULLs submitted_at). The only honest way to a null
+        // submitted_at now that both send adapters stamp it. NOT pending (drops out of /pending);
+        // surfaced on /by-month, which does not filter by status.
+        _e5ReopenedDraft = await SendAsync(admin, "s116a_e5");
+        await PostActionAsync(admin, $"/api/approval/{_e5ReopenedDraft}/reopen",
+            """{ "reason": "S116 genåbnet for DRAFT null-submittedAt state" }""");
     }
 
     public async Task DisposeAsync()
@@ -120,11 +128,13 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>The SCOPE-AGGREGATE branch (no my-reports): a GLOBAL actor's pending list. Asserts
-    /// the bare-array element against the spec (enum fidelity on status/periodType rides the
-    /// matcher) AND pins the nullable submittedAt in BOTH states: populated (the e4 SUBMITTED row)
-    /// and null (the e5 reopened-then-employee-approved row).</summary>
+    /// the bare-array element against the spec (enum fidelity on status/periodType rides the matcher)
+    /// AND pins the POPULATED submittedAt on the e4 EMPLOYEE_APPROVED row. S127 / TASK-12712: the
+    /// null-submittedAt state is no longer reachable on a pending row (both send adapters stamp
+    /// submitted_at), so it moved to the /by-month reopened-DRAFT assertion; e5 is a reopened DRAFT and
+    /// is NOT pending, so it does not appear here.</summary>
     [Fact]
-    public async Task Pending_ScopeBranch_BareArraySchemaMatchesRuntime_SubmittedAtBothStates()
+    public async Task Pending_ScopeBranch_BareArraySchemaMatchesRuntime_SubmittedAtPopulated()
     {
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
@@ -133,21 +143,18 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
             "/api/approval/pending", "get");
 
         var rows = JsonDocument.Parse(body).RootElement;
-        var e4 = FindByPeriodId(rows, _e4Submitted);
-        Assert.Equal("SUBMITTED", e4.GetProperty("status").GetString());
+        var e4 = FindByPeriodId(rows, _e4EmpApproved);
+        Assert.Equal("EMPLOYEE_APPROVED", e4.GetProperty("status").GetString());
         Assert.Equal(JsonValueKind.String, e4.GetProperty("submittedAt").ValueKind); // POPULATED
-        Assert.Equal("WEEKLY", e4.GetProperty("periodType").GetString());
-
-        var e5 = FindByPeriodId(rows, _e5EmpApprovedNull);
-        Assert.Equal("EMPLOYEE_APPROVED", e5.GetProperty("status").GetString());
-        Assert.Equal(JsonValueKind.Null, e5.GetProperty("submittedAt").ValueKind);   // NULL state
+        Assert.Equal("MONTHLY", e4.GetProperty("periodType").GetString());
     }
 
-    /// <summary>The MY-REPORTS branch (<c>?my-reports=true</c>): the designated manager's own
-    /// pending set — the SAME shared element record from the OTHER return site. Both submittedAt
-    /// states again (e4 populated + e5 null), proving the branch serializes the identical shape.</summary>
+    /// <summary>The MY-REPORTS branch (<c>?my-reports=true</c>): the designated manager's own pending
+    /// set — the SAME shared element record from the OTHER return site. The e4 EMPLOYEE_APPROVED row's
+    /// POPULATED submittedAt again, proving the branch serializes the identical shape (e5 is a reopened
+    /// DRAFT and is not pending).</summary>
     [Fact]
-    public async Task Pending_MyReportsBranch_BareArraySchemaMatchesRuntime_SubmittedAtBothStates()
+    public async Task Pending_MyReportsBranch_BareArraySchemaMatchesRuntime_SubmittedAtPopulated()
     {
         using var mgr = CreateActorClient(ManagerId, StatsTidRoles.LocalLeader, RosterOrg,
             new RoleScope(StatsTidRoles.LocalLeader, RosterOrg, "ORG_ONLY"));
@@ -157,10 +164,8 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
             "/api/approval/pending", "get");
 
         var rows = JsonDocument.Parse(body).RootElement;
-        var e4 = FindByPeriodId(rows, _e4Submitted);
+        var e4 = FindByPeriodId(rows, _e4EmpApproved);
         Assert.Equal(JsonValueKind.String, e4.GetProperty("submittedAt").ValueKind);
-        var e5 = FindByPeriodId(rows, _e5EmpApprovedNull);
-        Assert.Equal(JsonValueKind.Null, e5.GetProperty("submittedAt").ValueKind);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -181,11 +186,13 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
         // (the matcher already rejects any out-of-set value on EVERY row; these pin the literals).
         Assert.Equal("APPROVED", FindByPeriodId(rows, _e1Approved).GetProperty("status").GetString());
         Assert.Equal("REJECTED", FindByPeriodId(rows, _e2Rejected).GetProperty("status").GetString());
-        var e4 = FindByPeriodId(rows, _e4Submitted);
-        Assert.Equal("SUBMITTED", e4.GetProperty("status").GetString());
+        var e4 = FindByPeriodId(rows, _e4EmpApproved);
+        Assert.Equal("EMPLOYEE_APPROVED", e4.GetProperty("status").GetString());
         Assert.Equal(JsonValueKind.String, e4.GetProperty("submittedAt").ValueKind); // POPULATED
-        var e5 = FindByPeriodId(rows, _e5EmpApprovedNull);
-        Assert.Equal("EMPLOYEE_APPROVED", e5.GetProperty("status").GetString());
+        // The honest DRAFT-null pin: /by-month does not filter by status, so the reopened DRAFT row
+        // (send → reopen NULLs submitted_at) yields a GENUINE null — no SQL fakery.
+        var e5 = FindByPeriodId(rows, _e5ReopenedDraft);
+        Assert.Equal("DRAFT", e5.GetProperty("status").GetString());
         Assert.Equal(JsonValueKind.Null, e5.GetProperty("submittedAt").ValueKind);   // NULL state
     }
 
@@ -200,11 +207,12 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
             "/api/approval/by-month", "get");
 
         var rows = JsonDocument.Parse(body).RootElement;
-        // The manager's designated reports carry all four fixture periods this month.
+        // The manager's designated reports carry all four fixture periods this month (e5 is a reopened
+        // DRAFT — by-month does not filter by status, so it is present too).
         FindByPeriodId(rows, _e1Approved);
         FindByPeriodId(rows, _e2Rejected);
-        FindByPeriodId(rows, _e4Submitted);
-        FindByPeriodId(rows, _e5EmpApprovedNull);
+        FindByPeriodId(rows, _e4EmpApproved);
+        FindByPeriodId(rows, _e5ReopenedDraft);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -236,15 +244,16 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
         var rejectedRow = FindByPeriodId(JsonDocument.Parse(rejectedBody).RootElement, _e2Rejected);
         Assert.Equal("S116 afvist — dokumentation mangler", rejectedRow.GetProperty("rejectionReason").GetString());
 
-        // The SUBMITTED employee: all three decision fields NULL (the pre-decision state).
-        var submittedBody = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
+        // The EMPLOYEE_APPROVED employee: all three MANAGER-decision fields NULL (pre-manager-decision
+        // — /send has employee-approved it but no manager has approved or rejected it).
+        var empApprovedBody = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
             _spec, admin,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Get, "/api/approval/s116a_e4"),
             "/api/approval/{employeeId}", "get");
-        var submittedRow = FindByPeriodId(JsonDocument.Parse(submittedBody).RootElement, _e4Submitted);
-        Assert.Equal(JsonValueKind.Null, submittedRow.GetProperty("approvedBy").ValueKind);
-        Assert.Equal(JsonValueKind.Null, submittedRow.GetProperty("approvedAt").ValueKind);
-        Assert.Equal(JsonValueKind.Null, submittedRow.GetProperty("rejectionReason").ValueKind);
+        var empApprovedRow = FindByPeriodId(JsonDocument.Parse(empApprovedBody).RootElement, _e4EmpApproved);
+        Assert.Equal(JsonValueKind.Null, empApprovedRow.GetProperty("approvedBy").ValueKind);
+        Assert.Equal(JsonValueKind.Null, empApprovedRow.GetProperty("approvedAt").ValueKind);
+        Assert.Equal(JsonValueKind.Null, empApprovedRow.GetProperty("rejectionReason").ValueKind);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -330,23 +339,28 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     //  driven through the REAL state machine INSIDE the test.
     // ════════════════════════════════════════════════════════════════════════════════
 
+    /// <summary>Send — the FIRST adapter (<c>POST /api/approval/send</c>), the retired
+    /// <c>/api/approval/submit</c>'s replacement (S127 / TASK-12712). The shared action receipt
+    /// (<c>{periodId, status}</c>); the create arm transitions straight to EMPLOYEE_APPROVED. The month
+    /// is absence-covered first so the coverage + allocation gates pass.</summary>
     [Fact]
-    public async Task Submit_Post200_SchemaMatchesRuntime_StatusLiteralSUBMITTED()
+    public async Task Send_Post200_SchemaMatchesRuntime_StatusLiteralEMPLOYEE_APPROVED()
     {
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
+        await SeedAbsenceCoveredMonthAsync("s116a_m1", SendYear, SendMonth);
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
             _spec, admin,
-            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, "/api/approval/submit",
-                SubmitBody("s116a_m1", SubmitOrg)),
-            "/api/approval/submit", "post");
-        Assert.Equal("SUBMITTED", JsonDocument.Parse(body).RootElement.GetProperty("status").GetString());
+            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, "/api/approval/send",
+                SendBody("s116a_m1")),
+            "/api/approval/send", "post");
+        Assert.Equal("EMPLOYEE_APPROVED", JsonDocument.Parse(body).RootElement.GetProperty("status").GetString());
     }
 
     [Fact]
     public async Task Approve_Post200_SchemaMatchesRuntime_StatusLiteralAPPROVED()
     {
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
-        var periodId = await SubmitAsync(admin, "s116a_m2", ApproveOrg);
+        var periodId = await SendAsync(admin, "s116a_m2"); // → EMPLOYEE_APPROVED, then manager-approve
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
             _spec, admin,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, $"/api/approval/{periodId}/approve"),
@@ -356,11 +370,17 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
         Assert.Equal(periodId, root.GetProperty("periodId").GetGuid());
     }
 
+    /// <summary>EmployeeApprove — the SECOND (by-id) send adapter. To exercise it the period must be in
+    /// a re-sendable state: /send creates+approves it, reopen returns it to DRAFT, then this by-id
+    /// adapter re-sends it (the whole-month guard passes — /send made it a whole calendar month — and
+    /// the month is still absence-covered).</summary>
     [Fact]
     public async Task EmployeeApprove_Post200_SchemaMatchesRuntime_StatusLiteralEMPLOYEE_APPROVED()
     {
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
-        var periodId = await SubmitAsync(admin, "s116a_m3", EmpApproveOrg);
+        var periodId = await SendAsync(admin, "s116a_m3");
+        await PostActionAsync(admin, $"/api/approval/{periodId}/reopen",
+            """{ "reason": "S116 employee-approve-op setup" }""");
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
             _spec, admin,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, $"/api/approval/{periodId}/employee-approve"),
@@ -374,7 +394,7 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     public async Task Reject_Post200_SiblingSchemaMatchesRuntime_ReasonEchoed()
     {
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
-        var periodId = await SubmitAsync(admin, "s116a_m4", RejectOrg);
+        var periodId = await SendAsync(admin, "s116a_m4"); // → EMPLOYEE_APPROVED, then manager-reject
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
             _spec, admin,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, $"/api/approval/{periodId}/reject",
@@ -389,8 +409,7 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     public async Task Reopen_Post200_SchemaMatchesRuntime_StatusLiteralDRAFT()
     {
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
-        var periodId = await SubmitAsync(admin, "s116a_m5", ReopenOrg);
-        await PostActionAsync(admin, $"/api/approval/{periodId}/employee-approve", jsonBody: null);
+        var periodId = await SendAsync(admin, "s116a_m5"); // /send reaches EMPLOYEE_APPROVED directly
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
             _spec, admin,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, $"/api/approval/{periodId}/reopen",
@@ -401,18 +420,49 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
 
     // ── Support ──
 
-    private static string SubmitBody(string employeeId, string orgId) => $$"""
-        { "employeeId": "{{employeeId}}", "orgId": "{{orgId}}",
-          "periodStart": "{{PeriodStart}}", "periodEnd": "{{PeriodEnd}}",
-          "periodType": "WEEKLY", "agreementCode": "HK", "okVersion": "OK24" }
-        """;
+    private static string SendBody(string employeeId) =>
+        $$"""{ "employeeId": "{{employeeId}}", "year": {{SendYear}}, "month": {{SendMonth}} }""";
 
-    /// <summary>Submit a WEEKEND period for <paramref name="employeeId"/> via the REAL endpoint;
-    /// returns the created periodId. Used both by the fixture chain and per-op test setup.</summary>
-    private async Task<Guid> SubmitAsync(HttpClient client, string employeeId, string orgId)
+    /// <summary>Cover the March month's expected weekdays then send it via the REAL <c>/send</c>
+    /// adapter (server-resolved org/agreement/okVersion, MONTHLY, → EMPLOYEE_APPROVED); returns the
+    /// created periodId. Used by the fixture chain and per-op test setup.</summary>
+    private async Task<Guid> SendAsync(HttpClient client, string employeeId)
     {
-        var body = await PostActionAsync(client, "/api/approval/submit", SubmitBody(employeeId, orgId));
+        await SeedAbsenceCoveredMonthAsync(employeeId, SendYear, SendMonth);
+        var body = await PostActionAsync(client, "/api/approval/send", SendBody(employeeId));
         return JsonDocument.Parse(body).RootElement.GetProperty("periodId").GetGuid();
+    }
+
+    private long _absenceOutboxSeq = 51_160_000;
+
+    /// <summary>The vacuous-month coverage recipe (AC-6 shape): a full-day absence on every expected
+    /// weekday of the month so the send command's workday-coverage gate passes, while the allocation
+    /// gate stays vacuously balanced (no work-time / NORMAL rows are seeded for these employees).
+    /// Weekends are skipped; March 2026 carries no Danish public holiday, so covering every weekday is
+    /// exactly the expected-workday set. Direct projection insert — the coverage read only asks whether
+    /// each expected workday carries ≥1 registration.</summary>
+    private async Task SeedAbsenceCoveredMonthAsync(string employeeId, int year, int month)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        var end = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+        for (var d = new DateOnly(year, month, 1); d <= end; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                continue;
+            await using var cmd = new NpgsqlCommand(
+                """
+                INSERT INTO absences_projection
+                    (event_id, employee_id, date, absence_type, hours, feriedage, agreement_code, ok_version, occurred_at, outbox_id)
+                VALUES
+                    (gen_random_uuid(), @emp, @date, 'VACATION', 7.4, 1.0, 'HK', 'OK24', NOW(), @outbox)
+                ON CONFLICT DO NOTHING
+                """, conn);
+            cmd.Parameters.AddWithValue("emp", employeeId);
+            cmd.Parameters.AddWithValue("date", d);
+            cmd.Parameters.AddWithValue("outbox", _absenceOutboxSeq++);
+            await cmd.ExecuteNonQueryAsync();
+        }
     }
 
     /// <summary>A REAL state-machine transition call (setup, not the op under test): POST and
@@ -480,6 +530,30 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
                 ('S116A04',  'S116 MedarbGodkend-op',        'ORGANISATION', 'S116AMAO', '/S116AMAO/S116A04/',   'HK', 'OK24'),
                 ('S116A05',  'S116 Afvis-op',                'ORGANISATION', 'S116AMAO', '/S116AMAO/S116A05/',   'HK', 'OK24'),
                 ('S116A06',  'S116 Genåbn-op',               'ORGANISATION', 'S116AMAO', '/S116AMAO/S116A06/',   'HK', 'OK24')
+            ON CONFLICT DO NOTHING
+            """, conn))
+        {
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        // S127 / TASK-12701a — a project catalogue for every fixture org (AC-14a). Projects are
+        // strictly org-scoped (ProjectRepository.GetByOrgAsync), so a fixture org without one leaves
+        // its employees with an EMPTY project set: they can never allocate their hours, and once the
+        // S127 submit-time allocation gate lands, no period in these orgs could reach a
+        // manager-visible state. Seeded alongside the orgs so the fixture never depends on the
+        // baseline's STY02 rows. project_id is omitted (defaults to gen_random_uuid(); allocations
+        // key on project_code, SkemaEndpoints.cs:1609).
+        await using (var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by) VALUES
+                ('S116AMAO', 'ADM-01',   'Administration og ledelse',   1, 'seed'),
+                ('S116A01',  'DRIFT-01', 'Daglig drift',                1, 'seed'),
+                ('S116A01',  'PROJ-01',  'Tvaergaaende projekt',        2, 'seed'),
+                ('S116A02',  'DRIFT-01', 'Daglig drift',                1, 'seed'),
+                ('S116A03',  'DRIFT-01', 'Daglig drift',                1, 'seed'),
+                ('S116A04',  'DRIFT-01', 'Daglig drift',                1, 'seed'),
+                ('S116A05',  'DRIFT-01', 'Daglig drift',                1, 'seed'),
+                ('S116A06',  'DRIFT-01', 'Daglig drift',                1, 'seed')
             ON CONFLICT DO NOTHING
             """, conn))
         {

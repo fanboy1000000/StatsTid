@@ -1141,7 +1141,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/approval/submit": {
+    "/api/approval/send": {
         parameters: {
             query?: never;
             header?: never;
@@ -1159,7 +1159,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SubmitPeriodRequest"];
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SendPeriodRequest"];
                 };
             };
             responses: {
@@ -6386,16 +6386,12 @@ export interface components {
         "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.ReopenPeriodRequest": {
             reason?: string | null;
         };
-        "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SubmitPeriodRequest": {
+        "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SendPeriodRequest": {
             employeeId: string;
-            orgId: string;
-            /** Format: date */
-            periodStart: string;
-            /** Format: date */
-            periodEnd: string;
-            periodType: string;
-            agreementCode: string;
-            okVersion: string;
+            /** Format: int32 */
+            year: number;
+            /** Format: int32 */
+            month: number;
         };
         "StatsTid.Backend.Api.Endpoints.AssignUserUnitRequest": {
             /** Format: uuid */

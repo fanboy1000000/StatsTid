@@ -47,7 +47,12 @@ export interface AbsenceCapError {
   maxHours: number
 }
 
-/** 422 from employee-approve / submit-and-approve — discriminated union. */
+/**
+ * 422 from the send command — discriminated union. S127 / TASK-12703 collapsed
+ * both employee-facing routes (`POST /api/approval/send` and the by-id
+ * `POST /api/approval/{periodId}/employee-approve`) onto ONE backend command,
+ * so both arms raise the same two shapes.
+ */
 export interface CoverageValidationError {
   kind: 'coverage'
   missingDays: string[]
@@ -69,15 +74,12 @@ export interface AllocationValidationError {
 
 export type ApprovalValidationError = CoverageValidationError | AllocationValidationError
 
-/**
- * Derive OK version from a period-start month. The OK24 -> OK26 switch is
- * 2026-04-01: Jan-Mar 2026 (and earlier) -> OK24, Apr 2026 onwards -> OK26.
- */
-export function deriveOkVersion(year: number, month: number): 'OK24' | 'OK26' {
-  if (year > 2026) return 'OK26'
-  if (year < 2026) return 'OK24'
-  return month >= 4 ? 'OK26' : 'OK24'
-}
+// S127 / TASK-12707 — `deriveOkVersion` DELETED. It existed solely to fill the
+// retired `POST /api/approval/submit` body's `okVersion` field, and it was a
+// second, client-side copy of a rule the server owns (`OkVersionResolver`).
+// `POST /api/approval/send` takes only {employeeId, year, month} and resolves
+// the OK version — and the agreement code — server-side on BOTH adapters, so the
+// mirror is gone rather than left exported with no caller.
 
 interface UseSkemaResult {
   data: SkemaMonthData | null
@@ -103,7 +105,10 @@ interface UseSkemaResult {
     workTime?: WorkTimeDay[],
   ) => Promise<SaveMonthResult>
   employeeApprove: (periodId: string) => Promise<void>
-  submitAndApprove: (orgId: string, agreementCode: string) => Promise<void>
+  /** S127 / TASK-12707 — ZERO arguments. `/api/approval/send` takes only
+      {employeeId, year, month}; org, agreement code and OK version are all
+      server-resolved, so the old `(orgId, agreementCode)` pair is gone. */
+  submitAndApprove: () => Promise<void>
   reopenPeriod: (periodId: string, reason?: string) => Promise<void>
 }
 
@@ -298,50 +303,54 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     [fetchData]
   )
 
+  /**
+   * S127 / TASK-12707 — ONE call, was two.
+   *
+   * `POST /api/approval/submit` is RETIRED. `POST /api/approval/send` takes
+   * {employeeId, year, month}, derives the month range server-side (the
+   * caller-supplied range was a defect: this hook computed its own period
+   * boundaries), validates coverage and allocation, and transitions straight to
+   * `EMPLOYEE_APPROVED` inside one transaction.
+   *
+   * THE STRANDING BRANCH IS GONE, not merely its comment. The old flow could
+   * create a `SUBMITTED` row and then fail the approve leg, leaving the month
+   * half-sent — hence the old "period was created but not approved" note and the
+   * defensive refetch that went with it. A single atomic command cannot produce
+   * that state, so the condition it described no longer exists.
+   *
+   * THE 422 PARSE LIVES HERE NOW (AC-15). Previously the create leg's failure
+   * path was a bare `setError(submitResult.error)` with NO parse: a coverage or
+   * allocation rejection raised while creating the period never reached
+   * `approvalValidationError`, so the page showed a raw JSON string instead of
+   * the missing-days / unbalanced-days surface. With one call there is one
+   * failure path, and both 422 shapes — `{kind:"allocation", unbalancedDays}`
+   * and `{missingDays}` — route through `parseApprovalValidationError`, the same
+   * parse `employeeApprove` uses.
+   */
   const submitAndApprove = useCallback(
-    async (orgId: string, agreementCode: string) => {
+    async () => {
       setApprovalValidationError(null)
-      const periodStart = `${year}-${String(month).padStart(2, '0')}-01`
-      const lastDay = new Date(year, month, 0).getDate()
-      const periodEnd = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-      const okVersion = deriveOkVersion(year, month)
 
-      const submitResult = await apiClient.post('/api/approval/submit', {
-        body: {
-          employeeId,
-          orgId,
-          periodStart,
-          periodEnd,
-          periodType: 'MONTHLY',
-          agreementCode,
-          okVersion,
-        },
+      const result = await apiClient.post('/api/approval/send', {
+        body: { employeeId, year, month },
       })
-      if (!submitResult.ok) {
-        setError(submitResult.error)
+      if (result.ok) {
+        await fetchData()
         return
       }
-
-      // S116 typed switch — same NAMED no-body delta as employeeApprove above.
-      const approveResult = await apiClient.post('/api/approval/{periodId}/employee-approve', {
-        params: { path: { periodId: submitResult.data.periodId } },
-      })
-      if (approveResult.ok) {
-        await fetchData()
-      } else {
-        if (approveResult.status === 422) {
-          const validationError = parseApprovalValidationError(approveResult.error)
-          if (validationError) {
-            setApprovalValidationError(validationError)
-            // Still refetch so the grid shows current state (period was created but not approved)
-            await fetchData()
-            return
-          }
+      if (result.status === 422) {
+        const validationError = parseApprovalValidationError(result.error)
+        if (validationError) {
+          setApprovalValidationError(validationError)
+          await fetchData()
+          return
         }
-        setError(approveResult.error)
-        // Refetch even on error — the period may have been created (SUBMITTED) before approve failed
-        await fetchData()
       }
+      setError(result.error)
+      // Refetch on every failure: the send is atomic, but a 409 means someone
+      // else moved the month (a concurrent send, or a manager decision), so the
+      // grid must re-read rather than keep showing the pre-attempt state.
+      await fetchData()
     },
     [employeeId, year, month, fetchData]
   )

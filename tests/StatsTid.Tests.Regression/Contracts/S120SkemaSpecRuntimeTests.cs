@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.Json;
+using Npgsql;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using StatsTid.Tests.Regression.TestSupport;
@@ -15,10 +16,11 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// <c>SkemaRowPreferencesResponse</c> record — one shape, two surfaces).
 ///
 /// <para><b>The 4th allOf wrapper member (<c>skemaMonth.approval</c>) BOTH branches:</b> NULL
-/// when no approval period exists for the month, and POPULATED after a REAL create+submit
-/// through <c>POST /api/approval/submit</c> — the matcher recurses THROUGH the wrapper into
-/// the 6-member <c>SkemaApprovalInfo</c> (inner required + the 5-state <c>status</c> enum on
-/// the live "SUBMITTED").</para>
+/// when no approval period exists for the month, and POPULATED after a REAL send through
+/// <c>POST /api/approval/send</c> — the matcher recurses THROUGH the wrapper into the 6-member
+/// <c>SkemaApprovalInfo</c> (inner required + the 5-state <c>status</c> enum on the live
+/// "EMPLOYEE_APPROVED"). S127 / TASK-12712: <c>/api/approval/submit</c> is retired and SUBMITTED
+/// is no longer producible by any route, so the send transitions straight to EMPLOYEE_APPROVED.</para>
 ///
 /// <para><b>Per-op policy pins:</b> month GET + save POST are EmployeeOrAbove, driven at the
 /// Employee floor (positive pins); the row-preferences PUT is SELF-ONLY BY DESIGN (S72
@@ -166,28 +168,31 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
         Assert.Equal("2026-04-05", root.GetProperty("managerDeadline").GetString());
     }
 
-    /// <summary>The 4th wrapper member's POPULATED branch via REAL choreography: the employee
-    /// create+submits the March approval period through <c>POST /api/approval/submit</c>, and
-    /// the month GET then serves <c>approval</c> as the exact 6-member <c>SkemaApprovalInfo</c>
-    /// — matcher-recursed through the wrapper, the 5-state <c>status</c> enum exercised on the
-    /// live "SUBMITTED".</summary>
+    /// <summary>The 4th wrapper member's POPULATED branch via REAL choreography: the employee sends
+    /// the March approval period through <c>POST /api/approval/send</c>, and the month GET then serves
+    /// <c>approval</c> as the exact 6-member <c>SkemaApprovalInfo</c> — matcher-recursed through the
+    /// wrapper, the 5-state <c>status</c> enum exercised on the live "EMPLOYEE_APPROVED".
+    ///
+    /// <para>S127 / TASK-12712: <c>/api/approval/submit</c> is retired; <c>/send</c> gates on workday
+    /// coverage + allocation and transitions straight to EMPLOYEE_APPROVED, so the month is first
+    /// covered with a full-day absence per expected weekday (the vacuous-month recipe — coverage
+    /// passes, and with no work-time / NORMAL rows the allocation gate is vacuously balanced).</para></summary>
     [Fact]
-    public async Task Month_Get200_ApprovalPopulated_ThroughTheWrapper_AfterRealSubmit()
+    public async Task Month_Get200_ApprovalPopulated_ThroughTheWrapper_AfterRealSend()
     {
         var emp = await SeedEmployeeAsync("mon2");
         using var employee = S120ContractAssert.EmployeeClient(_factory, emp, Org);
 
-        // The REAL create+submit (EmployeeOrAbove; self-submit).
-        using (var submit = await employee.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Post, "/api/approval/submit",
-            $$"""
-            { "employeeId": "{{emp}}", "orgId": "{{Org}}", "periodStart": "2026-03-01",
-              "periodEnd": "2026-03-31", "periodType": "MONTHLY", "agreementCode": "AC", "okVersion": "OK24" }
-            """)))
+        // Cover every expected March weekday so the send's coverage gate passes (self-send).
+        await SeedAbsenceCoveredMonthAsync(emp, 2026, 3);
+
+        using (var send = await employee.SendAsync(SpecRuntimeTestSupport.JsonRequest(
+            HttpMethod.Post, "/api/approval/send",
+            $$"""{ "employeeId": "{{emp}}", "year": 2026, "month": 3 }""")))
         {
-            var submitBody = await submit.Content.ReadAsStringAsync();
-            if ((int)submit.StatusCode != 200)
-                throw new XunitException($"Approval submit for {emp} returned {(int)submit.StatusCode}: {submitBody}");
+            var sendBody = await send.Content.ReadAsStringAsync();
+            if ((int)send.StatusCode != 200)
+                throw new XunitException($"Approval send for {emp} returned {(int)send.StatusCode}: {sendBody}");
         }
 
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
@@ -199,8 +204,10 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Object, approval.ValueKind); // the POPULATED wrapper branch, LIVE
         S118ContractAssert.AssertExactKeySet(approval, ApprovalKeys, "skema approval (populated)");
         Assert.NotEqual(Guid.Empty, approval.GetProperty("periodId").GetGuid());
-        Assert.Equal("SUBMITTED", approval.GetProperty("status").GetString()); // in the declared 5-state set
-        Assert.Equal(JsonValueKind.Null, approval.GetProperty("employeeApprovedAt").ValueKind);
+        Assert.Equal("EMPLOYEE_APPROVED", approval.GetProperty("status").GetString()); // in the declared 5-state set
+        // /send stamps employee_approved_at (the send IS the self-approval act, ADR-012:60) — POPULATED
+        // now, where the retired bare /submit left it null.
+        Assert.Equal(JsonValueKind.String, approval.GetProperty("employeeApprovedAt").ValueKind);
         Assert.Equal(JsonValueKind.Null, approval.GetProperty("rejectionReason").ValueKind);
     }
 
@@ -332,6 +339,38 @@ public sealed class S120SkemaSpecRuntimeTests : IAsyncLifetime
         var employeeId = "s120s_" + suffix;
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, Org, "AC", "OK24");
         return employeeId;
+    }
+
+    private long _absenceOutboxSeq = 512_0000;
+
+    /// <summary>The vacuous-month coverage recipe (AC-6 shape): a full-day absence on every expected
+    /// weekday of the month so the send command's workday-coverage gate passes, while the allocation
+    /// gate stays vacuously balanced (no work-time / NORMAL rows are seeded). Direct projection insert
+    /// — the coverage read only asks whether each expected workday carries ≥1 registration. Weekends
+    /// are skipped; March 2026 carries no Danish public holiday, so covering every weekday is exactly
+    /// the expected-workday set (over-covering a holiday would be harmless anyway).</summary>
+    private async Task SeedAbsenceCoveredMonthAsync(string employeeId, int year, int month)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        var end = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+        for (var d = new DateOnly(year, month, 1); d <= end; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                continue;
+            await using var cmd = new NpgsqlCommand(
+                """
+                INSERT INTO absences_projection
+                    (event_id, employee_id, date, absence_type, hours, feriedage, agreement_code, ok_version, occurred_at, outbox_id)
+                VALUES
+                    (gen_random_uuid(), @emp, @date, 'VACATION', 7.4, 1.0, 'AC', 'OK24', NOW(), @outbox)
+                ON CONFLICT DO NOTHING
+                """, conn);
+            cmd.Parameters.AddWithValue("emp", employeeId);
+            cmd.Parameters.AddWithValue("date", d);
+            cmd.Parameters.AddWithValue("outbox", _absenceOutboxSeq++);
+            await cmd.ExecuteNonQueryAsync();
+        }
     }
 
     private static JsonElement FindDay(IReadOnlyList<JsonElement> rows, string date)

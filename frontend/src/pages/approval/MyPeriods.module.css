@@ -22,66 +22,10 @@
   margin: 0 0 1rem 0;
 }
 
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  max-width: 480px;
-}
-
-.formRow {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.formLabel {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-}
-
-.formLabel.required::after {
-  content: ' *';
-  color: var(--color-error);
-}
-
-.formInput,
-.formSelect {
-  padding: 0.5rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0px;
-  font-family: 'IBM Plex Sans', system-ui, sans-serif;
-  font-size: 0.875rem;
-}
-
-.formInput:focus,
-.formSelect:focus {
-  outline: 2px solid var(--color-primary);
-  outline-offset: -1px;
-}
-
-.submitButton {
-  padding: 0.5rem 1.5rem;
-  background: var(--color-primary);
-  color: var(--color-white);
-  border: 1px solid var(--color-primary);
-  border-radius: 0px;
-  font-family: 'IBM Plex Sans', system-ui, sans-serif;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  align-self: flex-start;
-}
-
-.submitButton:hover {
-  background: var(--color-primary-hover);
-}
-
-.submitButton:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* S127 / TASK-12707 (R3) — the `.form` / `.formRow` / `.formLabel` /
+   `.formInput` / `.formSelect` / `.submitButton` rules were deleted with the
+   "Indsend periode" form they styled. Nothing else in this stylesheet referenced
+   them. */
 
 .resubmitButton {
   padding: 0.25rem 0.75rem;

@@ -1146,12 +1146,55 @@ ON CONFLICT (time_type, ok_version, agreement_code, position, effective_from) DO
 
 -- Sample projects for test orgs. S92 flatten: the former AFD01/AFD02 projects re-point
 -- to their parent ORGANISATION STY02 (Statens IT) — the afdeling org rows are gone.
+--
+-- S127 / TASK-12701a — EVERY org now carries a project catalogue, not just STY02.
+-- Owner ruling B (REFINEMENT submit-allocation-gate §7): "all organisations should have
+-- projects". S127 makes it impossible to send a month to approval unless every worked hour is
+-- allocated to a project, and projects are strictly ORG-SCOPED
+-- (ProjectRepository.GetByOrgAsync filters on org_id AND is_active). An employee in a
+-- project-less org therefore sees an EMPTY project set — not a filtered one — and can never
+-- allocate, so the gate would be undeployable against this baseline. Measured before this
+-- change: 13 organisations, 2 with any projects; 1,319 of 3,251 active users (41%) sat in a
+-- project-less org.
+--
+-- STY01 is the load-bearing addition: emp001 and mgr03 both live there, and the S127
+-- end-to-end test cannot construct an allocated month until STY01 has a project.
+--
+-- The MAO rows (MIN01/MIN02) are included per ruling B even though no baseline user homes
+-- there today — a user later homed at a MAO must not silently become unable to send.
+-- project_id is omitted throughout (the column defaults to gen_random_uuid(); nothing
+-- references a project by id — allocations key on project_code, see SkemaEndpoints.cs:1609).
 INSERT INTO projects (org_id, project_code, project_name, sort_order, created_by) VALUES
     ('STY02', 'DRIFT-01', 'Daglig drift', 1, 'ladm01'),
     ('STY02', 'PROJ-ALPHA', 'Projekt Alpha', 2, 'ladm01'),
     ('STY02', 'PROJ-BETA', 'Projekt Beta', 3, 'ladm01'),
     ('STY02', 'SYSDEV-01', 'Systemudvikling', 4, 'ladm01'),
-    ('STY02', 'VEDL-01', 'Vedligeholdelse', 5, 'ladm01')
+    ('STY02', 'VEDL-01', 'Vedligeholdelse', 5, 'ladm01'),
+    -- S127: Medarbejder- og Kompetencestyrelsen (emp001, mgr03, admin01)
+    ('STY01', 'DRIFT-01', 'Daglig drift', 1, 'admin01'),
+    ('STY01', 'UDV-01', 'Udvikling og implementering', 2, 'admin01'),
+    ('STY01', 'ADM-01', 'Administration og ledelse', 3, 'admin01'),
+    ('STY01', 'PROJ-01', 'Tvaergaaende projekt', 4, 'admin01'),
+    -- S127: Ekonomistyrelsen (emp004)
+    ('STY03', 'DRIFT-01', 'Daglig drift', 1, 'admin01'),
+    ('STY03', 'UDV-01', 'Udvikling og implementering', 2, 'admin01'),
+    ('STY03', 'ADM-01', 'Administration og ledelse', 3, 'admin01'),
+    ('STY03', 'PROJ-01', 'Tvaergaaende projekt', 4, 'admin01'),
+    -- S127: Styrelsen for Arbejdsmarked og Rekruttering (admin02, hr02, emp006, emp009)
+    ('STY04', 'DRIFT-01', 'Daglig drift', 1, 'admin02'),
+    ('STY04', 'UDV-01', 'Udvikling og implementering', 2, 'admin02'),
+    ('STY04', 'ADM-01', 'Administration og ledelse', 3, 'admin02'),
+    ('STY04', 'PROJ-01', 'Tvaergaaende projekt', 4, 'admin02'),
+    -- S127: Arbejdstilsynet (ladm02, mgr02, emp007, emp008)
+    ('STY05', 'DRIFT-01', 'Daglig drift', 1, 'ladm02'),
+    ('STY05', 'UDV-01', 'Udvikling og implementering', 2, 'ladm02'),
+    ('STY05', 'ADM-01', 'Administration og ledelse', 3, 'ladm02'),
+    ('STY05', 'PROJ-01', 'Tvaergaaende projekt', 4, 'ladm02'),
+    -- S127: the two MAO roots (no users home here today — ruling B, future-proofing)
+    ('MIN01', 'ADM-01', 'Administration og ledelse', 1, 'admin01'),
+    ('MIN01', 'PROJ-01', 'Tvaergaaende projekt', 2, 'admin01'),
+    ('MIN02', 'ADM-01', 'Administration og ledelse', 1, 'admin02'),
+    ('MIN02', 'PROJ-01', 'Tvaergaaende projekt', 2, 'admin02')
 ON CONFLICT DO NOTHING;
 
 -- ============================================================

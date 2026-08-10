@@ -12,7 +12,9 @@
 //    DTO — the legacy calls sent a literal `{}` body, the typed form sends NO
 //    body (the backend handler takes only the periodId route param and never
 //    reads a body — ApprovalEndpoints.cs:1344). Pinned as `body === undefined`.
-//  • submit / reopen mutation bodies stay byte-identical.
+//  • reopen mutation bodies stay byte-identical. (S127 / TASK-12707: the submit
+//    body pin is gone — `POST /api/approval/submit` was retired and its two-call
+//    flow collapsed into one `POST /api/approval/send`.)
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import {
@@ -230,7 +232,8 @@ describe('useSkema approval slice — typed mutations (incl. THE named no-body d
   function skemaCalls() {
     return captureCalls((url) => {
       if (url.includes('/month')) return {}
-      if (url.endsWith('/api/approval/submit')) return { periodId: 'p-new', status: 'SUBMITTED' }
+      // S127 / TASK-12703 — `/api/approval/send` replaces the retired `/submit`, and it lands
+      // EMPLOYEE_APPROVED directly: there is no intermediate SUBMITTED response to route.
       return { periodId: 'p-1', status: 'EMPLOYEE_APPROVED' }
     })
   }
@@ -250,23 +253,20 @@ describe('useSkema approval slice — typed mutations (incl. THE named no-body d
     expect(post.body).toBeUndefined() // legacy sent {}; the op binds no DTO
   })
 
-  it('submitAndApprove: submit body byte-identical, then employee-approve on the returned periodId with NO body', async () => {
+  // S127 / TASK-12707 — was: "submit body byte-identical, then employee-approve on the returned
+  // periodId with NO body". Two POSTs became ONE. The old body carried a client-computed
+  // periodStart/periodEnd (the caller-supplied-range defect), an `orgId` and an `agreementCode` from
+  // the auth context, and a client-side `okVersion` derivation — all five are now server-resolved,
+  // and the count assertion below is what makes their absence provable rather than asserted.
+  it('submitAndApprove: exactly ONE POST — /api/approval/send with {employeeId, year, month} and nothing else', async () => {
     const calls = skemaCalls()
     const { result } = await mountSkema()
-    await act(async () => { await result.current.submitAndApprove('STY01', 'AC') })
+    await act(async () => { await result.current.submitAndApprove() })
     const posts = calls.filter(c => c.method === 'POST')
-    expect(posts[0].url).toBe('/api/approval/submit')
-    expect(posts[0].body).toEqual({
-      employeeId: 'EMP001',
-      orgId: 'STY01',
-      periodStart: '2026-07-01',
-      periodEnd: '2026-07-31',
-      periodType: 'MONTHLY',
-      agreementCode: 'AC',
-      okVersion: 'OK26',
-    })
-    expect(posts[1].url).toBe('/api/approval/p-new/employee-approve')
-    expect(posts[1].body).toBeUndefined()
+    expect(posts).toHaveLength(1)
+    expect(posts[0].url).toBe('/api/approval/send')
+    // toEqual on the WHOLE body: an extra field (a re-added orgId, a period range) fails here.
+    expect(posts[0].body).toEqual({ employeeId: 'EMP001', year: 2026, month: 7 })
   })
 
   it('reopenPeriod: POST /api/approval/{periodId}/reopen with the default reason body', async () => {

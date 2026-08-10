@@ -158,6 +158,24 @@ function formatDeadline(dateStr: string | null): string {
   }
 }
 
+/**
+ * S127 / TASK-12707 — the ONE frontend mirror of the backend's Skema lock set.
+ *
+ * The server locks a month iff its period is `EMPLOYEE_APPROVED` or `APPROVED`
+ * (`SkemaEndpoints.IsPeriodLocked`); a null period — nothing sent — is NOT
+ * locked. Sending now goes straight to `EMPLOYEE_APPROVED` in one call, so
+ * "sent" and "locked" became the same moment: the intermediate `SUBMITTED` state
+ * is only reachable for legacy rows, which stay editable and re-sendable.
+ *
+ * This exists because the page carried TWO encodings of the same rule that had
+ * already drifted: `isReadOnly` negated the lock set correctly, while the footer
+ * enumerated `DRAFT || SUBMITTED` positively — so an editable grid could sit
+ * under a footer that offered no way to send it. Both now read this.
+ */
+function isPeriodLocked(status: string | null | undefined): boolean {
+  return status === 'EMPLOYEE_APPROVED' || status === 'APPROVED'
+}
+
 /** Normalize a VALIDATED panel period's raw clock text ("9:05", "09.05", "0905",
     "HH:mm:ss") to the wire "HH:mm" the work-time save expects. Only called on
     periods periodHours() already accepted, so a null here is unreachable belt. */
@@ -212,7 +230,10 @@ export function SkemaPage() {
   )
 
   const { data, loading, error, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
-  const { orgId, agreementCode } = useAuth()
+  // S127 / TASK-12707 — the `useAuth()` read here is gone with the send body it
+  // fed: `orgId`/`agreementCode` were only ever arguments to the retired
+  // `/api/approval/submit` payload. (`ApprovalFooter` keeps its own `useAuth()`
+  // for the reopen role check.)
   const { data: balanceData, loading: balanceLoading } = useBalanceSummary(employeeId, year, month)
   const { result: complianceResult, loading: complianceLoading } = useCompliance(employeeId, year, month)
 
@@ -511,7 +532,7 @@ export function SkemaPage() {
 
   // Approval status
   const approvalStatus = data?.approval?.status ?? 'DRAFT'
-  const isReadOnly = approvalStatus === 'EMPLOYEE_APPROVED' || approvalStatus === 'APPROVED'
+  const isReadOnly = isPeriodLocked(approvalStatus)
 
   /** S73 R4 — fire a cell save for the given changes and split the rejected-save
       policy INSIDE the failure handler:
@@ -911,13 +932,18 @@ export function SkemaPage() {
     try {
       if (data?.approval?.periodId) {
         await employeeApprove(data.approval.periodId)
-      } else if (orgId && agreementCode) {
-        await submitAndApprove(orgId, agreementCode)
+      } else {
+        // S127 / TASK-12707 — the `orgId && agreementCode` guard is GONE with the
+        // arguments it guarded. `/api/approval/send` resolves org, agreement code
+        // and OK version server-side, so those two auth-context values are no
+        // longer inputs — and the guard had become a silent dead end: a missing
+        // agreementCode made "Godkend måned" do nothing at all, with no error.
+        await submitAndApprove()
       }
     } finally {
       setApproving(false)
     }
-  }, [data, employeeApprove, submitAndApprove, orgId, agreementCode, flushCellSave, flushWorkTimeSave, clearApprovalValidationError])
+  }, [data, employeeApprove, submitAndApprove, flushCellSave, flushWorkTimeSave, clearApprovalValidationError])
 
   if (loading && !data) {
     return (
@@ -1104,7 +1130,29 @@ function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFo
     }
   }, [approval?.periodId, approval?.status, onReopen])
 
-  if (!approval || approval.status === 'DRAFT' || approval.status === 'SUBMITTED') {
+  // S127 / TASK-12707 — REJECTED keeps its own branch and must be tested FIRST:
+  // it is unlocked (so it is sendable) but it also owes the employee the
+  // rejection reason, which the generic branch below does not render.
+  if (approval && approval.status === 'REJECTED') {
+    return (
+      <div className={styles.footerContent}>
+        <Alert variant="error">
+          Afvist: {approval.rejectionReason ?? 'Ingen begrundelse'}
+        </Alert>
+        <Button variant="primary" onClick={onApprove} disabled={approving}>
+          {approving ? 'Godkender...' : 'Godkend måned'}
+        </Button>
+      </div>
+    )
+  }
+
+  // S127 / TASK-12707 — the send affordance is the NEGATION of the lock set, not
+  // an enumeration of `DRAFT || SUBMITTED`. That enumeration mirrored the old
+  // two-step flow, where SUBMITTED was the intermediate state the FE itself
+  // created; the backend never locked on it. Keying on `isPeriodLocked` binds
+  // this to the same rule as the grid's `isReadOnly` and to the backend's own
+  // set, so an editable month always has a way to be sent.
+  if (!approval || !isPeriodLocked(approval.status)) {
     return (
       <div className={styles.footerContent}>
         {approval?.employeeDeadline && (
@@ -1146,19 +1194,6 @@ function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFo
             {reopening ? 'Genåbner...' : 'Genåbn'}
           </Button>
         )}
-      </div>
-    )
-  }
-
-  if (approval.status === 'REJECTED') {
-    return (
-      <div className={styles.footerContent}>
-        <Alert variant="error">
-          Afvist: {approval.rejectionReason ?? 'Ingen begrundelse'}
-        </Alert>
-        <Button variant="primary" onClick={onApprove} disabled={approving}>
-          {approving ? 'Godkender...' : 'Godkend måned'}
-        </Button>
       </div>
     )
   }

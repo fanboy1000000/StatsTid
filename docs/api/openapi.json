@@ -991,7 +991,7 @@
         }
       }
     },
-    "/api/approval/submit": {
+    "/api/approval/send": {
       "post": {
         "tags": [
           "StatsTid.Backend.Api"
@@ -1000,7 +1000,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SubmitPeriodRequest"
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SendPeriodRequest"
               }
             }
           },
@@ -10405,40 +10405,24 @@
         },
         "additionalProperties": false
       },
-      "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SubmitPeriodRequest": {
+      "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SendPeriodRequest": {
         "required": [
-          "agreementCode",
           "employeeId",
-          "okVersion",
-          "orgId",
-          "periodEnd",
-          "periodStart",
-          "periodType"
+          "month",
+          "year"
         ],
         "type": "object",
         "properties": {
           "employeeId": {
             "type": "string"
           },
-          "orgId": {
-            "type": "string"
+          "year": {
+            "type": "integer",
+            "format": "int32"
           },
-          "periodStart": {
-            "type": "string",
-            "format": "date"
-          },
-          "periodEnd": {
-            "type": "string",
-            "format": "date"
-          },
-          "periodType": {
-            "type": "string"
-          },
-          "agreementCode": {
-            "type": "string"
-          },
-          "okVersion": {
-            "type": "string"
+          "month": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false
