@@ -26,6 +26,9 @@ public static class TimeEndpoints
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             TimeEntryProjectionRepository timeProjectionRepo,
+            // S128 / TASK-12803 — the in-transaction approval-period read (the (conn, tx) overload
+            // only; see the in-lock check below).
+            ApprovalPeriodRepository approvalRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -55,9 +58,11 @@ public static class TimeEndpoints
                 // READS are untouched. A leader must still review the full month grid of a submitted
                 // period (TASK-12403) — this narrows WRITES only.
                 //
-                // This endpoint is the WORSE member of the write class the skema save belongs to: it
-                // has NO approval-period status check at all, so before the floor a leader could write
-                // an employee's time entry in ANY period state.
+                // This endpoint WAS the WORSE member of the write class the skema save belongs to: it
+                // had NO approval-period status check at all, so before the floor a leader could write
+                // an employee's time entry in ANY period state. (S128 / TASK-12803 closed that: the
+                // in-lock period check inside the transaction below now enforces the SAME
+                // ApprovalPeriodSaveLock the Skema save enforces.)
                 var writeFloor = string.Equals(request.EmployeeId, actor.ActorId, StringComparison.Ordinal)
                     ? null
                     : StatsTidRoles.LocalHR;
@@ -151,12 +156,41 @@ public static class TimeEndpoints
                     // (`pg_advisory_xact_lock(hashtext('employee-' || id))`, transaction-scoped).
                     // A second advisory lock acquired in a different order by two paths is a
                     // deadlock; there is exactly one.
-                    //
-                    // NOT in scope here: an approval-status check. The lock stops this write
-                    // racing INSIDE a send; it does not stop it writing AFTER one. That second
-                    // defect is deliberately carried (refinement §2 qualification 3, §4).
                     await StatsTid.Backend.Api.Services.EmployeeConsumptionLock.AcquireAsync(
                         conn, tx, request.EmployeeId, ct);
+
+                    // ── S128 / TASK-12803 — THE APPROVAL-STATUS CHECK (S127 FU-D1, owner ruling R3) ──
+                    // The lock above stops this write racing INSIDE a send; this check stops it
+                    // writing AFTER one — the defect S127 deliberately carried (refinement §2
+                    // qualification 3, §4) and S128 closes. It MIRRORS the Skema save byte-for-byte:
+                    // the SAME shared predicate + 409 construction site (ApprovalPeriodSaveLock —
+                    // EMPLOYEE_APPROVED / APPROVED are locked; DRAFT, REJECTED, legacy SUBMITTED
+                    // (ruling R6) and no-row stay writable; status-only, ALL actors including HR).
+                    //
+                    // Placement (PAT-015): AFTER the lock, BEFORE any write, on the (conn, tx)
+                    // IN-TRANSACTION overload — the self-managed overload opens a private connection
+                    // that sits outside this transaction and therefore outside the lock, so it would
+                    // miss a send that committed while we blocked on the acquire. Seeing that commit
+                    // also requires the ReadCommitted pin above; under RepeatableRead the snapshot
+                    // predates the lock grant and this read would be a no-op. This in-tx read is the
+                    // race the AC-7-style send-wins-then-POST test pins.
+                    //
+                    // KNOWN RESIDUAL (carried, shared with Skema — SPRINT-128 TASK-12803): the
+                    // natural-key probe matches whole-calendar-month period_start/period_end EXACTLY,
+                    // so a non-whole-month approval_periods row for this date would not be found and
+                    // "no row ⇒ allow" is weaker than it reads. Pre-existing on the Skema save's
+                    // identical probe; out of scope here.
+                    var monthStart = new DateOnly(request.Date.Year, request.Date.Month, 1);
+                    var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+                    var inLockPeriod = await approvalRepo.GetByEmployeeAndPeriodAsync(
+                        conn, tx, request.EmployeeId, monthStart, monthEnd, ct);
+                    if (ApprovalPeriodSaveLock.IsPeriodLockedForSave(inLockPeriod))
+                    {
+                        // Rollback explicitly before returning the shared 409 — no write has been
+                        // issued yet (the enqueue below is this tx's first write).
+                        await tx.RollbackAsync(ct);
+                        return ApprovalPeriodSaveLock.PeriodLockedForSaveConflict(inLockPeriod!);
+                    }
 
                     var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
                     await timeProjectionRepo.InsertAsync(conn, tx, @event, outboxId, ct);
@@ -174,7 +208,10 @@ public static class TimeEndpoints
                 EventId: @event.EventId,
                 StreamId: streamId));
         }).RequireAuthorization("EmployeeOrAbove")
-        .Produces<TimeEntryCreatedResponse>(StatusCodes.Status201Created); // S120 / TASK-12000
+        .Produces<TimeEntryCreatedResponse>(StatusCodes.Status201Created) // S120 / TASK-12000
+        // S128 / TASK-12803 — the period-locked conflict (ApprovalPeriodSaveLock), same shape as
+        // the Skema save's 409.
+        .Produces(StatusCodes.Status409Conflict);
 
         app.MapGet("/api/time-entries/{employeeId}", async (
             string employeeId,

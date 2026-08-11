@@ -19,9 +19,9 @@ import { runNonce, targetMonth, nonBoundaryWeekday, nonceWeekdayIndex } from './
  * left in the persistent local Postgres volume. The approval journey runs in PARALLEL
  * against the SAME employee and locks the whole month it sends, so the two must not
  * share a month — S127 made that separation structural (see SKEMA_MONTH_OFFSET below).
- * The save-side lock is `SkemaEndpoints.IsPeriodLockedForSave`, located by name: the
- * line number this comment used to carry (`:604`) had drifted onto the route
- * registration.
+ * The save-side lock is `ApprovalPeriodSaveLock.IsPeriodLockedForSave` (lifted out of
+ * SkemaEndpoints in S128/TASK-12803), located by name: the line number this comment
+ * used to carry (`:604`) had drifted onto the route registration.
  */
 
 const ABSENCE_LABEL = 'Sygedag' // SICK_DAY — the cell aria-label is `${label} dag ${dayOfMonth}`

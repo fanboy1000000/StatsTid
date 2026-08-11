@@ -27,3 +27,13 @@
 .actions {
   margin-top: var(--space-2);
 }
+
+/* S128 / TASK-12803 — the submit refusal (e.g. the period-locked 409). Mirrors the
+   .alert convention (TeamOversigt.module.css) on this module's token spacing. */
+.alert {
+  border: var(--border-width) solid var(--color-error);
+  background: var(--color-error-light);
+  color: var(--color-error);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-base);
+}

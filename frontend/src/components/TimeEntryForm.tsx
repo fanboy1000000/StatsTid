@@ -27,10 +27,12 @@ export function TimeEntryForm({ employeeId, onSubmit }: Props) {
   const [activityType, setActivityType] = useState('')
   const [agreementCode, setAgreementCode] = useState('AC')
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setSubmitting(true)
+    setSubmitError(null)
     try {
       await onSubmit({
         employeeId,
@@ -48,6 +50,22 @@ export function TimeEntryForm({ employeeId, onSubmit }: Props) {
       setEndTime('')
       setTaskId('')
       setActivityType('')
+    } catch (err) {
+      // S128 / TASK-12803 — surface the server's refusal instead of swallowing it as an
+      // unhandled rejection (the try/finally had no catch). The load-bearing case is the new
+      // period-locked 409 (ApprovalPeriodSaveLock): its body is `{ "error": "..." }`, which
+      // useTimeEntries throws as the raw body text — parse it for the message, fall back raw.
+      let message = err instanceof Error ? err.message : String(err)
+      try {
+        const parsed: unknown = JSON.parse(message)
+        if (parsed && typeof parsed === 'object' && 'error' in parsed
+            && typeof (parsed as { error: unknown }).error === 'string') {
+          message = (parsed as { error: string }).error
+        }
+      } catch {
+        // Not a JSON body — keep the raw message.
+      }
+      setSubmitError(message)
     } finally {
       setSubmitting(false)
     }
@@ -120,6 +138,11 @@ export function TimeEntryForm({ employeeId, onSubmit }: Props) {
           ))}
         </select>
       </FormField>
+      {submitError && (
+        <div className={styles.alert} role="alert" data-testid="time-entry-error">
+          {submitError}
+        </div>
+      )}
       <div className={styles.actions}>
         <Button type="submit" disabled={submitting}>
           {submitting ? 'Registrerer...' : 'Registrer tid'}

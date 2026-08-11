@@ -123,34 +123,12 @@ public static class SkemaEndpoints
         // (Null / non-positive pass through; positive ⇒ 2-dec AwayFromZero, ADR-032 D1.)
         => StatsTid.Backend.Api.Services.ConsumptionCalculator.RoundBasisTwoDp(fullDayHours);
 
-    /// <summary>
-    /// S127 / TASK-12704 — THE single spelling of "this month is closed to Skema writes".
-    ///
-    /// <para>
-    /// The save handler asks this question TWICE and the two askings must not be able to drift: once
-    /// pre-transaction (the cheap fast path, unchanged) and once INSIDE the write transaction after
-    /// <c>EmployeeConsumptionLock</c> is held. Two hand-copied status literals bound only by a comment
-    /// is exactly the shape S124/TASK-12405 removed on the read side; this is the write side of the
-    /// same lesson.
-    /// </para>
-    ///
-    /// <para>
-    /// The set is the one the pre-transaction check has always used — <c>EMPLOYEE_APPROVED</c> and
-    /// <c>APPROVED</c>, the two manager-visible/locked states. A null period (no row for the month)
-    /// is NOT locked: nothing has been sent.
-    /// </para>
-    /// </summary>
-    private static bool IsPeriodLockedForSave(ApprovalPeriod? period)
-        => period is not null && period.Status is "EMPLOYEE_APPROVED" or "APPROVED";
-
-    /// <summary>
-    /// S127 / TASK-12704 — THE single construction site for the save handler's period-locked 409, so
-    /// the in-transaction re-read returns byte-identically what the pre-transaction conflict path
-    /// returns (same status code, same body shape, same message). Callers must have established
-    /// <see cref="IsPeriodLockedForSave"/>.
-    /// </summary>
-    private static IResult PeriodLockedForSaveConflict(ApprovalPeriod period)
-        => Results.Conflict(new { error = $"Cannot save entries for a period with status {period.Status}" });
+    // S128 / TASK-12803 — the S127/TASK-12704 IsPeriodLockedForSave / PeriodLockedForSaveConflict
+    // pair moved VERBATIM to the shared StatsTid.Backend.Api.ApprovalPeriodSaveLock (the
+    // ApprovalVisibility precedent: one predicate, one 409 construction site) so
+    // POST /api/time-entries enforces the SAME lock without a hand-copied status list. The two
+    // call sites below (pre-transaction fast path + in-lock authoritative re-read) are unchanged
+    // in behavior — same predicate body, same 409 body, byte-identical wire.
 
     // S61 / TASK-6101 — the Backend-local EarnedToDate/MonthIndex mirror was removed. The pure
     // earned-to-date math is now the single shared copy in StatsTid.SharedKernel.Calendar.AccrualMath
@@ -711,8 +689,8 @@ public static class SkemaEndpoints
             // check is the in-lock re-read inside the transaction below. Both route through
             // IsPeriodLockedForSave / PeriodLockedForSaveConflict so they cannot drift.
             var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
-            if (IsPeriodLockedForSave(period))
-                return PeriodLockedForSaveConflict(period!);
+            if (ApprovalPeriodSaveLock.IsPeriodLockedForSave(period))
+                return ApprovalPeriodSaveLock.PeriodLockedForSaveConflict(period!);
 
             // ── Work-time date-range validation (S56 / Step 7a BLOCKER fix) ──
             // The approval-lock check above is scoped to the REQUESTED month. Reject any
@@ -1497,10 +1475,10 @@ public static class SkemaEndpoints
                     // disposes on the way out and rolls back, before any write has been issued.
                     var inLockPeriod = await approvalRepo.GetByEmployeeAndPeriodAsync(
                         conn, tx, employeeId, monthStart, monthEnd, ct);
-                    if (IsPeriodLockedForSave(inLockPeriod))
+                    if (ApprovalPeriodSaveLock.IsPeriodLockedForSave(inLockPeriod))
                     {
                         await tx.RollbackAsync(ct);
-                        return PeriodLockedForSaveConflict(inLockPeriod!);
+                        return ApprovalPeriodSaveLock.PeriodLockedForSaveConflict(inLockPeriod!);
                     }
 
                     // THEN re-derive the AUTHORITATIVE per-row feriedage INSIDE the lock. This

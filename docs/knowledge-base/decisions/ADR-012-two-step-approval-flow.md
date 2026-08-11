@@ -43,10 +43,16 @@ The three **manager** transitions (`approve`, `reject`, `reopen` — the Leader+
 - **Manager deadline**: Last day of month + 5 calendar days
 - Deadlines are set when the employee self-approves and stored on the `approval_periods` row
 
-### Locking Behavior
+### Locking Behavior (amended S128 / TASK-12803 — status code + a second enforced endpoint)
 
 - **DRAFT / REJECTED**: Employee can edit Skema cells freely
-- **EMPLOYEE_APPROVED / APPROVED**: Skema cells are read-only. Batch save returns 403.
+- **EMPLOYEE_APPROVED / APPROVED**: Skema cells are read-only. Batch save returns **409 Conflict**
+  — this line originally said 403; the shipped contract has been 409 since the S127 sweep
+  standardized locked-period refusals, and the ADR text lagged (caught by the S128 Step-0b
+  external lens). The predicate and the 409 construction site are single-sourced in
+  `ApprovalPeriodSaveLock` (S128/TASK-12803, lifted from SkemaEndpoints), and the same lock is
+  now ALSO enforced on `POST /api/time-entries` (closing the S127 FU-D1 post-send-drift carry;
+  legacy `SUBMITTED` deliberately stays writable per the S127 R6 ruling)
 - **Manager reopen (→ DRAFT)**: Unlocks for employee editing again
 
 ### Backward Compatibility

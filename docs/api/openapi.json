@@ -71,6 +71,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict"
           }
         }
       }

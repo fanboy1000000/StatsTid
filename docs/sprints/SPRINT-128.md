@@ -263,6 +263,40 @@ dispatch-ready.**
 
 ## Tasks Completed
 
+### TASK-12803 — FU-D1: the post-send write guard ✅ 2026-08-11 · **owns AC-4 (guard live; regression proof CI-pending)** · Orchestrator-reverified
+**Agent**: Backend (main tree) + Orchestrator checkpoint. **Backend files**: NEW
+`ApprovalPeriodSaveLock.cs` — the lifted shared pair (`IsPeriodLockedForSave` +
+`PeriodLockedForSaveConflict`), bodies byte-identical to the deleted SkemaEndpoints privates,
+sibling of `ApprovalVisibility.cs` with the same drift-hazard rationale; SkemaEndpoints both call
+sites converted (**behavior-empty diff** — Orchestrator-verified: no predicate/409/ordering change,
+zero remaining references to the old privates); TimeEndpoints gains the R3 guard in-lock, in-tx,
+via the `(conn, tx)` overload, after `EmployeeConsumptionLock.AcquireAsync` and before the enqueue,
+explicit rollback + the shared 409, known-residual comment (whole-month natural-key probe) at the
+call site, `.Produces(409)` metadata.
+**Tests**: NEW `TimeEntryPeriodLockTests.cs` (409 on EMPLOYEE_APPROVED + APPROVED with ZERO-delta
+TOTAL projection/outbox counts per the S127 F6 lesson; 201 preserved on DRAFT/SUBMITTED/REJECTED/
+no-row) + `S128_SendWinsThenTimeEntry_PostObservesNewStatusInLock_And409s` beside AC-7e (real
+forcing: third-connection advisory lock + pg_locks waiter-poll). **Posture: WRITTEN-BUT-NOT-EXECUTED
+— no docker/postgres on this machine**; compile + discovery proven (`--list-tests` names all 7),
+falsification documented at code-review level (the guard block is the revert target; both 409 arms
++ both zero-delta counts catch it; the pre-lock/self-managed-overload/RepeatableRead mutants die on
+the concurrency test; a SUBMITTED-widening mutant dies on the 201 arm). **Proof lands in CI's
+services-postgres regression step.** S124 write-floor trio untouched and unaffected (no-row⇒allow).
+Unit suite 868/868 (Orchestrator re-ran); solution build 0 errors, 0 new warnings.
+**Orchestrator checkpoint (C1, S127 precedent)**: openapi.json regenerated via the no-DB
+`--openapi` entrypoint — diff exactly the expected +3 lines (the 409 on POST /api/time-entries);
+`gen:api` regenerated `api-types.ts` (+7). ⚠ Python is ALSO missing on this machine, so
+`check_openapi_sync/convention` could not run locally — the sync gate's substance (regen+compare)
+was performed manually; both gates run in CI's docs job. **Frontend (PAT-016 both-arms, done
+here)**: `TimeEntryForm`'s `try/finally` had NO catch — a 409 was an unhandled rejection, the user
+saw NOTHING (a dead error path by construction). Added catch + JSON-body message parse + the
+`styles.alert`/`role="alert"` convention display; NEW `TimeEntryForm.test.tsx` pins both arms
+(parsed-message refusal render; success-clears-refusal + field reset) — vitest 730 → **733**.
+E2E comment naming the predicate's old home updated (`skema-registration.spec.ts`).
+**ADR-012 amended at this close per Step-0b Codex W3 (12805(b2) pulled forward)**: the stale
+"Batch save returns 403" → 409, single-source + second-endpoint note added.
+**Frontend gates after checkpoint**: typecheck:e2e 0 · lint 0 · build 0 · vitest 733/733.
+
 ### TASK-12802 — FU-C: the write-free demo-seed rerun ✅ 2026-08-11 · **owns AC-3 (arm (a) proven; arm (b) written-but-not-executed)** · Orchestrator-reverified
 **Agent**: Integration/Tooling (main tree). **Files**: NEW `Loading/PeriodLoadPlanner.cs` (pure
 static planner + the single-sourced outcome→status mapping); `ApiClient.GetPeriodsByMonthAsync`;

@@ -107,6 +107,13 @@ export interface paths {
                         "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse"];
                     };
                 };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         delete?: never;
