@@ -47,7 +47,7 @@ import { runNonce } from './helpers/dates'
  */
 
 const MERGED_URL = '/admin/organisation-medarbejdere'
-const STY02 = 'STY02' // Statens IT — the seeded Organisation carrying the unit tree.
+// STY02 = Statens IT — the seeded Organisation carrying the unit tree (used via tree-row-STY02 testids below).
 
 /** Open the merged page (post-login) and wait for the org-structure tree to render. */
 async function openMergedPage(page: Page): Promise<void> {

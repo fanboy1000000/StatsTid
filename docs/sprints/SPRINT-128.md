@@ -263,6 +263,23 @@ dispatch-ready.**
 
 ## Tasks Completed
 
+### TASK-12801 — FU-B: the e2e typecheck gate ✅ 2026-08-11 · **owns AC-2** · Orchestrator-reverified
+**Agent**: UX/Frontend (main tree). **Files**: NEW `frontend/tsconfig.e2e.json` (extends base;
+`include: ["e2e", "playwright.config.ts"]`; `types: ["node"]` overriding the base's pinned
+`vitest/globals`); `package.json` +`typecheck:e2e` script +`@types/node ^20.19.43` (was MISSING —
+`lazy-routes.spec.ts` needs `node:fs`/`__dirname`); one CI step in `frontend-build` after lint,
+before build (`ci.yml:257-263`) — deliberately NOT in `e2e-tests`, so the type gate is independent
+of the compose stack and browser flake.
+**Pre-existing errors surfaced**: exactly ONE in ~1.1k never-typechecked lines —
+`organisation.spec.ts(50)` TS6133 dead `STY02` const; removed, doc comment preserved, zero runtime
+change.
+**AC-2 RED-proof**: deliberate `string`→`number` tamper in `helpers/dates.ts` → gate FAILS with
+TS2322 (exit 2) → restored from scratchpad backup (not `git checkout`), SHA256-identical pre/post,
+absent from `git status`.
+**Gates**: `typecheck:e2e` 0 · lint 0 · build clean (src tsc unaffected) · vitest 730/730.
+Orchestrator re-ran `typecheck:e2e` (exit 0) and inspected the CI step placement. No stale
+citations, no cross-domain dependencies.
+
 ### TASK-12800 — FU-A: the `d7528d0` e2e-tests verdict ✅ 2026-08-11 (Orchestrator) · **AC-16 (S127) PROVEN**
 **GREEN, and verified genuinely exercised — not assumed from the workflow badge.** Run
 `31412597781` (StatsTid CI, master push 2026-08-10T17:09Z), job `93533977106` "E2E tests

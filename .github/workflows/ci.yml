@@ -254,6 +254,14 @@ jobs:
         run: npm run lint
         working-directory: frontend
 
+      - name: Typecheck Playwright layer (e2e/** + playwright.config.ts)
+        # S128 / TASK-12801: closes the S127 FU-B gap. tsconfig.json has include:["src"],
+        # so `npm run build`'s bare `tsc` never typechecked e2e/** or playwright.config.ts —
+        # S127's 474-line approval.spec.ts shipped typechecked only by a one-off manual run.
+        # tsconfig.e2e.json extends the same strict options over exactly that gap.
+        run: npm run typecheck:e2e
+        working-directory: frontend
+
       - name: Build frontend
         run: npm run build
         working-directory: frontend

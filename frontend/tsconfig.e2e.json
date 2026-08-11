@@ -1,0 +1,13 @@
+{
+  // S128 / TASK-12801: typecheck coverage for the Playwright layer.
+  // The base tsconfig has include:["src"], so `tsc` / `npm run build` never saw
+  // e2e/** or playwright.config.ts (the S127 FU-B gap). This config extends the
+  // same strict options over exactly that gap. Run via `npm run typecheck:e2e`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Node ambient types (node:fs / node:path / __dirname / process.env) instead
+    // of the base's vitest/globals — `types` pins the set, it is not additive.
+    "types": ["node"]
+  },
+  "include": ["e2e", "playwright.config.ts"]
+}
