@@ -138,6 +138,50 @@ public sealed class ApiClient : IDisposable
         return (status, periodId, body);
     }
 
+    /// <summary>
+    /// S128 / TASK-12802 — GET /api/approval/by-month?year=&amp;month= → (status, employeeId →
+    /// observed period, raw body). The period-stage idempotency probe: under the demo GLOBAL_ADMIN
+    /// the endpoint returns EVERY period for the month (bare array of the shared 9-field
+    /// pending/by-month element), so ONE call covers the whole manifest month and lets
+    /// <see cref="PeriodLoadPlanner"/> plan zero writes for rows already in their target state —
+    /// the fix for the re-send/re-reject event pollution on re-runs (S127 FU-C).
+    ///
+    /// <para>On a non-200 the map is EMPTY, never null — the loader falls back to plan-as-fresh,
+    /// where the send's 409 branch remains the safety net (pre-S128 behaviour).</para>
+    /// </summary>
+    public async Task<(HttpStatusCode Status, Dictionary<string, PeriodLoadPlanner.ObservedPeriod> Periods, string Body)>
+        GetPeriodsByMonthAsync(int year, int month, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, $"/api/approval/by-month?year={year}&month={month}");
+        var resp = await _http.SendAsync(req, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        var periods = new Dictionary<string, PeriodLoadPlanner.ObservedPeriod>(StringComparer.Ordinal);
+        if (resp.StatusCode == HttpStatusCode.OK)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        if (!el.TryGetProperty("employeeId", out var emp) || emp.GetString() is not { } employeeId)
+                            continue;
+                        if (!el.TryGetProperty("periodId", out var pid) || !pid.TryGetGuid(out var periodId))
+                            continue;
+                        if (!el.TryGetProperty("status", out var st) || st.GetString() is not { } status)
+                            continue;
+                        // The (employee, period_start, period_end) unique key means one row per
+                        // employee for a monthly period; last-wins is a harmless tiebreak.
+                        periods[employeeId] = new PeriodLoadPlanner.ObservedPeriod(periodId, status);
+                    }
+                }
+            }
+            catch (JsonException) { /* leave empty — the loader treats it as probe-failed */ }
+        }
+        return (resp.StatusCode, periods, body);
+    }
+
     public Task<(HttpStatusCode Status, string Body)> ApprovePeriodAsync(Guid periodId, CancellationToken ct)
         => SendAsync(HttpMethod.Post, $"/api/approval/{periodId}/approve", new { }, null, ct);
 

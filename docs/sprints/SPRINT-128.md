@@ -263,6 +263,32 @@ dispatch-ready.**
 
 ## Tasks Completed
 
+### TASK-12802 — FU-C: the write-free demo-seed rerun ✅ 2026-08-11 · **owns AC-3 (arm (a) proven; arm (b) written-but-not-executed)** · Orchestrator-reverified
+**Agent**: Integration/Tooling (main tree). **Files**: NEW `Loading/PeriodLoadPlanner.cs` (pure
+static planner + the single-sourced outcome→status mapping); `ApiClient.GetPeriodsByMonthAsync`;
+`DemoLoader` probe-first period stage (one by-month GET per distinct outcome-bearing month, planner-
+driven steps, new `PeriodsAlreadyInTargetState` counter, 409 branch kept as the race safety net);
+`DemoVerifier.ExpectedPeriodStatus` now a delegating shim to the planner's single source;
+`Program.cs` summary prints `alreadyInTargetState=` (the arm-(b) evidence line). NEW
+`PeriodLoadPlannerTests.cs`: **94 → 122 (+28), all green, Orchestrator re-ran: 122/122.**
+Planner semantics better than asked: the probe supplies the periodId, so partial states
+(observed `EMPLOYEE_APPROVED`, target `APPROVED`/`REJECTED`) plan only the remaining manager act —
+both endpoints verified to accept `EMPLOYEE_APPROVED` as source. Locked-`APPROVED` drift plans the
+full sequence and 409s into `PeriodsAlreadySent`, byte-identical to pre-S128 behavior.
+**RED-proof**: the FU-C bug reintroduced (`&& target != "REJECTED"`) → exactly the 3 guarding tests
+failed → restored from scratchpad backup (a Copy-Item mtime gotcha caused one stale-DLL rerun,
+caught and re-verified — the FAIL-005 class).
+**Arm (b) WRITTEN-BUT-NOT-EXECUTED, reason correct**: this machine has NO container runtime (no
+docker CLI, no WSL) and no general internet — a PAT-017 isolated stack cannot exist here. The
+evidence line is implemented and obtainable on any docker-capable machine: a rerun prints
+`periods: sent=0 alreadyInTargetState=<N> alreadySent(409)=0 approved=0 rejected=0`.
+**⚠ ENVIRONMENT FINDING (Orchestrator-verified)**: SDK 8 is GONE from this machine — only
+10.0.302 installed (net8.0 runtimes 8.0.29 remain), so `global.json` (`8.0.0`/`latestFeature`)
+cannot resolve and `dotnet build`/`test` FAIL from inside the repo. Workaround in use: invoke
+dotnet from OUTSIDE the repo root (bypasses global.json, SDK 10 targets net8.0 fine). Owner
+decision pending: reinstall SDK 8 vs relax the S39 pin. Docker absence additionally means
+Docker-gated regression tests can only be proven in CI from this machine.
+
 ### TASK-12801 — FU-B: the e2e typecheck gate ✅ 2026-08-11 · **owns AC-2** · Orchestrator-reverified
 **Agent**: UX/Frontend (main tree). **Files**: NEW `frontend/tsconfig.e2e.json` (extends base;
 `include: ["e2e", "playwright.config.ts"]`; `types: ["node"]` overriding the base's pinned

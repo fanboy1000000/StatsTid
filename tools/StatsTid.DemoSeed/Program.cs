@@ -148,7 +148,10 @@ static async Task<int> RunLoadAsync(Dictionary<string, string> opts)
     Console.WriteLine($"  roles: granted={result.RolesGranted} skipped={result.RolesSkipped}");
     Console.WriteLine($"  profiles: set={result.ProfilesSet} skipped={result.ProfilesSkipped}");
     Console.WriteLine($"  activity: absences={result.AbsencesSaved} allocations={result.AllocationsSaved} workDays={result.WorkDaysSaved} monthsAlreadyComplete={result.MonthsAlreadyComplete}");
-    Console.WriteLine($"  periods: sent={result.PeriodsSent} alreadySent(409)={result.PeriodsAlreadySent} approved={result.PeriodsApproved} rejected={result.PeriodsRejected}");
+    // S128 / TASK-12802: alreadyInTargetState is the probe-first re-run no-op (must equal the count
+    // of outcome-bearing manifest months on a re-run); alreadySent(409) is the race safety net.
+    Console.WriteLine($"  periods: sent={result.PeriodsSent} alreadyInTargetState={result.PeriodsAlreadyInTargetState} " +
+                      $"alreadySent(409)={result.PeriodsAlreadySent} approved={result.PeriodsApproved} rejected={result.PeriodsRejected}");
     Console.WriteLine($"  period outcome failures: {result.PeriodOutcomeFailures}" +
                       (result.PeriodOutcomeFailures == 0 ? "" : "  ← the manifest's outcome was NOT reached for these"));
     Console.WriteLine($"  vikars: created={result.VikarsCreated} skipped={result.VikarsSkipped}");

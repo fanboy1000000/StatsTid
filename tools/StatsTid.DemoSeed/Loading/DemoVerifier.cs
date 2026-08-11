@@ -309,24 +309,12 @@ public sealed class DemoVerifier
 
     /// <summary>
     /// S127 / TASK-12701b — manifest outcome ⇒ the <c>approval_periods.status</c> the row must END in.
-    /// Null ⇒ no row at all.
-    ///
-    /// <para><c>"SUBMITTED"</c> is the PRE-S127 spelling and maps to EMPLOYEE_APPROVED, because that
-    /// is where <c>POST /api/approval/send</c> actually leaves the row — an old manifest on disk
-    /// still describes the world truthfully. An UNKNOWN outcome throws rather than defaulting to "no
-    /// expectation": a silent default is how a whole class of months would drop out of the check.</para>
+    /// Null ⇒ no row at all. S128 / TASK-12802 moved the mapping itself to
+    /// <see cref="PeriodLoadPlanner.ExpectedPeriodStatus"/> so the loader (which plans TOWARD the
+    /// status) and this verifier (which checks the database AGAINST it) share one definition.
     /// </summary>
-    private static string? ExpectedPeriodStatus(string outcome) => outcome switch
-    {
-        "NONE" => null,
-        "EMPLOYEE_APPROVED" => "EMPLOYEE_APPROVED",
-        "SUBMITTED" => "EMPLOYEE_APPROVED",
-        "APPROVED" => "APPROVED",
-        "REJECTED" => "REJECTED",
-        _ => throw new InvalidOperationException(
-            $"Unknown manifest periodOutcome '{outcome}'. The status-count check cannot be derived, " +
-            "and defaulting it to 'no expectation' would silently drop those months from verification."),
-    };
+    private static string? ExpectedPeriodStatus(string outcome)
+        => PeriodLoadPlanner.ExpectedPeriodStatus(outcome);
 
     /// <summary>S114 — unit-spine verification: per plan org — all 5 unit types present, unit count
     /// exact, the leaderless count EXACTLY the deliberate ledger count, the sideways count EXACTLY

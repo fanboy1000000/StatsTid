@@ -10,7 +10,8 @@ namespace StatsTid.Tools.DemoSeed.Loading;
 /// trees, grant privileged roles, set part-time profiles, create the activity slice + vikars,
 /// and apply the messy-case steps. IDEMPOTENT: every write is skip-if-present (the import is a
 /// TRUE no-op on re-run; profile PUT skips when already at the target fraction; vikar create
-/// probes the GET first; the period send is conflict-tolerant).
+/// probes the GET first; the period stage probes GET /api/approval/by-month first — S128 — with
+/// the send's 409-tolerance kept as the race safety net).
 ///
 /// <para>S127 / TASK-12701a — the activity stage now writes a COMPLETE month: absences, self-recorded
 /// work time, and the project allocations that reconcile against it day by day. Before this it wrote
@@ -62,9 +63,23 @@ public sealed class DemoLoader
         public int PeriodsSent { get; set; }
 
         /// <summary>S127 / TASK-12701b — sends that 409'd because the row was already past a sendable
-        /// source state (the re-run path). A skip, NOT a success: on a first load a period that never
-        /// landed has no row and therefore cannot 409.</summary>
+        /// source state. Since S128's probe-first period stage this is a RACE safety net only (someone
+        /// changed the row between probe and send) — the planned re-run no-op is
+        /// <see cref="PeriodsAlreadyInTargetState"/>. A skip, NOT a success: on a first load a period
+        /// that never landed has no row and therefore cannot 409.</summary>
         public int PeriodsAlreadySent { get; set; }
+
+        /// <summary>
+        /// S128 / TASK-12802 (S127 FU-C) — outcome-bearing months whose by-month-probed status
+        /// ALREADY equals the manifest target, so the loader issued ZERO period calls for them.
+        ///
+        /// <para>This is the counter that proves a re-run is write-free for the period stage: before
+        /// S128 a REJECTED month was re-sent and re-rejected every re-run (REJECTED is a legitimate
+        /// send source), leaving final statuses identical but appending an extra send/reject event
+        /// pair each time. On a re-run over a loaded DB this must equal the count of manifest
+        /// activity rows with <c>PeriodOutcome != "NONE"</c>.</para>
+        /// </summary>
+        public int PeriodsAlreadyInTargetState { get; set; }
 
         public int PeriodsApproved { get; set; }
         public int PeriodsRejected { get; set; }
@@ -498,6 +513,35 @@ public sealed class DemoLoader
     private async Task CreateActivityAsync(LoadResult result, CancellationToken ct)
     {
         _log($"Creating activity for {_manifest.Activity.Count} employees ...");
+
+        // S128 / TASK-12802 (S127 FU-C) — the period stage is now PROBE-FIRST like the unit stages:
+        // ONE GET /api/approval/by-month per distinct outcome-bearing (year, month) — in practice one
+        // call, all manifest activity shares a single month — and every row whose observed status
+        // already equals its manifest target plans ZERO period calls (PeriodsAlreadyInTargetState).
+        // Before this the stage was only conflict-tolerant, and because REJECTED is a legitimate send
+        // source, every re-run re-sent + re-rejected every REJECTED month: same final statuses, one
+        // extra send/reject event pair per rejected month per re-run in the event stream.
+        // A failed probe degrades to the pre-S128 behaviour (plan-as-fresh; the 409 branch below
+        // stays as the race/fallback safety net).
+        var observedByMonth = new Dictionary<(int Year, int Month), Dictionary<string, PeriodLoadPlanner.ObservedPeriod>>();
+        foreach (var (year, month) in _manifest.Activity
+                     .Where(x => x.PeriodOutcome != "NONE")
+                     .Select(x => (x.Year, x.Month))
+                     .Distinct())
+        {
+            var (pStatus, periods, pBody) = await _api.GetPeriodsByMonthAsync(year, month, ct);
+            if (pStatus == HttpStatusCode.OK)
+            {
+                observedByMonth[(year, month)] = periods;
+                _log($"  period probe {year}-{month:00}: {periods.Count} existing period(s) observed");
+            }
+            else
+            {
+                result.Warnings.Add($"period probe {year}-{month:00} → {(int)pStatus} {Trunc(pBody)} — " +
+                                    "falling back to send-and-tolerate-409 for that month");
+            }
+        }
+
         foreach (var a in _manifest.Activity)
         {
             // 1. Save the month — absences, project allocations and self-recorded work time — but
@@ -589,62 +633,95 @@ public sealed class DemoLoader
             //    and resolves org / agreement / okVersion itself, so the manifest's stored OrgId /
             //    AgreementCode / OkVersion are NOT sent — they are generation-time values and a
             //    caller-supplied dimension is the P4 hole the send command closed.
-            if (a.PeriodOutcome == "NONE")
-                continue;
+            //    S128 / TASK-12802 — the decision is a PURE plan (PeriodLoadPlanner) over the
+            //    manifest outcome + the probed status. Observed == target ⇒ ZERO calls (including
+            //    the REJECTED case, the S127 FU-C event-pollution fix); no row ⇒ the full sequence;
+            //    observed EMPLOYEE_APPROVED with an APPROVED/REJECTED target ⇒ the manager act only,
+            //    addressed at the PROBED period id.
+            PeriodLoadPlanner.ObservedPeriod? observed = null;
+            if (observedByMonth.TryGetValue((a.Year, a.Month), out var monthPeriods))
+                monthPeriods.TryGetValue(a.EmployeeId, out observed);
 
-            var (sendStatus, periodId, sendBody) = await _api.SendPeriodAsync(a.EmployeeId, a.Year, a.Month, ct);
-
-            if (sendStatus == HttpStatusCode.Conflict)
-            {
-                // The row is already past a sendable source state (EMPLOYEE_APPROVED or APPROVED) —
-                // the genuine re-run path, and the ONLY status treated as a skip.
-                //
-                // ⚠ A 409 is a skip and NOT evidence of success. On a FIRST load a period that never
-                // landed produces no row at all, so it cannot 409 — it re-attempts and fails again.
-                // The proof that the world is right is the verifier's manifest-derived status-count
-                // check (DemoVerifier check 21), never this branch.
-                result.PeriodsAlreadySent++;
+            var plan = PeriodLoadPlanner.PlanPeriodActions(a, observed);
+            if (plan.Skip == PeriodLoadPlanner.PeriodSkipReason.NoneOutcome)
                 continue;
-            }
-            if (sendStatus != HttpStatusCode.OK || periodId is null)
+            if (plan.Skip == PeriodLoadPlanner.PeriodSkipReason.AlreadyInTargetState)
             {
-                // 422 = coverage or allocation refused the month; 403 = the floor; anything else is
-                // worse. None of them is a skip: the manifest says this month must reach a
-                // manager-visible state and it did not.
-                result.PeriodOutcomeFailures++;
-                result.Warnings.Add($"send {a.EmployeeId} {a.Year}-{a.Month:00} → {(int)sendStatus} {Trunc(sendBody)}");
+                result.PeriodsAlreadyInTargetState++;
                 continue;
             }
-            result.PeriodsSent++;
 
-            switch (a.PeriodOutcome)
+            // Steps run in order; a Send supplies the period id for the acts that follow it, and a
+            // plan that starts with an act targets the OBSERVED id (the resume-without-re-send path).
+            var currentPeriodId = observed?.PeriodId;
+            foreach (var step in plan.Steps)
             {
-                case "APPROVED":
-                    var (apStatus, apBody) = await _api.ApprovePeriodAsync(periodId.Value, ct);
+                if (step == PeriodLoadPlanner.PeriodStep.Send)
+                {
+                    var (sendStatus, periodId, sendBody) = await _api.SendPeriodAsync(a.EmployeeId, a.Year, a.Month, ct);
+
+                    if (sendStatus == HttpStatusCode.Conflict)
+                    {
+                        // The row is already past a sendable source state (EMPLOYEE_APPROVED or
+                        // APPROVED). Since S128's probe this is the RACE safety net (or the
+                        // probe-failed fallback), no longer the routine re-run path.
+                        //
+                        // ⚠ A 409 is a skip and NOT evidence of success. On a FIRST load a period that
+                        // never landed produces no row at all, so it cannot 409 — it re-attempts and
+                        // fails again. The proof that the world is right is the verifier's
+                        // manifest-derived status-count check (DemoVerifier check 21), never this branch.
+                        result.PeriodsAlreadySent++;
+                        break;
+                    }
+                    if (sendStatus != HttpStatusCode.OK || periodId is null)
+                    {
+                        // 422 = coverage or allocation refused the month; 403 = the floor; anything
+                        // else is worse. None of them is a skip: the manifest says this month must
+                        // reach a manager-visible state and it did not.
+                        result.PeriodOutcomeFailures++;
+                        result.Warnings.Add($"send {a.EmployeeId} {a.Year}-{a.Month:00} → {(int)sendStatus} {Trunc(sendBody)}");
+                        break;
+                    }
+                    result.PeriodsSent++;
+                    currentPeriodId = periodId;
+                    continue;
+                }
+
+                if (currentPeriodId is not Guid actTarget)
+                {
+                    // Defensive: an act step with no id to address (cannot happen — a plan either
+                    // starts with Send or was derived from an observed row).
+                    result.PeriodOutcomeFailures++;
+                    result.Warnings.Add($"{step} {a.EmployeeId} {a.Year}-{a.Month:00} → no period id available");
+                    break;
+                }
+
+                if (step == PeriodLoadPlanner.PeriodStep.Approve)
+                {
+                    var (apStatus, apBody) = await _api.ApprovePeriodAsync(actTarget, ct);
                     if (apStatus == HttpStatusCode.OK) result.PeriodsApproved++;
                     else
                     {
                         result.PeriodOutcomeFailures++;
                         result.Warnings.Add($"approve {a.EmployeeId} → {(int)apStatus} {Trunc(apBody)}");
                     }
-                    break;
-                case "REJECTED":
-                    var (rjStatus, rjBody) = await _api.RejectPeriodAsync(periodId.Value, "Demo: returneret til korrektion.", ct);
+                }
+                else // PeriodStep.Reject
+                {
+                    var (rjStatus, rjBody) = await _api.RejectPeriodAsync(actTarget, "Demo: returneret til korrektion.", ct);
                     if (rjStatus == HttpStatusCode.OK) result.PeriodsRejected++;
                     else
                     {
                         result.PeriodOutcomeFailures++;
                         result.Warnings.Add($"reject {a.EmployeeId} → {(int)rjStatus} {Trunc(rjBody)}");
                     }
-                    break;
-                // "EMPLOYEE_APPROVED" → the send already put it there; leave as-is. (A legacy
-                // manifest's "SUBMITTED" lands here too and means the same thing: no further act.)
+                }
             }
         }
         _log($"  absences={result.AbsencesSaved}, allocations={result.AllocationsSaved}, workDays={result.WorkDaysSaved}, " +
              $"monthsAlreadyComplete={result.MonthsAlreadyComplete}, sent={result.PeriodsSent}, " +
-             $"alreadySent={result.PeriodsAlreadySent}, approved={result.PeriodsApproved}, " +
-             $"rejected={result.PeriodsRejected}, outcomeFailures={result.PeriodOutcomeFailures}");
+             $"alreadyInTargetState={result.PeriodsAlreadyInTargetState}, alreadySent(409)={result.PeriodsAlreadySent}, " +
+             $"approved={result.PeriodsApproved}, rejected={result.PeriodsRejected}, outcomeFailures={result.PeriodOutcomeFailures}");
     }
 
     // ── Vikars: probe the GET first (idempotent), then create ──
