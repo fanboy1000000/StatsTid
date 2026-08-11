@@ -24,7 +24,9 @@ namespace StatsTid.Backend.Api;
 /// argued in full below rather than left to look like an oversight.</para>
 ///
 /// <para><b>S127 / TASK-12706 — owner ruling R1 REMOVED <c>REJECTED</c> from this set.</b> S124 put it
-/// here on purpose, and its reasoning is recorded in code at <c>ApprovalEndpoints.cs:1077-1078</c>:
+/// here on purpose, and its reasoning is recorded in code in ApprovalEndpoints' team-overview row
+/// construction (the comment block above the <c>submittedToManager</c> assignment — located by
+/// symbol; the line citation this doc once carried had drifted twice):
 /// <i>"REJECTED counts as submitted: the employee DID send it, the leader decided on these very
 /// numbers, and hiding them afterwards would erase the basis of that decision."</i> That is sound as
 /// far as it goes and R1 does not call it wrong — R1 answers it with a rule that outranks it: a

@@ -1037,22 +1037,29 @@ and a local run would need a destructive `down -v` on the owner's demo data. CI'
 fresh, so it is genuinely exercised there. **Action**: confirm the CI `e2e-tests` run is green before
 treating AC-16 as proven — the AC is not closed until then. (§ "TASK-12709 — E2E rebuild", `SPRINT-127.md:590,609–615`)
 
-**FU-B — CI gap: the E2E specs are never typechecked.** `frontend/tsconfig.json` has `include: ["src"]`,
+**FU-B — CI gap: the E2E specs are never typechecked.** ✅ **DISCHARGED S128 / TASK-12801**:
+`tsconfig.e2e.json` + `typecheck:e2e` in the `frontend-build` CI job, RED-proven; one pre-existing
+type error surfaced and fixed. `frontend/tsconfig.json` has `include: ["src"]`,
 so `npx tsc --noEmit` — both the project gate *and* CI's typecheck — does **not** cover `frontend/e2e/**`
 at all. The specs were typechecked in S127 only by explicit agent invocation; nothing in CI does, so a
 spec can drift out of compiling without any gate catching it. **Action**: bring `frontend/e2e/**` under a
 CI typecheck (a dedicated `tsc -p` over an e2e tsconfig, or widen coverage). (Orchestrator-verified;
 `SPRINT-127.md:629–631`)
 
-**FU-C — a demo-seed rerun is not write-free for REJECTED months.** `REJECTED` is a legitimate `/send`
+**FU-C — a demo-seed rerun is not write-free for REJECTED months.** ✅ **DISCHARGED S128 /
+TASK-12802**: probe-first `PeriodLoadPlanner` (+28 tests); the loader-evidence arm is
+written-but-not-executed pending a docker-capable machine. `REJECTED` is a legitimate `/send`
 source (§3.2), so a reseed rerun re-sends and re-rejects those ~127 periods: final status and counts are
 identical, but one extra event pair is emitted per rejected month per rerun. This is correct product
 behaviour, not a bug — but a genuinely write-free rerun would need a status probe before re-sending.
 **Action**: gate the rerun's re-send on a status probe if write-free idempotency is wanted. (§ TASK-12701b,
 `SPRINT-127.md:679–682`)
 
-**FU-D — carried ruled holes (deferrals, not settled rulings).** Both are recorded under "Known-accepted
-holes" but carry forward as real deferred work:
+**FU-D — carried ruled holes (deferrals, not settled rulings).** ✅ **BOTH ADDRESSED S128**:
+`/api/time-entries` post-send drift closed by TASK-12803 (the Skema lock, shared
+`ApprovalPeriodSaveLock`, 409); RES-002 partially closed by TASK-12804 (3 of 12 reads gated,
+tiered/narrow-only/403; the corrected 12-read census + the 9-read remainder recorded in the KB
+entry). Original statement:
 - **RES-002** — sibling read endpoints still disclose a rejected month's figures (ruled **R5**). The R1
   visibility predicate made the figures un-displayed, not unreadable; closing the sibling read endpoints
   was out of S127 scope. (`SPRINT-127.md:299,563`)

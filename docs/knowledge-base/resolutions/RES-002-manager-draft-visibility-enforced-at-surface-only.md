@@ -4,7 +4,7 @@
 |-------|-------|
 | **ID** | RES-002 |
 | **Category** | resolution |
-| **Status** | approved — enforcement deliberately INCOMPLETE, follow-up OPEN |
+| **Status** | approved — PARTIALLY ENFORCED (S128/TASK-12804: 3 of 12 reads gated); 9-read remainder OPEN |
 | **Sprint** | Sprint 124 |
 | **Date** | 2026-07-30 |
 | **Domains** | Backend, Frontend, Security |
@@ -46,22 +46,38 @@ honest statement of today's posture:
 > the LEADER tier (TASK-12405). The RULE is still not fully ENFORCED — the remaining sibling reads
 > below serve the same data to the same actor.
 
-## The unenforced surface (the follow-up's scope)
-Every read below authorizes through `DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync`
-or an equivalent authority predicate, and applies **no `approval_periods.status` filter**. Because
-that is the SAME predicate the team-overview roster is built from, reachability is not incidental —
-it is guaranteed for exactly the population whose row was withheld. Vikar / acting managers inherit
-all of it through the same predicate.
+## The read surface — CORRECTED CENSUS (S128/TASK-12805; the original 6-row census was understated)
+The S128 Step-0b investigation verified the true surface at **12 endpoints across 6 files** — the
+original table below omitted `flex-balance`, `balance/series`, `compliance/compensatory-rest`, and
+all three `overtime/{employeeId}/*` reads. Every open read authorizes through org-scope or
+`DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync` and applies **no
+`approval_periods.status` filter**. Vikar / acting managers inherit reachability through the same
+predicates.
 
-| Read | What it still serves | Note |
-|------|----------------------|------|
-| ~~`GET /api/skema/{employeeId}/month`~~ | ~~The ENTIRE un-submitted grid, cell by cell~~ | **CLOSED for the LEADER tier in S124 / TASK-12405** — a leader gets 403 unless the period was sent. STILL OPEN for HR-or-above, deliberately: HR is the corrective tier (TASK-12404 permits HR to edit, and you cannot correct what you cannot read) |
-| `GET /api/balance/{employeeId}/summary` | `normHoursActual` | The unwithheld twin of the withheld `normRegistered` |
-| `GET /api/balance/{employeeId}/year-overview` | Per-month actuals | |
-| `GET /api/time-entries/{employeeId}` | Raw entry rows, unbounded by date | |
-| `GET /api/absences/{employeeId}` | Absence rows | Related to the `ferieUsed` leak above |
-| `GET /api/approval/{employeeId}/allocation-breakdown` | Per-`task_id` hour split, worked, allocated, under/over | The Teamoversigt expander's own fetch — the FE affordance was removed, the endpoint was not |
-| the compliance read | Warnings/violations for the month | Same expander |
+**Gated in S128/TASK-12804** (tiered per R1, narrow-only per R5, 403 per R6 — see the ruling block
+below; the shared gate lives in `ApprovalReadTier.cs`):
+
+| Read | Status |
+|------|--------|
+| `GET /api/skema/{employeeId}/month` | CLOSED for the leader tier (S124/TASK-12405); HR-or-above deliberately exempt (corrective tier) |
+| `GET /api/approval/{employeeId}/allocation-breakdown` | **CLOSED S128** — leader tier 403 on non-submitted months (incl. REJECTED and no-row, fail-closed) |
+| `GET /api/compliance/{employeeId}/period` | **CLOSED S128** — same gate |
+| `GET /api/balance/{employeeId}/summary` | **CLOSED S128** — same gate |
+
+**Still open (the 9-read remainder — 7 of these carry NO month parameter, so gating them needs
+contract changes or per-row `approval_periods` joins, a materially larger change than a 403 guard):**
+
+| Read | What it still serves | Month param? |
+|------|----------------------|--------------|
+| `GET /api/balance/{employeeId}/year-overview` | Per-month actuals, all 12 months | year only |
+| `GET /api/balance/{employeeId}/series` | Entitlement series across months | no |
+| `GET /api/time-entries/{employeeId}` | Raw entry rows, unbounded by date | no |
+| `GET /api/absences/{employeeId}` | Absence rows (the `ferieUsed` source) | no |
+| `GET /api/flex-balance/{employeeId}` | The unwithheld twin of withheld `flexBalance` | no (latest event) |
+| `GET /api/compliance/{employeeId}/compensatory-rest` | All compensatory-rest rows, unbounded | no |
+| `GET /api/overtime/{employeeId}/balance` | Year overtime figures | year only |
+| `GET /api/overtime/{employeeId}/pre-approvals` | Pre-approval rows | no |
+| `GET /api/overtime/{employeeId}/compensation-choice` | Balance-derived choice state | year only |
 
 ## Rationale
 Withholding on the display surface removes the leak from the place a manager actually works, at UI
@@ -106,19 +122,22 @@ guards alongside. **The LEADER read WAS narrowed** in TASK-12405 (status-gated);
 is deliberately ungated. A leader must still review a *submitted* month's grid (TASK-12403), which is
 why the remaining deferred read gate must stay period-status-based, never a blanket denial.
 
-## OPEN QUESTION for the follow-up: which ACTOR MODEL is authoritative?
-Step-7a's internal lens flagged a genuine inconsistency this sprint created and did NOT resolve:
+## The ACTOR MODEL — RULED (S128, owner ruling R1, 2026-08-11)
+The S124 inconsistency (team-overview withholding actor-blind; month GET tiered) is resolved:
+**TIERED is authoritative for endpoint gates** — self exempt, HR-or-above exempt (the corrective
+tier: you cannot correct what you cannot read), leader tier gated by
+`ApprovalVisibility.IsSubmittedToManager`. Companion rulings: **R5 narrow-only composition** (a
+gate is applied WITHIN each endpoint's existing access population and may only subtract access —
+the 3 gated endpoints have three different auth shapes and none was widened) and **R6 withhold
+shape = 403** (the month-GET precedent; the shared construction site is
+`ApprovalReadTier.MonthNotSubmittedForbidden`). The team-overview's actor-blind DISPLAY withholding
+was deliberately NOT retrofitted in S128 — it stays as shipped; the tiered model governs endpoint
+gates. Implementation: `ApprovalReadTier.cs` (S128/TASK-12804), the third lift-pattern instance
+after `ApprovalVisibility` (S124) and `ApprovalPeriodSaveLock` (S128).
 
-- The **team-overview withholding is actor-blind** — the predicate keys on period status only, so it
-  withholds from LocalHR / LocalAdmin / GlobalAdmin exactly as from a leader.
-- The **month GET is tiered** — HR-or-above is exempt, on the explicit ground that HR may correct.
-
-So today HR sees `—` in the Teamoversigt Normtimer/Ferie columns while being able to open the full
-grid and edit it. Both are individually defensible; together they are two actor models for one rule.
-The follow-up must pick one: extend the corrective exemption to the withholding, or ratify the
-withholding as intentionally blanket. Recorded so the next sprint need not re-derive which is
-authoritative. (This entry's earlier sketch — "actor-is-not-self AND period-not-submitted" — does not
-account for the HR dimension at all.)
+The **reopen read-fork remains open** (S128 ruling R4): a leader-reopened month reverts to DRAFT
+and is withheld from the leader who approved it; `PeriodReopened.PreviousStatus` is the future
+discriminator if the owner ever rules to distinguish leader-reopen from self-reopen.
 
 ## Agent Guidance
 - **Backend Agent**: when touching any read in the table above, treat this entry as live scope — do

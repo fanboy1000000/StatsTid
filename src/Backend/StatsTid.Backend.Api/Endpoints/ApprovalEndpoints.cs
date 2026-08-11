@@ -1043,14 +1043,15 @@ public static class ApprovalEndpoints
                 // durable record of what was decided. What is withheld is only the live,
                 // still-moving month figures.
                 //
-                // Scope of the reversal, stated because it is narrower than it looks (ruling R5): this
-                // predicate governs TWO display surfaces — this row and the Skema leader tier
-                // (SkemaEndpoints.cs:515). The sibling read endpoints (allocation-breakdown,
-                // compliance, balance, raw time entries, absences) authorize the same manager
-                // population and read the projections with NO period-status gate, so a manager who
-                // calls them directly still sees a rejected month's current figures. That gap is
-                // RECORDED in RES-002 as its open follow-up — it is deliberately not closed here, and
-                // this change must not be described as access-control enforcement.
+                // Scope of the reversal (S127 ruling R5, PARTIALLY superseded by S128): this
+                // predicate originally governed TWO display surfaces — this row and the Skema leader
+                // tier (the `leaderTierRead` gate, SkemaEndpoints, located by symbol). S128/TASK-12804
+                // then lifted the tiering into ApprovalReadTier and gated THREE of the sibling reads
+                // (allocation-breakdown, compliance/period, balance/summary) with the same predicate —
+                // leader-tier 403 on non-submitted months. The REMAINING siblings (raw time entries,
+                // absences, flex-balance, balance year-overview/series, compensatory-rest, the
+                // overtime reads) still have NO period-status gate; that 9-read remainder is RECORDED
+                // in RES-002 with the corrected census. Describe enforcement as PARTIAL.
                 var submittedToManager = ApprovalVisibility.IsSubmittedToManager(status);
 
                 var normRegistered = registeredByEmployee.GetValueOrDefault(r.EmployeeId, 0m);

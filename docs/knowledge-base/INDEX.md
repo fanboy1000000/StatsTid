@@ -84,7 +84,7 @@
 | ID | Title | Status | Sprint | Priorities | Tags |
 |----|-------|--------|--------|------------|------|
 | [RES-001](resolutions/RES-001-ac-no-overtime-supplements.md) | AC has no overtime/supplements (agreement fidelity over feature parity) | approved | S2 | P2 vs P9 | ac, overtime, supplements, priority-conflict |
-| [RES-002](resolutions/RES-002-manager-draft-visibility-enforced-at-surface-only.md) | Manager draft-visibility rule enforced at the Teamoversigt surface only (endpoint-level gate DEFERRED — follow-up OPEN) | approved — enforcement deliberately incomplete | S124 | P7 vs P9/scope | access-control, approval, draft-visibility, manager, priority-conflict, deferred-hardening, p7 |
+| [RES-002](resolutions/RES-002-manager-draft-visibility-enforced-at-surface-only.md) | Manager draft-visibility rule: surface withholding (S124) + endpoint gates on 3 of 12 reads (S128, tiered/narrow-only/403 via `ApprovalReadTier`); 9-read remainder OPEN (7 lack month params) | approved — partially enforced | S124, S128 | P7 vs P9/scope | access-control, approval, draft-visibility, manager, priority-conflict, deferred-hardening, p7 |
 | [RES-003](resolutions/RES-003-self-approval-is-a-recurring-defect-class.md) | Self-approval is a RECURRING defect class — the segregation-of-duties rule is enforced per-path, not structurally (3 instances, ALL fixed; class still open) | **PARTIALLY CLOSED — audit + choke-point ruling still open** | S125 | P7 | access-control, approval, segregation-of-duties, self-approval, authorization, audit-required, p7, defect-class |
 
 ## Failure/Pivot Log (FAIL)
