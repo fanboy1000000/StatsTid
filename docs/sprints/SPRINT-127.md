@@ -1018,3 +1018,40 @@ genuinely unaffected (checked, not assumed): `TeamOverviewAggregateTests.cs:560`
 **Ops note**: worktree agents do not see untracked files — `docs/sprints/SPRINT-127.md` and
 `.claude/refinements/` are untracked on master, so worktrees created from HEAD lack them. The agent read
 them from `C:\StatsTid\` directly. Future phase prompts should state that path explicitly.
+
+## Open follow-ups
+
+> Consolidated at close for S128 Step 0/0a promotion. FU-A and FU-B are the same subject (the rebuilt
+> E2E spec) seen from two angles — verifying its CI run and closing the CI hole that lets it rot; treat
+> them as one work item. FU-C is a demo-seed idempotency refinement. FU-D carries the two ruled holes
+> that are deferrals, not settled rulings.
+
+**FU-A — AC-16 (the send E2E) is unproven until CI runs it.** `frontend/e2e/approval.spec.ts` was rebuilt
+(161 → 474 lines, one honest end-to-end over a month's real Skema registration + both send adapters + both
+manager verbs, asserting R1/R7 at the rejection moment) but was **written, not executed**: the running
+stack predates the sprint (`/submit` still 401s, `/send` 405s, `STY01` has 0 projects on the old volume),
+and a local run would need a destructive `down -v` on the owner's demo data. CI's `e2e-tests` job builds
+fresh, so it is genuinely exercised there. **Action**: confirm the CI `e2e-tests` run is green before
+treating AC-16 as proven — the AC is not closed until then. (§ "TASK-12709 — E2E rebuild", `SPRINT-127.md:590,609–615`)
+
+**FU-B — CI gap: the E2E specs are never typechecked.** `frontend/tsconfig.json` has `include: ["src"]`,
+so `npx tsc --noEmit` — both the project gate *and* CI's typecheck — does **not** cover `frontend/e2e/**`
+at all. The specs were typechecked in S127 only by explicit agent invocation; nothing in CI does, so a
+spec can drift out of compiling without any gate catching it. **Action**: bring `frontend/e2e/**` under a
+CI typecheck (a dedicated `tsc -p` over an e2e tsconfig, or widen coverage). (Orchestrator-verified;
+`SPRINT-127.md:629–631`)
+
+**FU-C — a demo-seed rerun is not write-free for REJECTED months.** `REJECTED` is a legitimate `/send`
+source (§3.2), so a reseed rerun re-sends and re-rejects those ~127 periods: final status and counts are
+identical, but one extra event pair is emitted per rejected month per rerun. This is correct product
+behaviour, not a bug — but a genuinely write-free rerun would need a status probe before re-sending.
+**Action**: gate the rerun's re-send on a status probe if write-free idempotency is wanted. (§ TASK-12701b,
+`SPRINT-127.md:679–682`)
+
+**FU-D — carried ruled holes (deferrals, not settled rulings).** Both are recorded under "Known-accepted
+holes" but carry forward as real deferred work:
+- **RES-002** — sibling read endpoints still disclose a rejected month's figures (ruled **R5**). The R1
+  visibility predicate made the figures un-displayed, not unreadable; closing the sibling read endpoints
+  was out of S127 scope. (`SPRINT-127.md:299,563`)
+- **`/api/time-entries` post-send drift** — the endpoint has no approval-status check (§4 carried), with
+  no pin or owner yet assigned. (`SPRINT-127.md:565`)
