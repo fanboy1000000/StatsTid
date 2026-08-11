@@ -53,6 +53,8 @@ public static class BalanceEndpoints
             IEventStore eventStore,
             OrgScopeValidator scopeValidator,
             IEmploymentProfileResolver profileResolver,
+            // S128 / TASK-12804 (RES-002) — period resolution for the leader-tier month gate.
+            ApprovalPeriodRepository approvalRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -82,6 +84,23 @@ public static class BalanceEndpoints
             var daysInMonth = DateTime.DaysInMonth(year, month);
             var monthStart = new DateOnly(year, month, 1);
             var monthEnd = new DateOnly(year, month, daysInMonth);
+
+            // ── S128 / TASK-12804 (RES-002) — THE LEADER MONTH GATE on this sibling read ────────
+            // The manager-visibility rule (a manager sees NOTHING of a month the employee has not
+            // sent — S124/TASK-12402; REJECTED withheld too since S127/R1) now covers this read:
+            // normHoursActual / overtimeHours / flex are recomputed from the same in-progress
+            // registrations the Teamoversigt row withholds. S128 rulings: R1 TIERED — self and
+            // HR-or-above (the corrective tier) are exempt, decided by the shared ApprovalReadTier;
+            // R5 NARROW-ONLY — the population admitted above (self OR org-scope; deliberately NO
+            // designated-edge branch on this endpoint, and this gate must NOT add one) is
+            // untouched, the gate only SUBTRACTS within it; R6 = 403 via the shared Skema-shape
+            // construction site. Fail-closed: no period row ⇒ withheld.
+            if (await ApprovalReadTier.IsLeaderTierReadAsync(scopeValidator, actor, employeeId, ct))
+            {
+                var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
+                if (!ApprovalVisibility.IsSubmittedToManager(period?.Status))
+                    return ApprovalReadTier.MonthNotSubmittedForbidden();
+            }
 
             // S34 / TASK-3410 — ADR-023 D2 binding cutover for agreement_code on past-period
             // queries. Source the month-effective agreement_code from the dated repository
@@ -419,7 +438,8 @@ public static class BalanceEndpoints
                         CompensationModel: overtimeBalance.CompensationModel)
                     : null));
         }).RequireAuthorization("EmployeeOrAbove")
-        .Produces<BalanceSummaryResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
+        .Produces<BalanceSummaryResponse>(StatusCodes.Status200OK) // S120 / TASK-12000
+        .Produces(StatusCodes.Status403Forbidden); // S128 / TASK-12804 — the leader-tier month gate
 
         // ── GET /api/balance/{employeeId}/series — per-month earned-to-date accrual curve ──
         //

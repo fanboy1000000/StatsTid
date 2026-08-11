@@ -189,55 +189,37 @@ public static class SkemaEndpoints
                 return Results.Json(new { error = "Access denied", reason = "Employee can only access own data" }, statusCode: 403);
 
             // S124 / TASK-12405 — true when the caller reached this read as a LEADER over someone
-            // else (see the tiers below). Self and HR-or-above are false: neither is month-gated.
+            // else. Self and HR-or-above are false: neither is month-gated.
             //
-            // NOTE the added `employeeId != actor.ActorId` on the branch below means a non-Employee
-            // actor reading their OWN month now skips scope resolution outright. That is deliberate
-            // (it is the same self-exemption TASK-12404 documents for writes) and is a self-read only,
-            // never an escalation — but it IS a behavioural widening: previously a scope-less
-            // LocalLeader was refused their own timesheet by "No scopes assigned".
-            var leaderTierRead = false;
+            // S128 / TASK-12804 (RES-002) — the tier decision itself (self / HR-or-above corrective
+            // tier / leader tier, incl. the deliberate non-Employee self-read scope-resolution skip)
+            // moved VERBATIM into the shared ApprovalReadTier.IsLeaderTierReadAsync — the
+            // ApprovalVisibility / ApprovalPeriodSaveLock lift pattern — so the RES-002 sibling
+            // reads (allocation-breakdown, compliance /period, balance /summary) classify actors
+            // through the SAME member instead of hand-copying this block. Same checks, same order,
+            // same scopeValidator calls: the behavior diff here is EMPTY. The tier rationale
+            // (TASK-12403/12404 and the Step-7a Codex BLOCKER) lives on ApprovalReadTier.
+            var leaderTierRead = await ApprovalReadTier.IsLeaderTierReadAsync(
+                scopeValidator, actor, employeeId, ct);
 
-            if (actor.ActorRole != StatsTidRoles.Employee && employeeId != actor.ActorId)
+            if (leaderTierRead)
             {
-                // ── S124 / TASK-12403 + TASK-12405 — the month read is admitted in TIERS ────────
-                // TIER 1  HR-or-above covering scope  → unrestricted. HR/Admin may CORRECT an
-                //         employee's month (TASK-12404 write floor), and you cannot correct what you
-                //         cannot read, so the corrective tier is deliberately not month-gated.
-                // TIER 2  LEADER (a covering below-HR scope, OR the designated approver / unit-leader
-                //         edge) → allowed ONLY for a month the employee has SENT. Enforced further
-                //         down, once the period is resolved.
-                //
-                // The designated-edge leg is the S88-8801 B2 shape both sibling reads on this expander
-                // already carry (ComplianceEndpoints.cs:38-58; ApprovalEndpoints.cs:1192-1199): the
-                // Teamoversigt roster is the DESIGNATED-APPROVER set (ADR-027 D13 / ADR-038 D4), which
-                // admits cross-afdeling vikar + escalation approvers and peer unit-leaders whose
-                // ORG_ONLY role-scope does NOT name the employee's org. Without it the leader's grid
-                // 403s for exactly that population — a hole masked as a transient "could not load".
-                //
-                // WHY THE TIERS EXIST (Step-7a Codex BLOCKER): the edge branch alone was a P7 WIDENING
-                // of an ungated read. It handed an edge-only leader the FULL grid of a DRAFT — or
-                // entirely nonexistent — month, flatly contradicting the same sprint's owner ruling
-                // that "a manager cannot see anything before a month is submitted" (TASK-12402). A
-                // named deferral (RES-002) does not make a widening acceptable.
-                var hrFloored = await scopeValidator.ValidateEmployeeAccessAsync(
-                    actor, employeeId, StatsTidRoles.LocalHR, ct);
-                if (hrFloored.Allowed)
+                // The leader tier's ACCESS decision (unchanged; only the tier CLASSIFICATION moved):
+                // a covering below-HR scope admits, else the designated-approver / unit-leader edge —
+                // the S88-8801 B2 shape both sibling reads on this expander already carry
+                // (ComplianceEndpoints; ApprovalEndpoints allocation-breakdown): the Teamoversigt
+                // roster is the DESIGNATED-APPROVER set (ADR-027 D13 / ADR-038 D4), which admits
+                // cross-afdeling vikar + escalation approvers and peer unit-leaders whose ORG_ONLY
+                // role-scope does NOT name the employee's org. Without it the leader's grid 403s for
+                // exactly that population — a hole masked as a transient "could not load".
+                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
+                if (!allowed)
                 {
-                    leaderTierRead = false;
-                }
-                else
-                {
-                    var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
-                    if (!allowed)
-                    {
-                        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                        var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                            actor.ActorId!, employeeId, asOf: today, ct: ct);
-                        if (!hasEdgeOrUnit)
-                            return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-                    }
-                    leaderTierRead = true;
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                        actor.ActorId!, employeeId, asOf: today, ct: ct);
+                    if (!hasEdgeOrUnit)
+                        return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
                 }
             }
 
@@ -522,11 +504,9 @@ public static class SkemaEndpoints
                 var sentToLeader = ApprovalVisibility.IsSubmittedToManager(period?.Status);
                 if (!sentToLeader)
                 {
-                    return Results.Json(new
-                    {
-                        error = "Access denied",
-                        reason = "The month has not been submitted for approval",
-                    }, statusCode: 403);
+                    // S128 / TASK-12804 — the 403 body moved VERBATIM into the shared construction
+                    // site (one wire shape across this gate + the RES-002 sibling gates).
+                    return ApprovalReadTier.MonthNotSubmittedForbidden();
                 }
             }
 

@@ -289,6 +289,24 @@ describe('useCompliance / useCompensatoryRest — typed reads; INTEGER enums flo
     expect(result.current.result?.violations[0].severity).toBe(1)
   })
 
+  // S128 / TASK-12804 — the error arm (PAT-016 both-arms). The RES-002 month gate
+  // makes a leader-tier read of a non-submitted month a REACHABLE 403 on this route;
+  // the hook must degrade to its `error` state (no throw, result stays null) — the
+  // branch TeamOversigt renders as "Advarsler kunne ikke hentes".
+  it('period 403 (month-gate) arm: sets error, result stays null, no throw', async () => {
+    captureCalls(() => ({
+      status: 403,
+      body: {
+        error: 'Access denied',
+        reason: 'The month has not been submitted for approval',
+      },
+    }))
+    const { result } = renderHook(() => useCompliance('emp001', 2026, 3))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.result).toBeNull()
+    expect(result.current.error).toContain('The month has not been submitted for approval')
+  })
+
   it('compensatory-rest → GET /api/compliance/{employeeId}/compensatory-rest (exact legacy URL)', async () => {
     const row = {
       id: '22222222-2222-2222-2222-222222222222',

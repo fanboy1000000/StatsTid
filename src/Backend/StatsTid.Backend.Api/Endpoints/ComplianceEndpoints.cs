@@ -26,6 +26,8 @@ public static class ComplianceEndpoints
             IEmploymentProfileResolver profileResolver,
             OrgScopeValidator scopeValidator,
             DesignatedApproverAuthorizer designatedAuthorizer,
+            // S128 / TASK-12804 (RES-002) — period resolution for the leader-tier month gate.
+            ApprovalPeriodRepository approvalRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -65,6 +67,22 @@ public static class ComplianceEndpoints
             var daysInMonth = DateTime.DaysInMonth(year, month);
             var monthStart = new DateOnly(year, month, 1);
             var monthEnd = new DateOnly(year, month, daysInMonth);
+
+            // ── S128 / TASK-12804 (RES-002) — THE LEADER MONTH GATE on this sibling read ────────
+            // The manager-visibility rule (a manager sees NOTHING of a month the employee has not
+            // sent — S124/TASK-12402; REJECTED withheld too since S127/R1) now covers this read:
+            // its compliance verdicts are derived from the same in-progress registrations the rule
+            // withholds. S128 rulings: R1 TIERED — self and HR-or-above (the corrective tier) are
+            // exempt, decided by the shared ApprovalReadTier; R5 NARROW-ONLY — the population
+            // admitted above (self / org-scope / the S88-8801 B2 designated edge) is untouched, the
+            // gate only SUBTRACTS within it; R6 = 403 via the shared Skema-shape construction site.
+            // Fail-closed: no period row ⇒ withheld.
+            if (await ApprovalReadTier.IsLeaderTierReadAsync(scopeValidator, actor, employeeId, ct))
+            {
+                var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
+                if (!ApprovalVisibility.IsSubmittedToManager(period?.Status))
+                    return ApprovalReadTier.MonthNotSubmittedForbidden();
+            }
 
             // Fetch time entries from projection (sync-in-tx with the POST that wrote them — read-your-write per ADR-018 D12)
             var timeEntryRows = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, monthStart, monthEnd, ct);
@@ -133,7 +151,8 @@ public static class ComplianceEndpoints
         }).RequireAuthorization("EmployeeOrAbove")
         // S120 / TASK-12000 — the NAMED SharedKernel model IS the wire shape (the handler
         // passes the rule-engine result through verbatim; PAT-012 named-model rule).
-        .Produces<ComplianceCheckResult>(StatusCodes.Status200OK);
+        .Produces<ComplianceCheckResult>(StatusCodes.Status200OK)
+        .Produces(StatusCodes.Status403Forbidden); // S128 / TASK-12804 — the leader-tier month gate
 
         // ── GET /api/compliance/{employeeId}/compensatory-rest — Get compensatory rest entries ──
         app.MapGet("/api/compliance/{employeeId}/compensatory-rest", async (

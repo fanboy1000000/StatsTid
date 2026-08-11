@@ -22,20 +22,17 @@ namespace StatsTid.Tests.Regression.Approval;
 /// (<c>GET /api/skema/{id}/month</c> 403s for a REJECTED month). Those are proven by
 /// <see cref="RejectedMonth_WithheldAtTeamOverviewAndSkemaLeaderGrid"/>.</para>
 ///
-/// <para><b>Ruling R5 (the KNOWN, ACCEPTED hole — deliberately NOT closed here, RES-002 follow-up):</b>
-/// the sibling READ endpoints — allocation-breakdown and the compliance detail — authorize the SAME
-/// designated-approver population (<c>IsEffectiveApproverOrUnitLeaderAsync</c>, the identical predicate
-/// the team-overview roster filters through, <c>ApprovalEndpoints.cs</c> allocation-breakdown auth /
-/// <c>ComplianceEndpoints.cs</c> the S88-8801 B2 edge OR-branch) and then read the projections with
-/// <b>NO period-status gate</b>. A manager who calls them directly therefore still sees a rejected
-/// month's current figures. <see cref="RejectedMonth_StillDisclosedByAllocationBreakdown_R5Gap"/>
-/// pins that as intended-and-open by asserting the figures come back <b>non-zero and recognizable</b>
-/// (not merely a non-403 — a 200 that returned zeros would pass while proving nothing, per RES-002).
-/// The disclosure figure-proof is anchored on allocation-breakdown, which is self-contained (it reads
-/// <c>work_time_projection</c> / <c>time_entries_projection</c> directly with no rule-engine round-trip
-/// and no period-status gate) — the compliance <c>/period</c> detail discloses on the identical auth
-/// basis but round-trips the rule-engine service, so it is documented here rather than figure-asserted
-/// to keep the pin deterministic.</para>
+/// <para><b>The former R5 hole — CLOSED by S128 / TASK-12804 (the RES-002 slice):</b> the sibling
+/// READ endpoints — allocation-breakdown, the compliance detail, and the balance summary — authorize
+/// their existing populations unchanged, but a LEADER-tier caller is now month-gated through the
+/// SAME <c>ApprovalVisibility.IsSubmittedToManager</c> predicate the two display surfaces use
+/// (tier decided by the shared <c>ApprovalReadTier</c>; 403 per S128 ruling R6). This class's second
+/// pin therefore FLIPPED: <see cref="RejectedMonth_WithheldByAllocationBreakdown_RES002Closed"/> —
+/// the direct successor of the retired <c>RejectedMonth_StillDisclosedByAllocationBreakdown_R5Gap</c>,
+/// which pinned the hole OPEN by asserting the same call returned 200 with the sentinel figures —
+/// now proves the SAME leader on the SAME rejected month with the SAME seeded sentinels gets 403 and
+/// no figures. The sentinels stay seeded so the pin is non-vacuous: were the gate removed, the old
+/// 200-with-recognizable-figures disclosure would come straight back.</para>
 ///
 /// <para>Topology mirrors <see cref="TeamOverviewAggregateTests"/>: an isolated <c>ac13_*</c> employee
 /// + designated leader on the baseline STY02 Organisation, the PRIMARY edge granting act authority.
@@ -129,32 +126,30 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  R5 — the sibling reads STILL disclose (the accepted, RES-002-tracked hole)
+    //  S128 / TASK-12804 — the sibling read now WITHHOLDS too (the R5 hole, closed)
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>The R5 gap, pinned so it cannot be mistaken for closed: allocation-breakdown authorizes
-    /// the SAME designated-approver population and reads the projections with no period-status gate, so
-    /// the leader still sees the rejected month's figures. Asserted by RECOGNIZABLE NON-ZERO SENTINELS
-    /// (worked / allocated / the allocations bar), not merely a non-403 — a 200 returning zeros would
-    /// pass while proving nothing (RES-002). The month is REJECTED and withheld at the two display
-    /// surfaces above, yet these exact figures come straight back here.</summary>
+    /// <summary><b>The marquee RES-002 flip</b> — successor of the retired
+    /// <c>RejectedMonth_StillDisclosedByAllocationBreakdown_R5Gap</c>, which pinned the hole OPEN
+    /// (this exact call returned 200 + the 6.5/6.5 sentinels while both display surfaces withheld).
+    /// The same designated leader on the same REJECTED month is now 403'd by the leader-tier month
+    /// gate (shared ApprovalReadTier tier + ApprovalVisibility predicate; S128 rulings R1/R6). The
+    /// sentinel figures REMAIN SEEDED so this is non-vacuous: remove the gate in
+    /// ApprovalEndpoints' allocation-breakdown handler and the old recognizable-figures disclosure
+    /// returns, turning this red. The body must carry no figures — only the denial envelope.</summary>
     [Fact]
-    public async Task RejectedMonth_StillDisclosedByAllocationBreakdown_R5Gap()
+    public async Task RejectedMonth_WithheldByAllocationBreakdown_RES002Closed()
     {
         using var mgrClient = LeaderClient(Mgr, TreeRootSty02);
 
         var rsp = await mgrClient.GetAsync($"/api/approval/{Emp}/allocation-breakdown?year=2026&month=5");
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode); // NOT 403 — same population, no status gate
-        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode); // was 200 pre-S128 — the R5 hole
 
-        // The sentinel figures the rejected month's projections carry — disclosed verbatim.
-        Assert.Equal(WorkedSentinel, body.GetProperty("worked").GetDecimal());
-        Assert.Equal(AllocSentinel, body.GetProperty("allocated").GetDecimal());
-
-        var allocations = body.GetProperty("allocations").EnumerateArray().ToList();
-        Assert.NotEmpty(allocations); // NOT an empty array — a real, non-zero disclosure
-        var bar = allocations.Single(a => a.GetProperty("taskId").GetString() == SentinelTask);
-        Assert.Equal(AllocSentinel, bar.GetProperty("hours").GetDecimal());
+        // Denial envelope only — none of the seeded sentinel figures leak in the body.
+        var body = await rsp.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("worked", body);
+        Assert.DoesNotContain("allocated", body);
+        Assert.DoesNotContain(SentinelTask, body);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════

@@ -1255,6 +1255,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Forbidden"
           }
         }
       }
@@ -3351,6 +3354,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Forbidden"
           }
         }
       }
@@ -3483,6 +3489,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Forbidden"
           }
         }
       }

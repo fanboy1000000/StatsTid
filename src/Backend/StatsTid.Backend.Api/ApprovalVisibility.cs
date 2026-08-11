@@ -39,13 +39,15 @@ namespace StatsTid.Backend.Api;
 /// decisionAt and rejectionReason are all still served, so the leader keeps WHY they rejected. The
 /// month becomes visible again the moment the employee re-sends it.</para>
 ///
-/// <para><b>NOT an access-control boundary (owner ruling R5).</b> This predicate governs the two
-/// DISPLAY surfaces named above and nothing else. A manager authorized for the same employee can
-/// still read the same underlying figures directly via <c>allocation-breakdown</c> and the compliance
-/// endpoints, neither of which has a period-status gate. <c>RES-002</c> records those plus the
-/// balance, raw-time-entry and absence siblings as unenforced; closing them is RES-002's open
-/// follow-up and was explicitly OUT of S127's scope. Do not cite this member as evidence that a
-/// rejected month's figures are unreachable — it makes them un-DISPLAYED, not unreadable.</para>
+/// <para><b>NOT an access-control boundary on its own (owner ruling R5).</b> This predicate decides
+/// only WHETHER a month was sent; WHO it is withheld from is the sibling tier decision
+/// (<see cref="ApprovalReadTier"/>). <b>S128 / TASK-12804 (the RES-002 slice)</b> extended
+/// enforcement beyond the two display surfaces to the three year+month sibling READS —
+/// <c>allocation-breakdown</c>, <c>compliance /period</c> and <c>balance /summary</c> — each gating
+/// its leader-tier callers through this member (403, the Skema shape). <c>RES-002</c> still records
+/// the raw-time-entry and absence siblings (and the non-month-keyed reads) as unenforced; closing
+/// those remains the open follow-up. Do not cite this member as evidence that a rejected month's
+/// figures are unreachable through THOSE remaining routes.</para>
 /// </summary>
 internal static class ApprovalVisibility
 {

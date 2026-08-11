@@ -263,6 +263,42 @@ dispatch-ready.**
 
 ## Tasks Completed
 
+### TASK-12804 — FU-D2: the RES-002 slice ✅ 2026-08-11 · **owns AC-5 (gates live; regression proof CI-pending)** · Orchestrator-reverified
+**Agent**: Security (main tree) + Orchestrator checkpoint. **Backend**: NEW `ApprovalReadTier.cs` —
+the extracted tiering helper (third instance of the lift pattern beside `ApprovalVisibility` /
+`ApprovalPeriodSaveLock`): `IsLeaderTierReadAsync` ((Employee || self) short-circuit → the
+HR-floored `ValidateEmployeeAccessAsync` → `!Allowed` = leader tier) +
+`MonthNotSubmittedForbidden` — THE single 403 construction site, the S124 Skema month-GET wire
+shape verbatim. SkemaEndpoints converted, **behavior-empty** (identical validator/authorizer call
+sequence in every actor shape; the unmodified `SkemaMonth_*` family pins it). The 3 gates land
+after each endpoint's EXISTING auth (R5: populations untouched — balance kept NO edge branch,
+terminated-leaver denials untouched), plain period read → `IsSubmittedToManager` → shared 403 (R6),
+`.Produces(403)` ×3: `ApprovalEndpoints` allocation-breakdown, `ComplianceEndpoints` period,
+`BalanceEndpoints` summary.
+**Census — zero flips outside the declared 6.** Marquee: `_R5Gap` rewritten →
+`RejectedMonth_WithheldByAllocationBreakdown_RES002Closed` (403 + sentinels seeded + body carries
+no figures). The S116 flip fixed by seeding a SUBMITTED period via SQL — deliberate: SUBMITTED is
+un-producible by any route since S127 (it is a gate precondition, not an asserted state) and e3's
+NORMAL row would fail /send's allocation gate. The 4 AllocationBreakdownEndpointTests
+auth-reachability flips fixed the same way. The agent's own sweep cleared every other test touching
+the 3 routes (GlobalAdmin/self/SUBMITTED-seeded/denial-arm/401 — enumerated in its report).
+**Tests**: NEW `SiblingReadMonthGateTests.cs` (14): per endpoint leader-403 on REJECTED AND no-row
+(fail-closed), self/HR/submitted-leader/submitted-vikar 200 arms, zero-widening pins. The 403
+asserter matches the reason text verbatim so an auth-403 cannot masquerade as the month gate.
+**Posture: WRITTEN-BUT-NOT-EXECUTED (no docker)** — discovery proven, falsification documented
+per-mutant (gate-delete, REJECTED re-admit, over-gate-self/HR, 403-shape drift). CI is the proof.
+Unit 868/868 (Orchestrator re-ran); build 0 errors, 0 new warnings (the agent restructured its
+cleanup SQL to keep the test project at its CA2100 baseline).
+**Orchestrator checkpoint**: openapi regenerated — exactly the three 403s; `gen:api` (+21).
+**PAT-016 both-arms closed at the checkpoint**: both hooks already had live error branches rendered
+by TeamOversigt ("Kunne ikke hente fordeling" / "Advarsler kunne ikke hentes") but only happy-path
+vitest — added the 403-arm tests to `approvalTypedWire.test.ts` (useAllocationBreakdown) and
+`employeeTypedWire.test.ts` (useCompliance): error state set, data/result stays null, no throw.
+vitest 733 → **735**. (`balance/summary`'s consumer is the employee's own BalanceSummary — self is
+exempt, so no leader-facing consumer exists to test; noted, not actioned.)
+**RES-002's enforcement status changes from "surface-only" to "3 of 12 reads gated"** — the KB
+entry update is TASK-12805(a).
+
 ### TASK-12803 — FU-D1: the post-send write guard ✅ 2026-08-11 · **owns AC-4 (guard live; regression proof CI-pending)** · Orchestrator-reverified
 **Agent**: Backend (main tree) + Orchestrator checkpoint. **Backend files**: NEW
 `ApprovalPeriodSaveLock.cs` — the lifted shared pair (`IsPeriodLockedForSave` +

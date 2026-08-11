@@ -1154,6 +1154,10 @@ public static class ApprovalEndpoints
             [FromQuery] int month,
             DesignatedApproverAuthorizer designatedAuthorizer,
             DbConnectionFactory connectionFactory,
+            // S128 / TASK-12804 (RES-002) — the leader-tier month gate's two collaborators: the
+            // tier classification (ApprovalReadTier) and the period resolution for this month.
+            OrgScopeValidator scopeValidator,
+            ApprovalPeriodRepository approvalRepo,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -1177,6 +1181,23 @@ public static class ApprovalEndpoints
 
             var monthStart = new DateOnly(year, month, 1);
             var monthEnd = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+
+            // ── S128 / TASK-12804 (RES-002) — THE LEADER MONTH GATE on this sibling read ────────
+            // The manager-visibility rule (a manager sees NOTHING of a month the employee has not
+            // sent — S124/TASK-12402, re-affirmed S127/R1 for REJECTED) was enforced at the two
+            // display surfaces only; this endpoint served the same figures to the same leader-tier
+            // actors ungated (the R5 hole ApprovalVisibility's remarks documented as open). Closed
+            // here per S128 owner rulings: R1 TIERED (self / HR-or-above exempt; the shared
+            // ApprovalReadTier classification — self cannot actually reach this population, which
+            // has no self branch), R5 NARROW-ONLY (the edge-only population above is untouched;
+            // this gate only SUBTRACTS within it), R6 = 403 (the Skema month-GET precedent shape,
+            // one shared construction site). Fail-closed: no period row ⇒ withheld.
+            if (await ApprovalReadTier.IsLeaderTierReadAsync(scopeValidator, actor, employeeId, ct))
+            {
+                var period = await approvalRepo.GetByEmployeeAndPeriodAsync(employeeId, monthStart, monthEnd, ct);
+                if (!ApprovalVisibility.IsSubmittedToManager(period?.Status))
+                    return ApprovalReadTier.MonthNotSubmittedForbidden();
+            }
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
@@ -1288,7 +1309,8 @@ public static class ApprovalEndpoints
                 OverAllocated: Math.Round(overAllocated, 2),
                 HasAllocationImbalance: hasAllocationImbalance));
         }).RequireAuthorization("LeaderOrAbove")
-        .Produces<AllocationBreakdownResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
+        .Produces<AllocationBreakdownResponse>(StatusCodes.Status200OK) // S116 / TASK-11600
+        .Produces(StatusCodes.Status403Forbidden); // S128 / TASK-12804 — the leader-tier month gate
 
         // ── Get Employee Periods ──
 

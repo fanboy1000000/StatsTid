@@ -167,6 +167,28 @@ describe('useAllocationBreakdown — typed read', () => {
     expect(calls[0].url).toBe('/api/approval/EMP001/allocation-breakdown?year=2026&month=7')
     expect(result.current.data).toEqual(breakdown)
   })
+
+  // S128 / TASK-12804 — the error arm (PAT-016 both-arms). The RES-002 month gate
+  // makes a leader-tier read of a non-submitted month a REACHABLE 403 on this route;
+  // the hook must degrade to its `error` state (no throw, data stays null) — the
+  // branch TeamOversigt renders as "Kunne ikke hente fordeling".
+  it('403 (month-gate) arm: sets error, data stays null, no throw', async () => {
+    const gateBody = {
+      error: 'Access denied',
+      reason: 'The month has not been submitted for approval',
+    }
+    mockFetch.mockImplementation(async () => ({
+      ok: false,
+      status: 403,
+      headers: new Headers(),
+      json: async () => gateBody,
+      text: async () => JSON.stringify(gateBody),
+    }))
+    const { result } = renderHook(() => useAllocationBreakdown('EMP001', 2026, 7))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.data).toBeNull()
+    expect(result.current.error).toContain('The month has not been submitted for approval')
+  })
 })
 
 // ── the delegate trio (useDelegation) ────────────────────────────────────────

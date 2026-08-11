@@ -1409,6 +1409,13 @@ export interface paths {
                         "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.AllocationBreakdownResponse"];
                     };
                 };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         put?: never;
@@ -3402,6 +3409,13 @@ export interface paths {
                         "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.BalanceSummaryResponse"];
                     };
                 };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
             };
         };
         put?: never;
@@ -3520,6 +3534,13 @@ export interface paths {
                     content: {
                         "application/json": components["schemas"]["StatsTid.SharedKernel.Models.ComplianceCheckResult"];
                     };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };

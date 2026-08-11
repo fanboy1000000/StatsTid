@@ -474,6 +474,10 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
     public async Task Breakdown_DesignatedApprover_CrossAfdeling_Is200()
     {
         await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 7.4m);
+        // S128 / TASK-12804 — the breakdown is now leader-tier month-gated (RES-002): a designated
+        // approver reaches the figures only for a SENT month, so the auth-reachability arm this
+        // test pins needs a SUBMITTED period seeded (previously no period row was needed).
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
         // Mgr is Emp's designated approver (same STY02 Organisation; the edge grants) → must reach 200.
         var b = await GetBreakdownAsync(Mgr, Emp, 2026, 5);
         Assert.Equal(7.4m, b.GetProperty("worked").GetDecimal());
@@ -488,6 +492,9 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
     {
         await CreateVikarAsync(AwayMgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
         await InsertWorkTimeAsync(EmpVik, new DateOnly(2026, 5, 4), 7.4m);
+        // S128 / TASK-12804 — the vikar approver is LEADER tier, so the month-gate requires a SENT
+        // month for this auth-reachability pin (previously no period row was needed).
+        await InsertPeriodAsync(EmpVik, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
 
         var b = await GetBreakdownAsync(Vik, EmpVik, 2026, 5);
         Assert.Equal(7.4m, b.GetProperty("worked").GetDecimal());
@@ -648,6 +655,11 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
     public async Task Compliance_CrossAfdelingVikarApprover_PassesAuth_NotForbidden()
     {
         await CreateVikarAsync(AwayMgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
+        // S128 / TASK-12804 — the compliance read is now leader-tier month-gated (RES-002): without
+        // a SENT month the vikar approver's 403 would come from the month gate, masking the B2
+        // auth-branch reachability this test pins. Seed SUBMITTED so the gate passes and the
+        // NOT-403 verdict again discriminates the AUTH branch (503 = rule engine unreachable here).
+        await InsertPeriodAsync(EmpVik, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
         var rsp = await GetComplianceRawAsync(Vik, EmpVik, 2026, 5);
         Assert.NotEqual(HttpStatusCode.Forbidden, rsp.StatusCode); // the B2 OR-branch admits the designated approver
     }
@@ -659,6 +671,9 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Compliance_CrossAfdelingEscalationApprover_PassesAuth_NotForbidden()
     {
+        // S128 / TASK-12804 — same as the vikar case above: seed a SENT month so the leader-tier
+        // month gate passes and NOT-403 again discriminates the escalation AUTH branch.
+        await InsertPeriodAsync(EmpIm, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
         var rsp = await GetComplianceRawAsync(Mgr, EmpIm, 2026, 5);
         Assert.NotEqual(HttpStatusCode.Forbidden, rsp.StatusCode);
     }

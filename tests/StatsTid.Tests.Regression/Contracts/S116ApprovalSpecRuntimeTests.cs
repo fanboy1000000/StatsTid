@@ -319,6 +319,30 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     [Fact]
     public async Task AllocationBreakdown_Get200_EnvelopeAndNestedAllocationsElementMatchRuntime()
     {
+        // S128 / TASK-12804 — the read is now leader-tier month-gated (RES-002): a LocalLeader may
+        // fetch the breakdown only for a month the employee has SENT, and e3 deliberately has NO
+        // approval_periods row (it is the TeamOverview zero-period DRAFT fixture), which the
+        // fail-closed gate 403s. Seed a SUBMITTED row for exactly this month so the test keeps
+        // verifying what it always verified — the 200 contract envelope. Direct SQL (not /send):
+        // SUBMITTED is un-producible by any route since S127/TASK-12712, this status is an auth-gate
+        // precondition rather than an asserted period state, and e3's seeded NORMAL projection row
+        // would fail /send's allocation gate anyway.
+        await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                """
+                INSERT INTO approval_periods
+                    (period_id, employee_id, org_id, period_start, period_end, period_type, status,
+                     agreement_code, ok_version, submitted_at, submitted_by)
+                VALUES
+                    (gen_random_uuid(), 's116a_e3', 'S116A01', '2026-03-01', '2026-03-31', 'MONTHLY',
+                     'SUBMITTED', 'HK', 'OK24', NOW(), 's116a_e3')
+                ON CONFLICT DO NOTHING
+                """, conn);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
         using var mgr = CreateActorClient(ManagerId, StatsTidRoles.LocalLeader, RosterOrg,
             new RoleScope(StatsTidRoles.LocalLeader, RosterOrg, "ORG_ONLY"));
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
