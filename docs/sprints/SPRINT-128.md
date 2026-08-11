@@ -263,4 +263,20 @@ dispatch-ready.**
 
 ## Tasks Completed
 
-*(none yet)*
+### TASK-12800 — FU-A: the `d7528d0` e2e-tests verdict ✅ 2026-08-11 (Orchestrator) · **AC-16 (S127) PROVEN**
+**GREEN, and verified genuinely exercised — not assumed from the workflow badge.** Run
+`31412597781` (StatsTid CI, master push 2026-08-10T17:09Z), job `93533977106` "E2E tests
+(Playwright against the docker-compose stack)": success. The job's 2m52s wall-time triggered a
+FAIL-006-class suspicion (green-but-didn't-run), so the job log was pulled and read rather than
+trusted: **`Running 7 tests using 2 workers` → `1 flaky, 6 passed (31.9s)`**, and the S127 spec ran
+and passed on its FIRST attempt, no retry:
+`✓ e2e/approval.spec.ts:301 › emp001 registers and allocates a whole month in Skema, sends it, and
+mgr03 rejects then approves it (20.6s)` — against the fresh-built compose stack (`down -v` teardown
+confirmed in the same log). AC-16's "unproven until CI runs it" is discharged; S127's headline E2E
+is real.
+**Incidental observation, recorded not actioned**: the lazy-routes spec flaked on first attempt
+(`LAZY ROUTES: 19 checked | failures: 11` immediately after webServer boot; retry #1 clean,
+`failures: 0`) — absorbed by the owner-ruled `retries:2`. Same surface as the S125/W4 lazy-route
+error-boundary history; if the flake recurs across runs it deserves a look at vite warm-up vs the
+spec's post-boot timing, but one absorbed flake is not a finding.
+**Verdict for sequencing**: no RED → TASK-12801/12802 dispatch as planned, no re-scope.

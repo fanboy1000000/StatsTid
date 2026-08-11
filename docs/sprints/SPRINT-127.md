@@ -1026,7 +1026,10 @@ them from `C:\StatsTid\` directly. Future phase prompts should state that path e
 > them as one work item. FU-C is a demo-seed idempotency refinement. FU-D carries the two ruled holes
 > that are deferrals, not settled rulings.
 
-**FU-A — AC-16 (the send E2E) is unproven until CI runs it.** `frontend/e2e/approval.spec.ts` was rebuilt
+**FU-A — AC-16 (the send E2E) is unproven until CI runs it.** ✅ **DISCHARGED S128 / TASK-12800
+(2026-08-11)**: CI run `31412597781` job `93533977106` GREEN; the spec verified executed via the job
+log (`1 flaky [lazy-routes, retry-green], 6 passed`; the approval journey passed first-attempt in
+20.6s). AC-16 proven. `frontend/e2e/approval.spec.ts` was rebuilt
 (161 → 474 lines, one honest end-to-end over a month's real Skema registration + both send adapters + both
 manager verbs, asserting R1/R7 at the rejection moment) but was **written, not executed**: the running
 stack predates the sprint (`/submit` still 401s, `/send` 405s, `STY01` has 0 projects on the old volume),
