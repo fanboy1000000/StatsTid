@@ -655,6 +655,16 @@ public sealed class SendConcurrencyTests : SendConcurrencyTestBase
         var entryDay = new DateOnly(2026, 3, 12);
         var (classId, objId) = await AdvisoryKeyPartsAsync(emp);
 
+        // S128 Step-7a (Codex WARNING absorption): TOTAL-count snapshots, taken after all seeding
+        // and before either racer launches — the same unfiltered form the plain
+        // TimeEntryPeriodLockTests use. The send's own events land on approval/period streams, NOT
+        // the employee-{id} outbox stream the time-entry POST writes, so BOTH totals must come out
+        // of the race unchanged: any delta is a side effect this arm previously could not see.
+        var projRowsBefore = await ScalarLongAsync(
+            "SELECT COUNT(*) FROM time_entries_projection WHERE employee_id=@e", ("e", emp));
+        var employeeStreamOutboxBefore = await ScalarLongAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id=@s", ("s", $"employee-{emp}"));
+
         await using var blockerConn = Fx.Db.Create();
         await blockerConn.OpenAsync();
         await using var blockerTx = await blockerConn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
@@ -689,6 +699,15 @@ public sealed class SendConcurrencyTests : SendConcurrencyTestBase
 
         // THE invariant: no time entry committed into the sent month.
         Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, entryDay));
+
+        // S128 Step-7a absorption — the TOTAL forms (unfiltered by date/type): the refused POST
+        // left the employee's projection AND employee-stream outbox exactly as seeded. The send's
+        // commit does not touch either (its events ride the approval streams), so ANY delta here
+        // is a leak the day-scoped count above would have missed.
+        Assert.Equal(projRowsBefore, await ScalarLongAsync(
+            "SELECT COUNT(*) FROM time_entries_projection WHERE employee_id=@e", ("e", emp)));
+        Assert.Equal(employeeStreamOutboxBefore, await ScalarLongAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id=@s", ("s", $"employee-{emp}")));
 
         var periodId = await FindPeriodIdAsync(emp, MarchStart, MarchEnd);
         Assert.NotNull(periodId);

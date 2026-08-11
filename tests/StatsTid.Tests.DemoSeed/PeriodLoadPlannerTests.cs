@@ -195,4 +195,55 @@ public sealed class PeriodLoadPlannerTests
         Assert.Equal(0, totalSteps); // the re-run is WRITE-FREE for the period stage
         Assert.Equal(rows.Count(r => r.PeriodOutcome != "NONE"), alreadyInTarget); // the AC-3(b) counter identity
     }
+
+    // ── The EXHAUSTIVE mismatch matrix (S128 Step-7a Codex WARNING absorption) ──
+    //
+    // The sections above pinned the four load-bearing rows of the decision table (at-target,
+    // fresh-load, EMPLOYEE_APPROVED-resume, NONE). The remaining outcome × observed-status
+    // combinations all fall to the "full sequence" arm, and Step 7a flagged that leaving them
+    // implicit lets future planner drift escape this suite: a sendable source with a different
+    // target legitimately re-sends; a locked APPROVED row whose manifest target drifted re-sends
+    // into the loader's 409 PeriodsAlreadySent safety net — byte-for-byte the pre-S128 behaviour.
+
+    [Theory]
+    // target EMPLOYEE_APPROVED (incl. the legacy "SUBMITTED" spelling) vs every non-target state:
+    [InlineData("EMPLOYEE_APPROVED", "DRAFT", new[] { PeriodLoadPlanner.PeriodStep.Send })]
+    [InlineData("EMPLOYEE_APPROVED", "SUBMITTED", new[] { PeriodLoadPlanner.PeriodStep.Send })]
+    [InlineData("EMPLOYEE_APPROVED", "REJECTED", new[] { PeriodLoadPlanner.PeriodStep.Send })]
+    [InlineData("EMPLOYEE_APPROVED", "APPROVED", new[] { PeriodLoadPlanner.PeriodStep.Send })] // locked drift → 409 net
+    [InlineData("SUBMITTED", "DRAFT", new[] { PeriodLoadPlanner.PeriodStep.Send })]
+    [InlineData("SUBMITTED", "SUBMITTED", new[] { PeriodLoadPlanner.PeriodStep.Send })] // legacy outcome ≠ legacy status
+    [InlineData("SUBMITTED", "REJECTED", new[] { PeriodLoadPlanner.PeriodStep.Send })]
+    [InlineData("SUBMITTED", "APPROVED", new[] { PeriodLoadPlanner.PeriodStep.Send })]
+    // target REJECTED vs the sendable non-target sources:
+    [InlineData("REJECTED", "DRAFT", new[] { PeriodLoadPlanner.PeriodStep.Send, PeriodLoadPlanner.PeriodStep.Reject })]
+    [InlineData("REJECTED", "SUBMITTED", new[] { PeriodLoadPlanner.PeriodStep.Send, PeriodLoadPlanner.PeriodStep.Reject })]
+    [InlineData("REJECTED", "APPROVED", new[] { PeriodLoadPlanner.PeriodStep.Send, PeriodLoadPlanner.PeriodStep.Reject })] // locked drift
+    // target APPROVED vs the sendable non-target sources:
+    [InlineData("APPROVED", "DRAFT", new[] { PeriodLoadPlanner.PeriodStep.Send, PeriodLoadPlanner.PeriodStep.Approve })]
+    [InlineData("APPROVED", "SUBMITTED", new[] { PeriodLoadPlanner.PeriodStep.Send, PeriodLoadPlanner.PeriodStep.Approve })]
+    [InlineData("APPROVED", "REJECTED", new[] { PeriodLoadPlanner.PeriodStep.Send, PeriodLoadPlanner.PeriodStep.Approve })]
+    public void Mismatch_SendableOrDriftedState_PlansTheFullSequence(
+        string outcome, string observedStatus, PeriodLoadPlanner.PeriodStep[] expected)
+    {
+        var plan = PeriodLoadPlanner.PlanPeriodActions(Row(outcome), Observed(observedStatus));
+
+        Assert.Equal(expected, plan.Steps);
+        Assert.Equal(PeriodLoadPlanner.PeriodSkipReason.NotSkipped, plan.Skip);
+    }
+
+    [Theory]
+    // NONE stays inert against EVERY observed state, not only the seeded ones:
+    [InlineData("DRAFT")]
+    [InlineData("SUBMITTED")]
+    [InlineData("EMPLOYEE_APPROVED")]
+    [InlineData("APPROVED")]
+    [InlineData("REJECTED")]
+    public void NoneOutcome_IsInert_InEveryObservedState(string observedStatus)
+    {
+        var plan = PeriodLoadPlanner.PlanPeriodActions(Row("NONE"), Observed(observedStatus));
+
+        Assert.Empty(plan.Steps);
+        Assert.Equal(PeriodLoadPlanner.PeriodSkipReason.NoneOutcome, plan.Skip);
+    }
 }
