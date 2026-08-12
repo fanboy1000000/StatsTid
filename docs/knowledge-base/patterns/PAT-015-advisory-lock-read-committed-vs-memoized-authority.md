@@ -51,7 +51,10 @@ The fix is never to weaken the authorizer's guard; it is to resolve authority pe
 - `ReportingLineRepository.cs:216-223`
 - `SettlementCloseService.cs:363-367`
 - `ApprovalEndpoints.ExecuteSendAsync` (S127) and the reopen transaction
-- `TimeEndpoints.cs` — `POST /api/time-entries` (S127/TASK-12704; was on the bare overload)
+- `TimeEndpoints.cs` — `POST /api/time-entries` (S127/TASK-12704; was on the bare overload).
+  **S128/TASK-12803: now ALSO an in-lock re-read site** — the post-send guard reads the period via
+  the `(conn, tx)` overload between lock-acquire and the enqueue, the second instance of the
+  checklist below
 - `SkemaEndpoints.cs` — the month-save transaction (S127/TASK-12704; was on the bare overload)
 
 ## Checklist
@@ -74,9 +77,13 @@ The fix is never to weaken the authorizer's guard; it is to resolve authority pe
 - [ ] **Where a pre-transaction guard is retained as a fast path, the in-lock authoritative check shares
       ONE predicate and ONE response-construction site with it** — not a hand-copied literal bound by a
       comment. Two spellings of the same status set is a drift bug waiting for the next status to be
-      added. S127 did this with `IsPeriodLockedForSave` / `PeriodLockedForSaveConflict`, so "the two 409s
-      match" holds by construction rather than by inspection. Read-side precedent: S124/TASK-12405's
-      shared `ApprovalVisibility` member.
+      added. S127 minted `IsPeriodLockedForSave` / `PeriodLockedForSaveConflict` for this;
+      **S128/TASK-12803 lifted the pair into the shared `ApprovalPeriodSaveLock` class** when
+      `POST /api/time-entries` became the second asking endpoint (Skema asks twice — fast path +
+      in-lock; the time-entry POST asks once, in-lock only; all askings route through the one
+      class), so "the two 409s match" holds by construction rather than by inspection. Read-side
+      precedents: S124/TASK-12405's shared `ApprovalVisibility` member and S128/TASK-12804's
+      `ApprovalReadTier` (the tiering + the month-withholding 403's single construction site).
 
 ## Related
 

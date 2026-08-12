@@ -1,7 +1,55 @@
 # Sprint 128 — Post-send integrity: prove the send, stop the drift, gate the reads
 
-**Opened**: 2026-08-11 · **Status**: OPEN · **Base**: `d7528d0` (S127 merge)
+**Opened**: 2026-08-11 · **Closed**: 2026-08-12 · **Status**: COMPLETE · **Base**: `d7528d0` (S127 merge)
 **Refinement**: `.claude/refinements/REFINEMENT-s128-open.md` (rev 2, code-grounded, READY)
+**CI**: ✅ whole-workflow GREEN, run `31485462948` on `3af7291` (all 7 jobs; frontend-build green on
+re-run after one vitest flake — see Step 7a / Open follow-ups)
+
+## Test Validation (close — `sprint-test-validation`, CI-anchored)
+
+Regression/Smoke counts are read from the actual CI runs (the local `:5432` holds the owner's native
+demo DB — running the fixed-port regression suite against it would destroy shared state, the S127
+discipline). Unit/DemoSeed/Frontend run locally AND in CI, matching.
+
+| Suite | Previous (S127 · CI `31412597781`) | Current (S128 · CI `31485462948`) | Delta |
+|-------|-----------------------------------:|----------------------------------:|------:|
+| Unit | 868 | 868 | 0 |
+| Regression | 1498 | 1519 | **+21** (7 TimeEntryPeriodLock/concurrency + 14 SiblingReadMonthGate) |
+| Smoke | 6 | 6 | 0 |
+| DemoSeed | 94 | 141 | **+47** (28 planner + 19 Step-7a matrix) |
+| Frontend (vitest) | 730 | 735 | **+5** (3 TimeEntryForm + 2 hook 403-arms) |
+| **Total** | **3196** | **3269** | **+73** |
+
+Arithmetic check: 3196 + 73 = 3269 ✓. (The 6 census flips modified existing tests count-neutrally;
+the marquee rewrite replaced its predecessor 1:1.)
+
+## Step 7a — dual-lens close review (2026-08-11/12)
+
+Artifacts: `.claude/reviews/SPRINT-128-step7a-{codex,reviewer}.md`, both
+`reviewed-against-commit: bd40128`.
+
+**External (Codex): APPROVED-WITH-WARNINGS — 0B / 2W / 4N.** The 4 NOTEs independently confirmed
+race-correctness of the write guard, R1/R5 fidelity of the read gates, seeded-fixture integrity,
+and contract-regen consistency. **W1** (the race arm asserted only day-scoped counts) and **W2**
+(the planner decision table was not exhaustively pinned) were absorbed in `3af7291`
+(total-count brackets; +19 matrix tests, DemoSeed 122→141).
+
+**Internal (Reviewer): APPROVED-WITH-WARNINGS — 0B / 5W / 5N.** Verified clean independently:
+narrow-only on all 3 gates, single construction sites with zero residual references, the Skema
+refactor behavior-empty branch-by-branch, all 6 expected-RED flips fixed without weakening, an
+independent 18-file census confirming zero flips outside the declared 6, P2/P3/P5 intact, agent
+scopes respected. Absorbed at close: **W1** (stale range/counts + missing Step-7a record → this
+section + the 141 correction), **W2** (12804 log attribution corrected), **W3** (S120 spec≡runtime
+closers recorded as CI-proven), **W5** (PAT-015 updated with the lifted pair's new home + the
+second in-lock re-read site), **N1** (the marquee now asserts the R6 reason text — an auth-403 can
+no longer masquerade), **N2/N3** (RES-002 census arithmetic stated + the `overtime/governance`
+exclusion rationale recorded). **W4 deliberately NOT fixed in the close window** → Open follow-ups.
+N4/N5 recorded, no action.
+
+**Lens complementarity, again**: zero overlap between the two lenses' findings across the whole
+sprint (Step 0b and Step 7a both) — and Codex's cycle-2 verification caught two defects in my own
+cycle-1 absorptions. The dual-lens requirement is owner-mandated as of this sprint (see the pinned
+memory): a missing external lens is a HALT-AND-ASK, never a footnote.
 
 ## Sprint Goal
 
@@ -261,6 +309,43 @@ family; S34 precedent per `feedback_thrash_defer_real_world.md`). Cycle cap (2/2
 (2B/2W/1N absorbed; cycle-2 2B absorption defects fixed). R1–R6 owner-ratified. Plan is
 dispatch-ready.**
 
+## Open follow-ups
+
+> Consolidated at close for the next sprint's Step 0/0a promotion (the S126/S127 convention).
+
+**FU-A — the tier probe logs spurious "Access denied" warnings on the happy path** (Step-7a internal
+W4, deliberately not fixed in the close window). `ApprovalReadTier.IsLeaderTierReadAsync` uses
+`ValidateEmployeeAccessAsync(roleFloor: LocalHR)` purely as a *classification*; for a covering
+LocalLeader it falls through `OrgScopeValidator.Deny`, which `LogWarning`s "Access denied" — on a
+read that is then ALLOWED. Replicated from the S124 Skema month GET onto 3 more routes, so one
+Teamoversigt expander open can log up to 3 spurious denials, degrading the exact line a P7 audit
+keys on. **Action**: a non-logging classification path on `OrgScopeValidator` (or route the tier
+probe around `Deny`), then re-point the 4 call sites.
+
+**FU-B — the RES-002 9-read remainder** (7 endpoints without month parameters — contract changes or
+per-row joins). Scope recorded in the corrected KB census; R1/R5/R6 are ruled, so the remainder is
+mechanical-with-contracts, not design work. The reopen read-fork (R4) stays open alongside it.
+
+**FU-C — TASK-12802 arm (b) loader evidence still unobserved.** The counter + summary line are
+implemented; a genuine rerun-over-loaded-stack has not been executed (this machine cannot run the
+compose stack, and the native load stopped short — see FU-E). Evidence is one rerun away on any
+docker-capable machine.
+
+**FU-D — the `SkemaPage` 7203-pin vitest flake, first occurrence.** CI run `31485462948` cycle 1:
+`the panel's allocations span ALL SERVED projects…` failed to find "Alt fordelt ✓" (27.8s file time
+on the runner); green on re-run of the same commit, green 735/735 locally twice on identical code.
+One absorbed flake is not a finding (the TASK-12800 rule); a recurrence graduates it.
+
+**FU-E — environment facts of the S128 machine (a VDI), recorded so the next session doesn't
+re-derive them.** No container runtime and none possible without an IT ticket (the VDI host does not
+expose virtualization extensions — nested virtualization off); .NET SDK 8 vanished in a pool refresh
+(restored 8.0.423 via winget 2026-08-11); Python absent (the openapi sync/convention gates run
+CI-only from here). A native no-docker stack was stood up for UI testing (PostgreSQL 16 service +
+`dotnet run` backend-api + Vite): works for core flows, but the demo loader stopped at 117/375
+activity periods because skema saves 500 on the missing `rule-engine` host — starting
+`StatsTid.RuleEngine.Api` natively on `:5200` and setting `ServiceUrls__RuleEngine` is the two-step
+fix, then a loader rerun (which doubles as FU-C's evidence).
+
 ## Tasks Completed
 
 ### TASK-12804 — FU-D2: the RES-002 slice ✅ 2026-08-11 · **owns AC-5 (gates live; regression proof CI-pending)** · Orchestrator-reverified
@@ -282,9 +367,17 @@ un-producible by any route since S127 (it is a gate precondition, not an asserte
 NORMAL row would fail /send's allocation gate. The 4 AllocationBreakdownEndpointTests
 auth-reachability flips fixed the same way. The agent's own sweep cleared every other test touching
 the 3 routes (GlobalAdmin/self/SUBMITTED-seeded/denial-arm/401 — enumerated in its report).
-**Tests**: NEW `SiblingReadMonthGateTests.cs` (14): per endpoint leader-403 on REJECTED AND no-row
-(fail-closed), self/HR/submitted-leader/submitted-vikar 200 arms, zero-widening pins. The 403
-asserter matches the reason text verbatim so an auth-403 cannot masquerade as the month gate.
+**Tests** *(attribution corrected at Step-7a — internal W2)*: NEW `SiblingReadMonthGateTests.cs`
+(14 facts: 4 breakdown / 5 compliance / 5 balance — per endpoint leader-403 on REJECTED AND no-row
+fail-closed, plus self/HR/submitted-leader 200 arms). The **submitted-vikar arms** live in the
+re-seeded pre-existing `AllocationBreakdownEndpointTests` (not in the new file), and the
+**zero-widening pin** is BY the unmodified pre-existing forbidden-arm tests — as the new file's own
+doc comment states. The 403 asserter matches the reason text verbatim so an auth-403 cannot
+masquerade as the month gate.
+**PAT-012 closers (Step-7a internal W3, recorded)**: the S116 suite flip was fixed in this task;
+the `S120ComplianceSpecRuntimeTests` + `S120BalanceSpecRuntimeTests` re-verification the plan
+required was verified self-actor (no flip) and **CI-PROVEN in run `31485462948`'s green
+build-and-test** alongside the rest of the regression suite.
 **Posture: WRITTEN-BUT-NOT-EXECUTED (no docker)** — discovery proven, falsification documented
 per-mutant (gate-delete, REJECTED re-admit, over-gate-self/HR, 403-shape drift). CI is the proof.
 Unit 868/868 (Orchestrator re-ran); build 0 errors, 0 new warnings (the agent restructured its
@@ -341,6 +434,8 @@ driven steps, new `PeriodsAlreadyInTargetState` counter, 409 branch kept as the 
 `DemoVerifier.ExpectedPeriodStatus` now a delegating shim to the planner's single source;
 `Program.cs` summary prints `alreadyInTargetState=` (the arm-(b) evidence line). NEW
 `PeriodLoadPlannerTests.cs`: **94 → 122 (+28), all green, Orchestrator re-ran: 122/122.**
+*(Step-7a external W2 later added the exhaustive mismatch matrix: 122 → **141**, the close-table
+figure — internal W1 count correction.)*
 Planner semantics better than asked: the probe supplies the periodId, so partial states
 (observed `EMPLOYEE_APPROVED`, target `APPROVED`/`REJECTED`) plan only the remaining manager act —
 both endpoints verified to accept `EMPLOYEE_APPROVED` as source. Locked-`APPROVED` drift plans the

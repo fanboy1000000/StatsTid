@@ -150,6 +150,12 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
         Assert.DoesNotContain("worked", body);
         Assert.DoesNotContain("allocated", body);
         Assert.DoesNotContain(SentinelTask, body);
+
+        // Step-7a (internal N1): the 403 must be THE MONTH GATE's, not some auth 403 wearing its
+        // status code — the predecessor's `Assert.Equal(OK, …)` implicitly carried the
+        // auth-reachability guarantee this rewrite would otherwise drop. The reason text is the
+        // single R6 construction site (ApprovalReadTier.MonthNotSubmittedForbidden) verbatim.
+        Assert.Contains("The month has not been submitted for approval", body);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════

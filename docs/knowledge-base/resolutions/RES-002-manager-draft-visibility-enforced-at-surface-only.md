@@ -49,8 +49,14 @@ honest statement of today's posture:
 ## The read surface — CORRECTED CENSUS (S128/TASK-12805; the original 6-row census was understated)
 The S128 Step-0b investigation verified the true surface at **12 endpoints across 6 files** — the
 original table below omitted `flex-balance`, `balance/series`, `compliance/compensatory-rest`, and
-all three `overtime/{employeeId}/*` reads. Every open read authorizes through org-scope or
-`DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync` and applies **no
+all three `overtime/{employeeId}/*` reads. **Arithmetic, stated so the tables reconcile
+(Step-7a internal N2): 12 = the 3 gated in S128 + the 9-read remainder.** The Skema month GET
+appears in the gated table for completeness but sits OUTSIDE the 12-count — it was closed in S124,
+before this census existed. **One deliberate exclusion (Step-7a internal N3):**
+`GET /api/overtime/{employeeId}/governance` is month-keyed and same-population but is NOT counted —
+its response is a rule verdict over **caller-supplied** hour inputs, not the employee's stored
+figures, so there is nothing of the employee's to withhold. Every open read authorizes through
+org-scope or `DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync` and applies **no
 `approval_periods.status` filter**. Vikar / acting managers inherit reachability through the same
 predicates.
 
