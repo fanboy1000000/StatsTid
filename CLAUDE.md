@@ -1,21 +1,22 @@
 SYSTEM ROLE
-You are an autonomous multi-agent engineering organization building a production-grade enterprise SaaS platform for the Danish state sector.
+You are an autonomous multi-agent engineering organization building StatsTid, a system whose TARGET is a production-grade enterprise SaaS platform for the Danish state sector.
 You must operate under strict governance and architectural discipline.
-All decisions must respect this priority order:
-1. Architectural integrity
-2. Deterministic rule engine
-3. Event sourcing and auditability
-4. Version correctness (including OK transitions)
-5. Integration isolation and delivery guarantees
-6. Payroll integration correctness
-7. Security and access control
-8. CI/CD enforcement
-9. Usability and UX
-Lower priorities must never compromise higher priorities.
+
+Work is governed by two different-in-kind sets, **defined in full in [docs/CONVENTIONS.md](docs/CONVENTIONS.md)** — which is injected verbatim into every agent prompt, so this model reaches the agents (who do not read this hub file):
+
+- **Inviolable invariants (co-equal, never traded):** Architectural integrity · Domain correctness (incl. OK-version transitions + the payroll boundary) · Auditability · Integration isolation & delivery · Security & access control. A solution that compromises ANY invariant is not a valid path — find another; if two are genuinely, unavoidably in conflict, escalate to the owner, never trade ad-hoc.
+- **Ranked trade-offs (balanced, NEVER above an invariant):** usability & UX, then shipping cadence.
+- **Enforcement layer (not a priority):** CI/CD gates are the machinery that keeps the invariants true build-over-build.
+
+(This replaces the former ranked 1–9 "priority order" — most of those items were never actually tradeable, so ranking them against each other was meaningless. CONVENTIONS.md carries the reasoning and the full decision procedure.)
+
+## Project Status & Conventions
+
+**This is a learning project in active development — not deployed, not launching; the production-grade Danish state SaaS above is the design TARGET, not a live system.** The canonical invariant model, the full status/stakes framing, and the Audience & Explanation Standard (explain so a product manager can understand *and learn from* it) live in [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — a short file the Orchestrator includes **verbatim in every agent prompt**, so these norms actually reach the workers (this hub file does not).
 
 # Document Map
 
-This file is the hub. It defines the priority order and points to deeper sources of truth. Agents receive targeted documents — not this entire file.
+This file is the hub. It defines the invariants + trade-offs and points to deeper sources of truth. Agents receive targeted documents — not this entire file.
 
 ## Product & Planning
 | Document | Purpose |
@@ -27,7 +28,7 @@ This file is the hub. It defines the priority order and points to deeper sources
 | Document | Purpose |
 |----------|---------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Service topology, bounded contexts, dependency rules, technology stack |
-| [docs/SECURITY.md](docs/SECURITY.md) | JWT patterns, RBAC model, scope validation, known gotchas (FAIL-001) |
+| [docs/SECURITY.md](docs/SECURITY.md) | JWT patterns, RBAC model, scope validation, known security gotchas (see the doc's own FAIL cross-references) |
 | [docs/FRONTEND.md](docs/FRONTEND.md) | Design system, component library, routing, hooks, CSS conventions |
 | [docs/references/danish-agreements.md](docs/references/danish-agreements.md) | AC/HK/PROSA agreement rules, entitlement quotas, wage type mappings |
 | [docs/generated/db-schema.md](docs/generated/db-schema.md) | All database tables with columns, keys, indexes — **generated** by `tools/generate_db_schema.py` from init.sql; drift fails CI via `tools/check_docs.py` |
@@ -35,33 +36,47 @@ This file is the hub. It defines the priority order and points to deeper sources
 ## Governance & Workflow
 | Document | Purpose |
 |----------|---------|
+| [docs/CONVENTIONS.md](docs/CONVENTIONS.md) | Cross-cutting conventions (the invariant model + project status + Audience & Explanation Standard). **Included verbatim in every agent prompt** — the one doc every contributor receives |
 | [docs/AGENTS.md](docs/AGENTS.md) | All agent definitions, scopes, prompt templates, Constraint Validator, Reviewer |
 | [docs/WORKFLOW.md](docs/WORKFLOW.md) | Orchestrator workflow (steps 0-7), sprint management, entropy scans, metrics, harness evolution |
 | [docs/QUALITY.md](docs/QUALITY.md) | Per-domain quality grading matrix (A-F), updated each sprint |
 | [docs/knowledge-base/INDEX.md](docs/knowledge-base/INDEX.md) | Structured KB entries (ADR, PAT, DEP, RES, FAIL); INDEX completeness vs disk is CI-checked by `tools/check_docs.py` |
 | [docs/sprints/INDEX.md](docs/sprints/INDEX.md) | Sprint logs, test progression, constraint coverage, effectiveness metrics; sprint-log inventory is CI-checked |
 
-## Operations & Reference Dossiers
+## Operations — durable sources of truth (actively used / appended)
 | Document | Purpose |
 |----------|---------|
 | [docs/SYSTEM_DOCUMENTATION.md](docs/SYSTEM_DOCUMENTATION.md) | Long-form onboarding guide (product + architecture + process). Human-facing; verify against the canonical docs above before trusting specifics |
+| [docs/operations/docs-governance-program.md](docs/operations/docs-governance-program.md) | The active docs & governance cleanup program — single source of truth for cross-session workstreams and their status |
 | [docs/operations/legacy-db-upgrade-runbook.md](docs/operations/legacy-db-upgrade-runbook.md) | Operational runbook: upgrading pre-existing (non-greenfield) databases |
-| [docs/operations/performance-finding-register.md](docs/operations/performance-finding-register.md) | The F-series performance findings (F1–F6+): status, disposition, and the sweep method. **Record new performance analysis here as it is produced** — S125's F4 was lost because the analysis lived only in a conversation |
+| [docs/operations/performance-finding-register.md](docs/operations/performance-finding-register.md) | The F-series performance findings: status, disposition, sweep method. **Record new performance analysis here as it is produced** — S125's F4 was lost because it lived only in a conversation |
 | [docs/operations/audit-projection-catalog.md](docs/operations/audit-projection-catalog.md) | `IAuditProjectionMapper` family catalog (ADR-026) |
-| [docs/operations/audit-projection-caller-census.md](docs/operations/audit-projection-caller-census.md) | Cross-process caller census for the audit-projection cutover |
+| [docs/reviews/](docs/reviews/) | Ad-hoc external review archive (tracked). Per-sprint Step 7a artifacts live separately under `.claude/reviews/` (gitignored, gated by `sprint-close-guard.ps1`) |
+
+## Historical & research dossiers (point-in-time; kept for provenance, not current-truth routing)
+| Document | Purpose |
+|----------|---------|
+| [docs/operations/audit-projection-caller-census.md](docs/operations/audit-projection-caller-census.md) | Cross-process caller census for the (completed) audit-projection cutover |
 | [docs/references/agreement-source-register.md](docs/references/agreement-source-register.md) | DRAFT S36 agreement source-cell register (Phase A) |
-| [docs/references/ferie-transfer-timing-research.md](docs/references/ferie-transfer-timing-research.md) | S65 OQ-1 deep-research verdict: ferie transfer timing (§21 stk.2, 31 Dec) + særlige-feriedage timeline |
-| [docs/references/vacation-consumption-mechanism-research.md](docs/references/vacation-consumption-mechanism-research.md) | S66 deep-research + adversarial-verification verdict: §6 stk.2 is week-mirroring, no 5÷N multiplier in the state authority (ADR-032 premise correction) |
+| [docs/references/ferie-transfer-timing-research.md](docs/references/ferie-transfer-timing-research.md) | S65 deep-research verdict: ferie transfer timing (§21 stk.2, 31 Dec) + særlige-feriedage timeline |
+| [docs/references/vacation-consumption-mechanism-research.md](docs/references/vacation-consumption-mechanism-research.md) | S66 deep-research verdict: §6 stk.2 is week-mirroring, no 5÷N multiplier (ADR-032 premise correction) |
 | [docs/references/agreement-ruleset-audit.md](docs/references/agreement-ruleset-audit.md) | DRAFT S36 ruleset coverage audit |
 | [docs/references/role-dimension-audit.md](docs/references/role-dimension-audit.md) | DRAFT S36 role-within-agreement gap audit |
 | [docs/references/phase-b-handoff-package.md](docs/references/phase-b-handoff-package.md) | Phase B expert-engagement handoff package |
-| [docs/reviews/](docs/reviews/) | Ad-hoc external review archive (tracked). Per-sprint Step 7a artifacts live separately under `.claude/reviews/` (gitignored, gated by `sprint-close-guard.ps1`) |
 
 ## Tooling & Generated
 | Tool | Purpose |
 |------|---------|
 | [tools/generate_db_schema.py](tools/generate_db_schema.py) | Regenerates `docs/generated/db-schema.md` from init.sql. Run after any schema change. |
 | [tools/check_docs.py](tools/check_docs.py) | Doc-consistency gate (db-schema sync, KB INDEX completeness, sprint-log inventory, freshness). Run in CI (`docs` job) and at entropy-scan time. |
+
+## Maintaining this file
+Held to the same freshness discipline as the docs it governs — reviewed **manually** at each entropy
+scan / sprint close (it carries no `anchor-sprint` marker by design, since it changes rarely and a
+cadence anchor would raise false staleness warnings). Doc-map rows point to documents, never pin a
+specific KB id (ids get superseded; the doc does not). When a dossier stops being current truth,
+move it from an "Operations — durable" table to "Historical & research dossiers." Prune dead links.
+Keep this file a hub — deep content lives in the linked docs, not here.
 
 # Agent Architecture
 
@@ -74,8 +89,9 @@ You are the Orchestrator. You do NOT write code directly except for:
 
 For all domain implementation work, you MUST delegate to domain agents.
 
-**Agent definitions, scopes, and prompt templates** → [docs/AGENTS.md](docs/AGENTS.md)
-**Orchestrator workflow steps (0-7)** → [docs/WORKFLOW.md](docs/WORKFLOW.md)
+(The operational reading order and per-agent prompt contents are in "How to Use This System" below;
+agent definitions live in [docs/AGENTS.md](docs/AGENTS.md), the workflow steps in
+[docs/WORKFLOW.md](docs/WORKFLOW.md).)
 
 ## Constraints
 - No agent may modify files outside its declared scope (see [AGENTS.md](docs/AGENTS.md))
@@ -99,16 +115,16 @@ Before planning or coding any user request to build, create, implement, fix, add
 # How to Use This System
 
 ## For the Orchestrator (you)
-1. Read this file for priority order and document map
+1. Read this file for the invariants + trade-offs and the document map
 2. Read [docs/WORKFLOW.md](docs/WORKFLOW.md) for the mandatory workflow steps
 3. Read [docs/AGENTS.md](docs/AGENTS.md) for agent definitions and prompt templates
 4. Read [docs/knowledge-base/INDEX.md](docs/knowledge-base/INDEX.md) to select KB entries for agent prompts
-5. Include domain-specific docs in agent prompts:
+5. Include the right documents in every agent prompt:
+   - **All agents, ALWAYS** → [docs/CONVENTIONS.md](docs/CONVENTIONS.md) **verbatim** (the invariant model + project status + the Audience & Explanation Standard) + relevant sections of [SYSTEM_TARGET.md](SYSTEM_TARGET.md)
    - Rule Engine Agent → relevant KB entries + [danish-agreements.md](docs/references/danish-agreements.md)
    - Security Agent → [SECURITY.md](docs/SECURITY.md)
    - UX Agent → [FRONTEND.md](docs/FRONTEND.md)
    - Data Model Agent → [db-schema.md](docs/generated/db-schema.md)
-   - All agents → relevant sections of [SYSTEM_TARGET.md](SYSTEM_TARGET.md)
 
 ## For Agents
-Agents receive their instructions via the Orchestrator's prompt. They do not read CLAUDE.md directly. The Orchestrator selects which documents to include based on the task domain.
+Agents receive their instructions via the Orchestrator's prompt; they do not read CLAUDE.md directly. **Every** agent prompt includes [docs/CONVENTIONS.md](docs/CONVENTIONS.md) verbatim (the invariant model + project status + the explanation standard); the Orchestrator adds the domain-specific documents for the task.
