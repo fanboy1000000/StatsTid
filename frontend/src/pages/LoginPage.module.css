@@ -113,11 +113,6 @@
   color: var(--color-text);
 }
 
-.personaBaseline {
-  font-weight: var(--font-weight-regular);
-  color: var(--color-text-muted);
-}
-
 .personaUser {
   padding: 0 var(--space-1);
   background-color: var(--color-gray-100);

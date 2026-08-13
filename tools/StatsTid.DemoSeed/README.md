@@ -51,13 +51,24 @@ Use `--scale smoke` everywhere for a tiny (~30-user) end-to-end smoke of the who
 
 ## Demo logins (all share password `password`)
 
+One recommended login per role (all in the big org STYX1) — these mirror the dev-only
+"Test-personaer" panel on the login screen:
+
 | Username | Role | Use for |
 |----------|------|---------|
-| `demo_admin` | GLOBAL_ADMIN | admin surfaces, the import/role tooling |
-| `demo_styx1_0002` | a manager in the big org | approval dashboard, vikar |
-| `demo_styx1_0005` | an employee in the big org | Skema / MyPeriods |
+| `demo_styx1_0284` | EMPLOYEE | Skema/tidsregistrering, Årsoversigt, Mine perioder |
+| `demo_styx1_0002` | LOCAL_LEADER | Godkend tid (Team-/Leder-oversigt), Vikariering |
+| `demo_styx1_0001` | LOCAL_HR | Organisation & medarbejdere, Audit log |
+| `demo_styx1_0285` | LOCAL_ADMIN | Projekter, Brugerrettigheder, Lokal OK-konfiguration |
+| `demo_admin` | GLOBAL_ADMIN | Overenskomster, Lønartstilknytning + all admin surfaces |
 
-(The baseline `emp001` / `mgr03` / `admin01` etc. + password `password` still work too.)
+> ⚠️ `demo_styx1_0005` is a **LOCAL_LEADER**, not an employee — an earlier version of this table
+> mislabeled it. Use `demo_styx1_0284` for a plain-employee persona. One scoped `LOCAL_ADMIN` is
+> seeded per org (`demo_styx1_0285`, `demo_styx2_0086`, `demo_styx3_0036`, `demo_styx4_0036`,
+> `demo_styx5_0037` — the 2nd active non-manager, gated by `ScaleConfig.SeedLocalAdminPersona`,
+> full scale only) so the LocalAdmin-gated surfaces are reachable in the rich demo world.
+
+(The baseline `emp001` / `mgr03` / `admin01` / `ladm01` etc. + password `password` still work too.)
 
 ## ⚠️ Ops warnings
 
@@ -89,8 +100,8 @@ config is **byte-identical to the pre-S114 generator**, pinned by
 
 ## Known limitation (S84)
 
-Privileged role grants (LOCAL_HR / LOCAL_LEADER) are **SQL-seeded event-less** rather than granted
-via `POST /api/admin/roles/grant`, because that endpoint has a **pre-existing production bug**
+Privileged role grants (LOCAL_HR / LOCAL_LEADER / LOCAL_ADMIN) are **SQL-seeded event-less** rather
+than granted via `POST /api/admin/roles/grant`, because that endpoint has a **pre-existing production bug**
 (it inserts `role_assignment_audit.action='GRANT'` but the schema CHECK only allows `'GRANTED'` →
 every call 500s). The reporting **trees** still load via the event-emitting bulk-import API. See the
 S84 sprint log for the recorded follow-up to fix the grant endpoint.

@@ -61,6 +61,16 @@ internal sealed class ScaleConfig
     /// <summary>Number of hand-curated messy cases.</summary>
     public required int MessyCaseCount { get; init; }
 
+    /// <summary>
+    /// Seed one dedicated, ORG-scoped <c>LOCAL_ADMIN</c> demo persona per tree (a clean local
+    /// administrator for exercising the LocalAdmin-gated surfaces — Projekter, Brugerrettigheder,
+    /// Lokal OK-konfiguration — inside the rich demo world, which otherwise had no LocalAdmin).
+    /// OPTIONAL and default-OFF so the golden-pinned legacy smoke clone (which omits this knob)
+    /// stays byte-identical; the grant consumes NO <see cref="Random"/> draw, so the determinism
+    /// pins are unaffected regardless. Enabled on <see cref="Full"/> only.
+    /// </summary>
+    public bool SeedLocalAdminPersona { get; init; }
+
     public static ScaleConfig For(string scale) => scale switch
     {
         "smoke" => Smoke,
@@ -106,6 +116,7 @@ internal sealed class ScaleConfig
         ActivityFraction = 0.15,
         PartTimeFraction = 0.10,
         MessyCaseCount = 26,
+        SeedLocalAdminPersona = true,
         // S114: every full-scale styrelse adopts a per-org span override so its manager tree has
         // depths 0–4 EXACTLY (⇒ the unit derivation yields all 5 types). Manager COUNTS stay the
         // generator-internal round(activeN×0.14) — headcounts and the positional manager SET are

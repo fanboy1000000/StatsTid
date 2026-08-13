@@ -223,4 +223,38 @@ public sealed class GeneratorStructuralTests
         Assert.Contains("ODD_PART_TIME", kinds);
         Assert.InRange(ds.Manifest.MessyCases.Count, 20, 30);
     }
+
+    [Fact]
+    public void Full_SeedsOneScopedLocalAdminPersonaPerTree_ActiveNonManager()
+    {
+        var ds = Gen("full");
+        var admins = ds.PrivilegedRoles.Where(r => r.RoleId == "LOCAL_ADMIN").ToList();
+        Assert.Equal(ds.Manifest.Trees.Count, admins.Count); // exactly one per tree
+
+        var byId = ds.Users.ToDictionary(u => u.UserId);
+        Assert.All(admins, a =>
+        {
+            Assert.Equal("ORG_ONLY", a.ScopeType);
+            var u = byId[a.UserId];
+            Assert.True(u.IsActive, $"local-admin {a.UserId} must be active");
+            Assert.False(u.IsManager, $"local-admin {a.UserId} must be a non-manager (clean persona)");
+            Assert.Equal(u.PrimaryOrgId, a.OrgId); // scoped to their own Organisation root
+        });
+
+        // Distinct from the login screen's plain-Employee persona (the FIRST active non-manager):
+        // the STYX1 admin must be a DIFFERENT user, or the Employee persona would silently become
+        // a LocalAdmin (rank 2 dominates) — the exact collision Skip(1) exists to prevent.
+        var styx1FirstEmployee = ds.Users.First(u => u.OrganisationId == "STYX1" && u.IsActive && !u.IsManager);
+        var styx1Admin = admins.Single(a => byId[a.UserId].OrganisationId == "STYX1");
+        Assert.NotEqual(styx1FirstEmployee.UserId, styx1Admin.UserId);
+    }
+
+    [Fact]
+    public void Smoke_SeedsNoLocalAdmin_KnobGatesIt()
+    {
+        // The knob is off for smoke (and absent in the golden legacy clone), so no LOCAL_ADMIN row
+        // is emitted — the guarantee that keeps the golden-pinned smoke bytes byte-identical.
+        var ds = Gen("smoke");
+        Assert.DoesNotContain(ds.PrivilegedRoles, r => r.RoleId == "LOCAL_ADMIN");
+    }
 }

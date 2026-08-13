@@ -11,7 +11,7 @@
 -- API has a product defect; see SPRINT-84) + a demo GLOBAL_ADMIN bootstrap.
 --
 -- scale=full  seed=42  referenceDate=2026-06-15
--- orgs=6  users=3350 (+1 demo_admin)  employeeRoles=3350  privilegedRoles=457  projects=24
+-- orgs=6  users=3350 (+1 demo_admin)  employeeRoles=3350  privilegedRoles=462  projects=24
 -- ============================================================================
 
 -- ── Organisations (S92 / ADR-035 flatten: 1 demo MAO root + N ORGANISATIONs under it; ──
@@ -3663,6 +3663,7 @@ INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
     ('demo_styx1_0281', 'LOCAL_LEADER', 'STYX1', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx1_0282', 'LOCAL_LEADER', 'STYX1', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx1_0283', 'LOCAL_LEADER', 'STYX1', 'ORG_ONLY', 'DEMO_SEED'),
+    ('demo_styx1_0285', 'LOCAL_ADMIN', 'STYX1', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx2_0001', 'LOCAL_HR', 'STYX2', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx2_0001', 'LOCAL_LEADER', 'STYX2', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx2_0002', 'LOCAL_LEADER', 'STYX2', 'ORG_ONLY', 'DEMO_SEED'),
@@ -3745,6 +3746,7 @@ INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
     ('demo_styx2_0081', 'LOCAL_LEADER', 'STYX2', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx2_0082', 'LOCAL_LEADER', 'STYX2', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx2_0084', 'LOCAL_LEADER', 'STYX2', 'ORG_ONLY', 'DEMO_SEED'),
+    ('demo_styx2_0086', 'LOCAL_ADMIN', 'STYX2', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx3_0001', 'LOCAL_HR', 'STYX3', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx3_0001', 'LOCAL_LEADER', 'STYX3', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx3_0002', 'LOCAL_LEADER', 'STYX3', 'ORG_ONLY', 'DEMO_SEED'),
@@ -3780,6 +3782,7 @@ INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
     ('demo_styx3_0032', 'LOCAL_LEADER', 'STYX3', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx3_0033', 'LOCAL_LEADER', 'STYX3', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx3_0034', 'LOCAL_LEADER', 'STYX3', 'ORG_ONLY', 'DEMO_SEED'),
+    ('demo_styx3_0036', 'LOCAL_ADMIN', 'STYX3', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx4_0001', 'LOCAL_HR', 'STYX4', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx4_0001', 'LOCAL_LEADER', 'STYX4', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx4_0002', 'LOCAL_LEADER', 'STYX4', 'ORG_ONLY', 'DEMO_SEED'),
@@ -3815,6 +3818,7 @@ INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
     ('demo_styx4_0032', 'LOCAL_LEADER', 'STYX4', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx4_0033', 'LOCAL_LEADER', 'STYX4', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx4_0034', 'LOCAL_LEADER', 'STYX4', 'ORG_ONLY', 'DEMO_SEED'),
+    ('demo_styx4_0036', 'LOCAL_ADMIN', 'STYX4', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx5_0001', 'LOCAL_HR', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx5_0001', 'LOCAL_LEADER', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx5_0002', 'LOCAL_LEADER', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
@@ -3848,7 +3852,8 @@ INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by)
     ('demo_styx5_0032', 'LOCAL_LEADER', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx5_0033', 'LOCAL_LEADER', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
     ('demo_styx5_0034', 'LOCAL_LEADER', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
-    ('demo_styx5_0035', 'LOCAL_LEADER', 'STYX5', 'ORG_ONLY', 'DEMO_SEED')
+    ('demo_styx5_0035', 'LOCAL_LEADER', 'STYX5', 'ORG_ONLY', 'DEMO_SEED'),
+    ('demo_styx5_0037', 'LOCAL_ADMIN', 'STYX5', 'ORG_ONLY', 'DEMO_SEED')
 ON CONFLICT DO NOTHING;
 
 -- ── Bulk EMPLOYEE role_assignments (event-less by design; assigned_by='DEMO_SEED') ──

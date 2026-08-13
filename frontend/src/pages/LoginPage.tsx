@@ -14,8 +14,6 @@ interface TestPersona {
   username: string
   /** Which features this persona is meant to exercise. */
   tests: string
-  /** Baseline seed user (not part of the rich demo world). */
-  baseline?: boolean
 }
 
 export function LoginPage({ onLogin }: Props) {
@@ -43,9 +41,8 @@ export function LoginPage({ onLogin }: Props) {
     },
     {
       role: 'Lokal admin',
-      username: 'ladm01',
+      username: 'demo_styx1_0285',
       tests: 'Projekter, Brugerrettigheder, Lokal OK-konfiguration',
-      baseline: true,
     },
     {
       role: 'Global admin',
@@ -122,12 +119,7 @@ export function LoginPage({ onLogin }: Props) {
                     aria-label={`Udfyld login som ${persona.role} (${persona.username})`}
                   >
                     <span className={styles.personaHead}>
-                      <span className={styles.personaRole}>
-                        {persona.role}
-                        {persona.baseline && (
-                          <span className={styles.personaBaseline}> (baseline)</span>
-                        )}
-                      </span>
+                      <span className={styles.personaRole}>{persona.role}</span>
                       <code className={styles.personaUser}>{persona.username}</code>
                     </span>
                     <span className={styles.personaTests}>{persona.tests}</span>

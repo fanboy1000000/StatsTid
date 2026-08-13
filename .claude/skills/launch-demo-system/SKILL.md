@@ -14,11 +14,15 @@ Brings up the backend docker-compose stack, the Vite frontend, and the demo data
 | Backend API | http://localhost:5100 (Vite proxies `/api` → here; see `frontend/vite.config.ts`) |
 | Password (ALL users) | `password` |
 
-**Demo logins** (full scale — 5 organisations, ~3,350 users):
-- `demo_admin` — GlobalAdmin (admin surfaces, org/role tooling)
-- `demo_styx1_0002` — manager in the big org (approval dashboard, vikar)
-- `demo_styx1_0005` — employee in the big org (Skema, MyPeriods)
-- Baseline `emp001` / `mgr03` / `admin01` also work.
+**Demo logins** (full scale — 5 organisations, ~3,350 users). These mirror the dev-only "Test-personaer" panel on the login screen — one recommended login per role, all in the big org STYX1:
+- `demo_styx1_0284` — Employee: Skema/tidsregistrering, Årsoversigt, Mine perioder
+- `demo_styx1_0002` — LocalLeader: Godkend tid (Team-/Leder-oversigt), Vikariering
+- `demo_styx1_0001` — LocalHR: Organisation & medarbejdere, Audit log
+- `demo_styx1_0285` — LocalAdmin: Projekter, Brugerrettigheder, Lokal OK-konfiguration
+- `demo_admin` — GlobalAdmin: Overenskomster, Lønartstilknytning + all admin surfaces
+- Baseline `emp001` / `mgr03` / `admin01` / `ladm01` also work.
+
+> ⚠️ `demo_styx1_0005` is a **LocalLeader**, not an employee (an older version of this list mislabeled it). Use `demo_styx1_0284` for a plain-employee persona. There is one scoped `LOCAL_ADMIN` per org (`demo_styx2_0086`, `demo_styx3_0036`, …) for cross-org scope testing.
 
 ## Ports (docker-compose.yml)
 postgres `5432` · backend-api `5100` · rule-engine `5200` · orchestrator `5300` · payroll `5400` · external `5500` · mock-payroll `5600` · mock-external `5700`. Frontend dev server `3000`.

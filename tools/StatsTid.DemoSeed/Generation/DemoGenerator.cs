@@ -259,6 +259,26 @@ public sealed class DemoGenerator
             });
         }
 
+        // ── 2f. Optional dedicated LOCAL_ADMIN persona (one per tree) — a clean, ORG-scoped local
+        //        administrator so testers can reach the LocalAdmin-gated surfaces (Projekter,
+        //        Brugerrettigheder, Lokal OK-konfiguration) inside the rich demo world; the demo set
+        //        otherwise had no LocalAdmin (only the thin-data baseline ladm0* users). Target the
+        //        SECOND active non-manager: the FIRST is the login screen's plain-Employee test
+        //        persona (…_0284), so Skip(1) keeps the two personas distinct. Deterministic (no
+        //        _rng draw) and gated by the config knob, so the golden/legacy smoke bytes are
+        //        untouched. ──
+        if (_config.SeedLocalAdminPersona)
+        {
+            var localAdmin = treeUsers.Where(u => u.IsActive && !u.IsManager).Skip(1).FirstOrDefault();
+            if (localAdmin is not null)
+            {
+                privilegedRoles.Add(new DemoRoleRow
+                {
+                    UserId = localAdmin.UserId, RoleId = "LOCAL_ADMIN", OrgId = root, ScopeType = "ORG_ONLY",
+                });
+            }
+        }
+
         var managerCount = treeUsers.Count(u => u.IsManager);
         manifest.Trees.Add(new DemoTree
         {
