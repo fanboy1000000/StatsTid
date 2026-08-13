@@ -1,6 +1,6 @@
 # Docs & Governance Cleanup Program
 
-**Status**: PHASES 1–2 COMPLETE (2026-08-13) — WS1 committed `3055886`, WS3 committed `ab3d6d9`, WS3b tail committed (see git log 2026-08-13). NEXT: Phase 3 = WS5 security sweep · **Owner**: Orchestrator + PM
+**Status**: PHASES 1–2 COMPLETE (2026-08-13) — WS1 committed `3055886`, WS3 committed `ab3d6d9`, WS3b tail committed `7c516c9`. NEXT: Phase 3 = WS5 security sweep · **Owner**: Orchestrator + PM
 **Why this exists**: a mid-session replan (per WORKFLOW.md Replanning Protocol). Several governance
 and documentation threads opened while closing S128 and scoping the security sweep; this doc is the
 **single source of truth** for all of them so nothing is lost across sessions. It supersedes the
@@ -310,7 +310,7 @@ staleness is in counts/pins/anchor:
 
 ### Cross-cutting — git hygiene
 Landed as planned: WS1 = `3055886` (governance model), WS3 = `ab3d6d9` (docs review), WS3b tail =
-its own commit (2026-08-13), all on top of the S128 close (`8c182e9`). Keep `origin/master` current.
+`7c516c9`, all on top of the S128 close (`8c182e9`). Keep `origin/master` current.
 
 ---
 
