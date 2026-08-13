@@ -96,6 +96,8 @@ The frontend admin page displays both fields read-only. Admins who need to chang
 
 ### D6 — `MONTHLY_ACCRUAL` enum value remains dead code
 
+> **Superseded by [ADR-030](ADR-030-monthly-vacation-accrual-activation.md) (monthly-accrual activation):** monthly accrual was later activated for VACATION, so `MONTHLY_ACCRUAL` is no longer dead code. This section records the pre-activation state and the activation prerequisites as they were assessed at S30; ADR-030 is the as-built accrual model.
+
 `AccrualModel` enum at `src/SharedKernel/StatsTid.SharedKernel/Models/EntitlementConfig.cs:15` declares two values: `IMMEDIATE` and `MONTHLY_ACCRUAL`. Today (S30 close), only `IMMEDIATE` is used in seed data + admin CRUD; `MONTHLY_ACCRUAL` has no consuming code path (no rule applies proportional monthly grants). The enum value is kept for forward compatibility — activating it would require:
 
 - A `MonthlyAccrualGrantRule` (or PCS extension) that grants `1/12 * annual_quota` at each month-start during the entitlement year

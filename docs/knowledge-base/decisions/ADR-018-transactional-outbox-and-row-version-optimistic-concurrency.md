@@ -1,11 +1,13 @@
 # ADR-018: Transactional Outbox + Row-Version Optimistic Concurrency
 
-**Status**: ACCEPTED (cycle 4 fixes applied + cycle 5 verified clean; pending Orchestrator approval)
-**Date**: 2026-05-03
-**Sprint**: 22
-**Augments**: [ADR-001](ADR-001-event-sourcing-postgresql-npgsql.md) (event sourcing topology — outbox is an additive layer between state-change writes and the canonical event store)
-**Supersedes**: [ADR-004](ADR-004-outbox-pattern-guaranteed-delivery.md) (approved S1 but never implemented; ADR-018 fulfills the original commitment AND adds state-change-to-event-store atomicity, which ADR-004 did not address)
-**Amends**: [ADR-017](ADR-017-local-agreement-configuration-as-a-profile.md) D2 (close-then-insert window math → end-exclusive `effective_to`) + D2.1 (`If-Match: <profile_id>` → `If-Match: <version>`)
+| Field | Value |
+|-------|-------|
+| **Status** | ACCEPTED (S22 — cycle-4 fixes applied + cycle-5 verified clean; implemented) |
+| **Date** | 2026-05-03 |
+| **Sprint** | 22 |
+| **Augments** | [ADR-001](ADR-001-event-sourcing-postgresql-npgsql.md) (event sourcing topology — outbox is an additive layer between state-change writes and the canonical event store) |
+| **Supersedes** | [ADR-004](ADR-004-outbox-pattern-guaranteed-delivery.md) (approved S1 but never implemented; ADR-018 fulfills the original commitment AND adds state-change-to-event-store atomicity, which ADR-004 did not address) |
+| **Amends** | [ADR-017](ADR-017-local-agreement-configuration-as-a-profile.md) D2 (close-then-insert window math → end-exclusive `effective_to`) + D2.1 (`If-Match: <profile_id>` → `If-Match: <version>`) |
 
 ## Context
 

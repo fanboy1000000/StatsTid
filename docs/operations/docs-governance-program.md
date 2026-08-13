@@ -1,6 +1,6 @@
 # Docs & Governance Cleanup Program
 
-**Status**: PHASE 1 IN PROGRESS (captured 2026-08-12; owner gave go for Phase 1) · **Owner**: Orchestrator + PM
+**Status**: PHASES 1–2 COMPLETE (2026-08-13) — WS1 committed `3055886`, WS3 committed `ab3d6d9`, WS3b tail committed (see git log 2026-08-13). NEXT: Phase 3 = WS5 security sweep · **Owner**: Orchestrator + PM
 **Why this exists**: a mid-session replan (per WORKFLOW.md Replanning Protocol). Several governance
 and documentation threads opened while closing S128 and scoping the security sweep; this doc is the
 **single source of truth** for all of them so nothing is lost across sessions. It supersedes the
@@ -39,19 +39,19 @@ a stale doc is an agent acting on wrong information.
 
 ### WS1 — Governance model finalization (CLAUDE.md + CONVENTIONS.md) — PHASE 1
 - [x] SYSTEM ROLE reframed to "target"; blocks moved to `docs/CONVENTIONS.md`; step-5 injection
-      mandate; doc-map row. *(done, uncommitted)*
+      mandate; doc-map row. *(done, committed `3055886`)*
 - [x] **Invariant-model rewrite** (D3): canonical model in `docs/CONVENTIONS.md` (invariant set +
       find-another-path + escalation + ranked trade-offs + CI/CD as enforcement); CLAUDE.md carries
       a compact named summary + pointer. *(done, uncommitted — the model lives in CONVENTIONS.md so
       it reaches agents; Step-7a Codex catch)*
 - [x] Doc-map cleanup: Operations table split (durable vs historical/research); `FAIL-001` pin
       removed; "Maintaining this file" rule added; Agent-Architecture / How-to-Use overlap de-duped.
-      *(done, uncommitted)*
+      *(done, committed `3055886`)*
 - [x] Dual-lens review (architectural → mandatory): cycle 1 internal BLOCKED / Codex
       APPROVED-WITH-WARNINGS (the "priority order" term in CONVENTIONS.md + the model not reaching
       agents + stale checkboxes) → absorbed → cycle 2 BOTH APPROVED-WITH-WARNINGS, 0 blockers
       (residual: enumeration lists + a "delivery"/"shipping cadence" term slip) → absorbed. Converged.
-- [x] Commit + push the governance change. *(this commit)*
+- [x] Commit + push the governance change. *(committed `3055886`)*
 
 ### WS2 — `P#` rename migration (doc-wide) — FOLDED INTO WS3
 Depends on WS1's rename landing. **CRITICAL nuance (found at WS3 start): `P#` is overloaded across
@@ -90,15 +90,15 @@ verify. Exit: every inventory row marked clean or fixed.
 prose. The actively-consulted live-truth docs (rewrite for correctness) are the canon set below.
 
 **Inventory & clusters (live-truth only; sprint logs = index/freshness check, not line-by-line):**
-- [ ] **C1 Governance canon** — `AGENTS.md`, `WORKFLOW.md`, `QUALITY.md` (highest migration density).
-- [ ] **C2 Architecture/domain canon** — `ARCHITECTURE.md`, `SECURITY.md`, `FRONTEND.md`,
+- [x] **C1 Governance canon** — `AGENTS.md`, `WORKFLOW.md`, `QUALITY.md` (highest migration density).
+- [x] **C2 Architecture/domain canon** — `ARCHITECTURE.md`, `SECURITY.md`, `FRONTEND.md`,
       `SYSTEM_TARGET.md`, `ROADMAP.md`, `SYSTEM_DOCUMENTATION.md`, `references/danish-agreements.md`.
-- [ ] **C3 KB decisions** — ADR-001…038 (status + citations + priority-refs only).
-- [ ] **C4 KB patterns/deps/failures/resolutions + INDEX** — PAT-001…018, DEP-001…004, FAIL-001…006,
+- [x] **C3 KB decisions** — ADR-001…038 (status + citations + priority-refs only).
+- [x] **C4 KB patterns/deps/failures/resolutions + INDEX** — PAT-001…018, DEP-001…004, FAIL-001…006,
       RES-001…003, `knowledge-base/INDEX.md`.
-- [ ] **C5 Operations durable + sprint index** — `legacy-db-upgrade-runbook`, `performance-finding-register`,
+- [x] **C5 Operations durable + sprint index** — `legacy-db-upgrade-runbook`, `performance-finding-register`,
       `audit-projection-catalog`; `sprints/INDEX.md` freshness. (`docs-governance-program.md` = this doc, skip.)
-- [ ] Findings register (below) populated; fixes applied; verify pass.
+- [x] Findings register (below) populated; fixes applied; verify pass. *(core `ab3d6d9`; tail 2026-08-13)*
 
 #### WS3 findings register
 *(populated as cluster reviews return; Orchestrator applies fixes after the full set is in)*
@@ -227,8 +227,8 @@ staleness is in counts/pins/anchor:
 
 ### WS3 execution split
 - **WS3a (doc-map restructure)** — ROADMAP repurpose + SYSTEM_DOCUMENTATION delete + CLAUDE.md
-  doc-map (2 rows) + WORKFLOW.md forcing-function. *(done, uncommitted)*
-- **WS3b (P# migration + staleness fixes)** — *(DONE, uncommitted — the high-value core)*:
+  doc-map (2 rows) + WORKFLOW.md forcing-function. *(done, committed `ab3d6d9`)*
+- **WS3b (P# migration + staleness fixes)** — *(DONE, committed `ab3d6d9` — the high-value core)*:
   - CONVENTIONS.md gained the authoritative legacy `Priority #N → invariant` mapping (so historical
     append-only refs decode without rewriting them).
   - AGENTS.md: 4 embedded ranked lists → pointer to CONVENTIONS; both trigger tables migrated to
@@ -255,12 +255,37 @@ staleness is in counts/pins/anchor:
   line kept a leader-by-org-scope fallback that ADR-035 retired → corrected to designated-edge OR
   HR/Admin org-scope. Internal's warning (the `refine-requirements` skill still cited "priority
   order") also fixed. Codex cycle-2 APPROVED.
-- **WS3b minor tail** *(low-value; a quick follow-up or a future entropy scan)*: FRONTEND.md precise
-  hook/component counts + `Drawer`; ARCHITECTURE KB-index tables (stop at ADR-014 → add a pointer);
-  ADR cross-ref niceties (ADR-038 "supersedes"→"in part", ADR-017/027/021-D6 forward-notes);
-  performance-finding-register accepted-disposition line-pins (dispositions correct, pins drifted);
-  danish-agreements `SLS_0540` collision verify; DEP-004 UI-pages table; ADR-018/019 Status-format.
-- Exit: every row in the inventory checked. Sprint logs: index/freshness check only (D5).
+- **WS3b minor tail** *(DONE 2026-08-13 — all items applied as mechanical fixes off the converged
+  WS3 register; every count/pin re-verified against code at HEAD before writing)*:
+  - FRONTEND.md: hooks table rebuilt **18 → 28** (phantom `useAbsences` removed — it never matched a
+    file on disk; 11 real hooks added with verified descriptions), UI components **19 → 20** +
+    `Drawer` row, orphaned-pages line corrected (`AbsenceRegistration`/`WeeklyView` deleted from
+    source since), frozen S82 test-count pin de-brittled (→ sprints/INDEX + `npm run test`).
+  - ARCHITECTURE.md: the hand-copied KB tables (frozen at ADR-014/PAT-006/DEP-004) replaced with a
+    pointer to the CI-checked `knowledge-base/INDEX.md` + a short foundational reading order — the
+    tables were a drift trap by construction.
+  - ADR cross-refs: ADR-017 gained an Amended-by header row + D2/D2.1 forward-notes (→ ADR-018);
+    ADR-021 D6 forward-note (→ ADR-030 activated `MONTHLY_ACCRUAL`); ADR-027 gained the missing
+    ADR-035 reshape banner (S92→S95 retired its styrelse framing; D6 disposition table); ADR-038
+    "supersedes ADR-035" softened to **in part** (D5 preserves the scope model); ADR-018/019 inline
+    Status → table style (stale "pending approval/review" clauses dropped — both shipped).
+  - performance-finding-register: verification found **14 of 22 pins exact**; the rest fixed —
+    `GetPageAsync` → `QueryByOrgScopeAsync` (`:153`), `ReadAllAsync` `:113`→`:195` (stale at
+    authoring, pre-F5 line), 3× ApprovalPeriodRepository +44, BalanceEndpoints `:904`→`:927`,
+    db-schema range +1, AppLayout pin; 2 vanished files annotated in place (the F1 refinement doc —
+    transient `.claude/refinements/` scratch — and the deleted F6 spec).
+  - danish-agreements `SLS_0540`: **verified faithful to init.sql** (PARENTAL_LEAVE rows S1-era,
+    SICK_DAY rows S9; the natural key excludes `wage_type`, so the sharing is structurally legal) —
+    but intentionality is UNEVIDENCED (different sprints, never registered as a collision, no test).
+    Annotated in the doc + flagged as a Phase B source-verification item.
+  - DEP-004: UI-pages table given a drift note (ApprovalDashboard deleted S88;
+    UserManagement/OrgManagement merged S109; route scheme renamed) — table retained as method record.
+  - C4 stragglers the core missed, caught at tail-verify: **PAT-005/006/007/008** present-tense
+    "supports P#" rationale migrated to invariant/enforcement/trade-off vocabulary. PAT-012's
+    "P6 authority gap" (`:59,68`) adjudicated: historical finding-label prose inside S120/S122
+    records → left, covered by the CONVENTIONS.md legacy map (the D5 append-only rule).
+- Exit **MET** (2026-08-13): every row in the inventory checked — clean or fixed. Sprint logs:
+  index/freshness check only (D5), verified clean under C5.
 
 ### WS4 — S128 follow-ups (recorded in SPRINT-128.md; not at risk of loss)
 - [ ] FU-A — tier-probe spurious "Access denied" log noise (a non-logging classification path).
@@ -284,14 +309,16 @@ staleness is in counts/pins/anchor:
 - [ ] Docker on the VDI = external IT ticket (nested virtualization) — owner action, may be declined.
 
 ### Cross-cutting — git hygiene
-Governance edits are currently uncommitted on top of the S128 close (`8c182e9`). Commit boundary:
-WS1 lands as one reviewed governance commit; WS3 as its own; keep `origin/master` current.
+Landed as planned: WS1 = `3055886` (governance model), WS3 = `ab3d6d9` (docs review), WS3b tail =
+its own commit (2026-08-13), all on top of the S128 close (`8c182e9`). Keep `origin/master` current.
 
 ---
 
 ## Phase gate
 
-The owner confirmed this capture and gave the go for Phase 1 (2026-08-12); WS1 is in progress.
-Each substantive workstream passes through the `refine-requirements` gate when picked up (WS1's
-refinement was the in-conversation invariant-model design). This doc is updated as items close and
-reviewed at each entropy scan.
+The owner confirmed this capture and gave the go for Phase 1 (2026-08-12). Phases 1–2 (WS1 + WS3
+incl. the tail) closed 2026-08-13. **Next: Phase 3 = WS5 (security threat-model sweep)** — it runs
+through the `refine-requirements` gate and dual-lens verification when picked up, reading the
+now-clean docs as input (the point of the D4 sequencing). WS4 follow-ups stay parked in
+SPRINT-128.md; WS6 stays on-demand. This doc is updated as items close and reviewed at each entropy
+scan.

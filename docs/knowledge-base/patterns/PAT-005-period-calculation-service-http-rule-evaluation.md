@@ -29,7 +29,7 @@ Time Event → Rule Evaluation (SourceRuleId) → TimeType (SourceTimeType) → 
 
 ## Rationale
 
-This pattern ensures the payroll service never directly invokes rule engine functions (P1 Architectural integrity, P5 Integration isolation) while maintaining the full traceability chain required by DEP-002.
+This pattern ensures the payroll service never directly invokes rule engine functions (the **Architectural integrity** and **Integration isolation & delivery** invariants) while maintaining the full traceability chain required by DEP-002.
 
 ## Agent Guidance
 

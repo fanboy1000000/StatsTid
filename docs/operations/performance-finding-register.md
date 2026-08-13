@@ -6,7 +6,9 @@
 
 The original F1–F6 performance analysis was produced during S125 and **never written to a file**. It
 survived only as list positions in `docs/sprints/SPRINT-125.md:667-671` and
-`.claude/refinements/REFINEMENT-f1-period-status-n-plus-1.md:295`. F1, F2, F3, F5 and F6 each carried
+`.claude/refinements/REFINEMENT-f1-period-status-n-plus-1.md:295` (the refinement file has since been
+removed — `.claude/refinements/` is transient per-sprint scratch, which is itself the point of this
+register). F1, F2, F3, F5 and F6 each carried
 an inline label in those lines and so remained identifiable; **F4 carried none and its description was
 lost.** The owner ruled (2026-08-03) to re-derive it by a fresh sweep rather than guess, and to record
 the result durably. This file is that record.
@@ -54,12 +56,12 @@ or *history depth* cannot show up locally. That, not raw query count, was the di
 | `AuditProjectionRepository.cs:189` | exact `COUNT(*)` over filtered `audit_projection`, **per page request** | **DEFECT — the F4 re-derivation.** See below |
 | `AuditProjectionRepository.cs:211` | `LIMIT/OFFSET` deep paging over the same table | **DEFECT (same finding, second mechanism)** |
 | `AuditProjectionRepository.cs:104` | unfiltered `COUNT(*)` | Not applicable — no request-path caller; tests + backfill only |
-| `ApprovalPeriodRepository.cs:1238`, `:1344` | shared `matched` CTE feeding `COUNT(*)` + page in ONE round-trip | Accepted — already the good pattern, deliberately documented at `:1147-1149`; bounded by org employees, not history |
+| `ApprovalPeriodRepository.cs:1282`, `:1388` | shared `matched` CTE feeding `COUNT(*)` + page in ONE round-trip | Accepted — already the good pattern, deliberately documented at `:1195-1197`; bounded by org employees, not history |
 | `UnitRepository.cs:216` | `LIMIT/OFFSET` | Accepted — bounded by unit count (administrative cardinality) |
-| `PostgresEventStore.cs:113` `ReadAllAsync` | `OFFSET/LIMIT`, `maxCount` default 1000 | Accepted — explicitly bounded |
+| `PostgresEventStore.cs:195` `ReadAllAsync` | `OFFSET/LIMIT`, `maxCount` default 1000 | Accepted — explicitly bounded |
 | `PostgresEventStore.cs:88` `ReadStreamAsync` | full-stream replay | Already **F5**; not double-counted |
 | `AgreementConfigRepository`, `EntitlementConfigRepository`, `OrganizationRepository`, `PositionOverrideRepository`, `WageTypeMappingRepository` — `GetAllAsync` | unpaged full-table reads | Accepted — config tables, bounded by administrative cardinality (dozens), not by usage or age |
-| `BalanceEndpoints.cs:904` | `foreach` over 3 probe anchors with awaited resolves | Accepted — fixed bound of 3, through cached helpers |
+| `BalanceEndpoints.cs:927` | `foreach` over 3 probe anchors with awaited resolves | Accepted — fixed bound of 3, through cached helpers |
 | `ReportingLineEndpoints.cs:1466`, `:1440`, `:1415` | per-row loops closing vikar/edge rows | Accepted — write paths, bounded by one user's active rows; one event per row is required by ADR-018 |
 | `AdminEndpoints.cs:2050`, `:2733` | per-edge / per-descendant loops | Accepted — bounded by one user's edges / subtree, not by history |
 | `SegmentManifestProjectionRebuilder.cs:131`, `:144` | `FROM events` unbounded | Accepted — offline rebuild tool, not a request path |
@@ -69,12 +71,12 @@ or *history depth* cannot show up locally. That, not raw query count, was the di
 **The audit-log read is the one place where per-request cost grows with SYSTEM AGE rather than with
 data size — and it grows two ways at once.**
 
-`GET` audit log → `AuditProjectionRepository.GetPageAsync`:
+`GET` audit log (`AuditEndpoints.cs:44`) → `AuditProjectionRepository.QueryByOrgScopeAsync` (`:153`; named `GetPageAsync` when this finding was written):
 
 1. **`SELECT COUNT(*) FROM audit_projection WHERE {visibility AND filters}` on every page request**
    (`:189`). An exact count cannot short-circuit: it must traverse every matching row. `audit_projection`
    is append-only with one row per audited event and **no retention or partitioning**
-   (`docs/generated/db-schema.md:1037-1063`), so this is O(matching rows) and rises forever. The
+   (`docs/generated/db-schema.md:1038-1064`), so this is O(matching rows) and rises forever. The
    partial indexes (`idx_audit_projection_target_org_time` etc.) make it an index-only scan rather
    than a heap scan — which lowers the constant and does not change the growth.
 2. **`LIMIT @limit OFFSET @offset` (`:211`)** — PostgreSQL walks and discards every skipped row, so
@@ -206,7 +208,7 @@ S126 Step-7a external lens found the harness invalid on two counts, both verifie
 1. **It never measured an SPA route transition.** `page.goto()` performs a FULL DOCUMENT navigation —
    entry chunk, app boot and login state included — not the client-side route change F6 is about.
 2. **The stop condition was already true before the route mounted.** `<main>` permanently contains
-   `mainInner` and the Suspense fallback element (`AppLayout.tsx:15`), so
+   `mainInner` and the Suspense fallback element (`AppLayout.tsx:16-17`, fallback `:27`), so
    `expect(main).not.toBeEmpty()` succeeds while the lazy chunk is still loading. The timer was read
    before the text assertion, so the recorded interval is "shell present", not "route content
    visible".
@@ -232,7 +234,8 @@ requirement.
 **Method**: production build served by `vite preview` (:3001, using the `preview.proxy` block added to
 `vite.config.ts` for this — `server.proxy` does not apply to preview, which is why earlier timings
 could only have come from the dev server, where on-demand transform inflates the very interval being
-measured). Driven by `frontend/e2e/f6-route-transition-timing.spec.ts`, timing navigation → first
+measured). Driven by `frontend/e2e/f6-route-transition-timing.spec.ts` (since deleted along with the
+retraction — a future F6 harness starts from the requirements above, not from this spec), timing navigation → first
 non-empty `<main>`. Because F3's Suspense fallback is an empty placeholder, that interval IS the blank
 period the user sees. Backend: the real 7-service compose stack.
 

@@ -171,6 +171,15 @@ Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) 
 | LEAVE_WITH_PAY | SLS_0565 | Leave with pay | Y | Y | Y |
 | SPECIAL_HOLIDAY_ALLOWANCE | SLS_0570 | Special holiday allowance | Y | Y | Y |
 
+> **Shared-code note (verified 2026-08-13):** `PARENTAL_LEAVE` and `SICK_DAY` both map to `SLS_0540`.
+> This faithfully mirrors the seed data (`docker/postgres/init.sql` — the PARENTAL_LEAVE rows are
+> S1-era, the SICK_DAY rows were added S9), and the `wage_type_mappings` natural key excludes
+> `wage_type`, so the duplication is structurally legal. What is NOT verified is whether the sharing
+> is correct against the real SLS wage catalogue: the two mappings entered in different sprints, no
+> source-register row records them jointly, and no test asserts either code. Treat as an open
+> source-verification item for the Phase B expert pass (see `agreement-source-register.md`, which
+> registered the analogous `MERARBEJDE`/`OVERTIME_50 → SLS_0210` collision but not this one).
+
 ### Flex & Duty
 
 | Time Type | SLS Code | Description | AC | HK | PROSA |

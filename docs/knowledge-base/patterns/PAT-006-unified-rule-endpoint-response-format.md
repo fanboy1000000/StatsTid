@@ -25,7 +25,7 @@ This allows `PeriodCalculationService` to use standard `CalculationResult` deser
 
 ## Rationale
 
-Unified response format eliminates special-case parsing code, reduces fragility from anonymous type changes, and enables the HTTP parallelization pattern (all calls return the same type). Supports P1 (architectural consistency) and P5 (integration simplicity).
+Unified response format eliminates special-case parsing code, reduces fragility from anonymous type changes, and enables the HTTP parallelization pattern (all calls return the same type). Supports the **Architectural integrity** and **Integration isolation & delivery** invariants.
 
 ## Agent Guidance
 

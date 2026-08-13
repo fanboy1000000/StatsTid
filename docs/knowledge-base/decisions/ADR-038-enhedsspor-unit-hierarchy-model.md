@@ -4,7 +4,7 @@
 |-------|-------|
 | **Status** | ACCEPTED (S102 Phase-0 design) → **AS-BUILT COMPLETE (S110, 2026-06-30)** — the program shipped S102→S110, CI-green; the design is realized (see the as-built note below) |
 | **Date** | 2026-06-28 |
-| **Supersedes/Amends** | Supersedes ADR-035 (flat authority), ADR-036 (zero-authority Enhed); amends ADR-037 (org lifecycle), ADR-008 (materialized path), ADR-027 (reporting/approval/vikar). Preserve+migrate: ADR-026 (audit projection). Preserve: ADR-010/014 (config). |
+| **Supersedes/Amends** | Supersedes **in part** ADR-035 (flat authority — reverses its no-deep-hierarchy *presentation*, but its exact-Organisation authority/scope model is preserved by D5), ADR-036 (zero-authority Enhed); amends ADR-037 (org lifecycle), ADR-008 (materialized path), ADR-027 (reporting/approval/vikar). Preserve+migrate: ADR-026 (audit projection). Preserve: ADR-010/014 (config). |
 | **Refinement** | `.claude/refinements/REFINEMENT-merged-admin-page.md` |
 | **Design source** | `design_handoff_org_medarbejdere/` ("Model A — Enhedsspor") |
 

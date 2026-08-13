@@ -1,5 +1,7 @@
 # ADR-027 — Reporting-Line Hierarchy (Complementing ADR-008 Org Hierarchy)
 
+> **Reshaped by [ADR-035](ADR-035-flat-authority-model.md) (S92→S95, flat authority):** the multi-tree / styrelse boundary this ADR is framed around (`tree_root_org_id`, same-tree checks, the D13 within-the-styrelse authority) was retired at S95 — authority checks are now a flat exact-Organisation set. ADR-035 D6 carries the per-decision disposition table (kept / reshaped / retired) for this ADR's D2/D9/D11/D13/D15/D18/D19; the "styrelse" framing below is historical.
+>
 > **Amended (not demolished) by [ADR-038](ADR-038-enhedsspor-unit-hierarchy-model.md) (S102, Enhedsspor).** `reporting_lines`/`manager_vikar` are RETAINED as the single canonical stored edge (ADR-038 D6 — the D13/D15/D18/D19 lock/revoke/`version` substrate survives intact); `CanApprove` is EXTENDED with a secondary-unit-leader exception path + same-Organisation vikar (ADR-038 D4), with the see==act dashboard reads extended in lockstep. Same-Organisation vikar bound unchanged (D12).
 
 | Field | Value |

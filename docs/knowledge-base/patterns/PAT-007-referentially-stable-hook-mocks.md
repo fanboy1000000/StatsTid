@@ -23,7 +23,7 @@ When mocking a data hook consumed by a component that keys any effect (or memo) 
 
 ## Rationale
 
-The failure mode is disproportionately expensive: an identity-loop bug in a mock does not fail an assertion — it OOMs the whole worker, reports every test as 0ms, and points suspicion at vitest/jsdom infrastructure rather than the mock. The fix is mechanical and free. Supports P8 (CI stability — a worker OOM is a flaky-looking hard failure) and P9.
+The failure mode is disproportionately expensive: an identity-loop bug in a mock does not fail an assertion — it OOMs the whole worker, reports every test as 0ms, and points suspicion at vitest/jsdom infrastructure rather than the mock. The fix is mechanical and free. Supports the **CI/CD enforcement layer** (CI stability — a worker OOM is a flaky-looking hard failure) and the **usability trade-off** (developer time not lost chasing phantom infra failures).
 
 ## Agent Guidance
 

@@ -175,6 +175,14 @@ This registry's coverage is current for the sections it contains, but whole endp
 
 ### UI Pages — All Mapped
 
+> **Drift note (added 2026-08-13):** this table is a frozen early-era snapshot — STALE, like the
+> endpoint-family gap noted above but never covered by that note. `ApprovalDashboard` was deleted in
+> S88; `UserManagement`/`OrgManagement` were merged into `admin/OrganisationOgMedarbejdere.tsx` at
+> the S109 Enhedsspor cutover; the route paths predate the current `/godkend/…` / `/tid/…` /
+> `/admin/organisation-medarbejdere` scheme; pages added after ~S13 are absent. For current routes
+> consult `frontend/src/App.tsx` and the route table in `docs/FRONTEND.md`. The table is retained as
+> the record of the original alignment method.
+
 All 11 frontend routes have complete API backing:
 
 | Route | Page | Endpoints Used | Status |

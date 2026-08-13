@@ -9,6 +9,7 @@
 | **Tags** | local-config, profile, configuration, effective-dating, schema, migration |
 | **Amends** | ADR-010 (merge-at-service-layer) |
 | **Augments** | ADR-002 (rule-engine purity invariant preserved), ADR-014 (partial-unique-index pattern reused, with predicate divergence noted in D1), ADR-016 (BoundarySources extended with `LocalProfileActivation`) |
+| **Amended by** | [ADR-018](ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) (S22) — D2's close-then-insert window math replaced by end-exclusive `effective_to` (+ UPDATE-in-place for same-day saves); D2.1's ETag token changed from `<profile_id>` to a `BIGINT version` column |
 | **Decisions** | D1–D12 below |
 | **Plan-Review Cycle 1** | Convergent BLOCKER + WARNING findings applied 2026-05-02 (D1 simplification, D2 ETag/If-Match concurrency contract, D5 authorization specification, D6+D8 transactional contract, D9a static-data design + DateOnly-scope ack, D9b tie-break rationale, D9c precedent + org_id contract, D10 forward-only rollback, D11 floor 13 → 17, NOTE applications, Q12-(b) rationale softened). See SPRINT-21.md "ADR Review (Cycle 1)" for the full finding list. |
 
@@ -88,6 +89,8 @@ ADR-014 uses a separate `status` enum (DRAFT/ACTIVE/ARCHIVED) and a partial-uniq
 
 ### D2 — Effective-dating model: supersession via close-then-insert (Q2) + ETag/If-Match concurrency (cycle 1 review resolution)
 
+> **Amended by [ADR-018](ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) (S22):** the window math below (predecessor closed at `effective_from - 1`, end-inclusive) produced invalid history windows on same-day re-saves. ADR-018 D7–D11 replaced it with **end-exclusive `effective_to`** semantics and UPDATE-in-place for same-day saves. The close-then-insert *shape* survives; the arithmetic here is historical.
+
 Activation is atomic, transactional, and has no scheduled-future support:
 
 ```sql
@@ -104,6 +107,8 @@ The partial-unique-index never fires during the transaction because the old row'
 If scheduled-future ever becomes a product requirement, the escape hatch is to migrate to a `daterange` exclusion constraint (PostgreSQL `btree_gist` extension); the per-profile data is unchanged. Documented for posterity; not implemented in S21.
 
 #### D2.1 — Concurrent same-profile saves: optimistic concurrency via ETag / If-Match
+
+> **Amended by [ADR-018](ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) (S22):** the concurrency *mechanism* (ETag / `If-Match`, 412 on stale) stands, but the token changed from `<profile_id>` to a dedicated `BIGINT version` column (`If-Match: <version>`), because profile_id-as-token cannot distinguish same-day in-place edits.
 
 Cycle-1 review identified an interleaved-supersession race: A1 closes current + inserts `new1`; A2 reads `new1` as current and supersedes it with `new2`. Both transactions succeed; the partial-unique-index is satisfied at every commit; the chain audit (`PrecedingProfileId` linkage) records both supersessions. But A1's intent is silently overwritten — the audit chain captures the sequence but A1 doesn't see that their change was immediately replaced.
 

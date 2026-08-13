@@ -1,10 +1,12 @@
 # ADR-019: Optimistic Concurrency via Row-Version (Admin-Strict Resources)
 
-**Status**: ACCEPTED (cycles 1-3 of plan-mode review absorbed 2026-05-07; pending Step 7a Codex pass at S25 close)
-**Date**: 2026-05-08
-**Sprint**: 25
-**Amends**: [ADR-018](ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) D7 — propagates the row-version + If-Match contract from the `local_agreement_profiles` exemplar to the three remaining admin-strict mutating resources.
-**Cross-references**: [ADR-017](ADR-017-local-agreement-configuration-as-a-profile.md) D2 (close-then-insert window math), [ADR-014](ADR-014-agreement-configs-database-backed.md) (DRAFT/ACTIVE/ARCHIVED lifecycle).
+| Field | Value |
+|-------|-------|
+| **Status** | ACCEPTED (S25 — cycles 1–3 of plan-mode review absorbed 2026-05-07; implemented) |
+| **Date** | 2026-05-08 |
+| **Sprint** | 25 |
+| **Amends** | [ADR-018](ADR-018-transactional-outbox-and-row-version-optimistic-concurrency.md) D7 — propagates the row-version + If-Match contract from the `local_agreement_profiles` exemplar to the three remaining admin-strict mutating resources. |
+| **Cross-references** | [ADR-017](ADR-017-local-agreement-configuration-as-a-profile.md) D2 (close-then-insert window math), [ADR-014](ADR-014-agreement-configs-database-backed.md) (DRAFT/ACTIVE/ARCHIVED lifecycle). |
 
 ## Context
 

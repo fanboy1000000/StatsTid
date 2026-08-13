@@ -82,6 +82,7 @@
 | Card | `ui/Card.tsx` | Content container with border |
 | Checkbox | `ui/Checkbox.tsx` | Boolean input |
 | Divider | `ui/Divider.tsx` | Horizontal separator |
+| Drawer | `ui/Drawer.tsx` | Slide-in side panel (admin person/unit edit surfaces) |
 | FormField | `ui/FormField.tsx` | Label + input + error wrapper |
 | Input | `ui/Input.tsx` | Text input field |
 | Label | `ui/Label.tsx` | Form label |
@@ -181,32 +182,42 @@ Routes are defined in `frontend/src/App.tsx`. Unauthenticated → `/login`; auth
 | `/health` | `HealthDashboard` | any auth | Service health (hidden from nav) |
 | `*` | `NotFoundPage` | any auth | 404 fallback |
 
-Legacy/orphaned pages still in source but **not routed**: `AbsenceRegistration`, `TimeRegistration`, `WeeklyView` (superseded by `SkemaPage`); `EntitlementConfigEditor`, `OvertimePreApprovalManagement` (not imported by `App.tsx`).
+Legacy/orphaned pages still in source but **not routed**: `TimeRegistration` (superseded by `SkemaPage`); `EntitlementConfigEditor`, `OvertimePreApprovalManagement` (not imported by `App.tsx`). (`AbsenceRegistration` and `WeeklyView`, formerly listed here, have since been deleted from source.)
 
 ## Hooks (`src/hooks/`)
 
 | Hook | Description |
 |------|-------------|
-| `useAbsences` | Fetch and manage absence entries |
 | `useAdmin` | Admin CRUD operations (orgs, users, roles) |
 | `useAgreementConfigs` | Agreement config CRUD for GlobalAdmin |
+| `useAllocationBreakdown` | Per-employee project-time allocation breakdown for the leader Teamoversigt detail row (S88) |
 | `useApprovals` | Period approval workflow (submit, approve, reject, reopen) |
 | `useAuth` | Legacy auth hook (prefer AuthContext) |
-| `useBalanceSummary` | Fetch employee balance summary (norm, flex, absence) |
+| `useBalanceSummary` | Employee balance summary — norm, flex, absence (typed contract, S120) |
+| `useCompensationChoice` | Overtime compensation-model choice |
+| `useCompliance` | EU-WTD compliance warnings |
 | `useConfig` | Local configuration management |
+| `useDelegation` | Acting-manager delegation / vikariering |
+| `useEditPerson` | Multi-PUT save orchestration for the admin person drawer (per-section If-Match, partial-failure tolerant; S76b) |
+| `useEntitlementConfig` | Entitlement config (GlobalAdmin) |
+| `useEntitlementEligibility` | HR-only per-employee entitlement eligibility — CHILD_SICK opt-in + senior-day gate (ADR-029) |
 | `useFlexBalance` | Fetch flex balance data |
+| `useForest` | Org forest (organizations ⊕ units) for the merged admin page's structure tree (S107) |
+| `useOrgMutations` | Organisation/MAO structure mutations for the merged admin page (S108) |
+| `usePlacement` | Person→unit placement routing over the stamdata/unit PUTs (merged admin drawer; S109) |
 | `usePositionOverrides` | Position override CRUD for GlobalAdmin |
 | `useProjects` | Project management per org unit |
-| `useSkema` | Monthly skema data + approval/reopen plumbing |
-| `useTimeEntries` | Time entry CRUD operations |
-| `useWageTypeMappings` | Wage type mapping CRUD for GlobalAdmin |
-| `useCompliance` | EU-WTD compliance warnings |
-| `useCompensationChoice` | Overtime compensation-model choice |
-| `useEntitlementConfig` | Entitlement config (GlobalAdmin) |
 | `useReportingLines` | Reporting-line hierarchy (ADR-027) |
-| `useDelegation` | Acting-manager delegation / vikariering |
+| `useRoster` | Unit-tagged per-Organisation roster for the merged admin page's Struktur panel (S107) |
+| `useSearch` | Server-side units+people search overlay for the merged admin page (S107) |
+| `useSkema` | Monthly skema data + approval/reopen plumbing |
+| `useTeamOverview` | Leader Teamoversigt aggregate rows (S87) |
+| `useTimeEntries` | Time entry CRUD operations |
+| `useUnitMutations` | Unit structure mutations — create/rename/move/delete, If-Match (ADR-038; S108) |
+| `useWageTypeMappings` | Wage type mapping CRUD for GlobalAdmin |
+| `useYearOverview` | Read-only year overview for ArsoversigtPage (S65) |
 
-> Removed S56: `useTimer` (timer retired, ADR-028). 18 hook files total (excluding tests).
+> Removed S56: `useTimer` (timer retired, ADR-028). 28 hook files total (excluding tests). A previously-listed `useAbsences` does not exist on disk (absence entry rides the skema/time-entry hooks).
 
 ## State Management
 
@@ -248,7 +259,7 @@ Centralized fetch wrapper. All API calls go through this client.
   - `src/hooks/__tests__/`
   - `src/pages/__tests__/`
   - `src/pages/admin/__tests__/`
-- **Test count (component tier)**: 468 tests across 37 files (`npm run test`, verified 2026-06-17 / S82)
+- **Test count (component tier)**: see the test progression in `docs/sprints/INDEX.md`, or run `npm run test` for the live number — this doc previously pinned a count (468/37 files) that froze at S82 while the suite kept growing
 - **`testTimeout` / `hookTimeout`**: 30000 (S82) — the grown userEvent-heavy suite (~200s) tripped the default 5s per-test ceiling under vitest's parallel pool even though tests pass <1s in isolation (the FAIL-002/SkemaPage load-contention class); the raised ceiling keeps the gated CI `frontend-build` (no retries) reliably green.
 
 ## End-to-End Tests (Playwright — S82, the A-ceiling lifter)
@@ -268,7 +279,7 @@ frontend/
     contexts/
       AuthContext.tsx           # Auth state provider
     components/
-      ui/                      # 19 reusable UI components (13 scratch + 6 Radix)
+      ui/                      # 20 reusable UI components (14 scratch + 6 Radix)
         index.ts               # Barrel export
       layout/                  # AppLayout, Header, TopNav, Sidebar
       guards/                  # RequireAuth, RequireRole
@@ -280,7 +291,7 @@ frontend/
       ProjectPicker.tsx         # Domain: project selector
       TimeEntryForm.tsx         # Domain: legacy (unrouted)
       WeekGrid.tsx              # Domain: legacy (unrouted)
-    hooks/                     # 18 data-fetching hooks
+    hooks/                     # 28 data-fetching hooks
     lib/
       api.ts                   # apiClient fetch wrapper
       jwt.ts                   # JWT decode utility

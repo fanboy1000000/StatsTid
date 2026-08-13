@@ -38,7 +38,7 @@ Choose the pinned date deliberately: it must make every seed's past/future class
 
 ## Rationale
 
-Wall-clock-dependent expected values rot (S64 census had a whole defect family of them); a fixed provider makes today-dependent endpoints pure functions of (request, seed, pinned-now) — replay-deterministic per P2. The boot-order combination matters because the two failure modes co-occur in practice: the same WAF host override that pins time also re-runs the seeders that destroy absent-state fixtures.
+Wall-clock-dependent expected values rot (S64 census had a whole defect family of them); a fixed provider makes today-dependent endpoints pure functions of (request, seed, pinned-now) — replay-deterministic per the **Domain correctness** invariant. The boot-order combination matters because the two failure modes co-occur in practice: the same WAF host override that pins time also re-runs the seeders that destroy absent-state fixtures.
 
 ## Agent Guidance
 
