@@ -303,13 +303,16 @@ staleness is in counts/pins/anchor:
       was leaking its own answers; closed **structurally** by running sweep agents in a clean worktree
       pinned to the pre-register baseline SHA (`fb64b9d`), where every answer-bearing artifact is
       absent. No open blocker in the plan.
-- [ ] **Vendor the skill — BLOCKED on a missing source (owner input needed, 2026-08-13).** The plan
-      vendors `security.md` + `security-checklist.md` from the "autoresearch security mode" plugin, but
-      that plugin is **not installed on this machine** (only `claude-plugins-official` is present; no
-      copy of the files on disk). Options for the owner: (a) install/provide the autoresearch source;
-      (b) approve authoring an equivalent OWASP/STRIDE method in-house (scope change: "vendor" →
-      "author", still dual-lens vetted); (c) fetch the two files from their public repo + re-vet.
-      TASK-C (the sweep) depends on this method, so it gates kickoff.
+- [x] **TASK-A — vendor the skill — DONE (2026-08-13, committed `4f41995`).** Owner chose fetch+revet.
+      The source is a THIRD-PARTY fork `zhongpei/autoresearch-skills` `/autoresearch:security` (MIT, ©
+      2026 Udit Goenka) — the official autoresearch plugin has NO security mode. Adapted into
+      `.claude/skills/threat-model-audit/` (SKILL + security.md + security-checklist.md): READ-ONLY
+      (source `--fix`/auto-remediation stripped), no hooks, no network, invoke-by-name only, findings
+      → SEC register+ledger. **Calibration near-miss caught + fixed:** a first draft embedded StatsTid
+      known-hole "anchors" in the tracked checklist (would be an answer key in the sweep worktree) →
+      stripped to neutral OWASP categories. Vetting: author line-by-line + grep gate (0 real
+      hooks/network/--fix) + Codex external-lens **VERDICT APPROVED** (all 5 checks incl.
+      calibration-neutrality).
 - [ ] Build the SEC register with the corrected 12-read census + revisit rows ("known — should be
       revisited": prior rulings are re-attacked, not shielded). *(register form + full rev-6 inventory
       + durable tracked adjudication record + baseline-SHA-pin AC all specified in the refinement)*
