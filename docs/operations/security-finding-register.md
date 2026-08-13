@@ -83,6 +83,19 @@ citation) · `adjudication` (→ `SPRINT-129.md#sec-id`, filled by the sweep).
 
 ---
 
+## Group 6 — found during S129 (incidental / CI gate)
+
+| SEC | What it means (plain language) | Title | Origin | Sev | OWASP/STRIDE | Status | Source of truth | Adjudication |
+|-----|--------------------------------|-------|--------|-----|--------------|--------|-----------------|--------------|
+| SEC-026 | The regression test suite pulled in SSH.NET 2023.0.0 (via Testcontainers), which carries a High CVE (SCP path traversal) — no real exposure (test-only, no untrusted-SCP download) but it failed the repo-wide CI vulnerable-package gate. | SSH.NET transitive CVE-2026-48798 | sweep-NEW (CI-incidental) | High | A06 / Tampering | **fixed** (forced patched SSH.NET 2026.0.0 in the Regression project, per the S39 transitive-CVE-override convention; build + scan verified clean) | CVE-2026-48798 / GHSA-q939-rpr3-3284; `tests/StatsTid.Tests.Regression/*.csproj` | this commit |
+
+> **Note on SEC-026 status vs "fixed never in-sprint."** The register's `fixed(… never in-sprint)`
+> rule is about not remediating *sweep-discovered* findings inside the audit sprint. SEC-026 was NOT
+> found by the sweep method — it surfaced from the CI vulnerable-package gate going red repo-wide
+> (a newly-published advisory), so it was fixed immediately as **enforcement-layer maintenance**
+> (a red vuln gate blocks every commit), via the project's existing transitive-CVE-override pattern.
+> Distinct from the audit's remediation-deferral discipline.
+
 ## Notes
 - **`sweep-NEW` rows** are appended here as the S129 sweep confirms new findings (refute-panel
   verdict CONFIRMED before entry).

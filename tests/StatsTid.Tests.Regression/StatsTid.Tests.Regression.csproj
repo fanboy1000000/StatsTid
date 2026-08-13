@@ -12,7 +12,7 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.*" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="Npgsql" Version="8.0.3" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="3.9.0" />
@@ -26,6 +26,14 @@
          resolution to patched 4.x releases. -->
     <PackageReference Include="System.Net.Http" Version="4.3.4" />
     <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
+
+    <!-- Transitive CVE override (2026-08-13): Testcontainers.PostgreSql 3.9.0 pulls
+         in SSH.NET 2023.0.0, which carries High-severity CVE-2026-48798 / GHSA-q939-rpr3-3284
+         (ScpClient recursive-download path traversal; newly published, so the CI vuln
+         gate began failing repo-wide). Test-only, and the suite never downloads from
+         untrusted SCP servers, so no real exposure — but the gate fails on any transitive
+         High CVE. Explicit ref forces the patched 2026.0.0. Also recorded as SEC-026 (A06). -->
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
   </ItemGroup>
 
   <ItemGroup>
