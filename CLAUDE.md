@@ -49,6 +49,7 @@ This file is the hub. It defines the invariants + trade-offs and points to deepe
 | [docs/operations/docs-governance-program.md](docs/operations/docs-governance-program.md) | The active docs & governance cleanup program — single source of truth for cross-session workstreams and their status |
 | [docs/operations/legacy-db-upgrade-runbook.md](docs/operations/legacy-db-upgrade-runbook.md) | Operational runbook: upgrading pre-existing (non-greenfield) databases |
 | [docs/operations/performance-finding-register.md](docs/operations/performance-finding-register.md) | The F-series performance findings: status, disposition, sweep method. **Record new performance analysis here as it is produced** — S125's F4 was lost because it lived only in a conversation |
+| [docs/operations/security-finding-register.md](docs/operations/security-finding-register.md) | The SEC-series security findings (S129 sweep): every known/found weakness as a pointer-index row, "revisit not shield" semantics, per-row adjudication → `SPRINT-129.md`. **Record new security findings here as they are ruled** |
 | [docs/operations/audit-projection-catalog.md](docs/operations/audit-projection-catalog.md) | `IAuditProjectionMapper` family catalog (ADR-026) |
 | [docs/reviews/](docs/reviews/) | Ad-hoc external review archive (tracked). Per-sprint Step 7a artifacts live separately under `.claude/reviews/` (gitignored, gated by `sprint-close-guard.ps1`) |
 

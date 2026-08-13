@@ -2,6 +2,12 @@
 
 > JWT patterns, RBAC model, scope validation, and known gotchas for agent context.
 
+> **Finding register:** the durable, cross-session list of security weaknesses — the revocation-residual
+> map below plus the sprint-log holes, deployment-config class, and swept-unruled findings — is
+> indexed in [docs/operations/security-finding-register.md](operations/security-finding-register.md)
+> (SEC-series, "revisit not shield"). This doc remains the source of truth for the auth/RBAC/scope
+> model; the register routes across all of it and carries the S129-sweep adjudications.
+
 ## Authentication
 
 - **Algorithm**: JWT HMAC-SHA256, shared secret across all 5 API services via Docker environment variables

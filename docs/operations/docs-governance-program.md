@@ -313,13 +313,19 @@ staleness is in counts/pins/anchor:
       stripped to neutral OWASP categories. Vetting: author line-by-line + grep gate (0 real
       hooks/network/--fix) + Codex external-lens **VERDICT APPROVED** (all 5 checks incl.
       calibration-neutrality).
-- [ ] Build the SEC register with the corrected 12-read census + revisit rows ("known — should be
-      revisited": prior rulings are re-attacked, not shielded). *(register form + full rev-6 inventory
-      + durable tracked adjudication record + baseline-SHA-pin AC all specified in the refinement)*
-- [ ] Run the sweep (static-analysis-only, TOOL-PROFILE-enforced; clean-worktree isolation; fixed
-      per-slice prompt templates + external prompt-audit; reproducible commit-pinned coverage
-      inventory) → adversarial refute-panel verification → owner adjudication → remediation-sprint
-      proposal.
+- [x] **TASK-B — SEC register + coverage inventory — DONE (2026-08-13).** `security-finding-register.md`
+      live with **25 rows** (SEC-001…025: 5 SECURITY.md residuals, 7 sprint-log holes, 2 convention
+      residuals, 5 deployment-config, 6 swept-unruled), pointer-index form + plain-language column +
+      per-row adjudication anchor → `SPRINT-129.md`. Sprint-open: `SPRINT-129.md` (audit sprint,
+      baseline 3269 carried-not-re-executed + S128 CI cited, Step-0b = the 5 refinement cycles,
+      sweep baseline SHA `e955e13`). Commit-pinned coverage inventory generated at baseline: 157
+      endpoints (Backend 137 / RuleEngine 9 / Payroll 6 / Orchestrator 3 / External 2) + auth chain +
+      33 auth-config + 26 svc↔svc + deploy (2 compose/12 mock/7 Dockerfile/14 appsettings/7
+      launchSettings/3 workflows). CLAUDE.md doc-map row + SECURITY.md cross-link + `anchor-sprint: 129`.
+- [ ] **TASK-C — the sweep — PENDING the owner-held calibration manifest (the one handoff).** Then:
+      static-analysis-only (TOOL-PROFILE-enforced) fan-out in the `e955e13` worktree; fixed per-slice
+      prompt templates + external prompt-audit; ledger → adversarial refute-panel verification (TASK-D)
+      → owner adjudication (TASK-E) → remediation-sprint proposal.
 
 ### WS6 — Environment / infra (parked / on demand)
 - [ ] Native stack back up (backend-api + Vite) when UI testing is wanted (Postgres already up).
