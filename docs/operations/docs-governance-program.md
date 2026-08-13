@@ -322,10 +322,19 @@ staleness is in counts/pins/anchor:
       endpoints (Backend 137 / RuleEngine 9 / Payroll 6 / Orchestrator 3 / External 2) + auth chain +
       33 auth-config + 26 svc↔svc + deploy (2 compose/12 mock/7 Dockerfile/14 appsettings/7
       launchSettings/3 workflows). CLAUDE.md doc-map row + SECURITY.md cross-link + `anchor-sprint: 129`.
+- [x] **SEC-026 (incidental, CI-health) — SSH.NET transitive High CVE fixed (`0110c3a`).** The CI
+      vulnerable-package gate went red repo-wide (CVE-2026-48798, SSH.NET 2023.0.0 via
+      Testcontainers.PostgreSql in the regression suite — newly-published advisory, not from S129
+      work; confirmed pre-existing on `4f41995`/`e955e13`). Forced patched SSH.NET 2026.0.0 (+ Logging.
+      Abstractions 8.0.2→8.0.3) per the S39 override convention; build + scan verified clean;
+      build-and-test CONFIRMED green. Recorded as SEC-026 (A06). Test-only; 3269 unchanged.
 - [ ] **TASK-C — the sweep — PENDING the owner-held calibration manifest (the one handoff).** Then:
       static-analysis-only (TOOL-PROFILE-enforced) fan-out in the `e955e13` worktree; fixed per-slice
       prompt templates + external prompt-audit; ledger → adversarial refute-panel verification (TASK-D)
-      → owner adjudication (TASK-E) → remediation-sprint proposal.
+      → owner adjudication (TASK-E) → remediation-sprint proposal. **Cross-device resume:** the plan is
+      tracked at `docs/sprints/SPRINT-129-refinement-rev6.md` (the `.claude/` original is gitignored);
+      the RESUME STATE + the TASK-C recipe are in `SPRINT-129.md`; the owner holds the calibration
+      manifest (SEC-020/021/025).
 
 ### WS6 — Environment / infra (parked / on demand)
 - [ ] Native stack back up (backend-api + Vite) when UI testing is wanted (Postgres already up).

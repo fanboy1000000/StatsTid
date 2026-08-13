@@ -6,7 +6,7 @@
 | **Build Verified** | N/A (audit sprint; no code change) |
 | **Test Verified** | **3269 carried from S128 — NOT re-executed** (audit sprint; per the design-only precedents S28/S32/S36/S38/S67). Source: S128 CI run `31485462948`, close `3af7291`. |
 | **Sweep baseline SHA** | `e955e13` (the PRE-REGISTER baseline — the SEC register + this file are committed AFTER it, so the sweep worktree checked out from `e955e13` contains neither; load-bearing for the calibration control). |
-| **Refinement** | `.claude/refinements/REFINEMENT-s129-security-sweep.md` (rev 6) |
+| **Refinement** | `.claude/refinements/REFINEMENT-s129-security-sweep.md` (rev 6) — **tracked mirror for cross-device resume: `SPRINT-129-refinement-rev6.md`** (the `.claude/` original is gitignored) |
 | **Skill** | `.claude/skills/threat-model-audit/` (TASK-A, `4f41995`, Codex-approved) |
 | **Register** | `docs/operations/security-finding-register.md` (TASK-B) |
 
@@ -54,6 +54,31 @@ independently regenerates + diffs this before the sweep (falsifiability backstop
 
 *(Counts are the mechanical extraction totals at `e955e13`; the sweep decomposes high-count cells —
 e.g. the 137 endpoints — into per-file/per-boundary examination rows in the ledger.)*
+
+## RESUME STATE (2026-08-13 — for a different-device pickup)
+
+**Done + committed + pushed:** TASK-A (skill `4f41995`, Codex-approved) · TASK-B (register +
+inventory + this sprint doc `0be8c15`) · SEC-026 SSH.NET CVE CI-health fix (`0110c3a`, build-and-test
+CONFIRMED green; smoke was still running at last check — verify on resume). Latest `origin/master`
+tip carries all of it.
+
+**The one gate to TASK-C — the owner-held calibration manifest.** Already sealed + given to the owner
+in-conversation (out of band, so it's not in the repo): **SEC-020, SEC-021, SEC-025**, baseline
+`e955e13`, hash `98622971e25ec663fc17375aa374d77707974369b7f5d939e7ba28d00853022e`. On resume, the
+owner confirms they hold this; then the sweep runs.
+
+**To run the sweep (TASK-C) — the recipe (from the tracked refinement `SPRINT-129-refinement-rev6.md`):**
+1. `git worktree add <path> e955e13` — the sweep worktree (answer-bearing docs absent there).
+2. Fan-out read-only (`Explore`-profile, no shell) agents per slice (i–v); fixed per-slice trust-
+   boundary prompt templates (no per-hole slot); Orchestrator is sole ledger writer + SEC-id assignor.
+3. Ledger `results.tsv` (schema in the refinement); discovery/calibration slices code-anchored only,
+   no answer-artifact citation; revisit slice (iv) handed its SEC target out of band + excluded from
+   the calibration count.
+4. Codex regenerates + diffs the coverage inventory (falsifiability backstop); archive
+   calibration-slice prompts verbatim for the external prompt-audit.
+5. TASK-D refute panel per candidate (Critical/High double-refuted: agent + Codex).
+6. Score calibration (≥2 of 3 rediscovered code-anchored) → TASK-E owner adjudication → fill the
+   adjudication records below → remediation-sprint proposal.
 
 ## TASK-C — the sweep (PENDING — owner handoff: the calibration manifest)
 
