@@ -296,12 +296,27 @@ staleness is in counts/pins/anchor:
 - [ ] FU-E — environment facts (recorded; actionable bit = native rule-engine for full UI testing).
 
 ### WS5 — Security threat-model sweep — PHASE 3 (was "S129"; renumbers after the docs sprint)
-- [ ] Finalize refinement rev 2 + cycle-2 dual-lens verification (`.claude/refinements/REFINEMENT-s129-security-sweep.md`).
-- [ ] Vendor the skill (`security.md` + `security-checklist.md` only; no hooks; no `--fix`; invoke-by-name).
+- [x] **Refinement CONVERGED at rev 6 (2026-08-13)** — five dual-lens cycles
+      (`.claude/refinements/REFINEMENT-s129-security-sweep.md`); both OQs resolved (public/no-redaction;
+      bounded browser-auth in round 1). Finding stream converged 3B→3B→1B→0-structural→3 one-line nits.
+      The load-bearing cycle-3 fix: the calibration control (the sprint's one falsifiable mechanism)
+      was leaking its own answers; closed **structurally** by running sweep agents in a clean worktree
+      pinned to the pre-register baseline SHA (`fb64b9d`), where every answer-bearing artifact is
+      absent. No open blocker in the plan.
+- [ ] **Vendor the skill — BLOCKED on a missing source (owner input needed, 2026-08-13).** The plan
+      vendors `security.md` + `security-checklist.md` from the "autoresearch security mode" plugin, but
+      that plugin is **not installed on this machine** (only `claude-plugins-official` is present; no
+      copy of the files on disk). Options for the owner: (a) install/provide the autoresearch source;
+      (b) approve authoring an equivalent OWASP/STRIDE method in-house (scope change: "vendor" →
+      "author", still dual-lens vetted); (c) fetch the two files from their public repo + re-vet.
+      TASK-C (the sweep) depends on this method, so it gates kickoff.
 - [ ] Build the SEC register with the corrected 12-read census + revisit rows ("known — should be
-      revisited": prior rulings are re-attacked, not shielded).
-- [ ] Run the sweep (static-analysis only; no live probing of the local stack) → adversarial
-      verification → owner adjudication → remediation-sprint proposal.
+      revisited": prior rulings are re-attacked, not shielded). *(register form + full rev-6 inventory
+      + durable tracked adjudication record + baseline-SHA-pin AC all specified in the refinement)*
+- [ ] Run the sweep (static-analysis-only, TOOL-PROFILE-enforced; clean-worktree isolation; fixed
+      per-slice prompt templates + external prompt-audit; reproducible commit-pinned coverage
+      inventory) → adversarial refute-panel verification → owner adjudication → remediation-sprint
+      proposal.
 
 ### WS6 — Environment / infra (parked / on demand)
 - [ ] Native stack back up (backend-api + Vite) when UI testing is wanted (Postgres already up).
