@@ -37,12 +37,100 @@
   margin-top: var(--space-2);
 }
 
-.hint {
+/* Dev-only test-personas panel (behind import.meta.env.DEV). */
+.personas {
   margin-top: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.personasHeading {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.personasIntro {
+  margin: 0;
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
 }
 
-.hint p {
+.code {
+  padding: 0 var(--space-1);
+  background-color: var(--color-gray-100);
+  color: var(--color-text);
+  font-weight: var(--font-weight-medium);
+}
+
+.personaList {
+  list-style: none;
   margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.persona {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-white);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.persona:hover {
+  background-color: var(--color-gray-100);
+  border-color: var(--color-border-strong);
+}
+
+.persona:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+.personaHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.personaRole {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.personaBaseline {
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-muted);
+}
+
+.personaUser {
+  padding: 0 var(--space-1);
+  background-color: var(--color-gray-100);
+  color: var(--color-text);
+}
+
+.personaTests {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.personasNote {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
 }

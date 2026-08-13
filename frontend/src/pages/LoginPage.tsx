@@ -6,11 +6,59 @@ interface Props {
   onLogin: (username: string, password: string) => Promise<void>
 }
 
+/** A seeded login used only for manual dev testing (behind import.meta.env.DEV). */
+interface TestPersona {
+  /** Danish role label shown to the tester. */
+  role: string
+  /** Seed username the click-to-fill button writes into the form. */
+  username: string
+  /** Which features this persona is meant to exercise. */
+  tests: string
+  /** Baseline seed user (not part of the rich demo world). */
+  baseline?: boolean
+}
+
 export function LoginPage({ onLogin }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+
+  // Dev-only test personas — verified against the demo seed. Ordered low → high role.
+  const testPersonas: TestPersona[] = [
+    {
+      role: 'Medarbejder',
+      username: 'demo_styx1_0284',
+      tests: 'Skema/tidsregistrering, Årsoversigt, Mine perioder',
+    },
+    {
+      role: 'Leder',
+      username: 'demo_styx1_0002',
+      tests: 'Godkend tid (Team-/Leder-oversigt), Vikariering',
+    },
+    {
+      role: 'HR',
+      username: 'demo_styx1_0001',
+      tests: 'Organisation & medarbejdere, Audit log',
+    },
+    {
+      role: 'Lokal admin',
+      username: 'ladm01',
+      tests: 'Projekter, Brugerrettigheder, Lokal OK-konfiguration',
+      baseline: true,
+    },
+    {
+      role: 'Global admin',
+      username: 'demo_admin',
+      tests: 'Overenskomster, Lønartstilknytning',
+    },
+  ]
+
+  // Click-to-fill: populate the visible fields; the tester still presses "Log ind".
+  const fillLogin = (persona: TestPersona) => {
+    setUsername(persona.username)
+    setPassword('password')
+  }
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -59,11 +107,37 @@ export function LoginPage({ onLogin }: Props) {
           </form>
         </Card>
         {import.meta.env.DEV && (
-          <div className={styles.hint}>
-            <p>Adgangskode for alle: <strong>password</strong></p>
-            <p>Admin: admin01, admin02 | Lokal admin: ladm01, ladm02</p>
-            <p>HR: hr01, hr02 | Leder: mgr01, mgr02, mgr03</p>
-            <p>Medarbejdere: emp001–emp010</p>
+          <div className={styles.personas}>
+            <p className={styles.personasHeading}>Test-personaer</p>
+            <p className={styles.personasIntro}>
+              Adgangskode for alle: <code className={styles.code}>password</code>
+            </p>
+            <ul className={styles.personaList}>
+              {testPersonas.map(persona => (
+                <li key={persona.username}>
+                  <button
+                    type="button"
+                    className={styles.persona}
+                    onClick={() => fillLogin(persona)}
+                    aria-label={`Udfyld login som ${persona.role} (${persona.username})`}
+                  >
+                    <span className={styles.personaHead}>
+                      <span className={styles.personaRole}>
+                        {persona.role}
+                        {persona.baseline && (
+                          <span className={styles.personaBaseline}> (baseline)</span>
+                        )}
+                      </span>
+                      <code className={styles.personaUser}>{persona.username}</code>
+                    </span>
+                    <span className={styles.personaTests}>{persona.tests}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className={styles.personasNote}>
+              Højere roller ser også alle lavere faner.
+            </p>
           </div>
         )}
       </div>
