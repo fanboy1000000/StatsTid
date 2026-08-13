@@ -153,11 +153,13 @@ S83 closed R1 + R2 (modulo the inactive-manager corner) and ruled R3 accepted; R
 - All endpoints MUST chain `.RequireAuthorization()` with one of the defined policies:
   - `"Authenticated"` -- any valid JWT
   - `"EmployeeOrAbove"` -- Employee (level 5) or higher
+  - `"LeaderOrAbove"` -- Leader (level 4) or higher
+  - `"HROrAbove"` -- HR (level 3) or higher
   - `"LocalAdminOrAbove"` -- LocalAdmin (level 2) or higher
   - `"GlobalAdminOnly"` -- GlobalAdmin (level 1) only
 - Scope-embedded JWT enables stateless authorization without DB lookups for role checks ([ADR-009](knowledge-base/decisions/ADR-009-scope-embedded-jwt.md))
 - Org hierarchy uses materialized path `/MIN01/STY02/` with `text_pattern_ops` index ([ADR-008](knowledge-base/decisions/ADR-008-materialized-path-org-hierarchy.md))
-- `OrgScopeValidator` provides the second layer: even with a valid role, access is denied if the actor's scopes do not cover the target org unit
+- `OrgScopeValidator` provides the second layer: even with a valid role, access is denied if the actor's scopes do not cover the target org unit. **Authority is exact-org-set membership (ADR-035 flat model); materialized-path prefix/subtree matching is dormant for authorization** (the path above is retained for hierarchy display/navigation).
 
 ## Known Gotchas
 

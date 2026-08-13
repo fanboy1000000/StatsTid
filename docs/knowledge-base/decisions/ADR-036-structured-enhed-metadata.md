@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | accepted |
+| **Status** | superseded by ADR-038 (S102) |
 | **Sprint** | S97 |
 | **Supersedes/Refines** | refines ADR-035 D2 (Enhed-as-metadata); the free-text `employee_profiles.enhed_label` is retained read-only/transitional |
 | **Domains** | Data Model, SharedKernel (events), Infrastructure, Backend API, Frontend |

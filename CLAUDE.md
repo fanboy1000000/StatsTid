@@ -22,7 +22,7 @@ This file is the hub. It defines the invariants + trade-offs and points to deepe
 | Document | Purpose |
 |----------|---------|
 | [SYSTEM_TARGET.md](SYSTEM_TARGET.md) | End-state product definition: functional requirements, agreement rules, payroll, integrations |
-| [ROADMAP.md](ROADMAP.md) | Technology stack, phased milestones, next-sprint detailed planning (rolling detail) |
+| [ROADMAP.md](ROADMAP.md) | The living forward view: the loose path to production + a durable backlog of deferred items + a loose-ideas parking lot. NOT the product spec (→ SYSTEM_TARGET), decisions (→ ADRs), the shipped ledger (→ sprints/INDEX), or next-sprint planning (→ sprint logs) |
 
 ## Architecture & Domain Knowledge
 | Document | Purpose |
@@ -46,7 +46,6 @@ This file is the hub. It defines the invariants + trade-offs and points to deepe
 ## Operations — durable sources of truth (actively used / appended)
 | Document | Purpose |
 |----------|---------|
-| [docs/SYSTEM_DOCUMENTATION.md](docs/SYSTEM_DOCUMENTATION.md) | Long-form onboarding guide (product + architecture + process). Human-facing; verify against the canonical docs above before trusting specifics |
 | [docs/operations/docs-governance-program.md](docs/operations/docs-governance-program.md) | The active docs & governance cleanup program — single source of truth for cross-session workstreams and their status |
 | [docs/operations/legacy-db-upgrade-runbook.md](docs/operations/legacy-db-upgrade-runbook.md) | Operational runbook: upgrading pre-existing (non-greenfield) databases |
 | [docs/operations/performance-finding-register.md](docs/operations/performance-finding-register.md) | The F-series performance findings: status, disposition, sweep method. **Record new performance analysis here as it is produced** — S125's F4 was lost because it lived only in a conversation |

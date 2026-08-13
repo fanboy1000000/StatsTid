@@ -40,6 +40,14 @@ conflict, the earlier one usually wins, all else equal.
 sprint-close guard) is *how* the invariants are kept true build-over-build. It protects the
 invariants; it is not one of the goals being weighed.
 
+**Reading legacy docs — the retired `Priority #N` → invariant map.** Older sprint logs and KB
+entries cite the pre-2026-08 ranked "Priority #N / P#" order (kept verbatim as historical record).
+Decode them as: **#1** → *Architectural integrity*; **#2** (rule engine), **#4** (version /
+OK-transition), **#6** (payroll) → *Domain correctness*; **#3** → *Auditability*; **#5** →
+*Integration isolation & delivery*; **#7** → *Security & access control*; **#8** (CI/CD) → the
+*enforcement layer*; **#9** → the *Usability* trade-off. (Distinct from review-SEVERITY labels
+`P1/P2/P3/P4` on Codex/Reviewer findings — those are unrelated and still current.)
+
 ## Project Status & Intent
 
 **StatsTid is a learning project in active development — it is NOT deployed and NOT launching.**

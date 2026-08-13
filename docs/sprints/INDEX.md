@@ -1,6 +1,6 @@
 # StatsTid Sprint Log
 
-<!-- anchor-sprint: 124 -->
+<!-- anchor-sprint: 128 -->
 > **Governance**: The Sprint Log is a formal governance artifact. Only the Orchestrator may create, modify, or approve sprint log entries. Agents report task completion to the Orchestrator, who validates and records them here.
 
 ## Sprint Index

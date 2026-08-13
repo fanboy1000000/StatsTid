@@ -10,36 +10,38 @@ Eight Docker services compose the runtime (see [ADR-006](knowledge-base/decision
 |---------|-----------|------|----------------|
 | **postgres** | PostgreSQL 16 | 5432 | Event store, all application tables, outbox |
 | **backend-api** | .NET 8 Minimal API | 5100 | HTTP endpoints for frontend (auth, time, admin, approval, config, skema, etc.) |
-| **rule-engine** | .NET 8 Minimal API | 8081 | Pure deterministic rule evaluation (norm, supplement, overtime, absence, flex, on-call, travel, call-in) |
-| **orchestrator** | .NET 8 | 8082 | Weekly calculation pipeline, task dispatch |
-| **payroll** | .NET 8 Minimal API | 8083 | Wage type mapping, SLS export, period calculation, retroactive corrections |
-| **external** | .NET 8 Minimal API | 8084 | Outbound integrations with circuit breaker and backoff |
-| **mock-payroll** | .NET 8 | 8085 | Test double for the payroll target system |
-| **mock-external** | .NET 8 | 8086 | Test double for external integration targets |
+| **rule-engine** | .NET 8 Minimal API | 5200 | Pure deterministic rule evaluation (norm, supplement, overtime, absence, flex, on-call, travel, call-in) |
+| **orchestrator** | .NET 8 | 5300 | Weekly calculation pipeline, task dispatch |
+| **payroll** | .NET 8 Minimal API | 5400 | Wage type mapping, SLS export, period calculation, retroactive corrections |
+| **external** | .NET 8 Minimal API | 5500 | Outbound integrations with circuit breaker and backoff |
+| **mock-payroll** | .NET 8 | 5600 | Test double for the payroll target system |
+| **mock-external** | .NET 8 | 5700 | Test double for external integration targets |
+
+*Ports shown are the **host** ports published by docker-compose (5100–5700); every container listens internally on **8080**, so service-to-service URLs are `http://<service>:8080`.*
 
 All .NET services share JWT HMAC-SHA256 secrets via Docker environment variables ([ADR-007](knowledge-base/decisions/ADR-007-jwt-auth-rbac-correlation-ids.md)).
 
 ```
 ┌─────────┐      ┌──────────────┐  HTTP   ┌─────────────┐
 │ Frontend │─────>│  backend-api │────────>│ rule-engine  │
-│ (Vite)   │      │   :5100      │         │   :8081      │
+│ (Vite)   │      │   :5100      │         │   :5200      │
 └─────────┘      └──────┬───────┘         └─────────────┘
                         │                        ^
                         │ HTTP                   │ HTTP
                         v                        │
                  ┌──────────────┐         ┌──────┴──────┐
                  │ orchestrator │────────>│   payroll    │
-                 │   :8082      │         │   :8083      │
+                 │   :5300      │         │   :5400      │
                  └──────────────┘         └──────┬──────┘
                                                  │ HTTP
                                                  v
                  ┌──────────────┐         ┌─────────────┐
                  │ mock-external│<────────│  external    │
-                 │   :8086      │         │   :8084      │
+                 │   :5700      │         │   :5500      │
                  └──────────────┘         └─────────────┘
                  ┌──────────────┐
                  │ mock-payroll │ (payroll target test double)
-                 │   :8085      │
+                 │   :5600      │
                  └──────────────┘
 
          All services ──────> postgres :5432
@@ -92,7 +94,6 @@ HTTP gateway for the frontend. Endpoint groups organized by domain:
 | `ApprovalEndpoints` | Two-step period approval ([ADR-012](knowledge-base/decisions/ADR-012-two-step-approval-flow.md)) |
 | `ConfigEndpoints` | Local config with central constraint validation |
 | `SkemaEndpoints` | Monthly spreadsheet data |
-| `TimerEndpoints` | Check-in/check-out timer sessions |
 | `ProjectEndpoints` | Project management per org unit |
 | `BalanceEndpoints` | Employee balance summary |
 | `AgreementConfigEndpoints` | Agreement config lifecycle (GlobalAdmin) |
@@ -103,7 +104,7 @@ HTTP gateway for the frontend. Endpoint groups organized by domain:
 
 Persistence, security services, and cross-cutting infrastructure.
 
-- **Repositories/** -- Npgsql-based (no EF Core): `EventStoreRepository`, `OrganizationRepository`, `UserRepository`, `RoleAssignmentRepository`, `LocalConfigurationRepository`, `ApprovalPeriodRepository`, `ProjectRepository`, `TimerSessionRepository`, `AgreementConfigRepository`, etc.
+- **Repositories/** -- Npgsql-based (no EF Core): `EventStoreRepository`, `OrganizationRepository`, `UserRepository`, `RoleAssignmentRepository`, `LocalConfigurationRepository`, `ApprovalPeriodRepository`, `ProjectRepository`, `AgreementConfigRepository`, etc.
 - **Security/** -- `OrgScopeValidator` (org-scope enforcement on all endpoints)
 - **Services/** -- `ConfigResolutionService` (central + position override + local merge per [ADR-010](knowledge-base/decisions/ADR-010-local-config-merge-at-service-layer.md)), `AgreementConfigSeeder`
 - **EventSerializer** -- Explicit type map registration for all domain events ([DEP-003](knowledge-base/dependencies/DEP-003-event-serializer-must-register-all-types.md))
@@ -129,10 +130,10 @@ Outbound integrations to external systems. Async, event-driven, idempotent.
 
 React 18 SPA with TypeScript and Vite ([ADR-011](knowledge-base/decisions/ADR-011-frontend-design-system-and-component-strategy.md)).
 
-- **components/** -- Design system (IBM Plex Sans, `#0059B3` primary, CSS Modules + custom properties)
+- **components/** -- Design system (IBM Plex Sans, `#066b43` primary [oes.dk green, re-skinned S57], CSS Modules + custom properties)
 - **pages/** -- Skema (monthly spreadsheet), Min Tid (employee hub), admin pages, approval dashboard
 - **contexts/** -- `AuthContext` (JWT decode, role scopes, agreement code)
-- **hooks/** -- `useSkema`, `useTimer`, `useProjects`, `useAgreementConfigs`, etc.
+- **hooks/** -- `useSkema`, `useProjects`, `useAgreementConfigs`, etc. (timer retired S56/ADR-028)
 - **lib/** -- `apiClient` (typed `ApiResult<T>`), `roles.ts` (role hierarchy + `hasMinRole()`)
 - Guards: `RequireAuth` (redirect to login) + `RequireRole` (minimum role check)
 
@@ -169,7 +170,7 @@ Types (SharedKernel)
 | Frontend | React 18 + TypeScript + Vite | [ADR-011](knowledge-base/decisions/ADR-011-frontend-design-system-and-component-strategy.md) |
 | Styling | CSS Modules + CSS custom properties | designsystem.dk-inspired tokens |
 | Orchestration | Docker Compose | [ADR-006](knowledge-base/decisions/ADR-006-eight-service-docker-compose.md) |
-| Testing | xUnit (.NET), vitest + @testing-library/react (frontend) | 387+ tests |
+| Testing | xUnit (.NET), vitest + @testing-library/react (frontend) | see [docs/sprints/INDEX.md](sprints/INDEX.md) for current counts (3269 at S128) |
 
 ## Configuration Patterns
 

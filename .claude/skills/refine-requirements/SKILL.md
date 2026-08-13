@@ -103,7 +103,7 @@ Refinements that bake in wrong scope or assumptions waste effort downstream. WOR
 1. Write the Step 3 refinement block to `.claude/refinements/REFINEMENT-<short-topic>.md` (gitignored — already excluded via `.gitignore`). Use a short, descriptive slug for `<short-topic>` (e.g., `s24-task-2206-redo`, `compliance-warning-color`).
 2. Run BOTH review lenses (in parallel where possible):
    - **External lens (Codex)**: `codex exec "<review-prompt>"` referencing the refinement file path. Catches scope drift, missing exclusions, weak acceptance criteria, hidden assumptions, regression vectors.
-   - **Internal lens (Reviewer Agent)**: spawn the Reviewer Agent (per [docs/AGENTS.md](../../../docs/AGENTS.md)) with the refinement file as REVIEW SCOPE. Catches architectural fit against KB / ADRs / priority order, simplicity, scope-vs-priority alignment.
+   - **Internal lens (Reviewer Agent)**: spawn the Reviewer Agent (per [docs/AGENTS.md](../../../docs/AGENTS.md)) with the refinement file as REVIEW SCOPE. Catches architectural fit against KB / ADRs / the invariant model, simplicity, scope-vs-invariant alignment.
 3. Both lenses return BLOCKER / WARNING / NOTE findings in the standard severity format.
 4. Append findings inline in the user-facing Step 3 output under a new section:
 
@@ -128,10 +128,10 @@ Refinements that bake in wrong scope or assumptions waste effort downstream. WOR
 Review the requirements refinement at <path> against:
 1. Scope tightness — explicit exclusions, anything in scope that should be deferred, anything deferred that's actually load-bearing?
 2. Open Questions — genuine forks not surfaced? For each listed, is the recommendation defensible?
-3. Assumptions — wrong against current code, ADRs (docs/knowledge-base/), ROADMAP, CLAUDE.md priority order?
+3. Assumptions — wrong against current code, ADRs (docs/knowledge-base/), ROADMAP, CLAUDE.md invariant model?
 4. Acceptance Criteria — checklist actually verifies "done"? Anything verifiable that's missing?
 5. Risks — hidden coupling, in-flux interfaces, regression vectors, migration concerns missing?
-6. Architectural fit — conflicts with KB / ADRs / ROADMAP / priority order?
+6. Architectural fit — conflicts with KB / ADRs / ROADMAP / the invariant model?
 
 Return BLOCKER / WARNING / NOTE findings with file:line citations where applicable. If clean, say "Clean — no findings."
 Be terse.

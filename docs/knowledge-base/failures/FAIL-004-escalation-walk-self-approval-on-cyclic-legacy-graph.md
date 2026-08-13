@@ -171,4 +171,7 @@ self-approval, and it was not part of this ruling. Flagged here rather than fold
   is NEVER `employeeId`**. Preserve it in any refactor; the two tests above will catch a regression.
 - Do NOT "simplify" the walk by adding cycle-termination — see the visited-set note above; it silently
   disables `FallbackTraversalWarning` on exactly the graphs that need it.
-- The residual (a subject's own vikar) needs an owner ruling before anyone changes it.
+- The residual (a subject's own vikar as approver) was **owner-ruled and fixed 2026-07-30** — see
+  RES-003 for the ruling of record and its application sites; preserve it in any refactor. (The
+  narrower "approval-by-one's-own-delegate" distinction noted above was recorded, not separately
+  re-ruled.)

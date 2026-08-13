@@ -115,7 +115,7 @@ Organizations are linked to agreements (agreement_code, ok_version)
 Some ministries have centralized HR placed in a child organization (e.g. a styrelse) that covers the entire ministry subtree
 Subtree resolution must be efficient (single query) for scope-based authorization
 
-Reporting-line hierarchy (ADR-027): Complementing the org-unit hierarchy, each employee may have a designated manager via a temporal reporting-line model. Each Ministry or Styrelse is an independent reporting-tree root. Relationships: PRIMARY (one per employee) and ACTING (temporary delegation / vikarierende leder). Cross-org management within the same tree is permitted. The reporting line determines approval routing; org-scope authority determines approval authorization.
+Reporting-line hierarchy (ADR-027): Complementing the org-unit hierarchy, each employee may have a designated manager via a temporal reporting-line model. Relationships: PRIMARY (one per employee) and ACTING (temporary delegation / vikarierende leder). Approval authority is scoped to the employee's Organisation (the earlier independent-reporting-tree-root / same-tree cross-org model was narrowed to Organisation scope in S95: `ValidateSameTree` → `ValidateSameOrganisation`). The reporting line determines approval routing; org-scope authority determines approval authorization.
 
 Examples:
 Finansministeriet (Ministry)
@@ -138,16 +138,17 @@ System must implement 5 roles with organization-scoped access control.
 | **Employee** | Own data only | Register time, view own registrations, submit periods for approval, view own balances |
 
 Authorization constraints:
-Each role assignment is scoped to an organization with a scope type: GLOBAL, ORG_ONLY, or ORG_AND_DESCENDANTS
-Scope resolution uses organizational hierarchy — a scope on a parent org covers all descendants
+> **Current model — ADR-035 flat authority (S93):** authority follows an EXPLICIT set of one-or-more Organisations, never the org tree. The `ORG_AND_DESCENDANTS` / subtree language in this section and the "+ descendants" / "subtree" wording in the role table above describe the SUPERSEDED design — the bounding by an org-set is kept, only the subtree/ancestor inheritance is removed. Read "descendants"/"subtree" here as "the explicit Organisation set."
+Each role assignment is scoped with a scope type: GLOBAL or ORG_ONLY (an explicit set of one-or-more Organisations)
+Scope resolution matches the target org against that explicit org-set — subtree inheritance is retired (ADR-035)
 A user may hold multiple role assignments (e.g. Leader for Team A, HR for Styrelse B)
-HR scope is explicitly assignable — HR in a child organization can cover the parent ministry's entire subtree
+HR scope is explicitly assignable — an HR actor is granted the specific Organisation(s) they cover (e.g. several Styrelser under a ministry, listed explicitly); no subtree inheritance (ADR-035)
 Role changes are infrequent (monthly at most) and take effect on next authentication
 All role assignments must be auditable (who granted, when, expiration)
 
 API enforcement:
 All resource-keyed API endpoints must verify the actor's org scope covers the target resource's organization
-Scope verification uses materialized path prefix matching (scopes are embedded in JWT — no DB lookup per request for the scope itself)
+Scope verification matches the target org against the actor's explicit org-set (ADR-035 flat model); scopes are embedded in JWT (no DB lookup per request). Materialized-path prefix matching is dormant for authorization
 The target resource's org must be resolved at request time (e.g. employeeId → user's primaryOrgId → org's materializedPath)
 Employees may only access their own data — ownership check only, no org scope check needed
 Higher roles (Leader, HR, Admin) must pass org scope verification for cross-employee access
@@ -180,7 +181,7 @@ System must support:
 Period types: weekly or monthly
 Period status lifecycle: DRAFT → SUBMITTED → APPROVED or REJECTED
 Employees submit their own periods
-Leaders approve/reject periods for employees within their organizational scope. The system routes pending approvals to the employee's designated manager (ADR-027); any leader with matching org scope retains approval authority. When enforcement is enabled per-tree (ADR-027 D11), non-designated approvers must explicitly confirm the org-scope fallback (soft enforcement via 428 + confirmation)
+Leaders approve/reject periods for employees. The system routes pending approvals to the employee's designated manager (ADR-027). Approval **authority** (ADR-035 flat model): the designated/effective approver — via the ADR-027 edge, including a unit leader — OR an HR/Admin actor by org-scope over the employee's Organisation. The unfloored leader-by-org-scope approval branch and the per-tree REQUIRED-mode `428` org-scope-fallback confirmation (ADR-027 D11) were retired in S94.
 Only APPROVED periods may be exported to payroll
 A leader may reopen an APPROVED month **until it is sent to payroll**; once exported the month is locked — reopen is refused for all roles and changes go through retroactive corrections (ADR-034, S89/S90). Monthly payroll export is idempotent per (employee, month)
 Rejection must include a reason

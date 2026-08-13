@@ -1,11 +1,11 @@
-# [RES-002] Manager draft-visibility rule enforced at the Teamoversigt surface only (deferred endpoint-level gate)
+# [RES-002] Manager draft-visibility rule: surface withholding (S124) + endpoint gates on 3 of 12 reads (S128); 9-read remainder open
 
 | Field | Value |
 |-------|-------|
 | **ID** | RES-002 |
 | **Category** | resolution |
 | **Status** | approved — PARTIALLY ENFORCED (S128/TASK-12804: 3 of 12 reads gated); 9-read remainder OPEN |
-| **Sprint** | Sprint 124 |
+| **Sprint** | Sprint 124, 128 |
 | **Date** | 2026-07-30 |
 | **Domains** | Backend, Frontend, Security |
 | **Tags** | access-control, approval, draft-visibility, manager, priority-conflict, deferred-hardening, p7 |

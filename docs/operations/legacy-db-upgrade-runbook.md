@@ -154,5 +154,5 @@ After migration, verify table counts match greenfield expectations:
 
 ```sql
 SELECT schemaname, tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;
--- Expected: ~30 tables (events, event_streams, organizations, users, ...)
+-- Expected: ~67 tables (events, event_streams, organizations, users, ...)
 ```

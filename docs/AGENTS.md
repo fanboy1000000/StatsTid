@@ -113,11 +113,12 @@ ROLE: [one-line role description]
 SCOPE: You may ONLY create/modify files under: [file paths]
 DO NOT modify files outside your scope.
 
-PRIORITY ORDER (from CLAUDE.md):
-1. Architectural integrity
-2. Deterministic rule engine
-3. Event sourcing and auditability
-[... full priority list ...]
+GOVERNING MODEL (from docs/CONVENTIONS.md — included verbatim in this prompt):
+The five co-equal inviolable invariants — Architectural integrity; Domain correctness (incl.
+OK-version transitions and the payroll boundary); Auditability; Integration isolation & delivery;
+Security & access control — plus the ranked trade-offs (usability & UX, then shipping cadence). A
+solution that compromises ANY invariant is not a valid path: find another or escalate to the owner.
+CI/CD is the enforcement layer, not a priority.
 
 TASK:
 [specific subtask description with acceptance criteria]
@@ -170,7 +171,7 @@ The Reviewer Agent is an independent audit layer. It challenges agent outputs be
 ### Role and Boundaries
 
 The Reviewer:
-- Challenges agent outputs for priority violations, architectural breaches, quality regressions, and simplicity failures
+- Challenges agent outputs for invariant violations, architectural breaches, quality regressions, and simplicity failures
 - Acts as internal auditor, red team, compliance validator, architecture stress tester, and code quality reviewer
 - Produces advisory findings only — it never issues approvals or rejections
 - Has no file scope — it reads agent outputs and existing code context provided by the Orchestrator, but writes nothing
@@ -181,23 +182,21 @@ The Reviewer:
 
 | Tier | Condition | Review Required |
 |------|-----------|----------------|
-| MANDATORY | Task touches P1 (Architectural integrity) | Always |
-| MANDATORY | Task touches P2 (Deterministic rule engine) | Always |
-| MANDATORY | Task touches P3 (Event sourcing / auditability) | Always |
-| MANDATORY | Task touches P4 (Version correctness) | Always |
+| MANDATORY | Task touches ANY co-equal invariant — Architectural integrity; Domain correctness (rule engine, OK-version, payroll); Auditability; Integration isolation & delivery; Security & access control | Always |
 | MANDATORY | Task involves cross-domain changes (multiple agents) | Always |
 | MANDATORY | Task introduces a new pattern or abstraction | Always |
-| OPTIONAL | Task touches P5–P7 (integrations, payroll, security) | Orchestrator discretion |
 | SKIP | Small Tasks Exception applies (< 10 lines, single domain) | Never |
 | SKIP | Pure UI fix with no backend change | Never |
 | SKIP | Documentation-only change | Never |
 | SKIP | Trivial seed data update (no schema or logic change) | Never |
 
+**Precedence (SKIP wins):** a genuinely trivial change that meets a SKIP condition (Small Tasks Exception, pure-UI, docs-only, trivial seed) is exempt from review *even if it nominally touches an invariant* — this is the CLAUDE.md Small Tasks Exception. MANDATORY applies to every other invariant-touching change.
+
 ### Finding Severity Levels
 
 | Severity | Meaning | Expected Orchestrator Response |
 |----------|---------|-------------------------------|
-| BLOCKER | Priority violation or architectural breach | Strongly consider withholding approval and re-dispatching the responsible agent with the finding |
+| BLOCKER | Invariant violation or architectural breach | Strongly consider withholding approval and re-dispatching the responsible agent with the finding |
 | WARNING | Quality or simplicity concern, potential future issue | Note in sprint log; address at Orchestrator discretion |
 | NOTE | Suggestion for improvement; not blocking | Record if useful; no required action |
 
@@ -207,7 +206,7 @@ The Reviewer NEVER uses the words "approved", "rejected", "pass", or "fail" in i
 
 The Orchestrator defines the Reviewer's scope each time. The Reviewer does not self-scope. Each invocation receives:
 - The specific agent output(s) to review (diff, new files, changed files)
-- The specific concerns to evaluate (e.g. "check P2 compliance", "assess cross-domain boundary violations")
+- The specific concerns to evaluate (e.g. "check Domain-correctness (rule-engine) compliance", "assess cross-domain boundary violations")
 - Relevant existing code context (file contents, interfaces, KB entries)
 
 ### Reviewer Prompt Template
@@ -223,16 +222,11 @@ You produce advisory findings only — you never approve, reject, or modify file
 REVIEW SCOPE:
 [Orchestrator specifies which agent output(s) to review, which files changed, which concerns to evaluate.]
 
-PRIORITY ORDER (from CLAUDE.md):
-1. Architectural integrity
-2. Deterministic rule engine
-3. Event sourcing and auditability
-4. Version correctness (including OK transitions)
-5. Integration isolation and delivery guarantees
-6. Payroll integration correctness
-7. Security and access control
-8. CI/CD enforcement
-9. Usability and UX
+GOVERNING MODEL (from docs/CONVENTIONS.md — included verbatim in this prompt):
+Five co-equal inviolable invariants — Architectural integrity; Domain correctness (incl. OK-version
+transitions and the payroll boundary); Auditability; Integration isolation & delivery; Security &
+access control — plus ranked trade-offs (usability & UX, then shipping cadence). A solution that
+compromises ANY invariant is not a valid path. CI/CD is the enforcement layer, not a priority.
 
 AGENT OUTPUT:
 [Diff or new file contents produced by the domain agent(s) being reviewed.]
@@ -242,14 +236,12 @@ EXISTING CONTEXT:
 
 REVIEW CHECKLIST:
 [Orchestrator selects which checks apply:]
-- [ ] P1 — Architectural integrity preserved? Bounded contexts respected?
-- [ ] P2 — Rule engine code free of I/O, non-determinism, state?
-- [ ] P3 — Events remain append-only? Auditability maintained?
-- [ ] P4 — OK version resolution correct (entry-date, not current-date)?
-- [ ] P5 — Integrations properly isolated? Delivery guaranteed?
-- [ ] P6 — Payroll traceability chain maintained end-to-end?
-- [ ] P7 — Security intact? New endpoints authorized?
-- [ ] P8 — CI/CD will pass? Untested paths?
+- [ ] Architectural integrity — preserved? Bounded contexts respected?
+- [ ] Domain correctness — rule engine free of I/O, non-determinism, state? OK-version resolution correct (entry-date, not current-date)? Payroll traceability chain maintained end-to-end?
+- [ ] Auditability — events remain append-only?
+- [ ] Integration isolation & delivery — integrations isolated? Delivery guaranteed?
+- [ ] Security & access control — intact? New endpoints authorized?
+- [ ] Enforcement (CI/CD) — will pass? Untested paths?
 - [ ] Cross-domain — Output require changes outside agent's declared scope?
 - [ ] Simplicity — Unnecessary complexity, over-abstraction, or duplication?
 - [ ] Completeness — Gaps relative to acceptance criteria?
@@ -261,7 +253,7 @@ If no issues found: "No findings for the reviewed scope."
 
 Format:
 BLOCKER: [Title]
-Priority: P[N]
+Invariant / Trade-off: [Architectural integrity | Domain correctness | Auditability | Integration isolation & delivery | Security | trade-off: usability/cadence | n/a]
 Location: [File and line or section]
 Finding: [What the problem is]
 Recommendation: [What the agent should do]
@@ -293,18 +285,14 @@ Plan Review runs both an external Codex pass and an internal Reviewer pass — t
 | Lens | Catches |
 |------|---------|
 | External Codex (`codex exec`) | Scope tightness, validation-criteria coverage gaps, gate / downstream-consumer mismatches, ambiguous task boundaries, plan-encoded bugs (a "feature" that's really a security hole) |
-| Internal Reviewer Agent | Architectural fit, simplicity vs. over-engineering, agent assignment correctness, KB reference freshness, alignment with priority order |
+| Internal Reviewer Agent | Architectural fit, simplicity vs. over-engineering, agent assignment correctness, KB reference freshness, alignment with the invariant model |
 
 ### Trigger Criteria
 
 | Tier | Condition | Plan Review Required |
 |------|-----------|----------------------|
-| MANDATORY | Sprint touches P1 (Architectural integrity) | Always |
-| MANDATORY | Sprint touches P3 (Event sourcing / auditability) | Always |
-| MANDATORY | Sprint touches P4 (Version correctness) | Always |
-| MANDATORY | Sprint touches P7 (Security / access control) | Always |
+| MANDATORY | Sprint touches ANY co-equal invariant — Architectural integrity; Domain correctness (rule engine, OK-version, payroll); Auditability; Integration isolation & delivery; Security & access control | Always |
 | MANDATORY | Sprint touches schema migrations or payroll export | Always |
-| OPTIONAL | Sprint touches P5–P6 (integrations, payroll non-export) | Orchestrator discretion |
 | SKIP | Sprint is documentation-only or pure tech-debt cleanup | Never |
 | SKIP | Sprint replays a previously-validated plan with no scope change | Never |
 
@@ -333,16 +321,13 @@ This is a PLAN review, not a CODE review. There is no diff yet. You are checking
 
 SPRINT GOAL: [one-line objective from the plan's "## Sprint Goal" section]
 
-PRIORITY ORDER (what matters most, in order):
-1. Architectural integrity
-2. Deterministic rule engine (no I/O, no state, version-aware)
-3. Event sourcing and auditability
-4. OK version correctness (entry-date resolution)
-5. Integration isolation and delivery guarantees
-6. Payroll integration correctness (SLS codes, traceability)
-7. Security and access control
-8. CI/CD enforcement
-9. Usability and UX
+GOVERNING MODEL (from docs/CONVENTIONS.md):
+Five co-equal inviolable invariants — Architectural integrity; Domain correctness (rule engine
+[no I/O/state, version-aware], OK-version entry-date resolution, payroll SLS/traceability);
+Auditability (event sourcing); Integration isolation & delivery; Security & access control — plus
+ranked trade-offs (usability & UX, then shipping cadence). A plan that would require compromising
+ANY invariant is unsound: it must find another path or escalate to the owner. CI/CD is the
+enforcement layer, not a priority.
 
 REVIEW FOCUS:
 - **Scope tightness**: Are task boundaries clear? Any task that should be split or merged? Any work that belongs in a different sprint?
@@ -471,16 +456,13 @@ SCOPE: [sprint-end | per-task high-risk — {category}]
 
 SPRINT GOAL / TASK GOAL: [one-line sprint objective, or task acceptance criteria]
 
-PRIORITY ORDER (what matters most, in order):
-1. Architectural integrity
-2. Deterministic rule engine (no I/O, no state, version-aware)
-3. Event sourcing and auditability
-4. OK version correctness (entry-date resolution)
-5. Integration isolation and delivery guarantees
-6. Payroll integration correctness (SLS codes, traceability)
-7. Security and access control
-8. CI/CD enforcement
-9. Usability and UX
+GOVERNING MODEL (from docs/CONVENTIONS.md):
+Five co-equal inviolable invariants — Architectural integrity; Domain correctness (rule engine
+[no I/O/state, version-aware], OK-version entry-date resolution, payroll SLS/traceability);
+Auditability (event sourcing); Integration isolation & delivery; Security & access control — plus
+ranked trade-offs (usability & UX, then shipping cadence). A plan that would require compromising
+ANY invariant is unsound: it must find another path or escalate to the owner. CI/CD is the
+enforcement layer, not a priority.
 
 REVIEW FOCUS:
 [sprint-end: "Cross-task consistency, architectural drift, spec-vs-implementation alignment, integration seams, gaps between sprint goal and delivered work."]

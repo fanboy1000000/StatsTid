@@ -2,7 +2,7 @@
 
 > **Governance note**: This document is Orchestrator-owned. Only the Orchestrator may modify it. All workflow steps are mandatory unless explicitly marked otherwise.
 
-This document defines the Orchestrator's mandatory workflow, governance processes, and sprint management rules. For agent definitions, see [AGENTS.md](AGENTS.md). For the priority order, see [../CLAUDE.md](../CLAUDE.md).
+This document defines the Orchestrator's mandatory workflow, governance processes, and sprint management rules. For agent definitions, see [AGENTS.md](AGENTS.md). For the invariant model (invariants + ranked trade-offs), see [../CLAUDE.md](../CLAUDE.md) and [CONVENTIONS.md](CONVENTIONS.md).
 
 ## Orchestrator Workflow (MANDATORY)
 When given an implementation task (sprint plan, feature request, bug fix spanning multiple domains):
@@ -11,14 +11,14 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
 0a. **Entropy Scan** (sprint start only): Before the first task of a new sprint, run the Entropy Scanner to detect drift and accumulation. See "Entropy Management" section for details. Record findings in the sprint log header. Fix critical findings before proceeding; note non-critical findings for future sprints.
 0b. **Plan Review** (sprint start only, after Step 0a): If the sprint meets MANDATORY trigger criteria (see [AGENTS.md](AGENTS.md) Plan Review section), the Orchestrator runs both lenses on `docs/sprints/SPRINT-N.md` BEFORE any code is written:
    - **External Codex (plan mode)** — `codex exec "<plan-review-prompt>"` referencing the plan path. Codex reads the plan and returns BLOCKER/WARNING/NOTE findings on scope tightness, validation-criteria coverage, gate / downstream-consumer alignment, agent assignment correctness, KB freshness, and dependency closure.
-   - **Internal Reviewer (plan mode)** — spawn the Reviewer Agent with the plan as REVIEW SCOPE; same finding format. Catches a different lens (architectural fit, simplicity, priority alignment).
+   - **Internal Reviewer (plan mode)** — spawn the Reviewer Agent with the plan as REVIEW SCOPE; same finding format. Catches a different lens (architectural fit, simplicity, invariant alignment).
 
    Record findings in the sprint log under "## Plan Review (Step 0b)". BLOCKERs MUST be addressed (plan edit) before Step 1 (decompose) begins. Same cycle-cap shape as Step 7a applies per lens: every plan-edit gets a verification review, so cycle 2 always runs to verify the cycle-1 edit and cycle 3 always runs to verify the cycle-2 edit; halt-and-prompt fires AFTER cycle 3 verification IF that verification surfaces new BLOCKERs, before any cycle-4 plan edit begins. Skip per the SKIP rows of the trigger table for documentation-only / pure tech-debt sprints; record a one-line SKIP rationale in the sprint log when skipping. **Cost-benefit**: 5–10 min at sprint start prevents the much larger cost of fixing a plan-encoded bug after implementation (S19 cycle 1's BLOCKER was a plan-encoded "feature" — a plan reviewer asking "does the gate validate the same id the downstream consumer reads?" would have flagged it before code was written).
 1. **Decompose**: Break the task into domain-scoped subtasks. Each subtask must map to exactly one domain agent. (See [AGENTS.md](AGENTS.md) for agent definitions and file scopes.)
 2. **Delegate**: Spawn one Agent per subtask using the Claude Code `Agent` tool with `subagent_type: "general-purpose"`. Each agent receives:
    - Its domain role (e.g. "You are the Rule Engine Agent")
    - The specific files it may create or modify (see [AGENTS.md](AGENTS.md) for File Scope)
-   - The priority order from this CLAUDE.md
+   - The invariant model from docs/CONVENTIONS.md (injected verbatim into every agent prompt)
    - Exact acceptance criteria for its subtask
    - All necessary context (existing file contents, interfaces it must conform to, models it depends on)
 3. **Parallelize**: Run independent agents concurrently. Use `isolation: "worktree"` when multiple agents write to the repo simultaneously. Use `run_in_background: true` for agents that can work while others proceed.
@@ -40,7 +40,7 @@ When given an implementation task (sprint plan, feature request, bug fix spannin
 
    **Mechanical close gates** (`.claude/hooks/sprint-close-guard.ps1`, PreToolUse on the close commit — all four are enforced by the hook, not by convention):
    1. **Step-7a artifacts** — `.claude/reviews/SPRINT-N-step7a-{codex,reviewer}.md` must exist, each with a `verdict:` line and a `reviewed-against-commit: <SHA>` that prefixes HEAD (post-S38 staleness contract). Waiver: `SPRINT-N-step7a-WAIVED.md` (bypasses ALL gates).
-   2. **CI-health** (S63 post-close) — the latest completed push-triggered CI run on master must not be a `failure`: *you cannot close sprint N+1 on top of a red sprint N*. Background: CI's regression step was red on every master push ≥ S57 while all enforced gates were local — a ~47-test deterministic-failure cluster accumulated invisibly because a red CI nobody reads is not enforcement (P8). Fail-open on infrastructure errors (gh missing/offline); fail-closed only on a real red run. Waiver: `SPRINT-N-ci-health-WAIVED.md` (document the tracked debt item).
+   2. **CI-health** (S63 post-close) — the latest completed push-triggered CI run on master must not be a `failure`: *you cannot close sprint N+1 on top of a red sprint N*. Background: CI's regression step was red on every master push ≥ S57 while all enforced gates were local — a ~47-test deterministic-failure cluster accumulated invisibly because a red CI nobody reads is not enforcement (the enforcement layer failing silently). Fail-open on infrastructure errors (gh missing/offline); fail-closed only on a real red run. Waiver: `SPRINT-N-ci-health-WAIVED.md` (document the tracked debt item).
    3. **Consecutive-CI-pending** (S63 post-close) — one Docker-down close may record "CI-pending" on its `**Test Verified**` header line; a SECOND consecutive one blocks without `SPRINT-N-ci-pending-WAIVED.md`. Three consecutive CI-pending closes (S61/S62/S63) is how the Docker-gated suite went locally unverified for weeks. The check is line-anchored to the Test Verified row, so narrative mentions of "CI-pending" elsewhere in a log do not trigger it. Sprint logs MUST therefore keep recording Docker-deferred status on the `**Test Verified**` line (the established phrasing) for the gate to see it.
    4. **Untracked-source** (FAIL-003, post-S111) — a close commit is blocked while `git status --porcelain` reports `??` entries under `src/`, `tests/`, `tools/`, or `frontend/`: local build/test globs everything on disk, so local green does not prove those files are in the commit (the S111 spec≡runtime gate files were verified locally, claimed in the close commit, and absent from CI for two days). Waiver: `SPRINT-N-untracked-WAIVED.md` (document why the files legitimately stay uncommitted).
    5. Hook regression coverage: `.claude/hooks/test-sprint-close-guard.ps1` (14 cases, incl. deterministic seams `STATSTID_CI_HEALTH_MOCK` / `STATSTID_SPRINTS_DIR` / `STATSTID_UNTRACKED_MOCK` — all honored ONLY for the harness-reserved sprint number S99, so a leaked env var can never silently disable a gate for a real close) — run it after any hook edit.
@@ -76,7 +76,7 @@ The project maintains a structured, version-controlled knowledge base at `docs/k
 | ADR | `decisions/` | Architectural Decision Records — why we chose X over Y |
 | PAT | `patterns/` | Validated pattern conventions — how we do X |
 | DEP | `dependencies/` | Cross-domain dependency registry — X depends on Y |
-| RES | `resolutions/` | Priority conflict resolutions — when P2 conflicts with P9 |
+| RES | `resolutions/` | Conflict resolutions — an owner ruling when two invariants genuinely conflict, or how a trade-off (usability/cadence) was balanced against an invariant |
 | FAIL | `failures/` | Failure/pivot log — what we tried that didn't work and why |
 
 ## Agent Responsibilities
@@ -124,14 +124,20 @@ Each sprint log includes a Legal & Payroll Verification table tracking:
 - Retroactive recalculation stability
 
 # Roadmap
-The project maintains a phased roadmap at `ROADMAP.md` using a rolling detail pattern.
+`ROADMAP.md` is the project's living **forward view**: the loose path to production + a durable
+**backlog** of deferred items + a **loose-ideas** parking lot. (It was repurposed in the S128-era
+docs cleanup — it previously held "rolling next-sprint planning," but that job moved to the sprint
+logs and the completed-sprint ledger moved to `docs/sprints/INDEX.md`; the old doc had rotted because
+nothing forced it current.)
 
 ## Governance
-- **Rolling detail**: Only the next sprint has task-level planning. Future phases have milestone-level descriptions.
-- **Sprint promotion**: After completing a sprint, the Orchestrator promotes the next sprint to detailed planning and updates ROADMAP.md.
-- **Coverage tracker**: ROADMAP.md includes a SYSTEM_TARGET.md coverage tracker showing projected completion per phase.
-- **Orchestrator-only writes**: Only the Orchestrator may modify ROADMAP.md. Already enforced by the Constraints section (ROADMAP.md in protected files list).
-- **Consistency**: Sprint plans in ROADMAP.md must be consistent with sprint logs in `docs/sprints/`.
+- **Planning lives in the sprint logs**: next-sprint task-level planning is authored in each
+  `docs/sprints/SPRINT-N.md` (goal + task decomposition + Open follow-ups). ROADMAP does NOT hold
+  next-sprint task plans; the completed-sprint ledger is `docs/sprints/INDEX.md`.
+- **The forcing function (keeps ROADMAP alive)**: at each **sprint close**, the Orchestrator routes
+  any deferred follow-up NOT scheduled for the next sprint into ROADMAP's Backlog, and drops loose
+  ideas into its parking lot as they arise. Items leave the Backlog when promoted into a sprint.
+- **Orchestrator-only writes**: Only the Orchestrator may modify ROADMAP.md (in the protected-files list).
 
 # Sprint Numbering & Re-prioritization
 
