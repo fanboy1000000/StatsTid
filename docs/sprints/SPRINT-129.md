@@ -177,3 +177,34 @@ severity × invariant-impact ordered. All are small, bounded fixes:
 7. **SEC-021** — add an ownership/scope check to `GET /orchestrator/tasks/{id}`.
 8. **SEC-028** — add a least-privilege `permissions:` block to `ci.yml`.
 Not an audit-sprint task (audit proposes, remediation fixes). Entered in the ROADMAP backlog.
+
+## TASK-C round 2 (2026-08-14) — deeper config bodies + full frontend
+
+Same `e955e13` worktree isolation. 2 agents (config/settlement bodies + full frontend) + 1 refuter.
+Calibration already validated in round 1 — round 2 is pure coverage extension.
+
+**Cleared (strong positives):** the money-adjacent **settlement / reversal / termination flows are
+robust** (quantities copied from row/snapshot, never client-recomputed; forfeit/waived/feriehindring/
+§21 bounded guards; per-employee advisory lock + in-lock re-read + CAS). Injection + mass-assignment
+clean. The **full frontend is clean** — zero XSS sinks, no open redirects, no prototype pollution, no
+token/PII leakage, clean deps.
+
+**New findings (register Group 8) — OWNER RULING PENDING:**
+- **sec-032** Position-Override cross-tenant config write — CONFIRMED ×2, refuter **upgraded Medium→High**:
+  all 7 routes only `LocalAdminOrAbove`, no org-scope check in any handler, resource is globally keyed,
+  `ConfigResolutionService.cs:153` resolves it per-agreement/position with NO orgId → a single-institution
+  LocalAdmin changes norm/flex for that position across ALL institutions. **Rec: FIX-NEXT (High) — add
+  GlobalAdminOnly (match the siblings) OR a real org-scope binding.** New High → recommend slotting into
+  the remediation list after SEC-009/020/027.
+- **sec-033** config-value validation gap (PositionOverride + AgreementConfig + EntitlementConfig) —
+  CONFIRMED. Rec: **fix-next** — add range/negativity validation + DB CHECK backstops on the
+  money-adjacent numeric fields.
+- **sec-034** Position-Override PUT re-key — CONFIRMED (Possible). Rec: **fix-next (cheap, rides with
+  SEC-032/033 in the same file)** or accept.
+- **sec-035** supersession audit-row omission — CONFIRMED (Possible, repo-invariant-dependent). Rec:
+  **verify the repo invariant; fix-next if reproducible**, else close.
+- **sec-031** missing CSP — CONFIRMED (Low). Rec: **fix-next (cheap)** — add a CSP header/meta.
+
+**Round-2 residue (round-3 candidates, if ever):** persistence/outbox consumers + a dependency audit
+were not swept. The sweep is otherwise comprehensive across the HTTP surface, auth chain, deploy, and
+frontend.

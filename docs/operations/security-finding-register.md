@@ -106,6 +106,22 @@ citation) · `adjudication` (→ `SPRINT-129.md#sec-id`, filled by the sweep).
 | SEC-029 | Container images run as root (no `USER`), so an RCE in any service runs as uid 0 inside its container. | Containers run as root | sweep-NEW | Info | A05 / EoP | CONFIRMED — ruling pending | 7× `**/Dockerfile` | →SPRINT-129#sec-029 |
 | SEC-030 | The UI derives the logged-in role/scope from client-writable localStorage, so tampering flips the rendered role (UI gating only — the backend still enforces). | UI role from client-writable storage | sweep-NEW | Medium | A01 / Tampering | CONFIRMED (rides with SEC-025) — ruling pending | `AuthContext.tsx:39` | →SPRINT-129#sec-030 |
 
+## Group 8 — round-2 sweep (2026-08-14: deeper config bodies + full frontend)
+
+> Round 2 cleared the highest-stakes area: the settlement/reversal/termination **money flows are
+> robust** (quantities copied from snapshots, never client-recomputed; bounded guards; per-employee
+> advisory lock + CAS), and injection + mass-assignment are clean. The **full frontend is clean** (no
+> XSS sinks, redirects, prototype pollution, or data leakage). The new findings are in config-CRUD
+> bodies + one FE header gap.
+
+| SEC | What it means (plain language) | Title | Origin | Sev | OWASP/STRIDE | Status | Source of truth | Adjudication |
+|-----|--------------------------------|-------|--------|-----|--------------|--------|-----------------|--------------|
+| SEC-032 | A LocalAdmin of ONE institution can edit Position-Override config (norm/flex hours) that resolves for EVERY institution on that agreement+position — the endpoint is only LocalAdmin-floored with no org-scope check, while all sibling global config is GlobalAdmin-only. | Position-Override cross-tenant config write | sweep-NEW (r2) | **High** | A01 / EoP | CONFIRMED ×2 (agent+refuter, refuter upgraded Medium→High) — ruling pending | `PositionOverrideEndpoints.cs:164`; `ConfigResolutionService.cs:153` | →SPRINT-129#sec-032 |
+| SEC-033 | Money-adjacent config numbers (norm hours, min rest, accrual quotas) have no server-side range/negativity validation and no DB CHECK — an admin can set values that corrupt overtime/vacation/norm calc (e.g. `MinimumRestHours=0`, negative norm). | Config-value validation gap (3 families) | sweep-NEW (r2) | Medium | A04 / Tampering | CONFIRMED — ruling pending | `PositionOverrideEndpoints.cs:93`; `AgreementConfigEndpoints.cs:862`; `EntitlementConfigEndpoints.cs:164` | →SPRINT-129#sec-033 |
+| SEC-034 | A Position-Override PUT can re-key an active override to a different agreement/position slot without re-checking the active-uniqueness index. | Position-Override PUT re-key state-confusion | sweep-NEW (r2) | Low | A04 / Tampering | CONFIRMED (Possible) — ruling pending | `PositionOverrideEndpoints.cs:205-220` | →SPRINT-129#sec-034 |
+| SEC-035 | On a config publish-supersession, the archive of the prior version emits its audit row only if a version field is non-null — a null could leave a silent audit gap on a lifecycle transition. | Supersession audit-row omission | sweep-NEW (r2) | Low | A09 / Repudiation | CONFIRMED (Possible; repo-invariant-dependent) — ruling pending | `AgreementConfigEndpoints.cs:515-528` | →SPRINT-129#sec-035 |
+| SEC-031 | The frontend ships no Content-Security-Policy header — a defense-in-depth gap (no impact today given zero XSS sinks, but no cap if one ever appears). | Missing Content-Security-Policy | sweep-NEW (r2) | Low | A05 / Tampering | CONFIRMED — ruling pending | `frontend/index.html:1-12` | →SPRINT-129#sec-031 |
+
 ## Notes on SEC-026 and calibration
 
 > **Note on SEC-026 status vs "fixed never in-sprint."** The register's `fixed(… never in-sprint)`

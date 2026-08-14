@@ -333,10 +333,17 @@ staleness is in counts/pins/anchor:
       holes rediscovered blind, 0 miss). Refute panel: 5 High findings CONFIRMED, SEC-009 + SEC-027
       double-refuted (agent + Codex). **SEC-009 OVERTURNED (worse — top fix); SEC-004/013
       downgraded/closed; SEC-022 split; new SEC-027…030.** Full records in `SPRINT-129.md`.
-- [ ] **TASK-E — owner adjudication (the one remaining touchpoint) → remediation-sprint proposal.**
-      Owner rules each SEC disposition (re-ratify/overturn/accept/fix-next); the recommended
-      dispositions + a severity-ordered remediation proposal are in `SPRINT-129.md`. Round-2 candidates
-      (deeper config-endpoint bodies, full frontend sweep) noted.
+- [x] **TASK-E — owner adjudication + remediation proposal — DONE (2026-08-14, `1dfb865`).** Owner
+      approved the fix-next order (8 items) + hobby accepts; remediation drafted to ROADMAP backlog.
+- [x] **TASK-C round 2 — DONE (2026-08-14).** Deeper config-CRUD bodies + full frontend. Money flows
+      (settlement/reversal/payout) + injection + mass-assignment + the whole frontend RULED CLEAN. New
+      findings SEC-031…035; the headline is **SEC-032 (Position-Override cross-tenant config write,
+      HIGH** — refuter-upgraded) + SEC-033 config-validation-gap class. Owner ruling on the 5 new rows
+      pending; recommend SEC-032 joins fix-next. Full records in `SPRINT-129.md`.
+- **WS5 STATUS: the sweep is substantively COMPLETE** (2 rounds, calibration 3/3, ~46 findings,
+      HTTP surface + auth chain + deploy + frontend + config bodies + money flows all covered).
+      Remaining: owner rules the 5 round-2 findings; the remediation sprint (fix-next, now +SEC-032)
+      is the follow-on. Round-3 candidates (persistence/outbox, dependency audit) optional.
 
 ### WS6 — Environment / infra (parked / on demand)
 - [ ] Native stack back up (backend-api + Vite) when UI testing is wanted (Postgres already up).
