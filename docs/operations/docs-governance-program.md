@@ -328,13 +328,15 @@ staleness is in counts/pins/anchor:
       work; confirmed pre-existing on `4f41995`/`e955e13`). Forced patched SSH.NET 2026.0.0 (+ Logging.
       Abstractions 8.0.2→8.0.3) per the S39 override convention; build + scan verified clean;
       build-and-test CONFIRMED green. Recorded as SEC-026 (A06). Test-only; 3269 unchanged.
-- [ ] **TASK-C — the sweep — PENDING the owner-held calibration manifest (the one handoff).** Then:
-      static-analysis-only (TOOL-PROFILE-enforced) fan-out in the `e955e13` worktree; fixed per-slice
-      prompt templates + external prompt-audit; ledger → adversarial refute-panel verification (TASK-D)
-      → owner adjudication (TASK-E) → remediation-sprint proposal. **Cross-device resume:** the plan is
-      tracked at `docs/sprints/SPRINT-129-refinement-rev6.md` (the `.claude/` original is gitignored);
-      the RESUME STATE + the TASK-C recipe are in `SPRINT-129.md`; the owner holds the calibration
-      manifest (SEC-020/021/025).
+- [x] **TASK-C round 1 + TASK-D — DONE (2026-08-14).** Sweep ran in the `e955e13` worktree
+      (isolation verified), 5 slice agents, 36 ledger findings. **Calibration PASS 3/3** (all held-out
+      holes rediscovered blind, 0 miss). Refute panel: 5 High findings CONFIRMED, SEC-009 + SEC-027
+      double-refuted (agent + Codex). **SEC-009 OVERTURNED (worse — top fix); SEC-004/013
+      downgraded/closed; SEC-022 split; new SEC-027…030.** Full records in `SPRINT-129.md`.
+- [ ] **TASK-E — owner adjudication (the one remaining touchpoint) → remediation-sprint proposal.**
+      Owner rules each SEC disposition (re-ratify/overturn/accept/fix-next); the recommended
+      dispositions + a severity-ordered remediation proposal are in `SPRINT-129.md`. Round-2 candidates
+      (deeper config-endpoint bodies, full frontend sweep) noted.
 
 ### WS6 — Environment / infra (parked / on demand)
 - [ ] Native stack back up (backend-api + Vite) when UI testing is wanted (Postgres already up).

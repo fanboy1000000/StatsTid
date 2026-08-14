@@ -80,26 +80,66 @@ owner confirms they hold this; then the sweep runs.
 6. Score calibration (≥2 of 3 rediscovered code-anchored) → TASK-E owner adjudication → fill the
    adjudication records below → remediation-sprint proposal.
 
-## TASK-C — the sweep (PENDING — owner handoff: the calibration manifest)
+## TASK-C — the sweep (RUN — round 1 complete, 2026-08-14)
 
-**Blocked on the one owner touchpoint:** the Orchestrator selects 3 calibration holes from the
-swept-unruled set (SEC-020…025) and hands the owner a **sealed manifest** (ids + evidence hash) to
-hold; the sweep then runs blind and is scored after round 1. Until the owner holds the manifest, the
-calibration control is not independent, so the sweep does not start. Then: fan-out read-only agents in
-the `e955e13` worktree → ledger → refute panel (TASK-D) → owner adjudication (TASK-E) → remediation
-proposal.
+Ran per the recipe: worktree `git worktree add --detach <path> e955e13`, isolation verified (register,
+sprint doc, refinement snapshot, and the untracked refinement all ABSENT from the worktree; the
+threat-model skill present). Five read-only `Explore`-profile discovery/revisit agents, one per slice,
+blind to the answer key; Orchestrator sole ledger writer. Ledger: 36 findings (gitignored sweep dir).
 
----
+### Calibration — PASS 3/3 (the method's self-test)
+All THREE held-out calibration holes were independently rediscovered by the discovery slices, code-
+anchored, with no answer-artifact citation: **SEC-025** (localStorage bearer token) by slice (v) at
+`AuthContext.tsx:109`; **SEC-020** (`Auth:UseDatabase` fail-open) by slice (iii) at
+`Program.cs:371`/`AuthEndpoints.cs:77-93`; **SEC-021** (Orchestrator task IDOR) by slice (ii) at
+`Program.cs:66-70`. Miss rate 0/3. The bar (≥2/3) is exceeded — the sweep method independently finds
+known holes.
 
-## Adjudication records (filled by the sweep — TASK-D/E)
+### Coverage (round 1)
+Slice (i) tiers: all 137 Backend endpoints' verb→policy→floor mapped + auth-core deep-read (1 finding,
+6 areas ruled clean). (ii) service↔service: 4 services + all HTTP-client sites (5 findings, SSRF ruled
+out). (iii) deploy/CI: 3 workflows + both compose + mocks + 7 Dockerfiles + all appsettings (9
+findings). (iv) revisit: all 8 ruled residuals re-attacked with fresh evidence. (v) browser-auth:
+bounded pass clean except the token-storage class. Round-2 candidates: the deeper bodies of the
+GlobalAdmin-config endpoints + settlement/reversal internals (floors confirmed, bodies not fully
+traced); the full frontend sweep.
 
-*Each SEC row's durable, PM-readable record: prior disposition · new adversarial evidence (src/
-file:line + commit) · finder verdict · refuter verdict(s) · disagreement resolution · owner decision +
-rationale · date · remediation pointer. Populated as the sweep adjudicates each row; empty anchors
-below are the destinations the register points to.*
+### TASK-D — refute panel (adversarial verification)
+The five new/overturned High findings each passed a fresh refuter (given only claim+evidence);
+**SEC-009 and SEC-027 double-refuted (agent + Codex)**. All five CONFIRMED. Severity nuance applied:
+SEC-015 scoped to dev/CI/demo (a production fail-fast exists); SEC-019 tempered (the `claude-code-
+action` has a built-in write-access actor check, so the workflow-layer gap is defense-in-depth).
 
-<!-- Group 1 --> ### sec-001 · ### sec-002 · ### sec-003 · ### sec-004 · ### sec-005
-<!-- Group 2 --> ### sec-006 · ### sec-007 · ### sec-008 · ### sec-009 · ### sec-010 · ### sec-011 · ### sec-012
-<!-- Group 3 --> ### sec-013 · ### sec-014
-<!-- Group 4 --> ### sec-015 · ### sec-016 · ### sec-017 · ### sec-018 · ### sec-019
-<!-- Group 5 --> ### sec-020 · ### sec-021 · ### sec-022 · ### sec-023 · ### sec-024 · ### sec-025
+## Adjudication records (round 1) — OWNER RULING PENDING on each
+
+*Prior disposition · sweep verdict · evidence · refuter · recommended disposition. Owner rules
+re-ratified / overturned / accepted / fix-next-sprint on each.*
+
+### Revisit residuals (Groups 1–3)
+- **sec-001** JWT-role-revoke TOCTOU — RE-RATIFIED (bounded, auditable; role read outside the 2 held advisories, `DesignatedApproverAuthorizer.cs:221`). Rec: **carry** (fix bundles with SEC-003).
+- **sec-002** user-deactivation 3-paths/2-domains — RE-RATIFIED (flag non-corrupting; companion-state drift residual). Rec: **carry**.
+- **sec-003** JWT 8h no revocation — RE-RATIFIED + noted as the AMPLIFIER turning SEC-001/002 into ≤8h windows. Rec: **fix-next** (short TTL / revocation list) — platform.
+- **sec-004** secondary-principal sibling escape — **DOWNGRADE**: structurally CLOSED by the S92 flatten (`ValidateSameOrganisationAsync` = exact `primary_org` equality). Rec: **close** (fix the stale "tree" error text only).
+- **sec-006** 9-read tier-gate remainder — RE-RATIFIED (timing rule, not an access boundary; tracked RES-002). Rec: **fix-next** (finish the tier gate) or **accept**.
+- **sec-009** HR/GlobalAdmin self-approval — **OVERTURN (worse)**: fully reachable, structurally unguarded on the org-scope leg, mis-audited as `ORG_SCOPE_FALLBACK`; GlobalAdmin unconditional. Triple-confirmed (slice i + slice iv + refuter + Codex). RES-003 class OPEN, owner-unruled. Rec: **FIX-NEXT (highest priority)** — add the `actor != employee` self-guard on the org-scope approve/reject/reopen legs.
+- **sec-013** prefetched-authority fail-open — **DOWNGRADE**: mitigated in current code (resolver routes out-of-scope to live SQL; the GATE source fails CLOSED). Rec: **close**.
+- **sec-014** governance-hop confused-deputy — RE-RATIFIED (rule is pure, no data reachable; missing defense-in-depth only). Rec: **accept** or **fix-next** (bind subject↔employeeId at the rule engine).
+
+### Deployment-config (Group 4)
+- **sec-015** committed JWT signing key + code fallback — CONFIRMED (dev/CI/demo; prod fail-fast exists). Rec: **fix-next** (env-only key, remove the code fallback).
+- **sec-016** committed DB password — CONFIRMED. Rec: **accept (hobby)** / cleanup at go-serious.
+- **sec-017** shared demo password incl GlobalAdmin — CONFIRMED. Rec: **accept (hobby)**.
+- **sec-018** unauth mock services disclose payloads — CONFIRMED (dev harness). Rec: **accept**.
+- **sec-019** workflow secret on untrusted triggers — CONFIRMED but TEMPERED (action's built-in write-access check is the real gate). Rec: **fix-next (cheap)** — add an `author_association` gate as defense-in-depth.
+
+### Swept-unruled (Group 5) + new
+- **sec-020** `Auth:UseDatabase` fail-open (admin01/admin=GlobalAdmin) — CONFIRMED (calibration). Rec: **FIX-NEXT** — default the flag to TRUE / remove the in-memory admin table.
+- **sec-021** Orchestrator task-read IDOR — CONFIRMED (calibration). Rec: **fix-next** — add an ownership/scope check.
+- **sec-022** Orchestrator `/execute` + raw-auth-forward — **SPLIT**: the `/execute` scope gate is SOUND (overturned-as-safe); only the raw-bearer-forward half stands (Low, blast-radius). Rec: **downgrade** to the forward half.
+- **sec-023** `external/send` unfloored JSON relay — CONFIRMED (mock downstream in this config). Rec: **fix-next** — add a role floor + schema.
+- **sec-024** RuleEngine can't org-scope (config disclosure) — CONFIRMED (Authenticated-only, no DB). Rec: **accept** or **fix-next** (different control at the boundary).
+- **sec-025** frontend localStorage bearer token — CONFIRMED (calibration). Rec: **fix-next / round-2** — the browser-token-storage redesign.
+- **sec-027** service self-mints GlobalAdmin over shared key — CONFIRMED ×2 (agent + Codex): any key-holder (incl. low-trust External) mints GlobalAdmin; no per-service audience/identity. Rec: **FIX-NEXT (high)** — per-service identity / drop the self-minted GlobalAdmin.
+- **sec-028** CI workflow no `permissions:` block — CONFIRMED (Low; fork PRs read-only bounds it). Rec: **fix-next (cheap)**.
+- **sec-029** containers run as root — CONFIRMED (Info). Rec: **accept** / hardening backlog.
+- **sec-030** UI role/scope hydrated from client-writable localStorage — CONFIRMED (Medium; UI-gating only, backend enforces). Rec: **accept** (rides with SEC-025).

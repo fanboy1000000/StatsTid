@@ -3,6 +3,14 @@
 
 **Status**: LIVE (created S129, 2026-08-13). **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `e955e13`.
 
+> **ROUND-1 SWEEP COMPLETE (2026-08-14) — see `docs/sprints/SPRINT-129.md` for the full adjudication
+> records.** Calibration **PASS 3/3** (the 3 held-out holes independently rediscovered from code).
+> Refute panel: 5 High findings CONFIRMED (SEC-009 + SEC-027 double-refuted, agent + Codex). Net
+> changes: **SEC-009 OVERTURNED (worse — the top fix priority)**; **SEC-004 + SEC-013 downgraded/closed**
+> (better than recorded); **SEC-022 split** (the `/execute` gate is sound; only the raw-auth-forward
+> stands); rest re-ratified. New confirmed: **SEC-027…030** (below). **Owner ruling on each disposition
+> is PENDING.**
+
 **What this is (plain language).** A single, durable list of every security weakness we know about or
 find, so none is lost and each is *re-attacked over time rather than quietly assumed settled*. It is a
 **pointer index**: each row is a one-line summary + a citation to the real source of truth (a
@@ -88,6 +96,17 @@ citation) · `adjudication` (→ `SPRINT-129.md#sec-id`, filled by the sweep).
 | SEC | What it means (plain language) | Title | Origin | Sev | OWASP/STRIDE | Status | Source of truth | Adjudication |
 |-----|--------------------------------|-------|--------|-----|--------------|--------|-----------------|--------------|
 | SEC-026 | The regression test suite pulled in SSH.NET 2023.0.0 (via Testcontainers), which carries a High CVE (SCP path traversal) — no real exposure (test-only, no untrusted-SCP download) but it failed the repo-wide CI vulnerable-package gate. | SSH.NET transitive CVE-2026-48798 | sweep-NEW (CI-incidental) | High | A06 / Tampering | **fixed** (forced patched SSH.NET 2026.0.0 in the Regression project, per the S39 transitive-CVE-override convention; build + scan verified clean) | CVE-2026-48798 / GHSA-q939-rpr3-3284; `tests/StatsTid.Tests.Regression/*.csproj` | this commit |
+
+## Group 7 — new findings confirmed by the round-1 sweep (2026-08-14)
+
+| SEC | What it means (plain language) | Title | Origin | Sev | OWASP/STRIDE | Status | Source of truth | Adjudication |
+|-----|--------------------------------|-------|--------|-----|--------------|--------|-----------------|--------------|
+| SEC-027 | Any service holding the shared JWT key (even the low-trust External integration) can mint itself a `GlobalAdmin` token that passes every admin gate — there's no per-service identity. | Service self-mints GlobalAdmin over shared key | sweep-NEW | High | A07 / Spoofing-EoP | CONFIRMED ×2 (agent+Codex) — ruling pending | `HttpRuleClassificationProvider.cs:117`; `JwtValidationSetup.cs:73-84` | →SPRINT-129#sec-027 |
+| SEC-028 | The CI workflow declares no least-privilege `permissions:` block, so its jobs inherit the default (broader) GitHub token scope. | CI no permissions block | sweep-NEW | Low | A05 / EoP | CONFIRMED (fork-PR read-only bounds it) — ruling pending | `.github/workflows/ci.yml:3` | →SPRINT-129#sec-028 |
+| SEC-029 | Container images run as root (no `USER`), so an RCE in any service runs as uid 0 inside its container. | Containers run as root | sweep-NEW | Info | A05 / EoP | CONFIRMED — ruling pending | 7× `**/Dockerfile` | →SPRINT-129#sec-029 |
+| SEC-030 | The UI derives the logged-in role/scope from client-writable localStorage, so tampering flips the rendered role (UI gating only — the backend still enforces). | UI role from client-writable storage | sweep-NEW | Medium | A01 / Tampering | CONFIRMED (rides with SEC-025) — ruling pending | `AuthContext.tsx:39` | →SPRINT-129#sec-030 |
+
+## Notes on SEC-026 and calibration
 
 > **Note on SEC-026 status vs "fixed never in-sprint."** The register's `fixed(… never in-sprint)`
 > rule is about not remediating *sweep-discovered* findings inside the audit sprint. SEC-026 was NOT
