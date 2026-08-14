@@ -14,325 +14,80 @@ using ReportingLineModel = StatsTid.SharedKernel.Models.ReportingLine;
 namespace StatsTid.Tests.Regression.Approval;
 
 /// <summary>
-/// SEC-009 / RES-003 — the segregation-of-duties (SoD) self-guard on the MANAGER-side approval
-/// decisions. The differential MATRIX that RES-003 item 1 asked for (the audit's output is a test
-/// matrix, not a document): for EACH authority leg — org-scope/HR-fallback, designated edge,
-/// unit-leader, vikar — a self actor is DENIED on approve while an OTHER actor via that SAME leg is
-/// ALLOWED (no regression); plus a positive self-match (a real self-id actually denies — guards
-/// against a no-op comparison), guard-ordering (self on an INELIGIBLE status still self-denies 403,
-/// not a state-leaking 409), the reopen split (HR/Admin self-reopen of an APPROVED period DENIED, of
-/// an EMPLOYEE_APPROVED period ALLOWED per owner ruling OQ-1a; the Employee-role arm unchanged), and
-/// the no-over-block cases (employee-approve + send self still succeed).
+/// S130 / SEC-009 — the shared per-CLASS fixture: ONE Postgres testcontainer + ONE booted API + the
+/// isolated <c>sec009_*</c> fixtures, created EXACTLY ONCE for the whole class and shared by every
+/// [Fact] through <see cref="Xunit.IClassFixture{TFixture}"/>.
 ///
-/// <para><b>The rule.</b> Nobody performs a manager DECISION on their own period. That blocks self on
-/// approve, reject, and reopen-of-<c>APPROVED</c>. It PERMITS self on the pre-approval self-undo
-/// (reopen of one's own <c>EMPLOYEE_APPROVED → DRAFT</c>), on <c>employee-approve</c>, and on
-/// <c>send</c> — the legitimate self-service the two-step flow depends on.</para>
+/// <para><b>Why a class fixture and not <c>IAsyncLifetime</c> on the test class.</b> xUnit
+/// instantiates a test class once per [Fact], so an <c>IAsyncLifetime</c> on the class boots a FRESH
+/// heavy container PER TEST (~13 here — each an <c>ApplyFullSchemaAsync</c> + host-seeder boot). Under
+/// the regression suite's high class-level parallelism that stampede exhausts the CI runner and a
+/// container can hang the whole job. A class fixture boots ONE container for all 13 tests; xUnit runs
+/// the [Fact]s within a class serially, so the tests simply share the one database.</para>
 ///
-/// <para><b>RED-on-old.</b> The org-scope/HR-fallback leg is SEC-009's exact defect: an
-/// HR/LocalAdmin/GlobalAdmin scoped over their own Organisation could approve their OWN period,
-/// because that leg does NOT route through <c>DesignatedApproverAuthorizer</c>'s predicate (where the
-/// unit-leader/vikar legs already self-exclude). Pre-fix, <c>Hr</c> approving their own period was a
-/// 200; now the endpoint's <c>ApprovalSelfGuard</c> denies it (403) before the status check. The
-/// edge/unit-leader/vikar self cases were already 403 via their per-path SQL exclusions — the matrix
-/// asserts each STILL denies (now via the guard, proven by the denial reason) AND that the other-actor
-/// leg is not regressed.</para>
-///
-/// <para>Each [Fact] boots a FRESH Postgres testcontainer (init.sql + host seeders) so the demo tree
-/// exists and the isolated <c>sec009_*</c> fixtures are seeded fresh per test. Endpoint-level via
-/// <see cref="StatsTidWebApplicationFactory"/>; idioms mirror <see cref="S105UnitLeaderApprovalTests"/>
-/// and <see cref="S94FlatApprovalTests"/>.</para>
+/// <para>Because the tests SHARE one database, every seeded period must be globally unique on the
+/// natural key <c>(employee_id, period_start, period_end)</c> — see the per-test YEAR blocks in
+/// <see cref="SelfApprovalGuardTests"/>.</para>
 /// </summary>
-[Trait("Category", "Docker")]
-public sealed class SelfApprovalGuardTests : IAsyncLifetime
+public sealed class SelfApprovalGuardFixture : IAsyncLifetime
 {
-    private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
+    private const string DevSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
 
     // STY02 is an ORGANISATION under MAO MIN01 (init.sql seed); the isolated unit + fixtures live here.
-    private const string OrgA = "STY02";
+    public const string OrgA = "STY02";
 
     // A single member unit under STY02 (disjoint from the demo 000000d0-… tree).
     private static readonly Guid UnitMember = Guid.Parse("5ec00900-0000-0000-0000-000000000001");
 
     // ── The four authority legs, each an actor who can act on Emp (the victim) ──
-    private const string Emp        = "sec009_emp";      // EMPLOYEE, member unit; PRIMARY edge → PrimaryMgr
-    private const string PrimaryMgr = "sec009_pmgr";     // LocalLeader — Emp's designated EDGE approver
-    private const string DirectLdr  = "sec009_direct";   // LocalLeader — leader of Emp's unit (UNIT-LEADER leg)
-    private const string VikarUsr   = "sec009_vikar";    // LocalLeader — active vikar of DirectLdr (VIKAR leg)
-    private const string Hr         = "sec009_hr";       // LocalHR over STY02 (ORG-SCOPE/HR fallback leg)
+    public const string Emp        = "sec009_emp";      // EMPLOYEE, member unit; PRIMARY edge → PrimaryMgr
+    public const string PrimaryMgr = "sec009_pmgr";     // LocalLeader — Emp's designated EDGE approver
+    public const string DirectLdr  = "sec009_direct";   // LocalLeader — leader of Emp's unit (UNIT-LEADER leg)
+    public const string VikarUsr   = "sec009_vikar";    // LocalLeader — active vikar of DirectLdr (VIKAR leg)
+    public const string Hr         = "sec009_hr";       // LocalHR over STY02 (ORG-SCOPE/HR fallback leg)
 
     // ── Send / employee-approve self-success (no-over-block) actors — full profile chain via RegressionSeed ──
-    private const string SelfSend   = "sec009_selfsend"; // EMPLOYEE — sends their OWN month
-    private const string SelfSend2  = "sec009_selfsend2";// EMPLOYEE — employee-approves their OWN period
+    public const string SelfSend   = "sec009_selfsend"; // EMPLOYEE — sends their OWN month
+    public const string SelfSend2  = "sec009_selfsend2";// EMPLOYEE — employee-approves their OWN period
 
-    // A monotonic seq for hand-written absence rows' outbox_id (a NOT-NULL BIGINT), clear of other suites.
-    private static long _absenceSeq = 90_090_000;
-
+    // Private: TestFixtures is internal, so exposing the harness type as a public property would be a
+    // CS0053 accessibility leak — only the connection string / factory / db factory are surfaced.
     private TestFixtures.DockerHarness _harness = null!;
-    private StatsTidWebApplicationFactory _factory = null!;
-    private DbConnectionFactory _dbFactory = null!;
+
+    public string ConnectionString { get; private set; } = null!;
+    public StatsTidWebApplicationFactory Factory { get; private set; } = null!;
+    public DbConnectionFactory DbFactory { get; private set; } = null!;
 
     public async Task InitializeAsync()
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
-        _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
-        _dbFactory = new DbConnectionFactory(_harness.ConnectionString);
-        _ = _factory.CreateClient(); // boot the host seeders (MAO→ORGANISATION tree + demo units + configs)
+        ConnectionString = _harness.ConnectionString;
+        Factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
+        DbFactory = new DbConnectionFactory(_harness.ConnectionString);
+        _ = Factory.CreateClient(); // boot the host seeders (MAO→ORGANISATION tree + demo units + configs)
 
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await using var conn = new NpgsqlConnection(ConnectionString);
         await conn.OpenAsync();
         await SeedAsync(conn);
     }
 
     public async Task DisposeAsync()
     {
-        _factory?.Dispose();
+        Factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
     }
 
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  (1) THE PER-LEG SELF-PAIR MATRIX — self DENIED, other-actor via the SAME leg ALLOWED.
-    // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>ORG-SCOPE / HR-FALLBACK leg (SEC-009's exact defect). Self: Hr (LocalHR over STY02)
-    /// approving their OWN period is DENIED (403, SoD) — pre-fix this was a 200. Other: Hr approves
-    /// Emp's period via the org-scope fallback → 200 (ORG_SCOPE_FALLBACK), no regression.</summary>
-    [Fact]
-    public async Task SelfPair_OrgScopeHrFallback_SelfDenied_OtherAllowed()
+    public JwtTokenService NewTokenService() => new(new JwtSettings
     {
-        // SELF (RED-on-old): Hr approving their own period is denied by the SoD guard.
-        var pSelf = await InsertPeriodAsync(Hr, "SUBMITTED", 5);
-        var selfRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pSelf}/approve", null);
-        await AssertSelfDeniedAsync(selfRsp);
-        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
+        Issuer = "statstid",
+        Audience = "statstid",
+        SigningKey = DevSigningKey,
+        ExpirationMinutes = 60,
+    });
 
-        // OTHER: Hr approves Emp via the org-scope fallback → 200, ORG_SCOPE_FALLBACK (no regression).
-        var pOther = await InsertPeriodAsync(Emp, "SUBMITTED", 6);
-        var otherRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pOther}/approve", null);
-        Assert.Equal(HttpStatusCode.OK, otherRsp.StatusCode);
-        Assert.Equal("APPROVED", await ReadStatusAsync(pOther));
-        Assert.Equal("ORG_SCOPE_FALLBACK", await ReadColumnAsync(pOther, "approval_method"));
-    }
-
-    /// <summary>DESIGNATED EDGE leg. Self: PrimaryMgr (Emp's edge approver) approving their OWN period is
-    /// DENIED (403, SoD). Other: PrimaryMgr approves Emp via the edge → 200, DESIGNATED_MANAGER.</summary>
-    [Fact]
-    public async Task SelfPair_DesignatedEdge_SelfDenied_OtherAllowed()
-    {
-        var pSelf = await InsertPeriodAsync(PrimaryMgr, "SUBMITTED", 5);
-        var selfRsp = await LeaderClient(PrimaryMgr).PostAsync($"/api/approval/{pSelf}/approve", null);
-        await AssertSelfDeniedAsync(selfRsp);
-        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
-
-        var pOther = await InsertPeriodAsync(Emp, "SUBMITTED", 6);
-        var otherRsp = await LeaderClient(PrimaryMgr).PostAsync($"/api/approval/{pOther}/approve", null);
-        Assert.Equal(HttpStatusCode.OK, otherRsp.StatusCode);
-        Assert.Equal("APPROVED", await ReadStatusAsync(pOther));
-        Assert.Equal("DESIGNATED_MANAGER", await ReadColumnAsync(pOther, "approval_method"));
-    }
-
-    /// <summary>UNIT-LEADER leg. Self: DirectLdr (leader of Emp's unit, and — the D3 member-invariant — a
-    /// member of it) approving their OWN period is DENIED (403, SoD). Other: DirectLdr approves Emp via
-    /// the secondary unit-leader path → 200, UNIT_LEADER.</summary>
-    [Fact]
-    public async Task SelfPair_UnitLeader_SelfDenied_OtherAllowed()
-    {
-        var pSelf = await InsertPeriodAsync(DirectLdr, "SUBMITTED", 5);
-        var selfRsp = await LeaderClient(DirectLdr).PostAsync($"/api/approval/{pSelf}/approve", null);
-        await AssertSelfDeniedAsync(selfRsp);
-        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
-
-        var pOther = await InsertPeriodAsync(Emp, "SUBMITTED", 6);
-        var otherRsp = await LeaderClient(DirectLdr).PostAsync($"/api/approval/{pOther}/approve", null);
-        Assert.Equal(HttpStatusCode.OK, otherRsp.StatusCode);
-        Assert.Equal("APPROVED", await ReadStatusAsync(pOther));
-        Assert.Equal("UNIT_LEADER", await ReadColumnAsync(pOther, "approval_method"));
-    }
-
-    /// <summary>VIKAR leg. Self: VikarUsr (active stand-in for DirectLdr) approving their OWN period is
-    /// DENIED (403, SoD). Other: VikarUsr approves Emp via the unit-leader-vikar path → 200,
-    /// UNIT_LEADER_VIKAR (the approvals the absent leader OWES — RES-003 instance 3).</summary>
-    [Fact]
-    public async Task SelfPair_Vikar_SelfDenied_OtherAllowed()
-    {
-        var pSelf = await InsertPeriodAsync(VikarUsr, "SUBMITTED", 5);
-        var selfRsp = await LeaderClient(VikarUsr).PostAsync($"/api/approval/{pSelf}/approve", null);
-        await AssertSelfDeniedAsync(selfRsp);
-        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
-
-        var pOther = await InsertPeriodAsync(Emp, "SUBMITTED", 6);
-        var otherRsp = await LeaderClient(VikarUsr).PostAsync($"/api/approval/{pOther}/approve", null);
-        Assert.Equal(HttpStatusCode.OK, otherRsp.StatusCode);
-        Assert.Equal("APPROVED", await ReadStatusAsync(pOther));
-        Assert.Equal("UNIT_LEADER_VIKAR", await ReadColumnAsync(pOther, "approval_method"));
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  (1b) CHOKE-POINT BACKSTOP — the predicate self-guard pinned DIRECTLY (RES-003 item 2).
-    // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// RES-003 item 2 — the structural fail-CLOSED choke point inside
-    /// <see cref="DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(string, string, System.DateOnly?, System.Threading.CancellationToken)"/>,
-    /// pinned DIRECTLY rather than through an endpoint. The RES-003 CLASS closure rests on this backstop:
-    /// at the endpoints the <c>ApprovalSelfGuard</c> helper fires first, and on the read surfaces the SQL
-    /// already self-excludes, so NO differential is possible today — remove the choke-point guard and
-    /// every OTHER test still passes. This is therefore a CONTRACT / regression pin (defense-in-depth),
-    /// asserting the predicate itself denies self so a future authorization path that funnels through it
-    /// inherits the SoD rule fail-closed instead of re-omitting it.
-    ///
-    /// <para>Positive control + pin, together proving the guard fired: <c>DirectLdr</c> IS a legitimate
-    /// unit-leader approver of <c>Emp</c> (a DIFFERENT employee) — the predicate has real authority facts
-    /// and returns TRUE — yet <c>(DirectLdr, DirectLdr)</c> (actor == employee) returns FALSE.</para>
-    /// </summary>
-    [Fact]
-    public async Task ChokePoint_Predicate_DeniesSelf_Directly()
-    {
-        // Construct the authorizer exactly as the app wires it (ctor: DbConnectionFactory +
-        // ReportingLineRepository), over the same test database — a read-only predicate, so a directly
-        // constructed instance and the DI-resolved one evaluate identically.
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-
-        // Positive control: DirectLdr is a real unit-leader approver of Emp, so the predicate returns TRUE
-        // — without this, a self-FALSE could be a vacuous "no authority anywhere" rather than the guard.
-        Assert.True(await authorizer.IsEffectiveApproverOrUnitLeaderAsync(DirectLdr, Emp, asOf: today),
-            "precondition: DirectLdr must be a legitimate approver of Emp for the self-denial to be meaningful");
-
-        // The pin: actor == employee → the FIRST-thing choke-point guard denies, even though DirectLdr
-        // holds genuine approval authority over OTHERS.
-        Assert.False(await authorizer.IsEffectiveApproverOrUnitLeaderAsync(DirectLdr, DirectLdr, asOf: today));
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  (2) POSITIVE SELF-MATCH — a real self-id actually denies (no no-op comparison).
-    // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>Guards against a comparison that silently never matches (a no-op / wrong id space): a REAL
-    /// self-id must be DENIED on BOTH approve and reject, and the period must stay SUBMITTED. If
-    /// <c>ApprovalSelfGuard.IsSelf</c> were a no-op returning false, Hr (org-scope) would APPROVE their
-    /// own period (200/APPROVED) — so 403 + unchanged status proves the equality actually fired.</summary>
-    [Fact]
-    public async Task PositiveSelfMatch_RealSelfId_Denies_Approve_And_Reject()
-    {
-        var pApprove = await InsertPeriodAsync(Hr, "SUBMITTED", 5);
-        await AssertSelfDeniedAsync(await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pApprove}/approve", null));
-        Assert.Equal("SUBMITTED", await ReadStatusAsync(pApprove));
-
-        var pReject = await InsertPeriodAsync(Hr, "SUBMITTED", 6);
-        await AssertSelfDeniedAsync(await AdminRoleClient(StatsTidRoles.LocalHR, Hr)
-            .PostAsJsonAsync($"/api/approval/{pReject}/reject", new { reason = "self" }));
-        Assert.Equal("SUBMITTED", await ReadStatusAsync(pReject));
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  (3) GUARD ORDERING — self on an INELIGIBLE status still self-denies (403, not 409).
-    // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>The guard precedes the status-eligibility check: a self-request on a status the approve
-    /// endpoint would otherwise 409 (DRAFT — not SUBMITTED/EMPLOYEE_APPROVED; or an already-APPROVED
-    /// period) STILL returns the self-denial 403, never a state-leaking 409. Both ineligible statuses
-    /// are probed.</summary>
-    [Fact]
-    public async Task GuardOrdering_SelfOnIneligibleStatus_Returns403SelfDenial_Not409()
-    {
-        // DRAFT — the status check would 409 ("Only SUBMITTED or EMPLOYEE_APPROVED …"); the guard wins.
-        var pDraft = await InsertPeriodAsync(Hr, "DRAFT", 5);
-        var draftRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pDraft}/approve", null);
-        await AssertSelfDeniedAsync(draftRsp);
-        Assert.NotEqual(HttpStatusCode.Conflict, draftRsp.StatusCode);
-        Assert.Equal("DRAFT", await ReadStatusAsync(pDraft));
-
-        // Already-APPROVED — the status check would also 409; the guard still wins with a 403.
-        var pApproved = await InsertPeriodAsync(Hr, "APPROVED", 6);
-        var approvedRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pApproved}/approve", null);
-        await AssertSelfDeniedAsync(approvedRsp);
-        Assert.NotEqual(HttpStatusCode.Conflict, approvedRsp.StatusCode);
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  (4) REOPEN SPLIT — self-reopen of APPROVED DENIED; of EMPLOYEE_APPROVED ALLOWED (OQ-1a).
-    // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>The reopen guard is scoped to the manager-DECIDED (APPROVED) source state only. An
-    /// HR/Admin reopening their OWN <c>APPROVED</c> period (a manager decision) is DENIED (403, SoD);
-    /// reopening their OWN <c>EMPLOYEE_APPROVED → DRAFT</c> (a pre-approval self-undo — owner ruling
-    /// OQ-1a) is ALLOWED (200 → DRAFT), because a higher-role user files their own timesheet through the
-    /// Leader arm and blocking it would strand their own self-correction.</summary>
-    [Fact]
-    public async Task ReopenSplit_HrSelfReopen_ApprovedDenied_EmployeeApprovedAllowed()
-    {
-        // APPROVED self-reopen → DENIED.
-        var pApproved = await InsertPeriodAsync(Hr, "APPROVED", 5);
-        var deniedRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr)
-            .PostAsJsonAsync($"/api/approval/{pApproved}/reopen", new { reason = "self" });
-        await AssertSelfDeniedAsync(deniedRsp);
-        Assert.Equal("APPROVED", await ReadStatusAsync(pApproved));
-
-        // EMPLOYEE_APPROVED self-reopen → ALLOWED (pre-approval self-undo).
-        var pEmpApproved = await InsertPeriodAsync(Hr, "EMPLOYEE_APPROVED", 6);
-        var allowedRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr)
-            .PostAsJsonAsync($"/api/approval/{pEmpApproved}/reopen", new { reason = "self-undo" });
-        Assert.Equal(HttpStatusCode.OK, allowedRsp.StatusCode);
-        Assert.Equal("DRAFT", await ReadStatusAsync(pEmpApproved));
-    }
-
-    /// <summary>The Employee-role reopen arm is UNCHANGED: an ordinary employee reopening their OWN
-    /// <c>EMPLOYEE_APPROVED → DRAFT</c> still succeeds (200 → DRAFT). The guard lives only in the Leader
-    /// arm, so the two-step flow's self-undo is untouched.</summary>
-    [Fact]
-    public async Task ReopenEmployeeArm_Unchanged_EmployeeSelfReopenEmployeeApproved_Allowed()
-    {
-        var pEmpApproved = await InsertPeriodAsync(Emp, "EMPLOYEE_APPROVED", 5);
-        var rsp = await EmployeeClient(Emp).PostAsJsonAsync($"/api/approval/{pEmpApproved}/reopen", new { reason = "fix" });
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
-        Assert.Equal("DRAFT", await ReadStatusAsync(pEmpApproved));
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  (5) NO OVER-BLOCK — send + employee-approve self still SUCCEED (self by design).
-    // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary><c>send</c> is a self action by design and carries NO SoD guard. An employee sending their
-    /// OWN month (a fully absence-covered, vacuously-balanced March) still succeeds → 200,
-    /// EMPLOYEE_APPROVED.</summary>
-    [Fact]
-    public async Task NoOverBlock_SelfSend_Succeeds()
-    {
-        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, SelfSend, OrgA, "HK", "OK24", ensureOrg: false);
-        await CoverMarchWithAbsencesAsync(SelfSend);
-
-        var rsp = await EmployeeClient(SelfSend).PostAsJsonAsync(
-            "/api/approval/send", new { employeeId = SelfSend, year = 2026, month = 3 });
-
-        var raw = await rsp.Content.ReadAsStringAsync();
-        Assert.True(rsp.StatusCode == HttpStatusCode.OK, $"expected 200, got {(int)rsp.StatusCode}: {raw}");
-        Assert.Equal("EMPLOYEE_APPROVED", JsonDocument.Parse(raw).RootElement.GetProperty("status").GetString());
-    }
-
-    /// <summary><c>employee-approve</c> (the by-id send adapter) is a self action by design and carries NO
-    /// SoD guard. An employee employee-approving their OWN DRAFT period (a fully covered March) still
-    /// succeeds → 200, EMPLOYEE_APPROVED.</summary>
-    [Fact]
-    public async Task NoOverBlock_SelfEmployeeApprove_Succeeds()
-    {
-        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, SelfSend2, OrgA, "HK", "OK24", ensureOrg: false);
-        await CoverMarchWithAbsencesAsync(SelfSend2);
-        var periodId = await InsertPeriodWithRangeAsync(
-            SelfSend2, "DRAFT", new DateOnly(2026, 3, 1), new DateOnly(2026, 3, 31));
-
-        var rsp = await EmployeeClient(SelfSend2).PostAsync($"/api/approval/{periodId}/employee-approve", null);
-
-        var raw = await rsp.Content.ReadAsStringAsync();
-        Assert.True(rsp.StatusCode == HttpStatusCode.OK, $"expected 200, got {(int)rsp.StatusCode}: {raw}");
-        Assert.Equal("EMPLOYEE_APPROVED", JsonDocument.Parse(raw).RootElement.GetProperty("status").GetString());
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  Seed
-    // ════════════════════════════════════════════════════════════════════════════════
+    // ── Seed (ONCE for the class) ────────────────────────────────────────────────────────────────
 
     private async Task SeedAsync(NpgsqlConnection conn)
     {
@@ -413,7 +168,7 @@ public sealed class SelfApprovalGuardTests : IAsyncLifetime
         }
 
         // (6) Emp reports PRIMARY to PrimaryMgr — the designated EDGE approver.
-        await new ReportingLineRepository(_dbFactory).AssignAsync(null, MakeLine(Emp, PrimaryMgr));
+        await new ReportingLineRepository(DbFactory).AssignAsync(null, MakeLine(Emp, PrimaryMgr));
     }
 
     private void AddFourLegUserParams(NpgsqlCommand cmd)
@@ -437,6 +192,319 @@ public sealed class SelfApprovalGuardTests : IAsyncLifetime
         Version = 0,
         CreatedBy = "TEST",
     };
+}
+
+/// <summary>
+/// SEC-009 / RES-003 — the segregation-of-duties (SoD) self-guard on the MANAGER-side approval
+/// decisions. The differential MATRIX that RES-003 item 1 asked for (the audit's output is a test
+/// matrix, not a document): for EACH authority leg — org-scope/HR-fallback, designated edge,
+/// unit-leader, vikar — a self actor is DENIED on approve while an OTHER actor via that SAME leg is
+/// ALLOWED (no regression); plus a positive self-match (a real self-id actually denies — guards
+/// against a no-op comparison), guard-ordering (self on an INELIGIBLE status still self-denies 403,
+/// not a state-leaking 409), the reopen split (HR/Admin self-reopen of an APPROVED period DENIED, of
+/// an EMPLOYEE_APPROVED period ALLOWED per owner ruling OQ-1a; the Employee-role arm unchanged), the
+/// no-over-block cases (employee-approve + send self still succeed), and the DIRECT choke-point
+/// contract pin (RES-003 item 2 backstop).
+///
+/// <para><b>The rule.</b> Nobody performs a manager DECISION on their own period. That blocks self on
+/// approve, reject, and reopen-of-<c>APPROVED</c>. It PERMITS self on the pre-approval self-undo
+/// (reopen of one's own <c>EMPLOYEE_APPROVED → DRAFT</c>), on <c>employee-approve</c>, and on
+/// <c>send</c> — the legitimate self-service the two-step flow depends on.</para>
+///
+/// <para><b>RED-on-old.</b> The org-scope/HR-fallback leg is SEC-009's exact defect: an
+/// HR/LocalAdmin/GlobalAdmin scoped over their own Organisation could approve their OWN period,
+/// because that leg does NOT route through <c>DesignatedApproverAuthorizer</c>'s predicate (where the
+/// unit-leader/vikar legs already self-exclude). Pre-fix, <c>Hr</c> approving their own period was a
+/// 200; now the endpoint's <c>ApprovalSelfGuard</c> denies it (403) before the status check. The
+/// edge/unit-leader/vikar self cases were already 403 via their per-path SQL exclusions — the matrix
+/// asserts each STILL denies (now via the guard, proven by the denial reason) AND that the other-actor
+/// leg is not regressed.</para>
+///
+/// <para><b>Shared-DB isolation.</b> Every [Fact] shares ONE container via
+/// <see cref="SelfApprovalGuardFixture"/> (an <see cref="Xunit.IClassFixture{TFixture}"/>), so every
+/// test owns a DISJOINT YEAR block for its inserted periods — the natural key is
+/// <c>(employee_id, period_start, period_end)</c>, and a per-test year makes every insert globally
+/// unique without per-employee bookkeeping (a month-only scheme would exceed 12 months given the
+/// period count). The pre-seeded approve/reject/reopen rows never traverse the send command, so their
+/// year is free of the OK-version / holiday constraints that pin the send cases to March 2026.
+/// Each [Fact] carries a 2-minute Timeout so a future hang FAILS FAST instead of wedging the job.</para>
+/// </summary>
+[Trait("Category", "Docker")]
+public sealed class SelfApprovalGuardTests : IClassFixture<SelfApprovalGuardFixture>
+{
+    private const int TwoMinutes = 120_000;
+
+    // Actor / org aliases (defined once on the fixture so the seed and the tests agree).
+    private const string OrgA       = SelfApprovalGuardFixture.OrgA;
+    private const string Emp        = SelfApprovalGuardFixture.Emp;
+    private const string PrimaryMgr = SelfApprovalGuardFixture.PrimaryMgr;
+    private const string DirectLdr  = SelfApprovalGuardFixture.DirectLdr;
+    private const string VikarUsr   = SelfApprovalGuardFixture.VikarUsr;
+    private const string Hr         = SelfApprovalGuardFixture.Hr;
+    private const string SelfSend   = SelfApprovalGuardFixture.SelfSend;
+    private const string SelfSend2  = SelfApprovalGuardFixture.SelfSend2;
+
+    // A monotonic seq for hand-written absence rows' outbox_id (a NOT-NULL BIGINT), clear of other suites.
+    private static long _absenceSeq = 90_090_000;
+
+    private readonly SelfApprovalGuardFixture _fx;
+
+    public SelfApprovalGuardTests(SelfApprovalGuardFixture fx) => _fx = fx;
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  (1) THE PER-LEG SELF-PAIR MATRIX — self DENIED, other-actor via the SAME leg ALLOWED.
+    //  Year blocks: OrgScope=2020, Edge=2021, UnitLeader=2022, Vikar=2023.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>ORG-SCOPE / HR-FALLBACK leg (SEC-009's exact defect). Self: Hr (LocalHR over STY02)
+    /// approving their OWN period is DENIED (403, SoD) — pre-fix this was a 200. Other: Hr approves
+    /// Emp's period via the org-scope fallback → 200 (ORG_SCOPE_FALLBACK), no regression.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task SelfPair_OrgScopeHrFallback_SelfDenied_OtherAllowed()
+    {
+        const int y = 2020;
+
+        // SELF (RED-on-old): Hr approving their own period is denied by the SoD guard.
+        var pSelf = await InsertPeriodAsync(Hr, "SUBMITTED", y, 1);
+        var selfRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pSelf}/approve", null);
+        await AssertSelfDeniedAsync(selfRsp);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
+
+        // OTHER: Hr approves Emp via the org-scope fallback → 200, ORG_SCOPE_FALLBACK (no regression).
+        var pOther = await InsertPeriodAsync(Emp, "SUBMITTED", y, 2);
+        var otherRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pOther}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, otherRsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(pOther));
+        Assert.Equal("ORG_SCOPE_FALLBACK", await ReadColumnAsync(pOther, "approval_method"));
+    }
+
+    /// <summary>DESIGNATED EDGE leg. Self: PrimaryMgr (Emp's edge approver) approving their OWN period is
+    /// DENIED (403, SoD). Other: PrimaryMgr approves Emp via the edge → 200, DESIGNATED_MANAGER.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task SelfPair_DesignatedEdge_SelfDenied_OtherAllowed()
+    {
+        const int y = 2021;
+
+        var pSelf = await InsertPeriodAsync(PrimaryMgr, "SUBMITTED", y, 1);
+        var selfRsp = await LeaderClient(PrimaryMgr).PostAsync($"/api/approval/{pSelf}/approve", null);
+        await AssertSelfDeniedAsync(selfRsp);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
+
+        var pOther = await InsertPeriodAsync(Emp, "SUBMITTED", y, 2);
+        var otherRsp = await LeaderClient(PrimaryMgr).PostAsync($"/api/approval/{pOther}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, otherRsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(pOther));
+        Assert.Equal("DESIGNATED_MANAGER", await ReadColumnAsync(pOther, "approval_method"));
+    }
+
+    /// <summary>UNIT-LEADER leg. Self: DirectLdr (leader of Emp's unit, and — the D3 member-invariant — a
+    /// member of it) approving their OWN period is DENIED (403, SoD). Other: DirectLdr approves Emp via
+    /// the secondary unit-leader path → 200, UNIT_LEADER.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task SelfPair_UnitLeader_SelfDenied_OtherAllowed()
+    {
+        const int y = 2022;
+
+        var pSelf = await InsertPeriodAsync(DirectLdr, "SUBMITTED", y, 1);
+        var selfRsp = await LeaderClient(DirectLdr).PostAsync($"/api/approval/{pSelf}/approve", null);
+        await AssertSelfDeniedAsync(selfRsp);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
+
+        var pOther = await InsertPeriodAsync(Emp, "SUBMITTED", y, 2);
+        var otherRsp = await LeaderClient(DirectLdr).PostAsync($"/api/approval/{pOther}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, otherRsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(pOther));
+        Assert.Equal("UNIT_LEADER", await ReadColumnAsync(pOther, "approval_method"));
+    }
+
+    /// <summary>VIKAR leg. Self: VikarUsr (active stand-in for DirectLdr) approving their OWN period is
+    /// DENIED (403, SoD). Other: VikarUsr approves Emp via the unit-leader-vikar path → 200,
+    /// UNIT_LEADER_VIKAR (the approvals the absent leader OWES — RES-003 instance 3).</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task SelfPair_Vikar_SelfDenied_OtherAllowed()
+    {
+        const int y = 2023;
+
+        var pSelf = await InsertPeriodAsync(VikarUsr, "SUBMITTED", y, 1);
+        var selfRsp = await LeaderClient(VikarUsr).PostAsync($"/api/approval/{pSelf}/approve", null);
+        await AssertSelfDeniedAsync(selfRsp);
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(pSelf));
+
+        var pOther = await InsertPeriodAsync(Emp, "SUBMITTED", y, 2);
+        var otherRsp = await LeaderClient(VikarUsr).PostAsync($"/api/approval/{pOther}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, otherRsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(pOther));
+        Assert.Equal("UNIT_LEADER_VIKAR", await ReadColumnAsync(pOther, "approval_method"));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  (1b) CHOKE-POINT BACKSTOP — the predicate self-guard pinned DIRECTLY (RES-003 item 2).
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// RES-003 item 2 — the structural fail-CLOSED choke point inside
+    /// <see cref="DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(string, string, System.DateOnly?, System.Threading.CancellationToken)"/>,
+    /// pinned DIRECTLY rather than through an endpoint. The RES-003 CLASS closure rests on this backstop:
+    /// at the endpoints the <c>ApprovalSelfGuard</c> helper fires first, and on the read surfaces the SQL
+    /// already self-excludes, so NO differential is possible today — remove the choke-point guard and
+    /// every OTHER test still passes. This is therefore a CONTRACT / regression pin (defense-in-depth),
+    /// asserting the predicate itself denies self so a future authorization path that funnels through it
+    /// inherits the SoD rule fail-closed instead of re-omitting it.
+    ///
+    /// <para>Positive control + pin, together proving the guard fired: <c>DirectLdr</c> IS a legitimate
+    /// unit-leader approver of <c>Emp</c> (a DIFFERENT employee) — the predicate has real authority facts
+    /// and returns TRUE — yet <c>(DirectLdr, DirectLdr)</c> (actor == employee) returns FALSE.</para>
+    /// </summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task ChokePoint_Predicate_DeniesSelf_Directly()
+    {
+        // Construct the authorizer exactly as the app wires it (ctor: DbConnectionFactory +
+        // ReportingLineRepository), over the same test database — a read-only predicate, so a directly
+        // constructed instance and the DI-resolved one evaluate identically.
+        var authorizer = new DesignatedApproverAuthorizer(_fx.DbFactory, new ReportingLineRepository(_fx.DbFactory));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        // Positive control: DirectLdr is a real unit-leader approver of Emp, so the predicate returns TRUE
+        // — without this, a self-FALSE could be a vacuous "no authority anywhere" rather than the guard.
+        Assert.True(await authorizer.IsEffectiveApproverOrUnitLeaderAsync(DirectLdr, Emp, asOf: today),
+            "precondition: DirectLdr must be a legitimate approver of Emp for the self-denial to be meaningful");
+
+        // The pin: actor == employee → the FIRST-thing choke-point guard denies, even though DirectLdr
+        // holds genuine approval authority over OTHERS.
+        Assert.False(await authorizer.IsEffectiveApproverOrUnitLeaderAsync(DirectLdr, DirectLdr, asOf: today));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  (2) POSITIVE SELF-MATCH — a real self-id actually denies (no no-op comparison). Year 2024.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Guards against a comparison that silently never matches (a no-op / wrong id space): a REAL
+    /// self-id must be DENIED on BOTH approve and reject, and the period must stay SUBMITTED. If
+    /// <c>ApprovalSelfGuard.IsSelf</c> were a no-op returning false, Hr (org-scope) would APPROVE their
+    /// own period (200/APPROVED) — so 403 + unchanged status proves the equality actually fired.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task PositiveSelfMatch_RealSelfId_Denies_Approve_And_Reject()
+    {
+        const int y = 2024;
+
+        var pApprove = await InsertPeriodAsync(Hr, "SUBMITTED", y, 1);
+        await AssertSelfDeniedAsync(await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pApprove}/approve", null));
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(pApprove));
+
+        var pReject = await InsertPeriodAsync(Hr, "SUBMITTED", y, 2);
+        await AssertSelfDeniedAsync(await AdminRoleClient(StatsTidRoles.LocalHR, Hr)
+            .PostAsJsonAsync($"/api/approval/{pReject}/reject", new { reason = "self" }));
+        Assert.Equal("SUBMITTED", await ReadStatusAsync(pReject));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  (3) GUARD ORDERING — self on an INELIGIBLE status still self-denies (403, not 409). Year 2025.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>The guard precedes the status-eligibility check: a self-request on a status the approve
+    /// endpoint would otherwise 409 (DRAFT — not SUBMITTED/EMPLOYEE_APPROVED; or an already-APPROVED
+    /// period) STILL returns the self-denial 403, never a state-leaking 409. Both ineligible statuses
+    /// are probed.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task GuardOrdering_SelfOnIneligibleStatus_Returns403SelfDenial_Not409()
+    {
+        const int y = 2025;
+
+        // DRAFT — the status check would 409 ("Only SUBMITTED or EMPLOYEE_APPROVED …"); the guard wins.
+        var pDraft = await InsertPeriodAsync(Hr, "DRAFT", y, 1);
+        var draftRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pDraft}/approve", null);
+        await AssertSelfDeniedAsync(draftRsp);
+        Assert.NotEqual(HttpStatusCode.Conflict, draftRsp.StatusCode);
+        Assert.Equal("DRAFT", await ReadStatusAsync(pDraft));
+
+        // Already-APPROVED — the status check would also 409; the guard still wins with a 403.
+        var pApproved = await InsertPeriodAsync(Hr, "APPROVED", y, 2);
+        var approvedRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr).PostAsync($"/api/approval/{pApproved}/approve", null);
+        await AssertSelfDeniedAsync(approvedRsp);
+        Assert.NotEqual(HttpStatusCode.Conflict, approvedRsp.StatusCode);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  (4) REOPEN SPLIT — self-reopen of APPROVED DENIED; of EMPLOYEE_APPROVED ALLOWED (OQ-1a).
+    //  Year blocks: ReopenSplit(HR)=2027, ReopenEmployeeArm(Emp)=2028.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>The reopen guard is scoped to the manager-DECIDED (APPROVED) source state only. An
+    /// HR/Admin reopening their OWN <c>APPROVED</c> period (a manager decision) is DENIED (403, SoD);
+    /// reopening their OWN <c>EMPLOYEE_APPROVED → DRAFT</c> (a pre-approval self-undo — owner ruling
+    /// OQ-1a) is ALLOWED (200 → DRAFT), because a higher-role user files their own timesheet through the
+    /// Leader arm and blocking it would strand their own self-correction.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task ReopenSplit_HrSelfReopen_ApprovedDenied_EmployeeApprovedAllowed()
+    {
+        const int y = 2027;
+
+        // APPROVED self-reopen → DENIED.
+        var pApproved = await InsertPeriodAsync(Hr, "APPROVED", y, 1);
+        var deniedRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr)
+            .PostAsJsonAsync($"/api/approval/{pApproved}/reopen", new { reason = "self" });
+        await AssertSelfDeniedAsync(deniedRsp);
+        Assert.Equal("APPROVED", await ReadStatusAsync(pApproved));
+
+        // EMPLOYEE_APPROVED self-reopen → ALLOWED (pre-approval self-undo).
+        var pEmpApproved = await InsertPeriodAsync(Hr, "EMPLOYEE_APPROVED", y, 2);
+        var allowedRsp = await AdminRoleClient(StatsTidRoles.LocalHR, Hr)
+            .PostAsJsonAsync($"/api/approval/{pEmpApproved}/reopen", new { reason = "self-undo" });
+        Assert.Equal(HttpStatusCode.OK, allowedRsp.StatusCode);
+        Assert.Equal("DRAFT", await ReadStatusAsync(pEmpApproved));
+    }
+
+    /// <summary>The Employee-role reopen arm is UNCHANGED: an ordinary employee reopening their OWN
+    /// <c>EMPLOYEE_APPROVED → DRAFT</c> still succeeds (200 → DRAFT). The guard lives only in the Leader
+    /// arm, so the two-step flow's self-undo is untouched.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task ReopenEmployeeArm_Unchanged_EmployeeSelfReopenEmployeeApproved_Allowed()
+    {
+        var pEmpApproved = await InsertPeriodAsync(Emp, "EMPLOYEE_APPROVED", 2028, 1);
+        var rsp = await EmployeeClient(Emp).PostAsJsonAsync($"/api/approval/{pEmpApproved}/reopen", new { reason = "fix" });
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("DRAFT", await ReadStatusAsync(pEmpApproved));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  (5) NO OVER-BLOCK — send + employee-approve self still SUCCEED (self by design).
+    //  Both use distinct employees (SelfSend / SelfSend2) at March 2026 (OK24, no holidays).
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary><c>send</c> is a self action by design and carries NO SoD guard. An employee sending their
+    /// OWN month (a fully absence-covered, vacuously-balanced March) still succeeds → 200,
+    /// EMPLOYEE_APPROVED.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task NoOverBlock_SelfSend_Succeeds()
+    {
+        await RegressionSeed.SeedEmployeeAsync(_fx.ConnectionString, SelfSend, OrgA, "HK", "OK24", ensureOrg: false);
+        await CoverMarchWithAbsencesAsync(SelfSend);
+
+        var rsp = await EmployeeClient(SelfSend).PostAsJsonAsync(
+            "/api/approval/send", new { employeeId = SelfSend, year = 2026, month = 3 });
+
+        var raw = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.OK, $"expected 200, got {(int)rsp.StatusCode}: {raw}");
+        Assert.Equal("EMPLOYEE_APPROVED", JsonDocument.Parse(raw).RootElement.GetProperty("status").GetString());
+    }
+
+    /// <summary><c>employee-approve</c> (the by-id send adapter) is a self action by design and carries NO
+    /// SoD guard. An employee employee-approving their OWN DRAFT period (a fully covered March) still
+    /// succeeds → 200, EMPLOYEE_APPROVED.</summary>
+    [Fact(Timeout = TwoMinutes)]
+    public async Task NoOverBlock_SelfEmployeeApprove_Succeeds()
+    {
+        await RegressionSeed.SeedEmployeeAsync(_fx.ConnectionString, SelfSend2, OrgA, "HK", "OK24", ensureOrg: false);
+        await CoverMarchWithAbsencesAsync(SelfSend2);
+        var periodId = await InsertPeriodWithRangeAsync(
+            SelfSend2, "DRAFT", new DateOnly(2026, 3, 1), new DateOnly(2026, 3, 31));
+
+        var rsp = await EmployeeClient(SelfSend2).PostAsync($"/api/approval/{periodId}/employee-approve", null);
+
+        var raw = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.OK, $"expected 200, got {(int)rsp.StatusCode}: {raw}");
+        Assert.Equal("EMPLOYEE_APPROVED", JsonDocument.Parse(raw).RootElement.GetProperty("status").GetString());
+    }
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  Coverage seeding (send success) — vacuously-balanced March via full-day absences.
@@ -450,7 +518,7 @@ public sealed class SelfApprovalGuardTests : IAsyncLifetime
     {
         var start = new DateOnly(2026, 3, 1);
         var end = new DateOnly(2026, 3, 31);
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         await using (var holidayCmd = new NpgsqlCommand(
@@ -485,15 +553,17 @@ public sealed class SelfApprovalGuardTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>Inserts an <c>approval_periods</c> row for <paramref name="employeeId"/> in the given
-    /// 2026 month (each month is a distinct natural key, avoiding the exact-tuple unique constraint).</summary>
-    private Task<Guid> InsertPeriodAsync(string employeeId, string status, int month)
+    /// (<paramref name="year"/>, <paramref name="month"/>). Each test owns a disjoint YEAR block, so
+    /// every (employee, year, month) is globally unique on the shared DB (natural key
+    /// <c>(employee_id, period_start, period_end)</c>).</summary>
+    private Task<Guid> InsertPeriodAsync(string employeeId, string status, int year, int month)
         => InsertPeriodWithRangeAsync(employeeId, status,
-            new DateOnly(2026, month, 1),
-            new DateOnly(2026, month, DateTime.DaysInMonth(2026, month)));
+            new DateOnly(year, month, 1),
+            new DateOnly(year, month, DateTime.DaysInMonth(year, month)));
 
     private async Task<Guid> InsertPeriodWithRangeAsync(string employeeId, string status, DateOnly start, DateOnly end)
     {
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         var id = Guid.NewGuid();
         await using var cmd = new NpgsqlCommand(
@@ -519,7 +589,7 @@ public sealed class SelfApprovalGuardTests : IAsyncLifetime
 
     private async Task<string> ReadStatusAsync(Guid periodId)
     {
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand("SELECT status FROM approval_periods WHERE period_id = @id", conn);
         cmd.Parameters.AddWithValue("id", periodId);
@@ -530,7 +600,7 @@ public sealed class SelfApprovalGuardTests : IAsyncLifetime
     /// literal (never user input), so direct interpolation is safe here.</summary>
     private async Task<string?> ReadColumnAsync(Guid periodId, string column)
     {
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand($"SELECT {column} FROM approval_periods WHERE period_id = @id", conn);
         cmd.Parameters.AddWithValue("id", periodId);
@@ -568,20 +638,12 @@ public sealed class SelfApprovalGuardTests : IAsyncLifetime
 
     private HttpClient RoleClient(string userId, string role, string agreementCode, string scopeOrg)
     {
-        var client = _factory.CreateClient();
+        var client = _fx.Factory.CreateClient();
         var scopes = new[] { new RoleScope(role, scopeOrg, "ORG_ONLY") };
-        var token = NewTokenService().GenerateToken(
+        var token = _fx.NewTokenService().GenerateToken(
             employeeId: userId, name: userId, role: role,
             agreementCode: agreementCode, orgId: scopeOrg, scopes: scopes);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;
     }
-
-    private static JwtTokenService NewTokenService() => new(new JwtSettings
-    {
-        Issuer = "statstid",
-        Audience = "statstid",
-        SigningKey = DevFallbackSigningKey,
-        ExpirationMinutes = 60,
-    });
 }
