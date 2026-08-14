@@ -49,6 +49,33 @@ domain agent → dual-lens Step-5a implementation review (Codex APPROVED-WITH-WA
 0-BLOCKER; the one warning — pin the choke point directly — closed by the added contract test) →
 build clean. **RES-003 CLOSED.** SEC-009 register status → fixed.
 
+## Task 2 — SEC-020 Auth:UseDatabase fail-closed (DONE, 2026-08-14)
+
+**The fix.** `Auth:UseDatabase` defaulted to FALSE, so a missing env var routed login to a hardcoded
+in-memory credential table (`admin01/"admin"` = GlobalAdmin). Owner ruled **(a) minimal**: flip the
+default, keep the in-memory branch behind an explicit opt-in (don't delete it).
+- `Program.cs:375` — `GetValue<bool>("Auth:UseDatabase", false)` → `..., true)`. Absent config now
+  selects DB/BCrypt → no seeded match → `Unauthorized`; never the hardcoded table.
+- The in-memory `else` branch (`AuthEndpoints.cs:77-103`) is UNCHANGED — reachable only by an explicit
+  `Auth:UseDatabase=false`.
+
+**Tests (both review-lens warnings absorbed).**
+- `InMemoryAuthWebApplicationFactory` (new) injects `Auth:UseDatabase=false` at the SAME early
+  host-config layer (`IHostBuilder.ConfigureHostConfiguration` via `CreateHost`) the true-factory uses
+  — the TASK-3001 gotcha: `ConfigureAppConfiguration`/`UseSetting`/`WithWebHostBuilder` fire after the
+  `:375` read and would silently no-op. `S118LoginSpecRuntimeTests`'s in-memory case repointed to it
+  (still asserts 200 + orgId:null + admin01=GlobalAdmin).
+- **Mandatory behavioral fail-closed test** `Login_Post_DefaultFactory_FailsClosed_...`: default factory
+  (fail-closed DB mode), `admin01/admin` → **401** (genuine RED-before-green — 200 on the old default;
+  admin01 is BCrypt("password") so "admin" fails). 401 asserted directly.
+
+**Docs:** `SECURITY.md:15` dual-mode note updated (default DB-backed/fail-closed; in-memory = explicit
+opt-in). Register SEC-020 → fixed; ROADMAP #2 done.
+
+**Governance:** refine-requirements + dual-lens Step-4 (0 BLOCKER; 2 complementary WARNINGs — mandatory
+behavioral test + host-config-layer mechanism — absorbed) → domain-agent implementation → dual-lens
+Step-5a (Codex APPROVED / internal review) → build clean.
+
 ## Remaining fix-next tasks
-SEC-020, 027, 032, 033, 015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, to be
-picked up in fix-next order.
+SEC-027, 032, 033, 015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next
+order.

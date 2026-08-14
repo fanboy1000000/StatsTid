@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -19,8 +20,9 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// proven against the ONE declared contract:
 ///
 /// <list type="bullet">
-///   <item><description><b>The in-memory branch</b> (<c>Auth:UseDatabase=false</c> — the
-///     default factory): the dictionary-user path, whose serialized body pins
+///   <item><description><b>The in-memory branch</b> (<c>Auth:UseDatabase=false</c> — now an
+///     EXPLICIT opt-in via <see cref="InMemoryAuthWebApplicationFactory"/> after the SEC-020
+///     fail-closed default flip, S130): the dictionary-user path, whose serialized body pins
 ///     <c>orgId: null</c> (the nullable member is PRESENT-and-null, never omitted — the
 ///     required/nullable orthogonality).</description></item>
 ///   <item><description><b>The DB branch</b> (the PRODUCTION auth path — BCrypt verify +
@@ -69,17 +71,19 @@ public sealed class S118LoginSpecRuntimeTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  Branch 1 — the in-memory path (Auth:UseDatabase=false, the default factory).
+    //  Branch 1 — the in-memory path (Auth:UseDatabase=false, the explicit-opt-in factory).
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>The dictionary-user branch under the DEFAULT factory: the matcher proves the
+    /// <summary>The dictionary-user branch under the EXPLICIT-opt-in
+    /// <see cref="InMemoryAuthWebApplicationFactory"/> (post-SEC-020 the flag must be forced to
+    /// <c>false</c> at host-config time — the default is now <c>true</c>): the matcher proves the
     /// declared <c>LoginResponse</c> against the real 200, and the serialized body pins
     /// <c>orgId: null</c> — the nullable member is PRESENT-and-null (required fidelity), never
     /// dropped. Exact 5-member key set.</summary>
     [Fact]
     public async Task Login_Post200_InMemoryBranch_OrgIdServedNull()
     {
-        await using var factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
+        await using var factory = new InMemoryAuthWebApplicationFactory(_harness.ConnectionString);
         using var anonymous = factory.CreateClient(); // login is anonymous — no bearer token
 
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
@@ -95,6 +99,36 @@ public sealed class S118LoginSpecRuntimeTests : IAsyncLifetime
         Assert.Equal(StatsTidRoles.GlobalAdmin, root.GetProperty("role").GetString());
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("token").GetString()));
         Assert.Equal(JsonValueKind.String, root.GetProperty("expiresAt").ValueKind);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  SEC-020 (S130) — the fail-closed boundary, proven by BEHAVIOR.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// The load-bearing SEC-020 proof: the DEFAULT <see cref="StatsTidWebApplicationFactory"/>
+    /// sets NO <c>Auth:UseDatabase</c> override, so after the fail-closed default flip
+    /// (<c>Program.cs:371</c> now defaults the flag to <c>true</c>) login routes to the
+    /// DB/BCrypt branch — the hardcoded in-memory admin is unreachable by omission. Although
+    /// <c>admin01</c> IS seeded by <c>init.sql</c> (applied in <see cref="InitializeAsync"/>),
+    /// its stored hash is BCrypt of <c>"password"</c>, so verifying the in-memory table's
+    /// <c>"admin"</c> secret FAILS ⇒ <b>401 Unauthorized</b> — never a 200, never a GlobalAdmin
+    /// token. This pins the security boundary by observable behaviour, not just the config literal.
+    /// </summary>
+    [Fact]
+    public async Task Login_Post_DefaultFactory_FailsClosed_HardcodedAdminCreds_Return401()
+    {
+        // Default factory = no auth override ⇒ the new fail-closed default (DB/BCrypt) is in force.
+        await using var factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
+        using var anonymous = factory.CreateClient(); // login is anonymous — no bearer token
+
+        using var response = await anonymous.SendAsync(
+            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, LoginPath,
+                """{ "username": "admin01", "password": "admin" }"""));
+
+        // The in-memory admin01/"admin" = GlobalAdmin path must NOT be served: DB-branch BCrypt
+        // verify of "admin" against the seeded hash-of-"password" fails ⇒ 401 (fail-closed).
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -169,6 +203,38 @@ public sealed class S118LoginSpecRuntimeTests : IAsyncLifetime
                 {
                     ["ConnectionStrings:EventStore"] = _connectionString,
                     ["Auth:UseDatabase"] = "true",
+                }));
+            return base.CreateHost(builder);
+        }
+    }
+
+    /// <summary>
+    /// SEC-020 (S130) — the SYMMETRIC counterpart of <see cref="DbAuthWebApplicationFactory"/>:
+    /// it forces <c>Auth:UseDatabase=false</c> so the (now explicit-opt-in) in-memory login branch
+    /// is reachable under test AFTER the fail-closed default flip (<c>Program.cs:371</c> now
+    /// defaults the flag to <c>true</c>). Before the flip this case rode the factory default and
+    /// needed no override; now it MUST inject <c>false</c> — and it must do so at the SAME
+    /// HOST-configuration layer the true-factory uses (<see cref="IHostBuilder.ConfigureHostConfiguration"/>
+    /// via <c>CreateHost</c>), because <c>Program.cs</c> reads <c>Auth:UseDatabase</c> at L371 off
+    /// <c>builder.Configuration</c> BEFORE <c>Build()</c>. Per the documented TASK-3001 gotcha,
+    /// <c>ConfigureAppConfiguration</c>/<c>UseSetting</c>/<c>WithWebHostBuilder</c> fire TOO LATE and
+    /// would SILENTLY NO-OP — the read would already have seen the new default <c>true</c>, quietly
+    /// routing this "in-memory" case through the DB branch. Test-side config only; no product change.
+    /// </summary>
+    private sealed class InMemoryAuthWebApplicationFactory : WebApplicationFactory<Program>
+    {
+        private readonly string _connectionString;
+
+        public InMemoryAuthWebApplicationFactory(string connectionString)
+            => _connectionString = connectionString;
+
+        protected override IHost CreateHost(IHostBuilder builder)
+        {
+            builder.ConfigureHostConfiguration(cfg => cfg.AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:EventStore"] = _connectionString,
+                    ["Auth:UseDatabase"] = "false",
                 }));
             return base.CreateHost(builder);
         }

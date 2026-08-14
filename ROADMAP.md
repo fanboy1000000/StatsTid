@@ -57,7 +57,9 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   1. ~~**SEC-009** self-approval self-guard (keystone)~~ ✅ **DONE (S130, 2026-08-14)** — choke point in
      `IsEffectiveApproverOrUnitLeaderAsync` + `ApprovalSelfGuard` at the 3 decision endpoints + a
      differential test matrix; RES-003 CLOSED. See `SPRINT-130.md`.
-  2. **SEC-020** `Auth:UseDatabase` fail-closed (default TRUE / drop the in-memory admin table).
+  2. ~~**SEC-020** `Auth:UseDatabase` fail-closed~~ ✅ **DONE (S130, 2026-08-14)** — default flipped
+     false→true (fail-closed); in-memory dev creds kept behind explicit opt-in (owner ruling a);
+     behavioral fail-closed test (admin01/admin→401). See `SPRINT-130.md`.
   3. **SEC-027** per-service s2s identity (no self-minted GlobalAdmin over the shared key).
   4. **SEC-032** Position-Override → `GlobalAdminOnly` (or a real org binding) — cross-tenant config write.
   5. **SEC-033** server-side range/negativity validation + DB CHECKs on money-adjacent config numbers
@@ -73,8 +75,12 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   endpoints + settlement/reversal internals (round-1 confirmed the floors, not the bodies) + the FULL
   frontend sweep (SEC-025 browser-token-storage redesign folds in here). Persistence/outbox consumers
   + a dependency audit are also round-2 candidates.
-- *Accepted hobby-stage (cleanup deferred to go-serious):* SEC-016/017 committed dev DB + demo
-  passwords, SEC-018 unauth mock services, SEC-029 root containers.
+- **Pre-production revisit ledger (owner request 2026-08-14 — see the register's own ledger section):**
+  deliberate hobby-stage / minimal-fix choices that close a finding now but leave a residual to
+  reconsider before production — **SEC-020's kept in-memory hardcoded credential table** (minimal
+  ruling (a); option (b) = remove it entirely is deferred), plus the accepted SEC-016/017 committed dev
+  DB + demo passwords, SEC-018 unauth mock services, SEC-029 root containers. This is the concrete
+  security half of the "go-serious hardening pass is owed work" theme.
 
 *(prior recon list — now superseded by the SEC register; kept for provenance:)*
 - **RES-002 read-gate remainder** — 9 sibling read endpoints still ungated (7 lack a month parameter,

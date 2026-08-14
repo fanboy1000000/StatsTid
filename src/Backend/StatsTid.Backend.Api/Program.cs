@@ -368,7 +368,11 @@ builder.Services.AddSingleton<ProfileAlignmentValidator>();
 builder.Services.AddSingleton<ProjectionBackfillService>();
 builder.Services.AddSingleton<AuditProjectionBackfillService>();
 
-var useDbAuth = builder.Configuration.GetValue<bool>("Auth:UseDatabase", false);
+// SEC-020 (S130) — auth fails CLOSED. The default is TRUE, so an absent/forgotten config selects
+// the DB/BCrypt branch (no seeded match ⇒ Unauthorized), NEVER the hardcoded in-memory credential
+// table (admin01/"admin" = GlobalAdmin). The in-memory dev path in AuthEndpoints is now reachable
+// ONLY by an explicit opt-in (Auth:UseDatabase=false); a missing env var must never serve it.
+var useDbAuth = builder.Configuration.GetValue<bool>("Auth:UseDatabase", true);
 
 var app = builder.Build();
 

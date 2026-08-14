@@ -12,7 +12,11 @@
 
 - **Algorithm**: JWT HMAC-SHA256, shared secret across all 5 API services via Docker environment variables
 - **Token configuration**: `MapInboundClaims = false`, `NameClaimType = "sub"`, `RoleClaimType = "role"`
-- **Dual-mode login**: `Auth:UseDatabase` config flag toggles between hardcoded dev credentials and DB-backed BCrypt password verification
+- **Dual-mode login (fail-closed default, SEC-020 / S130)**: `Auth:UseDatabase` selects DB-backed BCrypt
+  verification (the **default = `true`**, fail-closed) vs the in-memory hardcoded dev credentials. The
+  in-memory table is now an **explicit opt-in** (`Auth:UseDatabase=false`) — a missing/absent config can
+  no longer serve the hardcoded `admin01/admin = GlobalAdmin`. (Was: default `false`, so an unset env
+  var silently exposed the dev credentials — the SEC-020 fail-open, fixed S130.)
 - **Reference**: [ADR-007](knowledge-base/decisions/ADR-007-jwt-auth-rbac-correlation-ids.md)
 
 ## Custom JWT Claims

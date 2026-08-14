@@ -3,7 +3,8 @@
 
 **Status**: LIVE — **S129 sweep COMPLETE (2 rounds, 2026-08-14)**; now the durable cross-session
 security register. **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `e955e13`. **Fix-next
-(owner-ruled)**: **SEC-009 ✅ FIXED (S130, choke point + matrix; RES-003 CLOSED)** → 020 → 027 → 032 →
+(owner-ruled)**: **SEC-009 ✅** (S130 choke point; RES-003 CLOSED) → **SEC-020 ✅ FIXED (S130,
+fail-closed default)** → 027 → 032 →
 033 → 015 → 023 → 021 → 019 → 028/031/034/035 (remaining in the ROADMAP backlog → remediation sprint).
 
 > **ROUND-1 SWEEP COMPLETE (2026-08-14) — see `docs/sprints/SPRINT-129.md` for the full adjudication
@@ -85,7 +86,7 @@ citation) · `adjudication` (→ `SPRINT-129.md#sec-id`, filled by the sweep).
 
 | SEC | What it means (plain language) | Title | Origin | Sev | OWASP/STRIDE | Status | Source of truth | Adjudication |
 |-----|--------------------------------|-------|--------|-----|--------------|--------|-----------------|--------------|
-| SEC-020 | If a deployment forgets the `Auth:UseDatabase` env var it silently defaults to a hardcoded plaintext credential table including `admin01/admin` = GlobalAdmin. | Auth:UseDatabase fail-open | swept-unruled | High | A07 / Spoofing | NEW | S129 review byproduct; `Program.cs` default + `AuthEndpoints` cred table | →#sec-020 |
+| SEC-020 | If a deployment forgets the `Auth:UseDatabase` env var it silently defaults to a hardcoded plaintext credential table including `admin01/admin` = GlobalAdmin. | Auth:UseDatabase fail-open | swept-unruled | High | A07 / Spoofing | **fixed (S130, 2026-08-14)** — `Program.cs` default flipped false→**true** (fail-closed); in-memory branch kept behind explicit `Auth:UseDatabase=false` opt-in (owner ruling a); behavioral RED-test (admin01/admin→401) + `InMemoryAuthWebApplicationFactory` | `Program.cs:375`; `SECURITY.md:15`; S130 | →#sec-020 |
 | SEC-021 | The Orchestrator's task-read endpoint has no ownership/scope check — any authenticated user can read any task (IDOR). | Orchestrator task-read IDOR | swept-unruled | High | A01 / Info-disclosure | NEW | S129 review byproduct; Orchestrator `Program.cs` | →#sec-021 |
 | SEC-022 | The Orchestrator `/execute` uses the unfloored access overload AND forwards the caller's raw Authorization header downstream (confused deputy). | Orchestrator /execute unfloored + raw-auth forward | swept-unruled | High | A01+A10 / EoP | NEW | S129 review byproduct; Orchestrator `Program.cs` | →#sec-022 |
 | SEC-023 | `POST /api/external/send` forwards caller-supplied arbitrary JSON to the external system with no role floor or scope. | external/send no floor | swept-unruled | Medium | A10 / Tampering | NEW | S129 review byproduct; Integrations.External `Program.cs` | →#sec-023 |
@@ -144,3 +145,19 @@ citation) · `adjudication` (→ `SPRINT-129.md#sec-id`, filled by the sweep).
   no redaction). That is an accepted *publication risk*, not a claim the code is free of weaknesses —
   the rows above are exactly the weaknesses. Attack-detail raw evidence stays in the gitignored sweep
   dir for hygiene, not secrecy.
+
+## Pre-production revisit ledger
+
+*Deliberate hobby-stage / minimal-fix choices that CLOSE the finding for now but leave a residual that
+MUST be reconsidered before any move toward production. Recorded here (owner request, 2026-08-14) so
+the deferred decision is tied to a production-readiness gate, not silently permanent. See CONVENTIONS.md
+"Project Status & Intent" — the go-serious hardening pass is owed work, deferred by choice.*
+
+| Item | The choice we took | What to revisit before production |
+|------|--------------------|-----------------------------------|
+| **SEC-020** (fixed S130) | Owner ruling (a) MINIMAL: flipped `Auth:UseDatabase` to fail-closed by default, but KEPT the in-memory hardcoded credential table (`admin01/"admin"=GlobalAdmin`, …) in source, reachable via explicit `Auth:UseDatabase=false`. | **Remove the in-memory hardcoded credential table entirely (option b) — DB-only auth.** Hardcoded credentials in source, even behind an opt-in, do not belong in a production build. Delete the `else` branch (`AuthEndpoints.cs:77-103`), rework/remove `S118LoginSpecRuntimeTests`'s in-memory case, ensure every environment has DB-seeded auth. |
+| SEC-016 / SEC-017 (accepted) | Committed dev DB password (`statstid_dev`) + shared demo password (`"password"`, incl. GlobalAdmin seed users). | Rotate to environment secrets; no committed credentials in a production config/seed. |
+| SEC-018 (accepted) | Unauthenticated mock payroll/external services trusted by the integration flow. | Replace mocks with authenticated real integrations (or gate them off) before production. |
+| SEC-029 (accepted) | Container images run as root (no `USER`). | Add a non-root `USER` to the Dockerfiles for the production image set. |
+
+*(This ledger grows as later fix-next items take a minimal path with a deferred residual.)*
