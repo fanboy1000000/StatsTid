@@ -19,6 +19,10 @@ namespace StatsTid.Backend.Api.Endpoints;
 
 public static class ApprovalEndpoints
 {
+    // RES-003 / SEC-009 — the log category the manager-decision endpoints stamp their segregation-of-
+    // duties self-denial WARNING under, so the denied-attempt signal is greppable in one place.
+    private const string SelfGuardLogCategory = "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SelfGuard";
+
     // S127 / TASK-12705 — the allocation-reconciliation tolerance and the per-day predicate that
     // used to live here as a private const plus three hand-copied inline expressions now live in
     // StatsTid.Backend.Api.AllocationBalance. The three call sites below (the send command's gate,
@@ -204,6 +208,7 @@ public static class ApprovalEndpoints
             IAuditProjectionMapper<PeriodApproved> auditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R1 — wrap the whole body in the bounded drift-retry loop: if AcquireTreeLockForEmployeeAsync
@@ -213,10 +218,28 @@ public static class ApprovalEndpoints
         await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger(SelfGuardLogCategory);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)
                 return Results.NotFound(new { error = "Period not found" });
+
+            // ── RES-003 / SEC-009 — SEGREGATION OF DUTIES (self-decision guard) ──────────────────────
+            // Nobody manager-approves their OWN period. This EARLY guard — right after the row is loaded,
+            // BEFORE the status-eligibility check below — closes the org-scope / HR-Admin fallback
+            // self-approval SEC-009 reported (the leg that does NOT route through the authorizer's
+            // predicate choke point). Placed before the status check so a self-request on an INELIGIBLE
+            // status still self-denies (403) rather than leaking a 409 state-conflict. OQ-2: a structured
+            // WARNING log for detection — NOT an audit_log row (a denied action is not a domain event).
+            if (ApprovalSelfGuard.IsSelf(actor, period))
+            {
+                logger.LogWarning(
+                    "SEC-009 self-decision denied: actor {ActorId} on own period {PeriodId} (approve)",
+                    actor.ActorId, periodId);
+                return Results.Json(
+                    new { error = "Access denied", reason = "self-approval is not permitted (segregation of duties)" },
+                    statusCode: 403);
+            }
 
             // Both SUBMITTED (legacy) and EMPLOYEE_APPROVED (new flow) can be manager-approved
             if (period.Status is not ("SUBMITTED" or "EMPLOYEE_APPROVED"))
@@ -408,16 +431,32 @@ public static class ApprovalEndpoints
             IAuditProjectionMapper<PeriodRejected> auditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R1 — bounded drift-retry wrapper (same shape as approve).
         await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger(SelfGuardLogCategory);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)
                 return Results.NotFound(new { error = "Period not found" });
+
+            // ── RES-003 / SEC-009 — SEGREGATION OF DUTIES (self-decision guard) ──────────────────────
+            // Reject is a manager DECISION: nobody rejects their OWN period. Same early placement as
+            // approve (after load, BEFORE the status check) so a self-request on an ineligible status
+            // still self-denies (403), never a state-leaking 409. OQ-2: WARNING log, no audit_log row.
+            if (ApprovalSelfGuard.IsSelf(actor, period))
+            {
+                logger.LogWarning(
+                    "SEC-009 self-decision denied: actor {ActorId} on own period {PeriodId} (reject)",
+                    actor.ActorId, periodId);
+                return Results.Json(
+                    new { error = "Access denied", reason = "self-rejection is not permitted (segregation of duties)" },
+                    statusCode: 403);
+            }
 
             // Both SUBMITTED (legacy) and EMPLOYEE_APPROVED (new flow) can be rejected
             if (period.Status is not ("SUBMITTED" or "EMPLOYEE_APPROVED"))
@@ -1448,6 +1487,7 @@ public static class ApprovalEndpoints
             IAuditProjectionMapper<PeriodReopened> auditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R1 — bounded drift-retry wrapper. The LEADER arm takes the advisory + in-tx edge re-eval;
@@ -1457,6 +1497,7 @@ public static class ApprovalEndpoints
         await TreeRootDriftRetry.RunAsync(async () =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger(SelfGuardLogCategory);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)
@@ -1486,6 +1527,25 @@ public static class ApprovalEndpoints
             }
             else
             {
+                // ── RES-003 / SEC-009 — SEGREGATION OF DUTIES on the LEADER-arm reopen ────────────────
+                // A leader-tier actor may not reopen a period they themselves own — but ONLY once it is
+                // manager-DECIDED (APPROVED). Reopening one's OWN not-yet-manager-approved month
+                // (EMPLOYEE_APPROVED → DRAFT) is a legitimate PRE-APPROVAL self-undo (owner ruling
+                // OQ-1a): a higher-role (HR/Admin) user filing their own timesheet ALWAYS routes through
+                // THIS Leader arm — the employee arm above is gated on the exact "Employee" role label —
+                // so blanket-blocking would strand their own self-correction, the same self-undo the
+                // employee arm permits. Scope the guard to the APPROVED source state only. (The employee
+                // arm is deliberately untouched.)
+                if (ApprovalSelfGuard.IsSelf(actor, period) && period.Status == "APPROVED")
+                {
+                    logger.LogWarning(
+                        "SEC-009 self-decision denied: actor {ActorId} on own period {PeriodId} (reopen-of-APPROVED)",
+                        actor.ActorId, periodId);
+                    return Results.Json(
+                        new { error = "Access denied", reason = "self-reopen of an approved period is not permitted (segregation of duties)" },
+                        statusCode: 403);
+                }
+
                 // Leader+: authorize (S94 / ADR-035 OQ4/OQ5 — the same flat-authority model as
                 // approve/reject) via the HR/Admin fallback (floored at LocalHR, bound to the
                 // employee's CURRENT Organisation via ValidateEmployeeAccessAsync) OR the effective

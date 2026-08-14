@@ -54,7 +54,9 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 
 - **★ NEXT REMEDIATION SPRINT (owner-approved 2026-08-14, S130 candidate)** — the fix-next set in
   priority order, all small bounded fixes (round-2 additions folded in):
-  1. **SEC-009** self-approval self-guard (keystone — the org-scope approve/reject/reopen legs).
+  1. ~~**SEC-009** self-approval self-guard (keystone)~~ ✅ **DONE (S130, 2026-08-14)** — choke point in
+     `IsEffectiveApproverOrUnitLeaderAsync` + `ApprovalSelfGuard` at the 3 decision endpoints + a
+     differential test matrix; RES-003 CLOSED. See `SPRINT-130.md`.
   2. **SEC-020** `Auth:UseDatabase` fail-closed (default TRUE / drop the in-memory admin table).
   3. **SEC-027** per-service s2s identity (no self-minted GlobalAdmin over the shared key).
   4. **SEC-032** Position-Override → `GlobalAdminOnly` (or a real org binding) — cross-tenant config write.

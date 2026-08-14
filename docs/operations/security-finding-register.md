@@ -3,8 +3,8 @@
 
 **Status**: LIVE — **S129 sweep COMPLETE (2 rounds, 2026-08-14)**; now the durable cross-session
 security register. **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `e955e13`. **Fix-next
-(owner-ruled)**: SEC-009 → 020 → 027 → 032 → 033 → 015 → 023 → 021 → 019 → 028/031/034/035 (ROADMAP
-backlog → next remediation sprint).
+(owner-ruled)**: **SEC-009 ✅ FIXED (S130, choke point + matrix; RES-003 CLOSED)** → 020 → 027 → 032 →
+033 → 015 → 023 → 021 → 019 → 028/031/034/035 (remaining in the ROADMAP backlog → remediation sprint).
 
 > **ROUND-1 SWEEP COMPLETE (2026-08-14) — see `docs/sprints/SPRINT-129.md` for the full adjudication
 > records.** Calibration **PASS 3/3** (the 3 held-out holes independently rediscovered from code).
@@ -59,7 +59,7 @@ citation) · `adjudication` (→ `SPRINT-129.md#sec-id`, filled by the sweep).
 | SEC-006 | Nine sibling read endpoints were not fully tier-gated; 3 gated at S128, 9 remain (7 lack month params). | RES-002 9-read remainder | ruled-revisit | Medium | A01 / Info-disclosure | known—should-be-revisited | RES-002; SPRINT-128 R2 (census 6→12, 9 open) | →#sec-006 |
 | SEC-007 | A legacy SUBMITTED period's approvability path was ruled but should be re-checked for a bypass. | R6 legacy-SUBMITTED approvability | ruled-revisit | Low | A01 / EoP | known—should-be-revisited | SPRINT-127 R6 | →#sec-007 |
 | SEC-008 | The reopen action reads authority via a different fork than approve/reject — a possible drift. | Reopen read-fork | ruled-revisit | Low | A01 / EoP | known—should-be-revisited | SPRINT-128 R4 | →#sec-008 |
-| SEC-009 | Self-approval and the HR/GlobalAdmin org-scope fallback classification, carried unresolved since S125. | Self-approval + ORG_SCOPE_FALLBACK class | ruled-revisit | Medium | A01 / EoP | known—should-be-revisited | carried since SPRINT-125; `approval_method` classification | →#sec-009 |
+| SEC-009 | Self-approval and the HR/GlobalAdmin org-scope fallback classification, carried unresolved since S125. | Self-approval + ORG_SCOPE_FALLBACK class | ruled-revisit | High (overturned) | A01 / EoP | **fixed (S130, 2026-08-14)** — choke point in `IsEffectiveApproverOrUnitLeaderAsync` + `ApprovalSelfGuard` at the 3 decision endpoints + differential test matrix; RES-003 CLOSED | RES-003 (S130 close note); `ApprovalEndpoints.cs`/`DesignatedApproverAuthorizer.cs` | →SPRINT-129#sec-009 |
 | SEC-010 | A background backfill service writes without taking the advisory lock the online paths take. | ProjectionBackfillService §3.4 unlocked writes | ruled-revisit | Low | A04 / TOCTOU | known—should-be-revisited | ProjectionBackfillService §3.4 | →#sec-010 |
 | SEC-011 | A natural-key probe on a non-whole-month range may leak existence/state. | Non-whole-month natural-key probe residual | ruled-revisit | Low | A01 / Info-disclosure | known—should-be-revisited | SPRINT-128 census residual | →#sec-011 |
 | SEC-012 | A tier-probe path logs "Access denied" noise via a non-logging classification path — a signal/quality issue that may mask real denials. | S128 FU-A tier-probe log noise | ruled-revisit | Info | A09 / Repudiation | known—should-be-revisited | SPRINT-128 FU-A | →#sec-012 |

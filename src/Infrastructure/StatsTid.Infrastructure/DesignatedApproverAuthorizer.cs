@@ -256,6 +256,20 @@ public sealed class DesignatedApproverAuthorizer
         IReportingLineDataSource? source, IAuthorityFactsSource? facts,
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
     {
+        // ── RES-003 / SEC-009 — THE STRUCTURAL SELF-GUARD (segregation of duties, fail CLOSED) ──────
+        // Deny outright when the actor IS the employee whose period this is: nobody holds manager
+        // approval authority over their OWN period. Every EDGE / UNIT-LEADER / VIKAR authority path
+        // funnels through this terminal predicate (all public overloads delegate here), so this single
+        // guard makes the SoD rule fail CLOSED by default and turns each per-path SQL exclusion (the
+        // edge's FAIL-004 self-resolution guard, the unit-leader `e.user_id <> @actorId`, the vikar
+        // `mv.absent_approver_id <> e.user_id`) into defence-in-depth rather than the only line — the
+        // fix RES-003 item 2 asked for. No legitimate self-authority caller of this predicate exists
+        // (cycle-2 review VERIFIED: the read surfaces self-exclude, and the one leg that bypasses this
+        // predicate — the org-scope / HR-Admin fallback, SEC-009's exact path — is guarded separately
+        // at the three manager-decision endpoints via ApprovalSelfGuard).
+        if (string.Equals(actorId, employeeId, StringComparison.Ordinal))
+            return false;
+
         if (await IsEffectiveDesignatedApproverAsync(conn, tx, ctx, source, facts, actorId, employeeId, asOf, ct))
             return true;
         return await ResolveUnitLeaderApprovalKindAsync(conn, tx, ctx, facts, actorId, employeeId, asOf, ct)

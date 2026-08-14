@@ -4,7 +4,7 @@
 |-------|-------|
 | **ID** | RES-003 |
 | **Category** | resolution |
-| **Status** | **PARTIALLY CLOSED** — all THREE instances now fixed (the third owner-ruled 2026-07-30); the CLASS remains open pending the audit + choke-point ruling |
+| **Status** | **CLOSED (S130, 2026-08-14)** — the CLASS is now fail-closed structurally: the owner ruled SoD (block self on manager decisions, no exemption; Økonomistyrelsen funktionsadskillelse), and SEC-009 (the reachable org-scope self-approval) is fixed via the **single choke point** (item 2) + the per-leg differential test matrix + a direct choke-point contract pin (item 1). See the S130 close note at the foot of this file. *(Was PARTIALLY CLOSED — all 3 instances fixed but the class open pending the audit + choke-point ruling.)* |
 | **Sprint** | Sprint 125 (raised) |
 | **Date** | 2026-07-30 |
 | **Domains** | Backend, Infrastructure, Security |
@@ -153,3 +153,23 @@ identical stack, no assertion involved — isolation-cleared 35/35).
 - `SPRINT-125.md` TASK-12502 (the fix) and TASK-12501 step 3c (instance 2)
 - S105 Step-7a originally introduced `e.user_id <> @actorId` after an external lens caught the same
   class in the unit-leader path — so this is arguably the FOURTH occurrence, and the earliest.
+
+## S130 close note (2026-08-14) — the class is now fail-closed
+Surfaced again as **SEC-009** by the S129 security sweep (the org-scope/HR-fallback self-approval,
+confirmed reachable + mis-audited). Owner ruled the SoD line (block self on manager DECISIONS —
+approve / reject / reopen-of-`APPROVED`; **no exemption**; allow the pre-approval self-undo of one's
+own `EMPLOYEE_APPROVED`). Fixed structurally, satisfying the two proposals above:
+- **Item 2 (the choke point):** a fail-closed self-guard as the first statement of the terminal
+  `DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync` (all public overloads funnel
+  here) → every edge / unit-leader / vikar path self-excludes by default; the per-path SQL exclusions
+  become defence-in-depth. The one leg that bypasses the predicate — the org-scope/HR fallback — is
+  covered by the shared `ApprovalSelfGuard.IsSelf` at the three manager-decision endpoints.
+- **Item 1 (the audit as a test matrix):** `tests/StatsTid.Tests.Regression/Approval/
+  SelfApprovalGuardTests.cs` — a per-leg self-pair + other-actor differential (the org-scope self case
+  is a genuine 200→403), positive-self-match, guard-ordering (self on ineligible status → 403 not 409),
+  the reopen split, no-over-block (send/employee-approve), and a **direct choke-point contract pin**
+  (`IsEffectiveApproverOrUnitLeaderAsync(x, x) == false` while `x` holds real authority over another).
+- Dual-lens: refinement approved (Codex cycle-2) + implementation reviewed (Codex APPROVED-WITH-
+  WARNINGS / internal 0-BLOCKER), the one warning (pin the choke point) closed by the direct test.
+The SoD rule now has a single structural enforcement point; a future authority path inherits the
+fail-closed default. **CLASS CLOSED.**
