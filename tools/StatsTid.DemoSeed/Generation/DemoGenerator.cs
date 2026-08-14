@@ -267,7 +267,7 @@ public sealed class DemoGenerator
         //        persona (…_0284), so Skip(1) keeps the two personas distinct. Deterministic (no
         //        _rng draw) and gated by the config knob, so the golden/legacy smoke bytes are
         //        untouched. ──
-        if (_config.SeedLocalAdminPersona)
+        if (_config.CurateDemoPersonas)
         {
             var localAdmin = treeUsers.Where(u => u.IsActive && !u.IsManager).Skip(1).FirstOrDefault();
             if (localAdmin is not null)
@@ -499,6 +499,11 @@ public sealed class DemoGenerator
         }
     }
 
+    /// <summary>The advertised Leder demo persona — mirrors the "Test-personaer" panel in
+    /// <c>frontend/src/pages/LoginPage.tsx</c>. The <see cref="ScaleConfig.CurateDemoPersonas"/>
+    /// guarantee below keeps its Godkend-tid roster populated regardless of the random sample.</summary>
+    private const string LeaderPersonaUserId = "demo_styx1_0025";
+
     // ── Activity (~ActivityFraction of ACTIVE users) ──
     private void GenerateActivity(List<DemoUser> users, DemoManifest manifest)
     {
@@ -563,6 +568,48 @@ public sealed class DemoGenerator
                 Absences = absences,
                 PeriodOutcome = outcome,
             });
+        }
+
+        // ── Curated Leder-persona guarantee (CurateDemoPersonas, full scale). The advertised Leder
+        //    persona must ALWAYS have something to approve, but the activity sample above is random
+        //    and reshuffles per month (the day-picker's draw count is calendar-dependent), so no
+        //    fixed leader is reliably populated. Force ONE of its active non-manager reports — which
+        //    sit in its unit, hence its Godkend-tid roster — into an EMPLOYEE_APPROVED month. Runs
+        //    AFTER the random loop and consumes NO _rng (pure edit of one entry), so it perturbs
+        //    neither the golden smoke bytes (gated off) nor any full-scale draw; FillAllocatedMonths
+        //    later gives the entry balanced allocations like any other. ──
+        if (_config.CurateDemoPersonas)
+        {
+            var byId = users.ToDictionary(u => u.UserId, StringComparer.Ordinal);
+            var report = manifest.ReportingEdges
+                .Where(e => e.ManagerId == LeaderPersonaUserId)
+                .Select(e => byId.TryGetValue(e.EmployeeId, out var ru) ? ru : null)
+                .Where(ru => ru is { IsActive: true, IsManager: false })
+                .OrderBy(ru => ru!.UserId, StringComparer.Ordinal)
+                .FirstOrDefault();
+
+            if (report is not null)
+            {
+                var existing = manifest.Activity.FirstOrDefault(a => a.EmployeeId == report.UserId);
+                if (existing is not null)
+                {
+                    existing.PeriodOutcome = "EMPLOYEE_APPROVED";
+                }
+                else
+                {
+                    manifest.Activity.Add(new DemoActivity
+                    {
+                        EmployeeId = report.UserId,
+                        OrgId = report.PrimaryOrgId,
+                        AgreementCode = report.AgreementCode,
+                        OkVersion = report.OkVersion,
+                        Year = year,
+                        Month = month,
+                        Absences = new List<DemoAbsence>(),
+                        PeriodOutcome = "EMPLOYEE_APPROVED",
+                    });
+                }
+            }
         }
     }
 

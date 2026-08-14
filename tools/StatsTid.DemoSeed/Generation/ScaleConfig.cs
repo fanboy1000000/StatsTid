@@ -62,14 +62,17 @@ internal sealed class ScaleConfig
     public required int MessyCaseCount { get; init; }
 
     /// <summary>
-    /// Seed one dedicated, ORG-scoped <c>LOCAL_ADMIN</c> demo persona per tree (a clean local
-    /// administrator for exercising the LocalAdmin-gated surfaces — Projekter, Brugerrettigheder,
-    /// Lokal OK-konfiguration — inside the rich demo world, which otherwise had no LocalAdmin).
+    /// Curate the fixed demo personas the login screen advertises, so the manual-testing dataset
+    /// reliably demonstrates each role's surfaces. Two curations today, both in
+    /// <see cref="DemoGenerator"/>: (1) one dedicated ORG-scoped <c>LOCAL_ADMIN</c> per tree (the
+    /// demo world otherwise had no LocalAdmin — only the thin-data baseline); and (2) a guaranteed
+    /// pending (<c>EMPLOYEE_APPROVED</c>) member under the advertised Leder persona, so its Godkend
+    /// tid always has something to approve regardless of the random activity sample / month.
     /// OPTIONAL and default-OFF so the golden-pinned legacy smoke clone (which omits this knob)
-    /// stays byte-identical; the grant consumes NO <see cref="Random"/> draw, so the determinism
-    /// pins are unaffected regardless. Enabled on <see cref="Full"/> only.
+    /// stays byte-identical; NEITHER curation consumes a <see cref="Random"/> draw, so the
+    /// determinism pins are unaffected regardless. Enabled on <see cref="Full"/> only.
     /// </summary>
-    public bool SeedLocalAdminPersona { get; init; }
+    public bool CurateDemoPersonas { get; init; }
 
     public static ScaleConfig For(string scale) => scale switch
     {
@@ -116,7 +119,7 @@ internal sealed class ScaleConfig
         ActivityFraction = 0.15,
         PartTimeFraction = 0.10,
         MessyCaseCount = 26,
-        SeedLocalAdminPersona = true,
+        CurateDemoPersonas = true,
         // S114: every full-scale styrelse adopts a per-org span override so its manager tree has
         // depths 0–4 EXACTLY (⇒ the unit derivation yields all 5 types). Manager COUNTS stay the
         // generator-internal round(activeN×0.14) — headcounts and the positional manager SET are

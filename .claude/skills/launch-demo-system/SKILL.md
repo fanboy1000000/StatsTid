@@ -16,12 +16,14 @@ Brings up the backend docker-compose stack, the Vite frontend, and the demo data
 
 **Demo logins** (full scale — 5 organisations, ~3,350 users). These mirror the dev-only "Test-personaer" panel on the login screen — one recommended login per role, all in the big org STYX1:
 - `demo_styx1_0284` — Employee: Skema/tidsregistrering, Årsoversigt, Mine perioder
-- `demo_styx1_0002` — LocalLeader: Godkend tid (Team-/Leder-oversigt), Vikariering
+- `demo_styx1_0025` — LocalLeader: Godkend tid (Team-/Leder-oversigt), Vikariering
 - `demo_styx1_0001` — LocalHR: Organisation & medarbejdere, Audit log
 - `demo_styx1_0285` — LocalAdmin: Projekter, Brugerrettigheder, Lokal OK-konfiguration
 - `demo_admin` — GlobalAdmin: Overenskomster, Lønartstilknytning + all admin surfaces
 - Baseline `emp001` / `mgr03` / `admin01` / `ladm01` also work.
 
+> 📅 **The rolling reseed (Step 2) puts activity in the PREVIOUS (last complete) month** so it never goes stale. Godkend tid / Mine perioder / Årsoversigt default to the *current* month, so switch back one month to see submitted periods. `demo_styx1_0025` is guaranteed a member awaiting approval there every reseed (curated); approvals are unit-scoped, so a leader whose unit has no submissions (e.g. `demo_styx1_0002`) shows an empty list.
+>
 > ⚠️ `demo_styx1_0005` is a **LocalLeader**, not an employee (an older version of this list mislabeled it). Use `demo_styx1_0284` for a plain-employee persona. There is one scoped `LOCAL_ADMIN` per org (`demo_styx2_0086`, `demo_styx3_0036`, …) for cross-org scope testing.
 
 ## Ports (docker-compose.yml)
@@ -49,20 +51,26 @@ docker exec -i statstid-postgres psql -U statstid -d statstid -t \
 This WIPES the local Postgres volume (`down -v`). The data is fully regenerable (baseline from init.sql, demo from the deterministic loader), and this is the designed path ("demo regenerates on `down -v` + load").
 
 ```bash
-# (a) the structural overlay + manifest are committed at docker/postgres/99-demo-seed.sql
-#     + tools/StatsTid.DemoSeed/demo-manifest.full.json. REGENERATE only if the demo generator
-#     code or a table the overlay depends on changed:
-#     dotnet run --project tools/StatsTid.DemoSeed -- generate --scale full
+# (a) generate a ROLLING manifest to a gitignored scratch path so the seeded activity lands in the
+#     PREVIOUS (last complete) month instead of the pinned May 2026 — the committed structural SQL
+#     (docker/postgres/99-demo-seed.sql) stays pinned + mounted; only the loaded manifest rolls.
+#     (The user set / ids / active-leaver split are reference-date-independent, so this is consistent.)
+mkdir -p tools/StatsTid.DemoSeed/.local
+dotnet run --project tools/StatsTid.DemoSeed -- generate --scale full --reference-date rolling \
+  --out tools/StatsTid.DemoSeed/.local/seed.sql \
+  --manifest tools/StatsTid.DemoSeed/.local/demo-manifest.rolling.json
 # (b) wipe + fresh up WITH the demo overlay (fresh init → init.sql then the demo SQL):
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.demo.yml down -v
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.demo.yml up -d --build
 # (c) wait until all services are healthy:
 until [ "$(docker compose -f docker/docker-compose.yml -f docker/docker-compose.demo.yml ps \
   --format '{{.Status}}' | grep -c healthy)" -ge 8 ]; do sleep 5; done
-# (d) run the API loader (builds reporting-line trees, unit spines, roles, activity):
-dotnet run --project tools/StatsTid.DemoSeed -- load --scale full --base-url http://localhost:5100 --verify
+# (d) run the API loader against the ROLLING manifest (trees, unit spines, roles, activity):
+dotnet run --project tools/StatsTid.DemoSeed -- load --scale full \
+  --manifest tools/StatsTid.DemoSeed/.local/demo-manifest.rolling.json \
+  --base-url http://localhost:5100 --verify
 ```
-Use `--scale smoke` everywhere (generate + up-overlay-not-needed + load) for a tiny ~30-user end-to-end instead of the full ~3,350.
+For the pinned/committed dataset instead (activity in May 2026, byte-reproducible), drop `--reference-date rolling` and the scratch `--out`/`--manifest` and use the committed defaults. Use `--scale smoke` everywhere for a tiny ~30-user end-to-end instead of the full ~3,350.
 
 **KNOWN-BENIGN verify exit 5:** `--verify` prints `VERIFICATION FAILED` and exits 5 on ONE check — `demo_admin` is homed at the MAO root `MINX` (org_type MAO), not an Organisation. That is correct for a global admin and does not affect the app. Every other check passes (org-trees single-rooted, unit counts exact, roles/homing clean). Treat a lone `demo_users_off_org=1` (== demo_admin) as green. **Do NOT pipe the loader through `tail`** — it masks the real exit code AND truncates the failing check line if a genuine failure occurs.
 

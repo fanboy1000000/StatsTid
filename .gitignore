@@ -52,3 +52,6 @@ ds-bundle/
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules
+
+# Rolling (wall-clock) demo artifacts — never committed (see DemoSeed README)
+tools/StatsTid.DemoSeed/.local/

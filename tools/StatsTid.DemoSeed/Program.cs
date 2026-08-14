@@ -3,7 +3,7 @@
 //
 // Two sub-commands:
 //
-//   generate --scale {smoke|full} [--out <sql>] [--manifest <json>] [--seed N] [--reference-date YYYY-MM-DD]
+//   generate --scale {smoke|full} [--out <sql>] [--manifest <json>] [--seed N] [--reference-date YYYY-MM-DD|rolling]
 //     Emits the deterministic structural SQL (docker/postgres/99-demo-seed.sql) +
 //     a JSON manifest. Same (seed, scale, reference-date) ⇒ byte-identical output.
 //
@@ -26,6 +26,7 @@
 
 using System.Text;
 using System.Text.Json;
+using StatsTid.Tools.DemoSeed;
 using StatsTid.Tools.DemoSeed.Generation;
 using StatsTid.Tools.DemoSeed.Loading;
 using StatsTid.Tools.DemoSeed.Model;
@@ -65,9 +66,10 @@ static async Task<int> RunGenerateAsync(Dictionary<string, string> opts)
 {
     var scale = opts.GetValueOrDefault("scale", "full");
     var seed = int.TryParse(opts.GetValueOrDefault("seed", "42"), out var s) ? s : 42;
-    var referenceDate = opts.TryGetValue("reference-date", out var rd) && DateOnly.TryParse(rd, out var d)
-        ? d
-        : new DateOnly(2026, 6, 15);
+    // "rolling" ⇒ first of the current month ⇒ activity in the PREVIOUS month (recent, never stale);
+    // absent/ISO ⇒ deterministic pinned/explicit date. See ReferenceDateResolver.
+    var referenceDate = ReferenceDateResolver.Resolve(
+        opts.GetValueOrDefault("reference-date"), DateOnly.FromDateTime(DateTime.Today));
 
     var repoRoot = FindRepoRoot();
     var outSql = opts.GetValueOrDefault("out", Path.Combine(repoRoot, "docker", "postgres", "99-demo-seed.sql"));
@@ -227,7 +229,7 @@ static void PrintUsage()
 
         Usage:
           generate --scale {smoke|full} [--out <sql>] [--manifest <json>]
-                   [--seed N] [--reference-date YYYY-MM-DD]
+                   [--seed N] [--reference-date YYYY-MM-DD|rolling]
           load --scale {smoke|full} [--manifest <json>] [--base-url URL]
                [--batch-size N] [--db-conn "<connstr>"] [--verify]
 
@@ -235,6 +237,9 @@ static void PrintUsage()
                   --out docker/postgres/99-demo-seed.sql ·
                   --manifest tools/StatsTid.DemoSeed/demo-manifest.{scale}.json ·
                   --base-url http://localhost:5100 · --batch-size 200
+        --reference-date rolling ⇒ first of the current month ⇒ activity in the previous
+        (last complete) month. Wall-clock, so NOT byte-reproducible — used by the reseed, not
+        for regenerating the committed artifacts.
         """);
 }
 

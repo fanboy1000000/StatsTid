@@ -257,4 +257,31 @@ public sealed class GeneratorStructuralTests
         var ds = Gen("smoke");
         Assert.DoesNotContain(ds.PrivilegedRoles, r => r.RoleId == "LOCAL_ADMIN");
     }
+
+    // The curated Leder-persona guarantee across THREE reference dates → three different activity
+    // months (Jan / May / July). The whole point is month-independence: the random activity sample
+    // reshuffles per month, so this would fail on at least one month without the curation.
+    [Theory]
+    [InlineData(2026, 6, 15)] // pinned default → May activity
+    [InlineData(2026, 8, 1)]  // rolling-style   → July activity
+    [InlineData(2026, 2, 1)]  // → January activity (a differently-shaped calendar)
+    public void Full_LeaderPersona_AlwaysHasAPendingUnitMember_RegardlessOfMonth(int y, int m, int d)
+    {
+        const string leader = "demo_styx1_0025";
+        var ds = new DemoGenerator("full", 42, new DateOnly(y, m, d)).Generate();
+        var byId = ds.Users.ToDictionary(u => u.UserId);
+
+        // Its Godkend-tid roster = the leader's active non-manager direct reports (its unit members).
+        var unitMembers = ds.Manifest.ReportingEdges
+            .Where(e => e.ManagerId == leader)
+            .Select(e => e.EmployeeId)
+            .Where(id => byId.TryGetValue(id, out var u) && u.IsActive && !u.IsManager)
+            .ToHashSet();
+        Assert.NotEmpty(unitMembers); // sanity — the persona must actually lead non-managers
+
+        var pending = ds.Manifest.Activity
+            .Where(a => a.PeriodOutcome == "EMPLOYEE_APPROVED" && unitMembers.Contains(a.EmployeeId))
+            .ToList();
+        Assert.NotEmpty(pending); // the curated guarantee: ≥1 approvable member, any month
+    }
 }

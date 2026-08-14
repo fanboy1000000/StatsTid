@@ -31,7 +31,7 @@ export function LoginPage({ onLogin }: Props) {
     },
     {
       role: 'Leder',
-      username: 'demo_styx1_0002',
+      username: 'demo_styx1_0025',
       tests: 'Godkend tid (Team-/Leder-oversigt), Vikariering',
     },
     {
@@ -128,7 +128,13 @@ export function LoginPage({ onLogin }: Props) {
               ))}
             </ul>
             <p className={styles.personasNote}>
-              Højere roller ser også alle lavere faner.
+              Demodata ligger i <strong>den forrige måned</strong> (seneste afsluttede måned) —
+              skift til den i Godkend tid, Mine perioder og Årsoversigt for at se registreringer
+              og indsendte perioder.
+            </p>
+            <p className={styles.personasNote}>
+              Højere roller ser også alle lavere faner, men Godkend tid viser kun dit eget
+              team — admin-roller uden eget team ser derfor en tom godkendelsesliste.
             </p>
           </div>
         )}

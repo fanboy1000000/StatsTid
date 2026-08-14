@@ -49,6 +49,26 @@ dotnet run --project tools/StatsTid.DemoSeed -- load --scale full --base-url htt
 
 Use `--scale smoke` everywhere for a tiny (~30-user) end-to-end smoke of the whole pipeline.
 
+**Recent-month activity (recommended for manual testing).** The steps above use the pinned
+committed manifest (activity in May 2026, which goes stale as wall-clock advances). To make the
+seeded activity land in the **previous (last complete) month** instead, generate a *rolling*
+manifest to a scratch path and load that — the committed `99-demo-seed.sql` stays pinned + mounted:
+
+```bash
+mkdir -p tools/StatsTid.DemoSeed/.local
+dotnet run --project tools/StatsTid.DemoSeed -- generate --scale full --reference-date rolling \
+  --out tools/StatsTid.DemoSeed/.local/seed.sql \
+  --manifest tools/StatsTid.DemoSeed/.local/demo-manifest.rolling.json
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.demo.yml down -v
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.demo.yml up -d --build
+dotnet run --project tools/StatsTid.DemoSeed -- load --scale full \
+  --manifest tools/StatsTid.DemoSeed/.local/demo-manifest.rolling.json \
+  --base-url http://localhost:5100 --verify
+```
+`.local/` is gitignored — the rolling artifacts are wall-clock-dependent and never committed. The
+user set / ids / active-leaver split are reference-date-independent (RNG-driven), so the rolling
+manifest loads cleanly onto the pinned SQL; only the activity month (and vikar dates) move.
+
 ## Demo logins (all share password `password`)
 
 One recommended login per role (all in the big org STYX1) — these mirror the dev-only
@@ -57,15 +77,24 @@ One recommended login per role (all in the big org STYX1) — these mirror the d
 | Username | Role | Use for |
 |----------|------|---------|
 | `demo_styx1_0284` | EMPLOYEE | Skema/tidsregistrering, Årsoversigt, Mine perioder |
-| `demo_styx1_0002` | LOCAL_LEADER | Godkend tid (Team-/Leder-oversigt), Vikariering |
+| `demo_styx1_0025` | LOCAL_LEADER | Godkend tid (Team-/Leder-oversigt), Vikariering |
 | `demo_styx1_0001` | LOCAL_HR | Organisation & medarbejdere, Audit log |
 | `demo_styx1_0285` | LOCAL_ADMIN | Projekter, Brugerrettigheder, Lokal OK-konfiguration |
 | `demo_admin` | GLOBAL_ADMIN | Overenskomster, Lønartstilknytning + all admin surfaces |
 
+> 📅 **The reseed puts the seeded activity in the PREVIOUS (last complete) month** via
+> `--reference-date rolling` (see step 1 above), so it never goes stale. Godkend tid / Mine perioder
+> / Årsoversigt default to the *current* month, so switch back one month to see registrations and
+> submitted periods. The `LOCAL_LEADER` persona above (`demo_styx1_0025`) is **guaranteed** a member
+> awaiting approval there every reseed (a curated guarantee — see `CurateDemoPersonas`); approvals
+> are scoped to your own unit, so a leader whose unit has no submissions (e.g. `demo_styx1_0002`)
+> shows an empty list. (The COMMITTED `99-demo-seed.sql` + manifest stay
+> pinned at reference-date 2026-06-15 → activity May 2026, for reproducibility; only the reseed rolls.)
+>
 > ⚠️ `demo_styx1_0005` is a **LOCAL_LEADER**, not an employee — an earlier version of this table
 > mislabeled it. Use `demo_styx1_0284` for a plain-employee persona. One scoped `LOCAL_ADMIN` is
 > seeded per org (`demo_styx1_0285`, `demo_styx2_0086`, `demo_styx3_0036`, `demo_styx4_0036`,
-> `demo_styx5_0037` — the 2nd active non-manager, gated by `ScaleConfig.SeedLocalAdminPersona`,
+> `demo_styx5_0037` — the 2nd active non-manager, gated by `ScaleConfig.CurateDemoPersonas`,
 > full scale only) so the LocalAdmin-gated surfaces are reachable in the rich demo world.
 
 (The baseline `emp001` / `mgr03` / `admin01` / `ladm01` etc. + password `password` still work too.)
@@ -87,8 +116,12 @@ One recommended login per role (all in the big org STYX1) — these mirror the d
 
 ## Determinism
 
-Same `--seed` (default 42) + `--scale` ⇒ byte-identical `99-demo-seed.sql` + manifest. All dates
-derive from a fixed `--reference-date`, not wall-clock. The **structural** layer is reproducible;
+Same `--seed` (default 42) + `--scale` + `--reference-date` ⇒ byte-identical `99-demo-seed.sql` +
+manifest. All dates derive from the reference date, not wall-clock — the generator itself never
+reads the clock. The one opt-in exception is `--reference-date rolling`, resolved (in
+`ReferenceDateResolver`, at the CLI layer only) to the first of the current month so the reseed's
+activity lands in the previous month; that run is intentionally NOT byte-reproducible and is used
+for the local demo, never to regenerate the committed artifacts. The **structural** layer is reproducible;
 the **activity** layer (API-driven) is **idempotent** (skip-if-present, no duplicates on re-run)
 but not byte-reproducible (server-stamped event ids/timestamps reflect generation wall-clock).
 
