@@ -1,7 +1,10 @@
 <!-- anchor-sprint: 129 -->
 # SEC — Security Finding Register
 
-**Status**: LIVE (created S129, 2026-08-13). **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `e955e13`.
+**Status**: LIVE — **S129 sweep COMPLETE (2 rounds, 2026-08-14)**; now the durable cross-session
+security register. **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `e955e13`. **Fix-next
+(owner-ruled)**: SEC-009 → 020 → 027 → 032 → 033 → 015 → 023 → 021 → 019 → 028/031/034/035 (ROADMAP
+backlog → next remediation sprint).
 
 > **ROUND-1 SWEEP COMPLETE (2026-08-14) — see `docs/sprints/SPRINT-129.md` for the full adjudication
 > records.** Calibration **PASS 3/3** (the 3 held-out holes independently rediscovered from code).

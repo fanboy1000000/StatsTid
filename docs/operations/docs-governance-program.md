@@ -340,10 +340,13 @@ staleness is in counts/pins/anchor:
       findings SEC-031…035; the headline is **SEC-032 (Position-Override cross-tenant config write,
       HIGH** — refuter-upgraded) + SEC-033 config-validation-gap class. Owner ruling on the 5 new rows
       pending; recommend SEC-032 joins fix-next. Full records in `SPRINT-129.md`.
-- **WS5 STATUS: the sweep is substantively COMPLETE** (2 rounds, calibration 3/3, ~46 findings,
-      HTTP surface + auth chain + deploy + frontend + config bodies + money flows all covered).
-      Remaining: owner rules the 5 round-2 findings; the remediation sprint (fix-next, now +SEC-032)
-      is the follow-on. Round-3 candidates (persistence/outbox, dependency audit) optional.
+- [x] **WS5 COMPLETE (2026-08-14).** The sweep ran 2 rounds (calibration 3/3, ~46 findings, full
+      HTTP surface + auth chain + deploy + frontend + config bodies + money flows). All findings ruled;
+      the 10-item fix-next remediation list (owner-approved, SEC-032/033 folded in) is in the ROADMAP
+      backlog for the next remediation sprint. The audit method is a repeatable harness (skill +
+      register + calibration + worktree isolation + refute panel). **Phase 3 done → the whole
+      docs-&-governance + security program (Phases 1–3) is complete.** Round-3 (persistence/outbox +
+      dependency audit) optional/deferred.
 
 ### WS6 — Environment / infra (parked / on demand)
 - [ ] Native stack back up (backend-api + Vite) when UI testing is wanted (Postgres already up).

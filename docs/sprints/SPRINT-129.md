@@ -208,3 +208,22 @@ token/PII leakage, clean deps.
 **Round-2 residue (round-3 candidates, if ever):** persistence/outbox consumers + a dependency audit
 were not swept. The sweep is otherwise comprehensive across the HTTP surface, auth chain, deploy, and
 frontend.
+
+### Round-2 owner ruling (2026-08-14) — RULED
+Owner approved: **SEC-032 joins fix-next at #4** (after SEC-009/020/027); **SEC-033** fix-next;
+**SEC-034/035** verify-then-fix / ride along; **SEC-031** cheap add. Final remediation order (10 items)
+is in the ROADMAP security backlog. No item is CLOSED-as-accepted from round 2 (all are fix-next or
+verify-then-fix).
+
+---
+
+## SWEEP COMPLETE (2026-08-14)
+
+Two rounds, calibration **3/3**, ~46 ledger findings, adversarial refute panel (6 High double/single-
+refuted, all CONFIRMED). Coverage: 137 Backend endpoints + auth chain (round 1) · service↔service +
+deploy/CI + revisit (round 1) · config-CRUD bodies + settlement money flows + full frontend (round 2).
+Net register: **2 overturns-worse (SEC-009, and SEC-032 upgraded to High), 2 downgrades/closes
+(SEC-004, SEC-013), 1 split (SEC-022), 10 fix-next, the rest accepted/carried.** The audit sprint held
+its contract: **no product code changed, 3269 test baseline carried** (S128 CI `31485462948`). The
+follow-on is the remediation sprint (ROADMAP backlog); the audit method (skill + register + calibration
++ worktree isolation + refute panel) is now a repeatable harness for future sweeps.

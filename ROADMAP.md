@@ -52,12 +52,21 @@ action; delete the row when done.
 `docs/operations/security-finding-register.md` + `docs/sprints/SPRINT-129.md`. The items below are now
 tracked as SEC-NNN rows there; this list is the pickup summary.)*
 
-- **★ NEXT REMEDIATION SPRINT (owner-approved 2026-08-14, S130 candidate)** — 8 fix-next items in
-  priority order, all small bounded fixes: **SEC-009** self-approval self-guard (keystone) → **SEC-020**
-  `Auth:UseDatabase` fail-closed → **SEC-027** per-service s2s identity (no self-minted GlobalAdmin) →
-  **SEC-015** env-only signing key → **SEC-023** `external/send` role floor + schema → **SEC-019**
-  `claude.yml` author gate → **SEC-021** Orchestrator task IDOR scope check → **SEC-028** CI
-  `permissions:` block. Details in `SPRINT-129.md` "Remediation-sprint proposal".
+- **★ NEXT REMEDIATION SPRINT (owner-approved 2026-08-14, S130 candidate)** — the fix-next set in
+  priority order, all small bounded fixes (round-2 additions folded in):
+  1. **SEC-009** self-approval self-guard (keystone — the org-scope approve/reject/reopen legs).
+  2. **SEC-020** `Auth:UseDatabase` fail-closed (default TRUE / drop the in-memory admin table).
+  3. **SEC-027** per-service s2s identity (no self-minted GlobalAdmin over the shared key).
+  4. **SEC-032** Position-Override → `GlobalAdminOnly` (or a real org binding) — cross-tenant config write.
+  5. **SEC-033** server-side range/negativity validation + DB CHECKs on money-adjacent config numbers
+     (PositionOverride + AgreementConfig + EntitlementConfig).
+  6. **SEC-015** env-only signing key (remove the code fallback; rotate the committed dev key).
+  7. **SEC-023** `external/send` role floor + schema.
+  8. **SEC-021** Orchestrator `tasks/{id}` ownership/scope check.
+  9. **SEC-019** `claude.yml` `author_association` gate (defense-in-depth).
+  10. **SEC-028** CI `permissions:` block · **SEC-031** frontend CSP header · **SEC-034/035**
+      Position-Override PUT re-key guard + verify the supersession audit-omission (fix if reproducible).
+  Details + per-item evidence in `SPRINT-129.md`.
 - **WS5 sweep round 2 (owner-approved 2026-08-14)** — deeper bodies of the GlobalAdmin config
   endpoints + settlement/reversal internals (round-1 confirmed the floors, not the bodies) + the FULL
   frontend sweep (SEC-025 browser-token-storage redesign folds in here). Persistence/outbox consumers
