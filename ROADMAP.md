@@ -48,8 +48,24 @@ Concrete items explicitly deferred, each with its source. Grouped by theme. Prom
 action; delete the row when done.
 
 ### Security & access control
-*(Most of these are the "revisit register" candidates the WS5 security sweep will re-attack — a past
-ruling is re-examined, not shielded.)*
+*(The WS5 sweep RAN round 1, 2026-08-14 — calibration 3/3, findings in
+`docs/operations/security-finding-register.md` + `docs/sprints/SPRINT-129.md`. The items below are now
+tracked as SEC-NNN rows there; this list is the pickup summary.)*
+
+- **★ NEXT REMEDIATION SPRINT (owner-approved 2026-08-14, S130 candidate)** — 8 fix-next items in
+  priority order, all small bounded fixes: **SEC-009** self-approval self-guard (keystone) → **SEC-020**
+  `Auth:UseDatabase` fail-closed → **SEC-027** per-service s2s identity (no self-minted GlobalAdmin) →
+  **SEC-015** env-only signing key → **SEC-023** `external/send` role floor + schema → **SEC-019**
+  `claude.yml` author gate → **SEC-021** Orchestrator task IDOR scope check → **SEC-028** CI
+  `permissions:` block. Details in `SPRINT-129.md` "Remediation-sprint proposal".
+- **WS5 sweep round 2 (owner-approved 2026-08-14)** — deeper bodies of the GlobalAdmin config
+  endpoints + settlement/reversal internals (round-1 confirmed the floors, not the bodies) + the FULL
+  frontend sweep (SEC-025 browser-token-storage redesign folds in here). Persistence/outbox consumers
+  + a dependency audit are also round-2 candidates.
+- *Accepted hobby-stage (cleanup deferred to go-serious):* SEC-016/017 committed dev DB + demo
+  passwords, SEC-018 unauth mock services, SEC-029 root containers.
+
+*(prior recon list — now superseded by the SEC register; kept for provenance:)*
 - **RES-002 read-gate remainder** — 9 sibling read endpoints still ungated (7 lack a month parameter,
   so they need contract changes, not a one-line guard). [S128 R2]
 - **Reopen read-fork** — a leader-reopened month reverts to DRAFT and is withheld from the leader who

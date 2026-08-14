@@ -143,3 +143,37 @@ re-ratified / overturned / accepted / fix-next-sprint on each.*
 - **sec-028** CI workflow no `permissions:` block — CONFIRMED (Low; fork PRs read-only bounds it). Rec: **fix-next (cheap)**.
 - **sec-029** containers run as root — CONFIRMED (Info). Rec: **accept** / hardening backlog.
 - **sec-030** UI role/scope hydrated from client-writable localStorage — CONFIRMED (Medium; UI-gating only, backend enforces). Rec: **accept** (rides with SEC-025).
+
+## Owner adjudication (2026-08-14) — RULED
+
+Owner approved the proposed fix-next order and the hobby-stage accepts.
+- **FIX-NEXT (remediation sprint, in priority order):** SEC-009 → SEC-020 → SEC-027 → SEC-015 →
+  SEC-023 → SEC-019 → SEC-021 → SEC-028.
+- **ACCEPTED (hobby-stage — cleanup deferred to IF the project goes serious):** SEC-016, SEC-017,
+  SEC-018, SEC-029.
+- **CLOSED (downgraded — better than recorded; no fix needed beyond cosmetics):** SEC-004 (fix stale
+  "tree" error text only), SEC-013.
+- **CARRIED (re-ratified, no action this cycle):** SEC-001, SEC-002, SEC-003 (platform: token TTL /
+  revocation — bundles with any auth-lifetime work), SEC-006 (RES-002 tier-gate remainder), SEC-014,
+  SEC-022 (forward half), SEC-024, SEC-030.
+- **ROUND-2:** SEC-025 (browser token-storage redesign) folds into the round-2 frontend sweep.
+
+## Remediation-sprint proposal (the "next remediation sprint" — S130 candidate)
+
+Per the ROADMAP rolling-detail rule this is proposed, not hard-numbered. Scope = the 8 FIX-NEXT rows,
+severity × invariant-impact ordered. All are small, bounded fixes:
+1. **SEC-009** — add the `actor != employee` self-guard to the org-scope approve/reject/reopen legs
+   (`ApprovalEndpoints.cs:235/302/431/1495`); pin with a RED test (HR-self-approve denied); keep the
+   `ORG_SCOPE_FALLBACK` audit but distinguish a would-be self-approval. **The keystone fix.**
+2. **SEC-020** — default `Auth:UseDatabase` to TRUE (fail closed) and/or delete the in-memory admin
+   credential table; a missing env var must not serve `admin01/admin`.
+3. **SEC-027** — give service-to-service tokens a per-service identity (audience/subject) and drop the
+   self-minted `GlobalAdmin`; the classification fetch needs no admin role.
+4. **SEC-015** — env-only signing key; remove the code `DevFallbackSigningKey`; rotate the committed
+   dev key.
+5. **SEC-023** — add a role floor + a typed schema to `external/send`.
+6. **SEC-019** — add an `author_association` gate to `claude.yml` (defense-in-depth atop the action's
+   own actor check).
+7. **SEC-021** — add an ownership/scope check to `GET /orchestrator/tasks/{id}`.
+8. **SEC-028** — add a least-privilege `permissions:` block to `ci.yml`.
+Not an audit-sprint task (audit proposes, remediation fixes). Entered in the ROADMAP backlog.
