@@ -201,7 +201,40 @@ surfaced SEC-037) → owner ruling OQ-1(a)/OQ-2 → domain-agent implementation 
 APPROVED-WITH-WARNINGS [error-shape matches existing `{error}` convention — accepted; endpoint test-debt —
 recorded] / internal 0-BLOCKER 0-WARNING) → build clean; 53 unit tests green.
 
+## Task 6 — SEC-015 committed/shared dev JWT signing key (MITIGATED, re-adjudication, 2026-08-17)
+
+**Outcome: NO new code.** The refine-requirements pass found the security-critical protection was already
+built (and test-pinned) in Sprint 19 — so SEC-015 is a re-adjudication + residual-recording, not a fix.
+
+**What's already in place (verified by both review lenses).** `JwtValidationSetup.AddStatsTidJwtAuth`
+(`JwtValidationSetup.cs:29-53`) fails closed: a configured `Jwt:SigningKey` wins; else Development uses the
+well-known `DevFallbackSigningKey`; else (non-Development, no key) it THROWS at startup. All 5 services
+(Backend, RuleEngine, Orchestrator, Payroll, External) use this single path — no service reads the key
+another way, and no production-reachable code uses the committed literal. This is pinned by
+`JwtValidationSetupTests` (`AuthorizationPolicyTests.cs:189-263`, S19/TASK-1905): non-Dev→throws,
+Dev→fallback, configured-key-wins, `DOTNET_ENVIRONMENT` flow. **So a real production deploy cannot
+accidentally run on the well-known key.**
+
+**The honest residual (what MITIGATED does and does NOT cover).** `docker-compose.yml` sets no environment
+variable → containers run in **Production** mode but explicitly supply the committed `Jwt__SigningKey`
+(`docker-compose.yml:4`), so the dev/demo compose stack IS spoofable by anyone who knows the well-known key.
+Acceptable — it is dev/demo/test infra with no real data — conditioned on compose never being deployed as a
+real production stack. The committed key is shared across compose, the `DevFallbackSigningKey` const, and
+~89 test files.
+
+**Deferred (owner guidance).** Rotating the committed well-known key to injected secrets would break the
+test harness (~89 files hardcode the literal) + compose + friction-free local `dotnet run` — exactly the
+dev/test friction the owner said to defer while in development: *"if it makes the development and testing
+process less smooth, we should just note it for a follow up before we move towards production."* → recorded
+in the register pre-production ledger (with SEC-016/017). **Cross-ref: this is only the narrow "the key is
+well-known" slice — the shared-key trust-model capability (any key-holder mints any role) is SEC-036, OPEN.**
+
+**Governance:** refine-requirements + dual-lens Step-4 (Codex 1 BLOCKER [accuracy — compose runs Production
+with the committed key; don't claim spoofing categorically closed] + both-lens WARNINGs [pin test already
+exists → zero code; cross-ref SEC-036] absorbed) → owner standing guidance applied → MITIGATED + ledger. No
+code, no commit-of-code (docs-only re-adjudication).
+
 ## Remaining fix-next tasks
-SEC-015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
-(Still OPEN and tracked: SEC-034 [task-4 note], SEC-036 [ledger], SEC-037 [new, register], and the two
-SEC-033 deferrals [ledger].)
+SEC-023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
+(Still OPEN and tracked: SEC-034 [task-4 note], SEC-036 [ledger], SEC-037 [new, register], the two SEC-033
+deferrals [ledger], and the SEC-015 committed-key rotation [ledger].)

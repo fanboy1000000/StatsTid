@@ -70,7 +70,11 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
      ruling OQ-1(a)/OQ-2: app-layer + non-negativity/domain-sets only). DB CHECKs + fat-finger ceilings
      DEFERRED → pre-production ledger. Surfaced a new adjacent finding **SEC-037** (legacy-migrator
      `local_agreement_profiles` — same validation class, out of scope). See `SPRINT-130.md`.
-  6. **SEC-015** env-only signing key (remove the code fallback; rotate the committed dev key).
+  6. ~~**SEC-015** env-only signing key~~ ✅ **MITIGATED (S130, 2026-08-17, re-adjudication — no new code)**
+     — real production already fails closed without a configured key (all 5 services; pinned since S19). The
+     committed well-known dev key is shared across compose + ~89 test files, so rotating it hurts dev/test →
+     DEFERRED to the pre-production secrets-hygiene pass (ledger, with SEC-016/017; shared-key capability =
+     SEC-036). Owner guidance: defer dev/test-degrading hardening while in development. See `SPRINT-130.md`.
   7. **SEC-023** `external/send` role floor + schema.
   8. **SEC-021** Orchestrator `tasks/{id}` ownership/scope check.
   9. **SEC-019** `claude.yml` `author_association` gate (defense-in-depth).
