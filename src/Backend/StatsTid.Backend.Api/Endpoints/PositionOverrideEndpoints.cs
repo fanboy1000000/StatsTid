@@ -3,6 +3,7 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
+using StatsTid.Backend.Api.Validation;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
@@ -89,6 +90,13 @@ public static class PositionOverrideEndpoints
             var actor = context.GetActorContext();
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
+
+            // SEC-033: numeric range validation (→ 400) before persist. Every field is nullable;
+            // null means "don't override" and is skipped — only supplied values are range-checked.
+            var (rangesValid, rangeError) = PositionOverrideValidator.ValidateRanges(
+                body.WeeklyNormHours, body.NormPeriodWeeks, body.MaxFlexBalance, body.FlexCarryoverMax);
+            if (!rangesValid)
+                return Results.BadRequest(new { error = rangeError });
 
             var entity = new PositionOverrideConfigEntity
             {
@@ -185,6 +193,13 @@ public static class PositionOverrideEndpoints
             var actor = context.GetActorContext();
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
+
+            // SEC-033: numeric range validation (→ 400) before persist. Every field is nullable;
+            // null means "don't override" and is skipped — only supplied values are range-checked.
+            var (rangesValid, rangeError) = PositionOverrideValidator.ValidateRanges(
+                body.WeeklyNormHours, body.NormPeriodWeeks, body.MaxFlexBalance, body.FlexCarryoverMax);
+            if (!rangesValid)
+                return Results.BadRequest(new { error = rangeError });
 
             // 1. Parse If-Match (admin-strict mode — rejects If-None-Match: *).
             //    Missing or malformed → 428 Precondition Required with the helper's hint.

@@ -65,8 +65,11 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   4. ~~**SEC-032** Position-Override → `GlobalAdminOnly`~~ ✅ **DONE (S130, 2026-08-17)** — the 4 write
      endpoints raised to `GlobalAdminOnly` (reads stay LocalAdmin, owner ruling OQ-2). Per-institution
      org-binding redesign declined; SEC-034 (same PUT handler) stays open. See `SPRINT-130.md`.
-  5. **SEC-033** server-side range/negativity validation + DB CHECKs on money-adjacent config numbers
-     (PositionOverride + AgreementConfig + EntitlementConfig).
+  5. ~~**SEC-033** server-side range/negativity validation + DB CHECKs on money-adjacent config numbers~~
+     ✅ **DONE (S130, 2026-08-17, app-layer)** — value validation added at all 3 write surfaces (owner
+     ruling OQ-1(a)/OQ-2: app-layer + non-negativity/domain-sets only). DB CHECKs + fat-finger ceilings
+     DEFERRED → pre-production ledger. Surfaced a new adjacent finding **SEC-037** (legacy-migrator
+     `local_agreement_profiles` — same validation class, out of scope). See `SPRINT-130.md`.
   6. **SEC-015** env-only signing key (remove the code fallback; rotate the committed dev key).
   7. **SEC-023** `external/send` role floor + schema.
   8. **SEC-021** Orchestrator `tasks/{id}` ownership/scope check.

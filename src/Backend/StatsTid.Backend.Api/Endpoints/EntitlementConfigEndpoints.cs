@@ -3,6 +3,7 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Backend.Api.Endpoints.Helpers;
+using StatsTid.Backend.Api.Validation;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
@@ -160,6 +161,13 @@ public static class EntitlementConfigEndpoints
             var actor = context.GetActorContext();
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
+
+            // SEC-033: numeric range validation (→ 400). Runs first so out-of-range input is
+            // rejected before the statutory / product-rule guards below (which return 422).
+            var (rangesValid, rangeError) = EntitlementConfigValidator.ValidateRanges(
+                body.EntitlementType, body.AnnualQuota, body.CarryoverMax, body.ResetMonth, body.MinAge);
+            if (!rangesValid)
+                return Results.BadRequest(new { error = rangeError });
 
             // 1. Same-day-only-edit validator (cycle 3 symmetric forbid).
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
@@ -387,6 +395,13 @@ public static class EntitlementConfigEndpoints
             var actor = context.GetActorContext();
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
+
+            // SEC-033: numeric range validation (→ 400). Runs first so out-of-range input is
+            // rejected before the statutory / product-rule guards below (which return 422).
+            var (rangesValid, rangeError) = EntitlementConfigValidator.ValidateRanges(
+                body.EntitlementType, body.AnnualQuota, body.CarryoverMax, body.ResetMonth, body.MinAge);
+            if (!rangesValid)
+                return Results.BadRequest(new { error = rangeError });
 
             // 1. Same-day-only-edit validator (cycle 3 symmetric forbid). S121 / TASK-12100
             //    (owner ruling #1): body.EffectiveFrom is now OPTIONAL — omitted defaults to

@@ -2,6 +2,16 @@ namespace StatsTid.SharedKernel.Models;
 
 public sealed class AgreementRuleConfig
 {
+    /// <summary>
+    /// The valid norm-period lengths in weeks (1, 2, 4, 8, or 12). Single domain source of truth,
+    /// relocated here (SEC-033) from <c>RuleEngine.Api.Rules.NormCheckRule</c> so BOTH the Rule
+    /// Engine (which falls back to a 1-week norm for any value outside this set) and the Backend
+    /// admin-config write surfaces (which reject out-of-set values) can share it WITHOUT a
+    /// Backend→RuleEngine project reference — ARCHITECTURE.md hard rule #2 forbids that edge; both
+    /// projects already reference SharedKernel.
+    /// </summary>
+    public static readonly IReadOnlySet<int> ValidNormPeriodWeeks = new HashSet<int> { 1, 2, 4, 8, 12 };
+
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
     public required decimal WeeklyNormHours { get; init; }
@@ -47,7 +57,7 @@ public sealed class AgreementRuleConfig
     public decimal WorkingTravelRate { get; init; } = 1.0m;
     public decimal NonWorkingTravelRate { get; init; } = 0.5m;
 
-    // Norm period length in weeks (valid: 1, 2, 4, 8, 12)
+    // Norm period length in weeks (valid values: see ValidNormPeriodWeeks above)
     public int NormPeriodWeeks { get; init; } = 1;
 
     // Norm model (default WEEKLY_HOURS for backward compatibility)

@@ -155,6 +155,53 @@ internal WARNING [lock the read floor] + NOTEs absorbed) → owner ruled OQ-1(a)
 implementation → dual-lens Step-5a (Codex APPROVED-WITH-WARNINGS [one comment-accuracy nit, fixed] /
 internal 0-BLOCKER 0-WARNING) → build clean.
 
+## Task 5 — SEC-033 money-adjacent config-value validation (FIXED app-layer, 2026-08-17)
+
+**The finding.** Config numbers that drive pay + working-time compliance (norm hours, minimum rest, accrual
+quotas, flex balances) were accepted with no server-side range/negativity check at the three admin config
+write surfaces. Flagship real corruption: `MinimumRestHours = 0` **disables** the daily-rest compliance
+check (`RestPeriodRule` tests `restHours < MinimumRestHours`; nothing is `< 0`).
+
+**The fix — owner-ruled OQ-1(a) + OQ-2 (app-layer, lower-bounds + domain-sets only).**
+- **SharedKernel relocation (architectural):** the `NormPeriodWeeks` valid set `{1,2,4,8,12}` moved from
+  `RuleEngine.Api.NormCheckRule` to `SharedKernel.Models.AgreementRuleConfig.ValidNormPeriodWeeks`, so the
+  Backend validators can reuse it WITHOUT a `Backend→RuleEngine` reference (ARCHITECTURE.md hard rule #2 —
+  HTTP-only boundary). `NormCheckRule`'s fallback-to-1-week behavior is byte-unchanged (pinned by a test).
+- **AgreementConfig:** EXTENDED the existing private `ValidateRequest` (not a parallel validator) —
+  `MinimumRestHours>0`, `AnnualNormHours>0`, `MaxDailyHours>0`, and `NormPeriodWeeks ∈ valid set` (was `≥1`).
+  Existing `WeeklyNormHours ≤ 50` kept. `WeeklyMaxHoursReferencePeriod` excluded (inert — the rule hardcodes
+  48h and never reads the field).
+- **Entitlement + Position-Override:** new pure `EntitlementConfigValidator` / `PositionOverrideValidator`
+  (public, unit-testable), wired into BOTH POST and PUT before persist, returning **400** for range errors
+  (existing **422** statutory guards untouched — deliberate split). Entitlement: `AnnualQuota≥0`,
+  `CarryoverMax≥0` (0 allowed), `ResetMonth ∈ 1..12` non-VACATION, `MinAge≥0` if supplied. PositionOverride:
+  `null` = "don't override" is skipped (not rejected); supplied values `WeeklyNormHours>0`,
+  `NormPeriodWeeks ∈ set`, flex `≥0`; no upper cap (200 is a real seeded flex value).
+
+**Deferred (owner-ruled, recorded in the register's pre-production ledger — NOT dropped):**
+- **DB CHECK backstop** (OQ-1 a): app-layer closes the user-reachable hole; the DB-level guard on the 3
+  tables (+ the SEC-037 surface) — the house pattern `entitlement_configs` already uses — is deferred.
+- **Fat-finger upper ceilings** (OQ-2): shipped lower-bounds + domain-sets only; upper ceilings need domain
+  **agreement-truth** (Phase-B-class analysis), so deferred — owner: *"note that we have it as a follow up…
+  it requires agreement truth and deep analysis."*
+- **SEC-037 (new adjacent finding):** `LocalAgreementProfileMigrator` imports parsed legacy values into
+  `local_agreement_profiles` (a different table) unvalidated — recorded OPEN in the register; out of scope.
+
+**Tests.** 53 new **unit** tests ran locally GREEN (validators + the relocated constant + NormCheckRule
+fallback-preservation) — full `Tests.Unit` suite 914 passing. Endpoint-wiring tests
+(`SEC033AdminConfigValidationTests`) are testcontainer-backed → CI-deferred. **Test-debt follow-up (Codex
+Step-5a WARNING, accepted):** the endpoint tests are POST-only + omit negative `CarryoverMax`/`FlexCarryoverMax`
+endpoint cases — the validator logic is unit-proven and both lenses confirmed the PUT wiring is pre-persist,
+so the gap is CI-regression protection for the PUT wiring only; add PUT + those negatives to the endpoint
+suite in a later pass.
+
+**Governance:** refine-requirements + dual-lens Step-4 (found **5 BLOCKERs** across two rev cycles — assumption
+wrong, existing validator misstated, field inventory incomplete, illegal anchor dependency — all absorbed;
+surfaced SEC-037) → owner ruling OQ-1(a)/OQ-2 → domain-agent implementation → dual-lens Step-5a (Codex
+APPROVED-WITH-WARNINGS [error-shape matches existing `{error}` convention — accepted; endpoint test-debt —
+recorded] / internal 0-BLOCKER 0-WARNING) → build clean; 53 unit tests green.
+
 ## Remaining fix-next tasks
-SEC-033, 015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
-(SEC-034 explicitly remains open after task 4 — see above.)
+SEC-015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
+(Still OPEN and tracked: SEC-034 [task-4 note], SEC-036 [ledger], SEC-037 [new, register], and the two
+SEC-033 deferrals [ledger].)

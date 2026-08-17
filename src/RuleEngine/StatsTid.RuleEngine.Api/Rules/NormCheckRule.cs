@@ -32,11 +32,6 @@ public static class NormCheckRule
     public const decimal StandardWeeklyNorm = 37.0m;
 
     /// <summary>
-    /// Valid norm period lengths in weeks.
-    /// </summary>
-    public static readonly IReadOnlySet<int> ValidNormPeriodWeeks = new HashSet<int> { 1, 2, 4, 8, 12 };
-
-    /// <summary>
     /// Config-aware Evaluate: dispatches based on NormModel.
     /// WEEKLY_HOURS: delegates to the explicit normPeriodWeeks overload.
     /// ANNUAL_ACTIVITY: pro-rates annual norm to the period length.
@@ -76,7 +71,7 @@ public static class NormCheckRule
 
     /// <summary>
     /// S20 — multi-week-norm entry point (2/4/8/12 weeks per
-    /// <see cref="ValidNormPeriodWeeks"/>). Tags result with
+    /// <see cref="AgreementRuleConfig.ValidNormPeriodWeeks"/>). Tags result with
     /// <see cref="MultiWeekRuleId"/>. Reads the period count from
     /// <see cref="AgreementRuleConfig.NormPeriodWeeks"/>; values outside the valid set
     /// fall back to 1 to mirror legacy behaviour.
@@ -172,7 +167,7 @@ public static class NormCheckRule
         int normPeriodWeeks,
         decimal weeklyNormHours)
     {
-        var effectiveNormPeriodWeeks = ValidNormPeriodWeeks.Contains(normPeriodWeeks) ? normPeriodWeeks : 1;
+        var effectiveNormPeriodWeeks = AgreementRuleConfig.ValidNormPeriodWeeks.Contains(normPeriodWeeks) ? normPeriodWeeks : 1;
         var normHours = weeklyNormHours * profile.PartTimeFraction * effectiveNormPeriodWeeks;
 
         var periodEntries = entries

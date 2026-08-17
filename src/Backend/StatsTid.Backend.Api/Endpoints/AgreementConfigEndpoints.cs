@@ -867,8 +867,22 @@ public static class AgreementConfigEndpoints
             return (false, "OkVersion is required");
         if (r.WeeklyNormHours <= 0 || r.WeeklyNormHours > 50)
             return (false, "WeeklyNormHours must be > 0 and <= 50");
-        if (r.NormPeriodWeeks < 1)
-            return (false, "NormPeriodWeeks must be >= 1");
+        // SEC-033: NormPeriodWeeks must be one of the domain-valid lengths (was a bare >= 1 check,
+        // which let e.g. 3/5/7 through — the Rule Engine silently falls back to a 1-week norm for
+        // those, so a saved config would compute a different norm than the admin intended). The
+        // valid set is the SharedKernel single source of truth shared with NormCheckRule.
+        if (!AgreementRuleConfig.ValidNormPeriodWeeks.Contains(r.NormPeriodWeeks))
+            return (false, $"NormPeriodWeeks must be one of: {string.Join(", ", AgreementRuleConfig.ValidNormPeriodWeeks.OrderBy(w => w))}");
+        // SEC-033: money/compliance-adjacent norm knobs must be positive. AnnualNormHours drives the
+        // pro-rated annual norm; MaxDailyHours and MinimumRestHours drive the working-time compliance
+        // checks — MinimumRestHours = 0 is the flagship corruption (it DISABLES the daily-rest check,
+        // which tests `restHours < MinimumRestHours`). Non-negativity only; no invented upper ceiling.
+        if (r.AnnualNormHours <= 0)
+            return (false, "AnnualNormHours must be > 0");
+        if (r.MaxDailyHours <= 0)
+            return (false, "MaxDailyHours must be > 0");
+        if (r.MinimumRestHours <= 0)
+            return (false, "MinimumRestHours must be > 0");
         if (r.MaxFlexBalance < 0)
             return (false, "MaxFlexBalance must be >= 0");
         if (r.FlexCarryoverMax < 0)
