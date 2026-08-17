@@ -60,8 +60,11 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   2. ~~**SEC-020** `Auth:UseDatabase` fail-closed~~ ✅ **DONE (S130, 2026-08-14)** — default flipped
      false→true (fail-closed); in-memory dev creds kept behind explicit opt-in (owner ruling a);
      behavioral fail-closed test (admin01/admin→401). See `SPRINT-130.md`.
-  3. **SEC-027** per-service s2s identity (no self-minted GlobalAdmin over the shared key).
-  4. **SEC-032** Position-Override → `GlobalAdminOnly` (or a real org binding) — cross-tenant config write.
+  3. ~~**SEC-027** per-service s2s identity~~ ✅ **MITIGATED (S130, 2026-08-17)** — the one active
+     GlobalAdmin s2s mint lowered to least-privilege Employee; the shared-key capability residual → SEC-036.
+  4. ~~**SEC-032** Position-Override → `GlobalAdminOnly`~~ ✅ **DONE (S130, 2026-08-17)** — the 4 write
+     endpoints raised to `GlobalAdminOnly` (reads stay LocalAdmin, owner ruling OQ-2). Per-institution
+     org-binding redesign declined; SEC-034 (same PUT handler) stays open. See `SPRINT-130.md`.
   5. **SEC-033** server-side range/negativity validation + DB CHECKs on money-adjacent config numbers
      (PositionOverride + AgreementConfig + EntitlementConfig).
   6. **SEC-015** env-only signing key (remove the code fallback; rotate the committed dev key).

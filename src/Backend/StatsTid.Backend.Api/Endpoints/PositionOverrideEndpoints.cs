@@ -161,7 +161,7 @@ public static class PositionOverrideEndpoints
             context.Response.Headers.ETag = $"\"{created.Version}\"";
             return Results.Created($"/api/admin/position-overrides/{overrideId}",
                 MapEntityToResponse(created));
-        }).RequireAuthorization("LocalAdminOrAbove")
+        }).RequireAuthorization("GlobalAdminOnly") // SEC-032: global config write — GlobalAdmin only (was LocalAdminOrAbove)
         .Produces<PositionOverrideResponse>(StatusCodes.Status201Created); // S118 / TASK-11800 — ruling #1: ALWAYS the full entity
 
         // ═══════════════════════════════════════════
@@ -291,7 +291,7 @@ public static class PositionOverrideEndpoints
             // 4. Set ETag for the next If-Match and return the post-write snapshot.
             context.Response.Headers.ETag = $"\"{saveResult.Version}\"";
             return Results.Ok(MapEntityToResponse(saveResult.Override));
-        }).RequireAuthorization("LocalAdminOrAbove")
+        }).RequireAuthorization("GlobalAdminOnly") // SEC-032: global config write — GlobalAdmin only (was LocalAdminOrAbove)
         .Produces<PositionOverrideResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
@@ -391,7 +391,7 @@ public static class PositionOverrideEndpoints
                 OverrideId: overrideId,
                 Status: saveResult.Status,
                 Deactivated: true));
-        }).RequireAuthorization("LocalAdminOrAbove")
+        }).RequireAuthorization("GlobalAdminOnly") // SEC-032: global config write — GlobalAdmin only (was LocalAdminOrAbove)
         .Produces<PositionOverrideDeactivateResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         // ═══════════════════════════════════════════
@@ -520,7 +520,7 @@ public static class PositionOverrideEndpoints
                 OverrideId: overrideId,
                 Status: saveResult.Status,
                 Activated: true));
-        }).RequireAuthorization("LocalAdminOrAbove")
+        }).RequireAuthorization("GlobalAdminOnly") // SEC-032: global config write — GlobalAdmin only (was LocalAdminOrAbove)
         .Produces<PositionOverrideActivateResponse>(StatusCodes.Status200OK); // S118 / TASK-11800
 
         return app;

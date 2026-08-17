@@ -109,5 +109,52 @@ codebase's ONLY GlobalAdmin s2s mint.
 residual-tracking/accept-test warnings absorbed) → domain-agent implementation → dual-lens Step-5a
 (Codex APPROVED / internal review) → build clean; accept-test locally green.
 
+## Task 4 — SEC-032 Position-Override cross-tenant config write (FIXED, 2026-08-17)
+
+**The finding.** Position-Override config (`position_override_configs`) sets working-hours norms (weekly
+norm, flex balances, norm-period weeks) per **agreement + OK-version + position** — it is GLOBAL config:
+the table has no org/institution column (only a partial-unique index on the triple `WHERE status='ACTIVE'`),
+and resolution (`ConfigResolutionService` → `GetActiveAsync(agreementCode, okVersion, position)`) ignores
+org, so one row governs EVERY institution on that agreement+position. Yet the four write endpoints were
+floored only at `LocalAdminOrAbove` — so a LocalAdmin at any single institution could rewrite norms all
+institutions inherit (a cross-tenant elevation-of-privilege). Every sibling global-config surface
+(`AgreementConfigEndpoints`, `EntitlementConfigEndpoints`) is uniformly `GlobalAdminOnly`.
+
+**The fix — owner-ruled OQ-1(a) + OQ-2 (both the recommended paths).** A pure authorization-floor change,
+no schema/resolution/event/audit touch:
+- The 4 write endpoints in `PositionOverrideEndpoints.cs` raised `LocalAdminOrAbove`→`GlobalAdminOnly`:
+  POST create `:164`, PUT update `:294`, deactivate `:394`, activate `:523`.
+- The 3 GET reads (`:29/:48/:64`) STAY `LocalAdminOrAbove` (OQ-2 — view-only transparency; reads carry no
+  EoP). Note the reads are unfiltered (a LocalAdmin GET returns all global overrides, not just their own) —
+  acceptable for global, non-personal config; recorded so the read-floor decision was made on accurate terms.
+- **Per-institution org-binding redesign (OQ-1 option b) DECLINED by owner** — that would change what a
+  Position-Override *means* (global → per-institution): a schema + resolution + semantics change, a separate
+  domain sprint, not a security fix. `GlobalAdminOnly` gates on the role claim (the existing sibling
+  mechanism); no scope machinery introduced (that is SEC-036 territory, deferred).
+
+**SEC-034 stays OPEN post-fix.** The PUT re-key state-confusion (SEC-034) lives in the same PUT handler;
+raising the floor makes it GlobalAdmin-reachable only — it does NOT close SEC-034. Recorded so "PUT
+hardened" isn't misread as "SEC-034 closed."
+
+**Tests (both review lenses — the non-vacuity point was load-bearing).**
+- `SEC032PositionOverrideAuthorizationTests` (new) + a `CreateLocalAdminClient` helper on the shared
+  `SpecRuntimeTestSupport`. The helper mints an OTHERWISE-VALID LocalAdmin token (same dev key / iss / aud as
+  the GlobalAdmin client + a genuine `ORG_ONLY` RoleScope), differing only in role — so a 403 is provably the
+  `GlobalAdminOnly` ROLE gate rejecting a valid LocalAdmin, not a hidden auth failure (a 401 would be
+  vacuous). Four independent `[Fact]`s assert LocalAdmin→**403** on each write (RED-before-green: 200/201 on
+  the old floor); a GlobalAdmin lifecycle test drives create→update→deactivate→activate all green (positive
+  control); and a read-floor lock asserts LocalAdmin still gets **200** from GET list, pinning the OQ-2
+  decision so a later blanket-tightening can't silently flip the reads.
+- These are testcontainer-backed → **CI-deferred** (no Docker on this machine). Locally verified instead: the
+  `AuthorizationPolicy` unit suite (17/17), including the meta-test that every `RequireAuthorization("...")`
+  literal in `src/` resolves to a registered policy — which proves the four `GlobalAdminOnly` swaps are valid
+  registered policies, not typos.
+
+**Governance:** refine-requirements + dual-lens Step-4 (0 BLOCKER; Codex WARNING [assert all four writes] +
+internal WARNING [lock the read floor] + NOTEs absorbed) → owner ruled OQ-1(a)/OQ-2 → domain-agent
+implementation → dual-lens Step-5a (Codex APPROVED-WITH-WARNINGS [one comment-accuracy nit, fixed] /
+internal 0-BLOCKER 0-WARNING) → build clean.
+
 ## Remaining fix-next tasks
-SEC-032, 033, 015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
+SEC-033, 015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
+(SEC-034 explicitly remains open after task 4 — see above.)

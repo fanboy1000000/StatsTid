@@ -61,6 +61,30 @@ internal static class SpecRuntimeTestSupport
         return client;
     }
 
+    /// <summary>A client carrying a LocalAdmin JWT with a real ORG_ONLY scope over
+    /// <paramref name="orgId"/> — an OTHERWISE-VALID token (correct signing key / iss / aud +
+    /// a genuine org scope). It PASSES the org-scoped <c>LocalAdminOrAbove</c> floor (used by the
+    /// position-override GET reads) but is REJECTED (403) by the global <c>GlobalAdminOnly</c>
+    /// floor. Used by the SEC-032 tests to prove the four write endpoints reject a LocalAdmin on
+    /// the ROLE policy — not on an auth failure. Mirrors <see cref="CreateGlobalAdminClient"/>.</summary>
+    public static HttpClient CreateLocalAdminClient(StatsTidWebApplicationFactory factory, string actorId, string orgId)
+    {
+        var client = factory.CreateClient();
+        var tokenService = new JwtTokenService(new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        });
+        var token = tokenService.GenerateToken(
+            employeeId: actorId, name: actorId, role: StatsTidRoles.LocalAdmin,
+            agreementCode: "AC", orgId: orgId,
+            scopes: new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_ONLY") });
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
     /// <summary>Build a request with an optional JSON body and an optional admin-strict
     /// <c>If-Match: "&lt;version&gt;"</c> header.</summary>
     public static HttpRequestMessage JsonRequest(HttpMethod method, string url, string? jsonBody = null, long? ifMatchVersion = null)
