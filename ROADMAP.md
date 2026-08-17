@@ -75,12 +75,18 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   endpoints + settlement/reversal internals (round-1 confirmed the floors, not the bodies) + the FULL
   frontend sweep (SEC-025 browser-token-storage redesign folds in here). Persistence/outbox consumers
   + a dependency audit are also round-2 candidates.
-- **Pre-production revisit ledger (owner request 2026-08-14 — see the register's own ledger section):**
-  deliberate hobby-stage / minimal-fix choices that close a finding now but leave a residual to
-  reconsider before production — **SEC-020's kept in-memory hardcoded credential table** (minimal
-  ruling (a); option (b) = remove it entirely is deferred), plus the accepted SEC-016/017 committed dev
-  DB + demo passwords, SEC-018 unauth mock services, SEC-029 root containers. This is the concrete
-  security half of the "go-serious hardening pass is owed work" theme.
+- **Pre-production revisit ledger (owner request 2026-08-14 / -17 — see the register's own ledger
+  section for the full table):** deliberate hobby-stage / minimal-fix choices that close a finding now
+  but leave a residual to reconsider before production —
+  - **SEC-020** kept in-memory hardcoded credential table (minimal ruling (a); option (b) = remove it
+    entirely is deferred).
+  - **SEC-036** (the SEC-027 residual) — the shared-key s2s trust model has **no per-service identity**;
+    any key-holder can mint any role and `GlobalAdminOnly` gates on the role claim alone. Fix = require a
+    GLOBAL scope on admin gates (b) and/or per-service `aud`/`iss` (c); amend ADR-007. Its own scoped
+    task (breaks the opt-in in-memory admin login).
+  - Accepted: SEC-016/017 committed dev DB + demo passwords, SEC-018 unauth mock services, SEC-029 root
+    containers.
+  This is the concrete security half of the "go-serious hardening pass is owed work" theme.
 
 *(prior recon list — now superseded by the SEC register; kept for provenance:)*
 - **RES-002 read-gate remainder** — 9 sibling read endpoints still ungated (7 lack a month parameter,

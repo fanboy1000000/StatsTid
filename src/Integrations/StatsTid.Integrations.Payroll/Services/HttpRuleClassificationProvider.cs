@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using StatsTid.Auth;
+using StatsTid.SharedKernel.Security;
 using StatsTid.SharedKernel.Segmentation;
 
 namespace StatsTid.Integrations.Payroll.Services;
@@ -29,9 +30,10 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <see cref="PeriodCalculationService.CalculateWithOutcomeAsync"/> with no in-flight
 /// <see cref="HttpContext"/> (it's resolved as process-level metadata before per-segment
 /// evaluation). To satisfy the Rule Engine's <c>RequireAuthorization("Authenticated")</c>
-/// policy on <c>GET /api/rules/classifications</c>, the provider mints a service-to-service
-/// JWT using <see cref="JwtTokenService"/> on first call and caches it alongside the result.
-/// The signing key already lives in DI (registered by
+/// policy on <c>GET /api/rules/classifications</c>, the provider mints a LEAST-PRIVILEGE
+/// (Employee-role) service-to-service JWT using <see cref="JwtTokenService"/> on first call
+/// and caches it alongside the result (SEC-027 — the endpoint needs only <c>Authenticated</c>,
+/// so no admin role is minted). The signing key already lives in DI (registered by
 /// <see cref="JwtValidationSetup.AddStatsTidJwtAuth"/>), so the system token is signed with
 /// the same key used to validate inbound tokens — no new secret material is introduced.
 /// </para>
@@ -112,12 +114,16 @@ public sealed class HttpRuleClassificationProvider : IRuleClassificationProvider
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, "/api/rules/classifications");
 
-            // Service-to-service token: minted with the system signing key already in DI.
-            // Role "GlobalAdmin" satisfies the "Authenticated" policy on the Rule Engine.
+            // LEAST-PRIVILEGE service-to-service token (SEC-027): minted with the system
+            // signing key already in DI. GET /api/rules/classifications requires only the
+            // "Authenticated" policy (any valid JWT; the handler is role-insensitive), so no
+            // admin role is warranted — the lowest role (Employee) satisfies it. This removes
+            // the codebase's only GlobalAdmin service-to-service mint. The distinct service
+            // subject is kept so the call remains attributable to this provider in audit/logs.
             var token = _tokenService.GenerateToken(
                 employeeId: "system:payroll-classification-provider",
                 name: "Payroll Classification Provider",
-                role: "GlobalAdmin",
+                role: StatsTidRoles.Employee,
                 agreementCode: "system");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 

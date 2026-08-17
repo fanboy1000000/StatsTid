@@ -194,6 +194,56 @@ public sealed class HttpRuleClassificationProviderTests
         Assert.Equal(3, token.Split('.').Length);
     }
 
+    [Fact]
+    public void GetClassifications_MintsLeastPrivilegeEmployeeToken_NotGlobalAdmin()
+    {
+        // SEC-027 (S130 task 3): the service-to-service classification token must be
+        // LEAST-PRIVILEGE. The target endpoint (GET /api/rules/classifications) requires only
+        // the "Authenticated" policy and is role-insensitive, so a self-minted GlobalAdmin over
+        // the shared key was pure over-privilege. This directly pins the changed line: the
+        // minted token carries role=Employee (never GlobalAdmin) while keeping the distinct,
+        // attributable service subject. (End-to-end ACCEPTANCE of this token by the real Rule
+        // Engine is proven separately by the Regression accept-test — a unit mock cannot.)
+        string? observedAuth = null;
+        var handler = new StubHandler(req =>
+        {
+            observedAuth = req.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("[]", Encoding.UTF8, "application/json")
+            };
+        });
+
+        var provider = BuildProviderWithHandler(handler);
+        provider.GetClassifications();
+
+        Assert.NotNull(observedAuth);
+        var token = observedAuth!["Bearer ".Length..];
+        var payload = DecodeJwtPayload(token);
+
+        Assert.Equal(StatsTidRoles.Employee, payload.GetProperty("role").GetString());
+        Assert.NotEqual(StatsTidRoles.GlobalAdmin, payload.GetProperty("role").GetString());
+        // The distinct service subject is preserved (attributability in audit/logs).
+        Assert.Equal("system:payroll-classification-provider", payload.GetProperty("sub").GetString());
+    }
+
+    /// <summary>
+    /// Decodes a JWT's payload segment (the middle base64url part) into a
+    /// <see cref="JsonElement"/> without taking a dependency on any JWT-reader library.
+    /// </summary>
+    private static JsonElement DecodeJwtPayload(string jwt)
+    {
+        var payload = jwt.Split('.')[1].Replace('-', '+').Replace('_', '/');
+        switch (payload.Length % 4)
+        {
+            case 2: payload += "=="; break;
+            case 3: payload += "="; break;
+        }
+
+        var bytes = Convert.FromBase64String(payload);
+        return JsonSerializer.Deserialize<JsonElement>(bytes);
+    }
+
     // -----------------------------------------------------------------------
     // Test helpers
     // -----------------------------------------------------------------------

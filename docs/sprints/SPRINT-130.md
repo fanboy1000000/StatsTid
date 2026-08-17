@@ -76,6 +76,38 @@ opt-in). Register SEC-020 → fixed; ROADMAP #2 done.
 behavioral test + host-config-layer mechanism — absorbed) → domain-agent implementation → dual-lens
 Step-5a (Codex APPROVED / internal review) → build clean.
 
+## Task 3 — SEC-027 self-minted GlobalAdmin over the shared key (MITIGATED, 2026-08-17)
+
+**The finding.** Any service holding the shared JWT signing key can mint itself a `GlobalAdmin` token
+that passes every admin gate — there is no per-service identity. The concrete instance:
+`HttpRuleClassificationProvider` minted `role: "GlobalAdmin"` for its service-to-service fetch of
+`GET /api/rules/classifications` (which only needs `Authenticated`, and is role-insensitive) — the
+codebase's ONLY GlobalAdmin s2s mint.
+
+**The fix — owner-ruled (a) minimal (least-privilege now, structural residual recorded).**
+- `HttpRuleClassificationProvider.cs:123` — mint `role: StatsTidRoles.Employee` (the lowest role), NOT
+  GlobalAdmin. The distinct service subject (`system:payroll-classification-provider`) is preserved.
+  This removes the active over-privilege; grep confirms no s2s GlobalAdmin mint remains in `src/`.
+- **NOT marked "fixed" (both lenses, Codex Step-4 BLOCKER).** SEC-027 is a *capability* finding ("no
+  per-service identity"), which persists after lowering one token's role. Register status → **MITIGATED**;
+  the shared-key/per-service-identity residual is split into a NEW first-class finding **SEC-036** (OPEN,
+  ref ADR-007 — which documents the accepted shared-HMAC trade-off, so deferring is defensible; a future
+  key rotation can't silently close it). SEC-036 is in the pre-production revisit ledger + ROADMAP.
+
+**Tests (the load-bearing positive proof — both review lenses).**
+- `RuleClassificationsLeastPrivilegeAcceptTests` (new, Regression) — hosts the **real RuleEngine
+  in-process** via `WebApplicationFactory` (RuleEngine has no DB, so **no container needed**; injects
+  `Jwt:*` via `ConfigureHostConfiguration` per the TASK-3001 gotcha). Mints a token faithful to the
+  provider's (Employee role, same subject) with the real `JwtTokenService`, GETs `/api/rules/classifications`,
+  asserts **200 + non-empty classifications** — proving the privilege reduction did NOT break payroll
+  wage-type classification. Negative control: no token → **401** (proves auth is really enforced, so the
+  200 is earned). **Ran locally, 2/2 passed** — the accept path is live-proven, not merely deferred to CI.
+- `HttpRuleClassificationProviderTests` (Unit) — added a pin: the minted bearer decodes to
+  `role == Employee`, `!= GlobalAdmin`, service subject preserved. 7/7 passed locally.
+
+**Governance:** refine-requirements + dual-lens Step-4 (Codex BLOCKER [don't mark fixed] + both-lens
+residual-tracking/accept-test warnings absorbed) → domain-agent implementation → dual-lens Step-5a
+(Codex APPROVED / internal review) → build clean; accept-test locally green.
+
 ## Remaining fix-next tasks
-SEC-027, 032, 033, 015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next
-order.
+SEC-032, 033, 015, 023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
