@@ -30,9 +30,12 @@ public static class OrchestratorScopeHelpers
     /// reachable only via direct calls to the payroll and external services
     /// respectively — they MUST NOT be invokable through <c>/execute</c>:
     /// <list type="bullet">
-    /// <item><c>external-integration</c> → <c>/api/external/send</c> only requires
-    /// <c>Authenticated</c>, so allowing it through <c>/execute</c> would let any
-    /// Employee dispatch arbitrary external messages with their own JWT.</item>
+    /// <item><c>external-integration</c> → <c>/api/external/send</c> is floored at
+    /// <c>GlobalAdminOnly</c> downstream (SEC-023), but it stays excluded from
+    /// <c>/execute</c> for the same reason as <c>payroll-export</c> below: the
+    /// Orchestrator persists a task record BEFORE dispatch, so allowing it here
+    /// would let a non-admin caller poison the audit log even though the dispatch
+    /// itself is rejected.</item>
     /// <item><c>payroll-export</c> → <c>/api/payroll/export</c> requires
     /// <c>GlobalAdminOnly</c> downstream, but the orchestrator persists a task
     /// record BEFORE dispatch, so a non-admin caller would still poison the

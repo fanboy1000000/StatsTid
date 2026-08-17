@@ -75,7 +75,11 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
      committed well-known dev key is shared across compose + ~89 test files, so rotating it hurts dev/test →
      DEFERRED to the pre-production secrets-hygiene pass (ledger, with SEC-016/017; shared-key capability =
      SEC-036). Owner guidance: defer dev/test-degrading hardening while in development. See `SPRINT-130.md`.
-  7. **SEC-023** `external/send` role floor + schema.
+  7. ~~**SEC-023** `external/send` role floor + schema~~ ✅ **DONE (S130, 2026-08-17, thorough)** — floor
+     `Authenticated`→`GlobalAdminOnly` (sibling-consistent) + envelope guard (256 KB→413, object-shape→400)
+     + a new in-process External test harness (9 tests, Docker-free). Real per-field schema DEFERRED (no
+     external contract yet — enforce at `ExternalApiClient.SendAsync` when it exists, since the internal
+     outbox-drain also bypasses the endpoint). See `SPRINT-130.md`.
   8. **SEC-021** Orchestrator `tasks/{id}` ownership/scope check.
   9. **SEC-019** `claude.yml` `author_association` gate (defense-in-depth).
   10. **SEC-028** CI `permissions:` block · **SEC-031** frontend CSP header · **SEC-034/035**

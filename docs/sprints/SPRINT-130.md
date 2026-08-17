@@ -234,7 +234,49 @@ with the committed key; don't claim spoofing categorically closed] + both-lens W
 exists → zero code; cross-ref SEC-036] absorbed) → owner standing guidance applied → MITIGATED + ledger. No
 code, no commit-of-code (docs-only re-adjudication).
 
+## Task 7 — SEC-023 `/api/external/send` role floor + envelope guard (FIXED, thorough, 2026-08-17)
+
+**The finding.** `POST /api/external/send` — the outbound external-dispatch action — required only
+`Authenticated` (any role, down to the lowest Employee) and forwarded caller-supplied **arbitrary JSON** to
+the external system. Its direct sibling, the other Orchestrator-dispatched outbound-integration action
+`/api/payroll/export`, requires `GlobalAdminOnly`. The Orchestrator's `TaskDispatcher` forwards the caller's
+JWT, so the endpoint floor is the control point.
+
+**The fix — owner ruled THOROUGH.**
+- **Floor:** `Authenticated` → `GlobalAdminOnly` (`Integrations.External/Program.cs`), matching the sibling.
+- **Envelope guard (correct order — placement matters):** a 256 KB cap enforced on `ContentLength` BEFORE
+  `ReadFromJsonAsync` buffers the body (+ a `MaxRequestBodySize` backstop for chunked/no-Content-Length
+  bodies) → **413**; then an object-shape check (`JsonValueKind.Object`) → **400** for a bare
+  string/number/array/null. A valid JSON object forwards unchanged (read switched to `JsonElement`,
+  byte-equivalent). NO per-field schema (deferred — see below).
+- **Two stale comments updated** (`OrchestratorScopeHelpers.cs`, `OrchestratorScopeEnforcementTests.cs`):
+  they justified excluding `external-integration` from `/execute` by saying the endpoint "only requires
+  `Authenticated`" — stale after the raise (and floor-independent, so they wouldn't turn RED). Assertions
+  untouched (29/29 Orchestrator scope tests still pass).
+
+**New External test harness (the "thorough" investment the owner chose over the lean path).** The External
+service had NO `WebApplicationFactory`. Built one: `WebApplicationFactory<ExternalApiClient>` (used the public
+`ExternalApiClient` as the assembly marker; External's `Program` is internal top-level statements), injecting
+`Jwt:*` via `ConfigureHostConfiguration` and stubbing the outbound `IHttpClientFactory` so the 200 happy-path
+needs no real external system. The host boots with **no live Postgres** — `OutboxPublisher` +
+`EventConsumerService` swallow non-cancellation exceptions in their poll loops, and the 401/403/400/413 paths
+short-circuit before any DB work. So **all 9 tests run Docker-free**: Employee→403, Leader→403,
+GlobalAdmin+object→200 (positive control), non-object→400 (theory: array/string/number/null), oversized→413,
+no-token→401 (control proving the 403s are role decisions, not an open route). **RED-before-green
+demonstrated** by temporarily reverting the floor to `Authenticated` — Employee AND Leader both returned 200.
+
+**Deferred (recorded, not dropped): the REAL per-field payload schema.** No external contract exists — the
+receiver is a mock (`_mockExternalUrl`, untyped). When the real external system's contract is defined, the
+per-field schema must be enforced at `ExternalApiClient.SendAsync` (NOT only the endpoint), because the
+internal `EventConsumerService` outbox-drain reaches the external system bypassing the endpoint. Recorded in
+the register SEC-023 row.
+
+**Governance:** refine-requirements + dual-lens Step-4 (0 BLOCKER; both-lens WARNINGs — no existing test
+harness → build one; specify size-cap + status; update stale comments — absorbed) → owner ruled THOROUGH
+(over the lean recommendation) → domain-agent implementation → dual-lens Step-5a → build clean; 9/9 local.
+
 ## Remaining fix-next tasks
-SEC-023, 021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
+SEC-021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
 (Still OPEN and tracked: SEC-034 [task-4 note], SEC-036 [ledger], SEC-037 [new, register], the two SEC-033
-deferrals [ledger], and the SEC-015 committed-key rotation [ledger].)
+deferrals [ledger], the SEC-015 committed-key rotation [ledger], and the SEC-023 real-schema [register,
+when the external contract exists].)

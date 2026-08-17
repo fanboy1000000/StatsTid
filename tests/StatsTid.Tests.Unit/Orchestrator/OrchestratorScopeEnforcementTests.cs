@@ -182,10 +182,11 @@ public class OrchestratorScopeEnforcementTests
     [Fact]
     public async Task EvaluateAccessAsync_RejectsExternalIntegrationTaskType_WithoutCallingScopeCheck()
     {
-        // Allow-list rejection: external-integration → /api/external/send only
-        // requires "Authenticated", so allowing it through /execute would let
-        // any Employee dispatch arbitrary external messages. Same null-call
-        // contract for the scope-check delegate.
+        // Allow-list rejection: external-integration → /api/external/send is now
+        // floored at GlobalAdminOnly (SEC-023), but it stays excluded from /execute
+        // because the Orchestrator persists a task record pre-dispatch — a non-admin
+        // caller could still poison the audit log. Same null-call contract for the
+        // scope-check delegate.
         var request = new ExecuteRequest
         {
             TaskType = "external-integration",
