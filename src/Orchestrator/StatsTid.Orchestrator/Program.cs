@@ -63,10 +63,41 @@ app.MapPost("/api/orchestrator/execute", async (
     return task.Status == "completed" ? Results.Ok(task) : Results.UnprocessableEntity(task);
 }).RequireAuthorization("EmployeeOrAbove");
 
-app.MapGet("/api/orchestrator/tasks/{id:guid}", async (Guid id, OrchestratorControlLoop loop, CancellationToken ct) =>
+// SEC-021 (owner ruling: Option A) — per-task scope check on the read path. Previously this
+// endpoint returned ANY task to ANY EmployeeOrAbove caller with no ownership/scope check: an
+// IDOR (insecure direct object reference) letting any authenticated user read any task by id.
+// The floor stays at EmployeeOrAbove (which also enables a future non-admin "read your own
+// task" workflow); the per-task gate below decides visibility.
+//
+// Deliberate 404-not-403 posture: BOTH the not-found case AND every access denial return 404,
+// so an unauthorized caller cannot distinguish "task exists but you may not see it" from "no
+// such task" — a read IDOR must not confirm existence. (Contrast /execute above, which 403s a
+// caller-supplied ACTION it refuses to perform; there is no existing resource to hide there.)
+app.MapGet("/api/orchestrator/tasks/{id:guid}", async (
+    Guid id,
+    OrchestratorControlLoop loop,
+    OrgScopeValidator scopeValidator,
+    HttpContext context,
+    CancellationToken ct) =>
 {
     var task = await loop.GetTaskAsync(id, ct);
-    return task is not null ? Results.Ok(task) : Results.NotFound();
+    if (task is null)
+        return Results.NotFound();
+
+    var actor = context.GetActorContext();
+
+    // GlobalAdmin is decided FIRST, from the actor's claims only (no subject DB lookup) — the
+    // SEC-021 terminated-subject defect fix. Do NOT route a GlobalAdmin through
+    // ValidateEmployeeAccessAsync: that validator resolves the ACTIVE subject before its
+    // GLOBAL-scope check, so a task about a since-terminated subject would be denied even to a
+    // GlobalAdmin. See OrchestratorScopeHelpers.IsGlobalAdmin / EvaluateReadAccessAsync.
+    var decision = await OrchestratorScopeHelpers.EvaluateReadAccessAsync(
+        task,
+        OrchestratorScopeHelpers.IsGlobalAdmin(actor),
+        (employeeId, c) => scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, c),
+        ct);
+
+    return decision.Allowed ? Results.Ok(task) : Results.NotFound();
 }).RequireAuthorization("EmployeeOrAbove");
 
 app.Run();

@@ -54,6 +54,9 @@
     <!-- SEC-023: boots the External integration host in-process (WebApplicationFactory)
          for the /api/external/send authorization + envelope-hardening end-to-end tests. -->
     <ProjectReference Include="..\..\src\Integrations\StatsTid.Integrations.External\StatsTid.Integrations.External.csproj" />
+    <!-- SEC-021: boots the Orchestrator host in-process (WebApplicationFactory) for the
+         GET /api/orchestrator/tasks/{id} read-authorization end-to-end tests (Docker-gated). -->
+    <ProjectReference Include="..\..\src\Orchestrator\StatsTid.Orchestrator\StatsTid.Orchestrator.csproj" />
   </ItemGroup>
 
   <ItemGroup>

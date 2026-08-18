@@ -275,8 +275,57 @@ the register SEC-023 row.
 harness → build one; specify size-cap + status; update stale comments — absorbed) → owner ruled THOROUGH
 (over the lean recommendation) → domain-agent implementation → dual-lens Step-5a → build clean; 9/9 local.
 
+## Task 8 — SEC-021 Orchestrator task-read IDOR (FIXED, Option A, 2026-08-18)
+
+**The finding (High IDOR).** `GET /api/orchestrator/tasks/{id}` fetched a task by id and returned it to ANY
+`EmployeeOrAbove` caller with no ownership/scope check — any authenticated user could read any task by id.
+The sibling `/execute` already gates access (`ExtractEmployeeId` + `ValidateEmployeeAccessAsync`); the read
+had no equivalent.
+
+**The review reshaped the fix — and the owner chose the thorough path.** Both lenses found the endpoint has
+**no consumer today** (the frontend hits the Orchestrator only at `/health`; `/execute` is *synchronous* and
+returns the task inline, so there is no "poll your task" flow) and recommended the simple **Option C**
+(floor-raise to `GlobalAdminOnly`). The owner instead ruled **Option A** — a per-task scope check — to
+**enable a future non-admin "read your own task" workflow**. That made the review's A-specific residuals
+in-scope, including a real defect.
+
+**The fix (Option A).**
+- **Per-task scope check** in the read handler (`Program.cs`): reuse `ValidateEmployeeAccessAsync` on the
+  task's subject employee (extracted from the now-hydrated `input_data` via `ExtractEmployeeId`).
+- **Claim-based GlobalAdmin bypass, decided FIRST (the defect fix).** The reused validator resolves the
+  ACTIVE subject (`UserRepository.GetByIdAsync`, `is_active=TRUE`) *before* its GLOBAL-scope check, so a task
+  about a since-terminated employee would be denied *even to a GlobalAdmin* (an Auditability hole — tasks
+  persist, employees don't). `IsGlobalAdmin(actor)` decides from the actor's own claims (role==GlobalAdmin,
+  or a GLOBAL scope) with NO subject lookup, bypassing subject resolution for a global caller. The shared
+  `OrgScopeValidator` is UNTOUCHED (other callers depend on it) — the bypass lives only in the read path.
+- **Fail-closed 404 everywhere:** a null/conflict/ownerless-type/unresolvable subject denies WITHOUT calling
+  the scope check; every denial AND not-found returns **404** (a read IDOR must not confirm existence —
+  contrast `/execute`'s 403 for a refused action).
+- **`input_data` hydration:** `GetTaskAsync` selected `input_data` but never mapped it; now hydrated via
+  `DeserializeInputData` (System.Text.Json → `JsonElement` values, which `ExtractEmployeeId`'s
+  `rule-evaluation` nested-`profile` path requires; a `Dictionary` hydration would silently null the subject
+  and over-deny). `IsDBNull`/malformed → fail-closed, never a 500.
+
+**Tests.** 22 **Docker-free** unit tests (pass locally) — `IsGlobalAdmin` variants; every `EvaluateReadAccessAsync`
+branch (GlobalAdmin bypass incl. unresolvable subject, in-scope weekly + rule-eval, out-of-scope deny,
+ownerless deny, null/malformed fail-closed, conflict deny — asserting the scope delegate is/isn't called);
+a hydration round-trip pinning the `JsonElement` requirement; and (Step-5a BLOCKER fix) non-object/malformed
+`input_data` → null (never a 500) → fail-closed deny. 7 **Docker-gated** endpoint tests
+(new Orchestrator `WebApplicationFactory` over Testcontainers Postgres, SEC-023 pattern): in-scope→200,
+out-of-scope→404, GlobalAdmin→200, no-token→401, **GlobalAdmin+terminated-subject→200** (defect proof) vs
+**non-admin+terminated→404**, unknown-id→404. RED-before-green: pre-fix the out-of-scope caller got 200.
+
+**Residual (recorded).** The non-admin read path is enabled but has **no consumer** — a real task-status
+UI would also need an async task-submit path (`/execute` is synchronous today). Wire it up when built.
+
+**Governance:** refine-requirements + dual-lens Step-4 (Codex BLOCKER [Option A GlobalAdmin-deny on
+terminated subject] + both-lens "no consumer → prefer C" — owner overrode to A; the BLOCKER resolved by the
+claim-based bypass) → owner ruled A → domain-agent implementation → dual-lens Step-5a (Codex BLOCKER
+[hydration could 500 on a non-object row] + internal 0-BLOCKER; the fail-closed try/catch added) → build
+clean; 22/22 Docker-free green.
+
 ## Remaining fix-next tasks
-SEC-021, 019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
+SEC-019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
 (Still OPEN and tracked: SEC-034 [task-4 note], SEC-036 [ledger], SEC-037 [new, register], the two SEC-033
-deferrals [ledger], the SEC-015 committed-key rotation [ledger], and the SEC-023 real-schema [register,
-when the external contract exists].)
+deferrals [ledger], the SEC-015 committed-key rotation [ledger], the SEC-023 real-schema [register], and the
+SEC-021 enabled-but-unused non-admin read path [register].)

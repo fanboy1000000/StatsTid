@@ -149,11 +149,61 @@ public sealed class OrchestratorControlLoop
             TaskType = reader.GetString(1),
             Status = reader.GetString(2),
             AssignedAgent = reader.IsDBNull(3) ? null : reader.GetString(3),
+            // SEC-021: hydrate the persisted input_data (col 4) so the read-access gate can
+            // resolve the task's subject employee. Column 4 was SELECTed but never mapped
+            // before, so InputData was always null and no subject could be extracted. jsonb is
+            // read as its raw JSON text (the same pattern WorkTimeProjectionRepository uses),
+            // then deserialized via System.Text.Json — see DeserializeInputData for why the
+            // JsonElement shape matters. output_data (col 5) is intentionally still not mapped
+            // (unchanged pre-existing behavior; the access decision does not read it).
+            InputData = reader.IsDBNull(4) ? null : DeserializeInputData(reader.GetString(4)),
             CreatedAt = reader.GetDateTime(6),
             StartedAt = reader.IsDBNull(7) ? null : reader.GetDateTime(7),
             CompletedAt = reader.IsDBNull(8) ? null : reader.GetDateTime(8),
             ErrorMessage = reader.IsDBNull(9) ? null : reader.GetString(9)
         };
+    }
+
+    /// <summary>
+    /// Hydrates the persisted <c>input_data</c> JSONB text back into the loosely-typed
+    /// parameters dictionary. This is the exact inverse of <see cref="PersistTaskAsync"/>'s
+    /// <c>JsonSerializer.Serialize(task.InputData)</c>.
+    ///
+    /// <para>
+    /// <b>Why System.Text.Json specifically (SEC-021):</b> deserializing to
+    /// <c>Dictionary&lt;string, object&gt;</c> with System.Text.Json makes every value a
+    /// <see cref="JsonElement"/>, including a nested <c>profile</c> object. The read-access
+    /// gate's <c>rule-evaluation</c> subject extraction
+    /// (<see cref="OrchestratorScopeHelpers.ExtractEmployeeId"/> →
+    /// <c>TryReadNestedProfileEmployeeId</c>) requires the <c>profile</c> value to be a
+    /// <see cref="JsonElement"/> of <see cref="JsonValueKind.Object"/>. Hydrating to a nested
+    /// <c>Dictionary</c> instead would make that extraction silently return null and fail the
+    /// gate closed (a 404 for a legitimately in-scope caller). Exposed <c>static</c> and pure so
+    /// the serialize → persist → hydrate → extract round-trip is unit-testable without a database.
+    /// </para>
+    /// </summary>
+    public static Dictionary<string, object>? DeserializeInputData(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        // Fail-closed on any stored JSON that is not a deserializable object (SEC-021 Step-5a
+        // Codex BLOCKER). System.Text.Json throws JsonException when the JSONB text is valid
+        // JSON but NOT an object (an array or scalar) or is malformed. Left to propagate it
+        // would surface as a 500 from the read handler BEFORE the access check runs — the spec
+        // requires malformed stored input to fail CLOSED (a null subject → a 404 deny for a
+        // non-admin), never a 500. Unreachable via the sole writer (PersistTaskAsync always
+        // serializes a Dictionary), but structural: a future raw-INSERT/migration could persist
+        // a non-object row. Returning null routes it through the gate's fail-closed path;
+        // GlobalAdmin is unaffected because the bypass is decided before hydration matters.
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string? ResolveAgent(string taskType)

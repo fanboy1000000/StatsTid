@@ -1,5 +1,7 @@
 using System.Text.Json;
+using StatsTid.Auth;
 using StatsTid.Orchestrator.Contracts;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Orchestrator.Services;
 
@@ -224,6 +226,108 @@ public static class OrchestratorScopeHelpers
         return OrchestratorAccessDecision.Allow;
     }
 
+    // ========================================================================
+    // SEC-021 — per-task READ access gate for GET /api/orchestrator/tasks/{id}
+    // ========================================================================
+    // The read path previously returned ANY task to ANY EmployeeOrAbove caller with no
+    // ownership/scope check (an IDOR: any authenticated user could read any task by id).
+    // Owner ruling = Option A: keep the EmployeeOrAbove floor and add a per-task scope
+    // check (this also enables a future non-admin "read your own task" workflow). The
+    // decision is factored into the two pure/testable helpers below so every branch is
+    // unit-testable WITHOUT standing up the orchestrator host or a database.
+
+    /// <summary>
+    /// Determines whether the actor is a GlobalAdmin PURELY from its own claims/scope, with
+    /// NO subject or DB lookup. This is the signal <see cref="EvaluateReadAccessAsync"/> uses
+    /// for its GlobalAdmin bypass, which MUST be decided BEFORE any subject resolution.
+    ///
+    /// <para>
+    /// <b>Why claim-based and bypass-first (the SEC-021 terminated-subject defect):</b>
+    /// <see cref="OrgScopeValidator.ValidateEmployeeAccessAsync"/> resolves the ACTIVE subject
+    /// employee (<c>UserRepository.GetByIdAsync</c>, which filters <c>is_active = TRUE</c>)
+    /// BEFORE it reaches its GLOBAL-scope short-circuit. Tasks persist; employees don't — so a
+    /// task about a since-terminated (or otherwise unresolvable) subject would be DENIED even
+    /// to a GlobalAdmin if routed through that validator. Deciding GlobalAdmin here, from the
+    /// actor alone, lets the read gate bypass subject resolution entirely for a global caller.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Primary signal = the GlobalAdmin role claim.</b> A GlobalAdmin token is minted under
+    /// the <c>GlobalAdminOnly</c> policy with <c>requireOrgScope: false</c>, so it commonly
+    /// carries NO scopes at all (see <c>ExternalSendAuthorizationAndEnvelopeTests</c>) — the
+    /// role claim is the reliable signal. A GLOBAL <see cref="RoleScope"/> is accepted as a
+    /// secondary signal (belt-and-suspenders for a token that carries the global scope under a
+    /// legacy/other role string).
+    /// </para>
+    /// </summary>
+    public static bool IsGlobalAdmin(ActorContext actor)
+    {
+        if (actor is null)
+            return false;
+
+        if (string.Equals(actor.ActorRole, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal))
+            return true;
+
+        return actor.Scopes is { Length: > 0 }
+            && actor.Scopes.Any(s => string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Evaluates read access to a single already-fetched <paramref name="task"/> for
+    /// <c>GET /api/orchestrator/tasks/{id}</c>. The endpoint has already handled the
+    /// null-task (→ 404) case; this method decides whether a non-null task is visible to the
+    /// caller. Every deny is rendered as a 404 by the endpoint (deliberate: a read IDOR must
+    /// not confirm a task's existence to an unauthorized caller).
+    ///
+    /// <para>Ordered decision:</para>
+    /// <list type="number">
+    /// <item><b>GlobalAdmin bypass FIRST</b> — decided from <paramref name="isGlobalAdmin"/>
+    /// (computed via <see cref="IsGlobalAdmin"/> from the actor's claims), with NO subject
+    /// resolution. This is the terminated-subject defect fix: see <see cref="IsGlobalAdmin"/>.</item>
+    /// <item><b>Non-admin</b> — resolve the task's subject employee via
+    /// <see cref="ExtractEmployeeId"/> (task-type-aware: <c>weekly-calculation</c> top-level,
+    /// <c>rule-evaluation</c> nested <c>profile.employeeId</c>). Fail-closed: a conflict, a
+    /// missing/unresolvable id, or an ownerless/admin task type (payroll-export,
+    /// external-integration, or any type <see cref="ExtractEmployeeId"/> does not know) all
+    /// deny WITHOUT calling the scope check. Otherwise the supplied
+    /// <paramref name="scopeCheck"/> delegate decides (production:
+    /// <c>OrgScopeValidator.ValidateEmployeeAccessAsync(actor, id, ct)</c>).</item>
+    /// </list>
+    ///
+    /// <paramref name="scopeCheck"/> is a delegate so the gate is unit-testable without
+    /// instantiating <c>OrgScopeValidator</c> or its DB-backed repositories, mirroring
+    /// <see cref="EvaluateAccessAsync"/>.
+    /// </summary>
+    public static async Task<OrchestratorReadDecision> EvaluateReadAccessAsync(
+        OrchestratorTask task,
+        bool isGlobalAdmin,
+        Func<string, CancellationToken, Task<(bool Allowed, string? Reason)>> scopeCheck,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        ArgumentNullException.ThrowIfNull(scopeCheck);
+
+        // 1. GlobalAdmin bypass — BEFORE any subject resolution (terminated-subject defect fix).
+        if (isGlobalAdmin)
+            return OrchestratorReadDecision.Allow("GlobalAdmin bypass (no subject resolution)");
+
+        // 2. Non-admin: resolve the task's subject and scope-check it. ExtractEmployeeId
+        //    null-guards its parameters argument, so a null InputData resolves to a null
+        //    subject (fail-closed deny below). ownerless/admin task types return null too.
+        var extraction = ExtractEmployeeId(task.TaskType, task.InputData!);
+        if (extraction.Conflict)
+            return OrchestratorReadDecision.Deny("Conflicting subject employeeId in task input");
+
+        if (string.IsNullOrEmpty(extraction.EmployeeId))
+            return OrchestratorReadDecision.Deny(
+                "No resolvable subject employeeId (ownerless/admin task type or malformed input)");
+
+        var (allowed, reason) = await scopeCheck(extraction.EmployeeId, ct);
+        return allowed
+            ? OrchestratorReadDecision.Allow("Subject within actor scope")
+            : OrchestratorReadDecision.Deny(reason ?? "Subject outside actor scope");
+    }
+
     private static bool TryReadStringValue(Dictionary<string, object> dict, string key, out string? value)
     {
         value = null;
@@ -263,4 +367,17 @@ public sealed record OrchestratorAccessDecision(bool Allowed, int StatusCode, ob
 {
     public static OrchestratorAccessDecision Allow { get; } =
         new(Allowed: true, StatusCode: 200, ErrorBody: null);
+}
+
+/// <summary>
+/// Outcome of <see cref="OrchestratorScopeHelpers.EvaluateReadAccessAsync"/> (SEC-021). The
+/// read endpoint maps <see cref="Allowed"/> = true → <c>200 + task</c> and false → <c>404</c>
+/// (every deny is a 404 — a read IDOR must not confirm existence). <see cref="Reason"/> is
+/// diagnostic only (not surfaced in the 404 body); it exists so the branch a test exercises is
+/// legible and so a future audit line can record why access was granted or refused.
+/// </summary>
+public sealed record OrchestratorReadDecision(bool Allowed, string? Reason)
+{
+    public static OrchestratorReadDecision Allow(string reason) => new(true, reason);
+    public static OrchestratorReadDecision Deny(string reason) => new(false, reason);
 }

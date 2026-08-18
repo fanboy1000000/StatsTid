@@ -80,7 +80,11 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
      + a new in-process External test harness (9 tests, Docker-free). Real per-field schema DEFERRED (no
      external contract yet — enforce at `ExternalApiClient.SendAsync` when it exists, since the internal
      outbox-drain also bypasses the endpoint). See `SPRINT-130.md`.
-  8. **SEC-021** Orchestrator `tasks/{id}` ownership/scope check.
+  8. ~~**SEC-021** Orchestrator `tasks/{id}` ownership/scope check~~ ✅ **DONE (S130, 2026-08-18, Option A)** —
+     owner ruled the per-task scope check (over the simpler floor-raise) to enable a future non-admin
+     "read your own task" flow: `GET /tasks/{id}` scope-checks the subject employee + a claim-based
+     GlobalAdmin bypass (fixed a terminated-subject defect), 404 for every denial. The enabled non-admin
+     read path has no consumer yet (residual). See `SPRINT-130.md`.
   9. **SEC-019** `claude.yml` `author_association` gate (defense-in-depth).
   10. **SEC-028** CI `permissions:` block · **SEC-031** frontend CSP header · **SEC-034/035**
       Position-Override PUT re-key guard + verify the supersession audit-omission (fix if reproducible).
