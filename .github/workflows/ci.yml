@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [master]
 
+# SEC-028: least-privilege default GITHUB_TOKEN. Every job only reads (checkout, build, test,
+# docker-compose from local Dockerfiles, artifact upload — which uses the Actions runtime token,
+# not this scope). No job comments on PRs, writes checks/statuses, or publishes. Unspecified
+# scopes become `none`. A future job that needs write gets a job-scoped override.
+permissions:
+  contents: read
+
 jobs:
   lizard:
     name: Cyclomatic complexity report (lizard)

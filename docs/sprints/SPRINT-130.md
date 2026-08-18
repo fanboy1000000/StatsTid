@@ -324,8 +324,45 @@ claim-based bypass) → owner ruled A → domain-agent implementation → dual-l
 [hydration could 500 on a non-object row] + internal 0-BLOCKER; the fail-closed try/catch added) → build
 clean; 22/22 Docker-free green.
 
+## Task 9 — SEC-019 + SEC-028 + SEC-031 config-hardening batch (2026-08-18)
+
+Three small config-hardening findings, batched at the owner's request. All defense-in-depth; none an active
+exploit (hobby repo, no real data).
+
+**SEC-019 — Claude-workflow author gate (FIXED).** Both `.github/workflows/claude*.yml` run with the real
+`ANTHROPIC_API_KEY` on public-repo comment/PR triggers with no `author_association` gate → any external actor
+could invoke Claude with the repo's key. Fix: gate to trusted associations {OWNER,MEMBER,COLLABORATOR}.
+- `claude.yml` (the genuine exposure — comment/review events run in base-repo context WITH secrets even for a
+  fork-PR comment): a PER-EVENT `author_association` guard AND-ed into each `if:` OR-arm (the gotcha both
+  lenses flagged: reusing one payload path is null → false for the other events → would silently block
+  legitimate owner triggers). Dropped the `issues: assigned` trigger — its `author_association` is the issue
+  *author*, not the assigner, so the gate was imprecise; `opened` is the meaningful trigger.
+- `claude-code-review.yml`: a job-level PR-author gate. (Fork PRs already run this `pull_request` event with
+  secrets WITHHELD — empty key — so its real residual was only same-repo-branch PRs, which need write access.)
+- Note: bot-authored PRs (Dependabot, assoc. NONE) are now out of auto-review scope — intended.
+
+**SEC-028 — least-privilege CI token (FIXED).** `ci.yml` had no `permissions:` block → jobs inherited the
+broader default `GITHUB_TOKEN`. Fix: top-level `permissions: contents: read` (unlisted scopes → `none`). Both
+lenses read all 7 jobs — none writes (no PR comment / checks / packages / pages / push); `upload-artifact` uses
+the Actions runtime token, independent of this scope. A future write-needing job takes a job-scoped override.
+
+**SEC-031 — frontend CSP (DEFERRED, owner ruling c).** The review found a `<meta>` CSP in `index.html` is
+structurally incapable of being both dev-safe and strict: Vite's React plugin injects an inline `<script>` in
+dev, and `vite build` inlines a modulePreload-polyfill `<script>`, both forcing `script-src 'unsafe-inline'` —
+which defeats the anti-XSS value. And `frame-ancestors`/`report-to` don't work in a meta tag. With no serving
+layer to carry a real header, the owner ruled **defer the whole CSP** to a production web-server/CDN response
+header (nonce/hash `script-src`, `frame-ancestors 'none'`, real `connect-src`) → **pre-production ledger**.
+Register SEC-031 → DEFERRED (not fixed). No `index.html` change.
+
+**Governance:** refine-requirements + dual-lens Step-4 (Codex 1 BLOCKER [report-only isn't meta-implementable]
++ both-lens SEC-031 corrections — script-src not dev-safe, the `/api` dev-proxy reality, the verification
+overclaim — absorbed; SEC-019/028 confirmed ready) → owner ruled (implement 019/028; defer 031-c) →
+Orchestrator-direct implementation (cross-cutting `.github` config) → dual-lens Step-5a (both APPROVED /
+0-BLOCKER; per-event paths machine-verified) → no code build impact (workflow YAML).
+
 ## Remaining fix-next tasks
-SEC-019, 028/031/034/035 — in the ROADMAP security backlog, in fix-next order.
+**SEC-034/035** (Position-Override PUT re-key guard + verify the supersession audit-omission) — the last
+fix-next items; SEC-034 is in the same PUT handler as the SEC-032 fix.
 (Still OPEN and tracked: SEC-034 [task-4 note], SEC-036 [ledger], SEC-037 [new, register], the two SEC-033
-deferrals [ledger], the SEC-015 committed-key rotation [ledger], the SEC-023 real-schema [register], and the
-SEC-021 enabled-but-unused non-admin read path [register].)
+deferrals [ledger], the SEC-015 committed-key rotation [ledger], the SEC-023 real-schema [register], the
+SEC-021 enabled-but-unused non-admin read path [register], and the SEC-031 prod-header CSP [ledger].)
