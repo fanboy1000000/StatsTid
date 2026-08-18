@@ -89,8 +89,13 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
      workflows gated to trusted `author_association` (per-event paths; `issues: assigned` dropped). See `SPRINT-130.md`.
   10. ~~**SEC-028** CI `permissions:` block~~ ✅ **DONE (S130)** — top-level `contents: read` · ~~**SEC-031**
       frontend CSP header~~ 📋 **DEFERRED (owner ruling c) → prod server-header (ledger)** — a meta CSP can't be
-      both dev-safe and strict · **SEC-034/035** Position-Override PUT re-key guard + verify the supersession
-      audit-omission (fix if reproducible) — **the last remaining fix-next items.**
+      both dev-safe and strict · ~~**SEC-034/035**~~ ✅ **DONE (S130, 2026-08-18)** — SEC-034 reframed by review
+      (not a re-key/500 — an audit-infidelity bug: the PUT stamped audit/event with the body's wrong identity;
+      fixed with a 409 identity-immutability guard before any emit) + SEC-035 fail-loud supersession-audit
+      helper (invariant-protected today; hardened anyway). See `SPRINT-130.md`.
+
+  ✅ **S130 FIX-NEXT BACKLOG COMPLETE** — all 10 items dispositioned (fixed / mitigated / deferred-with-recorded-
+  residual). Deferred residuals live in the register's pre-production ledger, tied to the go-serious gate.
   Details + per-item evidence in `SPRINT-129.md`.
 - **WS5 sweep round 2 (owner-approved 2026-08-14)** — deeper bodies of the GlobalAdmin config
   endpoints + settlement/reversal internals (round-1 confirmed the floors, not the bodies) + the FULL

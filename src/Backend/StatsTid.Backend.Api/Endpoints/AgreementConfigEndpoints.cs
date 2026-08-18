@@ -512,9 +512,21 @@ public static class AgreementConfigEndpoints
 
                     // ADR-019 D1: when a prior ACTIVE was archived as part of this publish,
                     // emit the matching ARCHIVED audit + outbox for the archived config_id.
-                    if (saveResult.ArchivedId is { } archivedId &&
-                        saveResult.ArchivedVersion is { } archivedVersion)
+                    //
+                    // SEC-035: the emission decision is now a FAIL-LOUD gate. The repo assigns
+                    // ArchivedId + ArchivedVersion together from a single `RETURNING config_id,
+                    // version` row (both NOT NULL), so today the pair is only ever both-null (no
+                    // ACTIVE superseded → skip) or both-set (one superseded → emit) — a divergent
+                    // pair cannot occur. But Auditability is inviolable: a FUTURE repo change that
+                    // produced one-null-one-set must NEVER silently skip the archival audit.
+                    // EvaluateArchivalAudit THROWS on divergence; the throw propagates to the inner
+                    // `catch { Rollback; throw }` below, rolling back the WHOLE publish (fail-closed)
+                    // rather than committing a supersession with no archival audit row.
+                    if (EvaluateArchivalAudit(saveResult.ArchivedId, saveResult.ArchivedVersion)
+                        == ArchivalAuditDecision.Emit)
                     {
+                        var archivedId = saveResult.ArchivedId!.Value;
+                        var archivedVersion = saveResult.ArchivedVersion!.Value;
                         // S121 / TASK-12100 (deferred defect #3): previous/new data are JSON
                         // documents (::jsonb cast in the repo) — bare strings 22P02'd and
                         // rolled back EVERY supersession publish. Hand-built single-key JSON
@@ -1007,6 +1019,52 @@ public static class AgreementConfigEndpoints
             e.MaxDailyHours, e.MinimumRestHours, e.RestPeriodDerogationAllowed,
             e.WeeklyMaxHoursReferencePeriod, e.VoluntaryUnsocialHoursAllowed, e.Description,
         });
+
+    // ── SEC-035: fail-loud supersession-audit gate ──
+
+    /// <summary>
+    /// SEC-035 — whether a publish that superseded a prior-ACTIVE config must ALSO emit the
+    /// ARCHIVED audit row + AgreementConfigArchived outbox event for the archived config.
+    /// </summary>
+    public enum ArchivalAuditDecision
+    {
+        /// <summary>No prior ACTIVE was archived (id + version both null) — skip the archival emit (as today).</summary>
+        None,
+
+        /// <summary>A prior ACTIVE was archived (id + version both set) — emit the archival audit + outbox (as today).</summary>
+        Emit,
+    }
+
+    /// <summary>
+    /// SEC-035 fail-loud gate for the supersession archival emit. <see cref="SaveAgreementConfigResult.ArchivedId"/>
+    /// and <see cref="SaveAgreementConfigResult.ArchivedVersion"/> are assigned together from a
+    /// single <c>RETURNING config_id, version</c> row (both NOT NULL), so today the pair is only
+    /// ever both-null or both-set. Extracted as a pure, DB-free function so the divergence path is
+    /// unit-testable (the real repo cannot produce a divergent pair, so this THROW is the only way
+    /// to reach the fail-loud branch).
+    /// </summary>
+    /// <returns>
+    /// <see cref="ArchivalAuditDecision.None"/> when both are null (no supersession);
+    /// <see cref="ArchivalAuditDecision.Emit"/> when both are set (emit the archival audit + outbox).
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when exactly one of the pair is null (divergence). Silently skipping the archival
+    /// audit would break the inviolable Auditability invariant — so the publish fails closed: the
+    /// endpoint's inner <c>catch { Rollback; throw }</c> rolls back the ENTIRE publish.
+    /// </exception>
+    public static ArchivalAuditDecision EvaluateArchivalAudit(Guid? archivedId, long? archivedVersion)
+    {
+        var hasId = archivedId is not null;
+        var hasVersion = archivedVersion is not null;
+
+        return (hasId, hasVersion) switch
+        {
+            (false, false) => ArchivalAuditDecision.None,
+            (true, true) => ArchivalAuditDecision.Emit,
+            _ => throw new InvalidOperationException(
+                "supersession invariant violated: archived id/version diverged — refusing to publish without the archival audit row"),
+        };
+    }
 
     // ── Request DTO ──
 

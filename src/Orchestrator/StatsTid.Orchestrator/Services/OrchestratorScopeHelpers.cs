@@ -268,8 +268,16 @@ public static class OrchestratorScopeHelpers
         if (string.Equals(actor.ActorRole, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal))
             return true;
 
+        // SEC-021 (S130 Step-7a hardening): the scope fallback must require a GlobalAdmin-ROLE
+        // GLOBAL scope, NOT merely ScopeType == "GLOBAL". A GLOBAL scope is only ever issued to a
+        // GlobalAdmin, so requiring the role closes a theoretical over-grant — a lower-role token
+        // that somehow bore a GLOBAL-type scope would otherwise get an unrestricted task-read
+        // bypass — and keeps this consistent with the role-based `GlobalAdminOnly` policy the rest
+        // of the sprint's floors (SEC-032/SEC-023) use.
         return actor.Scopes is { Length: > 0 }
-            && actor.Scopes.Any(s => string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal));
+            && actor.Scopes.Any(s =>
+                string.Equals(s.Role, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal)
+                && string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal));
     }
 
     /// <summary>

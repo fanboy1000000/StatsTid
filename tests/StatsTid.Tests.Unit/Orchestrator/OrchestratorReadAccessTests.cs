@@ -97,12 +97,23 @@ public class OrchestratorReadAccessTests
     }
 
     [Fact]
-    public void IsGlobalAdmin_GlobalScope_IsTrue_EvenWithoutRoleClaim()
+    public void IsGlobalAdmin_GlobalAdminGlobalScope_IsTrue_EvenWithoutRoleClaim()
     {
-        // Secondary signal: a GLOBAL RoleScope denotes global reach even if the role string
-        // is legacy/other.
+        // Secondary signal: a GlobalAdmin-ROLE GLOBAL RoleScope denotes global reach even if the
+        // role claim string is absent/legacy. (Step-7a hardening: the scope's Role must be
+        // GlobalAdmin — see the negative test below.)
         var actor = Actor(role: null, new RoleScope(StatsTidRoles.GlobalAdmin, null, "GLOBAL"));
         Assert.True(OrchestratorScopeHelpers.IsGlobalAdmin(actor));
+    }
+
+    [Fact]
+    public void IsGlobalAdmin_NonGlobalAdminRole_WithGlobalScopeType_IsFalse()
+    {
+        // SEC-021 Step-7a hardening: a GLOBAL scope-type whose ROLE is not GlobalAdmin must NOT
+        // grant the bypass — otherwise a lower-role token bearing a GLOBAL scope would get an
+        // unrestricted task-read bypass (broader than the role-based GlobalAdminOnly policy).
+        var actor = Actor(role: StatsTidRoles.LocalAdmin, new RoleScope(StatsTidRoles.LocalAdmin, null, "GLOBAL"));
+        Assert.False(OrchestratorScopeHelpers.IsGlobalAdmin(actor));
     }
 
     [Fact]

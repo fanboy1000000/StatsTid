@@ -132,9 +132,10 @@ no schema/resolution/event/audit touch:
   domain sprint, not a security fix. `GlobalAdminOnly` gates on the role claim (the existing sibling
   mechanism); no scope machinery introduced (that is SEC-036 territory, deferred).
 
-**SEC-034 stays OPEN post-fix.** The PUT re-key state-confusion (SEC-034) lives in the same PUT handler;
-raising the floor makes it GlobalAdmin-reachable only — it does NOT close SEC-034. Recorded so "PUT
-hardened" isn't misread as "SEC-034 closed."
+**SEC-034 stays OPEN after THIS task (task 4) — later closed at task 10.** The PUT re-key state-confusion
+(SEC-034) lives in the same PUT handler; raising the floor (task 4) makes it GlobalAdmin-reachable only — it
+does NOT close SEC-034. (SEC-034 was subsequently fixed at task 10 — reframed by review as an audit-integrity
+bug. This clause is the point-in-time task-4 status, not current status.)
 
 **Tests (both review lenses — the non-vacuity point was load-bearing).**
 - `SEC032PositionOverrideAuthorizationTests` (new) + a `CreateLocalAdminClient` helper on the shared
@@ -360,9 +361,61 @@ overclaim — absorbed; SEC-019/028 confirmed ready) → owner ruled (implement 
 Orchestrator-direct implementation (cross-cutting `.github` config) → dual-lens Step-5a (both APPROVED /
 0-BLOCKER; per-event paths machine-verified) → no code build impact (workflow YAML).
 
-## Remaining fix-next tasks
-**SEC-034/035** (Position-Override PUT re-key guard + verify the supersession audit-omission) — the last
-fix-next items; SEC-034 is in the same PUT handler as the SEC-032 fix.
-(Still OPEN and tracked: SEC-034 [task-4 note], SEC-036 [ledger], SEC-037 [new, register], the two SEC-033
-deferrals [ledger], the SEC-015 committed-key rotation [ledger], the SEC-023 real-schema [register], the
-SEC-021 enabled-but-unused non-admin read path [register], and the SEC-031 prod-header CSP [ledger].)
+## Task 10 — SEC-034 + SEC-035 config-lifecycle audit integrity (FIXED, 2026-08-18) — SPRINT CLOSE
+
+Two Auditability-invariant fixes; the review corrected the framing of both.
+
+**SEC-034 — Position-Override PUT audit infidelity (FIXED).** The refinement's rev-1 premise ("PUT can re-key
+an override → uniqueness collision/500") was FALSE (both lenses): the repo's `UpdateAsync` `SET` clause writes
+only the value columns, so the identity triple is already immutable at the DB layer — no re-key, no 500. The
+REAL defect was AUDIT INFIDELITY: on an identity-mismatch PUT, the audit `new_data`, the `PositionOverrideUpdated`
+event, and the projection all carried the request BODY's (wrong) triple — a "phantom-identity" audit claiming
+the override moved when the stored row didn't. **Owner ruled reject:** the PUT now returns **409** (naming the
+three immutable fields) if the body's `AgreementCode`/`OkVersion`/`PositionCode` differ from the stored row,
+placed AFTER the 404/non-ACTIVE checks and BEFORE any audit/outbox/projection emit — so no phantom audit is
+ever written. Defence-in-depth: `updatedEntity`'s identity is sourced from `previous`. Value-only PUT
+unaffected (200). Tests (Docker-gated): 409 on each of the three identity fields with ZERO `UPDATED` audit rows
+(RED-before-green: pre-fix 200 + phantom audit); value-only → 200 with correct-identity audit.
+
+**SEC-035 — supersession ARCHIVED-audit non-skippable (FIXED, fail-loud hardening).** Both lenses verified the
+gap is **not reproducible today**: `AgreementConfigRepository` assigns `archivedId`+`archivedVersion` together
+from one `RETURNING config_id, version` row (both NOT NULL) → they can't diverge. **Owner ruled harden anyway**
+(Auditability is inviolable and shouldn't depend on an unenforced invariant): the emission gate is now a
+testable helper `EvaluateArchivalAudit(id, version)` — both-set→Emit, both-null→skip, **divergence→throw
+InvalidOperationException**. It runs inside the publish transaction's inner `catch { Rollback; throw }`, so a
+divergence rolls back the ENTIRE publish (fail-closed). Docker-free unit test covers all four cases (the only
+way to reach the throw); the happy path is already covered by existing suites (not duplicated).
+
+**Governance:** refine-requirements + dual-lens Step-4 (both lenses BLOCKER — SEC-034 premise false, it's an
+audit-infidelity bug; SEC-035 invariant-protected — absorbed, framing corrected) → owner ruled reject + harden
+→ domain-agent implementation → dual-lens Step-5a (both APPROVED / 0-BLOCKER) → build clean; unit 940/940
+(incl. 4 new SEC-035); SEC-034 endpoint tests Docker-gated (CI).
+
+---
+
+## S130 SPRINT CLOSE — the S129 fix-next backlog is fully dispositioned
+
+All 10 fix-next items handled, each through the full governance cycle (refine-requirements → dual-lens Step-4
+→ owner ruling → domain-agent implementation → dual-lens Step-5a → build/CI):
+
+| # | Finding | Disposition |
+|---|---------|-------------|
+| 1 | SEC-009 self-approval guard (keystone) | **FIXED** — structural choke point; RES-003 CLOSED |
+| 2 | SEC-020 `Auth:UseDatabase` fail-closed | **FIXED** (minimal; in-memory-table removal → ledger) |
+| 3 | SEC-027 s2s least-privilege | **MITIGATED** (shared-key capability → SEC-036, ledger) |
+| 4 | SEC-032 Position-Override write floor | **FIXED** → GlobalAdminOnly (SEC-034 was same handler) |
+| 5 | SEC-033 config-value validation | **FIXED** (app-layer; DB-CHECK + ceilings → ledger) |
+| 6 | SEC-015 committed dev JWT key | **MITIGATED** (prod fail-closed pinned S19; key rotation → ledger) |
+| 7 | SEC-023 `/external/send` floor+envelope | **FIXED** (thorough; real per-field schema → register) |
+| 8 | SEC-021 Orchestrator task-read IDOR | **FIXED** (Option A per-task scope + terminated-subject defect fixed) |
+| 9 | SEC-019 + SEC-028 config batch | **FIXED** (workflow author-gates + CI least-privilege) |
+| — | SEC-031 frontend CSP | **DEFERRED** → prod server-header (ledger) |
+| 10 | SEC-034 + SEC-035 config-lifecycle audit | **FIXED** (PUT identity-immutability + fail-loud supersession audit) |
+
+**Deferred residuals** (register pre-production ledger, tied to the go-serious hardening gate): SEC-020
+in-memory table removal · SEC-036 shared-key per-service identity · SEC-033 DB-CHECK backstop + fat-finger
+ceilings (agreement-truth) · SEC-015 committed-key rotation · SEC-023 real external per-field schema (at
+`SendAsync`) · SEC-031 prod-header CSP · SEC-021 enabled-but-unused non-admin task-read path.
+**New finding surfaced during the sprint:** SEC-037 (legacy-migrator `local_agreement_profiles` value
+validation — register, OPEN). **Still-open (out of this backlog):** SEC-034 was closed; nothing from the
+fix-next list remains open.

@@ -217,12 +217,36 @@ public static class PositionOverrideEndpoints
             if (!string.Equals(previous.Status, "ACTIVE", StringComparison.Ordinal))
                 return Results.Json(new { error = "Only ACTIVE position overrides can be updated" }, statusCode: 409);
 
+            // SEC-034: an override's identity triple (agreement_code, ok_version, position_code)
+            // is IMMUTABLE. The repo's UpdateAsync writes only the VALUE columns, so the DB row's
+            // identity never moves — but a PUT whose body carries a DIFFERENT triple would still
+            // stamp the audit row (`new_data`), the PositionOverrideUpdated event, and its
+            // projection with the BODY's (wrong) triple: a "phantom-identity" audit claiming the
+            // override moved when the stored row did not. Reject such a PUT with 409 (consistent
+            // with the non-ACTIVE 409 above) BEFORE any audit/outbox/projection emit — that is what
+            // closes the phantom-audit path. A value-only PUT (norm/flex/description) is unaffected
+            // and still returns 200 (body identity == stored identity on that path).
+            if (!string.Equals(body.AgreementCode, previous.AgreementCode, StringComparison.Ordinal) ||
+                !string.Equals(body.OkVersion, previous.OkVersion, StringComparison.Ordinal) ||
+                !string.Equals(body.PositionCode, previous.PositionCode, StringComparison.Ordinal))
+            {
+                return Results.Json(new
+                {
+                    error = "An override's AgreementCode, OkVersion, and PositionCode are immutable; deactivate and recreate to move it.",
+                }, statusCode: 409);
+            }
+
             var updatedEntity = new PositionOverrideConfigEntity
             {
                 OverrideId = overrideId,
-                AgreementCode = body.AgreementCode,
-                OkVersion = body.OkVersion,
-                PositionCode = body.PositionCode,
+                // SEC-034 defence-in-depth: source the identity triple from the STORED row, never
+                // the body. The guard above already rejects a mismatched triple, so on the 200 path
+                // these equal the body values; sourcing from `previous` guarantees the entity can
+                // never carry a phantom identity even if that guard were ever bypassed. (The repo's
+                // UpdateAsync ignores identity columns on update anyway — belt-and-suspenders.)
+                AgreementCode = previous.AgreementCode,
+                OkVersion = previous.OkVersion,
+                PositionCode = previous.PositionCode,
                 MaxFlexBalance = body.MaxFlexBalance,
                 FlexCarryoverMax = body.FlexCarryoverMax,
                 NormPeriodWeeks = body.NormPeriodWeeks,
