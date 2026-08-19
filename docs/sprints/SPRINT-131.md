@@ -39,7 +39,19 @@ any time.
 
 ## Task list
 
-- [ ] **TASK-A — method spec (the quality taxonomy).** Vendor a `quality-audit` skill (sibling of S129's
+- [ ] **TASK-A — method spec (the quality taxonomy).** *Status: drafted + dual-lens reviewed (Codex 1
+      BLOCKER / 4 W; internal 0 BLOCKER / 7 W / 6 N) → all findings absorbed in one revision pass →
+      Codex cycle-2 re-check pending.* **The recorded D3 sampling frame (final):** exhaustive tier of 9
+      tree-computable rules (payroll/settlement · authz/scope · outbox/events · OK-version/migrations ·
+      audit/projection · the rule-engine virtual stratum `*RuleTests.cs` ∪ `/Rules/` ∪ `*Accrual*` (~13
+      files) · architecture-constraints · SEC-id-citing tests · the smoke suite whole) + a
+      largest-and-smallest-per-stratum sample over FIVE suites (DemoSeed declared IN as its own stratum;
+      co-located `*.test.ts(x)` join the nearest `__tests__` stratum) + three pattern-level full scans
+      (Docker/env gating, assertion-free methods, swallowed catches). **Named residual (the declared cost
+      of sampling, per OQ-2):** assertion-present-but-weak tests in mid-size unsampled files are
+      systematically unexamined. Notable review catches: the drafting agent itself refused to write the
+      warning count into the skill (leak-immunity); the review moved the sole-guard-test example from
+      Critical to High under the new ruled boundary. Vendor a `quality-audit` skill (sibling of S129's
       `threat-model-audit`): per-dimension method for the 8 dimensions (architecture conformance ·
       complexity hotspots · test-suite quality · duplication/dead code · error-contract consistency ·
       warning debt · doc/code drift [isolated slice, enumerated excluded-path set] · observability/logging),
@@ -52,9 +64,14 @@ any time.
       Verified candidate #1: the **137 build warnings** (rebuilt twice at HEAD, exact; leak-immune — no
       tracked doc records the true count). Next pool candidate to verify: the Payroll CS0618 `[Obsolete]`
       opt-out. **Scored-dimension view rule (doc-echo closure): every scored dimension's worktree view
-      excludes `docs/sprints/**` + the operations registers, and views are baseline-pinned** (the S131
-      planning artifacts postdate the baseline → auto-excluded). CI-artifact availability (lizard report,
-      coverage) verified as a prerequisite.
+      excludes `docs/sprints/**`, the three operations registers, AND (TASK-A review absorption) the three
+      ledger-class debt docs — `docs/operations/s64-regression-debt-census.md`, `docs/QUALITY.md`,
+      `docs/operations/docs-governance-program.md`; views are baseline-pinned** (the S131 planning
+      artifacts postdate the baseline → auto-excluded). **Sealing checklist (TASK-A review, both lenses):
+      (i) per item — "no in-view doc records this item"; (ii) cross-check the manifest against every exact
+      fact the skill itself states** (the skill's stated counts — 16 csproj, 26 endpoint files, 157 routes,
+      35 ILogger files — are thereby foreclosed as withheld items, generalizing the drafting agent's own
+      137 catch). CI-artifact availability (lizard report, coverage) verified as a prerequisite.
 - [ ] **TASK-C — the sweep.** One agent per dimension over its declared universe; findings with file:line
       evidence + rubric severity. Doc-drift runs as its own isolated slice (reduced view, own method, no
       withheld scoring).
@@ -69,6 +86,18 @@ any time.
 
 Out-of-scope pointers (recorded, not silent): performance (F register owns it) · dependency CVEs
 (SEC/Dependabot/CI) · dependency staleness/abandonment (unowned — flagged for a future pass).
+
+## Pre-known findings (recorded at the TASK-A review, 2026-08-19 — so view-exclusions cost nothing)
+
+The TASK-A dual-lens review surfaced two genuine doc-map gaps in files the D7 drift-checker will never see
+(both are excluded from its view), so they are recorded HERE as pre-known findings and will be filed as
+QUAL rows at TASK-E without sweep credit:
+1. **`docs/operations/s64-regression-debt-census.md` is unrouted** — CLAUDE.md's doc map does not mention
+   it at all (the TASK-A draft even mis-cited the doc map as designating it historical — a citation to a
+   routing that does not exist).
+2. **`docs/references/vacation-settlement-law-research.md` is unrouted** — a point-in-time S67 research
+   verdict absent from CLAUDE.md's doc map (its siblings are all routed under "Historical & research
+   dossiers").
 
 ## Environment constraints (recorded)
 No Python and no Docker on this machine → lizard/coverage numbers come from CI artifacts (verified in
