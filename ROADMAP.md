@@ -148,7 +148,24 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 
 ### Governance / docs
 - **KB Tag & Domain indexes** — frozen ~S17, omit newer entries (completeness of the main INDEX is
-  CI-checked; these secondary indexes are not). [WS3 / C4]
+  CI-checked; these secondary indexes are not). [WS3 / C4] *S131 additive facts: the gate gap is
+  structural — `check_docs.py:59-76` checks link-PRESENCE only, so table placement/completeness is
+  invisible to CI; the domain index also carries two different rows both labelled "SharedKernel".
+  (Cross-ref only — tracked here, not a QUAL row.)*
+
+### Quality (S131 audit — the fix-next remediation is proposed as S132; see SPRINT-131.md)
+- **★ S132 candidate — the S131 fix-next set** (owner adjudication pending): the Critical daily-rest
+  defect (QUAL-001) + the 21 High rows + the gate-proposal packet. Full register:
+  `docs/operations/quality-finding-register.md`; adjudication record: `docs/sprints/SPRINT-131-adjudication.md`.
+- **⚠ NAMED GO-LIVE PRECONDITION (§15 stk.1)**: the SPECIAL_HOLIDAY export handler omits the under-lock
+  REVERSED probe its siblings carry (QUAL-133). Medium while the go-live gate is dormant (two verified
+  gates); **Critical-class the moment `Settlement:GoLiveDate` is configured** — the probe MUST land
+  before that gate opens (the code's own :679-686 note, now register-tracked).
+- **Serve the reporting period on the settlement overview** — the admin StrukturPanel renders a
+  hard-coded "Maj 2026" label for every period (QUAL-122); the fix depends on serving the real period,
+  deferred at the S123-era port. Retitle/re-pin the placeholder test with it.
+- **S132 coverage follow-ups**: lizard-artifact re-run over D2's ~30 census-identified unread
+  over-threshold regions; the SCD-2 write-path clone family (15 members) divergence check.
 
 ## 3. Loose ideas (someday-maybe; low commitment)
 

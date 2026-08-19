@@ -1,7 +1,45 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 111 -->
-> **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See CLAUDE.md "Quality Grading" section for grade definitions.
+<!-- anchor-sprint: 131 -->
+> **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
+
+## S131 evidence-based re-grade (2026-08-19) — the audit re-grounding
+
+**Why this section exists.** This document had refrozen twice (anchor S111; matrix "last updated S64"
+with per-cell prose from ~S35) — which the S131 code-quality audit both measured and fixed. The audit:
+a full 8-dimension sweep at pinned baseline `7e4bb1b`, adversarial refute panel over every finding, and
+a Codex external lens over the High/Critical set. Result: **140 register rows (1 Critical, 21 High,
+118 Medium)**. Everything below cites those rows; a domain with no findings keeps or raises its grade
+*explicitly*, never silently. The refreeze forcing-function fix is itself filed (QUAL-141: make the
+freshness warning a hard CI failure for this file — owner rules).
+
+**Canonical domain set (declared before grading, per the audit plan):** the 14 S56-refresh domains plus
+two the audit's evidence demands: *Documentation (canon)* and *Test Suite (cross-cutting)*.
+
+| Domain | S56 → S131 | Grade rests on (cites) |
+|--------|-----------|------------------------|
+| Rule Engine | A++ → **C+** ▼▼ | QUAL-001 (Critical: the daily-rest check mis-computes midnight-crossing shifts — a compliance rule reporting a real breach as compliant), QUAL-022 (a registered rule with zero tests), QUAL-019 (the classification registry pinned by no test), QUAL-031, QUAL-123 (open semantics). Counterweight: architectural purity is exemplary — no DB/HTTP/clock/file-IO, clean dependencies (D1 verified). The grade is about correctness confidence, which the evidence no longer supports at A-level. |
+| SharedKernel (Models) | A → **A−** | QUAL-033 (three no-implementer interfaces). Positive: 103/103 event types registered in the serializer (verified exhaustively). |
+| SharedKernel (Events) | A− → **B+** | 22 never-constructed event classes (suspected-dead, appendix — serialization-contract-blocked from deletion). Registration discipline itself is perfect. |
+| SharedKernel (Segmentation) | A → **A−** | Below-floor planner-loop duplication; the manifest encoding split (QUAL-002) lives in its *consumers*, not here. |
+| Infrastructure | A → **B−** ▼ | QUAL-004 (High: diverged settlement recovery), QUAL-005 (High: the diverged Copenhagen copy), QUAL-036 (33 production-unused write overloads), QUAL-038/041/042/044/045 (dead members incl. an ungated balance mutator), QUAL-066. |
+| Security (authz code) | B+ → **B** | QUAL-009 (High: policy denials leave no trace), QUAL-040. Strong positives, stated: every authorization choke point was verified fail-closed by two independent panels + Codex; the S105 boundedness invariant is test-pinned. |
+| Backend API | A → **B** ▼ | QUAL-047…059 (13 contract-consistency rows), QUAL-126…131 (endpoint hotspots), QUAL-003 (the unwired audit enrichment). Positives: the 128-site `{error,reason}` 403 norm, centralized ETag handling, and the spec≡runtime program are genuinely strong. |
+| Payroll Integration | A → **C+** ▼▼ | QUAL-002 + QUAL-006 (High), QUAL-133 (**conditional Critical at §15 stk.1 go-live — a named precondition**), QUAL-037 (the replay surface production-unreachable), QUAL-013/015 (its boundary's tests can't fail), QUAL-077. |
+| Frontend | A− (S82) → **B** ▼ | QUAL-023, 028, 029, 046, 058, 078, 097, 120, 121, 138-140. Positives: zero XSS sinks (S129 round 2), a single disciplined console site, and the typed-contract program. |
+| PostgreSQL Schema | A− → **A−** (held, explicitly) | Every documented table-ownership rule verified upheld in code; the doc generator has a single sanctioned path; residuals are comment-level (QUAL-094, the S74 marker). |
+| Docker/Infrastructure | A− → **B** ▼ | QUAL-024 (compose wiring inverted vs the call graph), QUAL-026/072/074 (two services outside every compile gate). |
+| CI/Tooling | B+ → **B** | QUAL-096 (an 82-test project compiled but never run), QUAL-069-074 (warning-gate scoping). Positives: suites run unfiltered in CI; testcontainers are the norm (two ambient-DB exceptions: QUAL-118). |
+| Domain Correctness | B → **C+** ▼ | QUAL-001, QUAL-010 (the agreement reference states a wrong statutory fact the code already fixed once), QUAL-123. Counterweight: S129 round 2 found the money flows robust, and the settlement valuation chain is heavily pinned. |
+| Reporting-Line & Approval Routing | A− → **B+** | QUAL-018 (revoke deny arms untested), QUAL-118, QUAL-129/130. Positives: the deny/allow matrices and lock-race harnesses in this domain were the panel's most-praised suites. |
+| **Documentation (canon)** — new | **C+** | QUAL-010/011/012 (High: a wrong statutory fact in an agent-prompt doc; a false authority-model claim; a runbook that cannot be followed) + QUAL-080…094 + the two unrouted docs (QUAL-124/125). Positives: the hooks/components/token tables verified exact; a zero-TODO tree. |
+| **Test Suite (cross-cutting)** — new | **B−** (split verdict) | The modern era is genuinely strong — the S127 send-command family, the spec≡runtime contract suites, and the security matrices were repeatedly held up by the panel as exemplary. The debt is concentrated: the atomic-outbox family (QUAL-016, High, ~45 tests that can't fail), 9 further High test rows (QUAL-013…022), and a legacy-Unit pocket (QUAL-095, 108-117). The suite's *shape* is right; specific load-bearing guards are theater. |
+
+**Reading the drop honestly (the PM view).** Code did not get worse in S131 — *measurement* got real.
+The old A-grades were self-reported at sprint close by the sprints that did the work; this is the first
+adversarial, evidence-cited grading. The two domains that fell hardest (Rule Engine, Payroll) are
+exactly where the audit found verification theater: tests named for guarantees they cannot check. That
+is also why the remediation sprint (S132 proposal) leads with those two.
 
 > **S114 (2026-07-03):** **DemoSeed units upgrade (Demo Tooling + Test; quality-of-demo).** The demo world now exercises the full Enhedsspor spine: units derived from the reporting-edge trees (leader-is-member + single-unit membership by construction), all 5 levels per styrelse via per-tree span/depth overrides (absence = byte-exact legacy, golden-pinned from the PRE-change generator), ledger-exact deliberate messiness (10 leaderless, sideways non-manager exceptions), canonical idempotent loader (the D3 re-homing hazard proven impossible), 452 units/3,231 homed/442 leaders/0 errors live + fully idempotent re-run. DemoSeed suite 29→55 cases; zero product code (the stray pre-S114 layout polish separated as `5004eae` — both Step-7a lenses). Pyramid 2678 (+26). **The S105 D4 unit-leader approval path is now ACTIVE in the demo world** (aligned with designated-approver authority; divergence only at the deliberate cross-unit exceptions).
 > **S113 (2026-07-02):** **Typed API Contract — the strict-types phase (CI/CD + Backend metadata + Frontend + Test; P8/quality).** Generated TS types are now DIRECTLY strict: the `ResponseStrictTypesFilter` emits `required` = all members of the response-reachable closure (with the truthfulness exclusions: conditional-ignore + the nullable-$ref exception — the new bounded residual) + `[AllowedValues]`-driven string-literal enums on 14 discriminator members (each set citing its authority; open sets refused); the FE coercion scaffolding (`apiNarrow.ts`) DELETED with an audited interface inventory; the spec≡runtime gate gains required-fidelity + enum-fidelity (`required`/`nullable` orthogonal — the enum set never arbitrates null). **The program's 3rd real contract-lie catch: `assignedBy`'s false non-null claim (the NULLABILITY axis — invisible to name-only guards).** The false S112 "all-optional request bodies" framing corrected (PAT-012 + a dated S112 gloss). Requests untouched (the binder-enforced boundary documented). Step-0b 0B both lenses; Step-7a both cycle-1 clean. Pyramid 2652 (+16). **NEXT: the retrofit passes resume (Pass 2: reporting-lines 13 + employee field-endpoints 8 + admin reads 3) — every newly-typed op now lands strict automatically.**
@@ -201,6 +239,15 @@ Delta since the S35 matrix freeze. This pass updates grades and counts; it does 
 | Reporting-Line & Approval Routing | A- | new (held tightened A− through S83 — S83/ADR-027 D19 closed R1+R2, accepted R3/R4/R5 as named residuals) |
 
 ## Pre-S39 Warning Baseline
+
+> **⚠ S131 CORRECTION (2026-08-19): this ledger is itself historical drift — the S131 audit's rebuild
+> at `7e4bb1b` measured exactly 137 warnings** (109 CA2100 + 19 CS0618 + 4 xUnit1031 + 3 CS1998 +
+> 2 xUnit2013; production code carries exactly ONE). The ~19 figure below was stale enough that the
+> external review lens initially cited it *against* the measured truth — an accidental proof of this
+> file's refreeze problem. Current triage + gate proposals: QUAL-069…077 in the quality register; the
+> full per-code × per-project matrix is in the S131 adjudication record. The `Program.cs:198` citation
+> below is also stale (the call is at `:249`, and a second production caller exists under a pragma —
+> QUAL-069/077). This section is retained as the historical S39 record only.
 
 Captured at S39 TASK-3908.1 (2026-05-23) via `dotnet build StatsTid.sln -c Release -p:TreatWarningsAsErrors=true`. Baseline is the per-csproj warning count under strict mode — used as the per-project escape-hatch threshold for TASK-3909 warn-as-error rollout. Production projects intended to clear strict; test/tool/mock projects intentionally remain at warn-as-info.
 

@@ -22,8 +22,8 @@ window away from being unrecoverable.
 
 | id | Finding | Status |
 |----|---------|--------|
-| F1 | Period-status projection: per-pending-employee authorization storm (27,001 commands / 13.8s at K=1000) | **DONE** S125 (TASK-12501) — 9 commands / 79ms, flat in K |
-| F2 | Un-cancelled fetch effects (reported as "StrictMode double-fetch") | **MOSTLY DONE** S126 — 13 hooks + 3 components; ⚠ census MISSED `useApprovalsByMonth` + `useMyReportsByMonth` (both `[year, month]`-keyed, still unguarded) |
+| F1 | Period-status projection: per-pending-employee authorization storm (27,001 commands / 13.8s at K=1000) | **DONE** S125 (TASK-12501) — 9 commands / 79ms, flat in K. ⚠ **S131 guard-quality note (2026-08-19)**: the S106 forest/search constant-query-count guards count a REPOSITORY COPY of the endpoints' reads, not the endpoints — a handler-side per-row query (the exact guarded regression class) would not move the count (QUAL-119). |
+| F2 | Un-cancelled fetch effects (reported as "StrictMode double-fetch") | **MOSTLY DONE** S126 — 13 hooks + 3 components; ⚠ census MISSED `useApprovalsByMonth` + `useMyReportsByMonth` (both `[year, month]`-keyed, still unguarded). ⚠ **S131 census-classification CORRECTION (2026-08-19)**: `usePositionOverrides` + `useWageTypeMappings` were classified "mount-only fetches (cannot exhibit it) — deliberately left alone", but their `fetchAll` is re-invoked by every mutation AND exposed as `refetch`, so overlapping responses CAN land out of order (QUAL-028, Likely). Same class as the two missed hooks above — fold into the F2 remainder. |
 | F3 | Route-level code splitting (entry chunk 594 kB) | **DONE** S125 (TASK-12504) — 209 kB, −61% |
 | F4 | *description lost; re-derived below* | RE-DERIVED 2026-08-03 — see below |
 | F5 | Flex-balance full-stream replay on the consolidated `employee-{id}` stream | **DONE** S126 — see below |
