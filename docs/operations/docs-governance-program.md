@@ -1,6 +1,8 @@
 # Docs & Governance Cleanup Program
 
-**Status**: PHASES 1–2 COMPLETE (2026-08-13) — WS1 committed `3055886`, WS3 committed `ab3d6d9`, WS3b tail committed `7c516c9`. NEXT: Phase 3 = WS5 security sweep · **Owner**: Orchestrator + PM
+**Status**: PHASES 1–3 COMPLETE — WS1 `3055886`, WS3 `ab3d6d9`, WS3b `7c516c9`; **WS5 sweep complete
+2026-08-14** and its 10-item remediation **executed as S130 (closed `7e4bb1b`, 2026-08-18)**. NEXT:
+**WS7 code-quality audit (S131, kicked off 2026-08-19)** · **Owner**: Orchestrator + PM
 **Why this exists**: a mid-session replan (per WORKFLOW.md Replanning Protocol). Several governance
 and documentation threads opened while closing S128 and scoping the security sweep; this doc is the
 **single source of truth** for all of them so nothing is lost across sessions. It supersedes the
@@ -347,6 +349,16 @@ staleness is in counts/pins/anchor:
       register + calibration + worktree isolation + refute panel). **Phase 3 done → the whole
       docs-&-governance + security program (Phases 1–3) is complete.** Round-3 (persistence/outbox +
       dependency audit) optional/deferred.
+
+### WS7 — Code-quality audit sweep (S131, kicked off 2026-08-19)
+
+The "S129, but for quality": same harness (commit-pinned universe at `7e4bb1b` → code/build-anchored
+withheld calibration → per-dimension agents (8 dimensions) → refute panel → register → owner adjudication →
+remediation proposal), with a TASK-A method spec supplying the taxonomy security got for free from
+STRIDE/OWASP. Owner-ruled 2026-08-19: full sweep · test-suite quality in scope (sampled) · gate promotions
+proposals-only · Medium+ registration floor. Outputs: `quality-finding-register.md` (QUAL-###) +
+re-grounded `QUALITY.md` + an S132 remediation proposal. Plan + rulings + task list: `SPRINT-131.md`
+(refinement snapshot: `SPRINT-131-refinement-rev2.md`).
 
 ### WS6 — Environment / infra (parked / on demand)
 - [ ] Native stack back up (backend-api + Vite) when UI testing is wanted (Postgres already up).
