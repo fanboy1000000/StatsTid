@@ -4,16 +4,25 @@
 **What this is (plain language).** The S131 quality sweep produced ~170 candidate findings. Every
 candidate was then adversarially re-verified by a refute panel (7 batches, each re-deriving the
 evidence fresh from the pinned code at `7e4bb1b`), and the surviving High/Critical set was verified a
-second time by the external lens (Codex: 19 CONFIRM / 2 ADJUST / 0 REFUTE). What follows is the final,
-dual-verified finding set with per-row verdict provenance — the transcription source for
+second time by the external lens (Codex). **Codex outcome, precisely:** the **21 High rows** got
+**19 CONFIRM / 2 ADJUST / 0 REFUTE** (the 21 Codex tags PR-2, AH-1…3, EH-1…4, DH-1…3, TH-1…9, NC-1 map
+one-to-one onto them); **the Critical (QUAL-001)** got Codex verdict **PR-1 with boundary opinion BQ-1
+recommending Critical** — a severity recommendation, which combined with the panel's own Critical
+filing is why QUAL-001's status reads `CONFIRMED(dual-lens)`. What follows is the final, dual-verified
+finding set with per-row verdict provenance (Critical + High per-row; Medium dimension-level + all
+refuted/merged/dedupe decisions) — the transcription source for
 `docs/operations/quality-finding-register.md`. Raw agent reports and panel transcripts are working
 papers in the gitignored `.claude/sweeps/` (hygiene, not secrecy — same convention as S129).
 
 **Verification outcomes at a glance:** 6 candidate rows REFUTED with disproofs · ~20 merged ·
-severity corrected in both directions (High→Medium ×2 where the tier rubric was applied strictly;
-Medium→High ×1 where the panel found a 6th diverged family member the sweep missed) · 2 evidence
-components refuted inside surviving rows · 1 sweep test-observation escalated to a **product defect
-at Critical** (both lenses) · 3 candidates retired to existing-register cross-references (dedupe rule).
+severity corrected in both directions — **High→Medium ×3** where the tier rubric was applied strictly
+(QUAL-023 the diagnostics page; QUAL-108 the identical-input half-timer test; QUAL-109 the
+conditionally-vacuous Assert.All arms), and **Medium→High ×1** where the panel found a 6th diverged
+family member the sweep missed (QUAL-005 the Copenhagen helper) · 2 evidence components refuted inside
+surviving rows · **escalations of KIND (distinct from severity): one sweep test-observation became a
+product defect at Critical (QUAL-001, both lenses), and one became a product-defect High (QUAL-002)** ·
+**2 candidates retired to existing-register cross-references** (dedupe rule; a third class was
+re-observed under SEC-012 but was never a candidate row — see §external-dedupe).
 **Final: 140 rows — 1 Critical, 21 High, 118 Medium.**
 
 **Calibration (the sweep's falsifiability control):** 3 withheld code-anchored items. Round-1 score
@@ -143,9 +152,15 @@ Format: `QUAL-id | Sev(conf) | Dim | class | title — plain meaning | primary l
   copy of another rule's tests (+10 phantom tests).** | `RuleRegistry.cs:85-87`;
   `Sprint17OvertimeGovernanceTests.cs` | fix-now (delete the copy; write governance tests) | R2c NC-1 + Codex NC-1.
 
-### Medium (118) — index
-The full per-row detail (loci, class, disposition, verdict provenance, panel corrections of record)
-is carried in the register's rows and grouped here by dimension for the sprint record:
+### Medium (118) — dimension index
+Provenance for the Mediums is split by design: each **register row** carries the durable, re-attackable
+content (plain-language claim, code loci, class, disposition, and the refute-batch tag in the row's
+Adjudication cell); the **per-dimension summary below** carries the panel's corrections-of-record and
+which batch owned each cluster; and the **per-row panel history** (every ADJUST/trim, the disproofs
+inside surviving rows) is in the regenerable sweep working papers `.claude/sweeps/S131-refute/R*.md` +
+`S131-consolidated-findings.md` (gitignored, S129 hygiene precedent). A Medium is re-attackable from its
+tracked loci + claim against the code alone — the working papers are the audit trail of *how it was
+verified*, not a precondition for re-attacking it. Grouped by dimension for the sprint record:
 - **D1 architecture (4):** QUAL-023 health-page boundary violation (High→Medium by tier rubric) ·
   QUAL-024 compose wiring asymmetry · QUAL-025 SharedKernel domain-logic creep (document — the code's
   placement rationale is sound; the doc's silence is the defect) · QUAL-026 mock hosts outside the
@@ -200,9 +215,10 @@ is carried in the register's rows and grouped here by dimension for the sprint r
   the non-discriminating carryoverMax pin; the presence-only fallback assertion; the two ambient-DB
   suites (one running an unscoped mutation sweep); the repo-copy perf guards; the self-declared nav
   redirect; the FE fixture-masking class GP.
-- **Product/other (2 + 1 open):** QUAL-122 the hard-coded "Maj 2026" period label (document + backlog
+- **Product/other (2):** QUAL-122 the hard-coded "Maj 2026" period label (document + backlog
   item) · QUAL-123(L) ⚖ the 48h ceiling ignores its configured reference period — domain-semantics
-  ruling required BEFORE severity (Phase-B-class question) · plus the D2 set below.
+  ruling required BEFORE severity (Phase-B-class question; the "open" is that the ⚖ ruling gates its
+  severity, not that it is an extra row) · plus the D2 set below.
 - **D2 complexity (15):** QUAL-126…140 — all Medium, R5-corrected facts govern (counts fixed; three
   unread tails read, lower bounds rose 15-25% with no band change; the scope-loop "missing guard"
   wording corrected — factored-differently-equivalent, verified). **QUAL-133 carries the sprint's
@@ -296,3 +312,20 @@ stale ~19-warning record — corrected in the QUALITY.md re-grade).
 5. **Rule on the 5 candidate SEC rows** and the SEC-004 close-or-rescope question.
 6. **Rule on QUAL-123's routing** (48h reference-period semantics → Phase-B domain question).
 7. **Approve the S132 remediation shortlist** (proposed in SPRINT-131.md §S132 proposal).
+8. **Rule on the Medium-provenance residual (Step-7a B1):** ratify that per-Medium panel history lives
+   in the regenerable gitignored sweep working papers (S129 precedent) with the register rows carrying
+   the re-attackable loci+claim, OR direct that the consolidated findings file be tracked. (Recommended:
+   ratify — the rows are re-attackable against tracked code; tracking the raw working papers duplicates
+   the register at lower signal.)
+9. **Ratify the read-only-contract deviation-of-letter** (Step-7a C5): three root governance files
+   (`CLAUDE.md` doc-map row, `.gitignore` sweeps entry, `ROADMAP.md` backlog) were touched outside the
+   literal `docs/**` + `.claude/**` allowlist — all Orchestrator-only governance docs, no product surface
+   (`git diff 7e4bb1b..HEAD` carries no `src/`/`frontend/`/`tests/`/`tools/`/`docker/`/`.github/` path).
+   Recorded as deviation-of-letter, consistent with the allowlist's intent (it names product surface).
+
+*Step-7a close-review note (2026-08-19): an internal-lens adversarial review of these deliverables
+re-derived every code-anchored claim against `7e4bb1b` (the Critical, the High set, and the calibration
+disclosure all reproduced exactly) and caught nine summary-layer defects (counts, cross-document
+tallies, the Medium-provenance circularity, a QUALITY.md stale-matrix contradiction). All were corrected
+in this pass; the corrections are counts/pointers only — no finding's substance changed. Full review
+archived in the gitignored sweep dir.*

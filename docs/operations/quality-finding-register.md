@@ -1,22 +1,35 @@
 <!-- anchor-sprint: 131 -->
 # QUAL — Code-Quality Finding Register
 
-**Status**: LIVE — **S131 sweep COMPLETE (TASK-C/D 2026-08-19)**; now the durable cross-session quality
-register. **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `7e4bb1b` (S130 close). **Registration
+**Status**: LIVE — **S131 sweep COMPLETE (TASK-C/D/E 2026-08-19)**; now the durable cross-session quality
+register. (This file is TASK-E output — the register rows, cross-register updates, gate packet, and
+below-floor appendix.) **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `7e4bb1b` (S130 close). **Registration
 floor (owner-ruled)**: **Medium+** — would plausibly change behavior, block or mislead a future change,
 or misinform a reader. Below-floor items live ONLY in the inventory appendix.
 
-**Semantics** (mirrors the SEC register): rows are a pointer-index — the durable "what + where + status,"
-with deep evidence and verdict provenance in **`docs/sprints/SPRINT-131-adjudication.md`** (the
-adjudication record) and `SPRINT-131.md`. **Revisit, not shield**: a prior ruling is re-attackable at any
-later audit. **Dedupe rule**: anything already tracked in SEC / F / ROADMAP gets a cross-reference here
-at most (three candidates were retired that way — see the adjudication record §external-dedupe).
+**Semantics** (mirrors the SEC register): rows are a pointer-index — the durable "what + where + status."
+Each row carries enough to **re-attack it** at any later audit: the plain-language claim, the code
+`Source of truth` loci (tracked ground truth), the class, and the disposition. **Where the deeper
+evidence lives**: for the **Critical + 21 High** rows, per-row verdict provenance (which refute batch,
+what the panel changed, the Codex tag) is in the tracked adjudication record
+**`docs/sprints/SPRINT-131-adjudication.md`**; for the **118 Medium** rows the adjudication carries
+dimension-level provenance plus every refuted/merged/dedupe decision, and per-row panel history sits in
+the regenerable sweep working papers (`.claude/sweeps/S131-*`, gitignored per the S129 raw-evidence
+hygiene precedent — "hygiene, not secrecy"). **Revisit, not shield**: a Medium row is re-attackable from
+its tracked loci + claim + the code, independent of the working papers. **Dedupe rule**: anything
+already tracked in SEC / F / ROADMAP gets a cross-reference here at most (**two** candidates were retired
+that way — the dev-JWT-key literal → SEC-015 and the KB-index freeze → ROADMAP; a third class, the
+scope-denial log noise, was re-observed under SEC-012 but was never a candidate row — see the
+adjudication record §external-dedupe).
 
 **Verification chain**: every row survived (1) a read-only dimension sweep at the pinned baseline, (2) an
 adversarial internal refute panel that re-derived the evidence fresh (6 rows refuted, ~20 merged,
-severities corrected both directions), and — for every High/Critical row — (3) the Codex external lens
-(19 CONFIRM / 2 ADJUST / 0 REFUTE). Calibration: 3 withheld items; round-1 score 1/3 (honest record);
-both misses recovered unseeded by corrected-method passes; all three hit chains verified code-derived.
+severities corrected both directions), and — for the Critical + High rows — (3) the Codex external lens:
+**the 21 High rows got 19 CONFIRM / 2 ADJUST / 0 REFUTE**, and **the Critical (QUAL-001) got Codex PR-1
+with boundary opinion BQ-1 recommending Critical** (a severity recommendation, which with the panel's own
+Critical filing is why its status reads `CONFIRMED(dual-lens)`). Calibration: 3 withheld items; round-1
+score 1/3 (honest record); both misses recovered unseeded by corrected-method passes; all three hit
+chains verified code-derived.
 
 **Statuses**: `CONFIRMED(dual-lens)` (panel + Codex) · `CONFIRMED(panel)` · `(L)` = confidence Likely ·
 `GP` = gate proposal (owner rules per gate; the audit changed no CI behavior) · `⚖` = owner ruling PENDING
@@ -54,10 +67,10 @@ on a reserved call. All dispositions are proposals until owner adjudication (→
 | QUAL-021 | The daily-rest rule is never tested with a midnight-crossing shift — the canonical shape that exposes QUAL-001 — so the defect had no guard. | Daily-rest untested for midnight-crossing shifts | D3 | High | CONFIRMED(dual-lens) | `RestPeriodRuleTests.cs:79-139` | →adjudication §QUAL-021 |
 | QUAL-022 | A registered, invoked compliance rule has zero tests anywhere — while the file named for it is a byte-identical copy of a different rule's tests, adding ten phantom tests to the suite count. | OvertimeGovernanceRule untested; its test file is a copy | D3 | High | CONFIRMED(dual-lens) | `RuleRegistry.cs:85-87`; `Sprint17OvertimeGovernanceTests.cs` | →adjudication §QUAL-022 |
 
-### Medium (118) — pointer rows (full verdict provenance in the adjudication record)
+### Medium (118) — pointer rows (re-attackable from the in-row loci + claim + code; per-row panel history in the sweep working papers, dimension-level provenance in the adjudication record)
 | QUAL | What it means (plain language) | Title | Dim | Sev | Status | Source of truth | Adjudication |
 |------|--------------------------------|-------|-----|-----|--------|-----------------|--------------|
-| QUAL-023 | The health page fetches seven services on hardcoded localhost ports, breaking the frontend-talks-to-Backend-only hard rule; off a dev machine it reports six services unreachable. | Health page bypasses the Backend | D1 | M | CONFIRMED(panel) | `HealthDashboard.tsx:11-30` | →adjudication |
+| QUAL-023 | The health page fetches seven services on hardcoded localhost ports, breaking the frontend-talks-to-Backend-only hard rule; off a dev machine all seven resolve to the viewer's host, so six of seven (all but a locally-run Backend) report unreachable. | Health page bypasses the Backend | D1 | M | CONFIRMED(panel; **H→M** by tier rubric) | `HealthDashboard.tsx:11-30` | →adjudication |
 | QUAL-024 | Compose never sets the Backend's rule-engine URL (it silently falls back to a constant) while setting an orchestrator URL nothing reads and a startup dependency nothing calls. | Compose wiring inverted vs actual call graph | D1 | M | CONFIRMED(panel) | `docker-compose.yml:33-42` | →adjudication |
 | QUAL-025 | The shared assembly carries the accrual formula, statutory period geometry and the segmentation planner across three folders the architecture doc doesn't list, under a "no business logic" rule. The code's placement rationale is sound; the doc is silent. | SharedKernel holds undocumented domain logic | D1 | M | CONFIRMED(panel) | `ARCHITECTURE.md:52-62` vs 9-folder census | →adjudication; document |
 | QUAL-026 | Two declared services are .NET projects outside the solution, so the standard build gate compiles 14 of 16 projects (CI's compose jobs do compile them later, unconditionally). | Two mock hosts sit outside the solution build | D1 | M | CONFIRMED(panel) | `StatsTid.sln`; `ci.yml` | →adjudication; xref QUAL-072/074 |
@@ -177,6 +190,10 @@ on a reserved call. All dispositions are proposals until owner adjudication (→
 | QUAL-140 | The save hook picks which Danish error to show by testing body-field presence; the quota arm is purely shape-based with no string anchor — the mis-surfacing defect the file records once already. | saveMonth discriminates 422s by body shape | D2 | M | CONFIRMED(panel; sub-claim relocated) | `useSkema.ts:187-276` | →adjudication |
 
 ## Gate-promotion proposals (owner rules each; the audit changed no CI behavior)
+
+*(Id-space note: the sweep produced **QUAL-001…140 findings**; **QUAL-141** is the pre-planned
+gate-promotion proposal, numbered in the same id space but excluded from the 140 finding total —
+1 Critical + 21 High + 118 Medium = 140.)*
 
 | QUAL | Proposal | Cites |
 |------|----------|-------|

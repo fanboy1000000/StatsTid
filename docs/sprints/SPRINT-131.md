@@ -141,10 +141,10 @@ any time.
         caller census (592 public members, 100% of its declared roots; 68 overload families
         disambiguated by call-site argument shape) independently surfaced the withheld family from
         code, plus 16 Medium rows covering **86 production-unused public members** — headline: across
-        12 repository classes the self-connection write overload is production-unused WITHOUT
-        EXCEPTION (production always routes the in-transaction sibling that the ADR-018 outbox+audit
-        atomicity contract binds); both audit-log query methods are dead; the replay-determinism
-        entry points have no production consumer.
+        14 repository classes (33 overloads) the self-connection write overload is production-unused
+        WITHOUT EXCEPTION (production always routes the in-transaction sibling that the ADR-018
+        outbox+audit atomicity contract binds); both audit-log query methods are dead; the
+        replay-determinism entry points have no production consumer.
       - **CALIBRATION FINAL: round-1 score 1/3 stands on the record; all 3 withheld items were
         independently rediscovered (QC-1 round 1; QC-2 + QC-3 by corrected-method supplemental
         passes, unseeded). Both misses shared one method-gap class (existence-verified vs
@@ -166,21 +166,24 @@ any time.
         supplemented this sprint.
 - [x] **TASK-D — refute panel. COMPLETE 2026-08-19.** Every finding at/above the Medium+ floor: real? severity honest per the
       rubric? already tracked (SEC/F/ROADMAP → cross-ref, not a row)? Calibration hits with doc-derived
-      (not code-derived) evidence chains do not count. **Status 2026-08-19: dual-lens verification
-      COMPLETE except one late batch.** Seven internal refute batches (R1 architecture/dead-code, R2a/b/c
-      test-quality, R3 error/observability, R4 warnings/doc-drift, R5 complexity [late — the Orchestrator
-      caught that D2's rows were initially unassigned]) re-verified every Medium+ candidate fresh against
-      the pinned worktree. Panel outcomes: 6 rows REFUTED with disproofs, ~20 merged, severities corrected
-      BOTH directions (2 demotions incl. a High→Medium tier-rubric call; 2 escalations incl. a
-      Medium→High where the panel found a 6th diverged family member the sweep missed, on the statutory
-      §21 stk.2 deadline guard), 2 evidence components refuted inside surviving rows, and **one sweep
-      test-observation escalated to a PRODUCT defect: the daily-rest rule's midnight-crossing model
-      (dual-lens CRITICAL-recommended; owner ratifies)**. **Codex external lens over the surviving
-      High/Critical set: 19 CONFIRM / 2 ADJUST (held High) / 0 REFUTE; boundary opinions delivered
-      (BQ-1 Critical; BQ-2 systemic families promote where they prevent regression detection).**
+      (not code-derived) evidence chains do not count. **All seven internal refute batches complete
+      (R1 architecture/dead-code, R2a/b/c test-quality, R3 error/observability, R4 warnings/doc-drift,
+      R5 complexity [late — the Orchestrator caught that D2's rows were initially unassigned]);** each
+      re-verified every Medium+ candidate fresh against the pinned worktree. Panel outcomes: 6 rows
+      REFUTED with disproofs, ~20 merged, severities corrected BOTH directions — **3 High→Medium
+      demotions** (QUAL-023 diagnostics page by tier rubric; QUAL-108 identical-input test; QUAL-109
+      conditionally-vacuous Assert.All arms) and **1 Medium→High escalation** (QUAL-005, the panel found
+      a 6th diverged family member the sweep missed on the statutory §21 stk.2 deadline guard) — plus
+      2 evidence components refuted inside surviving rows, and **two escalations of KIND: sweep
+      test-observations that became product defects — QUAL-001 (daily-rest midnight-crossing model,
+      dual-lens CRITICAL-recommended; owner ratifies) and QUAL-002 (segment-manifest encoding split,
+      High)**. **Codex external lens: the 21 High rows got 19 CONFIRM / 2 ADJUST (held High) / 0 REFUTE;
+      the Critical (QUAL-001) got PR-1/BQ-1 recommending Critical; boundary opinion BQ-2 = systemic
+      families promote where they prevent regression detection.**
       Calibration evidence chains re-verified code-derived (QC-1 by R4 with an honest printed-number
       qualification; QC-2 by R4; QC-3 by R1). External dedupe (Orchestrator, registers in view): 2
-      candidate rows retired to SEC-015/ROADMAP cross-refs; register-update actions queued (SEC-022
+      candidate rows retired to SEC-015/ROADMAP cross-refs (a third class re-observed under SEC-012, not
+      a candidate row); register-update actions queued (SEC-022
       half-fixed split [Orchestrator-verified at the baseline Orchestrator Program.cs], SEC-037
       reachability, SEC-004 reconcile, F2 census correction). **Consolidated index:
       `.claude/sweeps/S131-consolidated-findings.md`.** Panel verdict archives: `.claude/sweeps/S131-refute/`.
@@ -250,6 +253,22 @@ respected):
 11. **The gate packet — QUAL-141 + 069/072/073/074/096/121, each per owner ruling ⚖.**
 Everything else (the remaining Mediums) stays register-tracked with dispositions, picked up opportunistically
 or in themed batches — never silently.
+
+## Step-7a close review (dual-lens, 2026-08-19)
+
+Mandatory sprint-close review of the deliverables (register + adjudication + QUALITY.md re-grade), per
+WORKFLOW Step-7a. **Internal Reviewer lens** (adversarial, read-only): re-derived every code-anchored
+claim against `7e4bb1b` — the Critical, the High set, and the calibration disclosure all reproduced
+exactly — and caught **9 summary-layer defects** (a JWT-census sub-count that didn't sum; three
+cross-document tally disagreements; the Medium-provenance circular pointer; a QUALITY.md stale-S64-matrix
+contradiction; and minor precision items). **All 9 corrected in a single pass** (counts/pointers only —
+no finding's substance changed); the Orchestrator independently re-verified the load-bearing arithmetic
+(the 94-file census breakdown → ×86; the register reconciles to 1C+21H+118M=140 findings + QUAL-141;
+the three H→M markers land on QUAL-023/108/109). **External Codex lens**: run over the *corrected*
+deliverables scoped to transcription integrity (the findings themselves already passed Codex at TASK-D:
+21 High = 19 CONFIRM / 2 ADJUST / 0 REFUTE + the Critical PR-1/BQ-1) — verdict recorded at close. The
+internal review is archived in the gitignored sweep dir; the correction-pass note is in the adjudication
+record's owner packet (items 8-9 added: the Medium-provenance residual + the read-only deviation-of-letter).
 
 Out-of-scope pointers (recorded, not silent): performance (F register owns it) · dependency CVEs
 (SEC/Dependabot/CI) · dependency staleness/abandonment (unowned — flagged for a future pass).

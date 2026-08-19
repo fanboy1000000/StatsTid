@@ -16,8 +16,11 @@ freshness warning a hard CI failure for this file — owner rules).
 **Canonical domain set (declared before grading, per the audit plan):** the 14 S56-refresh domains plus
 two the audit's evidence demands: *Documentation (canon)* and *Test Suite (cross-cutting)*.
 
-| Domain | S56 → S131 | Grade rests on (cites) |
-|--------|-----------|------------------------|
+| Domain | last-known → S131 | Grade rests on (cites) |
+|--------|-------------------|------------------------|
+
+*(The "from" grade is each domain's last recorded value — S56 for the 12 unchanged domains, S82 for
+Frontend, S64 for CI/Tooling — not uniformly S56.)*
 | Rule Engine | A++ → **C+** ▼▼ | QUAL-001 (Critical: the daily-rest check mis-computes midnight-crossing shifts — a compliance rule reporting a real breach as compliant), QUAL-022 (a registered rule with zero tests), QUAL-019 (the classification registry pinned by no test), QUAL-031, QUAL-123 (open semantics). Counterweight: architectural purity is exemplary — no DB/HTTP/clock/file-IO, clean dependencies (D1 verified). The grade is about correctness confidence, which the evidence no longer supports at A-level. |
 | SharedKernel (Models) | A → **A−** | QUAL-033 (three no-implementer interfaces). Positive: 103/103 event types registered in the serializer (verified exhaustively). |
 | SharedKernel (Events) | A− → **B+** | 22 never-constructed event classes (suspected-dead, appendix — serialization-contract-blocked from deletion). Registration discipline itself is perfect. |
@@ -29,7 +32,7 @@ two the audit's evidence demands: *Documentation (canon)* and *Test Suite (cross
 | Frontend | A− (S82) → **B** ▼ | QUAL-023, 028, 029, 046, 058, 078, 097, 120, 121, 138-140. Positives: zero XSS sinks (S129 round 2), a single disciplined console site, and the typed-contract program. |
 | PostgreSQL Schema | A− → **A−** (held, explicitly) | Every documented table-ownership rule verified upheld in code; the doc generator has a single sanctioned path; residuals are comment-level (QUAL-094, the S74 marker). |
 | Docker/Infrastructure | A− → **B** ▼ | QUAL-024 (compose wiring inverted vs the call graph), QUAL-026/072/074 (two services outside every compile gate). |
-| CI/Tooling | B+ → **B** | QUAL-096 (an 82-test project compiled but never run), QUAL-069-074 (warning-gate scoping). Positives: suites run unfiltered in CI; testcontainers are the norm (two ambient-DB exceptions: QUAL-118). |
+| CI/Tooling | A− (S64) → **B** ▼ | QUAL-096 (an 82-test project compiled but never run), QUAL-069-074 (warning-gate scoping). Positives: suites run unfiltered in CI; testcontainers are the norm (two ambient-DB exceptions: QUAL-118). |
 | Domain Correctness | B → **C+** ▼ | QUAL-001, QUAL-010 (the agreement reference states a wrong statutory fact the code already fixed once), QUAL-123. Counterweight: S129 round 2 found the money flows robust, and the settlement valuation chain is heavily pinned. |
 | Reporting-Line & Approval Routing | A− → **B+** | QUAL-018 (revoke deny arms untested), QUAL-118, QUAL-129/130. Positives: the deny/allow matrices and lock-race harnesses in this domain were the panel's most-praised suites. |
 | **Documentation (canon)** — new | **C+** | QUAL-010/011/012 (High: a wrong statutory fact in an agent-prompt doc; a false authority-model claim; a runbook that cannot be followed) + QUAL-080…094 + the two unrouted docs (QUAL-124/125). Positives: the hooks/components/token tables verified exact; a zero-TODO tree. |
@@ -141,6 +144,15 @@ is also why the remediation sprint (S132 proposal) leads with those two.
 ## Domain Quality Matrix
 
 Last updated: **Sprint 64 (2026-06-05)**.
+
+> **⛔ SUPERSEDED BY THE S131 RE-GRADE (2026-08-19) — see the "S131 evidence-based re-grade" section at
+> the top of this file.** This matrix (and its per-cell prose, frozen at ~S35) is the pre-audit,
+> self-reported grading. The S131 code-quality audit re-graded every domain against pinned-baseline
+> evidence with adversarial verification; where this matrix and the S131 table disagree — notably **Rule
+> Engine A++ here vs C+ (QUAL-001 Critical), Payroll A here vs C+, Backend API A here vs B** — **the S131
+> table governs.** This matrix is retained as the historical S35/S64 record only; do not cite its grades
+> as current. (This exact refreeze is what QUAL-141 exists to stop; its freshness-gate promotion is the
+> forcing function.)
 
 > **S64 (2026-06-05):** **CI/Tooling B+ → A−** — the standing debt that capped the grade is cleared: the Docker-gated Regression suite is **424/424 green twice-consecutively** (pristine + consecutive; the pre-S60 deterministic cluster + flaky margin both resolved via the census at `docs/operations/s64-regression-debt-census.md`), Smoke is 5/5 (+1 deny-pin), and **master CI is whole-workflow green** for the first time since ≥ S57 (regression step now backed by a services-postgres; smoke job independent; the S63 mechanical close gates now operate against a green baseline). All fixes test-side with citation-gated assertions (zero laundering — 3 attempts caught); 2 product findings deferred with owner sign-off (OK-straddle export gap; segments_jsonb enum asymmetry — tracked in ROADMAP). Remaining gap to A: the ~19-min sequential suite runtime (accepted trade) and the deferred product follow-ups. All other grades hold. The per-cell detail in the matrix below reflects the **S35** assessment (most domains were not materially changed by the S36–S56 work — Rule Engine, SharedKernel Models/Segmentation, Payroll all held grade). The **"S36–S56 Refresh"** section immediately after the matrix records every grade change, the new domains, and corrected counts since S35. Where a grade changed, the **Grade** column below shows the current value with a `→` note.
 
