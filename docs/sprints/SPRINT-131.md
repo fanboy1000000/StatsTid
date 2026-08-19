@@ -72,6 +72,19 @@ any time.
       fact the skill itself states** (the skill's stated counts — 16 csproj, 26 endpoint files, 157 routes,
       35 ILogger files — are thereby foreclosed as withheld items, generalizing the drafting agent's own
       137 catch). CI-artifact availability (lizard report, coverage) verified as a prerequisite.
+      **Status: SEALED (2026-08-19).** Manifest = **3 items, spread D6 ×2 + D4 ×1**, each verified
+      still-live at `7e4bb1b` by direct git-pinned greps; full loci in the gitignored
+      `.claude/sweeps/S131-calibration-manifest.md` (NOT recorded here until the sweep completes —
+      belt-and-braces on top of the baseline-pinned views). Sealing checklist PASSED: per-item
+      no-in-view-doc-records-it (grep-verified); no overlap with any skill-stated exact fact; no
+      SEC/F/ROADMAP dedupe collision. Notes: one candidate was dropped because its only finder is the
+      UNSCORED D7 slice (structurally cannot host a scored item — recorded as a design fact); a second
+      candidate sharpened during verification (the item is not merely unused code — it bypasses a
+      correctness contract). **CI-artifact prerequisite outcome:** artifact download requires
+      authentication this machine lacks (no gh CLI/token) → **D2 falls back to agent-read complexity
+      estimation for BOTH C# and frontend** (allowed by the refinement, hereby declared). ROADMAP.md
+      added to the scored-view exclusion set (ledger-class backlog — same rationale as the three debt
+      docs; D7 already excluded it).
 - [ ] **TASK-C — the sweep.** One agent per dimension over its declared universe; findings with file:line
       evidence + rubric severity. Doc-drift runs as its own isolated slice (reduced view, own method, no
       withheld scoring).

@@ -38,6 +38,7 @@ coverage/
 ## Claude Code transient artifacts
 .claude/refinements/
 .claude/reviews/
+.claude/sweeps/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
 .claude/worktrees/
