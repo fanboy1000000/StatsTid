@@ -197,7 +197,12 @@ any time.
       **TASK-D COMPLETE. FINAL: 140 register rows — 1 Critical + 21 High + 118 Medium — every row
       dual-verified (sweep agent → adversarial panel; the High/Critical set additionally Codex-verified:
       19 CONFIRM / 2 ADJUST / 0 REFUTE).**
-- [x] **TASK-E — grade + adjudicate. EXECUTED 2026-08-19 (owner rulings PENDING — the only open item).**
+- [x] **TASK-E — grade + adjudicate. EXECUTED 2026-08-19; OWNER RULINGS DECIDED 2026-08-20 (all 9 packet
+      items — see `SPRINT-131-adjudication.md` §Owner rulings). Net effect: QUAL-001 ratified Critical;
+      "family alone = High" promoted 6 rows M→H (→ 1C/27H/112M); all 6 gates + the full fix-next set
+      adopted for S132; 5 findings mirrored to SEC-038…042; SEC-004 CLOSED (premise retired); QUAL-123
+      routed to the domain track; the consolidated findings index is now tracked; the read-only
+      deviation-of-letter is ratified. SPRINT-131 is CLOSED — remaining work is S132 remediation.**
       Delivered:
       - **Register LIVE**: `docs/operations/quality-finding-register.md` — QUAL-001…140 + the pre-planned
         gate row QUAL-141 (check_docs freshness → hard failure for QUALITY.md, FAIL-006 class), each row

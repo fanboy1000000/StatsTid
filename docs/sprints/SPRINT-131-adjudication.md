@@ -329,3 +329,47 @@ disclosure all reproduced exactly) and caught nine summary-layer defects (counts
 tallies, the Medium-provenance circularity, a QUALITY.md stale-matrix contradiction). All were corrected
 in this pass; the corrections are counts/pointers only — no finding's substance changed. Full review
 archived in the gitignored sweep dir.*
+
+---
+
+## Owner rulings — DECIDED 2026-08-20
+
+All 9 packet items ruled (asked one at a time). Recorded here as the authoritative resolution; the
+register and the cross-registers were updated to match in the same pass.
+
+1. **QUAL-001 = Critical — RATIFIED.** Both lenses recommended it; the bounded-exposure downgrade
+   argument was heard and declined. Leads the S132 fix order.
+2. **QUAL-133 = FIX NOW in S132** (not left gated). The missing under-lock REVERSED probe is landed in
+   S132 (which already touches these settlement/export files for QUAL-004/005), removing the latent
+   conditional-Critical outright. The §15 stk.1 go-live precondition entry stays as a backstop.
+3. **Systemic-family rule = BROADER: a verified systemic family reaches High on its own** (owner chose
+   this over the panel/Codex line, which would have kept them Medium). **Applied scope — 6 rows promoted
+   Medium→High:** QUAL-027 (17 byte-identical mapper copies), QUAL-036 (33 production-unused write
+   overloads / 14 repos), QUAL-090 (17-site stale "Authority: init.sql" comment family), QUAL-095
+   (legacy-Unit SUT-copy family), QUAL-110 (schema-mirror gap replicated across 2 test schemas),
+   QUAL-111 (8 identically-bodied helper tests). **Criterion applied:** the defect IS the replication
+   (identical/near-identical copies, or one structural gap replicated). **Deliberately NOT promoted
+   (named so the line is visible and pull-up-able):** QUAL-028, QUAL-029, QUAL-050, QUAL-061, QUAL-064,
+   QUAL-109 — each is N sites *independently* diverging from a norm (an instance-of-a-class), not a
+   copied family. **New totals: 1 Critical + 27 High + 112 Medium = 140.**
+4. **All six gate proposals ADOPTED for S132** (QUAL-141 freshness-hard-fail, QUAL-069 payroll warn-gate,
+   QUAL-072/074 mock hosts into the compiled gate, QUAL-073 CA2100 ratchet, QUAL-096 DemoSeed in CI,
+   QUAL-121 FE fixture-contract binding).
+5a. **All five candidate SEC rows MIRRORED** into the SEC register (cross-referenced, not duplicated):
+    **SEC-038** ← QUAL-009/003 (policy-denial no-trace), **SEC-039** ← QUAL-061 (employment data in
+    logs), **SEC-040** ← QUAL-063 (failed-login logging), **SEC-041** ← QUAL-049 (raw exception text in
+    a 500 body), **SEC-042** ← QUAL-011 (SECURITY.md false authority claim). Remediation rides with S132.
+5b. **SEC-004 CLOSED — premise retired** by the S92–S95 flat-authority reform (QUAL-085); the committed
+    follow-up is moot. One cheap belt-and-braces test (exact-Organisation equality on secondary-principal
+    binding) added to S132.
+6. **QUAL-123 ROUTED to the domain-semantics track, severity held.** The 48h reference-period question
+   is domain truth (EU Working Time Directive reference-period averaging), not a code judgment; it leaves
+   the S132 rest-period bundle, which is now QUAL-001 + QUAL-021 + QUAL-114 only.
+7. **Consolidated findings index NOW TRACKED** at `docs/sprints/SPRINT-131-consolidated-findings.md` so
+   every Medium row's verdict provenance is durable across sessions; raw agent transcripts + R-batch
+   verdicts stay gitignored (S129 hygiene precedent).
+8. **Read-only deviation-of-letter RATIFIED.** The three touched root governance files (CLAUDE.md,
+   .gitignore, ROADMAP.md) are Orchestrator-only; no product/test/CI surface changed.
+9. **S132 = the full fix-next set** (Critical + all 27 High + the six gates), sequenced per SPRINT-131.md
+   §S132 proposal; the 112 Medium rows stay register-tracked for themed follow-ups. Backend-only-audit
+   design ruling (inside QUAL-003/009) is settled when that pair is worked.

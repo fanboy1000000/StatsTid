@@ -153,10 +153,19 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   invisible to CI; the domain index also carries two different rows both labelled "SharedKernel".
   (Cross-ref only — tracked here, not a QUAL row.)*
 
-### Quality (S131 audit — the fix-next remediation is proposed as S132; see SPRINT-131.md)
-- **★ S132 candidate — the S131 fix-next set** (owner adjudication pending): the Critical daily-rest
-  defect (QUAL-001) + the 21 High rows + the gate-proposal packet. Full register:
-  `docs/operations/quality-finding-register.md`; adjudication record: `docs/sprints/SPRINT-131-adjudication.md`.
+### Quality (S131 audit — CLOSED 2026-08-20; the fix-next remediation is S132)
+- **★ S132 — the S131 fix-next set (owner-approved 2026-08-20)**: the Critical daily-rest defect
+  (QUAL-001) + **all 27 High rows** (21 as-swept + 6 owner-promoted under the "family alone = High"
+  ruling: QUAL-027/036/090/095/110/111) + the **six adopted gate proposals** (QUAL-069/072/073/074/096/121
+  + QUAL-141 the doc-freshness hard-fail). QUAL-133's reversal probe lands here (owner ruled fix-now).
+  The 112 Medium rows stay register-tracked for themed follow-ups. Full register:
+  `docs/operations/quality-finding-register.md`; adjudication + owner rulings:
+  `docs/sprints/SPRINT-131-adjudication.md`; per-row provenance:
+  `docs/sprints/SPRINT-131-consolidated-findings.md`.
+- **5 findings mirrored to the SEC register** (SEC-038…042, owner ruling); **SEC-004 CLOSED** (premise
+  retired by the S92–S95 flat-authority reform). Both fold into the S132 work.
+- **QUAL-123 → domain-semantics track** (owner-routed): the 48h reference-period question needs
+  domain truth (EU Working Time Directive averaging), joining the Phase-B agreement-cell engagement.
 - **⚠ NAMED GO-LIVE PRECONDITION (§15 stk.1)**: the SPECIAL_HOLIDAY export handler omits the under-lock
   REVERSED probe its siblings carry (QUAL-133). Medium while the go-live gate is dormant (two verified
   gates); **Critical-class the moment `Settlement:GoLiveDate` is configured** — the probe MUST land
