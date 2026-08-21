@@ -153,11 +153,12 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   invisible to CI; the domain index also carries two different rows both labelled "SharedKernel".
   (Cross-ref only — tracked here, not a QUAL row.)*
 
-### Quality (S131 audit — CLOSED 2026-08-20; the fix-next remediation is S132)
-- **★ S132 — the S131 fix-next set (owner-approved 2026-08-20)**: the Critical daily-rest defect
+### Quality (S131 audit — CLOSED 2026-08-20; the fix-next remediation is the S132–S134 program)
+- **★ S132–S134 — the S131 fix-next set (owner-approved 2026-08-20; re-ruled into a 3-increment PROGRAM
+  2026-08-20 — see the Impact Assessment below)**: the Critical daily-rest defect
   (QUAL-001) + **all 27 High rows** (21 as-swept + 6 owner-promoted under the "family alone = High"
   ruling: QUAL-027/036/090/095/110/111) + the **six adopted gate proposals** (QUAL-069/072/073/074/096/121
-  + QUAL-141 the doc-freshness hard-fail). QUAL-133's reversal probe lands here (owner ruled fix-now).
+  + QUAL-141 the doc-freshness hard-fail). QUAL-133's reversal probe lands in S132 (owner ruled fix-now).
   The 112 Medium rows stay register-tracked for themed follow-ups. Full register:
   `docs/operations/quality-finding-register.md`; adjudication + owner rulings:
   `docs/sprints/SPRINT-131-adjudication.md`; per-row provenance:
@@ -175,6 +176,45 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   deferred at the S123-era port. Retitle/re-pin the placeholder test with it.
 - **S132 coverage follow-ups**: lizard-artifact re-run over D2's ~30 census-identified unread
   over-threshold regions; the SCD-2 write-path clone family (15 members) divergence check.
+
+#### Impact Assessment — S131 fix-next re-ruled into a program (Tier-2 re-prioritisation, 2026-08-20)
+
+*Trigger:* S131 ruling 9 blessed the whole fix-next set (Critical + 27 High + 6 gates) as a **single**
+sprint. The S132 refinement's dual-lens review found a 34-item close-review diff is not adversarially
+reviewable and that interleaving live product fixes with the ~45-test outbox test-conversion makes a red
+test un-attributable. The owner **re-ruled** the shape to a program (OQ-1 → program). This is a Tier-2
+cross-cutting change (2+ sprints), so per WORKFLOW.md:163-172 it is recorded here before execution.
+
+*Affected sprints & how:*
+- **S132 (was: the whole set) → the correctness + safety core.** Critical QUAL-001 (+ RED-on-old test
+  QUAL-021 + the boundary-threshold leg of QUAL-114); QUAL-133 reversal probe; QUAL-002 encoding;
+  QUAL-006/007 (swallow fixes); QUAL-004/005 (diverged families); the ruling-5 SEC items (SEC-039/040/041
+  remediations + the SEC-004 verify test); gates QUAL-141 + QUAL-069 (the latter only on a clean payroll
+  warning count). **Scope grew** vs. the refinement's first cut: OQ-2 was ruled (b) — day-attribution is
+  fixed now, not deferred — so QUAL-001 extends beyond `CheckDailyRest` into `CheckWeeklyRest` +
+  `CheckMaxDailyHours`, **gated on a new domain-truth PRE-TASK** (which calendar day post-midnight hours
+  belong to; dual-lens, cites Arbejdstidsloven; owner confirms the rule before code).
+- **S133 (NEW) — test integrity.** QUAL-013/014/015/016/017/018/019/020/022 + the test-family promotions
+  QUAL-095/110/111 + the D4 dead-code batch (QUAL-027/036) + gates QUAL-096 (DemoSeed in CI) + QUAL-121
+  (FE fixture-contract binding) + QUAL-072/074/073 (post warning-count-freeze).
+- **S134 (NEW) — audit-scope + observability + docs.** QUAL-003 + QUAL-009 IN FULL: OQ-4 was ruled (b) —
+  **build the link** — so `AuditLoggingMiddleware` is registered in the Payroll/calc host and the ADR-016
+  D10 `segment_manifests`⋈`audit_log` join works end-to-end **as written (ADR-016 NOT amended)**; +
+  observability QUAL-008; + the doc-fix pass (QUAL-010/011/012/093 + the enumerated D7 rows + QUAL-090) +
+  SEC-038/042.
+
+*Splits/merges/adds/removes:* no previously-planned sprint is merged or dropped; S133 and S134 are new
+increments carved from the S132 set. No task is removed — every ratified High/Critical/gate is assigned to
+exactly one increment (re-swept by the internal Reviewer at refinement cycle 3: Critical + 27 High [6 S132
++ 12 S133 + 7 S134 + 2 correlation/audit] + 6 gates all placed).
+
+*Phase-range impact:* none — this is a remediation program riding on top of the roadmap phases, not a
+re-sequencing of a numbered phase. QUAL-123 stays routed to the domain-semantics track (unchanged);
+day-attribution (OQ-2b) joins that same track as its OWN item for the domain-truth analysis, then its code
+lands in S132.
+
+*Coverage-tracker projection:* the fix-next burn-down is now three sprint closes (S132→S133→S134) instead
+of one; each increment closes on its own dual-lens Step-7a with an independently reviewable diff.
 
 ## 3. Loose ideas (someday-maybe; low commitment)
 

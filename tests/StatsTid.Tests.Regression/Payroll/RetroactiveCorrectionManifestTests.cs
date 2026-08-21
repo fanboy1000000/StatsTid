@@ -377,6 +377,89 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    //  7. QUAL-006 (S132) — the idempotency marker is written ATOMICALLY inside
+    //     the correction tx (was a separate, swallowed post-commit write in the
+    //     /recalculate endpoint). So a same-token retry can no longer emit a
+    //     phantom second correction event + audit row.
+    // ════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task IdempotencyMark_WrittenInSameTx_AsCorrectionEventAndAudit()
+    {
+        const string emp = "EMP_IDEMPO_MARK";
+        const int year = 2026, month = 7;
+        var token = Guid.NewGuid();
+
+        await SeedExportRecordAsync(emp, year, month, new[] { Line(emp, year, month, hours: 10m, amount: 1000m) });
+
+        var service = await BuildWorkingCorrectionServiceAsync();
+        // AgreementCode/Position match the seeded wage-type mappings (see test #5) so the calc's
+        // export-line mapping succeeds and we reach the transactional block; OrgId stays the seeded
+        // ORG_CORRMAN so the audit-row FK/CHECK pass and the correction commits.
+        var profile = BuildProfile(emp) with { AgreementCode = "HK", Position = "" };
+
+        var result = await service.RecalculateAsync(
+            profile,
+            entries: [],
+            absences: [],
+            periodStart: new DateOnly(year, month, 1),
+            periodEnd: new DateOnly(year, month, DateTime.DaysInMonth(year, month)),
+            previousFlexBalance: 0m,
+            reason: "atomic idempotency mark",
+            actorId: "admin-mark",
+            idempotencyToken: token);
+
+        Assert.True(result.Success);
+
+        // RED-on-old: pre-S132 RecalculateAsync wrote NO marker (the endpoint did, in a separate tx
+        // this service-level test never runs), so this delivered-mark count was 0 while the correction
+        // event was 1 — the marker and the event it guards were NOT atomic. Post-S132 the marker is
+        // committed in the SAME tx as the event, so both are present together.
+        Assert.Equal(1, await CountDeliveredMarksAsync(token));
+        Assert.Equal(1, await CountCorrectionEventsAsync(emp));
+    }
+
+    [Fact]
+    public async Task SameTokenRetry_FailsClosed_NoPhantomSecondCorrection()
+    {
+        const string emp = "EMP_IDEMPO_RETRY";
+        const int year = 2026, month = 8;
+        var token = Guid.NewGuid();
+        var actor = "admin-EMP_IDEMPO_RETRY"; // unique so the audit-row count is scoped to this test
+
+        await SeedExportRecordAsync(emp, year, month, new[] { Line(emp, year, month, hours: 10m, amount: 1000m) });
+
+        var service = await BuildWorkingCorrectionServiceAsync();
+        var profile = BuildProfile(emp) with { AgreementCode = "HK", Position = "" };
+        var ps = new DateOnly(year, month, 1);
+        var pe = new DateOnly(year, month, DateTime.DaysInMonth(year, month));
+
+        // First correction with token T: succeeds and marks T delivered atomically with the event.
+        var first = await service.RecalculateAsync(
+            profile, entries: [], absences: [], periodStart: ps, periodEnd: pe,
+            previousFlexBalance: 0m, reason: "first", actorId: actor, idempotencyToken: token);
+        Assert.True(first.Success);
+        Assert.Equal(1, await CountCorrectionEventsAsync(emp));
+        Assert.Equal(1, await CountCorrectionAuditRowsAsync(actor));
+        Assert.Equal(1, await CountDeliveredMarksAsync(token));
+
+        // A same-token retry reaching RecalculateAsync again (e.g. the endpoint's HasBeenDelivered
+        // pre-check lost a race, or an at-least-once redelivery). Post-S132 the atomic marker's UNIQUE
+        // constraint fails the write CLOSED (23505) → the whole correction rolls back → it THROWS, and
+        // NO phantom second event/audit row is committed.
+        // RED-on-old: pre-S132 RecalculateAsync had no marker of its own, so this second call re-ran
+        // and committed a PHANTOM second correction event + audit row (Success, no throw).
+        await Assert.ThrowsAnyAsync<Exception>(() => service.RecalculateAsync(
+            profile, entries: [], absences: [], periodStart: ps, periodEnd: pe,
+            previousFlexBalance: 0m, reason: "retry", actorId: actor, idempotencyToken: token));
+
+        // Still exactly ONE correction event + ONE audit row + ONE delivered marker — no phantom.
+        Assert.Equal(1, await CountCorrectionEventsAsync(emp));
+        Assert.Equal(1, await CountCorrectionAuditRowsAsync(actor));
+        Assert.Equal(1, await CountDeliveredMarksAsync(token));
+    }
+
     // ── service / profile builders + counters ─────────────────────────────────
 
     /// <summary>
@@ -455,6 +538,28 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             "SELECT COUNT(*) FROM outbox_events WHERE event_type='RetroactiveCorrectionRequested' AND stream_id LIKE @s", conn);
         cmd.Parameters.AddWithValue("s", $"retro-correction-{employeeId}-%");
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    // QUAL-006 (S132) counters: the delivered idempotency marker (outbox_messages) and the
+    // correction audit row (audit_projection). Both must stay at 1 across a same-token retry.
+    private async Task<int> CountDeliveredMarksAsync(Guid token)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM outbox_messages WHERE idempotency_token=@t AND status='delivered'", conn);
+        cmd.Parameters.AddWithValue("t", token);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    private async Task<int> CountCorrectionAuditRowsAsync(string actorId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type='RetroactiveCorrectionRequested' AND actor_id=@a", conn);
+        cmd.Parameters.AddWithValue("a", actorId);
         return Convert.ToInt32(await cmd.ExecuteScalarAsync());
     }
 

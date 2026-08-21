@@ -235,7 +235,91 @@ public sealed class Settlement15S17GodtgoerelseEmitterTests : IAsyncLifetime
             entitlementType: SettlementEmitterFixture.SpecialHolidayType));
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // Scenario 6 (S132 TASK-132-2a / QUAL-133) — the under-lock REVERSED-row probe: a
+    //              SaerligeFeriedagePaidOut consumed AFTER its settlement was reversed must NOT stage
+    //              an orphan godtgørelse line (mirrors the §24 R9/R12 reversal-awareness test).
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>S132 QUAL-133 — reversal-commits-BEFORE-§15-stk.2/§17-consumption must NOT stage an
+    /// orphan line. The SPECIAL_HOLIDAY settlement row at the event's exact identity is already
+    /// <c>REVERSED</c> when the emitter consumes the <c>SaerligeFeriedagePaidOut</c>, so the new
+    /// under-lock step-(0b) re-read stages NOTHING and writes a terminal <c>SKIPPED_VOIDED</c>
+    /// checkpoint at the godtgørelse bucket. Without the probe the emitter would stage a live
+    /// godtgørelse line the <c>SettlementReversed</c> consumer can never compensate (its targets derive
+    /// from lines staged BEFORE the reversal) — the orphan the R12 race names.
+    ///
+    /// <para>
+    /// This forces the §15 go-live world the SPECIAL_HOLIDAY close is R5-gated OUT of pre-launch: the
+    /// event is written DIRECTLY to the canonical <c>events</c> table (the close-service go-live gate,
+    /// keyed off <c>Settlement:GoLiveDate</c>, is bypassed — the emitter itself is gate-agnostic and
+    /// simply drains whatever settlement events exist). RED on the pre-fix baseline (no probe ⇒ the
+    /// line is wrongly staged and the inbox goes PROCESSED); GREEN after the fix. A second drain leaves
+    /// everything untouched (terminal).
+    /// </para></summary>
+    [Fact]
+    public async Task ReversedSettlement_SaerligeFeriedagePaidOutEvent_SkippedVoided_NoOrphanLine()
+    {
+        var emp = await SettlementEmitterFixture.SeedEmployeeAsync(Cs, "emp_s132_");
+
+        // A SPECIAL_HOLIDAY settlement exists at the event's identity (SPECIAL_HOLIDAY / 2022 / seq 1)
+        // and has ALREADY been REVERSED (the reversal won the race). The AC/OK24 §15 stk.2/§17 mapping
+        // is seeded (init.sql), so absent the probe the fail-closed path would succeed and stage a live
+        // line — this test proves the probe suppresses that.
+        await SeedReversedSpecialHolidaySettlementRowAsync(emp, year: 2022, sequence: 1);
+        var eventId = await SettlementEmitterFixture.WriteSaerligeFeriedagePaidOutEventAsync(
+            Factory, emp, payoutDays: 5m, agreementCode: "AC", okVersion: "OK24");
+
+        // Wait until the godtgørelse-bucket inbox row reaches ANY terminal state (SKIPPED_VOIDED after
+        // the fix; PROCESSED on the pre-fix baseline) — so the RED baseline fails FAST on the assertion
+        // below rather than on a wait timeout.
+        var emitter = SettlementEmitterFixture.BuildEmitter(Factory);
+        await SettlementEmitterFixture.ProcessOnceAsync(emitter,
+            until: async () => await SettlementEmitterFixture.InboxStatusForBucketAsync(
+                Cs, eventId, SettlementEmitterFixture.GodtgoerelseBucket) is not null);
+
+        Assert.Equal("SKIPPED_VOIDED", await SettlementEmitterFixture.InboxStatusForBucketAsync(
+            Cs, eventId, SettlementEmitterFixture.GodtgoerelseBucket));
+        Assert.Equal(0L, await SettlementEmitterFixture.TotalLineCountAsync(Cs, emp)); // orphan PREVENTED
+
+        // Terminal: a second drain leaves everything untouched.
+        var emitter2 = SettlementEmitterFixture.BuildEmitter(Factory);
+        await SettlementEmitterFixture.ProcessOnceAsync(emitter2,
+            until: async () => false, settleWait: TimeSpan.FromSeconds(2));
+        Assert.Equal("SKIPPED_VOIDED", await SettlementEmitterFixture.InboxStatusForBucketAsync(
+            Cs, eventId, SettlementEmitterFixture.GodtgoerelseBucket));
+        Assert.Equal(0L, await SettlementEmitterFixture.TotalLineCountAsync(Cs, emp));
+    }
+
     // ─────────────────────────────── helpers ───────────────────────────────
+
+    /// <summary>Seeds a SPECIAL_HOLIDAY <c>vacation_settlements</c> row DIRECTLY in the <c>REVERSED</c>
+    /// state at the event's exact identity (SPECIAL_HOLIDAY / <paramref name="year"/> /
+    /// <paramref name="sequence"/>) — the reversal-service end state the step-(0b) probe re-reads under
+    /// the lock. A minimal valid camelCase snapshot (its content is immaterial: the probe returns on the
+    /// REVERSED state before any snapshot read). REVERSED rows are excluded from the
+    /// <c>idx_vacation_settlements_active</c> partial-unique index, so this never collides.</summary>
+    private async Task SeedReversedSpecialHolidaySettlementRowAsync(string employeeId, int year, int sequence)
+    {
+        var snapshotJson = SettlementEmitterFixture.BuildSnapshotJson(
+            "AC", "OK24", null, SettlementEmitterFixture.BoundaryDate, payoutDays: 5m);
+
+        await using var conn = new NpgsqlConnection(Cs);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO vacation_settlements
+                (employee_id, entitlement_type, entitlement_year, sequence,
+                 settlement_state, trigger, snapshot, transfer_days, payout_days, forfeit_days, version)
+            VALUES (@e, @t, @y, @seq, 'REVERSED', 'YEAR_END', @snapshot::jsonb, 0, 5, 0, 1)
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("t", SettlementEmitterFixture.SpecialHolidayType);
+        cmd.Parameters.AddWithValue("y", year);
+        cmd.Parameters.AddWithValue("seq", sequence);
+        cmd.Parameters.AddWithValue("snapshot", snapshotJson);
+        await cmd.ExecuteNonQueryAsync();
+    }
 
     private async Task InsertGodtgoerelseMappingAsync(
         string agreementCode, string okVersion, string wageType, DateOnly effectiveFrom, DateOnly? effectiveTo = null)

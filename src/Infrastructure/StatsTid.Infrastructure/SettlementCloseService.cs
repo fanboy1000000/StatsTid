@@ -1041,36 +1041,10 @@ public sealed class SettlementCloseService : BackgroundService
     }
 
     // ------------------------------------------------------------------
-    // Europe/Copenhagen business-date helper (ADR-033 D3 boundary-timezone / follow-up (v)).
-    // Scoped to this file (no SharedKernel/shared-helper edit; the Orchestrator may later hoist this
-    // into the (v) business-timezone helper). Cross-platform zone-id lookup: IANA "Europe/Copenhagen"
-    // on Linux/macOS (and .NET 6+ on Windows via ICU), Windows "Romance Standard Time" as the fallback.
+    // Europe/Copenhagen business-date helper (ADR-033 D3 boundary-timezone). S132 TASK-132-3b
+    // (QUAL-005): the DST-correct zone resolution + conversion now lives once in SharedKernel
+    // (CopenhagenBusinessDate); this is a thin adapter to the injected TimeProvider seam.
     // ------------------------------------------------------------------
 
-    private static readonly TimeZoneInfo CopenhagenZone = ResolveCopenhagenZone();
-
-    private DateOnly CopenhagenToday()
-    {
-        var utcNow = _timeProvider.GetUtcNow(); // the injected seam — overridable in tests/hosts.
-        var copenhagenNow = TimeZoneInfo.ConvertTime(utcNow, CopenhagenZone);
-        return DateOnly.FromDateTime(copenhagenNow.DateTime);
-    }
-
-    private static TimeZoneInfo ResolveCopenhagenZone()
-    {
-        // Prefer the IANA id (canonical; works on Linux CI + the .NET ICU-backed Windows runtime).
-        // Fall back to the Windows registry id. If neither resolves (a stripped container with no tz
-        // database AND no ICU), fall back to UTC — the boundary is then UTC-based (degraded but never a
-        // crash); production/CI both carry one of the two id sets.
-        foreach (var id in new[] { "Europe/Copenhagen", "Romance Standard Time" })
-        {
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById(id);
-            }
-            catch (TimeZoneNotFoundException) { }
-            catch (InvalidTimeZoneException) { }
-        }
-        return TimeZoneInfo.Utc;
-    }
+    private DateOnly CopenhagenToday() => CopenhagenBusinessDate.Today(_timeProvider);
 }

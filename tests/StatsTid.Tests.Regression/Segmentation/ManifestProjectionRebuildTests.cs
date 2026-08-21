@@ -88,35 +88,23 @@ public sealed class ManifestProjectionRebuildTests : IAsyncLifetime
         Assert.Equal(pre.CalculationKind, post.CalculationKind);
         Assert.Equal(pre.BoundaryCauseSummary, post.BoundaryCauseSummary);
 
-        // F4-1 downstream reconciliation: the two projection-write paths serialize the
-        // BoundaryCause enum DIFFERENTLY — the PCS live-write (PeriodCalculationService.JsonOptions,
-        // no JsonStringEnumConverter) emits the numeric enum ("boundaryCause": 0), while the
-        // rebuilder copies data->'segments' verbatim from events.data, which EventSerializer wrote
-        // WITH JsonStringEnumConverter ("boundaryCause": "OkTransition"). This product serializer
-        // asymmetry was previously MASKED by the AlignedWindow PlannerInvariantViolation that the
-        // StraddleSafeRuleSet removes (the test never reached this comparison). The boundary causes
-        // ARE asserted restored via boundary_cause_summary (string array) above; for the segment
-        // body we normalize the boundaryCause encoding on both sides so the comparison verifies the
-        // restored shape (segment date ranges + snapshots) without depending on the int-vs-string
-        // encoding. The underlying product inconsistency is out of test scope (recorded for the
-        // Orchestrator).
-        Assert.Equal(
-            NormalizeBoundaryCauseEncoding(pre.SegmentsJson),
-            NormalizeBoundaryCauseEncoding(post.SegmentsJson));
+        // S132 TASK-132-2b (QUAL-002). The F4-1 workaround that used to live here normalized the
+        // boundaryCause encoding away because the two projection-write paths DISAGREED: the PCS
+        // live-write emitted the enum NUMERICALLY ("boundaryCause": 0) while the rebuilder copies
+        // data->'segments' verbatim from events.data, which EventSerializer wrote as a STRING
+        // ("boundaryCause": "OkTransition"). That inconsistency (recorded for the Orchestrator) is
+        // now fixed via a JsonStringEnumConverter on PeriodCalculationService.JsonOptions.
+        //
+        // The contract we assert is DESERIALIZED EQUIVALENCE, not byte-identity: the live-written and
+        // rebuilt rows must deserialize to the SAME PlannedSegment set (date ranges + BoundaryCause
+        // values + snapshots). We do NOT assert raw text equality — that would OVERCLAIM, because a
+        // null Snapshot serializes as "snapshot":null from PCS but is omitted by EventSerializer
+        // (WhenWritingNull), so null-snapshot rows are legitimately byte-different yet equivalent.
+        // (These straddle fixtures carry non-null snapshots, but the assertion is stated at the
+        // correct altitude.) Dedicated encoding + null-residual coverage lives in
+        // BoundaryCauseEncodingTests.
+        TestFixtures.AssertSegmentsDeserializeEquivalent(pre.SegmentsJson, post.SegmentsJson);
     }
-
-    /// <summary>
-    /// Canonicalizes the <c>boundaryCause</c> JSON encoding so the numeric enum form emitted by
-    /// the PCS live-write path and the string form emitted by the event-replay rebuild path
-    /// compare equal. Replaces the <c>boundaryCause</c> value (a JSON number or quoted string)
-    /// with a fixed placeholder; every other field (startDate, endDate, snapshot) is left
-    /// byte-for-byte so a real shape regression still fails the comparison.
-    /// </summary>
-    private static string NormalizeBoundaryCauseEncoding(string segmentsJson) =>
-        System.Text.RegularExpressions.Regex.Replace(
-            segmentsJson,
-            "\"boundaryCause\"\\s*:\\s*(?:\"[^\"]*\"|\\d+)",
-            "\"boundaryCause\":\"<normalized>\"");
 
     private async Task<ManifestRow?> ReadSingleRowAsync(Guid manifestId)
     {

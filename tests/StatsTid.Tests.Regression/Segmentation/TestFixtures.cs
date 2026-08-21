@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
@@ -29,6 +30,54 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// </summary>
 internal static class TestFixtures
 {
+    // S132 TASK-132-2b (QUAL-002): MIRRORS PeriodCalculationService.JsonOptions — camelCase +
+    // JsonStringEnumConverter(allowIntegerValues:true). Used by the encoding tests to model the
+    // production projection deserialization contract when comparing a live-written manifest row to
+    // its rebuilt-from-events twin. KEEP IN SYNC with PCS.JsonOptions. (PCS.JsonOptions is a private
+    // field and cannot be reached from the test project: the Web-SDK Payroll assembly cannot expose
+    // internals here without a Program-type clash against Backend.Api, and the public ReplayAsync
+    // does not surface segment-level BoundaryCause.)
+    public static readonly JsonSerializerOptions ManifestReadOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: true) }
+    };
+
+    public static List<PlannedSegment> DeserializeSegments(string segmentsJson) =>
+        JsonSerializer.Deserialize<List<PlannedSegment>>(segmentsJson, ManifestReadOptions)
+            ?? new List<PlannedSegment>();
+
+    /// <summary>
+    /// Asserts two <c>segments_jsonb</c> payloads (e.g. a PCS live-write and its rebuilt-from-events
+    /// twin) deserialize to the SAME <see cref="PlannedSegment"/> set — the contract QUAL-002
+    /// enforces. This is deliberately NOT a text comparison: a null <see cref="PlannedSegment.Snapshot"/>
+    /// serializes as <c>"snapshot":null</c> from PCS but is OMITTED by EventSerializer
+    /// (<c>WhenWritingNull</c>), so the two rows are byte-different yet deserialized-equivalent (both
+    /// read back to <c>Snapshot == null</c>). Compares each segment's date range, its
+    /// <see cref="BoundaryCause"/> value (the enum whose encoding QUAL-002 unifies), and its snapshot
+    /// (null-ness, then a canonical re-serialization for non-null snapshots — record equality can't be
+    /// used because <c>SegmentSnapshot.Values</c> is a dictionary compared by reference).
+    /// </summary>
+    public static void AssertSegmentsDeserializeEquivalent(string liveJson, string rebuiltJson)
+    {
+        var live = DeserializeSegments(liveJson);
+        var rebuilt = DeserializeSegments(rebuiltJson);
+
+        Assert.Equal(live.Count, rebuilt.Count);
+        for (int i = 0; i < live.Count; i++)
+        {
+            Assert.Equal(live[i].StartDate, rebuilt[i].StartDate);
+            Assert.Equal(live[i].EndDate, rebuilt[i].EndDate);
+            Assert.Equal(live[i].BoundaryCause, rebuilt[i].BoundaryCause);
+            Assert.Equal(live[i].Snapshot is null, rebuilt[i].Snapshot is null);
+            if (live[i].Snapshot is not null)
+                Assert.Equal(
+                    JsonSerializer.Serialize(live[i].Snapshot, ManifestReadOptions),
+                    JsonSerializer.Serialize(rebuilt[i].Snapshot, ManifestReadOptions));
+        }
+    }
+
     public static EmploymentProfile Profile(string employeeId, string okVersion = "OK24") => new()
     {
         EmployeeId = employeeId,

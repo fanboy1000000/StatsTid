@@ -159,10 +159,22 @@ def check_freshness() -> None:
         anchored += 1
         anchor = int(m.group(1))
         if anchor < head - ANCHOR_SLACK:
-            warnings.append(
-                f"freshness: {md.relative_to(REPO)} anchored at S{anchor} "
+            rel = md.relative_to(REPO).as_posix()
+            msg = (
+                f"freshness: {rel} anchored at S{anchor} "
                 f"but HEAD is S{head} (>{ANCHOR_SLACK} behind)"
             )
+            # QUAL-141 (S132, FAIL-006 class): docs/QUALITY.md's freshness is a HARD
+            # failure (exit 1), NOT a report-only warning. The quality matrix refroze
+            # twice — the S64 grading matrix and the S111 anchor both went stale for
+            # sprints — precisely because freshness findings never reached the exit
+            # code. Every OTHER anchored doc stays soft (report-only) as before.
+            if rel == "docs/QUALITY.md":
+                failures.append(
+                    msg + "  [QUAL-141: QUALITY.md freshness is a hard gate — re-ground it]"
+                )
+            else:
+                warnings.append(msg)
     if anchored:
         print(f"[ok] freshness: checked {anchored} anchored doc(s) against S{head}")
 

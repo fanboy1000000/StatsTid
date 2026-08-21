@@ -2,6 +2,7 @@ using System.Data;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -589,29 +590,11 @@ public sealed class SettlementReversalService
             row.Version,
         }, SnapshotJsonOptions);
 
-    // ── Europe/Copenhagen business-date helper (the file-scoped convention; PAT-008 seam). ──
+    // ── Europe/Copenhagen business-date helper (PAT-008 seam). S132 TASK-132-3b (QUAL-005):
+    // the DST-correct zone resolution + conversion now lives once in SharedKernel; this is a thin
+    // adapter to the injected TimeProvider. ──
 
-    private static readonly TimeZoneInfo CopenhagenZone = ResolveCopenhagenZone();
-
-    private DateOnly CopenhagenToday()
-    {
-        var copenhagenNow = TimeZoneInfo.ConvertTime(_timeProvider.GetUtcNow(), CopenhagenZone);
-        return DateOnly.FromDateTime(copenhagenNow.DateTime);
-    }
-
-    private static TimeZoneInfo ResolveCopenhagenZone()
-    {
-        foreach (var id in new[] { "Europe/Copenhagen", "Romance Standard Time" })
-        {
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById(id);
-            }
-            catch (TimeZoneNotFoundException) { }
-            catch (InvalidTimeZoneException) { }
-        }
-        return TimeZoneInfo.Utc;
-    }
+    private DateOnly CopenhagenToday() => CopenhagenBusinessDate.Today(_timeProvider);
 }
 
 /// <summary>The operator-explicit reversal mode (SPRINT-71 R4 — the endpoint never infers it).</summary>

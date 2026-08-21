@@ -828,10 +828,12 @@ public static class ReportingLineEndpoints
             OrgScopeValidator scopeValidator,
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+            var logger = loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.Import");
 
             // 1. Basic payload validation.
             if (string.IsNullOrWhiteSpace(request.OrganisationId))
@@ -1143,7 +1145,21 @@ public static class ReportingLineEndpoints
             }
             catch (Exception ex)
             {
-                return Results.Json(new { error = "Import failed", detail = ex.Message }, statusCode: 500);
+                // SEC-041 (← QUAL-049) — the catch-all for an UNEXPECTED failure (i.e. NOT one of the
+                // specific domain/concurrency cases handled above). The previous behaviour had two defects:
+                //   (1) INFORMATION LEAK — it echoed the raw `ex.Message` back to the client as `detail`,
+                //       which can carry internals (DB/table names, connection text, even row data). The
+                //       Security invariant (confidentiality) says the client gets a GENERIC problem body;
+                //       the diagnostic text stays server-side.
+                //   (2) OBSERVABILITY / AUDIT BLIND SPOT — it logged NOTHING, so an operational failure
+                //       vanished silently. We now record the full exception + operation context at Error
+                //       level (org + row count + actor — no secrets), so the failure is diagnosable.
+                // The wire contract is otherwise unchanged: still a 500 with an `error` string; only the
+                // raw `detail` is dropped and the server-side log line is added.
+                logger.LogError(ex,
+                    "Reporting-line bulk import failed unexpectedly for organisation {OrganisationId} (rowCount={RowCount}, actor={ActorId})",
+                    request.OrganisationId, request.Rows?.Count ?? 0, actor.ActorId);
+                return Results.Json(new { error = "Import failed" }, statusCode: 500);
             }
 
             // S115 / TASK-11501 — named record (BYTE-IDENTICAL wire JSON).

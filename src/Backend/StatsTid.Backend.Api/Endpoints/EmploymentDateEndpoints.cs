@@ -6,6 +6,7 @@ using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Services;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -558,32 +559,13 @@ public static class EmploymentDateEndpoints
         return Enumerable.Range(low, high - low + 1).ToArray();
     }
 
-    // ── Europe/Copenhagen business-date helper ──
-    // Mirrors the SettlementCloseService file-scoped convention (ADR-033 D3 boundary-timezone;
-    // the Orchestrator may later hoist both into the follow-up (v) shared helper). The injected
-    // TimeProvider is the test seam (PAT-008).
+    // ── Europe/Copenhagen business-date helper (ADR-033 D3 boundary-timezone; the injected
+    // TimeProvider is the test seam, PAT-008). S132 TASK-132-3b (QUAL-005): the DST-correct zone
+    // resolution + conversion now lives once in SharedKernel (CopenhagenBusinessDate); this is a
+    // thin adapter. ──
 
-    private static readonly TimeZoneInfo CopenhagenZone = ResolveCopenhagenZone();
-
-    private static DateOnly CopenhagenToday(TimeProvider timeProvider)
-    {
-        var copenhagenNow = TimeZoneInfo.ConvertTime(timeProvider.GetUtcNow(), CopenhagenZone);
-        return DateOnly.FromDateTime(copenhagenNow.DateTime);
-    }
-
-    private static TimeZoneInfo ResolveCopenhagenZone()
-    {
-        foreach (var id in new[] { "Europe/Copenhagen", "Romance Standard Time" })
-        {
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById(id);
-            }
-            catch (TimeZoneNotFoundException) { }
-            catch (InvalidTimeZoneException) { }
-        }
-        return TimeZoneInfo.Utc;
-    }
+    private static DateOnly CopenhagenToday(TimeProvider timeProvider) =>
+        CopenhagenBusinessDate.Today(timeProvider);
 
     // ── Request DTO ──
 

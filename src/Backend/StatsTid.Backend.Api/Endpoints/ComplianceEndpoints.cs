@@ -7,6 +7,7 @@ using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Normalization;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -84,8 +85,19 @@ public static class ComplianceEndpoints
                     return ApprovalReadTier.MonthNotSubmittedForbidden();
             }
 
-            // Fetch time entries from projection (sync-in-tx with the POST that wrote them — read-your-write per ADR-018 D12)
-            var timeEntryRows = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, monthStart, monthEnd, ct);
+            // Fetch time entries from projection (sync-in-tx with the POST that wrote them — read-your-write per ADR-018 D12).
+            // ADR-039 D5b (GAP-B, no dropped hours at a period edge): widen the read's LOWER bound
+            // by one day. A midnight-crossing shift filed on the LAST day of the PREVIOUS month
+            // (e.g. 31-Mar 23:00→02:00) carries post-midnight hours that belong (by wall clock +
+            // ADR-003) to THIS month's first day; without the extra day the source row is never
+            // fetched and those OK-correct hours are lost from BOTH months' compliance view. We
+            // read [monthStart-1 .. monthEnd], THEN normalize (splitting each crossing into a
+            // day-D + day-D+1 half), and RestPeriodRule's own period filter [monthStart..monthEnd]
+            // then keeps exactly the halves that belong to this month — the prev-month pre-half is
+            // dropped there, and a crossing on monthEnd yields a next-month post-half the filter
+            // drops here (the NEXT month picks it up via ITS OWN widened read — no double count).
+            var readStart = monthStart.AddDays(-1);
+            var timeEntryRows = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, readStart, monthEnd, ct);
             var timeEntries = timeEntryRows
                 .Select(r => new TimeEntry
                 {
@@ -99,8 +111,22 @@ public static class ComplianceEndpoints
                     AgreementCode = r.AgreementCode,
                     OkVersion = r.OkVersion,
                     VoluntaryUnsocialHours = r.VoluntaryUnsocialHours,
+                    // ADR-039 D4 — continuity link from the immutable source event id, so a
+                    // midnight-crossing shift's two normalized halves (below) share one stint
+                    // identity and a rest check can rejoin them as ONE continuous work period.
+                    SourceStintId = r.EventId,
                 })
                 .ToList();
+
+            // ADR-039 (S132 TASK-132-1b-1) — normalize midnight-crossing entries on the
+            // COMPLIANCE INPUT (before shipping to the rule engine), so post-midnight hours are
+            // attributed to the correct calendar day / OK-version (D3) and the per-day hours
+            // checks count them on D+1. Same pure, shared implementation as the payroll calc
+            // path (D6). The projection rows above are DISPLAY-faithful and untouched (D5a) —
+            // this transform derives the calc view only. A crossing shift on the last day of the
+            // queried month yields a D+1 half in the next month; RestPeriodRule's own period
+            // filter drops it here (those hours belong to the next period — see TASK-1b-3 contract).
+            var normalizedEntries = MidnightCrossingNormalizer.Normalize(timeEntries);
 
             // Call Rule Engine via HTTP (PAT-005).
             // S73 / TASK-7300 (R1): the NAMED rule-engine client — BaseAddress +
@@ -124,7 +150,7 @@ public static class ComplianceEndpoints
             var complianceRequest = new
             {
                 profile,
-                entries = timeEntries,
+                entries = normalizedEntries,
                 periodStart = monthStart,
                 periodEnd = monthEnd,
             };

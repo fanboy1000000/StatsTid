@@ -1,4 +1,4 @@
-<!-- anchor-sprint: 131 -->
+<!-- anchor-sprint: 132 -->
 # QUAL — Code-Quality Finding Register
 
 **Status**: LIVE — **S131 sweep COMPLETE (TASK-C/D/E 2026-08-19)**; now the durable cross-session quality
@@ -6,6 +6,26 @@ register. (This file is TASK-E output — the register rows, cross-register upda
 below-floor appendix.) **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `7e4bb1b` (S130 close). **Registration
 floor (owner-ruled)**: **Medium+** — would plausibly change behavior, block or mislead a future change,
 or misinform a reader. Below-floor items live ONLY in the inventory appendix.
+
+> ## S132 remediation status (2026-08-21) — increment 1 of the fix-next program
+> The S132 correctness-and-safety core is remediated + merged (uncommitted pending the sprint-close commit);
+> each fix was dual-lens-reviewed. Per-fix detail + verification in `docs/sprints/SPRINT-132.md`.
+> - **FIXED (S132):** **QUAL-001** (Critical daily-rest miscalc + day-attribution + compliance period-edge +
+>   the payroll fail-closed guard; ADR-039) · **QUAL-021** (its RED-on-old) · **QUAL-114** (threshold
+>   fixtures) · **QUAL-133** (§15 reversal probe — the go-live precondition guard) · **QUAL-002** (manifest
+>   encoding) · **QUAL-004** (settlement recovery) · **QUAL-005** (Copenhagen date helper) · **QUAL-006**
+>   (idempotency atomicity) · **QUAL-007** (weekly-pipeline swallow) · **QUAL-141** (the doc-freshness HARD
+>   gate — landed). Mirrored SEC rows **SEC-039/040/041** fixed + **SEC-004** confirming test (SEC register).
+> - **DEFERRED:** **QUAL-069** (payroll warn-gate) — per OQ-5, the payroll project's baseline CS0618 (legacy
+>   `CalculateAsync` overload) is not cleared by S132; lands when that overload retires.
+> - **ROUTED (unchanged by S132):** test-integrity rows (QUAL-013…022, 095/110/111, 096/121, 072/073/074) →
+>   **S133**; audit-scope (QUAL-003/009) + observability (QUAL-008) + doc pass (QUAL-010/011/012/090/093 + D7)
+>   + dead-code (QUAL-027/036) → **S134**; QUAL-123 + day-attribution → **domain-semantics track**.
+> - **S132-DISCOVERED follow-ups (8):** enumerated in `SPRINT-132.md` §S132-discovered follow-ups (rule-eval
+>   swallow · adjacent-interval false-gap · guard⇄payroll-widen go-live coupling · WeeklyCalculationPipeline
+>   + TaskDispatcher normalize-or-retire · login timing side-channel · InvalidOperationException detail echo ·
+>   app-wide username-log CR/LF audit · universal manifest byte-identity). Register as new rows at S133 open.
+> - **Legacy-overload retirement + QUAL-069 landing** — a tracked follow-up (unblocks the payroll warn-gate).
 
 **Semantics** (mirrors the SEC register): rows are a pointer-index — the durable "what + where + status."
 Each row carries enough to **re-attack it** at any later audit: the plain-language claim, the code

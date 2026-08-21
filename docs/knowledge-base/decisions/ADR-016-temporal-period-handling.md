@@ -166,7 +166,7 @@ Every existing rule (and every mode of multi-mode rules) tagged with its `(span,
 | 3 | `CallInWorkRule` | entry | segment-safe | calculation | Concatenate | Min-hours guarantee per entry |
 | 4 | `TravelTimeRule` | entry | segment-safe | calculation | Concatenate | Filters TRAVEL_WORK / TRAVEL_NON_WORK |
 | 5 | `AbsenceRule` | entry | segment-safe | calculation | Concatenate | Per-absence date-stamped |
-| 6 | `RestPeriodRule.MAX_DAILY_HOURS` | window (day) | segment-safe | compliance | UnionDedupe | Day is atomic at date-aligned boundaries |
+| 6 | `RestPeriodRule.MAX_DAILY_HOURS` | window (day) | segment-safe | compliance | UnionDedupe | Day is atomic at date-aligned boundaries **only after input normalization (ADR-039, S132)**: a midnight-crossing stint is split per-day BEFORE segmentation, so the `:360` segment filter sees clock-correct per-day rows. Enforced by ORDERING (normalize-before-filter) + the `AssertNoDroppedBoundaryCrossing` fail-closed guard (trips on a boundary-last-day crossing whose post-half would drop) — NOT by rejecting `EndTime≤StartTime` (a normalized pre-half is legitimately `[Start→00:00]`). |
 | 7 | `OvertimeRule` | window (week) | aligned-window | calculation | RejectIfMultipleSegments | Period must be ≤ 1 week or week-aligned |
 | 8 | `NormCheckRule.WEEKLY` | window (week) | aligned-window | calculation | RejectIfMultipleSegments | Default 1-week norm window |
 | 9 | `RestPeriodRule.DAILY_REST` | window (day-pair) | aligned-window | compliance | RejectIfMultipleSegments | Pair straddles boundary if boundary mid-pair |

@@ -28,7 +28,13 @@ namespace StatsTid.Infrastructure;
 /// <see cref="GetActiveAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, CancellationToken)"/>.
 /// </para>
 /// </summary>
-public sealed class VacationSettlementRepository
+// S132 / TASK-132-2c (QUAL-004) — NOT sealed, and the two in-tx settlement-write members below are
+// `virtual`, SOLELY to let the regression suite subclass a test-double that forces the "impossible"
+// collision-with-null-winner state (a 23505 backstop whose active-row re-read returns nothing) and
+// prove the four VacationSettlementService recovery blocks fail LOUD instead of fabricating an
+// AlreadySettled outcome. Behavior-preserving: no logic change, no DI change (the real service still
+// receives the concrete registration; the subclass is constructed only inside the test).
+public class VacationSettlementRepository
 {
     private readonly DbConnectionFactory _connectionFactory;
 
@@ -56,7 +62,8 @@ public sealed class VacationSettlementRepository
     /// holding the advisory lock) so it observes any active row a racing poller committed before
     /// the lock was acquired. Returns the ACTIVE row or <c>null</c>.
     /// </summary>
-    public async Task<VacationSettlementRow?> GetActiveAsync(
+    // `virtual` for the QUAL-004 test-double (see the class-level note) — overridden to return null.
+    public virtual async Task<VacationSettlementRow?> GetActiveAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, string entitlementType, int entitlementYear, CancellationToken ct = default)
         => await ExecuteGetActiveAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
@@ -96,7 +103,9 @@ public sealed class VacationSettlementRepository
     /// (a racing poller already settled this year) so the caller can swallow it benignly.
     /// Returns the persisted row.
     /// </summary>
-    public async Task<VacationSettlementRow> InsertAsync(
+    // `virtual` for the QUAL-004 test-double (see the class-level note) — overridden to throw the
+    // DuplicateActiveSettlementException backstop without persisting, so the recovery-block re-read runs.
+    public virtual async Task<VacationSettlementRow> InsertAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         VacationSettlementRow row, string snapshotJson, string actorId, string actorRole,
         CancellationToken ct = default)

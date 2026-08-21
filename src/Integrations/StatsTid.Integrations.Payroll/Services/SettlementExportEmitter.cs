@@ -675,15 +675,40 @@ public sealed class SettlementExportEmitter : BackgroundService
                 return;
             }
 
-            // PARITY NOTE vs the §24 path (S80 Step-5a, intentional for this slice):
-            //   • The §24 step (1) `IsPayoutReconciledAsync` SKIPPED_RECONCILED branch is OMITTED — there
-            //     is NO §15/§17 operator-reconciliation surface (correct, not a gap).
-            //   • The §24 step (0b) under-lock REVERSED-row probe (SKIPPED_VOIDED) is OMITTED — a RECORDED
-            //     GO-LIVE FOLLOW-UP (the SPECIAL_HOLIDAY reversal-handling cluster, with the 8002 deferred
-            //     supersede path + the R9 retrofit). NON-corrupting here: the SPECIAL_HOLIDAY close is
-            //     R5-gated DORMANT (no SaerligeFeriedagePaidOut is ever emitted pre-launch) and the line is
-            //     SLS_TBD_* never-delivered, so no reversal can interleave. MUST land before the §15-stk.1
-            //     go-live gate opens, else a line staged after a reversal could orphan (uncompensated).
+            // PARITY NOTE vs the §24 path (S80 Step-5a; UPDATED S132 TASK-132-2a / QUAL-133):
+            //   • The §24 step (0b) under-lock REVERSED-row probe (SKIPPED_VOIDED) is now IMPLEMENTED
+            //     below — mirrored EXACTLY from ProcessAutoPaidOutAsync's step (0b) (R9/R12). This closes
+            //     the recorded go-live follow-up: without it, a godtgørelse line staged AFTER the
+            //     settlement was reversed would orphan (the SettlementReversed consumer derives its
+            //     compensation targets from lines staged BEFORE the reversal, so it can never see a
+            //     later-staged line). Dormant today (the SPECIAL_HOLIDAY close is R5-gated, so no
+            //     SaerligeFeriedagePaidOut is emitted pre-launch, and the SLS_TBD_* line is never
+            //     delivered), but a NAMED §15-stk.1 go-live precondition — now satisfied.
+            //   • The §24 step (1) `IsPayoutReconciledAsync` SKIPPED_RECONCILED branch REMAINS OMITTED —
+            //     there is NO §15/§17 operator-reconciliation surface, so adding it would be wrong
+            //     (correct omission, not a gap).
+
+            // (0b) S132 TASK-132-2a / QUAL-133 — the under-lock REVERSED-row probe (mirrors the §24
+            //      ProcessAutoPaidOutAsync step (0b), R9/R12): re-read the settlement row at the EVENT's
+            //      exact sequence under the lock. REVERSED ⇒ the row this godtgørelse event was emitted
+            //      from has been compensated away — staging now would create a live, never-compensated
+            //      ORPHAN line (the SettlementReversed consumer derives its targets from lines staged
+            //      BEFORE the reversal; it cannot see this one). Stage NOTHING, write a terminal
+            //      SKIPPED_VOIDED checkpoint. A MISSING row or any non-REVERSED state proceeds
+            //      (byte-identical to the §24 sibling — the event is the authority; the close service
+            //      may legitimately have emitted before this consumer observes the row).
+            var rowProbe = await _repo.GetSettlementRowAsync(
+                conn, tx, identity.EmployeeId, identity.EntitlementType, identity.EntitlementYear, identity.Sequence, ct);
+            if (rowProbe is { State: "REVERSED" })
+            {
+                await _repo.PromoteToTerminalAsync(conn, tx, pending.EventId, identity, "SKIPPED_VOIDED", ct);
+                await tx.CommitAsync(ct);
+                _logger.LogInformation(
+                    "SettlementExportEmitter: settlement {EmployeeId}/{Type}/{Year} seq {Sequence} is REVERSED — " +
+                    "§15 stk.2/§17 event {EventId} SKIPPED_VOIDED (no line; R9 reversal-awareness).",
+                    identity.EmployeeId, identity.EntitlementType, identity.EntitlementYear, identity.Sequence, pending.EventId);
+                return;
+            }
 
             // (1) Fail-closed validation (B5) — a missing snapshot / agreement code / OK-version /
             //     boundary date is a DETERMINISTIC failure (never a live/empty/hard-coded fallback).

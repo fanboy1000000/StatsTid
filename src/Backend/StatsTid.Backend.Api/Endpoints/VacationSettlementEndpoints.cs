@@ -115,11 +115,13 @@ public static class VacationSettlementEndpoints
             string, SetTransferAgreementRequest,
             VacationTransferAgreementRepository, VacationSettlementRepository,
             EntitlementConfigRepository, UserAgreementCodeRepository, UserRepository,
+            TimeProvider,
             DbConnectionFactory, OrgScopeValidator, HttpContext, CancellationToken,
             Task<IResult>> handler = async (
             employeeId, body,
             transferRepo, settlementRepo,
             configRepo, agreementCodeRepo, userRepo,
+            timeProvider,
             connectionFactory, scopeValidator, context, ct) =>
         {
             var actor = context.GetActorContext();
@@ -174,7 +176,9 @@ public static class VacationSettlementEndpoints
             // uses (agreement-at + ok_version-at the ferieår START — WARNING fix below), so the guard cap
             // equals the snapshot's CarryoverMax. Compared against the Copenhagen business clock (NOT UTC)
             // so an agreement at 23:30 on 31 Dec Copenhagen-time is in-deadline even if UTC has rolled.
-            var copenhagenToday = DateOnly.FromDateTime(NowCopenhagen());
+            // S132 TASK-132-3b (QUAL-005): the shared DST-correct SharedKernel helper off the injected
+            // TimeProvider (was a private +01:00-fallback copy that mis-decided the day every summer).
+            var copenhagenToday = CopenhagenBusinessDate.Today(timeProvider);
             var (deadline, cap) = await ResolveDeadlineAndCapAsync(
                 configRepo, agreementCodeRepo, userRepo, employeeId, body.EntitlementYear, ct);
 
@@ -1505,21 +1509,6 @@ public static class VacationSettlementEndpoints
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         var result = await cmd.ExecuteScalarAsync(ct);
         return result is null or DBNull ? null : (string)result;
-    }
-
-    /// <summary>Copenhagen wall-clock now — the §21 stk.2 deadline is a Copenhagen business date,
-    /// not UTC. Tries the IANA id first (works cross-platform on .NET 8 ICU), then the Windows id,
-    /// then a fixed +01:00 fallback so the resolution never throws on an exotic host.</summary>
-    private static DateTime NowCopenhagen()
-    {
-        TimeZoneInfo tz;
-        try { tz = TimeZoneInfo.FindSystemTimeZoneById("Europe/Copenhagen"); }
-        catch (TimeZoneNotFoundException)
-        {
-            try { tz = TimeZoneInfo.FindSystemTimeZoneById("Romance Standard Time"); }
-            catch (TimeZoneNotFoundException) { return DateTime.UtcNow.AddHours(1); }
-        }
-        return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
     }
 
     private static readonly JsonSerializerOptions SnapshotJsonOptions = new(JsonSerializerDefaults.Web);

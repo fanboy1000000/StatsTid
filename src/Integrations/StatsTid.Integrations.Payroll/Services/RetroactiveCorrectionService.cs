@@ -235,8 +235,8 @@ public sealed class RetroactiveCorrectionService
                 $"Audit projection: employee {profile.EmployeeId} has no OrgId; cannot resolve target_org_id.");
         var manifestId = newResult.RuleResults.FirstOrDefault()?.ManifestId ?? Guid.Empty;
 
-        // ── BLOCKER 2 + 3 — the baseline read + diff + event + audit + baseline-UPDATE are now ONE
-        // MANDATORY, SERIALIZED transactional unit. ──
+        // ── BLOCKER 2 + 3 — the baseline read + diff + event + audit + baseline-UPDATE + idempotency-
+        // marker (S132/QUAL-006) are now ONE MANDATORY, SERIALIZED transactional unit. ──
         //
         // BLOCKER 3: the AUTHORITATIVE diff baseline is re-read under SELECT … FOR UPDATE INSIDE this
         // tx and the row lock is HELD through the diff compute + the UpdateCurrentEffectiveLinesAsync
@@ -323,8 +323,53 @@ public sealed class RetroactiveCorrectionService
                     $"forsvandt under korrektionen; korrektionen blev rullet tilbage.");
             }
 
-            // COMMIT — releases the FOR UPDATE lock; the baseline is durably advanced. Any throw above
-            // disposes the tx (rollback) WITHOUT this commit and propagates (BLOCKER 2: no swallow).
+            // ── QUAL-006 (S132) — mark the idempotency token delivered IN THIS SAME tx ──
+            // The duplicate-prevention marker now commits ATOMICALLY with the correction event +
+            // audit row + baseline advance it guards. Pre-S132 this INSERT lived in the
+            // /api/payroll/recalculate endpoint in a SEPARATE tx that ran AFTER this one committed,
+            // and its failure was swallowed by an empty catch — silently disarming the guard for that
+            // token, so a same-token retry re-ran the correction and emitted a PHANTOM second
+            // correction event + audit row (auditability + idempotency invariants; ADR-034). Folding
+            // it in here makes the marker load-bearing under the same BLOCKER 2 contract as the event
+            // and audit insert above:
+            //   • a failed marker write ROLLS BACK the whole correction (rethrow → the endpoint maps a
+            //     5xx) — nothing half-applied, so a clean retry re-runs the correction from scratch;
+            //   • the UNIQUE constraint on outbox_messages.idempotency_token fails a concurrent /
+            //     duplicate same-token correction CLOSED here (23505 → rollback) instead of letting it
+            //     double-emit — the guard is now enforced at the write boundary, not only by the
+            //     endpoint's best-effort pre-check.
+            // A null token (non-endpoint callers / test fixtures that opt out of idempotency) writes
+            // no marker — the same contract as before this change.
+            if (idempotencyToken.HasValue)
+            {
+                try
+                {
+                    await using var markCmd = new Npgsql.NpgsqlCommand(
+                        """
+                        INSERT INTO outbox_messages (destination, payload, status, delivered_at, idempotency_token)
+                        VALUES ('retroactive-correction', '{}', 'delivered', NOW(), @token)
+                        """, conn, tx);
+                    markCmd.Parameters.AddWithValue("token", idempotencyToken.Value);
+                    await markCmd.ExecuteNonQueryAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    // LOUD, not swallowed (the QUAL-006 defect was an empty catch here-in-spirit): record
+                    // the token + employee/period + the exception so the failure is diagnosable, then
+                    // rethrow so the tx rolls back and the whole correction fails closed. A Postgres
+                    // 23505 unique_violation here means a concurrent/duplicate same-token correction was
+                    // fail-closed (the guard doing its job); any other exception is a real marker-write
+                    // fault — either way the correction MUST NOT be reported as succeeded.
+                    _logger.LogError(ex,
+                        "Idempotency-mark write failed for retroactive correction (token {IdempotencyToken}, employee {EmployeeId}, period {PeriodStart}..{PeriodEnd}); rolling back the correction — no event, audit row, or baseline change was committed.",
+                        idempotencyToken.Value, profile.EmployeeId, periodStart, periodEnd);
+                    throw;
+                }
+            }
+
+            // COMMIT — releases the FOR UPDATE lock; the baseline is durably advanced and (for a
+            // tokened call) the idempotency marker is set. Any throw above disposes the tx (rollback)
+            // WITHOUT this commit and propagates (BLOCKER 2: no swallow).
             await tx.CommitAsync(ct);
         }
 

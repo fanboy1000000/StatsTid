@@ -328,7 +328,6 @@ app.MapPost("/api/payroll/recalculate", async (
     RecalculateRequest request,
     RetroactiveCorrectionService correctionService,
     IdempotencyGuard idempotencyGuard,
-    DbConnectionFactory dbConnectionFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
 {
@@ -395,25 +394,17 @@ app.MapPost("/api/payroll/recalculate", async (
     if (!result.Success)
         return Results.UnprocessableEntity(result);
 
-    // Mark idempotency token as delivered in outbox
-    try
-    {
-        await using var conn = dbConnectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new Npgsql.NpgsqlCommand(
-            """
-            INSERT INTO outbox_messages (destination, payload, status, delivered_at, idempotency_token)
-            VALUES ('retroactive-correction', '{}', 'delivered', NOW(), @token)
-            """, conn);
-        cmd.Parameters.AddWithValue("token", idempotencyToken);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-    catch (Exception)
-    {
-        // Non-fatal: idempotency mark failed but correction was processed.
-        // Next call with same token will re-process (at-least-once is acceptable).
-    }
-
+    // QUAL-006 (S132): the idempotency token is now marked delivered ATOMICALLY inside
+    // RetroactiveCorrectionService.RecalculateAsync's correction transaction (the same tx as the
+    // correction event + audit row + baseline advance), so the duplicate-prevention marker can no
+    // longer be lost independently of the correction it guards. Pre-S132 the marker was written HERE
+    // in a separate post-commit tx and its failure was swallowed by an empty catch — silently
+    // disarming the guard for that token and letting a same-token retry emit a phantom second
+    // correction event + audit row. A marker-write failure now rolls the whole correction back and
+    // surfaces as a 5xx (logged with the token/employee/period inside RecalculateAsync); the result
+    // reaching this line is fully committed, marker included. The HasBeenDeliveredAsync pre-check
+    // above remains the cheap fast-path dedupe that avoids re-running the calc for an already-marked
+    // token; the in-tx marker + its UNIQUE constraint are the authoritative guard behind it.
     return Results.Ok(result);
 }).RequireAuthorization("GlobalAdminOnly");
 

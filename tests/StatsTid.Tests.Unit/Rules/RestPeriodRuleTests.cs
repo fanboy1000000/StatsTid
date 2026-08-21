@@ -43,8 +43,11 @@ public class RestPeriodRuleTests
         MaxDailyHours = maxDaily,
         MinimumRestHours = minRest,
         RestPeriodDerogationAllowed = derogation,
-        WeeklyMaxHoursReferencePeriod = 17,
         VoluntaryUnsocialHoursAllowed = true,
+        // NOTE (S132 QUAL-114): WeeklyMaxHoursReferencePeriod is intentionally NOT set here.
+        // RestPeriodRule never reads it — the reference-period *averaging* concern is the
+        // separately-deferred QUAL-123, out of scope. It was dead fixture config and was removed;
+        // the model default (17) still applies, so this is behavior-neutral for these tests.
     };
 
     private static TimeEntry CreateTimedEntry(
@@ -228,6 +231,56 @@ public class RestPeriodRuleTests
     }
 
     // ---------------------------------------------------------------
+    // 7a. Max daily hours: EXACTLY at the 13.0h limit → no violation (S132 QUAL-114 boundary pin).
+    //     Pins the strict `>` comparison in CheckMaxDailyHours: the limit VALUE itself must NOT
+    //     fire; only strictly-more does. Existing tests probe 12h (clearly under) and 14h (clearly
+    //     over) but never the exact edge, so an accidental `>=` would have slipped through before.
+    //     Uses an hours-only entry so ONLY the hours-summing check is exercised — with no clock the
+    //     daily-/weekly-rest checks are skipped, isolating the daily-max boundary cleanly.
+    // ---------------------------------------------------------------
+    [Fact]
+    public void MaxDailyHours_ExactlyAtLimit_NoViolation()
+    {
+        var entries = new List<TimeEntry>
+        {
+            CreateHoursOnlyEntry(Monday, 13.0m), // exactly the 13.0h MaxDailyHours limit
+        };
+
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+
+        // At the exact limit, the day is fully compliant — no finding of any kind.
+        Assert.True(result.Success);
+        Assert.DoesNotContain(result.Violations, v =>
+            v.ViolationType == ComplianceViolationType.MAX_DAILY_HOURS);
+        Assert.DoesNotContain(result.Warnings, v =>
+            v.ViolationType == ComplianceViolationType.MAX_DAILY_HOURS);
+    }
+
+    // ---------------------------------------------------------------
+    // 7b. Max daily hours: the smallest step OVER the 13.0h limit → VIOLATION (S132 QUAL-114 pin).
+    //     13.01h > 13.0h must fire. This is the other half of the boundary pin (with 7a): together
+    //     they lock the comparison as strictly-greater-than, not >=. ActualValue is unrounded here
+    //     (CheckMaxDailyHours reports the raw daily total), so we can assert it exactly.
+    // ---------------------------------------------------------------
+    [Fact]
+    public void MaxDailyHours_JustOverLimit_ReturnsViolation()
+    {
+        var entries = new List<TimeEntry>
+        {
+            CreateHoursOnlyEntry(Monday, 13.01m), // one hundredth of an hour over the 13.0h limit
+        };
+
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Violations, v =>
+            v.ViolationType == ComplianceViolationType.MAX_DAILY_HOURS &&
+            v.ActualValue == 13.01m &&
+            v.ThresholdValue == 13.0m &&
+            v.Severity == ComplianceSeverity.VIOLATION);
+    }
+
+    // ---------------------------------------------------------------
     // 8. Weekly max hours: over 48h average → VIOLATION
     // ---------------------------------------------------------------
     [Fact]
@@ -247,6 +300,57 @@ public class RestPeriodRuleTests
         Assert.Contains(result.Violations, v =>
             v.ViolationType == ComplianceViolationType.WEEKLY_MAX_HOURS &&
             v.Severity == ComplianceSeverity.VIOLATION);
+    }
+
+    // ---------------------------------------------------------------
+    // 8a. 48h/week ceiling: average EXACTLY 48.0h → no violation (S132 QUAL-114 boundary pin).
+    //     Monday–Sunday is exactly one 7-day week, so period-average == total. 6 × 8.0h = 48.0h →
+    //     avg 48.0h, which is the limit VALUE and must NOT fire (CheckWeeklyMaxHours uses `>`).
+    //     Hours-only entries keep the rest checks out of the way, and 8h/day is well under the 13h
+    //     daily max, so the 48h edge is isolated. Existing test #8 only probes 50h (clearly over).
+    // ---------------------------------------------------------------
+    [Fact]
+    public void WeeklyMaxHours_ExactlyAt48Average_NoViolation()
+    {
+        var entries = new List<TimeEntry>();
+        for (int i = 0; i < 6; i++)
+            entries.Add(CreateHoursOnlyEntry(Monday.AddDays(i), 8.0m)); // 6 × 8 = 48.0h over the week
+
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+
+        // Exactly at the ceiling → fully compliant, no finding of any kind.
+        Assert.True(result.Success);
+        Assert.DoesNotContain(result.Violations, v =>
+            v.ViolationType == ComplianceViolationType.WEEKLY_MAX_HOURS);
+        Assert.DoesNotContain(result.Violations, v =>
+            v.ViolationType == ComplianceViolationType.MAX_DAILY_HOURS);
+    }
+
+    // ---------------------------------------------------------------
+    // 8b. 48h/week ceiling: average the smallest step OVER 48.0h → VIOLATION (S132 QUAL-114 pin).
+    //     48.01h total over one week → avg 48.01h > 48.0h fires. NOTE: the reported ActualValue is
+    //     Math.Round(avg, 1) = 48.0 — the strict `>` compares the RAW (unrounded) average, so a hair
+    //     over the limit still fires even though it PRINTS as "48.0t". We assert the violation +
+    //     threshold, deliberately NOT the rounded ActualValue, to pin that raw-comparison behavior.
+    // ---------------------------------------------------------------
+    [Fact]
+    public void WeeklyMaxHours_JustOver48Average_ReturnsViolation()
+    {
+        var entries = new List<TimeEntry>();
+        for (int i = 0; i < 5; i++)
+            entries.Add(CreateHoursOnlyEntry(Monday.AddDays(i), 8.0m)); // 5 × 8 = 40.0h
+        entries.Add(CreateHoursOnlyEntry(Monday.AddDays(5), 8.01m));    // + 8.01 = 48.01h total
+
+        var result = RestPeriodRule.Evaluate(CreateProfile(), entries, Monday, Sunday, CreateConfig());
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Violations, v =>
+            v.ViolationType == ComplianceViolationType.WEEKLY_MAX_HOURS &&
+            v.ThresholdValue == 48.0m &&
+            v.Severity == ComplianceSeverity.VIOLATION);
+        // The hair-over day (8.01h) is still under the 13h daily max — no spurious daily-max finding.
+        Assert.DoesNotContain(result.Violations, v =>
+            v.ViolationType == ComplianceViolationType.MAX_DAILY_HOURS);
     }
 
     // ---------------------------------------------------------------

@@ -1,7 +1,37 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 131 -->
+<!-- anchor-sprint: 132 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
+
+## S132 remediation re-grade (2026-08-21) — the fix-next core landed
+
+S132 (increment 1 of the S131 fix-next program) remediated the correctness-and-safety core: the Critical +
+the conditional-Critical + the invariant-adjacent Highs, each dual-lens-reviewed and merged. The grades
+below **recover** the S131 drops for the domains whose findings are now FIXED; domains whose debt is routed
+to S133 (test integrity) / S134 (audit-scope + docs) / the domain-semantics track are held with the
+remaining rows named. Every movement cites the fixed row(s).
+
+| Domain | S131 → S132 | Movement rests on (fixed in S132) — and what remains |
+|--------|-------------|------------------------------------------------------|
+| Rule Engine | C+ → **B** ▲ | **FIXED:** QUAL-001 (the Critical daily-rest miscalc — the correctness-confidence hole that drove the C+) + QUAL-021 (RED-on-old on the real registry path) + QUAL-114 (threshold fixtures at exact limits). **Remains:** QUAL-019/022 (registry/rule test integrity → S133), QUAL-123 (48h reference-period semantics → domain track), + the day-attribution follow-up. Correctness confidence materially restored; not A until the test-integrity + QUAL-123 close. |
+| Payroll Integration | C+ → **B** ▲ | **FIXED:** QUAL-133 (the conditional-Critical §15 reversal probe — the named go-live precondition guard now present), QUAL-002 (manifest encoding unified), QUAL-006 (idempotency-mark now atomic), + SEC-039 (employment-data log-leak redacted). **Remains:** QUAL-037/013/015/077 (S133 test integrity), the QUAL-001 guard⇄payroll-widen coupling (tracked go-live item), the legacy `CalculateAsync` CS0618 (blocks QUAL-069 — deferred). |
+| Infrastructure | B− → **B** ▲ | **FIXED:** QUAL-004 (settlement recovery fails loud) + QUAL-005 (the diverged Copenhagen copy → one DST-correct helper). **Remains:** QUAL-036 + the dead-member set (D4 batch → S133), QUAL-066. |
+| Domain Correctness | C+ → **B−** ▲ | **FIXED:** QUAL-001. **Remains:** QUAL-010 (the wrong statutory fact in the agreement doc → S134 doc pass), QUAL-123 (domain track). |
+| Security (authz code) | B → **B** (held) | **Net positive (not the flagged rows):** SEC-040 (failed logins now observable, CR/LF-safe) + SEC-041 (import no longer leaks raw exception text) + SEC-004 (exact-Organisation binding regression-locked). **Remains:** QUAL-009 (High: policy-denial audit trace → S134 audit-scope), QUAL-040. |
+| Backend API | B → **B** (held) | **FIXED:** QUAL-007 (weekly-pipeline silent-failure), SEC-040/041. **Remains:** QUAL-047…059 + QUAL-126…131 (contract/hotspot rows), QUAL-003 (audit enrichment → S134). |
+| CI/Tooling | B → **B** (held) | **FIXED:** QUAL-141 (the doc-freshness refreeze forcing-function is now a HARD CI gate for QUALITY.md — the FAIL-006 class closed). **Remains:** QUAL-069 (payroll warn-gate — **deferred**, blocked on the legacy CS0618), QUAL-096/072/073/074 (→ S133). |
+| SharedKernel (Segmentation) | A− → **A−** (held) | QUAL-002's encoding fix landed in its PCS consumer (not here); planner-loop duplication is below-floor. |
+| Test Suite (cross-cutting) | B− → **B−** (held) | S132 added RED-on-old + threshold + confirming tests (QUAL-021/114, SEC-004); the CONCENTRATED debt (atomic-outbox QUAL-016 + the QUAL-013…022 High rows) is **S133's** increment. |
+
+*(Domains not listed — SharedKernel Models/Events, PostgreSQL Schema, Frontend, Reporting-Line & Approval,
+Docker, Documentation-canon — are unchanged by S132; their S131 grades stand until their routed increments.)*
+
+**PM reading.** S131 measured the truth and the grades fell; S132 is the first half of earning them back —
+the two domains that fell hardest (Rule Engine, Payroll) both recover a full step because the specific
+verification-theater and the Critical they were graded on are now fixed *with tests that can fail*. They
+sit at B, not back at A, deliberately: the honest bar is that the routed test-integrity (S133) and
+audit/doc (S134) debt must also close before A-level correctness confidence is warranted. S132-discovered
+follow-ups (8, recorded in `SPRINT-132.md`) are tracked, not silently absorbed.
 
 ## S131 evidence-based re-grade (2026-08-19) — the audit re-grounding
 

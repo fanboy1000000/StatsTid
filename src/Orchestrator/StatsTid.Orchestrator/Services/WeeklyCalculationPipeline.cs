@@ -67,11 +67,18 @@ public sealed class WeeklyCalculationPipeline
         // 1. Fetch time entries from Backend
         var entriesResponse = await client.GetAsync($"{_backendUrl}/api/time-entries/{employeeId}", ct);
         var entriesJson = await entriesResponse.Content.ReadAsStringAsync(ct);
+        // QUAL-007: a non-success fetch (e.g. 403) returns a JSON error body. Without this guard
+        // the pipeline used to deserialize that error body as if it were the data and go on to
+        // report a completed Success=true calculation — a wrong result presented as right, a
+        // domain-correctness failure. Fail loudly instead so a failed fetch can never be
+        // persisted as a completed calc. See EnsureBackendFetchSucceeded for why we THROW.
+        EnsureBackendFetchSucceeded(entriesResponse, entriesJson, "time-entries", employeeId);
         var entries = JsonSerializer.Deserialize<JsonElement>(entriesJson);
 
         // 2. Fetch absences from Backend
         var absencesResponse = await client.GetAsync($"{_backendUrl}/api/absences/{employeeId}", ct);
         var absencesJson = await absencesResponse.Content.ReadAsStringAsync(ct);
+        EnsureBackendFetchSucceeded(absencesResponse, absencesJson, "absences", employeeId);
         var absences = JsonSerializer.Deserialize<JsonElement>(absencesJson);
 
         // 3. NORM_CHECK_37H
@@ -139,6 +146,49 @@ public sealed class WeeklyCalculationPipeline
             FlexBalance = flexResult,
             Success = true
         };
+    }
+
+    /// <summary>
+    /// Guards a Backend data fetch (time-entries / absences). On a non-success HTTP status this
+    /// logs the failure (dataset + employeeId + status + a bounded, secrets-free snippet of the
+    /// response body) and THROWS — so the composite calculation is never assembled from an error
+    /// body and reported as a completed success (QUAL-007).
+    ///
+    /// <para><b>Why throw, not return <c>Success=false</c>:</b> the sole caller,
+    /// <see cref="OrchestratorControlLoop.ExecuteWeeklyCalculation"/>, marks the task
+    /// <c>"completed"</c> UNCONDITIONALLY whenever <see cref="ExecuteAsync"/> returns — it never
+    /// inspects <see cref="WeeklyCalculationResult.Success"/>. Only its <c>catch</c> block marks
+    /// the task <c>"failed"</c>. So a thrown exception is the ONLY signal the caller treats as a
+    /// failed fetch; returning <c>Success=false</c> would still be persisted as a completed calc,
+    /// defeating the fix.</para>
+    ///
+    /// <para>The exception message becomes the caller's <c>task.ErrorMessage</c>. The body
+    /// snippet is bounded so a large/unexpected error body is not dumped wholesale; the outbound
+    /// bearer lives on the request (not the response), so no credential is echoed here.</para>
+    /// </summary>
+    private void EnsureBackendFetchSucceeded(
+        HttpResponseMessage response, string body, string dataset, string employeeId)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        var status = (int)response.StatusCode;
+        _logger.LogWarning(
+            "Weekly calculation Backend fetch failed: dataset={Dataset} employeeId={EmployeeId} status={Status} body={BodySnippet}",
+            dataset, employeeId, status, Snippet(body));
+
+        throw new HttpRequestException(
+            $"Backend {dataset} fetch for employee {employeeId} failed with HTTP {status}: {Snippet(body)}",
+            inner: null,
+            statusCode: response.StatusCode);
+    }
+
+    /// <summary>Bounds a response body for safe logging / error surfacing (default 512 chars).</summary>
+    private static string Snippet(string? body, int max = 512)
+    {
+        if (string.IsNullOrEmpty(body))
+            return "(empty body)";
+        return body.Length <= max ? body : string.Concat(body.AsSpan(0, max), "…(truncated)");
     }
 
     private async Task<object?> CallRuleEvaluateAsync(HttpClient client, object payload, CancellationToken ct)

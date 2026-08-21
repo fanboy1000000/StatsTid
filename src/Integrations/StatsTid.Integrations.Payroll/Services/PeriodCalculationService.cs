@@ -7,8 +7,10 @@ using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Normalization;
 using StatsTid.SharedKernel.Segmentation;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace StatsTid.Integrations.Payroll.Services;
 
@@ -109,10 +111,43 @@ public sealed class PeriodCalculationService
     /// </summary>
     public const string AuditStateItemKey = "audit:audit_state";
 
+    // S132 TASK-132-2b (QUAL-002): the single JsonSerializerOptions used to WRITE segments into
+    // the segment_manifests projection (segments_jsonb) AND to READ them back in LoadManifestAsync.
+    //
+    // Why the JsonStringEnumConverter matters (auditability / correctness — ADR-016 D10, ADR-018):
+    // the PlannedSegment.BoundaryCause enum previously serialized NUMERICALLY here (no converter),
+    // e.g. "boundaryCause": 0. But the SegmentManifestCreated *event* is serialized by
+    // EventSerializer, which DOES use JsonStringEnumConverter, so the immutable event — and any
+    // projection row rebuilt from it (SegmentManifestProjectionRebuilder copies data->'segments'
+    // verbatim) — encodes it as a STRING, e.g. "boundaryCause": "OkTransition". Two writers, two
+    // encodings: a reader wired to one silently misread the other. Concretely, after a projection
+    // rebuild (a first-class, always-supported operation) LoadManifestAsync's converter-less reader
+    // could not parse the string form at all.
+    //
+    // The enforced contract this restores is DESERIALIZED EQUIVALENCE, not byte-identity: a
+    // live-written and a rebuilt manifest deserialize to the SAME PlannedSegment set. Adding the
+    // converter (no naming policy → PascalCase member names, matching EventSerializer) makes PCS's
+    // writes STRING-encoded and enum-equivalent to the event/rebuild path, and allowIntegerValues:true
+    // keeps the READER deliberately tolerant of BOTH encodings so a lingering LEGACY numeric row
+    // (written by the old converter-less writer and not yet rebuilt) still round-trips — belt-and-
+    // braces, no data loss.
+    //
+    // NOTE — a benign byte residual remains and is intentionally NOT closed here: PlannedSegment.Snapshot
+    // is nullable and null is the common case. These options have no DefaultIgnoreCondition, so a
+    // null snapshot serializes as "snapshot":null, whereas EventSerializer uses
+    // JsonIgnoreCondition.WhenWritingNull and OMITS the key — and JSONB preserves explicit-null vs
+    // absent-key. So a null-snapshot live row and its rebuilt twin are NOT byte-identical, but BOTH
+    // deserialize back to Snapshot == null, so the deserialized-equivalence contract holds. Making
+    // the two byte-identical would require adding WhenWritingNull HERE, but this is the SHARED
+    // options object for the rule-engine HTTP payloads (EmploymentProfile / TimeEntry / …) — that
+    // is a wire-format change out of QUAL-002's scope, deferred to its own task with its own tests.
+    // No consumer depends on segments_jsonb byte-identity; the D10 manifest⋈audit join keys on
+    // manifest_id.
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: true) }
     };
 
     public PeriodCalculationService(
@@ -292,6 +327,26 @@ public sealed class PeriodCalculationService
                 $"ManifestId={plan.ManifestId}.");
         }
 
+        // ADR-039 (S132 TASK-132-1b-1) — midnight-crossing normalization on the calculation
+        // INPUT, BEFORE the per-segment filter below. A shift crossing midnight (e.g.
+        // 23:00→02:00) is filed as one row under its start-date; its post-midnight hours belong
+        // (by wall clock + ADR-003) to the next calendar day, which at 2026-04-01 is a different
+        // OK-version. Normalizing here splits the crossing entry into a day-D half and a day-D+1
+        // half so the segment filter (:Date-based) routes each half to the correct OK-version
+        // segment, and the per-day hours-summing checks count post-midnight hours on D+1 (D3).
+        //
+        // This is the SOLE logic entry point, so applying it here covers BOTH the forward calc
+        // (CalculateAsync) AND the replay path (ReplayAsync re-enters via emitAuditEvents:false)
+        // from the ONE shared implementation (D6). It is a pure derived transform on the input
+        // only — the immutable event and every DISPLAY projection are untouched (D1/D5a). The
+        // absences list is unaffected (absences are day-keyed, they cannot cross midnight).
+        var normalizedEntries = MidnightCrossingNormalizer.Normalize(entries);
+
+        // ADR-039 BLOCKER-3 (Reviewer Q3) — fail-closed guard against a dropped-hours payroll
+        // underpayment. If a boundary-LAST-day crossing's post-midnight half now lands after the
+        // period end, the per-segment filter below would silently drop it. Refuse loudly instead.
+        AssertNoDroppedBoundaryCrossing(normalizedEntries, plan);
+
         // Resolve the rule classification set once per call. Used for per-rule MergeStrategy
         // dispatch below AND for the "rules attempted per segment" budget in the
         // total-failure short-circuit.
@@ -357,7 +412,7 @@ public sealed class PeriodCalculationService
             if (segmentProfile.Position is null && profile.Position is not null)
                 segmentProfile = segmentProfile with { Position = profile.Position };
 
-            var segmentEntries = entries.Where(e => e.Date >= segment.StartDate && e.Date <= segment.EndDate).ToList();
+            var segmentEntries = normalizedEntries.Where(e => e.Date >= segment.StartDate && e.Date <= segment.EndDate).ToList();
             var segmentAbsences = absences.Where(a => a.Date >= segment.StartDate && a.Date <= segment.EndDate).ToList();
 
             var (segmentRuleResults, segmentFailureCount, segmentAttempted) = await EvaluateSegmentAsync(
@@ -1366,6 +1421,54 @@ public sealed class PeriodCalculationService
                 $"ManifestId={plan.ManifestId}.");
     }
 
+    /// <summary>
+    /// ADR-039 BLOCKER-3 (Reviewer Q3) — fail-closed guard against a dropped-hours payroll
+    /// underpayment at the period's LAST day.
+    ///
+    /// <para>
+    /// After normalization, a midnight-crossing shift filed on the period's last day becomes a
+    /// pre-half dated <c>periodEnd</c> and a post-half dated <c>periodEnd+1</c>. The per-segment
+    /// date filter keeps only dates within the plan's segments (which end at <see cref="PlannedCalculation.PeriodEnd"/>),
+    /// so the post-half would be SILENTLY DROPPED — its post-midnight hours lost from this period,
+    /// and (unless the caller widens its read) never picked up by the next period either. That is a
+    /// payroll underpayment, so we throw rather than emit a short-paid calculation.
+    /// </para>
+    ///
+    /// <para>
+    /// Trips ONLY on the genuine case: a normalized half dated after <see cref="PlannedCalculation.PeriodEnd"/>
+    /// whose stint sibling is in-period. A fully-in-period crossing splits into two in-period halves
+    /// (no spill); a WorkTime-pre-split crossing is already two per-day rows (never a crossing, never
+    /// split); an OK-boundary crossing mid-period keeps both halves in-period (routed to their
+    /// segments). The REAL fix is the caller widening its entries read to <c>[periodStart-1, periodEnd]</c>
+    /// (ADR-039 GAP-B caller-contract) so the NEXT period receives this crossing on its first day —
+    /// this guard makes the gap LOUD until that lands.
+    /// </para>
+    /// </summary>
+    private static void AssertNoDroppedBoundaryCrossing(
+        IReadOnlyList<TimeEntry> normalizedEntries, PlannedCalculation plan)
+    {
+        foreach (var e in normalizedEntries)
+        {
+            if (e.Date <= plan.PeriodEnd)
+                continue; // in-period (or a lower-edge pre-half) — never a drop at the upper edge
+
+            // e is a post-half spilling past the period end. Confirm its stint sibling is in-period
+            // (i.e. this really is a split boundary-last-day crossing, not a stray out-of-range row).
+            var siblingInPeriod = e.SourceStintId is Guid id
+                && normalizedEntries.Any(o => o.SourceStintId == id && o.Date <= plan.PeriodEnd);
+            if (!siblingInPeriod)
+                continue;
+
+            throw new PlannerInvariantViolation(
+                $"PeriodCalculationService: a midnight-crossing time entry on the last day of the period " +
+                $"(employee {e.EmployeeId}, stint {e.SourceStintId}) has post-midnight hours dated " +
+                $"{e.Date:yyyy-MM-dd}, AFTER PeriodEnd {plan.PeriodEnd:yyyy-MM-dd}. The per-segment filter " +
+                $"would silently drop them — a payroll underpayment. Those hours belong to the NEXT period, " +
+                $"which MUST include this crossing: the caller must widen its entries read to " +
+                $"[periodStart-1, periodEnd] per ADR-039 (GAP-B). ManifestId={plan.ManifestId}.");
+        }
+    }
+
     // ---------------------------------------------------------------
     // Private helpers — HTTP calls to Rule Engine (PAT-005)
     // ---------------------------------------------------------------
@@ -1395,10 +1498,16 @@ public sealed class PeriodCalculationService
 
             if (!response.IsSuccessStatusCode)
             {
-                var body = await response.Content.ReadAsStringAsync(ct);
+                // SEC-039 / QUAL-061 (data-confidentiality hygiene): the rule-engine error
+                // response body echoes the request payload — employee id + per-day hours /
+                // rates / balances, i.e. confidential employment data. Logging the whole body
+                // copied that data into the application log stream. Log a bounded, non-
+                // confidential diagnostic instead: HTTP status + rule id + employee id (an
+                // identifier, acceptable) — enough to triage the failure, never the payload.
+                // Failure behaviour (return null) is unchanged.
                 _logger.LogWarning(
-                    "Rule engine returned {StatusCode} for {RuleId}: {Body}",
-                    (int)response.StatusCode, ruleId, body);
+                    "Rule engine returned {StatusCode} for {RuleId} (employee {EmployeeId})",
+                    (int)response.StatusCode, ruleId, profile.EmployeeId);
                 return null;
             }
 
@@ -1435,10 +1544,11 @@ public sealed class PeriodCalculationService
 
             if (!response.IsSuccessStatusCode)
             {
-                var body = await response.Content.ReadAsStringAsync(ct);
+                // SEC-039 / QUAL-061: do not log the response body — it echoes confidential
+                // employment data (see CallTimeRuleAsync). Bounded diagnostic only.
                 _logger.LogWarning(
-                    "Rule engine returned {StatusCode} for absence evaluation: {Body}",
-                    (int)response.StatusCode, body);
+                    "Rule engine returned {StatusCode} for absence evaluation (employee {EmployeeId})",
+                    (int)response.StatusCode, profile.EmployeeId);
                 return null;
             }
 
@@ -1479,10 +1589,11 @@ public sealed class PeriodCalculationService
 
             if (!response.IsSuccessStatusCode)
             {
-                var body = await response.Content.ReadAsStringAsync(ct);
+                // SEC-039 / QUAL-061: do not log the response body — it echoes confidential
+                // employment data (see CallTimeRuleAsync). Bounded diagnostic only.
                 _logger.LogWarning(
-                    "Rule engine returned {StatusCode} for flex evaluation: {Body}",
-                    (int)response.StatusCode, body);
+                    "Rule engine returned {StatusCode} for flex evaluation (employee {EmployeeId})",
+                    (int)response.StatusCode, profile.EmployeeId);
                 return null;
             }
 

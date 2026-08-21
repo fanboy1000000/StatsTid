@@ -1,5 +1,15 @@
-<!-- anchor-sprint: 129 -->
+<!-- anchor-sprint: 132 -->
 # SEC — Security Finding Register
+
+> **S132 update (2026-08-21) — the ruling-5 SEC items remediated (increment 1 of the fix-next program;
+> dual-lens-reviewed, merged uncommitted).** **SEC-039** (← QUAL-061: rule-response body no longer logged —
+> employment-data log-leak redacted to status+ruleId+employeeId) · **SEC-040** (← QUAL-063: failed logins now
+> observable — structured WARNING with username+reason+IP+correlationId, CR/LF-sanitized, generic 401 kept,
+> no response-side enumeration oracle) · **SEC-041** (← QUAL-049: bulk-import catch-all now logs server-side +
+> returns a generic 500, no raw `ex.Message` leak). **SEC-004** — already CLOSED-by-reform; the owed
+> belt-and-braces confirming test (exact-Organisation binding, sibling-sub-org case) is now LANDED. Detail:
+> `docs/sprints/SPRINT-132.md`. S132-discovered SEC-adjacent follow-ups (login timing side-channel; app-wide
+> username-log CR/LF audit; the InvalidOperationException detail echo) are tracked there for registration.
 
 **Status**: LIVE — **S129 sweep COMPLETE (2 rounds, 2026-08-14)**; now the durable cross-session
 security register. **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `e955e13`. **Fix-next

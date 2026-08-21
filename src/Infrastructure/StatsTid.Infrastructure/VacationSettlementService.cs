@@ -398,14 +398,24 @@ public sealed class VacationSettlementService
             if (superseding) throw;
 
             // The single-settle backstop fired between the in-lock re-check and the INSERT (a
-            // concurrent poller committed first). Swallow benignly — exactly one settlement stands.
+            // concurrent poller committed first). Swallow benignly ONLY when the winning active row
+            // is re-read — then exactly one settlement stands. A NULL re-read is the defect case the
+            // three sibling recovery blocks (TERMINATION ~L620, leaver-deferred ~L760, SPECIAL_HOLIDAY
+            // ~L916) ALL fail LOUDLY on: the 23505 PROVED an active row existed at insert time, so a
+            // null re-read means it vanished mid-race — impossible under the advisory lock, i.e. a real
+            // invariant breach, NOT a benign no-op. NEVER report the UNPERSISTED candidate row as
+            // settled (a fabricated success) — fail loud (ADR-033 D10) exactly like the siblings, so
+            // the close/reversal service surfaces the breach instead of masking it.
             _logger.LogInformation(
                 "Vacation settlement no-op: 23505 single-settle backstop for {EmployeeId}/{Type}/{Year}.",
                 employeeId, entitlementType, entitlementYear);
             var winner = await _settlementRepo.GetActiveAsync(conn, tx, employeeId, entitlementType, entitlementYear, ct);
             return winner is not null
                 ? SettlementOutcome.AlreadySettled(winner)
-                : SettlementOutcome.AlreadySettled(row);
+                : throw new InvalidOperationException(
+                    $"Vacation settlement: 23505 single-active collision for {employeeId}/{entitlementType}/" +
+                    $"{entitlementYear} (YEAR_END auto-partition), but no active settlement row is visible " +
+                    "on re-read — refusing to fabricate an AlreadySettled outcome from the unpersisted candidate row.");
         }
 
         // §21 carryover (ADR-033 D5/D6) — DERIVED from transfer_days; idempotent (overwrite, not add).
@@ -1648,36 +1658,13 @@ public sealed class VacationSettlementService
     // S70 / TASK-7004 — Europe/Copenhagen business-date helper (SPRINT-70 R4 leak-proofing pin (b)).
     // The leaver/no-partition decision compares the in-lock re-read employment_end_date against the
     // COPENHAGEN business date (never raw UTC/CURRENT_DATE — the boundary-timezone rule the close
-    // service documents). Mirrors SettlementCloseService.CopenhagenToday verbatim, sourced from the
-    // injected TimeProvider (the trigger MAY read the clock; the settled QUANTITY stays a pure
-    // function of the captured snapshot — ADR-033 D3). Scoped to this file like the close service's
-    // copy (the Orchestrator may later hoist both into the follow-up (v) business-timezone helper).
+    // service documents). The trigger MAY read the clock; the settled QUANTITY stays a pure function
+    // of the captured snapshot — ADR-033 D3. S132 TASK-132-3b (QUAL-005): the DST-correct zone
+    // resolution + conversion now lives once in SharedKernel; this is a thin adapter to the injected
+    // TimeProvider seam.
     // ------------------------------------------------------------------
 
-    private static readonly TimeZoneInfo CopenhagenZone = ResolveCopenhagenZone();
-
-    private DateOnly CopenhagenToday()
-    {
-        var utcNow = _timeProvider.GetUtcNow(); // the injected seam — overridable in tests/hosts.
-        var copenhagenNow = TimeZoneInfo.ConvertTime(utcNow, CopenhagenZone);
-        return DateOnly.FromDateTime(copenhagenNow.DateTime);
-    }
-
-    private static TimeZoneInfo ResolveCopenhagenZone()
-    {
-        // IANA id first (Linux CI + ICU-backed Windows), Windows registry id as fallback, UTC as the
-        // never-crash terminal (degraded but deterministic) — the SettlementCloseService shape.
-        foreach (var id in new[] { "Europe/Copenhagen", "Romance Standard Time" })
-        {
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById(id);
-            }
-            catch (TimeZoneNotFoundException) { }
-            catch (InvalidTimeZoneException) { }
-        }
-        return TimeZoneInfo.Utc;
-    }
+    private DateOnly CopenhagenToday() => CopenhagenBusinessDate.Today(_timeProvider);
 
     // ------------------------------------------------------------------
     // Event-emit + audit_projection sync-in-tx (ADR-018 D3 + ADR-026 D13). The audit row is
