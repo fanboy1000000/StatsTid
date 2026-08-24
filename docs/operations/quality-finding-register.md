@@ -1,4 +1,4 @@
-<!-- anchor-sprint: 132 -->
+<!-- anchor-sprint: 133 -->
 # QUAL — Code-Quality Finding Register
 
 **Status**: LIVE — **S131 sweep COMPLETE (TASK-C/D/E 2026-08-19)**; now the durable cross-session quality
@@ -6,6 +6,28 @@ register. (This file is TASK-E output — the register rows, cross-register upda
 below-floor appendix.) **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `7e4bb1b` (S130 close). **Registration
 floor (owner-ruled)**: **Medium+** — would plausibly change behavior, block or mislead a future change,
 or misinform a reader. Below-floor items live ONLY in the inventory appendix.
+
+> ## S133 remediation status (2026-08-24) — increment 2 of the fix-next program (TEST INTEGRITY)
+> The test-integrity increment is remediated + merged (uncommitted pending the sprint-close commit); each fix
+> was dual-lens-reviewed at Step-0b and (for the auditability-boundary hoist) Step-5a; per-fix detail in
+> `docs/sprints/SPRINT-133.md`. **No production bug was hiding behind the theater** — all defects were test-side.
+> - **FIXED (S133):** **QUAL-013/014/015/017/018/019/020/022/095/110/111** (the 11 non-outbox test-integrity
+>   rows — each rewired to the SHIPPED path + proven falsifiable) · **QUAL-016** (atomic-outbox — the **cheap
+>   cluster** of 15 tests converted wire-driven per **PAT-019**; the mechanism is the shared `WithThrowingOutbox()`
+>   on `StatsTidWebApplicationFactory`) · **QUAL-027** (audit JSON options hoisted to SharedKernel; byte-format
+>   pinned by the golden pin; dual-lens Step-5a cleared) · **QUAL-096/072/073/074/121** (the five CI gates) ·
+>   **QUAL-026** (mock hosts now in the solution, resolved by QUAL-074). QUAL-069 rationale comment corrected.
+> - **PARTIAL (S133):** **QUAL-036** — 14 of 26 self-connection write overloads (write-with-`(conn,tx)`-sibling)
+>   deleted; **residual 12** blocked on live test-seeding + one production seeder → FOLLOW-UP (retire/repoint the
+>   test seeders onto a `(conn,tx)` helper, then delete the rest). (Register's prior "33/14" over-counted — it
+>   folded in READ overloads + no-sibling writes; QUAL-036's precise target = 26 write-with-sibling / 9 repos.)
+> - **DEFERRED:** **QUAL-016 bespoke cluster** (~16 tests: Skema/WorkTime/Approval/Overtime — org-scope tokens +
+>   heavy seed + rule-engine stub) → its own increment per the owner's **OQ-3 SPLIT** ruling (mechanism proven +
+>   shared, so pure copy-work). **QUAL-069** (payroll warn-gate) stays deferred (legacy CS0618 unretired).
+> - **REGISTER CORRECTIONS (re-attack findings):** QUAL-111's "three endpoints have no 428 test" → actually **six**
+>   (AgreementConfig ×3 + PositionOverride ×3; only WageTypeMapping's 2 were covered). QUAL-096's "~82 DemoSeed
+>   tests" → actually **153**. QUAL-036's "33/14" → **26/9** (see PARTIAL above).
+> - **8 S132-discovered follow-ups registered** at S133 open: QUAL-142–146 (new rows below) + SEC-043–045.
 
 > ## S132 remediation status (2026-08-21) — increment 1 of the fix-next program
 > The S132 correctness-and-safety core is remediated + merged (uncommitted pending the sprint-close commit);
@@ -18,9 +40,12 @@ or misinform a reader. Below-floor items live ONLY in the inventory appendix.
 >   gate — landed). Mirrored SEC rows **SEC-039/040/041** fixed + **SEC-004** confirming test (SEC register).
 > - **DEFERRED:** **QUAL-069** (payroll warn-gate) — per OQ-5, the payroll project's baseline CS0618 (legacy
 >   `CalculateAsync` overload) is not cleared by S132; lands when that overload retires.
-> - **ROUTED (unchanged by S132):** test-integrity rows (QUAL-013…022, 095/110/111, 096/121, 072/073/074) →
->   **S133**; audit-scope (QUAL-003/009) + observability (QUAL-008) + doc pass (QUAL-010/011/012/090/093 + D7)
->   + dead-code (QUAL-027/036) → **S134**; QUAL-123 + day-attribution → **domain-semantics track**.
+> - **ROUTED (unchanged by S132):** test-integrity rows (QUAL-013…022, 095/110/111, 096/121, 072/073/074)
+>   **+ the D4 dead-code batch QUAL-027/036** → **S133** (per the ratified ROADMAP program record `ROADMAP.md:198`
+>   + the SPRINT-132 OUT-set; **corrected at S133 open 2026-08-24** — an earlier draft of this block mis-routed
+>   QUAL-027/036 to S134, which contradicted ROADMAP; the dual-lens S133 Step-0b caught it); audit-scope
+>   (QUAL-003/009) + observability (QUAL-008) + doc pass (QUAL-010/011/012/090/093 + D7) → **S134**; QUAL-123
+>   + day-attribution → **domain-semantics track**.
 > - **S132-DISCOVERED follow-ups (8):** enumerated in `SPRINT-132.md` §S132-discovered follow-ups (rule-eval
 >   swallow · adjacent-interval false-gap · guard⇄payroll-widen go-live coupling · WeeklyCalculationPipeline
 >   + TaskDispatcher normalize-or-retire · login timing side-channel · InvalidOperationException detail echo ·
@@ -225,6 +250,22 @@ on a reserved call. All dispositions are proposals until owner adjudication (→
 | QUAL-138 | Saving a person's edits fires five sequential writes, hand-threading row versions between them — a mistake silently 412s or overwrites. | saveEdit hand-threads versions across five writes | D2 | M | CONFIRMED(panel; count corrected) | `useEditPerson.ts:138-349` | →adjudication |
 | QUAL-139 | The placement hook repeats the promote/demote ordering rule across cases with an asymmetric guard (verified harmless today) — a fourth caller copying the wrong arm drops a leadership. | savePlacement repeats the ordering rule | D2 | M | CONFIRMED(panel; corrected) | `usePlacement.ts:101-191` | →adjudication |
 | QUAL-140 | The save hook picks which Danish error to show by testing body-field presence; the quota arm is purely shape-based with no string anchor — the mis-surfacing defect the file records once already. | saveMonth discriminates 422s by body shape | D2 | M | CONFIRMED(panel; sub-claim relocated) | `useSkema.ts:187-276` | →adjudication |
+
+## S132-discovered follow-up findings (registered 2026-08-24 at S133 open)
+
+These 5 QUAL rows were surfaced DURING the S132 remediation (not by the S131 sweep, so they sit outside the
+001–140 sweep table above) and are recorded here so none is lost. Enumerated in `SPRINT-132.md`
+§S132-discovered follow-ups; routed per the S132–S134 program. **S133 fixes NONE of them as domain fixes** —
+they are registered + routed (S133's job is test integrity, not these behaviours). Same "revisit, not shield"
+semantics as the sweep rows: each is re-attackable from its loci + claim + the code.
+
+| QUAL | What it means (plain language) | Title | Dim | Sev | Status | Source of truth | Disposition |
+|------|--------------------------------|-------|-----|-----|--------|-----------------|-------------|
+| QUAL-142 | The weekly-pipeline rule-eval helpers swallow a non-success rule-engine response to `null` while the pipeline still reports `Success=true` — a compliance/calc result can be silently wrong. Same silent-failure class as QUAL-007, but for the rule-eval calls (QUAL-007 fixed only the data-fetch half). | Rule-eval helpers swallow non-success to null | D5 | **H** | REGISTERED (S132-discovered) | `WeeklyCalculationPipeline.cs` — `CallRuleEvaluateAsync`/`CallAbsenceEvaluateAsync`/`CallFlexEvaluateAsync` | → Backend/orchestrator track; fix candidate (QUAL-007 sibling). NOT S133. |
+| QUAL-143 | Two separately-registered adjacent per-day intervals (distinct or absent `SourceStintId`) are read as two stints, producing a false 0-hour midnight gap in the rest-period checks — a spurious rest violation, or a real one missed. Edge of the QUAL-001 day-attribution fix. | Adjacent registered intervals read as a false rest gap | D-domain | M (correctness-adjacent) | REGISTERED (S132-discovered) | `RestPeriodRule.cs` (`ReconstructStints`); `TimeEntry.SourceStintId` | → domain/rule track; candidate = rejoin clock-adjacent zero-gap same-employee stints, or a one-crossing-entry input contract. NOT S133. |
+| QUAL-144 | The PCS `AssertNoDroppedBoundaryCrossing` fail-closed guard (S132) must be reworked IN LOCKSTEP with the GAP-B payroll caller-widen (ADR-039 D5b) — otherwise widening the payroll caller would make the guard throw on valid input. A go-live sequencing constraint, not a standalone bug. | Boundary-crossing guard coupled to the payroll caller-widen | D-integration | M (go-live-coupled) | REGISTERED (S132-discovered) | `PeriodCalculationService.cs` (`AssertNoDroppedBoundaryCrossing`); ADR-039 D5b | → §15 / go-live precondition (rides the payroll-widen task). NOT S133. |
+| QUAL-145 | `WeeklyCalculationPipeline` + `TaskDispatcher` ship un-normalized time entries to OK-version-sensitive calc rules (the ADR-039 D6a exclusions) — a midnight-crossing entry via these paths could be attributed to the wrong calendar day / OK-version. Excluded from S132 on their non-of-record status. | Un-normalized secondary rule-input boundaries (D6a exclusions) | D-domain | M | REGISTERED (S132-discovered) | `WeeklyCalculationPipeline.cs`; `TaskDispatcher.cs`; ADR-039 D6a | → S134-adjacent; normalize-or-retire; revisit if these paths become of-record. NOT S133. |
+| QUAL-146 | QUAL-002 restored DESERIALIZED equivalence (the real ADR-018 contract) between a live-written and a rebuilt segment manifest, but a null-snapshot segment still byte-DIFFERS (PCS writes `"snapshot":null`; `EventSerializer` omits it via `WhenWritingNull`). Benign — no consumer keys on segment bytes; the ADR-016 D10 join is on `manifest_id`. | Null-snapshot segment byte-differs (deserialized-equivalence holds) | D-contract | L | REGISTERED (S132-discovered) | `PeriodCalculationService.cs` (shared `JsonOptions` / snapshot write); `Infrastructure/EventSerializer.cs` (`WhenWritingNull`) | → deferred: universal byte-identity needs `DefaultIgnoreCondition=WhenWritingNull` on PCS's shared JsonOptions — a wire-format change to the rule-engine HTTP payloads with its own RED test. NOT S133. |
 
 ## Gate-promotion proposals (owner rules each; the audit changed no CI behavior)
 

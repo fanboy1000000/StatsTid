@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Serialization;
 using StatsTid.SharedKernel.Events;
 
 namespace StatsTid.Backend.Api.AuditMappers;

@@ -113,48 +113,17 @@ public sealed class S25VersionMigrationTests : IAsyncLifetime
         """;
 
     /// <summary>
-    /// Verbatim copy of the <c>s25-d2-2-version</c> migration DO $$ block from
-    /// <c>docker/postgres/init.sql</c> lines ~1317-1359 — the single canonical source of
-    /// the S25 migration logic. Idempotent via <c>schema_migrations</c> ledger guard
+    /// The <c>s25-d2-2-version</c> migration <c>DO $$</c> block — read from the SHIPPED
+    /// <c>docker/postgres/init.sql</c> at test time, NOT a pasted copy (S133 / QUAL-014).
+    /// The prior in-test "verbatim copy" had already drifted from the file (its cited line
+    /// range was stale) and, being a duplicate, could not have caught a real regression in
+    /// the shipped block — the test verified its own copy. Extracting the real block means a
+    /// drift in the shipped migration (e.g. a dropped <c>entitlement_configs</c> ALTER or a
+    /// missing audit version-transition column) surfaces as a failing post-apply assertion
+    /// below. Idempotent via the <c>schema_migrations</c> ledger guard baked into the block
     /// (the <c>IF NOT FOUND THEN RETURN</c> branch fires on re-run).
     /// </summary>
-    private const string S25MigrationDdl = """
-        DO $$
-        BEGIN
-            INSERT INTO schema_migrations (migration_id, notes)
-            VALUES ('s25-d2-2-version', 'ADR-019 (pending): row-version on admin-config surfaces + audit version-transition columns')
-            ON CONFLICT (migration_id) DO NOTHING;
-
-            IF NOT FOUND THEN
-                RETURN;
-            END IF;
-
-            ALTER TABLE agreement_configs
-            ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
-
-            ALTER TABLE position_override_configs
-            ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
-
-            ALTER TABLE wage_type_mappings
-            ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
-
-            ALTER TABLE entitlement_configs
-            ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
-
-            ALTER TABLE agreement_config_audit
-            ADD COLUMN IF NOT EXISTS version_before BIGINT NULL,
-            ADD COLUMN IF NOT EXISTS version_after BIGINT NULL;
-
-            ALTER TABLE position_override_config_audit
-            ADD COLUMN IF NOT EXISTS version_before BIGINT NULL,
-            ADD COLUMN IF NOT EXISTS version_after BIGINT NULL;
-
-            ALTER TABLE wage_type_mapping_audit
-            ADD COLUMN IF NOT EXISTS version_before BIGINT NULL,
-            ADD COLUMN IF NOT EXISTS version_after BIGINT NULL;
-        END
-        $$;
-        """;
+    private static string S25MigrationDdl => CanonicalInitSql.ExtractGuardedBlock("s25-d2-2-version");
 
     private Segmentation.TestFixtures.DockerHarness _harness = null!;
 

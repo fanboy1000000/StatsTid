@@ -35,7 +35,7 @@ namespace StatsTid.Tests.Regression.PhaseE;
 ///     post-insert tx rollback).</description></item>
 ///   </list></description></item>
 /// </list>
-/// Direct-orchestration shape mirroring <see cref="AdminAtomicTests"/>.
+/// Direct-orchestration shape mirroring the retired <c>Outbox.AdminAtomicTests</c>.
 /// Each test instantiates real mappers + real AuditProjectionRepository
 /// against the DockerHarness factory; only IOutboxEnqueue is the mocked seam.
 /// </summary>

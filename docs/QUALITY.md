@@ -1,7 +1,34 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 132 -->
+<!-- anchor-sprint: 133 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
+
+## S133 remediation re-grade (2026-08-24) — test integrity landed
+
+S133 (increment 2 of the S131 fix-next program) attacked the **verification theater** the S131 audit named:
+tests that pass on nothing because they re-implement the system-under-test or assert values they just
+assigned. Across the sprint, **every one of the 11 non-outbox test-integrity rows + the cheap-cluster
+atomic-outbox family (QUAL-016, 15 tests) was rewired to exercise the SHIPPED path and proven falsifiable**
+(mutation-on-the-real-guard). Notably, **no production bug was hiding** behind the theater — the defects were
+genuinely test-side — and several rotted artifacts were retired (a phantom byte-identical test copy → 0
+coverage became 11 real tests; four drifted DDL copies → runtime extraction from the shipped `init.sql`;
+eight per-endpoint helper-clones → six genuine per-endpoint 428 tests). Plus: QUAL-027 (audit JSON options)
+hoisted to SharedKernel (byte-format pinned), the five CI-gate holes closed, and 14/26 dead-code overloads
+deleted.
+
+| Domain | S132 → S133 | Movement rests on (S133) |
+|--------|-------------|--------------------------|
+| **Test Suite (cross-cutting)** | B− → **B** ▲ | The S131 split verdict was "the suite's shape is right; specific load-bearing guards are theater." S133 retired that theater: QUAL-016 cheap cluster (15 wire-driven, PAT-019) + QUAL-013/014/015/017/018/019/020/022/095/110/111 all rewired + proven falsifiable; the phantom `Sprint17OvertimeGovernanceTests` copy replaced (0→11). **Not A:** the QUAL-016 bespoke cluster (~16 tests) is a scoped deferral (mechanism proven, copy-work) + no E2E/visual regression. |
+| Rule Engine | B → **B** (held) | **Test integrity CLOSED:** QUAL-019/022 (the registry now read by a real test; OvertimeGovernanceRule now genuinely covered). Remaining blockers are off the test track (QUAL-123 domain semantics; day-attribution). |
+| Payroll Integration | B → **B** (held) | **FIXED:** QUAL-013/015/020/110 (real resolver + wire-driven emitter + init.sql-bound drift guard + replay marquee now falsifiable). Remains: the QUAL-001 guard⇄payroll-widen go-live coupling; the legacy CS0618 (blocks QUAL-069, deferred). |
+| Infrastructure | B → **B** (held) | **FIXED:** QUAL-027 (audit options hoisted to SharedKernel, byte-format pinned). **PARTIAL:** QUAL-036 (14/26 self-connection write overloads deleted; residual 12 blocked on live test-seeding → follow-up). |
+| CI/Tooling | B → **B+** ▲ | **FIXED:** QUAL-096 (DemoSeed suite — 153 tests — now RUN in CI), QUAL-074 (mock hosts gated) + QUAL-072 (dead opt-outs removed) + QUAL-073 (CA2100 frozen at 116 + ratchet) + QUAL-121 (FE fixtures bound to the served contract) + QUAL-026 (mock hosts now in the solution). QUAL-069 comment corrected (gate stays deferred). Green now means green across five previously-blind gates. |
+
+*(Domains not listed are unchanged by S133; their grades stand until their routed increments.)*
+
+**PM reading.** S131 measured the truth; S132 restored correctness confidence; S133 restores *test* confidence —
+the suite now largely fails when the code it names breaks, which is the whole job of a test. The remaining
+test debt (the bespoke atomic-outbox cluster, the QUAL-036 residual) is scoped and low-risk, not theater.
 
 ## S132 remediation re-grade (2026-08-21) — the fix-next core landed
 

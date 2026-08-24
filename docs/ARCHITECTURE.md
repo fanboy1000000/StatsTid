@@ -59,6 +59,11 @@ Cross-cutting types shared by all services. No business logic, no I/O.
 - **Security/** -- `StatsTidRoles`, `RoleScope`, role hierarchy constants
 - **Calendar/** -- Danish holiday calendar, work-day calculations ([DEP-001](knowledge-base/dependencies/DEP-001-rule-engine-depends-on-sharedkernel-calendar.md))
 - **Config/** -- `CentralAgreementConfigs` (static source of truth), `PositionOverrideConfigs`
+- **Audit/** -- Audit-projection contracts: `AuditProjectionRowData`, `IAuditProjectionMapper<T>`, visibility-scope types (ADR-026)
+- **Segmentation/** -- Temporal period segmentation planner + manifest value types (ADR-016)
+- **Normalization/** -- `MidnightCrossingNormalizer` — calc/compliance input-boundary day-attribution normalizer (ADR-039)
+- **Serialization/** -- `AuditMapperJsonOptions` — the single canonical audit-payload `JsonSerializerOptions` shared by every `IAuditProjectionMapper` across Backend.Api + Infrastructure (QUAL-027; cross-cutting wire-format config, not business logic — lives here because Infrastructure cannot reference Backend.Api)
+- **Exceptions/** -- Shared domain exception types
 
 ### Auth (`src/Auth/StatsTid.Auth/`)
 

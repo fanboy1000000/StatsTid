@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Serialization;
 using StatsTid.SharedKernel.Events;
 
 namespace StatsTid.Infrastructure.AuditMappers;
@@ -28,12 +29,6 @@ namespace StatsTid.Infrastructure.AuditMappers;
 /// </summary>
 public sealed class TerminationSettledAuditMapper : IAuditProjectionMapper<TerminationSettled>
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false,
-    };
-
     public AuditProjectionRowData Map(TerminationSettled @event, AuditProjectionContext context)
     {
         var snapshot = @event.Snapshot;
@@ -58,6 +53,6 @@ public sealed class TerminationSettledAuditMapper : IAuditProjectionMapper<Termi
             VisibilityScope: AuditVisibilityScope.TenantTargeted,
             TargetOrgId: context.ResolvedTargetOrgId,
             TargetResourceId: @event.EmployeeId ?? string.Empty,
-            DetailsJson: JsonSerializer.Serialize(details, JsonOptions));
+            DetailsJson: JsonSerializer.Serialize(details, AuditMapperJsonOptions.Default));
     }
 }

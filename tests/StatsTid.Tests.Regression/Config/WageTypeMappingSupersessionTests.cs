@@ -1,36 +1,49 @@
-using System.Data;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using Npgsql;
+using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
-using StatsTid.Tests.Regression.Outbox;
+using StatsTid.SharedKernel.Security;
+using StatsTid.Tests.Regression.Hosting;
+using StatsTid.Tests.Regression.Segmentation;
 
 namespace StatsTid.Tests.Regression.Config;
 
 /// <summary>
-/// S29 / TASK-2909 D-tests #1, #2, #3, #4, #5 — same-day + cross-day supersession routing on
-/// <see cref="WageTypeMappingRepository"/> (ADR-020 D2 + S22 precedent at
-/// <c>LocalAgreementProfileRepository</c>). Verifies the repository-level supersession
-/// contract end-to-end against a Postgres testcontainer with the full S29 effective-dating
-/// schema (mapping_id surrogate PK + effective_from/effective_to range + partial-unique-
-/// index on open rows + audit table widened with SUPERSEDED action).
+/// S29 / TASK-2909 D-tests #1–#5 — the wage-type-mapping supersession lifecycle, driven
+/// through the SHIPPED HTTP endpoints (<see cref="WageTypeMappingEndpoints"/>) via
+/// <see cref="StatsTidWebApplicationFactory"/> against a real Postgres testcontainer.
+///
+/// <para>
+/// <b>S133 / TASK-13302 (QUAL-020) — rewire away from verification theatre.</b> The prior
+/// version of these tests called the real repository for the state change but then
+/// <i>hand-wrote its own audit rows, its own <c>INSERT INTO outbox_events</c>, and (for the
+/// zero-width reopen) its own <c>UPDATE … SET effective_to = NULL</c></i> — re-implementing
+/// the endpoint's job inside the test body. As a result the real emitter
+/// (<c>WageTypeMappingEndpoints</c> POST/PUT/DELETE: the action routing, the
+/// <c>IOutboxEnqueue</c> call, and the <c>IAuditProjectionMapper</c> projection write) was
+/// exercised by NOTHING, and the tests would have stayed green even if that emitter were
+/// deleted. Now every side effect under assertion — the state rows, the audit action, and
+/// the outbox event — is produced by shipped code reached over the wire, exactly as a real
+/// GlobalAdmin request produces it. What the test still does directly is DATA SETUP only
+/// (seeding a dated predecessor row the same-day-only-edit validator will not let an
+/// endpoint create) and READ-BACK assertions.
+/// </para>
 ///
 /// <list type="bullet">
-///   <item>#1: same-day UPDATE-in-place preserves natural key + bumps version + UPDATED audit.</item>
-///   <item>#2: cross-day supersession (predecessor closed, new row inserted, SUPERSEDED
-///   audit + WageTypeMappingSuperseded outbox event, single tx).</item>
-///   <item>#3: <see cref="WageTypeMappingRepository.GetByKeyAtAsync"/> across closed range,
-///   open range, before-earliest, and exact-boundary (end-exclusive predicate).</item>
-///   <item>#4: D2 Case B (DELETE-then-CREATE-same-day, predecessor <c>effective_from &lt; today</c>):
-///   predecessor stays closed at <c>(original_day, today)</c>; new row at <c>(today, NULL)</c>;
-///   audit chain DELETED → CREATED.</item>
-///   <item>#5: D2 Case C (CREATE-DELETE-CREATE-same-day, predecessor <c>effective_from == today</c>):
-///   zero-width predecessor reopened via UPDATE-and-reopen; final state is single open row at
-///   <c>(today, NULL)</c> with bumped version; UPDATED audit (not CREATED).</item>
+///   <item>#1: PUT same-day → in-place UPDATE (version bump), UPDATED audit + WageTypeMappingUpdated outbox.</item>
+///   <item>#2: PUT cross-day → predecessor closed + new row inserted, SUPERSEDED audit + WageTypeMappingSuperseded outbox.</item>
+///   <item>#3: <see cref="WageTypeMappingRepository.GetByKeyAtAsync"/> dated read across closed/open/boundary — a pure
+///   REPO-read contract with no emitter, so it stays a direct real-repo call (it already exercises the shipped SUT).</item>
+///   <item>#4: D2 Case B (DELETE then POST, predecessor effective_from &lt; today) → fresh INSERT; DELETED→CREATED audit chain.</item>
+///   <item>#5: D2 Case C (POST, DELETE, POST same day) → zero-width row UPDATE-and-reopen (version bump), UPDATED audit (not CREATED/SUPERSEDED).</item>
 /// </list>
 ///
-/// Direct-repo orchestration — these are repo-surface contracts (per refinement L161 for #11a/#11b
-/// and matching the S22 <see cref="ProfileSupersessionTests"/> location precedent). HTTP-level
-/// validation lives in the endpoint tests for the same-day-only-edit validator (#12).
+/// JWT minting follows the dev-fallback signing-key pattern (Development host env → dev
+/// fallback key fires), verbatim from <see cref="WageTypeMappingEndpointTests"/>. The
+/// <c>GlobalAdminOnly</c> policy requires the GlobalAdmin role on the JWT.
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
@@ -39,356 +52,210 @@ public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
     private const string OkVersion = "OK24";
     private const string Position = "";
 
-    private Segmentation.TestFixtures.DockerHarness _harness = null!;
+    // Verbatim from JwtValidationSetup.DevFallbackSigningKey (same as WageTypeMappingEndpointTests).
+    private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
+
+    private TestFixtures.DockerHarness _harness = null!;
+    private StatsTidWebApplicationFactory _factory = null!;
     private WageTypeMappingRepository _repo = null!;
 
     public async Task InitializeAsync()
     {
-        _harness = await Segmentation.TestFixtures.DockerHarness.StartAsync();
-        await OutboxTestSchema.ApplyAsync(_harness.ConnectionString);
-        // ForcedRollbackHarness schema includes wage_type_mapping_audit with version_before /
-        // version_after columns + SUPERSEDED action — the canonical post-S29 fixture DDL.
-        await ForcedRollbackHarness.ApplySchemaAsync(_harness.ConnectionString);
+        _harness = await TestFixtures.DockerHarness.StartAsync();
+        // Full production schema — the real emitter (Program.cs DI + init.sql tables:
+        // wage_type_mappings, wage_type_mapping_audit, outbox_events, audit_projection) must
+        // all be present for the endpoint's atomic write to run.
+        await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
+        _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
         _repo = new WageTypeMappingRepository(_harness.Factory);
     }
 
-    public async Task DisposeAsync() => await _harness.DisposeAsync();
+    public async Task DisposeAsync()
+    {
+        _factory?.Dispose();
+        if (_harness is not null)
+            await _harness.DisposeAsync();
+    }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // D-test #1 — same-day in-place UPDATE preserves natural key + bumps version.
+    // D-test #1 — PUT same-day → in-place UPDATE, UPDATED audit + Updated outbox.
+    //
+    // Falsifiability: the audit action + outbox event_type are chosen by the endpoint's
+    // same-day branch. Flip that branch to SUPERSEDED / WageTypeMappingSuperseded and both
+    // the audit-action assertion and the outbox event_type assertion go RED. Remove the
+    // outbox.EnqueueAndReturnIdAsync call and the outbox count drops to 0 → RED.
     // ═════════════════════════════════════════════════════════════════════════
     [Fact]
-    public async Task SameDayInPlaceUpdate_PreservesNaturalKey_BumpsVersion_EmitsUpdatedAudit()
+    public async Task SameDayEdit_ViaPut_InPlaceUpdate_BumpsVersion_EmitsUpdatedAuditAndOutbox()
     {
         var timeType = NewTimeType("SAMEDAY");
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
-        // Seed one row at effective_from = today, version = 1 (CreateAsync path).
-        var seed = new WageTypeMapping
-        {
-            TimeType = timeType,
-            WageType = "SLS_0110",
-            OkVersion = OkVersion,
-            AgreementCode = AgreementCode,
-            Position = Position,
-            Description = "original",
-            EffectiveFrom = today,
-        };
-        await _repo.CreateAsync(seed);
+        // Data setup: one open row at effective_from = today, version = 1.
+        await SeedOpenRowAsync(timeType, effectiveFrom: today, wageType: "SLS_0110", description: "original");
 
-        // Call SupersedeAndCreateAsync with newMapping.EffectiveFrom = today (== predecessor's),
-        // different description — exercises the same-day in-place UPDATE branch.
-        SaveWageTypeMappingResult result;
-        await using (var conn = _harness.Factory.Create())
-        {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-            var newMapping = new WageTypeMapping
-            {
-                TimeType = timeType,
-                WageType = "SLS_0110",
-                OkVersion = OkVersion,
-                AgreementCode = AgreementCode,
-                Position = Position,
-                Description = "updated-same-day",
-                EffectiveFrom = today,
-            };
-            result = await _repo.SupersedeAndCreateAsync(
-                conn, tx, newMapping, expectedCurrentVersion: 1);
+        var client = AdminClient();
+        var rsp = await PutAsync(client, timeType,
+            wageType: "SLS_0110", description: "updated-same-day",
+            effectiveFrom: today, ifMatchValue: "1");
 
-            // Endpoint-style emit UPDATED audit row to verify the audit pairing the
-            // refinement L288 AC requires (#1: "Audit row inserted with action='UPDATED'").
-            await _repo.AppendAuditAsync(
-                conn, tx, timeType, OkVersion, AgreementCode, Position,
-                "UPDATED",
-                previousData: """{"description":"original"}""",
-                newData: """{"description":"updated-same-day"}""",
-                actorId: "admin1", actorRole: "GlobalAdmin",
-                versionBefore: 1, versionAfter: result.Version);
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("\"2\"", rsp.Headers.ETag!.Tag); // in-place update bumped version 1 → 2
 
-            await tx.CommitAsync();
-        }
-
-        Assert.False(result.IsCreated);
-        Assert.Equal(2L, result.Version);
-        Assert.Equal("updated-same-day", result.Mapping.Description);
-        Assert.Equal(today, result.Mapping.EffectiveFrom);
-        Assert.Null(result.Mapping.EffectiveTo);
-
-        // Row count unchanged at 1 for the natural key.
+        // State: still exactly one row, now version 2 with the new description, still open.
         Assert.Equal(1L, await CountRowsForNaturalKeyAsync(timeType));
+        var row = await ReadRowAsync(timeType, today);
+        Assert.NotNull(row);
+        Assert.Equal(2L, row!.Version);
+        Assert.Equal("updated-same-day", row.Description);
+        Assert.Null(row.EffectiveTo);
 
-        // Audit row: action = UPDATED, version pair (1 -> 2).
+        // Audit produced by the endpoint: UPDATED with version pair 1 → 2.
         var (audAction, audBefore, audAfter) = await ReadLatestAuditAsync(timeType);
         Assert.Equal("UPDATED", audAction);
         Assert.Equal(1L, audBefore);
         Assert.Equal(2L, audAfter);
+
+        // Outbox produced by the endpoint's real IOutboxEnqueue.
+        Assert.Equal(1L, await CountOutboxAsync(StreamId(timeType), "WageTypeMappingUpdated"));
+        Assert.Equal(0L, await CountOutboxAsync(StreamId(timeType), "WageTypeMappingSuperseded"));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // D-test #2 — cross-day supersession.
+    // D-test #2 — PUT cross-day → close predecessor + insert new row, SUPERSEDED
+    // audit + WageTypeMappingSuperseded outbox. THE headline supersession case.
+    //
+    // Falsifiability: the SUPERSEDED action + Superseded event are the endpoint's cross-day
+    // branch (WageTypeMappingEndpoints PUT, isCrossDay==true). Break the branch (emit
+    // UPDATED) → both the audit-action and outbox event_type assertions go RED. Skip the
+    // predecessor-close and the "2 rows" / predecessor.effective_to assertions go RED.
     // ═════════════════════════════════════════════════════════════════════════
     [Fact]
-    public async Task CrossDaySupersession_ClosesPredecessor_InsertsNewRow_EmitsSupersededAudit_SingleTx()
+    public async Task CrossDayEdit_ViaPut_ClosesPredecessor_InsertsNewRow_EmitsSupersededAuditAndOutbox()
     {
         var timeType = NewTimeType("CROSSDAY");
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var predecessorEffectiveFrom = new DateOnly(2020, 1, 1); // mirrors init.sql backfill epoch
 
-        // Seed one row at effective_from = '2020-01-01' (mirrors init.sql backfill epoch).
-        var predecessorEffectiveFrom = new DateOnly(2020, 1, 1);
-        var seed = new WageTypeMapping
-        {
-            TimeType = timeType,
-            WageType = "SLS_0110",
-            OkVersion = OkVersion,
-            AgreementCode = AgreementCode,
-            Position = Position,
-            Description = "original",
-            EffectiveFrom = predecessorEffectiveFrom,
-        };
-        await _repo.CreateAsync(seed);
+        // Data setup: an open, day-old predecessor (the endpoint's validator forbids creating
+        // a non-today effective_from, so this must be seeded directly).
+        await SeedOpenRowAsync(timeType, effectiveFrom: predecessorEffectiveFrom, wageType: "SLS_0110", description: "original");
 
-        // Cross-day supersession: SupersedeAndCreateAsync with newMapping.EffectiveFrom = today.
-        SaveWageTypeMappingResult result;
-        await using (var conn = _harness.Factory.Create())
-        {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-            var newMapping = new WageTypeMapping
-            {
-                TimeType = timeType,
-                WageType = "SLS_0110",
-                OkVersion = OkVersion,
-                AgreementCode = AgreementCode,
-                Position = Position,
-                Description = "new",
-                EffectiveFrom = today,
-            };
-            result = await _repo.SupersedeAndCreateAsync(
-                conn, tx, newMapping, expectedCurrentVersion: 1);
+        var client = AdminClient();
+        var rsp = await PutAsync(client, timeType,
+            wageType: "SLS_0110", description: "new",
+            effectiveFrom: today, ifMatchValue: "1");
 
-            // SUPERSEDED audit + outbox event are the endpoint's responsibility (per the
-            // ConfigEndpoints / WageTypeMappingEndpoints contract). Mirror the endpoint
-            // orchestration in-tx — single-tx invariant must hold (audit + outbox + state
-            // change all commit together per ADR-018 D3).
-            await _repo.AppendAuditAsync(
-                conn, tx, timeType, OkVersion, AgreementCode, Position,
-                "SUPERSEDED",
-                previousData: """{"description":"original"}""",
-                newData: """{"description":"new"}""",
-                actorId: "admin1", actorRole: "GlobalAdmin",
-                versionBefore: 1, versionAfter: result.Version);
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("\"1\"", rsp.Headers.ETag!.Tag); // the new open row starts at version 1
 
-            // Outbox event (WageTypeMappingSuperseded) — written in the same tx.
-            await EnqueueOutboxAsync(conn, tx, timeType, "WageTypeMappingSuperseded");
-
-            await tx.CommitAsync();
-        }
-
-        Assert.False(result.IsCreated);
-        Assert.Equal(1L, result.Version);  // new row starts at v=1
-        Assert.Equal(today, result.Mapping.EffectiveFrom);
-        Assert.Null(result.Mapping.EffectiveTo);
-
-        // Row count: 2 (closed predecessor + new open row).
+        // State: 2 rows — closed predecessor + new open row.
         Assert.Equal(2L, await CountRowsForNaturalKeyAsync(timeType));
 
-        // Predecessor row: effective_to = today, original description preserved.
         var predecessor = await ReadRowAsync(timeType, predecessorEffectiveFrom);
         Assert.NotNull(predecessor);
         Assert.Equal(today, predecessor!.EffectiveTo);
         Assert.Equal("original", predecessor.Description);
         Assert.Equal(1L, predecessor.Version);
 
-        // New row: effective_from = today, effective_to = NULL, version = 1.
         var newRow = await ReadRowAsync(timeType, today);
         Assert.NotNull(newRow);
         Assert.Null(newRow!.EffectiveTo);
         Assert.Equal("new", newRow.Description);
         Assert.Equal(1L, newRow.Version);
 
-        // Single audit row with SUPERSEDED + version pair (1 -> 1).
-        var auditRows = await ReadAllAuditAsync(timeType);
-        var supersededAuditCount = auditRows.Count(r => r.Action == "SUPERSEDED");
-        Assert.Equal(1, supersededAuditCount);
-        var sup = auditRows.Single(r => r.Action == "SUPERSEDED");
-        Assert.Equal(1L, sup.VersionBefore);
-        Assert.Equal(1L, sup.VersionAfter);
+        // Audit produced by the endpoint: exactly one SUPERSEDED with version pair 1 → 1.
+        var audits = await ReadAllAuditAsync(timeType);
+        var superseded = audits.Where(a => a.Action == "SUPERSEDED").ToList();
+        Assert.Single(superseded);
+        Assert.Equal(1L, superseded[0].VersionBefore);
+        Assert.Equal(1L, superseded[0].VersionAfter);
 
-        // Single outbox row for stream wage-type-mapping-{AC}-{OK}-{TT}.
-        var streamId = $"wage-type-mapping-{AgreementCode}-{OkVersion}-{timeType}";
-        Assert.Equal(1L, await CountOutboxRowsAsync(streamId, "WageTypeMappingSuperseded"));
+        // Outbox produced by the endpoint's real IOutboxEnqueue.
+        Assert.Equal(1L, await CountOutboxAsync(StreamId(timeType), "WageTypeMappingSuperseded"));
+        Assert.Equal(0L, await CountOutboxAsync(StreamId(timeType), "WageTypeMappingUpdated"));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // D-test #3 — GetByKeyAtAsync(asOfDate) across 3 cases + end-exclusive boundary.
+    // D-test #3 — GetByKeyAtAsync(asOfDate) across closed / open / boundary. This is a pure
+    // REPO-read contract (no emitter), so it drives the shipped repo method DIRECTLY and
+    // asserts its real output — it was never verification theatre. Data is seeded raw because
+    // arbitrary-dated history rows cannot be produced through the same-day-only endpoints.
+    //
+    // Falsifiability: change GetByKeyAtAsync's end-exclusive predicate and case (d) (the
+    // boundary) flips from "open-row" to "closed-row"; a wrong effective_from bound flips (a).
     // ═════════════════════════════════════════════════════════════════════════
     [Fact]
     public async Task GetByKeyAtAsync_HistoryAndOpenRows_ResolvesCorrectlyAcrossDates()
     {
         var timeType = NewTimeType("DATED");
 
-        // Seed one closed history row at [2024-01-01, 2024-06-01).
-        // Then one open row at [2024-06-01, NULL).
-        await InsertRawAsync(
-            timeType, "SLS_0110", description: "closed-row",
-            effectiveFrom: new DateOnly(2024, 1, 1),
-            effectiveTo: new DateOnly(2024, 6, 1),
-            version: 1);
-        await InsertRawAsync(
-            timeType, "SLS_0220", description: "open-row",
-            effectiveFrom: new DateOnly(2024, 6, 1),
-            effectiveTo: null,
-            version: 1);
+        // Closed history row at [2024-01-01, 2024-06-01); then open row at [2024-06-01, NULL).
+        await InsertRawAsync(timeType, "SLS_0110", description: "closed-row",
+            effectiveFrom: new DateOnly(2024, 1, 1), effectiveTo: new DateOnly(2024, 6, 1), version: 1);
+        await InsertRawAsync(timeType, "SLS_0220", description: "open-row",
+            effectiveFrom: new DateOnly(2024, 6, 1), effectiveTo: null, version: 1);
 
-        // (a) asOfDate before earliest history row → NULL.
+        // (a) before earliest → NULL.
         var beforeEarliest = await _repo.GetByKeyAtAsync(
-            timeType, OkVersion, AgreementCode, Position,
-            asOfDate: new DateOnly(2023, 12, 1));
+            timeType, OkVersion, AgreementCode, Position, asOfDate: new DateOnly(2023, 12, 1));
         Assert.Null(beforeEarliest);
 
-        // (b) asOfDate within the closed range → returns the closed row.
+        // (b) within closed range → the closed row.
         var withinClosed = await _repo.GetByKeyAtAsync(
-            timeType, OkVersion, AgreementCode, Position,
-            asOfDate: new DateOnly(2024, 3, 15));
+            timeType, OkVersion, AgreementCode, Position, asOfDate: new DateOnly(2024, 3, 15));
         Assert.NotNull(withinClosed);
         Assert.Equal("closed-row", withinClosed!.Description);
         Assert.Equal("SLS_0110", withinClosed.WageType);
 
-        // (c) asOfDate within the open range → returns the open row.
+        // (c) within open range → the open row.
         var withinOpen = await _repo.GetByKeyAtAsync(
-            timeType, OkVersion, AgreementCode, Position,
-            asOfDate: new DateOnly(2024, 9, 1));
+            timeType, OkVersion, AgreementCode, Position, asOfDate: new DateOnly(2024, 9, 1));
         Assert.NotNull(withinOpen);
         Assert.Equal("open-row", withinOpen!.Description);
         Assert.Equal("SLS_0220", withinOpen.WageType);
         Assert.Null(withinOpen.EffectiveTo);
 
-        // (d) Boundary: asOfDate == exact effective_from of the open row.
-        // Per the end-exclusive predicate (effective_from <= asOfDate AND
-        // (effective_to IS NULL OR effective_to > asOfDate)), the open row wins:
-        //   - closed row: effective_to = 2024-06-01, asOfDate = 2024-06-01 → 6/1 > 6/1 is FALSE
-        //                 → closed row excluded.
-        //   - open row:   effective_from = 2024-06-01, asOfDate = 2024-06-01 → 6/1 <= 6/1 TRUE,
-        //                 effective_to IS NULL TRUE → open row included.
+        // (d) boundary asOfDate == open row's effective_from: end-exclusive predicate excludes
+        // the closed row (effective_to = 2024-06-01 is NOT > 2024-06-01) and includes the open row.
         var atBoundary = await _repo.GetByKeyAtAsync(
-            timeType, OkVersion, AgreementCode, Position,
-            asOfDate: new DateOnly(2024, 6, 1));
+            timeType, OkVersion, AgreementCode, Position, asOfDate: new DateOnly(2024, 6, 1));
         Assert.NotNull(atBoundary);
         Assert.Equal("open-row", atBoundary!.Description);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // D-test #4 — D2 Case B: DELETE-then-CREATE-same-day with predecessor < today.
+    // D-test #4 — D2 Case B: DELETE (soft-close today) then POST re-create, predecessor
+    // effective_from < today → fresh INSERT (new open row). Audit chain DELETED → CREATED,
+    // never SUPERSEDED. Both legs driven through the real endpoints.
+    //
+    // Falsifiability: the DELETE and POST each emit their own audit + outbox via shipped code.
+    // If the POST mis-routed Case B into the reopen (Case C) branch the "2 rows" assertion
+    // goes RED; if it emitted SUPERSEDED the DoesNotContain-SUPERSEDED assertion goes RED.
     // ═════════════════════════════════════════════════════════════════════════
     [Fact]
-    public async Task Case_B_DeleteThenCreateSameDay_PredecessorBeforeToday_ResultsInTwoRows()
+    public async Task CaseB_DeleteThenRecreate_PredecessorBeforeToday_FreshInsert_DeletedThenCreatedAudit()
     {
         var timeType = NewTimeType("CASEB");
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
         var pastEffectiveFrom = new DateOnly(2024, 1, 1);
 
-        // Setup: insert one open row at effective_from = 2024-01-01 (a typical seed row).
-        var seed = new WageTypeMapping
-        {
-            TimeType = timeType,
-            WageType = "SLS_0110",
-            OkVersion = OkVersion,
-            AgreementCode = AgreementCode,
-            Position = Position,
-            Description = "original-seed",
-            EffectiveFrom = pastEffectiveFrom,
-        };
-        await _repo.CreateAsync(seed);
+        await SeedOpenRowAsync(timeType, effectiveFrom: pastEffectiveFrom, wageType: "SLS_0110", description: "original-seed");
 
-        // Step 1: SoftDeleteAsync(today) — predecessor becomes (2024-01-01, today).
-        await using (var conn = _harness.Factory.Create())
-        {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-            var deleted = await _repo.SoftDeleteAsync(
-                conn, tx, timeType, OkVersion, AgreementCode, Position,
-                expectedVersion: 1, closeDate: today);
-            Assert.True(deleted);
+        var client = AdminClient();
 
-            // The DELETE's own audit row (DELETED).
-            await _repo.AppendAuditAsync(
-                conn, tx, timeType, OkVersion, AgreementCode, Position,
-                "DELETED",
-                previousData: """{"description":"original-seed"}""",
-                newData: null,
-                actorId: "admin1", actorRole: "GlobalAdmin",
-                versionBefore: 1, versionAfter: 1);
-            await tx.CommitAsync();
-        }
+        // DELETE → soft-close (effective_to = today); DELETED audit + WageTypeMappingDeleted outbox.
+        var delRsp = await DeleteAsync(client, timeType, ifMatchValue: "1");
+        Assert.Equal(HttpStatusCode.NoContent, delRsp.StatusCode);
 
-        // Step 2: a fresh CREATE for the same natural key — repro the endpoint's Case B
-        // path: there's no open row, but there's a closed-today predecessor with
-        // effective_from < today, so Case B is fresh INSERT preserving the closure.
-        await using (var conn = _harness.Factory.Create())
-        {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
+        // POST re-create same natural key — Case B: closed-today predecessor with
+        // effective_from < today → fresh INSERT at version 1; CREATED audit + Created outbox.
+        var postRsp = await PostAsync(client, timeType,
+            wageType: "SLS_0110", description: "recreated-case-B", effectiveFrom: today);
+        Assert.Equal(HttpStatusCode.Created, postRsp.StatusCode);
+        Assert.Equal("\"1\"", postRsp.Headers.ETag!.Tag);
 
-            // Mirror the endpoint's lock query for closed-on-today predecessors.
-            WageTypeMapping? closedToday = null;
-            await using (var lockCmd = new NpgsqlCommand(
-                """
-                SELECT mapping_id, time_type, wage_type, ok_version, agreement_code, position,
-                       description, version, effective_from, effective_to
-                FROM wage_type_mappings
-                WHERE time_type = @tt AND ok_version = @ok AND agreement_code = @ac
-                  AND position = @pos AND effective_to = @today
-                FOR UPDATE
-                """, conn, tx))
-            {
-                lockCmd.Parameters.AddWithValue("tt", timeType);
-                lockCmd.Parameters.AddWithValue("ok", OkVersion);
-                lockCmd.Parameters.AddWithValue("ac", AgreementCode);
-                lockCmd.Parameters.AddWithValue("pos", Position);
-                lockCmd.Parameters.AddWithValue("today", today);
-                await using var reader = await lockCmd.ExecuteReaderAsync();
-                Assert.True(await reader.ReadAsync(), "Predecessor closed-today not found");
-                closedToday = new WageTypeMapping
-                {
-                    MappingId = reader.GetGuid(0),
-                    TimeType = reader.GetString(1),
-                    WageType = reader.GetString(2),
-                    OkVersion = reader.GetString(3),
-                    AgreementCode = reader.GetString(4),
-                    Position = reader.GetString(5),
-                    Description = reader.IsDBNull(6) ? null : reader.GetString(6),
-                    Version = reader.GetInt64(7),
-                    EffectiveFrom = reader.GetFieldValue<DateOnly>(8),
-                    EffectiveTo = reader.IsDBNull(9) ? null : reader.GetFieldValue<DateOnly>(9),
-                };
-            }
-
-            // Case B routing: predecessor.effective_from < today → fresh INSERT.
-            Assert.True(closedToday!.EffectiveFrom < today);
-
-            await _repo.CreateAsync(conn, tx, new WageTypeMapping
-            {
-                TimeType = timeType,
-                WageType = "SLS_0110",
-                OkVersion = OkVersion,
-                AgreementCode = AgreementCode,
-                Position = Position,
-                Description = "recreated-case-B",
-                EffectiveFrom = today,
-            });
-
-            await _repo.AppendAuditAsync(
-                conn, tx, timeType, OkVersion, AgreementCode, Position,
-                "CREATED",
-                previousData: null,
-                newData: """{"description":"recreated-case-B"}""",
-                actorId: "admin1", actorRole: "GlobalAdmin");
-            await tx.CommitAsync();
-        }
-
-        // Assert: row count = 2. Predecessor unchanged from step 1 (effective_to = today).
-        // New row: effective_from = today, effective_to = NULL.
+        // State: 2 rows — closed predecessor + new open row.
         Assert.Equal(2L, await CountRowsForNaturalKeyAsync(timeType));
         var predecessor = await ReadRowAsync(timeType, pastEffectiveFrom);
         Assert.NotNull(predecessor);
@@ -400,209 +267,164 @@ public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
         Assert.Equal("recreated-case-B", newRow.Description);
         Assert.Equal(1L, newRow.Version);
 
-        // Audit chain: DELETED (step 1) then CREATED (step 2) — no SUPERSEDED.
-        var allAudits = await ReadAllAuditAsync(timeType);
-        Assert.Contains(allAudits, a => a.Action == "DELETED");
-        Assert.Contains(allAudits, a => a.Action == "CREATED");
-        Assert.DoesNotContain(allAudits, a => a.Action == "SUPERSEDED");
+        // Audit chain produced by the endpoints: DELETED then CREATED, never SUPERSEDED.
+        var audits = await ReadAllAuditAsync(timeType);
+        Assert.Contains(audits, a => a.Action == "DELETED");
+        Assert.Contains(audits, a => a.Action == "CREATED");
+        Assert.DoesNotContain(audits, a => a.Action == "SUPERSEDED");
 
-        // GetByKeyAtAsync gap behavior: yesterday returns the closed row;
-        // today returns the new row (end-exclusive predicate at the closed row's effective_to).
-        var yesterday = today.AddDays(-1);
-        var resolveYesterday = await _repo.GetByKeyAtAsync(
-            timeType, OkVersion, AgreementCode, Position, asOfDate: yesterday);
-        Assert.NotNull(resolveYesterday);
-        Assert.Equal("original-seed", resolveYesterday!.Description);
-
-        var resolveToday = await _repo.GetByKeyAtAsync(
-            timeType, OkVersion, AgreementCode, Position, asOfDate: today);
-        Assert.NotNull(resolveToday);
-        Assert.Equal("recreated-case-B", resolveToday!.Description);
+        // Outbox produced by the endpoints.
+        Assert.Equal(1L, await CountOutboxAsync(StreamId(timeType), "WageTypeMappingDeleted"));
+        Assert.Equal(1L, await CountOutboxAsync(StreamId(timeType), "WageTypeMappingCreated"));
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // D-test #5 — D2 Case C: CREATE-DELETE-CREATE-same-day with predecessor = today.
+    // D-test #5 — D2 Case C: POST (create today), DELETE (zero-width close), POST again.
+    // The final POST hits a closed-today row whose effective_from == today, so the endpoint
+    // UPDATE-and-reopens IN PLACE (version bump, single row) rather than inserting — UPDATED
+    // audit, WageTypeMappingUpdated outbox, NOT a SUPERSEDED and NOT a second CREATED for the
+    // reopen. The reopen UPDATE is now performed by the SHIPPED endpoint (previously the test
+    // hand-wrote the `UPDATE … SET effective_to = NULL` itself).
+    //
+    // Falsifiability: if Case C wrongly inserted a second row the "1 row" assertion goes RED;
+    // if it emitted CREATED/SUPERSEDED for the reopen the "latest audit == UPDATED" assertion
+    // and the outbox event_type assertion go RED; if it failed to bump the version the
+    // version==2 assertion goes RED.
     // ═════════════════════════════════════════════════════════════════════════
     [Fact]
-    public async Task Case_C_CreateDeleteCreateSameDay_PredecessorEqualToday_UpdatesAndReopens()
+    public async Task CaseC_CreateDeleteRecreateSameDay_ZeroWidthReopen_UpdatesInPlace_EmitsUpdatedAudit()
     {
         var timeType = NewTimeType("CASEC");
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
-        // Step 0: insert one open row at effective_from = today.
-        await _repo.CreateAsync(new WageTypeMapping
-        {
-            TimeType = timeType,
-            WageType = "SLS_0110",
-            OkVersion = OkVersion,
-            AgreementCode = AgreementCode,
-            Position = Position,
-            Description = "first-create-today",
-            EffectiveFrom = today,
-        });
+        var client = AdminClient();
 
-        // Step 1: SoftDeleteAsync(today) — zero-width close (effective_from = effective_to = today).
-        await using (var conn = _harness.Factory.Create())
-        {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-            var deleted = await _repo.SoftDeleteAsync(
-                conn, tx, timeType, OkVersion, AgreementCode, Position,
-                expectedVersion: 1, closeDate: today);
-            Assert.True(deleted);
+        // POST create today (Case A) → version 1, CREATED audit + Created outbox.
+        var create = await PostAsync(client, timeType,
+            wageType: "SLS_0110", description: "first-create-today", effectiveFrom: today);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        Assert.Equal("\"1\"", create.Headers.ETag!.Tag);
 
-            await _repo.AppendAuditAsync(
-                conn, tx, timeType, OkVersion, AgreementCode, Position,
-                "DELETED",
-                previousData: """{"description":"first-create-today"}""",
-                newData: null,
-                actorId: "admin1", actorRole: "GlobalAdmin",
-                versionBefore: 1, versionAfter: 1);
-            await tx.CommitAsync();
-        }
+        // DELETE → zero-width close (effective_from == effective_to == today); DELETED audit.
+        var del = await DeleteAsync(client, timeType, ifMatchValue: "1");
+        Assert.Equal(HttpStatusCode.NoContent, del.StatusCode);
 
-        // Verify the zero-width predecessor state (effective_from = effective_to = today).
+        // POST again — Case C UPDATE-and-reopen: single row, version 2, UPDATED audit + Updated outbox.
+        var reopen = await PostAsync(client, timeType,
+            wageType: "SLS_0110", description: "recreated-case-C", effectiveFrom: today);
+        Assert.Equal(HttpStatusCode.Created, reopen.StatusCode);
+        Assert.Equal("\"2\"", reopen.Headers.ETag!.Tag);
+
+        // State: exactly one row (reopen, not fresh insert), version 2, open, new description.
         Assert.Equal(1L, await CountRowsForNaturalKeyAsync(timeType));
-        var afterDelete = await ReadRowAsync(timeType, today);
-        Assert.NotNull(afterDelete);
-        Assert.Equal(today, afterDelete!.EffectiveFrom);
-        Assert.Equal(today, afterDelete.EffectiveTo);
-
-        // Step 2: re-CREATE same natural key, same day — Case C: UPDATE-and-reopen.
-        long persistedVersion;
-        await using (var conn = _harness.Factory.Create())
-        {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-
-            // Lock the closed-today predecessor (mirror endpoint).
-            Guid mappingId;
-            long preVersion;
-            await using (var lockCmd = new NpgsqlCommand(
-                """
-                SELECT mapping_id, version, effective_from
-                FROM wage_type_mappings
-                WHERE time_type = @tt AND ok_version = @ok AND agreement_code = @ac
-                  AND position = @pos AND effective_to = @today
-                FOR UPDATE
-                """, conn, tx))
-            {
-                lockCmd.Parameters.AddWithValue("tt", timeType);
-                lockCmd.Parameters.AddWithValue("ok", OkVersion);
-                lockCmd.Parameters.AddWithValue("ac", AgreementCode);
-                lockCmd.Parameters.AddWithValue("pos", Position);
-                lockCmd.Parameters.AddWithValue("today", today);
-                await using var reader = await lockCmd.ExecuteReaderAsync();
-                Assert.True(await reader.ReadAsync(), "Zero-width predecessor not found");
-                mappingId = reader.GetGuid(0);
-                preVersion = reader.GetInt64(1);
-                var lockedFrom = reader.GetFieldValue<DateOnly>(2);
-                Assert.Equal(today, lockedFrom); // Case C: predecessor.effective_from == today
-            }
-
-            // Case C reopen: UPDATE effective_to = NULL + version + 1 + new field values.
-            await using (var reopenCmd = new NpgsqlCommand(
-                """
-                UPDATE wage_type_mappings SET
-                    wage_type    = @wt,
-                    description  = @desc,
-                    effective_to = NULL,
-                    version      = version + 1
-                WHERE mapping_id = @id
-                RETURNING version
-                """, conn, tx))
-            {
-                reopenCmd.Parameters.AddWithValue("wt", "SLS_0110");
-                reopenCmd.Parameters.AddWithValue("desc", "recreated-case-C");
-                reopenCmd.Parameters.AddWithValue("id", mappingId);
-                persistedVersion = (long)(await reopenCmd.ExecuteScalarAsync())!;
-            }
-
-            await _repo.AppendAuditAsync(
-                conn, tx, timeType, OkVersion, AgreementCode, Position,
-                "UPDATED",
-                previousData: """{"description":"first-create-today"}""",
-                newData: """{"description":"recreated-case-C"}""",
-                actorId: "admin1", actorRole: "GlobalAdmin",
-                versionBefore: preVersion, versionAfter: persistedVersion);
-            await tx.CommitAsync();
-        }
-
-        // Assert: row count = 1 (UPDATE-and-reopen, NOT a fresh INSERT).
-        Assert.Equal(1L, await CountRowsForNaturalKeyAsync(timeType));
-
-        // Row: effective_from = today, effective_to = NULL, version bumped to 2.
         var final = await ReadRowAsync(timeType, today);
         Assert.NotNull(final);
-        Assert.Equal(today, final!.EffectiveFrom);
-        Assert.Null(final.EffectiveTo);
+        Assert.Null(final!.EffectiveTo);
         Assert.Equal(2L, final.Version);
         Assert.Equal("recreated-case-C", final.Description);
-        Assert.Equal(2L, persistedVersion);
 
-        // Audit chain: DELETED (step 1) → UPDATED (step 2). NO separate CREATED for step 2.
-        var allAudits = await ReadAllAuditAsync(timeType);
-        Assert.Contains(allAudits, a => a.Action == "DELETED");
-        Assert.Contains(allAudits, a => a.Action == "UPDATED");
-        Assert.DoesNotContain(allAudits, a => a.Action == "CREATED");
+        // Audit produced by the endpoints: the reopen is an UPDATE (latest action UPDATED),
+        // a DELETED exists from the middle step, and there is NO SUPERSEDED anywhere.
+        var (latestAction, _, _) = await ReadLatestAuditAsync(timeType);
+        Assert.Equal("UPDATED", latestAction);
+        var audits = await ReadAllAuditAsync(timeType);
+        Assert.Contains(audits, a => a.Action == "DELETED");
+        Assert.DoesNotContain(audits, a => a.Action == "SUPERSEDED");
+
+        // Outbox produced by the endpoints — the reopen emits WageTypeMappingUpdated.
+        Assert.Equal(1L, await CountOutboxAsync(StreamId(timeType), "WageTypeMappingUpdated"));
+        Assert.Equal(0L, await CountOutboxAsync(StreamId(timeType), "WageTypeMappingSuperseded"));
     }
 
-    // ─── Test helpers ────────────────────────────────────────────────────────
+    // ─── HTTP helpers (drive the real endpoints) ───────────────────────────────
+
+    private HttpClient AdminClient()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
+        return client;
+    }
+
+    private static async Task<HttpResponseMessage> PutAsync(
+        HttpClient client, string timeType,
+        string wageType, string description, DateOnly effectiveFrom, string? ifMatchValue)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Put, "/api/admin/wage-type-mappings")
+        {
+            Content = JsonContent.Create(new
+            {
+                timeType,
+                wageType,
+                okVersion = OkVersion,
+                agreementCode = AgreementCode,
+                position = Position,
+                description,
+                effectiveFrom = effectiveFrom.ToString("yyyy-MM-dd"),
+            }),
+        };
+        if (ifMatchValue is not null)
+            req.Headers.TryAddWithoutValidation("If-Match", $"\"{ifMatchValue}\"");
+        return await client.SendAsync(req);
+    }
+
+    private static async Task<HttpResponseMessage> PostAsync(
+        HttpClient client, string timeType,
+        string wageType, string description, DateOnly effectiveFrom)
+    {
+        return await client.PostAsJsonAsync("/api/admin/wage-type-mappings", new
+        {
+            timeType,
+            wageType,
+            okVersion = OkVersion,
+            agreementCode = AgreementCode,
+            position = Position,
+            description,
+            effectiveFrom = effectiveFrom.ToString("yyyy-MM-dd"),
+        });
+    }
+
+    private static async Task<HttpResponseMessage> DeleteAsync(
+        HttpClient client, string timeType, string? ifMatchValue)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Delete,
+            $"/api/admin/wage-type-mappings?timeType={timeType}&okVersion={OkVersion}&agreementCode={AgreementCode}&position=");
+        if (ifMatchValue is not null)
+            req.Headers.TryAddWithoutValidation("If-Match", $"\"{ifMatchValue}\"");
+        return await client.SendAsync(req);
+    }
+
+    private static string MintAdminToken()
+    {
+        var settings = new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        };
+        var tokenService = new JwtTokenService(settings);
+        return tokenService.GenerateToken(
+            employeeId: "ADMIN_S133_QA",
+            name: "S133 QA Admin",
+            role: StatsTidRoles.GlobalAdmin,
+            agreementCode: AgreementCode);
+    }
+
+    // ─── Data-setup + read-back helpers (talk to the DB directly) ──────────────
 
     private static string NewTimeType(string prefix) =>
         $"WTM_S29_{prefix}_" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
-    private async Task<long> CountRowsForNaturalKeyAsync(string timeType)
-    {
-        await using var conn = _harness.Factory.Create();
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            """
-            SELECT COUNT(*) FROM wage_type_mappings
-            WHERE time_type = @tt AND ok_version = @ok AND agreement_code = @ac
-              AND position = @pos
-            """, conn);
-        cmd.Parameters.AddWithValue("tt", timeType);
-        cmd.Parameters.AddWithValue("ok", OkVersion);
-        cmd.Parameters.AddWithValue("ac", AgreementCode);
-        cmd.Parameters.AddWithValue("pos", Position);
-        return Convert.ToInt64(await cmd.ExecuteScalarAsync());
-    }
+    private static string StreamId(string timeType) =>
+        $"wage-type-mapping-{AgreementCode}-{OkVersion}-{timeType}";
 
-    private async Task<WageTypeMapping?> ReadRowAsync(string timeType, DateOnly effectiveFrom)
-    {
-        await using var conn = _harness.Factory.Create();
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            """
-            SELECT mapping_id, time_type, wage_type, ok_version, agreement_code, position,
-                   description, version, effective_from, effective_to
-            FROM wage_type_mappings
-            WHERE time_type = @tt AND ok_version = @ok AND agreement_code = @ac
-              AND position = @pos AND effective_from = @ef
-            """, conn);
-        cmd.Parameters.AddWithValue("tt", timeType);
-        cmd.Parameters.AddWithValue("ok", OkVersion);
-        cmd.Parameters.AddWithValue("ac", AgreementCode);
-        cmd.Parameters.AddWithValue("pos", Position);
-        cmd.Parameters.AddWithValue("ef", effectiveFrom);
-        await using var reader = await cmd.ExecuteReaderAsync();
-        if (!await reader.ReadAsync())
-            return null;
-        return new WageTypeMapping
-        {
-            MappingId = reader.GetGuid(0),
-            TimeType = reader.GetString(1),
-            WageType = reader.GetString(2),
-            OkVersion = reader.GetString(3),
-            AgreementCode = reader.GetString(4),
-            Position = reader.GetString(5),
-            Description = reader.IsDBNull(6) ? null : reader.GetString(6),
-            Version = reader.GetInt64(7),
-            EffectiveFrom = reader.GetFieldValue<DateOnly>(8),
-            EffectiveTo = reader.IsDBNull(9) ? null : reader.GetFieldValue<DateOnly>(9),
-        };
-    }
+    /// <summary>
+    /// Seeds one currently-open row for the natural key at the given effective_from. Used to
+    /// stage a predecessor the same-day-only-edit endpoint validator will not let us create
+    /// through HTTP. Pure data setup — no orchestration.
+    /// </summary>
+    private Task SeedOpenRowAsync(string timeType, DateOnly effectiveFrom, string wageType, string description) =>
+        InsertRawAsync(timeType, wageType, description, effectiveFrom, effectiveTo: null, version: 1);
 
     private async Task InsertRawAsync(
         string timeType, string wageType, string description,
@@ -629,6 +451,55 @@ public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("et", (object?)effectiveTo ?? DBNull.Value);
         cmd.Parameters.AddWithValue("v", version);
         await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task<long> CountRowsForNaturalKeyAsync(string timeType)
+    {
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM wage_type_mappings
+            WHERE time_type = @tt AND ok_version = @ok AND agreement_code = @ac AND position = @pos
+            """, conn);
+        cmd.Parameters.AddWithValue("tt", timeType);
+        cmd.Parameters.AddWithValue("ok", OkVersion);
+        cmd.Parameters.AddWithValue("ac", AgreementCode);
+        cmd.Parameters.AddWithValue("pos", Position);
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync());
+    }
+
+    private async Task<WageTypeMapping?> ReadRowAsync(string timeType, DateOnly effectiveFrom)
+    {
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT description, version, effective_to
+            FROM wage_type_mappings
+            WHERE time_type = @tt AND ok_version = @ok AND agreement_code = @ac
+              AND position = @pos AND effective_from = @ef
+            """, conn);
+        cmd.Parameters.AddWithValue("tt", timeType);
+        cmd.Parameters.AddWithValue("ok", OkVersion);
+        cmd.Parameters.AddWithValue("ac", AgreementCode);
+        cmd.Parameters.AddWithValue("pos", Position);
+        cmd.Parameters.AddWithValue("ef", effectiveFrom);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+            return null;
+        return new WageTypeMapping
+        {
+            TimeType = timeType,
+            WageType = "", // not needed by assertions
+            OkVersion = OkVersion,
+            AgreementCode = AgreementCode,
+            Position = Position,
+            Description = reader.IsDBNull(0) ? null : reader.GetString(0),
+            Version = reader.GetInt64(1),
+            EffectiveFrom = effectiveFrom,
+            EffectiveTo = reader.IsDBNull(2) ? null : reader.GetFieldValue<DateOnly>(2),
+        };
     }
 
     private async Task<(string Action, long? VersionBefore, long? VersionAfter)> ReadLatestAuditAsync(string timeType)
@@ -676,36 +547,14 @@ public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
         return rows;
     }
 
-    private async Task<long> CountOutboxRowsAsync(string streamId, string eventType)
+    private async Task<long> CountOutboxAsync(string streamId, string eventType)
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
-            """
-            SELECT COUNT(*) FROM outbox_events
-            WHERE stream_id = @sid AND event_type = @et
-            """, conn);
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @sid AND event_type = @et", conn);
         cmd.Parameters.AddWithValue("sid", streamId);
         cmd.Parameters.AddWithValue("et", eventType);
         return Convert.ToInt64(await cmd.ExecuteScalarAsync());
-    }
-
-    private static async Task EnqueueOutboxAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        string timeType, string eventType)
-    {
-        var streamId = $"wage-type-mapping-{AgreementCode}-{OkVersion}-{timeType}";
-        await using var cmd = new NpgsqlCommand(
-            """
-            INSERT INTO outbox_events (
-                service_id, stream_id, event_id, event_type, event_payload)
-            VALUES (
-                'backend-api', @sid, @eid, @et, @payload::jsonb)
-            """, conn, tx);
-        cmd.Parameters.AddWithValue("sid", streamId);
-        cmd.Parameters.AddWithValue("eid", Guid.NewGuid());
-        cmd.Parameters.AddWithValue("et", eventType);
-        cmd.Parameters.AddWithValue("payload", "{}");
-        await cmd.ExecuteNonQueryAsync();
     }
 }

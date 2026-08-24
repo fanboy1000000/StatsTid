@@ -1755,21 +1755,10 @@ public sealed class ApprovalPeriodRepository
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task UpdateDeadlinesAsync(
-        Guid periodId, DateOnly? employeeDeadline, DateOnly? managerDeadline, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            "UPDATE approval_periods SET employee_deadline = @employeeDeadline, manager_deadline = @managerDeadline WHERE period_id = @periodId", conn);
-        cmd.Parameters.AddWithValue("periodId", periodId);
-        cmd.Parameters.AddWithValue("employeeDeadline", (object?)employeeDeadline ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("managerDeadline", (object?)managerDeadline ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
     /// <summary>
-    /// In-transaction sibling overload of <see cref="UpdateDeadlinesAsync(Guid, DateOnly?, DateOnly?, CancellationToken)"/>.
+    /// Updates the employee/manager deadlines within the caller-supplied <paramref name="conn"/>
+    /// + <paramref name="tx"/> (ADR-018 D3 transactional-outbox contract). The caller commits
+    /// or rolls back; this method does NOT.
     /// </summary>
     public async Task UpdateDeadlinesAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -1784,27 +1773,11 @@ public sealed class ApprovalPeriodRepository
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task AppendAuditAsync(
-        Guid periodId, string action, string actorId, string actorRole,
-        string? comment = null, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            """
-            INSERT INTO approval_audit (period_id, action, actor_id, actor_role, comment)
-            VALUES (@periodId, @action, @actorId, @actorRole, @comment)
-            """, conn);
-        cmd.Parameters.AddWithValue("periodId", periodId);
-        cmd.Parameters.AddWithValue("action", action);
-        cmd.Parameters.AddWithValue("actorId", actorId);
-        cmd.Parameters.AddWithValue("actorRole", actorRole);
-        cmd.Parameters.AddWithValue("comment", (object?)comment ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
     /// <summary>
-    /// In-transaction sibling overload of <see cref="AppendAuditAsync(Guid, string, string, string, string?, CancellationToken)"/>.
+    /// Appends an approval-audit row within the caller-supplied <paramref name="conn"/> +
+    /// <paramref name="tx"/> so the audit write is atomic with the business mutation + outbox
+    /// event (ADR-018 D3 transactional-outbox contract). The caller commits or rolls back;
+    /// this method does NOT.
     /// </summary>
     public async Task AppendAuditAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,

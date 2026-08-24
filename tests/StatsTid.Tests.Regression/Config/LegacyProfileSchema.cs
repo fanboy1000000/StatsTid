@@ -69,37 +69,15 @@ internal static class LegacyProfileSchema
         """;
 
     /// <summary>
-    /// The S22 migration DO $$ block from <c>docker/postgres/init.sql</c> lines ~1278-1305
-    /// — the single canonical source of the migration logic. Idempotent via
-    /// <c>schema_migrations</c> ledger guard.
+    /// The S22 migration <c>DO $$</c> block (ledger id <c>s22-d7-d8-d9</c>) — read from the
+    /// SHIPPED <c>docker/postgres/init.sql</c> at test time, NOT a pasted copy (S133 / QUAL-014).
+    /// Extracting the real block means the S22 tests exercise exactly what production runs; if
+    /// the shipped migration ever drops the version column / the +1-day shift / the MODIFIED
+    /// audit action, the migration tests' post-apply assertions catch it instead of silently
+    /// verifying a stale in-test duplicate. Idempotent via the <c>schema_migrations</c> ledger
+    /// guard baked into the block.
     /// </summary>
-    public const string S22MigrationDdl = """
-        DO $$
-        BEGIN
-            INSERT INTO schema_migrations (migration_id, notes)
-            VALUES ('s22-d7-d8-d9', 'ADR-018: row-version + end-exclusive + MODIFIED audit action')
-            ON CONFLICT (migration_id) DO NOTHING;
-
-            IF NOT FOUND THEN
-                RETURN;
-            END IF;
-
-            ALTER TABLE local_agreement_profiles
-            ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
-
-            UPDATE local_agreement_profiles
-            SET effective_to = effective_to + INTERVAL '1 day'
-            WHERE effective_to IS NOT NULL;
-
-            ALTER TABLE local_agreement_profile_audit
-            DROP CONSTRAINT IF EXISTS local_agreement_profile_audit_action_check;
-
-            ALTER TABLE local_agreement_profile_audit
-            ADD CONSTRAINT local_agreement_profile_audit_action_check
-            CHECK (action IN ('CREATED', 'MODIFIED', 'SUPERSEDED', 'DEACTIVATED', 'MIGRATED_FROM_LEGACY'));
-        END
-        $$;
-        """;
+    public static string S22MigrationDdl => CanonicalInitSql.ExtractGuardedBlock("s22-d7-d8-d9");
 
     public static async Task ApplyAsync(string connectionString, CancellationToken ct = default)
     {

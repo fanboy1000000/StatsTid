@@ -157,40 +157,6 @@ public sealed class WageTypeMappingRepository
         return rows > 0;
     }
 
-    public async Task<bool> UpdateAsync(WageTypeMapping mapping, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        return await ExecuteSelfManagedUpdateAsync(conn, mapping, ct);
-    }
-
-    private static async Task<bool> ExecuteSelfManagedUpdateAsync(
-        NpgsqlConnection conn,
-        WageTypeMapping mapping, CancellationToken ct)
-    {
-        // Self-managed (no caller tx) — preserved unchanged from pre-S25; legacy callers
-        // (seeders, internal tooling) continue to use this best-effort path. The v3
-        // in-transaction sibling enforces ETag/If-Match optimistic concurrency for HTTP
-        // admin endpoints.
-        var sql =
-            """
-            UPDATE wage_type_mappings SET
-                wage_type = @wageType,
-                description = @description
-            WHERE time_type = @timeType AND ok_version = @okVersion AND agreement_code = @agreementCode
-              AND position = @position
-            """;
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("wageType", mapping.WageType);
-        cmd.Parameters.AddWithValue("description", (object?)mapping.Description ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("timeType", mapping.TimeType);
-        cmd.Parameters.AddWithValue("okVersion", mapping.OkVersion);
-        cmd.Parameters.AddWithValue("agreementCode", mapping.AgreementCode);
-        cmd.Parameters.AddWithValue("position", mapping.Position ?? "");
-        var rows = await cmd.ExecuteNonQueryAsync(ct);
-        return rows > 0;
-    }
-
     /// <summary>
     /// In-transaction v3 update overload — admin-strict ETag/If-Match optimistic-concurrency
     /// (ADR-019). Single PUT entry point for all mutations on the natural key.
@@ -484,22 +450,6 @@ public sealed class WageTypeMappingRepository
         cmd.Parameters.AddWithValue("agreementCode", agreementCode);
         cmd.Parameters.AddWithValue("okVersion", okVersion);
         return await ReadMappingsAsync(cmd, ct);
-    }
-
-    public async Task AppendAuditAsync(
-        string timeType, string okVersion, string agreementCode, string position,
-        string action, string? previousData, string? newData,
-        string actorId, string actorRole, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            """
-            INSERT INTO wage_type_mapping_audit (time_type, ok_version, agreement_code, position, action, previous_data, new_data, actor_id, actor_role)
-            VALUES (@timeType, @okVersion, @agreementCode, @position, @action, @previousData::jsonb, @newData::jsonb, @actorId, @actorRole)
-            """, conn);
-        AddAuditParameters(cmd, timeType, okVersion, agreementCode, position, action, previousData, newData, actorId, actorRole);
-        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>

@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -47,12 +49,16 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// <para>
 /// <b>Direct-orchestration shape (S29 TASK-2909 precedent).</b> Uses the
 /// real <see cref="EmploymentProfileResolver"/> and the real
-/// <see cref="PeriodCalculationService"/> in-process; the rule engine is
-/// stubbed via <see cref="TestFixtures.DefaultRuleEngineHandler"/> — the
-/// rule outputs only need to be plausible enough that PCS walks the full
-/// segment-loop + merge + replay path. The full Backend.Api Program.cs
-/// boot is intentionally skipped (the WAF&lt;Program&gt; harness is used by
-/// the HTTP-level lifecycle tests in
+/// <see cref="PeriodCalculationService"/> in-process. The rule engine is
+/// stubbed via <see cref="PartTimeSensitiveRuleEngineHandler"/> — which,
+/// crucially (QUAL-015), CONSUMES the resolved <c>part_time_fraction</c>
+/// and scales <see cref="CalculationResult.NormHoursTotal"/> by it, modelling
+/// the real <c>NormCheckRule</c>. The shared
+/// <see cref="TestFixtures.DefaultRuleEngineHandler"/> ignores the fraction,
+/// so with it the byte-identity assertion was blind to the resolver — a
+/// resolver regression could not have failed this marquee. The full
+/// Backend.Api Program.cs boot is intentionally skipped (the WAF&lt;Program&gt;
+/// harness is used by the HTTP-level lifecycle tests in
 /// <see cref="StatsTid.Tests.Regression.EmployeeProfile.EmployeeProfileLifecycleTests"/>).
 /// </para>
 /// </summary>
@@ -63,6 +69,17 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     private const string OrgId = "STY01";
     private const string AgreementCode = "AC";
     private const string OkVersion = "OK24";
+
+    // QUAL-015: the part_time_fraction the DATED predecessor row carries for April 2026.
+    // The resolver must return THIS value on replay (the Case C supersession closes the
+    // predecessor at Today, and PeriodStart=2026-04-01 < Today), NOT the mutated live row.
+    private const decimal SeededPartTimeFraction = 1.000m;
+
+    // The marquee stub models NormCheckRule: the period norm scales with the resolved
+    // part-time fraction (37h full-time). NormHoursTotal = FullTimeWeeklyNorm * fraction is
+    // the field that carries the resolved fraction into the serialized RuleResults, so the
+    // byte-identity assertion is now genuinely coupled to what the resolver returned.
+    private const decimal FullTimeWeeklyNorm = 37.0m;
 
     // Period inside OK24 only — single segment so the marquee proves the
     // resolver-driven segmentProfile construction in the simplest possible
@@ -139,6 +156,11 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         Assert.True(baseline.Success);
         Assert.NotEmpty(baseline.RuleResults);
 
+        // QUAL-015 falsifiability guard: prove the resolved part_time_fraction actually
+        // reaches the serialized RuleResults, so the byte-identity assertion below is
+        // meaningful. Baseline resolves the dated row (fraction=1.000) → NormHoursTotal=37.0.
+        Assert.Equal(FullTimeWeeklyNorm * SeededPartTimeFraction, ReadNormHoursTotal(baseline));
+
         // ManifestId is stamped per-RuleResult (PCS.cs:356-359 WithManifestId)
         var baselineManifestId = baseline.RuleResults.First().ManifestId;
         Assert.NotEqual(Guid.Empty, baselineManifestId);
@@ -163,6 +185,13 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         var replay = await pcs.ReplayAsync(
             baselineManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
         Assert.True(replay.Success);
+
+        // The dated resolver returns the predecessor (fraction=1.000) for asOfDate=2026-04-01
+        // < Today, so replay's norm is 37.0 — identical to baseline. A resolver regression
+        // that read the mutated LIVE row (fraction=0.800) would make this 29.6, so the
+        // byte-identity assertion below would FAIL. THIS is the regression the marquee exists
+        // for; before QUAL-015 the stub ignored the fraction and the assertion could not fail.
+        Assert.Equal(FullTimeWeeklyNorm * SeededPartTimeFraction, ReadNormHoursTotal(replay));
 
         var replayJson = JsonSerializer.Serialize(replay.RuleResults, SerializerOptions);
 
@@ -195,6 +224,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             profileSeed, entries, absences, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
 #pragma warning restore CS0618
         Assert.True(baseline.Success);
+        // QUAL-015 falsifiability guard (see variant 1): the resolved fraction reaches the
+        // serialized RuleResults. Baseline resolves the dated row (fraction=1.000) → 37.0.
+        Assert.Equal(FullTimeWeeklyNorm * SeededPartTimeFraction, ReadNormHoursTotal(baseline));
         var baselineManifestId = baseline.RuleResults.First().ManifestId;
         var baselineJson = JsonSerializer.Serialize(baseline.RuleResults, SerializerOptions);
 
@@ -206,6 +238,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         var replay = await pcs.ReplayAsync(
             baselineManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
         Assert.True(replay.Success);
+        // Dated resolver returns the predecessor (1.000) → 37.0, identical to baseline. A
+        // regression reading the live row (0.750) would yield 27.75 → byte-identity FAILS.
+        Assert.Equal(FullTimeWeeklyNorm * SeededPartTimeFraction, ReadNormHoursTotal(replay));
         var replayJson = JsonSerializer.Serialize(replay.RuleResults, SerializerOptions);
 
         Assert.Equal(baselineJson, replayJson);
@@ -321,7 +356,13 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     /// </summary>
     private PeriodCalculationService BuildPcsWithResolver(EmploymentProfileResolver resolver)
     {
-        var stubHandler = new TestFixtures.StubHandler(TestFixtures.DefaultRuleEngineHandler);
+        // QUAL-015 rewire: the rule-engine stub MUST consume the resolved
+        // profile.part_time_fraction, otherwise the byte-identity assertion is blind to the
+        // resolver (see PartTimeSensitiveRuleEngineHandler). The shared
+        // TestFixtures.DefaultRuleEngineHandler ignores part_time_fraction, so a resolver
+        // regression could not have failed this marquee — the exact verification-theater
+        // defect this task removes.
+        var stubHandler = new TestFixtures.StubHandler(PartTimeSensitiveRuleEngineHandler);
         var httpFactory = new SingleClientFactory(stubHandler);
         var wtmRepo = new WageTypeMappingRepository(_harness.Factory);
         var mappingService = new PayrollMappingService(
@@ -344,6 +385,128 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             localAgreementProfileRepo: null,
             profileResolver: resolver);
     }
+
+    // ─── QUAL-015: resolver-sensitive rule-engine stub ───────────────────────
+    /// <summary>
+    /// Rule-engine stub that — unlike <see cref="TestFixtures.DefaultRuleEngineHandler"/> —
+    /// CONSUMES the resolved <c>profile.part_time_fraction</c> from the request body and
+    /// reflects it into <see cref="CalculationResult.NormHoursTotal"/> for the NORM_CHECK_37H
+    /// rule (<c>NormHoursTotal = FullTimeWeeklyNorm * part_time_fraction</c>). This models the
+    /// real <c>NormCheckRule</c>, whose period norm scales with the part-time fraction (37.0 *
+    /// 1.0 = 37.0 for the dated predecessor vs 37.0 * 0.8 = 29.6 for the superseded live row).
+    ///
+    /// <para>
+    /// This is the crux of the QUAL-015 rewire. PCS ships the resolved segment profile to the
+    /// rule engine (<c>CallTimeRuleAsync</c> serializes <c>profile</c>), but the default stub
+    /// echoes only <c>employeeId</c> + entry-derived line items, so NO resolved-profile field
+    /// reached the serialized <c>RuleResults</c> — the byte-identity assertion could not fail
+    /// on a resolver regression. By echoing the resolved fraction into a NormCheckRule-native
+    /// field, a replay that reads the WRONG (live, mutated) row now produces a different
+    /// <c>NormHoursTotal</c> → the JSON differs → the marquee goes RED.
+    /// </para>
+    /// </summary>
+    private static HttpResponseMessage PartTimeSensitiveRuleEngineHandler(HttpRequestMessage request)
+    {
+        var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+
+        if (path.EndsWith("/api/rules/evaluate", StringComparison.Ordinal))
+            return EvaluateTimeRuleWithNorm(request);
+        if (path.EndsWith("/api/rules/evaluate-absence", StringComparison.Ordinal))
+            return SimpleSuccess("ABSENCE");
+        if (path.EndsWith("/api/rules/evaluate-flex", StringComparison.Ordinal))
+            return SimpleSuccess("FLEX_BALANCE");
+
+        return new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("unknown rule endpoint"),
+        };
+    }
+
+    private static HttpResponseMessage EvaluateTimeRuleWithNorm(HttpRequestMessage request)
+    {
+        string body = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? "{}";
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+
+        var ruleId = root.TryGetProperty("ruleId", out var rid) ? rid.GetString() ?? "UNKNOWN" : "UNKNOWN";
+
+        var employeeId = "EMP";
+        var partTimeFraction = 1.0m;
+        if (root.TryGetProperty("profile", out var prof))
+        {
+            if (prof.TryGetProperty("employeeId", out var eid))
+                employeeId = eid.GetString() ?? "EMP";
+            // The resolved (dated) part_time_fraction — the value the resolver looked up at
+            // segment.StartDate. This is what the marquee's byte-identity assertion must pin.
+            if (prof.TryGetProperty("partTimeFraction", out var ptf) && ptf.ValueKind == JsonValueKind.Number)
+                partTimeFraction = ptf.GetDecimal();
+        }
+
+        var entries = root.TryGetProperty("entries", out var ents)
+            ? ents.EnumerateArray().ToList()
+            : new List<JsonElement>();
+
+        // Only NORM_CHECK_37H emits per-entry line items (mirrors the default stub so the
+        // export-line path is unchanged) AND carries the fraction-scaled norm.
+        var isNorm = ruleId == "NORM_CHECK_37H";
+        var lineItems = isNorm
+            ? entries.Select(e => new
+            {
+                timeType = "NORMAL_HOURS",
+                hours = e.TryGetProperty("hours", out var h) ? h.GetDecimal() : 0m,
+                rate = 1.0m,
+                date = e.TryGetProperty("date", out var d) ? d.GetString() : null,
+            }).ToList<object>()
+            : new List<object>();
+
+        object payload = isNorm
+            ? (object)new
+            {
+                ruleId,
+                employeeId,
+                success = true,
+                lineItems,
+                // The resolver-coupled field: scales with the resolved dated fraction.
+                normHoursTotal = FullTimeWeeklyNorm * partTimeFraction,
+            }
+            : new
+            {
+                ruleId,
+                employeeId,
+                success = true,
+                lineItems,
+            };
+
+        return JsonResponse(payload);
+    }
+
+    private static HttpResponseMessage SimpleSuccess(string ruleId) =>
+        JsonResponse(new
+        {
+            ruleId,
+            employeeId = "EMP",
+            success = true,
+            lineItems = Array.Empty<object>(),
+        });
+
+    private static HttpResponseMessage JsonResponse(object payload)
+    {
+        var json = JsonSerializer.Serialize(
+            payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    /// <summary>
+    /// Returns the fraction-scaled <see cref="CalculationResult.NormHoursTotal"/> the marquee
+    /// stub stamps onto the NORM_CHECK_37H rule result — the single value that carries the
+    /// resolved <c>part_time_fraction</c> into the serialized <c>RuleResults</c>. Used by the
+    /// falsifiability guard below to assert the coupling is live.
+    /// </summary>
+    private static decimal? ReadNormHoursTotal(PeriodCalculationResult result) =>
+        result.RuleResults.First(r => r.RuleId == "NORM_CHECK_37H").NormHoursTotal;
 
     /// <summary>
     /// Seeds the marquee employee via the shared

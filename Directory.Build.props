@@ -48,12 +48,24 @@
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'StatsTid.Integrations.Payroll'">
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <!--
-      Baseline: 1 CS0618 at Program.cs:198 — calls deferred-retirement
-      `PeriodCalculationService.CalculateAsync(EmploymentProfile, …)`
-      legacy overload. Per S20 Step 0b W2: "The single surviving caller
-      is the /calculate-and-export endpoint; full retirement is deferred."
-      Intentional debt with explicit rationale; not a cleanup target until
-      the legacy endpoint retires.
+      QUAL-069 (S133): rationale corrected — the prior comment was wrong about
+      BOTH the location and the caller count. Measured on the current tree:
+      exactly ONE unsuppressed CS0618 in this project, at Program.cs:249 (NOT
+      :198) — the body of the /api/payroll/calculate-and-export endpoint
+      (mapped at Program.cs:199) calls the deferred-retirement legacy overload
+      `PeriodCalculationService.CalculateAsync(EmploymentProfile, …)`.
+      There is a SECOND caller of the same [Obsolete] overload —
+      RetroactiveCorrectionService.cs:210 — but it is already wrapped in a
+      local `#pragma warning disable CS0618`, so it does not trip the gate.
+      "Single surviving caller" was therefore false: two call sites exist, one
+      pragma-suppressed. This project-wide opt-out is load-bearing for that one
+      unsuppressed warning only.
+
+      STATUS: DEFERRED (QUAL-069, per OQ-5). The gate stays OFF until the legacy
+      overload retires (that clears Program.cs:249 and the pragma together). A
+      narrower fix — a targeted `#pragma warning disable CS0618` at Program.cs:249
+      so project-wide warn-as-error could be restored now — is deliberately NOT
+      taken this sprint; it rides the legacy-overload-retirement follow-up.
     -->
   </PropertyGroup>
 
@@ -65,7 +77,18 @@
       property; must enumerate project names instead.
     - Tooling projects: ProjectionBackfill is a one-shot migration tool;
       strict mode adds friction without value.
-    - Mock services: docker/mock-* are dev stubs; lower bar acceptable.
+
+    QUAL-072 (S133): MockPayroll / MockExternal REMOVED from this list. Before
+    S133 they sat outside every compiled gate (not in StatsTid.sln, and the
+    Docker build context excludes this repo-root props file), so these two
+    opt-out entries were UNREACHABLE — they described a regime that never ran.
+    QUAL-074 brought both mock hosts into StatsTid.sln, so the gated build now
+    compiles them WITH this props file applied. Observed on the gated tree they
+    build CLEAN under the full analyzer suite + warn-as-error (0 warnings), so
+    the opt-outs were not needed to keep them green — the mock hosts are now
+    held to the same warn-as-error bar as production. If a future stub edit
+    introduces a genuinely-benign warning, re-add the specific project here with
+    a cited rationale (do NOT blanket-disable), or NoWarn the specific rule.
   -->
   <PropertyGroup Condition="
        '$(MSBuildProjectName)' == 'StatsTid.Tests.Unit'
@@ -73,9 +96,7 @@
     OR '$(MSBuildProjectName)' == 'StatsTid.Tests.Smoke'
     OR '$(MSBuildProjectName)' == 'ProjectionBackfill'
     OR '$(MSBuildProjectName)' == 'StatsTid.DemoSeed'
-    OR '$(MSBuildProjectName)' == 'StatsTid.Tests.DemoSeed'
-    OR '$(MSBuildProjectName)' == 'MockPayroll'
-    OR '$(MSBuildProjectName)' == 'MockExternal'">
+    OR '$(MSBuildProjectName)' == 'StatsTid.Tests.DemoSeed'">
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 

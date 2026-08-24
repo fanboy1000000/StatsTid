@@ -1,6 +1,4 @@
-using Microsoft.AspNetCore.Http;
 using Npgsql;
-using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Tests.Regression.Outbox;
@@ -16,14 +14,18 @@ namespace StatsTid.Tests.Regression.Concurrency;
 /// maps to 409, distinct from row-version concurrency → 412).
 ///
 /// <para>
-/// Test slots (7 total):
+/// Test slots (4 total):
 ///   <list type="bullet">
 ///     <item>3 stale-If-Match → <see cref="OptimisticConcurrencyException"/> tests
 ///       (PUT update / activate / deactivate)</item>
-///     <item>3 missing-If-Match → <see cref="EtagHeaderHelper.TryParseIfMatch"/> false-return tests
-///       (PUT update / activate / deactivate)</item>
 ///     <item>1 end-to-end ETag-cycle test (CREATE → version=1, UPDATE → version=2 read-back)</item>
 ///   </list>
+/// S133 / TASK-13306 (QUAL-111): the three missing-If-Match "428" slots that used to live here were
+/// verification-theater clones — they called <c>EtagHeaderHelper.TryParseIfMatch</c> directly on a
+/// hand-built header-less request and so pinned the shared helper, NEVER the endpoints they were named
+/// for (a removed endpoint 428 guard left every clone GREEN, PAT-014). They were deleted; genuine
+/// per-endpoint 428 proofs that drive the REAL routes over HTTP now live in
+/// <c>Hosting.PositionOverridePreconditionHttpTests</c>.
 ///
 /// The 23505-vs-412 distinction test lives in
 /// <see cref="ActivateConflict_Distinction_23505_NotOptimisticConcurrency"/> and is COUNTED
@@ -187,41 +189,6 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
         Assert.Equal("23505", ex.SqlState);
     }
 
-    // ─── Missing-If-Match (428 contract) — helper surface ─────────────────────
-
-    [Fact]
-    public void Update_MissingIfMatch_HelperRejects()
-    {
-        // Mirrors PUT /api/admin/position-overrides/{overrideId} missing-precondition path.
-        var request = NewRequestWithoutIfMatch();
-        var parsed = EtagHeaderHelper.TryParseIfMatch(request, out _, out var error);
-        Assert.False(parsed);
-        Assert.NotNull(error);
-        Assert.Contains("Missing If-Match", error, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Activate_MissingIfMatch_HelperRejects()
-    {
-        // Mirrors POST /api/admin/position-overrides/{overrideId}/activate missing-precondition path.
-        var request = NewRequestWithoutIfMatch();
-        var parsed = EtagHeaderHelper.TryParseIfMatch(request, out _, out var error);
-        Assert.False(parsed);
-        Assert.NotNull(error);
-        Assert.Contains("Missing If-Match", error, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Deactivate_MissingIfMatch_HelperRejects()
-    {
-        // Mirrors POST /api/admin/position-overrides/{overrideId}/deactivate missing-precondition path.
-        var request = NewRequestWithoutIfMatch();
-        var parsed = EtagHeaderHelper.TryParseIfMatch(request, out _, out var error);
-        Assert.False(parsed);
-        Assert.NotNull(error);
-        Assert.Contains("Missing If-Match", error, StringComparison.Ordinal);
-    }
-
     // ─── End-to-end ETag-cycle ─────────────────────────────────────────────────
 
     [Fact]
@@ -257,13 +224,6 @@ public sealed class PositionOverrideConcurrencyTests : IAsyncLifetime
     }
 
     // ── Test data builders ────────────────────────────────────────────────────
-
-    private static HttpRequest NewRequestWithoutIfMatch()
-    {
-        var ctx = new DefaultHttpContext();
-        ctx.Request.Method = "PUT";
-        return ctx.Request;
-    }
 
     private static PositionOverrideConfigEntity NewOverride(
         decimal? maxFlex = 200m, string positionCode = PositionCode) => new()

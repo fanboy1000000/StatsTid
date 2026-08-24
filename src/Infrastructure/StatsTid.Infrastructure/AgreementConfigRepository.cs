@@ -203,76 +203,6 @@ public sealed class AgreementConfigRepository
         return ReadEntity(reader);
     }
 
-    public async Task<bool> UpdateDraftAsync(Guid configId, AgreementConfigEntity updated, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        return await ExecuteSelfManagedUpdateDraftAsync(conn, configId, updated, ct);
-    }
-
-    private static async Task<bool> ExecuteSelfManagedUpdateDraftAsync(
-        NpgsqlConnection conn,
-        Guid configId, AgreementConfigEntity updated, CancellationToken ct)
-    {
-        // Self-managed (no caller tx) — preserved unchanged from pre-S25; legacy callers
-        // (seeders, internal tooling) continue to use this best-effort path. The v3
-        // in-transaction sibling enforces ETag/If-Match optimistic concurrency for HTTP
-        // admin endpoints.
-        var sql =
-            """
-            UPDATE agreement_configs SET
-                weekly_norm_hours = @weeklyNormHours,
-                norm_period_weeks = @normPeriodWeeks,
-                norm_model = @normModel,
-                annual_norm_hours = @annualNormHours,
-                max_flex_balance = @maxFlexBalance,
-                flex_carryover_max = @flexCarryoverMax,
-                has_overtime = @hasOvertime,
-                has_merarbejde = @hasMerarbejde,
-                overtime_threshold_50 = @overtimeThreshold50,
-                overtime_threshold_100 = @overtimeThreshold100,
-                evening_supplement_enabled = @eveningSupplementEnabled,
-                night_supplement_enabled = @nightSupplementEnabled,
-                weekend_supplement_enabled = @weekendSupplementEnabled,
-                holiday_supplement_enabled = @holidaySupplementEnabled,
-                evening_start = @eveningStart,
-                evening_end = @eveningEnd,
-                night_start = @nightStart,
-                night_end = @nightEnd,
-                evening_rate = @eveningRate,
-                night_rate = @nightRate,
-                weekend_saturday_rate = @weekendSaturdayRate,
-                weekend_sunday_rate = @weekendSundayRate,
-                holiday_rate = @holidayRate,
-                on_call_duty_enabled = @onCallDutyEnabled,
-                on_call_duty_rate = @onCallDutyRate,
-                call_in_work_enabled = @callInWorkEnabled,
-                call_in_minimum_hours = @callInMinimumHours,
-                call_in_rate = @callInRate,
-                travel_time_enabled = @travelTimeEnabled,
-                working_travel_rate = @workingTravelRate,
-                non_working_travel_rate = @nonWorkingTravelRate,
-                max_daily_hours = @maxDailyHours,
-                minimum_rest_hours = @minimumRestHours,
-                rest_period_derogation_allowed = @restPeriodDerogationAllowed,
-                weekly_max_hours_reference_period = @weeklyMaxHoursReferencePeriod,
-                voluntary_unsocial_hours_allowed = @voluntaryUnsocialHoursAllowed,
-                default_compensation_model = @defaultCompensationModel,
-                employee_compensation_choice = @employeeCompensationChoice,
-                max_overtime_hours_per_period = @maxOvertimeHoursPerPeriod,
-                overtime_requires_pre_approval = @overtimeRequiresPreApproval,
-                description = @description,
-                updated_at = NOW()
-            WHERE config_id = @configId AND status = 'DRAFT'
-            """;
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("configId", configId);
-        AddConfigParameters(cmd, updated);
-        cmd.Parameters.AddWithValue("description", (object?)updated.Description ?? DBNull.Value);
-        var rows = await cmd.ExecuteNonQueryAsync(ct);
-        return rows > 0;
-    }
-
     /// <summary>
     /// In-transaction v3 update overload — admin-strict ETag/If-Match optimistic-concurrency
     /// (ADR-019 pending, mirrors S22 ADR-018 D7 pattern). Reads the current row under
@@ -415,43 +345,6 @@ public sealed class AgreementConfigRepository
     }
 
     /// <summary>
-    /// Self-managed overload: opens its own connection and an internal transaction for the
-    /// archive-prior-ACTIVE + activate-DRAFT pair. For a caller-driven atomic outbox + audit +
-    /// publish (ADR-018 D3) call the in-transaction sibling
-    /// <see cref="PublishAsync(NpgsqlConnection, NpgsqlTransaction, Guid, long, string, CancellationToken)"/>.
-    ///
-    /// Returns the prior-ACTIVE config_id that was archived (null if there was no prior
-    /// ACTIVE OR the publish was a no-op because the target config was missing / not in
-    /// DRAFT). On no-op the internal transaction is rolled back so the archive write is
-    /// reverted — matches the pre-S24 atomic semantic.
-    /// </summary>
-    public async Task<Guid?> PublishAsync(Guid configId, string actorId, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
-        try
-        {
-            var (archivedId, published) = await ExecuteSelfManagedPublishAsync(conn, tx, configId, actorId, ct);
-            if (!published)
-            {
-                // Config not found OR config not DRAFT — preserve pre-S24 atomic semantic by
-                // rolling back the (potentially) archived prior-ACTIVE update so the
-                // database is left untouched. Endpoint observes null and surfaces 409.
-                await tx.RollbackAsync(ct);
-                return null;
-            }
-            await tx.CommitAsync(ct);
-            return archivedId;
-        }
-        catch
-        {
-            await tx.RollbackAsync(ct);
-            throw;
-        }
-    }
-
-    /// <summary>
     /// In-transaction v3 publish overload — admin-strict ETag/If-Match optimistic-concurrency
     /// (ADR-019 pending). Atomically archives the prior ACTIVE config (if any) for the same
     /// (agreement_code, ok_version) and activates the DRAFT identified by
@@ -571,86 +464,6 @@ public sealed class AgreementConfigRepository
             ArchivedId: archivedId, ArchivedVersion: archivedVersion);
     }
 
-    private static async Task<(Guid? ArchivedId, bool Published)> ExecuteSelfManagedPublishAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid configId, string actorId, CancellationToken ct)
-    {
-        // Self-managed path — preserved unchanged from pre-S25 (no version bump). Legacy
-        // callers (PublishAsync(Guid, …) entry) continue to use this best-effort path; HTTP
-        // admin endpoints use the v3 sibling that enforces ETag/If-Match optimistic
-        // concurrency.
-        string agreementCode;
-        string okVersion;
-        string status;
-        await using (var getCmd = new NpgsqlCommand(
-            "SELECT agreement_code, ok_version, status FROM agreement_configs WHERE config_id = @configId",
-            conn, tx))
-        {
-            getCmd.Parameters.AddWithValue("configId", configId);
-            await using var reader = await getCmd.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
-                return (null, false);
-            agreementCode = reader.GetString(0);
-            okVersion = reader.GetString(1);
-            status = reader.GetString(2);
-        }
-        if (status != "DRAFT")
-            return (null, false);
-
-        Guid? archivedId = null;
-        await using (var archiveCmd = new NpgsqlCommand(
-            """
-            UPDATE agreement_configs
-            SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW()
-            WHERE agreement_code = @agreementCode AND ok_version = @okVersion AND status = 'ACTIVE'
-            RETURNING config_id
-            """, conn, tx))
-        {
-            archiveCmd.Parameters.AddWithValue("agreementCode", agreementCode);
-            archiveCmd.Parameters.AddWithValue("okVersion", okVersion);
-            var result = await archiveCmd.ExecuteScalarAsync(ct);
-            if (result is Guid archivedGuid)
-                archivedId = archivedGuid;
-        }
-
-        await using var publishCmd = new NpgsqlCommand(
-            """
-            UPDATE agreement_configs
-            SET status = 'ACTIVE', published_at = NOW(), updated_at = NOW()
-            WHERE config_id = @configId AND status = 'DRAFT'
-            """, conn, tx);
-        publishCmd.Parameters.AddWithValue("configId", configId);
-        var publishedRows = await publishCmd.ExecuteNonQueryAsync(ct);
-
-        return (archivedId, publishedRows > 0);
-    }
-
-    public async Task<bool> ArchiveAsync(Guid configId, string actorId, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        return await ExecuteSelfManagedArchiveAsync(conn, configId, actorId, ct);
-    }
-
-    private static async Task<bool> ExecuteSelfManagedArchiveAsync(
-        NpgsqlConnection conn,
-        Guid configId, string actorId, CancellationToken ct)
-    {
-        // Self-managed path — preserved unchanged from pre-S25 (no version bump). Legacy
-        // callers (internal tooling) continue to use this best-effort path; HTTP admin
-        // endpoints use the v3 sibling that enforces ETag/If-Match optimistic concurrency.
-        var sql =
-            """
-            UPDATE agreement_configs
-            SET status = 'ARCHIVED', archived_at = NOW(), updated_at = NOW()
-            WHERE config_id = @configId AND status != 'ARCHIVED'
-            """;
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("configId", configId);
-        var rows = await cmd.ExecuteNonQueryAsync(ct);
-        return rows > 0;
-    }
-
     /// <summary>
     /// In-transaction v3 archive overload — admin-strict ETag/If-Match optimistic-concurrency
     /// (ADR-019 pending). Reads the current row under <c>SELECT ... FOR UPDATE</c>, validates
@@ -735,21 +548,6 @@ public sealed class AgreementConfigRepository
         return new SaveAgreementConfigResult(
             entity, entity.Version, IsCreated: false, ArchivedId: null,
             PreviousStatus: currentStatus);
-    }
-
-    public async Task AppendAuditAsync(
-        Guid configId, string action, string? previousData, string? newData,
-        string actorId, string actorRole, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            """
-            INSERT INTO agreement_config_audit (config_id, action, previous_data, new_data, actor_id, actor_role)
-            VALUES (@configId, @action, @previousData::jsonb, @newData::jsonb, @actorId, @actorRole)
-            """, conn);
-        AddAuditParameters(cmd, configId, action, previousData, newData, actorId, actorRole);
-        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>

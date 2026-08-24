@@ -1,6 +1,4 @@
-using Microsoft.AspNetCore.Http;
 using Npgsql;
-using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Tests.Regression.Outbox;
@@ -12,18 +10,22 @@ namespace StatsTid.Tests.Regression.Concurrency;
 /// <c>agreement_configs</c> (per ADR-019 D2/D6/D7/D8). Verifies the row-version optimistic
 /// concurrency contract at the repository surface and the admin-strict If-Match parser
 /// at the helper surface. Direct-orchestration shape mirroring <see cref="Config.ProfileAuditTests"/>
-/// + <see cref="Outbox.AgreementConfigAtomicTests"/> precedent (no <c>WebApplicationFactory&lt;Program&gt;</c>
+/// + the retired <c>Outbox.AgreementConfigAtomicTests</c> precedent (no <c>WebApplicationFactory&lt;Program&gt;</c>
 /// — HTTP-surface harness deferred to Phase 4d per S24 carry-forward).
 ///
 /// <para>
-/// Test slots (7 total):
+/// Test slots (4 total):
 ///   <list type="bullet">
 ///     <item>3 stale-If-Match → <see cref="OptimisticConcurrencyException"/> tests
 ///       (PUT update DRAFT / publish / archive)</item>
-///     <item>3 missing-If-Match → <see cref="EtagHeaderHelper.TryParseIfMatch"/> false-return tests
-///       (PUT update DRAFT / publish / archive)</item>
 ///     <item>1 end-to-end ETag-cycle test (CREATE → version=1, UPDATE → version=2 read-back)</item>
 ///   </list>
+/// S133 / TASK-13306 (QUAL-111): the three missing-If-Match "428" slots that used to live here were
+/// verification-theater clones — they called <c>EtagHeaderHelper.TryParseIfMatch</c> directly on a
+/// hand-built header-less request and so pinned the shared helper, NEVER the endpoints they were named
+/// for (a removed endpoint 428 guard left every clone GREEN, PAT-014). They were deleted; genuine
+/// per-endpoint 428 proofs that drive the REAL routes over HTTP now live in
+/// <c>Hosting.AgreementConfigPreconditionHttpTests</c>.
 /// Audit version-transition coverage lives in <see cref="AuditVersionTransitionTests"/>
 /// (per ADR-019 D8 — cross-resource invariant).
 /// </para>
@@ -136,44 +138,6 @@ public sealed class AgreementConfigConcurrencyTests : IAsyncLifetime
         });
         Assert.Equal(1L, ex.ExpectedVersion);
         Assert.Equal(2L, ex.ActualVersion);
-    }
-
-    // ─── Missing-If-Match (428 contract) — helper surface ─────────────────────
-
-    [Fact]
-    public void UpdateDraft_MissingIfMatch_HelperRejects()
-    {
-        // The 428 path is hit at the endpoint, not the repo. Verify the helper surface
-        // rejects requests with no If-Match header in admin-strict mode (mirrors the
-        // PUT /api/agreement-configs/{configId} endpoint's first-line precondition check).
-        var request = NewRequestWithoutIfMatch();
-        var parsed = EtagHeaderHelper.TryParseIfMatch(
-            request, out _, out var error);
-        Assert.False(parsed);
-        Assert.NotNull(error);
-        Assert.Contains("Missing If-Match", error, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Publish_MissingIfMatch_HelperRejects()
-    {
-        // Mirrors POST /api/agreement-configs/{configId}/publish missing-precondition path.
-        var request = NewRequestWithoutIfMatch();
-        var parsed = EtagHeaderHelper.TryParseIfMatch(request, out _, out var error);
-        Assert.False(parsed);
-        Assert.NotNull(error);
-        Assert.Contains("Missing If-Match", error, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Archive_MissingIfMatch_HelperRejects()
-    {
-        // Mirrors POST /api/agreement-configs/{configId}/archive missing-precondition path.
-        var request = NewRequestWithoutIfMatch();
-        var parsed = EtagHeaderHelper.TryParseIfMatch(request, out _, out var error);
-        Assert.False(parsed);
-        Assert.NotNull(error);
-        Assert.Contains("Missing If-Match", error, StringComparison.Ordinal);
     }
 
     // ─── End-to-end ETag-cycle ─────────────────────────────────────────────────
@@ -349,18 +313,6 @@ public sealed class AgreementConfigConcurrencyTests : IAsyncLifetime
     }
 
     // ── Test data builders ────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Construct a synthetic <see cref="HttpRequest"/> with no If-Match / If-None-Match
-    /// headers — drives <see cref="EtagHeaderHelper.TryParseIfMatch"/>'s missing-precondition
-    /// branch.
-    /// </summary>
-    private static HttpRequest NewRequestWithoutIfMatch()
-    {
-        var ctx = new DefaultHttpContext();
-        ctx.Request.Method = "PUT";
-        return ctx.Request;
-    }
 
     private static AgreementConfigEntity NewConfig(
         decimal weeklyNorm = 37m,

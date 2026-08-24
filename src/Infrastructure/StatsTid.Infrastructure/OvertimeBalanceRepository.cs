@@ -67,19 +67,11 @@ public sealed class OvertimeBalanceRepository
         return (decimal)result!;
     }
 
-    public async Task<(bool Success, decimal NewPaidOut)> AdjustPaidOutAsync(
-        string employeeId, int periodYear, decimal deltaHours, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        return await ExecuteAdjustPaidOutAsync(conn, null, employeeId, periodYear, deltaHours, ct);
-    }
-
     /// <summary>
-    /// In-transaction sibling overload of <see cref="AdjustPaidOutAsync(string, int, decimal, CancellationToken)"/>.
-    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
-    /// caller can extend the same transaction across outbox writes (ADR-018 D3 transactional-
-    /// outbox contract). The caller commits or rolls back; this method does NOT.
+    /// Adjusts paid-out overtime hours within the caller-supplied <paramref name="conn"/> +
+    /// <paramref name="tx"/> so the write extends the same transaction across outbox writes
+    /// (ADR-018 D3 transactional-outbox contract). The caller commits or rolls back; this
+    /// method does NOT.
     /// </summary>
     public async Task<(bool Success, decimal NewPaidOut)> AdjustPaidOutAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -106,16 +98,10 @@ public sealed class OvertimeBalanceRepository
         return (false, 0m);
     }
 
-    public async Task<(bool Success, decimal NewAfspadseringUsed)> AdjustAfspadseringAsync(
-        string employeeId, int periodYear, decimal deltaHours, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        return await ExecuteAdjustAfspadseringAsync(conn, null, employeeId, periodYear, deltaHours, ct);
-    }
-
     /// <summary>
-    /// In-transaction sibling overload of <see cref="AdjustAfspadseringAsync(string, int, decimal, CancellationToken)"/>.
+    /// Adjusts used-afspadsering overtime hours within the caller-supplied
+    /// <paramref name="conn"/> + <paramref name="tx"/> (ADR-018 D3 transactional-outbox
+    /// contract). The caller commits or rolls back; this method does NOT.
     /// </summary>
     public async Task<(bool Success, decimal NewAfspadseringUsed)> AdjustAfspadseringAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,

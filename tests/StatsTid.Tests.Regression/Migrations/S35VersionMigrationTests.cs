@@ -27,13 +27,15 @@ namespace StatsTid.Tests.Regression.Migrations;
 /// </para>
 ///
 /// <para>
-/// <b>Migration block source.</b> Verbatim copy of the S35 D1 segment from
-/// <c>docker/postgres/init.sql</c> lines ~598-629. Unlike the S25 / S22 migrations the S35
-/// D1 segment is NOT a guarded <c>DO $$ ... END $$</c> block — instead it's greenfield-baked:
-/// <c>users.version</c> is part of the base <c>users</c> CREATE (init.sql:467) and the
-/// <c>users_audit</c> table uses <c>CREATE TABLE IF NOT EXISTS</c>. Idempotency is therefore
-/// intrinsic to the <c>IF NOT EXISTS</c> guards + the <c>ON CONFLICT DO NOTHING</c> ledger
-/// insert; this test pins that intrinsic idempotency.
+/// <b>Migration block source (S133 / QUAL-014).</b> The DDL under test is EXTRACTED from the
+/// shipped <c>docker/postgres/init.sql</c> at runtime (see <see cref="S35MigrationDdl"/>), not
+/// pasted — so this test runs exactly what a legacy upgrade runs and cannot drift from the
+/// real migration. The S35 D1 upgrade path is the guarded <c>DO $$</c> block carrying
+/// <c>ALTER TABLE users ADD COLUMN IF NOT EXISTS version</c> (the ADD COLUMN path that the
+/// base <c>CREATE TABLE IF NOT EXISTS users</c> cannot reach on a pre-existing database);
+/// the <c>users_audit</c> table + its two indexes are the base <c>CREATE TABLE/INDEX IF NOT
+/// EXISTS</c> region. Idempotency is intrinsic to those <c>IF NOT EXISTS</c> guards + the
+/// <c>ON CONFLICT DO NOTHING</c> ledger insert; this test pins that intrinsic idempotency.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -92,46 +94,31 @@ public sealed class S35VersionMigrationTests : IAsyncLifetime
         """;
 
     /// <summary>
-    /// Composite of the S35 D1 migration path in <c>docker/postgres/init.sql</c>:
-    /// the <c>ALTER TABLE users ADD COLUMN IF NOT EXISTS version</c> from the guarded
-    /// DO $$ block at the bottom of init.sql (S35 / D1), plus the
-    /// <c>CREATE TABLE IF NOT EXISTS users_audit</c> + index pair from the base section
-    /// at L610-623, plus the ledger INSERT (carried inside the DO $$ block in
-    /// production; flattened here for test brevity). Step 7a cycle 1 absorption
-    /// (Codex BLOCKER-1) added the guarded ALTER so legacy databases receive
-    /// <c>users.version</c>; before that absorption the ALTER did not exist in init.sql
-    /// and this test only exercised the greenfield-equivalent path.
-    ///
-    /// <para>
-    /// The test wraps <c>ApplyAsync</c> via <c>SimpleConnection.ExecuteAsync</c> at
-    /// statement level (no DO $$ wrapper) — semantically equivalent to running the
-    /// init.sql block on a fresh users table without the column, and equivalent to
-    /// the upgrade path the guarded ALTER takes on a legacy database.
-    /// </para>
+    /// The S35 D1 migration path — read from the SHIPPED <c>docker/postgres/init.sql</c> at
+    /// test time, NOT a pasted copy (S133 / QUAL-014). Unlike S22 / S25 the S35 migration is
+    /// split across two non-adjacent regions of the file, so both are lifted and concatenated:
+    /// <list type="number">
+    ///   <item>the base <c>CREATE TABLE IF NOT EXISTS users_audit</c> + its two indexes (the
+    ///     new-in-S35 audit table, whose <c>IF NOT EXISTS</c> is sufficient for any DB state), and</item>
+    ///   <item>the S35 D1 guarded <c>DO $$</c> block (ledger id
+    ///     <c>s35-d1-users-version-and-audit</c>) that carries the
+    ///     <c>ALTER TABLE users ADD COLUMN IF NOT EXISTS version</c> legacy-upgrade path.</item>
+    /// </list>
+    /// The previous in-test copy had drifted (its cited line ranges were stale) AND had a
+    /// DIFFERENT SHAPE from production — it flattened the ledger insert to a bare
+    /// <c>INSERT</c> outside any <c>DO $$</c> guard, so it never exercised the shipped block's
+    /// <c>IF NOT FOUND THEN RETURN</c> guard ordering. Reading the real regions removes both
+    /// gaps: the test now runs exactly what a legacy upgrade runs, and a drift in either region
+    /// (a dropped <c>users.version</c> ALTER, a missing audit column/index) surfaces below.
+    /// Idempotent via <c>ADD COLUMN IF NOT EXISTS</c> + <c>CREATE TABLE/INDEX IF NOT EXISTS</c>
+    /// + <c>ON CONFLICT DO NOTHING</c>.
     /// </summary>
-    private const string S35MigrationDdl = """
-        ALTER TABLE users
-        ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1;
-
-        CREATE TABLE IF NOT EXISTS users_audit (
-            audit_id          BIGSERIAL    PRIMARY KEY,
-            user_id           TEXT         NOT NULL,
-            action            TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
-            previous_data     JSONB        NULL,
-            new_data          JSONB        NULL,
-            version_before    BIGINT       NULL,
-            version_after     BIGINT       NULL,
-            actor_id          TEXT         NOT NULL,
-            actor_role        TEXT         NOT NULL,
-            audit_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS idx_users_audit_user_id ON users_audit(user_id);
-        CREATE INDEX IF NOT EXISTS idx_users_audit_at ON users_audit(audit_at);
-
-        INSERT INTO schema_migrations (migration_id, applied_at)
-            VALUES ('s35-d1-users-version-and-audit', NOW())
-            ON CONFLICT (migration_id) DO NOTHING;
-        """;
+    private static string S35MigrationDdl =>
+        CanonicalInitSql.ExtractInclusiveRange(
+            "CREATE TABLE IF NOT EXISTS users_audit",
+            "CREATE INDEX IF NOT EXISTS idx_users_audit_at ON users_audit(audit_at);")
+        + "\n\n"
+        + CanonicalInitSql.ExtractGuardedBlock("s35-d1-users-version-and-audit");
 
     private Segmentation.TestFixtures.DockerHarness _harness = null!;
 

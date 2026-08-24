@@ -1,6 +1,4 @@
-using Microsoft.AspNetCore.Http;
 using Npgsql;
-using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Tests.Regression.Outbox;
@@ -14,14 +12,19 @@ namespace StatsTid.Tests.Regression.Concurrency;
 /// the helper surface.
 ///
 /// <para>
-/// Test slots (5 total):
+/// Test slots (3 total):
 ///   <list type="bullet">
 ///     <item>2 stale-If-Match → <see cref="OptimisticConcurrencyException"/> tests
 ///       (PUT update / DELETE)</item>
-///     <item>2 missing-If-Match → <see cref="EtagHeaderHelper.TryParseIfMatch"/> false-return tests
-///       (PUT update / DELETE)</item>
 ///     <item>1 end-to-end ETag-cycle test (CREATE → version=1, UPDATE → version=2 read-back)</item>
 ///   </list>
+/// S133 / TASK-13306 (QUAL-111): the two missing-If-Match "428" slots that used to live here were
+/// verification-theater clones — they called <c>EtagHeaderHelper.TryParseIfMatch</c> directly on a
+/// hand-built header-less request and so pinned the shared helper, NEVER the endpoints they were named
+/// for (PAT-014). They were deleted with NO coverage lost: GENUINE per-endpoint 428 proofs that drive
+/// the REAL PUT + DELETE routes over HTTP already exist in
+/// <c>Config.WageTypeMappingEndpointTests</c> (<c>Put_MissingIfMatch_Returns428</c> /
+/// <c>Delete_MissingIfMatch_Returns428</c>).
 /// Audit version-transition coverage lives in <see cref="AuditVersionTransitionTests"/>
 /// (per ADR-019 D8 — cross-resource invariant; DELETE records (version, version) per D8).
 /// </para>
@@ -115,30 +118,6 @@ public sealed class WageTypeMappingConcurrencyTests : IAsyncLifetime
         Assert.Equal(2L, ex.ActualVersion);
     }
 
-    // ─── Missing-If-Match (428 contract) — helper surface ─────────────────────
-
-    [Fact]
-    public void Update_MissingIfMatch_HelperRejects()
-    {
-        // Mirrors PUT /api/admin/wage-type-mappings missing-precondition path.
-        var request = NewRequestWithoutIfMatch();
-        var parsed = EtagHeaderHelper.TryParseIfMatch(request, out _, out var error);
-        Assert.False(parsed);
-        Assert.NotNull(error);
-        Assert.Contains("Missing If-Match", error, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Delete_MissingIfMatch_HelperRejects()
-    {
-        // Mirrors DELETE /api/admin/wage-type-mappings missing-precondition path.
-        var request = NewRequestWithoutIfMatch();
-        var parsed = EtagHeaderHelper.TryParseIfMatch(request, out _, out var error);
-        Assert.False(parsed);
-        Assert.NotNull(error);
-        Assert.Contains("Missing If-Match", error, StringComparison.Ordinal);
-    }
-
     // ─── End-to-end ETag-cycle ─────────────────────────────────────────────────
 
     [Fact]
@@ -176,13 +155,6 @@ public sealed class WageTypeMappingConcurrencyTests : IAsyncLifetime
     }
 
     // ── Test data builders ────────────────────────────────────────────────────
-
-    private static HttpRequest NewRequestWithoutIfMatch()
-    {
-        var ctx = new DefaultHttpContext();
-        ctx.Request.Method = "PUT";
-        return ctx.Request;
-    }
 
     private static WageTypeMapping NewMapping(string timeType, string wageType = "SLS_0110") => new()
     {

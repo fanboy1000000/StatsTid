@@ -1,11 +1,15 @@
 using System.Reflection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
+using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
+using StatsTid.Tests.Regression.Outbox;
 
 namespace StatsTid.Tests.Regression.Hosting;
 
@@ -148,6 +152,61 @@ public sealed class StatsTidWebApplicationFactory : WebApplicationFactory<Progra
             .Single();
         await publisher.StartAsync(CancellationToken.None);
     }
+
+    // ─── S133 / TASK-13307 (QUAL-016) atomic-outbox rollback harness ─────────────────────
+    // The ONE reusable way to drive an atomic-outbox rollback through the REAL wire: derive a
+    // host identical to this one EXCEPT its single IOutboxEnqueue registration is swapped for a
+    // throwing double. The endpoint's in-tx `outbox.Enqueue…` call then throws, and — because
+    // the throw happens BEFORE `tx.CommitAsync` — PostgreSQL rolls back the WHOLE transaction on
+    // dispose. A converted `*AtomicTests` posts to the endpoint, expects the 5xx the escaped
+    // throw produces, and reuses ForcedRollbackHarness.AssertNo*Async to pin that no state /
+    // audit / canonical-event / outbox row leaked.
+    //
+    // This HOISTS the local `ThrowingOutboxFactory()` helper proven in S127's
+    // Approval.SendAtomicityTests into the shared factory so every QUAL-016 conversion reuses
+    // ONE mechanism instead of re-declaring it per file. Only IOutboxEnqueue is swapped — the
+    // IEventStore / PostgresEventStore registration the OutboxPublisher depends on is untouched,
+    // so ONLY the state-change-site enqueue faults, never the background drain.
+    //
+    // The derived host is disposable and independent: disposing it stops only that host; this
+    // factory's own host + the shared testcontainer are unaffected. Boot the returned factory's
+    // client only AFTER the per-test employee/config is seeded — a fresh derived host re-runs the
+    // startup seeders, and a seeder that had to backfill a row would invoke the throwing outbox at
+    // startup (the S63/S65 boot-order lesson SendAtomicityTests documents).
+
+    /// <summary>
+    /// A derived host whose <see cref="IOutboxEnqueue"/> throws on EVERY enqueue
+    /// (<see cref="ForcedRollbackHarness.ThrowingOutboxEnqueue"/>) — for the single-emit endpoints
+    /// (create/update/publish-no-supersede/archive/approve/reject/reopen/time/absence/…), whose
+    /// FIRST and only enqueue must roll the whole state-change tx back.
+    /// </summary>
+    public WebApplicationFactory<Program> WithThrowingOutbox()
+        => WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IOutboxEnqueue>();
+                services.AddSingleton<IOutboxEnqueue>(new ForcedRollbackHarness.ThrowingOutboxEnqueue());
+            }));
+
+    /// <summary>
+    /// A derived host whose <see cref="IOutboxEnqueue"/> DELEGATES the first enqueue to the real
+    /// <see cref="PostgresEventStore"/> (so the first outbox row genuinely lands in-tx) and throws
+    /// on the second and later calls (<see cref="ForcedRollbackHarness.ThrowOnSecondCallOutboxEnqueue"/>).
+    /// This is the DUAL-EMIT case — the agreement-config publish that supersedes a prior ACTIVE
+    /// emits PUBLISHED (enqueue #1) then ARCHIVED (enqueue #2); a fault on #2 must roll back the
+    /// whole tx INCLUDING the successfully-inserted #1 row. The real <see cref="PostgresEventStore"/>
+    /// is still registered after the <see cref="IOutboxEnqueue"/> swap, so the decorator resolves it
+    /// as its inner from the SAME derived-host container.
+    /// </summary>
+    public WebApplicationFactory<Program> WithThrowOnSecondEnqueueOutbox()
+        => WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IOutboxEnqueue>();
+                services.AddSingleton<IOutboxEnqueue>(sp =>
+                    new ForcedRollbackHarness.ThrowOnSecondCallOutboxEnqueue(
+                        sp.GetRequiredService<PostgresEventStore>()));
+            }));
 
     /// <summary>
     /// Applies the canonical <c>docker/postgres/init.sql</c> schema to

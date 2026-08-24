@@ -7,9 +7,17 @@ using ReportingLineModel = StatsTid.SharedKernel.Models.ReportingLine;
 namespace StatsTid.Tests.Unit.ReportingLine;
 
 /// <summary>
-/// Unit tests for the reporting-line feature (TASK-4812):
-/// EventSerializer round-trip for all 4 event types, DEP-003 registration parity,
-/// and ReportingLine model property verification.
+/// Unit tests for the reporting-line feature (TASK-4812): EventSerializer round-trip for the event
+/// family and DEP-003 registration parity — all driving the REAL <c>EventSerializer</c> (serialize →
+/// deserialize; reflection over the shipped <c>EventTypeMap</c>).
+///
+/// <para>S133 / TASK-13306 (QUAL-095): four model "tests" here were POCO literal echoes — they
+/// constructed a <c>ReportingLine</c> and asserted back the very fields they had just assigned (e.g.
+/// <c>line.EmployeeId == "emp010"</c>), and two of those only re-checked a nullable property is null.
+/// They proved nothing about the system and were removed. The retained model tests are genuine
+/// structural pins that reflect over the shipped type (<c>IsSealed</c>, all-init-only), not value
+/// echoes; the reporting-line WRITE behavior is exercised by the Docker-gated
+/// <c>ReportingLine/*</c> regression suite.</para>
 /// </summary>
 public class ReportingLineTests
 {
@@ -264,59 +272,6 @@ public class ReportingLineTests
     }
 
     [Fact]
-    public void ReportingLine_Model_HasExpectedProperties()
-    {
-        var reportingLineId = Guid.NewGuid();
-        var effectiveFrom = new DateOnly(2024, 2, 15);
-        var effectiveTo = new DateOnly(2024, 12, 31);
-
-        var line = new ReportingLineModel
-        {
-            ReportingLineId = reportingLineId,
-            EmployeeId = "emp010",
-            ManagerId = "mgr05",
-            OrganisationId = "STY02",
-            Relationship = "PRIMARY",
-            EffectiveFrom = effectiveFrom,
-            EffectiveTo = effectiveTo,
-            Source = "MANUAL",
-            Version = 1,
-            CreatedBy = "admin01",
-        };
-
-        Assert.Equal(reportingLineId, line.ReportingLineId);
-        Assert.Equal("emp010", line.EmployeeId);
-        Assert.Equal("mgr05", line.ManagerId);
-        Assert.Equal("STY02", line.OrganisationId);
-        Assert.Equal("PRIMARY", line.Relationship);
-        Assert.Equal(effectiveFrom, line.EffectiveFrom);
-        Assert.Equal(effectiveTo, line.EffectiveTo);
-        Assert.Equal("MANUAL", line.Source);
-        Assert.Equal(1, line.Version);
-        Assert.Equal("admin01", line.CreatedBy);
-    }
-
-    [Fact]
-    public void ReportingLine_Model_EffectiveTo_IsNullable()
-    {
-        var line = new ReportingLineModel
-        {
-            ReportingLineId = Guid.NewGuid(),
-            EmployeeId = "emp011",
-            ManagerId = "mgr06",
-            OrganisationId = "STY02",
-            Relationship = "SECONDARY",
-            EffectiveFrom = new DateOnly(2024, 1, 1),
-            EffectiveTo = null,
-            Source = "CSV_IMPORT",
-            Version = 1,
-            CreatedBy = "system",
-        };
-
-        Assert.Null(line.EffectiveTo);
-    }
-
-    [Fact]
     public void ReportingLine_Model_AllPropertiesAreInitOnly()
     {
         var properties = typeof(ReportingLineModel)
@@ -401,48 +356,8 @@ public class ReportingLineTests
     // event field, the `TreeSettings` model, and `TreeSettingsRepository` no longer exist.
 
     // ---------------------------------------------------------------
-    // S51 TASK-5109: Self-service delegation — ScheduledExpiry + ReportingLineSelfDelegated
+    // S51 TASK-5109: Self-service delegation — ReportingLineSelfDelegated event round-trip + registration
     // ---------------------------------------------------------------
-
-    [Fact]
-    public void ReportingLine_ScheduledExpiry_RoundTrips()
-    {
-        var expiry = new DateOnly(2026, 6, 15);
-        var line = new ReportingLineModel
-        {
-            ReportingLineId = Guid.NewGuid(),
-            EmployeeId = "emp001",
-            ManagerId = "mgr01",
-            OrganisationId = "STY02",
-            Relationship = "ACTING",
-            EffectiveFrom = new DateOnly(2026, 5, 1),
-            Source = "SELF_DELEGATION",
-            Version = 1,
-            ScheduledExpiry = expiry,
-            CreatedBy = "mgr01",
-        };
-
-        Assert.Equal(expiry, line.ScheduledExpiry);
-    }
-
-    [Fact]
-    public void ReportingLine_ScheduledExpiry_IsNullable()
-    {
-        var line = new ReportingLineModel
-        {
-            ReportingLineId = Guid.NewGuid(),
-            EmployeeId = "emp002",
-            ManagerId = "mgr02",
-            OrganisationId = "STY02",
-            Relationship = "PRIMARY",
-            EffectiveFrom = new DateOnly(2026, 5, 1),
-            Source = "MANUAL",
-            Version = 1,
-            CreatedBy = "admin01",
-        };
-
-        Assert.Null(line.ScheduledExpiry);
-    }
 
     [Fact]
     public void ReportingLineSelfDelegated_RoundTrips()

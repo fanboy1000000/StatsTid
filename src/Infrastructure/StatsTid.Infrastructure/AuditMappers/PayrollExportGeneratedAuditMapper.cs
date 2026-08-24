@@ -1,5 +1,6 @@
 using System.Text.Json;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Serialization;
 using StatsTid.SharedKernel.Events;
 
 namespace StatsTid.Infrastructure.AuditMappers;
@@ -15,12 +16,6 @@ namespace StatsTid.Infrastructure.AuditMappers;
 /// </summary>
 public sealed class PayrollExportGeneratedAuditMapper : IAuditProjectionMapper<PayrollExportGenerated>
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false,
-    };
-
     public AuditProjectionRowData Map(PayrollExportGenerated @event, AuditProjectionContext context)
     {
         var details = new
@@ -38,6 +33,6 @@ public sealed class PayrollExportGeneratedAuditMapper : IAuditProjectionMapper<P
             VisibilityScope: AuditVisibilityScope.TenantTargeted,
             TargetOrgId: context.ResolvedTargetOrgId,
             TargetResourceId: @event.EmployeeId,
-            DetailsJson: JsonSerializer.Serialize(details, JsonOptions));
+            DetailsJson: JsonSerializer.Serialize(details, AuditMapperJsonOptions.Default));
     }
 }

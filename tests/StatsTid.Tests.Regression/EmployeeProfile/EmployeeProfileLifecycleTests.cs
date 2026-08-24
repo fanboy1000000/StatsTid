@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
@@ -693,65 +696,89 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Compliance is a rule-engine-bound HTTP caller (POST to
-    /// /api/rules/check-compliance). After soft-delete, the resolver returns
-    /// null → ComplianceEndpoints throws EmployeeProfileNotFoundException →
-    /// existing exception middleware maps to 500. Fail-closed per ADR-023 D3
-    /// (Compliance == PCS-routed callers).
+    /// Compliance is the PCS-routed rule-engine caller (POST /api/rules/check-compliance).
+    /// After a soft-delete the employment-profile resolver returns null, and ComplianceEndpoints
+    /// is contractually FAIL-CLOSED (ADR-023 D3): it throws EmployeeProfileNotFoundException at
+    /// the <c>?? throw</c> guard (ComplianceEndpoints.cs:147-148) instead of silently substituting
+    /// the old hardcoded 37.0m norm. The anti-property this test LOCKS against is the pre-S33
+    /// behaviour — a soft-deleted profile quietly producing a 200 on the central-config default.
+    ///
+    /// <para><b>Why this test was rewired (S133 / TASK-13304, QUAL-017 — verification theater).</b>
+    /// The previous version asserted "any 5xx" (<c>StatusCode &gt;= 500</c>). But the fail-closed
+    /// guard throws BEFORE the rule-engine hop, and in the WAF harness that hop is UNSTUBBED
+    /// (nothing serves <c>/api/rules/check-compliance</c>), so the hop ALSO faults with a 5xx.
+    /// Two different sources produced the same 5xx surface, so the assertion could not tell them
+    /// apart: mutate the guard to silently default and the flow would still reach the (faulting)
+    /// hop and still surface a 5xx — the test stayed green on the very regression it names. Worse,
+    /// its <c>catch (HttpRequestException)</c> arm asserted NOTHING (a bare <c>return</c>), so any
+    /// transport fault was an automatic pass. It could not go RED. (PAT-014 false-green class.)</para>
+    ///
+    /// <para><b>The fix.</b> Stub the rule-engine hop to a well-formed 200 ComplianceCheckResult
+    /// (the Adr032ConsumptionPinTests / SkemaFullDayOnlyGuardTests convention). The hop can now
+    /// NEVER be a fault source, so the ONLY way the endpoint returns anything other than a clean
+    /// 200 is the resolver-null fail-closed guard firing. <b>Falsifiability:</b> replace
+    /// <c>?? throw new EmployeeProfileNotFoundException(...)</c> with a silent default (the pre-S33
+    /// regression) → the flow reaches the stubbed hop → 200 → this test goes RED on the
+    /// <c>NotEqual(OK)</c> lock (or the fail-closed-signal assertion in the throw arm).</para>
     /// </summary>
     [Fact]
-    public async Task Compliance_SoftDeletedProfile_Returns500FromComplianceEndpoint()
+    public async Task Compliance_SoftDeletedProfile_FailsClosed_DoesNotSilentlyDefaultTo200()
     {
         const string employeeId = "emp001";
-        var client = AuthorizedClient();
 
-        // Soft-delete first.
+        // The rule-engine hop is stubbed to a valid 200 (see CreateComplianceRuleStubbedClient):
+        // this REMOVES the incidental-5xx source so the resolver-null guard is the ONLY thing that
+        // can make the response non-200. Booting the stubbed host re-runs the startup seeder — but
+        // emp001 already has a LIVE profile from the primary host's boot, so the seeder's
+        // "users lacking a live row" query skips it. We soft-delete AFTER this boot, so no seeder
+        // re-backfills the row we are about to remove (the seeder treats a soft-deleted row —
+        // effective_to NOT NULL — as "missing a live row" and would otherwise re-insert one).
+        var client = CreateComplianceRuleStubbedClient();
+
+        // Soft-delete emp001's live profile (seeded version = 1).
         var delReq = new HttpRequestMessage(
             HttpMethod.Delete, $"/api/admin/employee-profiles/{employeeId}");
         delReq.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
         var delRsp = await client.SendAsync(delReq);
         Assert.Equal(HttpStatusCode.NoContent, delRsp.StatusCode);
 
-        // Now call compliance. With profile resolver returning null,
-        // ComplianceEndpoints throws EmployeeProfileNotFoundException which
-        // bubbles to the 500 middleware. The asOfDate the resolver sees is
-        // monthStart=2026-04-01 — falls inside the predecessor's old
-        // [0001-01-01, today) window EXCEPT the predecessor was just
-        // closed with effective_to=today. With effective_to NOT NULL AND
-        // effective_to > 2026-04-01 the predicate also passes... wait,
-        // actually the resolver's predicate is `effective_to IS NULL OR
-        // effective_to > asOfDate`. The closed row has effective_to=today
-        // (=2026-05-17) which IS > 2026-04-01, so the predecessor STILL
-        // matches asOfDate=2026-04-01. To force null-return we use a year
-        // that's strictly after today.
-        //
-        // Use a far-future query date so the predecessor row's window
-        // (effective_to = today) does NOT cover it.
+        // A far-future query date: the just-closed predecessor row carries effective_to=today, so
+        // an asOfDate strictly after today is outside its window and the resolver returns null —
+        // the exact precondition the fail-closed guard exists to catch.
         var farFuture = DateTime.UtcNow.AddYears(5);
-        HttpResponseMessage rsp;
+        var url = $"/api/compliance/{employeeId}/period?year={farFuture.Year}&month={farFuture.Month}";
+
+        HttpResponseMessage? rsp = null;
+        Exception? thrown = null;
         try
         {
-            rsp = await client.GetAsync(
-                $"/api/compliance/{employeeId}/period?year={farFuture.Year}&month={farFuture.Month}");
+            rsp = await client.GetAsync(url);
         }
-        catch (HttpRequestException)
+        catch (Exception ex)
         {
-            // TestServer may surface unhandled EmployeeProfileNotFoundException
-            // as a transport-level exception when no developer exception page
-            // is configured. Either path satisfies "fail-closed per ADR-023 D3"
-            // — what we are NOT allowed to see is a silently-defaulted 200
-            // with the 37.0m fallback (the pre-S33 Compliance behavior).
-            return;
+            thrown = ex;
         }
-        // Production path: middleware translates the unhandled exception to
-        // 500. Both 500 and 503 (Compliance check service unavailable) are
-        // failure surfaces and would NOT regress the contract — but 200 is
-        // the explicit anti-property we lock against here.
-        Assert.True(
-            rsp.StatusCode == HttpStatusCode.InternalServerError
-            || (int)rsp.StatusCode >= 500,
-            $"Expected 500/5xx for soft-deleted profile under PCS-routed Compliance; got {(int)rsp.StatusCode} {rsp.StatusCode}.");
-        Assert.NotEqual(HttpStatusCode.OK, rsp.StatusCode);
+
+        if (thrown is null)
+        {
+            // The Development-environment developer-exception-page middleware maps the unhandled
+            // EmployeeProfileNotFoundException to a 500 response. The load-bearing assertion is
+            // NotEqual(OK): with the hop stubbed to 200, a 200 here can ONLY mean the guard was
+            // bypassed and the profile silently defaulted — the anti-property we lock against.
+            Assert.NotEqual(HttpStatusCode.OK, rsp!.StatusCode);
+            Assert.True(
+                (int)rsp.StatusCode >= 500,
+                $"Expected the fail-closed 5xx from the resolver-null guard; got {(int)rsp.StatusCode} {rsp.StatusCode}.");
+        }
+        else
+        {
+            // If the pipeline instead surfaces the unhandled exception as a transport fault, it can
+            // ONLY be the guard here — the hop is stubbed to 200 and never faults. Assert it is the
+            // SPECIFIC fail-closed signal (EmployeeProfileNotFoundException's message), so this arm
+            // pins the real guard rather than passing on any throw (the old bare-return defect).
+            var flattened = FlattenExceptionMessages(thrown);
+            Assert.Contains("no employee profile found", flattened, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>
@@ -842,6 +869,65 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             role: StatsTidRoles.GlobalAdmin,
             agreementCode: "AC",
             scopes: new[] { new RoleScope(StatsTidRoles.GlobalAdmin, null, "GLOBAL") });
+    }
+
+    /// <summary>
+    /// A GlobalAdmin client whose host has the whole <see cref="IHttpClientFactory"/> replaced by a
+    /// stub that returns a well-formed 200 ComplianceCheckResult for <c>/api/rules/check-compliance</c>
+    /// (the Adr032ConsumptionPinTests / SkemaFullDayOnlyGuardTests convention). Used by the QUAL-017
+    /// fail-closed test so the rule-engine hop is NOT a 5xx source and the resolver-null guard is the
+    /// sole non-200 path. Derived via <c>WithWebHostBuilder</c> so the primary host is untouched.
+    /// </summary>
+    private HttpClient CreateComplianceRuleStubbedClient()
+    {
+        var stubbedFactory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.AddSingleton<IHttpClientFactory>(new ComplianceRuleStubFactory())));
+        var client = stubbedFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
+        return client;
+    }
+
+    private static string FlattenExceptionMessages(Exception ex)
+    {
+        var sb = new StringBuilder();
+        for (Exception? cur = ex; cur is not null; cur = cur.InnerException)
+            sb.Append(cur.Message).Append(" | ");
+        return sb.ToString();
+    }
+
+    private sealed class ComplianceRuleStubFactory : IHttpClientFactory
+    {
+        // Whole-factory replacement (Skema convention): supplies the BaseAddress the production
+        // named-client registration would set, so the endpoint's relative-URI PostAsJsonAsync
+        // composes correctly and is intercepted by the stub handler below.
+        public HttpClient CreateClient(string name) =>
+            new(new ComplianceRuleStubHandler(), disposeHandler: false)
+            {
+                BaseAddress = new Uri("http://rule-engine:8080"),
+            };
+    }
+
+    private sealed class ComplianceRuleStubHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (!path.EndsWith("/api/rules/check-compliance", StringComparison.Ordinal))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+
+            // A well-formed, deserializable ComplianceCheckResult (success, no violations). The
+            // point is only that the hop returns a clean 200 — so if the guard were bypassed, the
+            // endpoint would produce a silently-defaulted 200 this test then catches.
+            const string body =
+                "{\"ruleId\":\"REST_PERIOD\",\"employeeId\":\"stub\",\"success\":true,\"violations\":[],\"warnings\":[]}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 
     private static async Task<HttpResponseMessage> PutEmployeeProfileAsync(

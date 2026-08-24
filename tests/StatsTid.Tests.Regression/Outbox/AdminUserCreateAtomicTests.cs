@@ -37,7 +37,7 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// the transaction and short-circuits before <c>BeginTransactionAsync</c> — the
 /// duplicate-username test therefore pins the "no leaked state" invariant via the
 /// short-circuit path. A genuine in-tx rollback (e.g. on outbox throw) is covered
-/// by <see cref="AdminAtomicTests"/>' related sub-shape (i) test against
+/// by the retired <c>Outbox.AdminAtomicTests</c>' related sub-shape (i) test against
 /// <c>POST /api/admin/organizations</c> + S26 <c>TxContractTests</c>.
 /// </para>
 /// </summary>

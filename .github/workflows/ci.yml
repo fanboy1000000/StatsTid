@@ -118,7 +118,41 @@ jobs:
           fi
 
       - name: Build
-        run: dotnet build StatsTid.sln --no-restore --configuration Release
+        # QUAL-073: the build log is teed so the CA2100 ratchet step below can count
+        # warnings. `set -o pipefail` (also GitHub's default for bash steps) makes a real
+        # build failure — including any PRODUCTION warn-as-error — still fail this step
+        # through the `tee`. CI runs on a fresh checkout, so this first Release build is a
+        # full compile: every analyzer warning surfaces in the log (no incremental skip).
+        run: |
+          set -o pipefail
+          dotnet build StatsTid.sln --no-restore --configuration Release 2>&1 | tee build.log
+
+      - name: CA2100 warning ratchet (QUAL-073 — freeze the count, ratchet DOWN only)
+        # 109 identical benign "review this SQL for injection" (CA2100) warnings once hid
+        # warning #110. These live in the warn-as-error-OFF test/tooling projects, so they
+        # stay WARNINGS (a CA2100 in a production project is already a build ERROR). This
+        # step FREEZES the count and fails the build if it RISES — so a NEW CA2100 can no
+        # longer hide in the pile. BASELINE measured on the FINAL S133 gated tree (mock hosts in
+        # the solution, opt-outs removed, ALL S133 test changes merged): 116 (109 pre-S132; 111
+        # after S132's +2; 116 after S133's +5 — new wire-driven atomic-outbox HTTP tests +
+        # per-endpoint If-Match precondition tests + init.sql-extraction migration helper, all
+        # test-project SQL in warn-as-error-OFF projects; a production CA2100 is a build ERROR).
+        # Counting: dedupe by `path(line,col): warning CA2100` — MSBuild prints
+        # each warning twice (inline + end-of-build summary), so `sort -u` collapses the
+        # doubles to distinct sites, identically on Linux CI and Windows dev.
+        # RATCHET-DOWN is manual and intended: when the count falls, LOWER this baseline in
+        # ci.yml in the same PR that removed the warnings — it must never drift back up.
+        run: |
+          BASELINE=116
+          count=$(grep -oE '[^ (]+\([0-9]+,[0-9]+\): warning CA2100' build.log | sort -u | wc -l | tr -d ' ')
+          echo "CA2100 distinct sites: $count (baseline $BASELINE)"
+          if [ "$count" -gt "$BASELINE" ]; then
+            echo "::error::CA2100 count rose to $count (baseline $BASELINE). A new SQL-review warning appeared — fix it (parameterise / justify) so warning #$BASELINE+1 stays visible; do NOT raise the baseline."
+            exit 1
+          fi
+          if [ "$count" -lt "$BASELINE" ]; then
+            echo "::warning::CA2100 count fell to $count (baseline $BASELINE). Ratchet the baseline DOWN to $count in .github/workflows/ci.yml so it cannot drift back up."
+          fi
 
       - name: Run OpenAPI drift gate (typed-contract — fork B / Phase 0)
         # Regenerates the OpenAPI spec via the no-DB `--openapi` entrypoint and fails if it
@@ -130,6 +164,16 @@ jobs:
 
       - name: Run unit tests
         run: dotnet test tests/StatsTid.Tests.Unit --no-build -c Release --logger "trx"
+
+      - name: Run DemoSeed tests (QUAL-096)
+        # The StatsTid.Tests.DemoSeed suite (153 tests incl. the byte-exact Golden pins) was
+        # COMPILED by CI — it is in StatsTid.sln, so the Build step above builds it — but was
+        # never EXECUTED, so its green status was never established and a DemoSeed-generator
+        # regression could ship with CI green. This step runs it. It is fully hermetic (no
+        # Docker, no database — it drives the generator + reads Golden fixtures from disk), so
+        # it lives here in build-and-test alongside the unit suite, NOT in the compose jobs,
+        # and needs no services-postgres. --no-build reuses the Release output from Build.
+        run: dotnet test tests/StatsTid.Tests.DemoSeed --no-build -c Release --logger "trx"
 
       - name: Apply init.sql to the services-postgres (schema + seeds for the :5432-coupled classes)
         # S64 / TASK-6405: the compose-coupled classes read init.sql-seeded state (orgs,

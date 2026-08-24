@@ -29,57 +29,19 @@ public sealed class AuditProjectionLegacyMigrationTests : IAsyncLifetime
 {
     private Segmentation.TestFixtures.DockerHarness _harness = null!;
 
-    // Mirror of init.sql:2008-2086 (S43 / ADR-026 D1) — same DDL, plus the
-    // ledger insert block. Test schema fixture includes the FK target
-    // (organizations) so the audit_projection FK validates.
-    private const string AuditProjectionMigrationBlock = """
-        CREATE TABLE IF NOT EXISTS audit_projection (
-            projection_id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-            event_id                 UUID         NOT NULL UNIQUE,
-            outbox_id                BIGINT       NOT NULL,
-            event_type               TEXT         NOT NULL,
-            visibility_scope         TEXT         NOT NULL CHECK (visibility_scope IN ('TENANT_TARGETED', 'GLOBAL_TENANT_VISIBLE', 'GLOBAL_ADMIN_ONLY')),
-            target_org_id            TEXT         NULL REFERENCES organizations(org_id),
-            target_resource_id       TEXT         NULL,
-            actor_id                 TEXT         NULL,
-            actor_primary_org_id     TEXT         NULL,
-            occurred_at              TIMESTAMPTZ  NOT NULL,
-            correlation_id           UUID         NULL,
-            details                  JSONB        NOT NULL,
-            projected_at             TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-            CONSTRAINT chk_target_org_required_when_tenant
-                CHECK (
-                    (visibility_scope = 'TENANT_TARGETED'      AND target_org_id IS NOT NULL) OR
-                    (visibility_scope IN ('GLOBAL_TENANT_VISIBLE', 'GLOBAL_ADMIN_ONLY'))
-                )
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_audit_projection_target_org_time
-            ON audit_projection (target_org_id, occurred_at DESC)
-            WHERE target_org_id IS NOT NULL;
-
-        CREATE INDEX IF NOT EXISTS idx_audit_projection_global_visible
-            ON audit_projection (occurred_at DESC)
-            WHERE visibility_scope = 'GLOBAL_TENANT_VISIBLE';
-
-        CREATE INDEX IF NOT EXISTS idx_audit_projection_actor_org_time
-            ON audit_projection (actor_primary_org_id, occurred_at DESC)
-            WHERE actor_primary_org_id IS NOT NULL;
-
-        CREATE INDEX IF NOT EXISTS idx_audit_projection_event_type_time
-            ON audit_projection (event_type, occurred_at DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_audit_projection_outbox_id
-            ON audit_projection (outbox_id);
-
-        DO $$
-        BEGIN
-            INSERT INTO schema_migrations (migration_id, notes)
-            VALUES ('s43-d1-audit-projection-table', 'ADR-026 D1: audit_projection table + 5 partial indexes + chk_target_org_required_when_tenant CHECK; Sub-Sprint 1 plumbing per path C event-projection')
-            ON CONFLICT (migration_id) DO NOTHING;
-        END
-        $$;
-        """;
+    // S133 / QUAL-014: the S43 / ADR-026 D1 migration DDL is EXTRACTED from the shipped
+    // docker/postgres/init.sql at test time (see AuditProjectionMigrationBlock below), NOT
+    // pasted. The old in-test copy cited a stale line range (init.sql:2008-2086) and, being a
+    // duplicate, verified itself rather than the shipped migration — a drift in the real
+    // audit_projection DDL (a dropped index, a changed CHECK) could not have failed this test.
+    // Extracting the real region (the CREATE TABLE + 5 partial indexes through the trailing
+    // ledger DO $$ block) makes the idempotency assertions below guard the SHIPPED schema.
+    // The pre-S43 baseline fixture still supplies the FK target (organizations) so the
+    // audit_projection.target_org_id FK validates.
+    private static string AuditProjectionMigrationBlock =>
+        CanonicalInitSql.ExtractRegionThroughGuardedBlock(
+            "CREATE TABLE IF NOT EXISTS audit_projection",
+            "s43-d1-audit-projection-table");
 
     // Pre-S43 baseline: schema_migrations + organizations (FK target),
     // but NO audit_projection.

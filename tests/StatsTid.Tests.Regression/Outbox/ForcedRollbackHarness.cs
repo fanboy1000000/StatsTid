@@ -34,27 +34,36 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// </list>
 ///
 /// <para>
-/// Test shape: each <c>*AtomicTests</c> test arranges fixture state, then mirrors the
-/// converted endpoint's orchestration verbatim — open a connection, begin a tx, call the
-/// repository's <c>(conn, tx)</c> overload, append the audit row (Pattern B only), call
-/// <see cref="ThrowingOutboxEnqueue.EnqueueAsync"/>, and expect <see cref="InvalidOperationException"/>.
-/// The unhandled throw before <c>tx.CommitAsync</c> means PostgreSQL rolls back the
-/// transaction; the four post-action assertions then pin that no state row, no audit row,
-/// no canonical event row, and no outbox row was visible to a fresh connection. This is
-/// the same invariant the real endpoint upholds when its outbox-enqueue path fails — the
-/// HTTP layer surfaces a 500 to the caller, but the ADR-018 D3 contract under test is
-/// "everything-or-nothing transactional rollback," which is what these tests pin.
+/// Legacy test shape (the <c>*AtomicTests</c> under this <c>Outbox/</c> folder): each test
+/// arranges fixture state, then MIRRORS the endpoint's orchestration verbatim in the test body —
+/// open a connection, begin a tx, call the repository's <c>(conn, tx)</c> overload, append the
+/// audit row (Pattern B only), call <see cref="ThrowingOutboxEnqueue.EnqueueAsync"/>, and expect
+/// <see cref="InvalidOperationException"/>. The unhandled throw before <c>tx.CommitAsync</c> means
+/// PostgreSQL rolls back the transaction; the four post-action assertions then pin that no state
+/// row, no audit row, no canonical event row, and no outbox row was visible to a fresh connection.
 /// </para>
 ///
 /// <para>
-/// No <see cref="Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory{TEntryPoint}"/>
-/// harness in the regression project — established convention since
-/// <see cref="Config.ProfileAuditTests"/>: tests mirror the endpoint's orchestration
-/// directly rather than booting the full <c>Backend.Api</c> stack against a Testcontainer
-/// (which would require JWT seed + DB seeders + 29-table schema bring-up). The contract
-/// under test (atomic rollback when outbox throws) is identical at the orchestration
-/// surface and at the wire surface — proving it at the orchestration surface is the
-/// minimum sufficient harness, consistent with <see cref="Infrastructure.TxContractTests"/>.
+/// KNOWN LIMITATION of that hand-mirrored shape (QUAL-016, S131 quality sweep): because the test
+/// re-types the endpoint's save sequence instead of INVOKING the shipped endpoint, it only proves
+/// "my hand-typed sequence rolls back" — NOT that the real endpoint does. If the endpoint's
+/// orchestration drifts (commits before enqueue, opens its own connection/tx, is deleted), these
+/// tests stay green. The contract under test (atomic rollback when the outbox throws) IS the same
+/// at the orchestration surface and the wire surface, but only a wire-driven test pins the wiring.
+/// </para>
+///
+/// <para>
+/// THE WIRE-DRIVEN SHAPE these convert to: a booting <see cref="Hosting.StatsTidWebApplicationFactory"/>
+/// (S27) boots the real <c>Backend.Api</c> against a Postgres testcontainer; a converted test posts
+/// to the REAL endpoint over authenticated HTTP through
+/// <see cref="Hosting.StatsTidWebApplicationFactory.WithThrowingOutbox"/> (or
+/// <see cref="Hosting.StatsTidWebApplicationFactory.WithThrowOnSecondEnqueueOutbox"/> for the
+/// dual-emit publish), expects the 5xx the escaped throw produces, then reuses the same
+/// <c>AssertNo*Async</c> helpers below to pin no leakage. Proven precedent: S127's
+/// <c>Approval.SendAtomicityTests</c>; QUAL-016 spike conversions:
+/// <c>Hosting.AgreementConfigCreateAtomicHttpTests</c> (Pattern B) and
+/// <c>Hosting.TimeEntryRegisterAtomicHttpTests</c> (Pattern C). The assertion helpers below are
+/// harness-agnostic — they read a fresh connection and are reused unchanged by BOTH shapes.
 /// </para>
 /// </summary>
 internal static class ForcedRollbackHarness

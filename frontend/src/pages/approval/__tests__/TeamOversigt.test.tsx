@@ -15,6 +15,14 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { TeamOversigt } from '../TeamOversigt'
+// QUAL-121: the fixtures below are TYPED against the SERVED contract — `TeamOverviewRow`
+// is the generated spec record (components['schemas']['…TeamOverviewEmployeeRow']), the exact
+// shape `openapi-typescript` derives from docs/api/openapi.json. Binding the fixture factory to
+// it means a backend field drop/rename/type/nullability change is a `tsc` error here (gated by
+// `npm run build` in the frontend-build job) rather than a hermetic test that keeps passing
+// against a wire shape the server stopped sending — the S97→S100 "FE mock masks the backend
+// shape" class this file was itself a victim of.
+import type { TeamOverviewRow } from '../../../hooks/useTeamOverview'
 
 // ── Auth mock (PAT-007: stable role; flip via the module-level holder) ───────
 const authState = { role: 'LocalLeader' as string }
@@ -45,7 +53,12 @@ const mockReload = vi.fn()
 Object.defineProperty(window, 'location', { value: { reload: mockReload }, writable: true })
 
 // ── Fixtures: the team-overview contract rows ────────────────────────────────
-function row(over: Partial<Record<string, unknown>> = {}) {
+// The return annotation + `Partial<TeamOverviewRow>` override param are the QUAL-121 binding:
+// the base object must satisfy every field of the served row (missing/renamed field ⇒ tsc error),
+// each value must match the spec type incl. nullability (e.g. `normRegistered: number | null`),
+// and an override key that is not on the contract is rejected as an excess property (so a typo'd
+// or removed field can no longer silently do nothing).
+function row(over: Partial<TeamOverviewRow> = {}): TeamOverviewRow {
   return {
     periodId: 'p-1',
     employeeId: 'emp001',
@@ -107,7 +120,7 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 /** Route the team-overview GET to the given roster; everything else → {}. */
-function mockOverview(rows = team) {
+function mockOverview(rows: TeamOverviewRow[] = team) {
   mockFetch.mockImplementation(async (url: string) => {
     if (typeof url === 'string' && url.includes('/api/approval/team-overview')) {
       return jsonResponse({ employees: rows })

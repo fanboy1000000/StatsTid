@@ -130,21 +130,11 @@ public sealed class OvertimePreApprovalRepository
         return cmd;
     }
 
-    public async Task UpdateStatusAsync(
-        Guid id, string status, string? approvedBy, string? reason, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = BuildUpdateStatusCommand(conn, null, id, status, approvedBy, reason);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
     /// <summary>
-    /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, CancellationToken)"/>.
-    /// Reuses the caller-supplied <paramref name="conn"/> + <paramref name="tx"/> so the
-    /// caller can extend the same transaction across outbox writes (ADR-018 D3 transactional-
-    /// outbox contract). Required by TASK-2607 (Overtime approve/reject atomic). The caller
-    /// commits or rolls back; this method does NOT.
+    /// Updates the pre-approval status within the caller-supplied <paramref name="conn"/> +
+    /// <paramref name="tx"/> so the write extends the same transaction across outbox writes
+    /// (ADR-018 D3 transactional-outbox contract). Required by TASK-2607 (Overtime
+    /// approve/reject atomic). The caller commits or rolls back; this method does NOT.
     /// </summary>
     public async Task UpdateStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,

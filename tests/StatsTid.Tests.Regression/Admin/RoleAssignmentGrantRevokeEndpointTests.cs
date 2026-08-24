@@ -186,6 +186,123 @@ public sealed class RoleAssignmentGrantRevokeEndpointTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  QUAL-018 (S133 / TASK-13304) — revoke AUTHORIZATION DENY tests.
+    //  The revoke handler (AdminEndpoints.cs:2468-2486) carries THREE distinct 403 guards;
+    //  before this, ONLY the happy path was covered — a guard with no deny test cannot be shown
+    //  to guard anything (verification theater). One deny test PER guard below, each asserting the
+    //  SPECIFIC 403 reason (not a generic failure) and each RED if its guard were removed/loosened.
+    //  Each also asserts the assignment stays ACTIVE — a denied revoke must not de-privilege.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// GUARD 1 (<c>scope_type == "GLOBAL"</c> ⇒ GlobalAdmin-only, AdminEndpoints.cs:2468-2473):
+    /// a LocalAdmin revoking a live GLOBAL-scoped assignment is denied 403 "Only GlobalAdmin can
+    /// revoke global-scoped roles", and the assignment stays active.
+    /// <para><b>Falsifiability:</b> delete/loosen the <c>if (!HasGlobalScope(actor))</c> check at
+    /// AdminEndpoints.cs:2471 → the LocalAdmin revoke proceeds → 200 + is_active=FALSE → RED (both
+    /// the 403 assertion and the still-active assertion flip).</para>
+    /// </summary>
+    [Fact]
+    public async Task Revoke_GlobalScopedAssignment_ByLocalAdmin_Returns403_GlobalAdminOnly()
+    {
+        // A live GLOBAL-scoped assignment (org_id NULL, per the shape CHECK). LOCAL_HR keeps the
+        // role↔scope CHECK satisfied (only GLOBAL_ADMIN is barred from a non-GLOBAL scope).
+        var assignmentId = await InsertRawAssignmentAsync(TargetEmp, "LOCAL_HR", orgId: null, scopeType: "GLOBAL");
+
+        var client = LocalAdminClient(); // STY01 LocalAdmin — has no GLOBAL scope
+        var rsp = await client.PostAsJsonAsync(
+            "/api/admin/roles/revoke", new { assignmentId, reason = "deny-test" });
+
+        var (status, error, reason) = await ReadDenyAsync(rsp);
+        Assert.Equal(403, status);
+        Assert.Equal("Access denied", error);
+        Assert.Equal("Only GlobalAdmin can revoke global-scoped roles", reason);
+
+        // The denied operation must NOT have deactivated the assignment.
+        var (_, _, _, isActive) = await ReadAssignmentAsync(assignmentId);
+        Assert.True(isActive);
+    }
+
+    /// <summary>
+    /// GUARD 2 (non-GLOBAL + non-null org ⇒ actor scope must COVER the assignment's org,
+    /// AdminEndpoints.cs:2474-2479): a LocalAdmin scoped to STY01 revoking an ORG_ONLY assignment
+    /// in STY02 (an org it does not cover) is denied 403 with the OrgScopeValidator reason "Actor
+    /// scope does not cover target organization", and the assignment stays active.
+    /// <para><b>Falsifiability:</b> delete/loosen the <c>if (!allowed)</c> check at
+    /// AdminEndpoints.cs:2477 → the out-of-scope LocalAdmin revoke proceeds → 200 → RED.</para>
+    /// </summary>
+    [Fact]
+    public async Task Revoke_OrgScopedAssignment_ByOutOfScopeLocalAdmin_Returns403_ScopeMismatch()
+    {
+        // STY02 is a seeded ORGANISATION the STY01 LocalAdmin's exact-org scope does not cover.
+        var assignmentId = await InsertRawAssignmentAsync(TargetEmp, "LOCAL_LEADER", orgId: "STY02", scopeType: "ORG_ONLY");
+
+        var client = LocalAdminClient(); // scope = LocalAdmin @ STY01
+        var rsp = await client.PostAsJsonAsync(
+            "/api/admin/roles/revoke", new { assignmentId, reason = "deny-test" });
+
+        var (status, error, reason) = await ReadDenyAsync(rsp);
+        Assert.Equal(403, status);
+        Assert.Equal("Access denied", error);
+        Assert.Equal("Actor scope does not cover target organization", reason);
+
+        var (_, _, _, isActive) = await ReadAssignmentAsync(assignmentId);
+        Assert.True(isActive);
+    }
+
+    /// <summary>
+    /// GUARD 3 (defensive <c>else</c>: a non-GLOBAL assignment with a NULL org ⇒ GlobalAdmin-only,
+    /// AdminEndpoints.cs:2480-2486): a LocalAdmin revoking such a row is denied 403 "Cannot
+    /// determine org scope for this assignment", and the row stays active.
+    ///
+    /// <para><b>PAT-016 — this guard is DEAD BY CONSTRUCTION in production, and this is reported as
+    /// a finding.</b> The row shape it exists to catch (<c>scope_type='ORG_ONLY' AND org_id IS
+    /// NULL</c>) is EXACTLY what the DB CHECK <c>role_assignments_global_scope_shape</c> —
+    /// <c>((scope_type='GLOBAL') = (org_id IS NULL))</c> — forbids. The container (the CHECK) is
+    /// mutually exclusive with the guard's reaching condition, so no legal row can route into the
+    /// else branch. To EXERCISE the defense-in-depth guard at all, this test temporarily drops that
+    /// CHECK, inserts the malformed row, and restores the CHECK afterwards (per-test container, but
+    /// restored regardless). It proves the guard fails CLOSED — it does not silently admit a
+    /// de-privileging op — if the constraint were ever absent (legacy data, a manual migration, a
+    /// future CHECK removal).</para>
+    /// <para><b>Falsifiability:</b> delete/loosen the <c>if (!HasGlobalScope(actor))</c> check at
+    /// AdminEndpoints.cs:2484 → the else branch falls through to the deactivate path → 200 → RED.</para>
+    /// </summary>
+    [Fact]
+    public async Task Revoke_MalformedNonGlobalNullOrgAssignment_ByLocalAdmin_Returns403_FailsClosed()
+    {
+        // The DB CHECK forbids the malformed shape; drop it to construct the state the defensive
+        // guard exists to catch, then ALWAYS restore it (deleting the offending row first so the
+        // re-add re-validates cleanly).
+        await ExecRawAsync("ALTER TABLE role_assignments DROP CONSTRAINT role_assignments_global_scope_shape");
+        Guid assignmentId = default;
+        try
+        {
+            assignmentId = await InsertRawAssignmentAsync(TargetEmp, "LOCAL_LEADER", orgId: null, scopeType: "ORG_ONLY");
+
+            var client = LocalAdminClient(); // non-global actor
+            var rsp = await client.PostAsJsonAsync(
+                "/api/admin/roles/revoke", new { assignmentId, reason = "deny-test" });
+
+            var (status, error, reason) = await ReadDenyAsync(rsp);
+            Assert.Equal(403, status);
+            Assert.Equal("Access denied", error);
+            Assert.Equal("Cannot determine org scope for this assignment", reason);
+
+            var (_, _, _, isActive) = await ReadAssignmentAsync(assignmentId);
+            Assert.True(isActive);
+        }
+        finally
+        {
+            if (assignmentId != default)
+                await DeleteAssignmentAsync(assignmentId);
+            await ExecRawAsync(
+                "ALTER TABLE role_assignments ADD CONSTRAINT role_assignments_global_scope_shape " +
+                "CHECK ((scope_type = 'GLOBAL') = (org_id IS NULL))");
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Privilege-escalation guards (P7) — must NOT mint a row
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -420,6 +537,60 @@ public sealed class RoleAssignmentGrantRevokeEndpointTests : IAsyncLifetime
             "SELECT COUNT(*) FROM role_assignments WHERE user_id = @id", conn);
         cmd.Parameters.AddWithValue("id", userId);
         return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    // ── QUAL-018 deny-test helpers ──
+
+    /// <summary>
+    /// Inserts a live <c>role_assignments</c> row directly (bypassing the grant endpoint's own
+    /// validation), so a deny test can set up EXACTLY the assignment shape a revoke guard inspects.
+    /// Subject to the table CHECK constraints unless a caller has dropped one (the Guard-3 case).
+    /// </summary>
+    private async Task<Guid> InsertRawAssignmentAsync(string userId, string roleId, string? orgId, string scopeType)
+    {
+        var id = Guid.NewGuid();
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO role_assignments (assignment_id, user_id, role_id, org_id, scope_type, assigned_by, is_active)
+            VALUES (@id, @userId, @roleId, @orgId, @scopeType, 'test', TRUE)
+            """, conn);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("userId", userId);
+        cmd.Parameters.AddWithValue("roleId", roleId);
+        cmd.Parameters.AddWithValue("orgId", (object?)orgId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("scopeType", scopeType);
+        await cmd.ExecuteNonQueryAsync();
+        return id;
+    }
+
+    private async Task DeleteAssignmentAsync(Guid assignmentId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "DELETE FROM role_assignments WHERE assignment_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", assignmentId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>Runs a raw DDL/DML statement (used to drop/restore the shape CHECK in the Guard-3 test).</summary>
+    private async Task ExecRawAsync(string sql)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>Reads a 403 <c>{ error, reason }</c> deny body so a test can assert the SPECIFIC reason.</summary>
+    private static async Task<(int Status, string? Error, string? Reason)> ReadDenyAsync(HttpResponseMessage rsp)
+    {
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var error = body.TryGetProperty("error", out var e) ? e.GetString() : null;
+        var reason = body.TryGetProperty("reason", out var r) ? r.GetString() : null;
+        return ((int)rsp.StatusCode, error, reason);
     }
 
     private HttpClient LocalAdminClient()
