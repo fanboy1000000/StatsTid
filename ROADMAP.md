@@ -34,13 +34,19 @@ Not commitments or dates — direction.
 2. **Security threat-model sweep + remediation** — a systematic STRIDE/OWASP audit of the whole
    attack surface, re-examining prior owner rulings ("known — should be revisited"), then a
    remediation sprint. (WS5; refinement drafted.)
-3. **Domain completeness** — the pre-launch agreement-correctness program: real domain-expert
+3. **Employment lifecycle time-control** — *owner-raised 2026-08-25.* The system must be
+   time-controlled at the employee level: an employee starts on a date, leaves on a date, changes
+   position on a date — and registration, approval, balances/accrual, payroll calculation, and
+   access must all respect those boundaries. Full capture (what exists / the gap to refine) in the
+   Backlog → "Correctness / domain" below. Big enough to be its own program; goes through
+   `refine-requirements` + likely an ADR when promoted.
+4. **Domain completeness** — the pre-launch agreement-correctness program: real domain-expert
    engagement (Phase B) for the ~80 still-unsourced agreement cells
    ([phase-b-handoff-package](docs/references/phase-b-handoff-package.md)).
-4. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
+5. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.
    A precondition for any go-live.
-5. **Go-to-production decision** — owner's call; not on the near horizon.
+6. **Go-to-production decision** — owner's call; not on the near horizon.
 
 ## 2. Backlog (deferred, awaiting pickup)
 
@@ -133,6 +139,34 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Tier-probe log noise** — every legitimate leader read logs a spurious "Access denied" WARNING. [S128 FU-A]
 
 ### Correctness / domain
+- **★ Employment lifecycle time-control (owner-raised 2026-08-25 — arc item 3; BIG).** The
+  requirement in plain terms: every employee-level fact is bounded in time — employment starts on a
+  date, ends on a date, position (and with it part-time fraction, agreement, unit) changes on a
+  date — and the whole system must respect those boundaries, not just store them.
+  **What already exists (refinement starts from inventory, not zero):** `users` carries nullable
+  `employment_start_date`/`employment_end_date` + an `end_date_deactivated` flag; `employee_profiles`
+  (position, part-time fraction) and `user_agreement_codes` are already effective-dated with
+  live/history rows; every config layer (rule versions, wage-type mappings, local agreement
+  profiles, entitlement configs) is effective-dated; payroll segmentation already splits on
+  OK-transitions + LocalProfileActivations; a termination settlement flow (vacation payout/waive/
+  settle) exists.
+  **The gap to refine (plausible surface — refinement must verify each):**
+  (a) *enforcement* — can time/absence be registered before start or after leave? do approvals and
+  period locks handle partial periods?; (b) *lifecycle semantics* — are the `users`-row dates
+  actually consulted consistently anywhere, or are they inert columns?; (c) *calculation* —
+  mid-period start/leave (partial-month pro-rating) and mid-period position change as a segmentation
+  boundary everywhere, not only the S21 boundary sources; (d) *accrual* — entitlement pro-rating at
+  start/leave (ferie, særlige feriedage, flex); (e) *the flat-vs-history duplication* — `users.
+  agreement_code`/`ok_version`/`unit_id` are single "current" columns shadowing the effective-dated
+  history tables; a time-controlled model needs one as-of resolution rule; (f) *access* — what a
+  departed employee can still see/do (SEC-021 grazed this); (g) *UX* — scheduling future-dated
+  hire/leave/position changes and showing history; (h) *retro* — a backdated lifecycle change must
+  ride the existing retroactive-recalculation machinery, not bypass it.
+  **Gate:** promote via `refine-requirements`; expect an ADR for the temporal model (as-of
+  resolution semantics) before any code. *(Refinement ran 2026-08-25, dual-lens converged —
+  `.claude/refinements/REFINEMENT-employment-lifecycle-time-control.md` rev 2; owner-flagged:
+  **re-hiring is a potential situation**, so the ADR must decide single-window vs employment
+  spells — the current one-start/one-end schema would erase a prior spell on re-hire.)*
 - **Demo-seed write-free rerun** — the loader-evidence arm is written but unobserved (no container
   runtime on the dev machine). [S128 FU-C]
 
