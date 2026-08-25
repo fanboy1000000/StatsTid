@@ -11529,6 +11529,7 @@
           "hours",
           "okVersion",
           "registeredAt",
+          "sourceStintId",
           "startTime",
           "taskId",
           "voluntaryUnsocialHours"
@@ -11576,6 +11577,11 @@
           },
           "voluntaryUnsocialHours": {
             "type": "boolean"
+          },
+          "sourceStintId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
           }
         },
         "additionalProperties": false
