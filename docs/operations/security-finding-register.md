@@ -180,6 +180,17 @@ target's road to production-readiness.
 | SEC-044 | The bulk reporting-line import's `InvalidOperationException` handler still returns `detail = ex.Message` on the wire — less controlled than the pure-domain exceptions. SEC-041 shaped the catch-all 500; this specific handler is a residual raw-`ex.Message` echo. | InvalidOperationException handler echoes raw ex.Message | S132-discovered (SEC-041 residual) | Low | A09 / Info-disclosure | REGISTERED (S132-discovered); **owner ruling wanted** on scope | `ReportingLineEndpoints.cs` (the `InvalidOperationException` catch) | `SPRINT-132.md` §S132-discovered #6. Ruling: close only this one, or audit every raw-`ex.Message` echo tree-wide? |
 | SEC-045 | SEC-040 sanitizes the logged username within `AuthEndpoints.cs` (CR/LF strip via `SanitizeForLog`), but logging unsanitized usernames/identifiers at plain-text sinks pre-exists app-wide (per the internal Reviewer) — those sinks should be audited for the same CR/LF log-injection sanitization. | App-wide username/identifier log-sanitization audit | S132-discovered (SEC-040 sibling) | Low | A09 / log-injection (Tampering) | REGISTERED (S132-discovered); audit-scope | app-wide plain-text log sinks logging username/identifier values; `AuthEndpoints.cs` `SanitizeForLog` = the established pattern | `SPRINT-132.md` §S132-discovered #7. Fix candidate = a shared sanitizer / structured-sink convention across identifier log sinks. |
 
+## Group 11 — discovered by the employment-lifecycle time-control refinement recon (2026-08-25)
+
+Surfaced by the three-agent read-only recon behind the ROADMAP arc-item-3 refinement
+(`.claude/refinements/REFINEMENT-employment-lifecycle-time-control.md`, rev 2 — dual-lens converged).
+Registered so the finding survives independent of that program's schedule; the fix is ROUTED to the
+program's Increment 1. Severity ranks engineering priority (learning-project framing).
+
+| SEC | What it means (plain language) | Title | Origin | Sev | OWASP/STRIDE | Status | Source of truth | Adjudication |
+|-----|--------------------------------|-------|--------|-----|--------------|--------|-----------------|-------------|
+| SEC-046 | A terminated employee whose JWT is still valid (lifetime up to 8 h) can register time for themselves for ANY date — including after termination: `POST /api/time-entries` never loads the `users` row (the handler's DI list has no `UserRepository`, so no `is_active` or employment-date check is even possible), and `OrgScopeValidator`'s Employee own-data branch returns allow WITHOUT resolving the target row. Re-login is closed (repo `is_active` filter); the live-token write path is not. No test pins this path (the S70 matrix pins skema/balance surfaces, not the time-entry POST). | Terminated employee with a live token can register time | Employment-lifecycle refinement recon (gap f) | Med | A01 Broken Access Control / stale-session write | REGISTERED; fix ROUTED to time-control Increment 1 (+ a pinning regression test) | `TimeEndpoints.cs` (no user lookup); `OrgScopeValidator.cs:65-71` (own-data short-circuit) | Refinement rev 2, gap (f). Fix shape = the temporal-model ADR's one-predicate write gate (the employment window governs WHAT DATES are registrable; role governs WHO may write for a deactivated leaver; `is_active` governs login/session only). |
+
 ## Notes on SEC-026 and calibration
 
 > **Note on SEC-026 status vs "fixed never in-sprint."** The register's `fixed(… never in-sprint)`

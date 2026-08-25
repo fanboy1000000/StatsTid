@@ -8,7 +8,7 @@
 | **End Date** | 2026-08-25 |
 | **Orchestrator Approved** | yes — 2026-08-25 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` 0 errors (Release, final merged tree) |
-| **Test Verified** | Unit green locally (994 pass, incl. the 24 denial-trace tests); Docker-gated regression + the DemoSeed CI step **CI-pending** — no local Docker, verifies in the CI run this sprint's push triggers (established no-local-Docker close posture, per S132/S133; Step-7a Reviewer no-action NOTE). **Precondition checked at push (2026-08-25):** S133's run `32736662066` **FAILED** at the OpenAPI drift gate — S133 added `TimeEntry.sourceStintId` without regenerating `docs/api/openapi.json`, and the gate stopped the run before unit/DemoSeed/regression executed, so S133's CI-pending verification never ran. Remediated in this push (spec regenerated; sole delta = the TimeEntry schema — S134's Contracts edits are doc-only and don't perturb the spec). The push-triggered run therefore verifies S132+S133+S134 regression together. |
+| **Test Verified** | Unit green locally (994 pass, incl. the 24 denial-trace tests); Docker-gated regression + the DemoSeed CI step **CI-pending** — no local Docker, verifies in the CI run this sprint's push triggers (established no-local-Docker close posture, per S132/S133; Step-7a Reviewer no-action NOTE). **Precondition checked at push (2026-08-25):** S133's run `32736662066` **FAILED** at the OpenAPI drift gate — S133 added `TimeEntry.sourceStintId` without regenerating `docs/api/openapi.json`, and the gate stopped the run before unit/DemoSeed/regression executed, so S133's CI-pending verification never ran. Remediated in this push (spec regenerated; sole delta = the TimeEntry schema — S134's Contracts edits are doc-only and don't perturb the spec). The push-triggered run therefore verifies S132+S133+S134 regression together. **Resolved (2026-08-25):** that run (`32841900233`) FAILED — 2 regression + 1 smoke + frontend drift, four distinct causes — remediated in `968328a`; rerun **`32859859712` GREEN, all 7 jobs** (§Post-close CI remediation below). |
 
 ## Sprint Goal
 Increment 3 (final) of the S131 fix-next program. Close the last cluster of ratified High findings — the
@@ -214,7 +214,7 @@ value cites its sources). Docker/Python gates in CI.
 | Suite | Count | Status |
 |-------|-------|--------|
 | Unit tests | 994 | all passing locally (incl. 24 denial-trace tests + the QUAL-008 scope test) |
-| Regression (Docker-gated) | — | **CI-pending** — no local Docker; the D10 + cross-service + denial-trace probes verify in CI |
+| Regression (Docker-gated) | 1598 | **GREEN in CI `32859859712`** (2026-08-25, after the post-close remediation) — the D10 + cross-service + denial-trace probes all pass |
 | DemoSeed | 153 | CI (runs in `build-and-test` per S133 QUAL-096) |
 | **Full solution build** | — | `dotnet build StatsTid.sln` Release **0 errors** on the final merged tree |
 
@@ -238,3 +238,29 @@ value cites its sources). Docker/Python gates in CI.
 **Knowledge produced:** two proposed PATs recorded as rationale (ambient-correlation-id; denial-trace decorate-and-delegate) → deferred to the KB pass with S133's set. Two S134-surfaced follow-ups registered (LogSanitizer consolidation; a `check_docs.py` anchor-resolution CI check — the QUAL-090/012 root-cause gate).
 
 **Program close:** the S131 fix-next PROGRAM (S132 correctness core → S133 test integrity → S134 audit/obs/docs) is COMPLETE. Every ratified Critical/High/gate row is fixed or on a named track.
+
+## Post-close CI remediation (2026-08-25)
+
+The close push's run `32841900233` was the FIRST full execution of the Docker-gated suites since
+S132 — S133's run had died at the OpenAPI drift gate before any test ran (its own remediation:
+`e9d9392`, the stale-spec regen). It failed with four distinct causes, all fixed in `968328a`:
+1. **Payroll host DI — a real product bug (S34-era):** `EmploymentProfileResolver` ctor-requires
+   `UserAgreementCodeRepository`, which only the Backend host registered — composed-stack
+   `/calculate-and-export` 500'd on first resolver activation. Caught on day one by THIS sprint's
+   `PayrollCalcAuditSmokeTests` probe — the probe's exact purpose.
+2. **S120 contract pin — an unruled S132 wire change:** ADR-039's `sourceStintId` reached the
+   time-entry wire; the 11-member exact-key-set pin caught it exactly as designed. Owner ratified
+   the exposure (option a, 2026-08-25); the pin is now 12 members + a null-for-plain-entry
+   assertion, and `docs/api/openapi.json` + the frontend `api-types.ts` carry the field.
+3. **S133 harness defect:** the forced-rollback throwing outbox also faulted the S31/S34 startup
+   backfill seeders for the test's raw-seeded user, killing the host before the request fired
+   (never reproducible locally — no Docker). The seed now includes the live profile +
+   agreement-code rows so the forced throw fires only inside the endpoint under test.
+4. **Frontend typed-contract drift:** `api-types.ts` regenerated (`gen:api`) for the same field.
+
+Rerun **`32859859712`: GREEN, all 7 jobs** — the first fully green CI since S131, retroactively
+verifying the S132+S133+S134 Docker-gated work. Lesson (recorded for the close posture): the
+no-local-Docker "CI-pending" chain deferred THREE sprints of Docker-gated verification onto one
+run; the drift gate then hid the queue behind an early exit. The posture stands (no local Docker
+exists), but a sprint-close push should be watched to verdict before the next sprint's work builds
+on it — which is exactly what happened here, one sprint late.

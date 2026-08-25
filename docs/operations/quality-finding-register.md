@@ -292,6 +292,17 @@ semantics as the sweep rows: each is re-attackable from its loci + claim + the c
 | QUAL-145 | `WeeklyCalculationPipeline` + `TaskDispatcher` ship un-normalized time entries to OK-version-sensitive calc rules (the ADR-039 D6a exclusions) — a midnight-crossing entry via these paths could be attributed to the wrong calendar day / OK-version. Excluded from S132 on their non-of-record status. | Un-normalized secondary rule-input boundaries (D6a exclusions) | D-domain | M | REGISTERED (S132-discovered) | `WeeklyCalculationPipeline.cs`; `TaskDispatcher.cs`; ADR-039 D6a | → S134-adjacent; normalize-or-retire; revisit if these paths become of-record. NOT S133. |
 | QUAL-146 | QUAL-002 restored DESERIALIZED equivalence (the real ADR-018 contract) between a live-written and a rebuilt segment manifest, but a null-snapshot segment still byte-DIFFERS (PCS writes `"snapshot":null`; `EventSerializer` omits it via `WhenWritingNull`). Benign — no consumer keys on segment bytes; the ADR-016 D10 join is on `manifest_id`. | Null-snapshot segment byte-differs (deserialized-equivalence holds) | D-contract | L | REGISTERED (S132-discovered) | `PeriodCalculationService.cs` (shared `JsonOptions` / snapshot write); `Infrastructure/EventSerializer.cs` (`WhenWritingNull`) | → deferred: universal byte-identity needs `DefaultIgnoreCondition=WhenWritingNull` on PCS's shared JsonOptions — a wire-format change to the rule-engine HTTP payloads with its own RED test. NOT S133. |
 
+## Discovered by the employment-lifecycle time-control refinement recon (2026-08-25)
+
+Surfaced by the arc-item-3 refinement recon (rev 2, dual-lens converged; this row's scope was
+corrected by the internal Reviewer — the first draft over-attributed it to payroll). Registered
+independent of that program's schedule; routed to its Increment 2. Same "revisit, not shield"
+semantics as the sweep rows.
+
+| QUAL | What it means (plain language) | Title | Dim | Sev | Status | Source of truth | Disposition |
+|------|--------------------------------|-------|-----|-----|--------|-----------------|-------------|
+| QUAL-147 | `EmploymentProfileResolver` hydrates `OkVersion` from the live `users.ok_version` column instead of resolving by date (the ADR-003 principle; the resolver's own documented "Phase 4e" tail). The payroll path is ALREADY protected — PCS overlays the segment-date-resolved version before every rule-engine call (`PeriodCalculationService.cs:404-408`) — but the compliance check and historical balance summaries feed the live value into OK-version-sensitive config lookups, and the OK24→OK26 boundary (2026-04-01) is already crossed: a past-period read through those consumers can use the wrong agreement version. | Live `ok_version` reaches OK-sensitive consumers (compliance, balance history) | D-domain | **H** | REGISTERED (refinement-recon-discovered) | `EmploymentProfileResolver.cs:114` (live JOIN); `ComplianceEndpoints.cs:147-159`; `BalanceEndpoints.cs:152-157`; protected caller: `PeriodCalculationService.cs:404-408` | → time-control Increment 2; structural fix = move the date-overlay INTO the resolver so every caller is correct by construction, not per-caller. |
+
 ## Gate-promotion proposals (owner rules each; the audit changed no CI behavior)
 
 *(Id-space note: the sweep produced **QUAL-001…140 findings**; **QUAL-141** is the pre-planned

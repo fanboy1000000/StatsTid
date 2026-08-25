@@ -1,8 +1,13 @@
 # Docs & Governance Cleanup Program
 
 **Status**: PHASES 1–3 COMPLETE — WS1 `3055886`, WS3 `ab3d6d9`, WS3b `7c516c9`; **WS5 sweep complete
-2026-08-14** and its 10-item remediation **executed as S130 (closed `7e4bb1b`, 2026-08-18)**. NEXT:
-**WS7 code-quality audit (S131, kicked off 2026-08-19)** · **Owner**: Orchestrator + PM
+2026-08-14** and its 10-item remediation **executed as S130 (closed `7e4bb1b`, 2026-08-18)**.
+**WS7 COMPLETE (2026-08-25)**: the S131 sweep (closed `455e34d`) + its three-increment fix-next
+program — S132 `1052909` · S133 `a8dbb25` · S134 `5121ad9` + post-close remediation `968328a` —
+**CI-green `32859859712`** (all 7 jobs; first fully green run since S131, verifying all three
+increments' Docker-gated work). NEXT: **the employment-lifecycle time-control program** (ROADMAP
+arc item 3; refinement dual-lens-converged + owner-ruled 2026-08-25 — ADR first). ·
+**Owner**: Orchestrator + PM
 **Why this exists**: a mid-session replan (per WORKFLOW.md Replanning Protocol). Several governance
 and documentation threads opened while closing S128 and scoping the security sweep; this doc is the
 **single source of truth** for all of them so nothing is lost across sessions. It supersedes the
