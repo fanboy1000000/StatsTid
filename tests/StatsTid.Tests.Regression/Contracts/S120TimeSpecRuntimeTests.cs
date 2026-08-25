@@ -12,7 +12,8 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// S120 / TASK-12002 — the per-route spec≡runtime gate for the TIME family drained in retrofit
 /// Pass 7 (TASK-12000): time-entries POST (the 201 <c>{eventId, streamId}</c> receipt — the
 /// event-sourced write's receipt, P3-fenced) + time-entries GET (a BARE ARRAY of the NAMED
-/// SharedKernel <c>TimeEntry</c> model — 11 members), absences GET (a bare array of the NAMED
+/// SharedKernel <c>TimeEntry</c> model — 12 members since S132's ADR-039 <c>sourceStintId</c>,
+/// wire exposure owner-ratified 2026-08-25 at the S134-close CI remediation), absences GET (a bare array of the NAMED
 /// <c>AbsenceEntry</c> — 6 members; a ZERO-FE-caller greenfield op, typed anyway), and the flex
 /// GET carrying <b>OWNER RULING #1</b> (branch-normalization class, 1st instance): the
 /// no-history branch serves the normalized ONE shape — all 5 keys present, the 3 history keys
@@ -50,6 +51,9 @@ public sealed class S120TimeSpecRuntimeTests : IAsyncLifetime
     {
         "employeeId", "date", "hours", "startTime", "endTime", "taskId",
         "activityType", "agreementCode", "okVersion", "registeredAt", "voluntaryUnsocialHours",
+        // S132 / ADR-039: links a midnight-split projection row back to its source stint;
+        // null for a non-split entry. Wire exposure ratified by the owner 2026-08-25.
+        "sourceStintId",
     };
 
     /// <summary>The EXACT 6 members of the NAMED SharedKernel <c>AbsenceEntry</c> model.</summary>
@@ -137,6 +141,8 @@ public sealed class S120TimeSpecRuntimeTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Null, row.GetProperty("taskId").ValueKind);
         Assert.False(row.GetProperty("voluntaryUnsocialHours").GetBoolean());
         Assert.Equal(JsonValueKind.String, row.GetProperty("registeredAt").ValueKind);
+        // ADR-039: a plain (non-midnight-crossing) entry is not a split row — no source stint.
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("sourceStintId").ValueKind);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════

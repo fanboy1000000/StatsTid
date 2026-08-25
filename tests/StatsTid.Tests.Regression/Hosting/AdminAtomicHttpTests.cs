@@ -144,6 +144,13 @@ public sealed class AdminAtomicHttpTests : IAsyncLifetime
     /// Seeds a target user (for the role-grant) directly via SQL — the grant only requires the user
     /// to EXIST; a direct INSERT (no event) keeps the <c>user-{userId}</c> stream clean for the
     /// stream-keyed outbox/event witnesses. Primary org = the init.sql-seeded ORGANISATION STY01.
+    /// The live employee_profiles + user_agreement_codes rows MUST be seeded alongside: the host's
+    /// startup backfill seeders (S31 EmployeeProfileSeeder, S34 UserAgreementCodeBackfillSeeder)
+    /// each enqueue an outbox event for any user missing a live row — under
+    /// <c>WithThrowingOutbox()</c> that throw escapes during HOST STARTUP, before the test's
+    /// request ever fires (first surfaced in CI run 32841900233; this suite never ran under
+    /// Docker locally). Seeding the rows keeps both backfills no-op so the forced throw fires
+    /// only inside the endpoint under test.
     /// </summary>
     private async Task SeedUserAsync(string userId, string primaryOrgId)
     {
@@ -153,7 +160,13 @@ public sealed class AdminAtomicHttpTests : IAsyncLifetime
             """
             INSERT INTO users (user_id, username, password_hash, display_name, primary_org_id, agreement_code, ok_version)
             VALUES (@userId, @username, 'x', 'Forced-Rollback HTTP User', @orgId, 'AC', 'OK24')
-            ON CONFLICT (user_id) DO NOTHING
+            ON CONFLICT (user_id) DO NOTHING;
+            INSERT INTO employee_profiles (employee_id)
+            VALUES (@userId)
+            ON CONFLICT DO NOTHING;
+            INSERT INTO user_agreement_codes (assignment_id, user_id, agreement_code)
+            VALUES (gen_random_uuid(), @userId, 'AC')
+            ON CONFLICT DO NOTHING;
             """, conn);
         cmd.Parameters.AddWithValue("userId", userId);
         cmd.Parameters.AddWithValue("username", userId.ToLowerInvariant());

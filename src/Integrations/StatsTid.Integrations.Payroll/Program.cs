@@ -54,6 +54,11 @@ builder.Services.AddHostedService<SettlementExportEmitter>();
 // hydration (ADR-016 D5b consumption-time-lookup). Same dated-vs-live split
 // pattern as WageTypeMappingRepository's ADR-018 D14 export-time effective-date
 // lookup — adjacent registration mirrors the consumption shape.
+// EmploymentProfileResolver ctor-requires UserAgreementCodeRepository for the dated
+// agreement-code layer (ADR-023 D2) — registered in the Backend host but missing here
+// until the S134 PayrollCalcAuditSmokeTests composed-stack probe 500'd on first
+// resolver activation (run 32841900233).
+builder.Services.AddSingleton<UserAgreementCodeRepository>();
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();

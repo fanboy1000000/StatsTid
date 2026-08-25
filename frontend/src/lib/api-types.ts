@@ -6778,6 +6778,8 @@ export interface components {
             /** Format: date-time */
             registeredAt: string;
             voluntaryUnsocialHours: boolean;
+            /** Format: uuid */
+            sourceStintId: string | null;
         };
     };
     responses: never;
