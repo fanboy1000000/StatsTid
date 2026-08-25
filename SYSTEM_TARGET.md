@@ -408,6 +408,35 @@ The system must explicitly model the choice between time-off compensation (afspa
 - These must be added to the wage_type_mappings table
 - **Vacation-settlement wage types** (§24/§26 payouts, §7 deduction, §15 stk.2/§17 særlige-feriedage godtgørelse) are day-count lines emitted by a *separate period-close emitter*, not the rule-engine path — specified in ADR-033 D7 + `docs/references/danish-agreements.md`. Only the særlige-feriedage godtgørelse løndele are SLS-verified today; the §24/§26/§7 contracts are per-slice Step-0 gates (ADR-033 D1).
 
+### N. Employment Lifecycle & Time-Control (ADR-040)
+
+Every employee-level fact is bounded in time, and the whole system obeys those bounds — the
+governing model is **ADR-040 "Employee timeline & as-of resolution"** (owner-ratified 2026-08-25):
+
+- **Employment window**: an employee starts on a date and leaves on a date (end date inclusive =
+  last day employed). Conceptually employment is a list of non-overlapping **spells** (re-hire = a
+  later spell; deferred increment — a completed spell is never silently overwritten). NULL dates
+  mean unbounded on that side.
+- **Enforcement**: registration (time/absence/skema) outside the window is refused with date-free
+  errors; window edits that would strand existing registered data are refused; approval keeps
+  whole-month geometry with content window-clean by construction; access for departed employees is
+  role-gated (HR corrections via the terminated-inclusive paths), with `is_active` governing
+  login/session only.
+- **As-of resolution**: what was true on date X — position, part-time fraction, agreement code,
+  OK-version (a pure function of the date, ADR-003), employment category, and (model decided,
+  implementation a named follow-up) org/unit membership — resolves from the dated history, never
+  from "current" values, for every past-dated read and calculation.
+- **Calculation**: employment and profile-change boundaries split payroll segments (typed
+  EMPLOYED/NOT_EMPLOYED segments; non-employed spans evaluate no rules and export no lines but stay
+  explicit in the manifest); monthly accrual pro-rates at start and caps at the end date —
+  IMMEDIATE-grant entitlements (care/child-sick/senior days) keep full quota on hire pending
+  Phase B domain sourcing (ADR-040 D9 ratified default).
+- **Temporal editing**: changes may be future-dated (apply on their date) or backdated (recorded
+  truthfully; exported months affected by a backdate land on an HR diagnostic worklist for the
+  audited manual recalculation path — never auto-cascaded, per ADR-013).
+- Employment dates are HR-scoped: never serialized into employee-facing DTOs, JWTs, exports, or
+  error bodies.
+
 ## AC-Specific Requirements
 
 AC employees differ fundamentally.

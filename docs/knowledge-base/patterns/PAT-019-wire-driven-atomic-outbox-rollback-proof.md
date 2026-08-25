@@ -63,6 +63,18 @@ template); **bespoke** for Skema/approval/overtime endpoints (org-scope token mi
 seeds + a rule-engine `IHttpClientFactory` stub). Because the regression suite is Docker-gated (CI-only), the
 bespoke conversions iterate slowly — plan them as their own increment, not co-scheduled with unrelated work.
 
+## Usage note — the throwing outbox also faults STARTUP seeders (S134 close remediation)
+
+First CI execution of the converted suite (run `32841900233`) surfaced a harness trap: the
+throwing `IOutboxEnqueue` is host-wide, and the host's **startup backfill seeders**
+(S31 `EmployeeProfileSeeder`, S34 `UserAgreementCodeBackfillSeeder`) also enqueue — for any user
+row the test seeded raw (no live profile / agreement-code rows), the seeder's enqueue throws
+**during host startup**, killing the host before the test's request ever fires. Rule: a test that
+raw-seeds a user AND uses `WithThrowingOutbox()` must seed the live `employee_profiles` +
+`user_agreement_codes` rows alongside, so the backfills are no-op and the forced throw fires only
+inside the endpoint under test (`AdminAtomicHttpTests.SeedUserAsync`, fixed `968328a`). This class
+is invisible locally — the suite is Docker-gated, CI-only.
+
 ## Related
 
 - [PAT-016](PAT-016-container-predicate-silently-gates-its-contents.md) — a green test that could not see the
