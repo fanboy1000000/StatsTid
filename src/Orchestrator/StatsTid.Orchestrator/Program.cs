@@ -6,6 +6,9 @@ using StatsTid.Orchestrator.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// QUAL-008 render fold-in — render the ambient CorrelationId log scope in the default console sink.
+builder.Logging.AddSimpleConsole(options => options.IncludeScopes = true);
+
 var connectionString = builder.Configuration.GetConnectionString("EventStore")
     ?? "Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev";
 

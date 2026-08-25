@@ -5,6 +5,9 @@ using StatsTid.SharedKernel.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// QUAL-008 render fold-in — render the ambient CorrelationId log scope in the default console sink.
+builder.Logging.AddSimpleConsole(options => options.IncludeScopes = true);
+
 builder.Services.AddSingleton<RuleRegistry>();
 builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);
 builder.Services.AddStatsTidPolicies();

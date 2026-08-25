@@ -591,6 +591,71 @@ public sealed class PeriodCalculationService
             previousFlexBalance, authorizationHeader, correlationId, ct);
     }
 
+    // -------------------------------------------------------------------
+    // Back-compat shim (outcome-returning sibling) — S134 TASK-13404 (QUAL-003)
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Planless back-compat shim that returns the full <see cref="PeriodCalculationOutcome"/>
+    /// (result + <see cref="AuditState"/> + <see cref="PeriodCalculationOutcome.ManifestId"/>),
+    /// the outcome-returning sibling of the legacy planless
+    /// <see cref="CalculateAsync(EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
+    /// shim above.
+    ///
+    /// <para>
+    /// <strong>Byte-identical export by construction (QUAL-003 payroll-boundary invariant).</strong>
+    /// This method builds the plan via the SAME <see cref="BuildPlanForLegacyCallersAsync"/> and
+    /// re-enters the SAME sole logic entry point
+    /// (<see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, decimal, string?, Guid?, bool, CancellationToken)"/>)
+    /// as the planless <c>CalculateAsync</c> — which is literally
+    /// <c>CalculateWithOutcomeAsync(plan, …).Result</c>. So <c>this(…).Result</c> is bit-identical
+    /// to <c>CalculateAsync(profile, …)</c> for the same inputs; the ONLY difference across two
+    /// separate invocations is the freshly-minted <see cref="PlannedCalculation.ManifestId"/>, which
+    /// was already non-deterministic per call before this method existed. The added value is the
+    /// exposed <see cref="PeriodCalculationOutcome.ManifestId"/>, which the
+    /// <c>/api/payroll/calculate-and-export</c> endpoint threads into the audit chain via
+    /// <see cref="StampAuditContext(HttpContext, PeriodCalculationOutcome)"/> so the ADR-016 D10
+    /// <c>segment_manifests⋈audit_log</c> linkage is created — without perturbing the export at all.
+    /// </para>
+    ///
+    /// <para>
+    /// <c>emitAuditEvents</c> is left at its default (true): this is a FORWARD calc, so the
+    /// SegmentManifestCreated event + projection row are persisted exactly as before — mirroring how
+    /// the planless <c>CalculateAsync</c> re-enters the emitting path (only <c>ReplayAsync</c> passes
+    /// <c>emitAuditEvents:false</c>).
+    /// </para>
+    /// </summary>
+    [Obsolete(
+        "Use CalculateWithOutcomeAsync(PlannedCalculation, …). Boundary sources are limited to " +
+        "OK-transitions plus LocalProfileActivations (S21) in this path; full segmentation requires " +
+        "explicit PlannedCalculation construction. The single surviving caller is the " +
+        "/calculate-and-export endpoint (S134 QUAL-003); full retirement is deferred per S20 Step 0b W2.",
+        error: false)]
+    public async Task<PeriodCalculationOutcome> CalculateWithOutcomeAsync(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<AbsenceEntry> absences,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        decimal previousFlexBalance,
+        string? authorizationHeader = null,
+        Guid? correlationId = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        // Mirrors the planless CalculateAsync shim EXACTLY (build the plan via the same
+        // BuildPlanForLegacyCallersAsync), then returns the PeriodCalculationOutcome INSTEAD of its
+        // .Result — this shared plan-building is what makes the export output bit-identical.
+        var plan = await BuildPlanForLegacyCallersAsync(profile, periodStart, periodEnd, ct);
+
+        // Named ct: so the plan-first overload's emitAuditEvents parameter keeps its default (true) —
+        // identical to how the plan-first CalculateAsync re-enters this method.
+        return await CalculateWithOutcomeAsync(
+            plan, profile, entries, absences,
+            previousFlexBalance, authorizationHeader, correlationId, ct: ct);
+    }
+
     /// <summary>
     /// Build a <see cref="PlannedCalculation"/> for callers that haven't migrated to the
     /// PlannedCalculation-first signature yet. Hydrates an OK-version boundary source from

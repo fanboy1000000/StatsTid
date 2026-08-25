@@ -1,4 +1,4 @@
-<!-- anchor-sprint: 133 -->
+<!-- anchor-sprint: 134 -->
 # QUAL — Code-Quality Finding Register
 
 **Status**: LIVE — **S131 sweep COMPLETE (TASK-C/D/E 2026-08-19)**; now the durable cross-session quality
@@ -6,6 +6,31 @@ register. (This file is TASK-E output — the register rows, cross-register upda
 below-floor appendix.) **Owner**: Orchestrator + PM. **Sweep baseline SHA**: `7e4bb1b` (S130 close). **Registration
 floor (owner-ruled)**: **Medium+** — would plausibly change behavior, block or mislead a future change,
 or misinform a reader. Below-floor items live ONLY in the inventory appendix.
+
+> ## S134 remediation status (2026-08-25) — increment 3 / FINAL of the fix-next program (AUDIT-SCOPE + OBSERVABILITY + DOCS)
+> The audit/observability/docs increment is remediated + merged (uncommitted pending the sprint-close commit);
+> dual-lens-reviewed (Step-0b 3 Codex + 2 Reviewer cycles; Step-5a on QUAL-003; Step-7a at close). Per-fix
+> detail in `docs/sprints/SPRINT-134.md`. **No production behaviour changed** — additive audit/log emission +
+> doc accuracy. **This closes the three-increment S131 fix-next PROGRAM.**
+> - **FIXED (S134):** **QUAL-003** (Payroll-host audit middleware + the manifest-id/ADR-016-D10 linkage;
+>   byte-identical export by construction; Step-5a-cleared) · **QUAL-008** (correlation id ambient within a
+>   request + `IncludeScopes` tree-wide) · **QUAL-065** (the cross-service propagation half — pulled in per
+>   owner OQ-2; Backend→rule-engine forwarder carries the ambient id) · **QUAL-009 / SEC-038** (policy-denial
+>   trace: a decorating result-handler + a denial-gated admin/mutating audit-row middleware) · **QUAL-010**
+>   (særlige-feriedage reset Sep→Jan) · **QUAL-011 / SEC-042** (SECURITY.md → the ADR-038/S105 as-built
+>   authority model) · **QUAL-012** (upgrade-runbook pointers → durable grep refs) · **QUAL-080**
+>   (ARCHITECTURE folders + the renamed class) · **QUAL-090** (ALL stale `init.sql` "authority" comment
+>   anchors — the drift was systematic, not the finding's "3-4") · **QUAL-093** (the paired balance comment).
+> - **ROUTED OUT (not S134):** **QUAL-145** (WeeklyCalculationPipeline/TaskDispatcher normalize-or-retire) →
+>   the domain-semantics track (it is OK-version domain behaviour, not audit/obs/docs).
+> - **S134-SURFACED FOLLOW-UPS (register + route, don't lose):** (1) **`LogSanitizer` consolidation** — S134
+>   added a shared `src/Auth/LogSanitizer` that duplicates SEC-040's `private SanitizeForLog` in Backend
+>   `AuthEndpoints.cs`; consolidate the Backend one onto the shared helper (new QUAL, low). (2) **QUAL-090
+>   root-cause** — today's re-sync/durable-ref fix should be backed by a `check_docs.py` CI check that
+>   resolves any `init.sql:NNN` (or named-anchor) reference in source comments + fails on drift (new QUAL/gate).
+> - **PROGRAM RESIDUALS (on their tracks):** QUAL-016 bespoke atomic-outbox increment · QUAL-036 residual 12
+>   overloads (retire/repoint test seeders) · QUAL-123 + day-attribution (domain track) · the 8 S132-discovered
+>   follow-ups (QUAL-142–146 + SEC-043–045, already registered).
 
 > ## S133 remediation status (2026-08-24) — increment 2 of the fix-next program (TEST INTEGRITY)
 > The test-integrity increment is remediated + merged (uncommitted pending the sprint-close commit); each fix

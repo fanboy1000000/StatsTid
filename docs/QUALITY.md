@@ -1,7 +1,30 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 133 -->
+<!-- anchor-sprint: 134 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
+
+## S134 remediation re-grade (2026-08-25) — audit-scope + observability + docs landed (fix-next program COMPLETE)
+
+S134 (increment 3, FINAL) closed the audit trail's structural wiring gaps + the doc-canon rot. **The
+three-increment S131 fix-next program (S132 correctness core → S133 test integrity → S134 audit/obs/docs) is
+now complete** — every ratified Critical/High/gate row in the register is fixed or on a named track (residuals:
+QUAL-016 bespoke outbox, QUAL-036 residual overloads, QUAL-123 + day-attribution on the domain track,
+QUAL-065-done-here, and two S134-surfaced follow-ups). No production behaviour changed — S134 is additive
+audit/log emission + doc accuracy.
+
+| Domain | S133 → S134 | Movement rests on (S134) |
+|--------|-------------|--------------------------|
+| **Documentation (canon)** | (S131 weak area) → **materially recovered** ▲ | The doc-canon rot the S131 audit flagged is closed: QUAL-010 (statutory reset-month fact), QUAL-011/SEC-042 (SECURITY.md corrected to the ADR-038/S105 as-built authority model), QUAL-012 (the upgrade runbook's rotted pointers → durable grep refs — root-cause-fixed, not re-synced), QUAL-080 (ARCHITECTURE folders + the renamed class), QUAL-090/093 (the systematically-drifted `init.sql` "authority" comment anchors). Each source-verified. |
+| **Security (authz code)** | B+ → **B+** (held, ▲ posture) | **FIXED:** QUAL-009 / SEC-038 — policy-layer denials now leave a structured, redacted, correlation-linked trace (a decorating `IAuthorizationMiddlewareResultHandler` that delegates-always + a denial-gated audit-row middleware, admin/mutating routes) tree-wide. The "a 403's cause can't be established" gap is closed. |
+| **Backend API / audit** | A → **A** (held) | **FIXED:** QUAL-003 — the Payroll host now writes `audit_log` rows + the manifest-id enrichment is called, so the ADR-016 D10 `segment_manifests⋈audit_log` linkage exists end-to-end (byte-identical export proven by construction + Step-5a-cleared). |
+| **Observability / CI-Tooling** | B+ → **B+** (▲ capability) | **FIXED:** QUAL-008 (correlation id now ambient within a correlated request via a log scope + `IncludeScopes` tree-wide) + QUAL-065 (the id survives the Backend→rule-engine hop — the cross-service trace half). One user action is now followable across services (composed-stack probes, CI-gated). |
+
+*(Domains not listed are unchanged by S134.)*
+
+**PM reading.** The program set out to fix what the S131 audit measured. Three increments later: the
+correctness core is sound (S132), the tests genuinely fail on regressions (S133), and the audit trail +
+observability + the docs-that-feed-the-agents are now accurate (S134). The remaining debt is scoped and
+named — nothing silent.
 
 ## S133 remediation re-grade (2026-08-24) — test integrity landed
 

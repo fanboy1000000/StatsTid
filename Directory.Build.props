@@ -48,24 +48,33 @@
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'StatsTid.Integrations.Payroll'">
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <!--
-      QUAL-069 (S133): rationale corrected — the prior comment was wrong about
-      BOTH the location and the caller count. Measured on the current tree:
-      exactly ONE unsuppressed CS0618 in this project, at Program.cs:249 (NOT
-      :198) — the body of the /api/payroll/calculate-and-export endpoint
-      (mapped at Program.cs:199) calls the deferred-retirement legacy overload
-      `PeriodCalculationService.CalculateAsync(EmploymentProfile, …)`.
-      There is a SECOND caller of the same [Obsolete] overload —
-      RetroactiveCorrectionService.cs:210 — but it is already wrapped in a
-      local `#pragma warning disable CS0618`, so it does not trip the gate.
-      "Single surviving caller" was therefore false: two call sites exist, one
-      pragma-suppressed. This project-wide opt-out is load-bearing for that one
-      unsuppressed warning only.
+      QUAL-069 (S133 rationale; re-synced S134 QUAL-003). Measured on the current
+      tree: exactly ONE unsuppressed CS0618 in this project — at the
+      `calculator.CalculateWithOutcomeAsync(request.Profile, …)` CALL SITE inside the
+      `MapPost("/api/payroll/calculate-and-export", …)` handler in Program.cs. (Durable
+      by-name reference, NOT a line number — the line moved from :272 to :282 within
+      S134 itself when TASK-13403 inserted the denial middleware above it, which is
+      exactly the anchor-rot class QUAL-090/QUAL-012 fixed; grep the call, don't trust a
+      number.) That call target is the deferred-retirement [Obsolete] PLANLESS
+      `PeriodCalculationService.CalculateWithOutcomeAsync(EmploymentProfile, …)`
+      overload (the outcome-returning sibling of the legacy planless
+      `CalculateAsync(EmploymentProfile, …)`, ADDED in S134 QUAL-003 so the endpoint
+      can thread the calc's manifest-id into the audit trail — see TASK-13404).
+      S134 moved the endpoint's call from the legacy `CalculateAsync` shim to this
+      new sibling; the sibling is marked [Obsolete] on purpose so exactly ONE live
+      CS0618 remains and this project-wide opt-out stays LOAD-BEARING (dropping it to
+      zero while the planless boundary-limited shims are unretired would silently make
+      the opt-out inert — precisely QUAL-069's own defect class). There is still a
+      SECOND caller of the ORIGINAL `CalculateAsync(EmploymentProfile, …)` overload —
+      RetroactiveCorrectionService.cs:210 — wrapped in a local
+      `#pragma warning disable CS0618`, so it does not trip the gate.
 
-      STATUS: DEFERRED (QUAL-069, per OQ-5). The gate stays OFF until the legacy
-      overload retires (that clears Program.cs:249 and the pragma together). A
-      narrower fix — a targeted `#pragma warning disable CS0618` at Program.cs:249
-      so project-wide warn-as-error could be restored now — is deliberately NOT
-      taken this sprint; it rides the legacy-overload-retirement follow-up.
+      STATUS: DEFERRED (QUAL-069, per OQ-5). The gate stays OFF until the planless
+      boundary-limited shims (`CalculateAsync` + the S134 `CalculateWithOutcomeAsync`
+      sibling) retire (that clears the endpoint's call site and the pragma together). A
+      narrower fix — a targeted `#pragma warning disable CS0618` at that call site so
+      project-wide warn-as-error could be restored now — is deliberately NOT taken;
+      it rides the legacy-overload-retirement follow-up.
     -->
   </PropertyGroup>
 

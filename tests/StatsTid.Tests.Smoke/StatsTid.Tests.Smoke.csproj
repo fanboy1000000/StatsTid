@@ -12,6 +12,11 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="7.5.1" />
+    <!-- S134 TASK-13404 (QUAL-003): the composed-stack calc-audit probe seeds an APPROVED period +
+         reads audit_log / segment_manifests directly against the composed Postgres (localhost:5432),
+         so this HTTP-only smoke suite now also needs a Postgres client. Version pinned to match the
+         regression project (8.0.3). -->
+    <PackageReference Include="Npgsql" Version="8.0.3" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="xunit" Version="2.5.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />

@@ -11,7 +11,7 @@ namespace StatsTid.Backend.Api.Contracts;
 // entity via CreateReturningAsync).
 //
 // [property: AllowedValues] discriminator, authority cited:
-//   status {ACTIVE, INACTIVE} — init.sql:1430 CHECK (position_override_configs.status).
+//   status {ACTIVE, INACTIVE} — init.sql:1512 CHECK (position_override_configs.status).
 // REFUSED (P4-open BY DESIGN): agreementCode / okVersion / positionCode — agreement data.
 
 /// <summary>

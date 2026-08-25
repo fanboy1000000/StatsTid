@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.Extensions.DependencyInjection;
 using StatsTid.SharedKernel.Security;
 
@@ -39,6 +40,18 @@ public static class AuthorizationPolicies
             // Any authenticated user
             .AddPolicy("Authenticated", policy =>
                 policy.RequireAuthenticatedUser());
+
+        // QUAL-009 / SEC-038 — the policy-denial trace. Replace the framework's default
+        // IAuthorizationMiddlewareResultHandler with a decorator that OBSERVES every final
+        // authorization decision and, on a denial, emits a structured/redacted/correlation-linked
+        // log (and annotates the request for the before-authz audit-row middleware). It delegates
+        // ALL actual result handling to the built-in handler, so the allow/deny outcome is
+        // unchanged. Registered HERE — after AddAuthorizationBuilder (which registers the default
+        // via TryAddSingleton) — so this explicit registration wins the last-one-wins resolution.
+        // Wiring it into AddStatsTidPolicies (rather than each Program.cs) means EVERY host that
+        // adds the StatsTid policies gets the trace by construction; no host can be missed, and a
+        // future host inherits it for free.
+        services.AddSingleton<IAuthorizationMiddlewareResultHandler, DenialLoggingAuthorizationResultHandler>();
 
         return services;
     }

@@ -1,3 +1,5 @@
+using StatsTid.Auth;
+
 namespace StatsTid.Backend.Api.Http;
 
 /// <summary>
@@ -28,6 +30,17 @@ namespace StatsTid.Backend.Api.Http;
 /// Absent or empty inbound headers ⇒ NO outgoing header — never an empty value. A header
 /// already set explicitly by the call site wins (no double-append).
 /// </para>
+///
+/// <para><b>QUAL-065 — correlation-id ambient fallback:</b> a frontend-originated request often
+/// arrives with NO <c>X-Correlation-Id</c> header, in which case the
+/// <see cref="CorrelationIdMiddleware"/> has already MINTED one into
+/// <see cref="HttpContext.Items"/> (and echoed it on the response the frontend sees). The
+/// Authorization forward stays header-only, but the correlation id falls back to that AMBIENT
+/// <see cref="HttpContext.Items"/> value when the inbound header is absent — so the id the Backend
+/// logs and returns is the SAME id the rule engine receives and logs. Without this fallback the
+/// hop reads only the (absent) inbound header, the rule engine mints a DIFFERENT id, and the
+/// cross-service trace breaks at the first hop. The id is read from <c>Items</c>, never from the
+/// response header.</para>
 /// </summary>
 public sealed class RuleEngineHeaderForwardingHandler : DelegatingHandler
 {
@@ -49,8 +62,11 @@ public sealed class RuleEngineHeaderForwardingHandler : DelegatingHandler
         var httpContext = _httpContextAccessor.HttpContext;
         if (httpContext is not null)
         {
+            // Authorization stays header-only: the user's bearer lives on the inbound request,
+            // never in Items — there is nothing ambient to fall back to (the MINT partition).
             CopyInboundHeader(httpContext, request, AuthorizationHeader);
-            CopyInboundHeader(httpContext, request, CorrelationIdHeader);
+            // Correlation id: inbound header first, then the ambient (minted) id from Items (QUAL-065).
+            ForwardCorrelationId(httpContext, request);
         }
 
         return base.SendAsync(request, cancellationToken);
@@ -71,5 +87,43 @@ public sealed class RuleEngineHeaderForwardingHandler : DelegatingHandler
             return; // absent/empty inbound ⇒ NO outgoing header, never an empty value
 
         request.Headers.TryAddWithoutValidation(headerName, value);
+    }
+
+    /// <summary>
+    /// QUAL-065 — forwards the correlation id with an ambient fallback:
+    /// <list type="number">
+    /// <item><description>an explicitly caller-set outgoing header wins (never double-append);</description></item>
+    /// <item><description>else the non-empty INBOUND <c>X-Correlation-Id</c> header (a caller that
+    /// supplied its own id — the pre-QUAL-065 behavior, unchanged);</description></item>
+    /// <item><description>else the AMBIENT id the <see cref="CorrelationIdMiddleware"/> minted into
+    /// <see cref="HttpContext.Items"/> — the header-less frontend-originated case QUAL-065 fixes.
+    /// Read from <c>Items</c>, NOT from the response header.</description></item>
+    /// </list>
+    /// If none of these yields a value ⇒ NO outgoing header (never an empty value).
+    /// </summary>
+    private static void ForwardCorrelationId(HttpContext httpContext, HttpRequestMessage request)
+    {
+        // An explicitly caller-set header wins — never double-append.
+        if (request.Headers.Contains(CorrelationIdHeader))
+            return;
+
+        // Prefer a non-empty INBOUND header (a caller that supplied its own id).
+        if (httpContext.Request.Headers.TryGetValue(CorrelationIdHeader, out var values))
+        {
+            var inbound = values.ToString();
+            if (!string.IsNullOrEmpty(inbound))
+            {
+                request.Headers.TryAddWithoutValidation(CorrelationIdHeader, inbound);
+                return;
+            }
+        }
+
+        // Fall back to the ambient minted id (QUAL-065). Sourced from Items — the SAME Guid the
+        // Backend logs + response carry — so ONE id spans the Backend→rule-engine hop.
+        if (httpContext.Items.TryGetValue(CorrelationIdMiddleware.ItemKey, out var ambient)
+            && ambient is Guid ambientId && ambientId != Guid.Empty)
+        {
+            request.Headers.TryAddWithoutValidation(CorrelationIdHeader, ambientId.ToString());
+        }
     }
 }

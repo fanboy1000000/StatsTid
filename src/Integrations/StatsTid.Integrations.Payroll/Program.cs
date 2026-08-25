@@ -9,6 +9,9 @@ using StatsTid.SharedKernel.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// QUAL-008 render fold-in — render the ambient CorrelationId log scope in the default console sink.
+builder.Logging.AddSimpleConsole(options => options.IncludeScopes = true);
+
 var connectionString = builder.Configuration.GetConnectionString("EventStore")
     ?? "Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev";
 
@@ -67,6 +70,15 @@ builder.Services.AddSingleton<StatsTid.SharedKernel.Audit.IAuditProjectionMapper
 // — the per-(employee, year, month) payroll-export lock fact, emitted from this
 // process (TASK-9002). Mirrors the RetroactiveCorrectionRequested registration above.
 builder.Services.AddSingleton<StatsTid.SharedKernel.Audit.IAuditProjectionMapper<StatsTid.SharedKernel.Events.PayrollExportGenerated>, StatsTid.Infrastructure.AuditMappers.PayrollExportGeneratedAuditMapper>();
+// S134 TASK-13404 (QUAL-003): the audit_log writer. Before this, the Payroll host
+// registered ONLY AuditProjectionRepository (the audit_projection cross-process table),
+// so no request through this process ever produced an audit_log row and the ADR-016 D10
+// segment_manifests⋈audit_log manifest linkage (persisted via audit_log.details) was
+// never created. AuditLogRepository is the SAME singleton the Backend host registers
+// (Backend Program.cs:100); it backs the AuditLoggingMiddleware wired into the pipeline
+// below (the middleware method-injects this repository per request). Additive: no other
+// registration or behaviour changes.
+builder.Services.AddSingleton<AuditLogRepository>();
 builder.Services.AddSingleton<ApprovalPeriodRepository>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
 // S21 TASK-2108 (ADR-017 D9c): hydrates BoundarySources.LocalProfileActivations on
@@ -112,7 +124,22 @@ var app = builder.Build();
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseAuthentication();
+// QUAL-009 / SEC-038 (S134 TASK-13403) — the denial audit-ROW writer, BEFORE UseAuthorization: an
+// authorization denial short-circuits the pipeline, so only a before-authz middleware survives to
+// record it. Payroll's admin/mutating endpoints (GlobalAdminOnly / LocalAdminOrAbove) are exactly the
+// ADMIN-STRICT/MUTATING routes the owner ruling (OQ-1a) wants a row for. Denial-gated (no double-write
+// with the allowed-request row that AuditLoggingMiddleware writes below) + best-effort. It
+// method-injects AuditLogRepository (registered above by TASK-13404).
+app.UseMiddleware<PolicyDenialAuditRowMiddleware>();
 app.UseAuthorization();
+// S134 TASK-13404 (QUAL-003): audit middleware, registered in the SAME pipeline position as
+// the Backend host (Backend Program.cs:487 — after auth/authz so GetActorContext() is populated).
+// It runs POST-_next in a swallowing try/catch (an audit-write failure never touches the export
+// transaction or the response) and writes one audit_log row per non-/health request. The
+// /calculate-and-export endpoint additionally stamps the calc's manifest id into HttpContext.Items
+// (PeriodCalculationService.StampAuditContext) BEFORE this middleware persists, so that row's
+// audit_log.details carries {"manifest_id":"<guid>"} — creating the ADR-016 D10 linkage.
+app.UseMiddleware<AuditLoggingMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "payroll-integration" }));
 
@@ -246,7 +273,13 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             ? parsedCorr
             : null;
 
-    var result = await calculator.CalculateAsync(
+    // S134 TASK-13404 (QUAL-003): call the planless CalculateWithOutcomeAsync overload — the
+    // outcome-returning sibling of the legacy planless CalculateAsync shim. It builds the SAME
+    // PlannedCalculation via the SAME BuildPlanForLegacyCallersAsync and runs the SAME core, so
+    // outcome.Result is bit-identical to what CalculateAsync(profile, …) returned here before:
+    // the export payload / SLS lines are unchanged BY CONSTRUCTION. The outcome additionally
+    // exposes the ManifestId + AuditState.
+    var outcome = await calculator.CalculateWithOutcomeAsync(
         request.Profile,
         request.Entries,
         request.Absences,
@@ -256,6 +289,17 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         authHeader,
         correlationId,
         ct);
+
+    // Thread the manifest id (and degraded audit state, when applicable) into HttpContext.Items
+    // BEFORE returning, so the AuditLoggingMiddleware — which reads Items AFTER the endpoint runs
+    // (post-_next) — writes it into audit_log.details, creating the ADR-016 D10
+    // segment_manifests⋈audit_log linkage. No-op when no manifest was produced (Guid.Empty), e.g.
+    // the total-rule-failure short-circuit.
+    PeriodCalculationService.StampAuditContext(httpContext, outcome);
+
+    // Derive the SAME PeriodCalculationResult the endpoint returned before — the response body,
+    // export lines, and every downstream branch are unchanged (outcome.Result IS that result).
+    var result = outcome.Result;
 
     if (!result.Success)
         return Results.UnprocessableEntity(result);

@@ -114,7 +114,7 @@ Source: `DefaultEntitlementConfigs.cs` and `entitlement_configs` seed data.
 | Entitlement Type | Annual Quota | Reset Month | Per-Episode | Pro-Rate Part-Time | Carryover Max | Min Age | Notes | SR rows |
 |-----------------|-------------|-------------|-------------|-------------------|---------------|---------|-------|---------|
 | VACATION | 25 days | September (9) | No | No (day-count flat per Ferieloven §5; ADR-031) | 5 days | -- | Ferie (ferieaar) | SR-AC-OK24-013 (quota, HIGH per Ferieloven) + SR-AC-OK24-032 (sub-fields) |
-| SPECIAL_HOLIDAY | 5 days | September (9) | No | No (day-count flat per Ferieloven §5; ADR-031) | 0 | -- | Saerlige feriedage | SR-AC-OK24-031 (quota) + SR-AC-OK24-036 (sub-fields) |
+| SPECIAL_HOLIDAY | 5 days | January (1) | No | No (day-count flat per Ferieloven §5; ADR-031) | 0 | -- | Saerlige feriedage (calendar-year cycle, reset 1 Jan — corrected from a pre-S80 September defect per QUAL-010; both cited SR sources state January) | SR-AC-OK24-031 (quota) + SR-AC-OK24-036 (sub-fields) |
 | CARE_DAY | 2 days | January (1) | No | No | 0 | -- | Omsorgsdage | SR-AC-OK24-014 (quota) + SR-AC-OK24-033 (sub-fields) |
 | CHILD_SICK (AC) | 1 day | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-AC-OK24-016 + SR-AC-OK24-034 |
 | CHILD_SICK (HK) | 2 days | January (1) | Yes | No | 0 | -- | Barns sygedag | SR-HK-OK24-028 |

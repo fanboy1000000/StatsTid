@@ -9,9 +9,9 @@ namespace StatsTid.Backend.Api.Contracts;
 // BYTE-IDENTICAL wire JSON.
 //
 // Enum authorities (OQ-3, owner-ruled S116): period status = the approval_periods status CHECK
-// (init.sql:867, superseded by the 5-state re-CHECK at init.sql:1103 — DRAFT / EMPLOYEE_APPROVED /
+// (init.sql:883, superseded by the 5-state re-CHECK at init.sql:1119 — DRAFT / EMPLOYEE_APPROVED /
 // SUBMITTED / APPROVED / REJECTED; the team-overview row's synthetic "DRAFT" is a member); period
-// type = the approval_periods period_type CHECK (init.sql:866 — WEEKLY / MONTHLY).
+// type = the approval_periods period_type CHECK (init.sql:882 — WEEKLY / MONTHLY).
 
 /// <summary>The shared <c>{ periodId, status }</c> action receipt — serialized by
 /// <c>POST /api/approval/send</c> and <c>POST .../{periodId}/employee-approve</c> (both
@@ -27,7 +27,7 @@ namespace StatsTid.Backend.Api.Contracts;
 /// </summary>
 public sealed record PeriodActionResponse(
     Guid PeriodId,
-    // Authority: approval_periods status CHECK, init.sql:1103 (5-state).
+    // Authority: approval_periods status CHECK, init.sql:1119 (5-state).
     [property: AllowedValues("DRAFT", "SUBMITTED", "EMPLOYEE_APPROVED", "APPROVED", "REJECTED")]
     string Status);
 
@@ -38,7 +38,7 @@ public sealed record PeriodActionResponse(
 /// four ops' wire (forbidden).</summary>
 public sealed record PeriodRejectResponse(
     Guid PeriodId,
-    // Authority: approval_periods status CHECK, init.sql:1103 (5-state).
+    // Authority: approval_periods status CHECK, init.sql:1119 (5-state).
     [property: AllowedValues("DRAFT", "SUBMITTED", "EMPLOYEE_APPROVED", "APPROVED", "REJECTED")]
     string Status,
     string Reason);
@@ -55,10 +55,10 @@ public sealed record ApprovalPeriodListItem(
     string OrgId,
     DateOnly PeriodStart,
     DateOnly PeriodEnd,
-    // Authority: approval_periods period_type CHECK, init.sql:866.
+    // Authority: approval_periods period_type CHECK, init.sql:882.
     [property: AllowedValues("WEEKLY", "MONTHLY")]
     string PeriodType,
-    // Authority: approval_periods status CHECK, init.sql:1103 (5-state).
+    // Authority: approval_periods status CHECK, init.sql:1119 (5-state).
     [property: AllowedValues("DRAFT", "SUBMITTED", "EMPLOYEE_APPROVED", "APPROVED", "REJECTED")]
     string Status,
     DateTime? SubmittedAt,
@@ -75,10 +75,10 @@ public sealed record EmployeePeriodItem(
     string OrgId,
     DateOnly PeriodStart,
     DateOnly PeriodEnd,
-    // Authority: approval_periods period_type CHECK, init.sql:866.
+    // Authority: approval_periods period_type CHECK, init.sql:882.
     [property: AllowedValues("WEEKLY", "MONTHLY")]
     string PeriodType,
-    // Authority: approval_periods status CHECK, init.sql:1103 (5-state).
+    // Authority: approval_periods status CHECK, init.sql:1119 (5-state).
     [property: AllowedValues("DRAFT", "SUBMITTED", "EMPLOYEE_APPROVED", "APPROVED", "REJECTED")]
     string Status,
     string AgreementCode,
@@ -94,7 +94,7 @@ public sealed record EmployeePeriodItem(
 /// DRAFT row (the roster LEFT JOIN); <paramref name="SubmittedAt"/>/<paramref name="DecisionAt"/>/
 /// <paramref name="RejectionReason"/>/<paramref name="PayrollExportedAt"/> are state-dependent
 /// nullable scalars. <paramref name="Status"/> includes the SYNTHETIC "DRAFT" the handler emits
-/// for zero-period rows — still inside the init.sql:1103 closed set.
+/// for zero-period rows — still inside the init.sql:1119 closed set.
 /// <para>S124 / TASK-12402: <paramref name="NormRegistered"/>, <paramref name="Overtime"/> and
 /// <paramref name="HasWarning"/> are ALSO null on a non-submitted row — the manager-visibility rule
 /// (an un-submitted timesheet is not the manager's to read). See their inline note below.</para>
@@ -104,7 +104,7 @@ public sealed record TeamOverviewEmployeeRow(
     string EmployeeId,
     string DisplayName,
     string Agreement,
-    // Authority: approval_periods status CHECK, init.sql:1103 (5-state; the zero-period row's
+    // Authority: approval_periods status CHECK, init.sql:1119 (5-state; the zero-period row's
     // synthetic "DRAFT" is a set member).
     [property: AllowedValues("DRAFT", "SUBMITTED", "EMPLOYEE_APPROVED", "APPROVED", "REJECTED")]
     string Status,

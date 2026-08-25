@@ -251,26 +251,53 @@ public sealed class RuleEngineAuthForwardingTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Absent inbound X-Correlation-Id ⇒ NO outgoing X-Correlation-Id header at all — never an
-    /// empty value (pinned end-to-end through the governance family; the bearer still forwards).
+    /// QUAL-065 (S134) — the cross-service trace probe: a FRONTEND-ORIGINATED, header-less action
+    /// must show ONE correlation id across the Backend and the rule-engine hop.
+    ///
+    /// <para><b>The scenario:</b> the request carries a bearer but deliberately NO X-Correlation-Id
+    /// (the common frontend case). The <see cref="CorrelationIdMiddleware"/> MINTS an id into
+    /// <c>HttpContext.Items</c> and echoes it on the RESPONSE header (the id the Backend logs +
+    /// returns). Pre-QUAL-065 the forwarder read only the inbound REQUEST header — absent here — so
+    /// it forwarded nothing and the rule engine minted a DIFFERENT id (trace broken at hop 1).</para>
+    ///
+    /// <para><b>The proof (verifiable proxy for "one id across both services' logs"):</b> the id on
+    /// the outgoing rule-engine request equals the id echoed on the Backend response — i.e. the
+    /// ambient minted id, sourced from Items, crosses the hop unchanged. That the rule engine then
+    /// logs the id it receives is the RuleEngine CorrelationIdMiddleware's job (adopts an inbound
+    /// header), already pinned by that middleware's own tests.</para>
+    ///
+    /// <para><b>Docker/CI-gated:</b> this rides the composed-stack harness (class-level
+    /// <c>[Trait("Category","Docker")]</c>); it is NOT asserted green locally without Docker. The
+    /// truly header-less AND context-less "forward nothing / never an empty value" invariant is
+    /// still pinned separately by <see cref="NamedClient_NoAmbientHttpContext_ForwardsNothing"/>.</para>
     /// </summary>
     [Fact]
-    public async Task OvertimeGovernance_AbsentInboundCorrelationId_OmitsHeaderEntirely()
+    public async Task OvertimeGovernance_HeaderlessFrontendRequest_ForwardsAmbientMintedCorrelationId_S73Probe()
     {
         var (client, capture) = CreateCaptureClient();
         var employeeId = await SeedEmployeeAsync(fraction: 1.000m);
         var token = MintEmployeeToken(employeeId, OrgId);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        // Deliberately NO X-Correlation-Id on the inbound request.
+        // Deliberately NO X-Correlation-Id on the inbound request (the frontend-originated case).
 
         var rsp = await client.GetAsync(
             $"/api/overtime/{employeeId}/governance?periodStart=2026-05-01&periodEnd=2026-05-31&overtimeHours=5");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // The Backend minted an id and echoed it on the response — the id the Backend logs + the
+        // frontend sees.
+        Assert.True(rsp.Headers.TryGetValues("X-Correlation-Id", out var responseIds),
+            "The Backend must mint + echo an X-Correlation-Id even when the request had none.");
+        var mintedId = responseIds!.Single();
+        Assert.True(Guid.TryParse(mintedId, out _), "The echoed correlation id must be a GUID.");
+
+        // The outgoing rule-engine call carries that SAME minted id (QUAL-065) — the bearer still
+        // forwards. One id now spans Backend + rule-engine for a header-less frontend action.
         var governanceCall = Assert.Single(capture.Requests(CheckOvertimeGovernancePath));
         Assert.Equal($"Bearer {token}", governanceCall.Authorization);
-        Assert.False(governanceCall.HasCorrelationId,
-            "An absent inbound X-Correlation-Id must produce NO outgoing header — never an empty value.");
+        Assert.True(governanceCall.HasCorrelationId,
+            "QUAL-065: a header-less frontend request must forward the ambient minted id across the hop.");
+        Assert.Equal(mintedId, governanceCall.CorrelationId);
     }
 
     /// <summary>

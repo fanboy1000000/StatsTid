@@ -41,22 +41,28 @@ Apply the guarded ALTER blocks from init.sql in order. Each sprint's additions a
 
 ## Sprint-by-Sprint Schema Additions
 
-| Sprint | Table(s) | Columns / Changes | init.sql location |
-|--------|----------|-------------------|-------------------|
-| S3 | events | actor_id, actor_role, correlation_id | ~L407-411 |
-| S9 | approval_periods | employee_approved_at, employee_deadline, manager_deadline | ~L897-902 |
-| S21 | local_agreement_profiles | version BIGINT | ~L1612-1613 |
-| S22 | outbox_events + schema_migrations | New tables (CREATE IF NOT EXISTS) | ~L5-71 |
-| S25 | agreement_configs, position_override_configs, wage_type_mappings, entitlement_configs | version BIGINT columns | ~L1652-1665 |
-| S25 | *_audit tables | version_before, version_after BIGINT | ~L1670-1680 |
-| S29 | wage_type_mappings | mapping_id UUID PK, effective_from/effective_to | ~L1709-1729 |
-| S30 | entitlement_configs | effective_from/effective_to, entitlement_config_audit table | ~L1787-1800 |
-| S31 | employee_profiles + employee_profile_audit | New tables (CREATE IF NOT EXISTS) | ~L480-520 |
-| S34 | user_agreement_codes + user_agreement_code_audit | New tables (CREATE IF NOT EXISTS) | ~L1830-1842 |
-| S35 | users | version BIGINT, users_audit table | ~L1843-1844 |
-| S40 | role_config_overrides + role_config_override_audit, overtime_pre_approvals extension | New tables + columns | ~L1900-1982 |
-| S43 | audit_projection | New table (CREATE IF NOT EXISTS) | ~L2035-2080 |
-| S97 | enheder + user_enheder | New tables (CREATE IF NOT EXISTS) + partial-unique `idx_enheder_active_name` | ~L563-589 |
+> **QUAL-012 (S134): the `init.sql location` column now uses DURABLE search references, not absolute
+> `~L###` line numbers.** The prior line numbers had drifted (init.sql grows every sprint; ~11 of 14 rows
+> pointed at unrelated lines, and one named tables that no longer exist) — the same rot class as QUAL-090.
+> Each row names the CREATE / ALTER / index block to `grep` for in `docker/postgres/init.sql`, which does
+> not drift. (Mirrors the S122 row's long-standing pattern.)
+
+| Sprint | Table(s) | Columns / Changes | init.sql location (grep for) |
+|--------|----------|-------------------|------------------------------|
+| S3 | events | actor_id, actor_role, correlation_id | the `CREATE TABLE ... events` body + these columns |
+| S9 | approval_periods | employee_approved_at, employee_deadline, manager_deadline | the `approval_periods` block + these deadline columns |
+| S21 | local_agreement_profiles | version BIGINT | `local_agreement_profiles` + its `version` column |
+| S22 | outbox_events + schema_migrations | New tables (CREATE IF NOT EXISTS) | `CREATE TABLE IF NOT EXISTS outbox_events` + `schema_migrations` |
+| S25 | agreement_configs, position_override_configs, wage_type_mappings, entitlement_configs | version BIGINT columns | the `version` column on each of the four named tables |
+| S25 | *_audit tables | version_before, version_after BIGINT | `version_before` / `version_after` on the `*_audit` tables |
+| S29 | wage_type_mappings | mapping_id UUID PK, effective_from/effective_to | `wage_type_mappings` + `mapping_id` / `effective_from` / `idx_wtm_natural_key_*` |
+| S30 | entitlement_configs | effective_from/effective_to, entitlement_config_audit table | `entitlement_configs` effective-dating + `CREATE TABLE ... entitlement_config_audit` |
+| S31 | employee_profiles + employee_profile_audit | New tables (CREATE IF NOT EXISTS) | `CREATE TABLE IF NOT EXISTS employee_profiles` + `employee_profile_audit` |
+| S34 | user_agreement_codes + user_agreement_code_audit | New tables (CREATE IF NOT EXISTS) | `CREATE TABLE IF NOT EXISTS user_agreement_codes` + `user_agreement_code_audit` |
+| S35 | users | version BIGINT, users_audit table | `users` `version` column + `CREATE TABLE ... users_audit` |
+| S40 | role_config_overrides + role_config_override_audit, overtime_pre_approvals extension | New tables + columns | `role_config_overrides` + `role_config_override_audit` + the `overtime_pre_approvals` D7 columns |
+| S43 | audit_projection | New table (CREATE IF NOT EXISTS) | `CREATE TABLE IF NOT EXISTS audit_projection` (+ the `s43-d1-audit-projection-table` guarded block) |
+| S97 | ~~enheder + user_enheder~~ **SUPERSEDED** | ~~New tables + `idx_enheder_active_name`~~ | **OBSOLETE — `enheder`/`user_enheder` were REPLACED by `units`/`unit_leaders`/`users.unit_id` (ADR-038, S103) as a GREENFIELD reseed, NOT a migration (D9). A pre-ADR-038 legacy DB is reseeded, not upgraded through this row; a current init.sql has no `enheder` tables. For the current model grep `CREATE TABLE ... units` + `unit_leaders`.** |
 | S122 | agreement_configs, overtime_balances | DEFAULT flip `'UDBETALING'`→`'AFSPADSERING'` + named CHECK on the compensation-model column (each in BOTH the CREATE-body inline form AND a guarded post-table `ALTER COLUMN SET DEFAULT` + `DROP/ADD CONSTRAINT` block) | search `agreement_configs_default_compensation_model_check` / `overtime_balances_compensation_model_check` in init.sql (CREATE-body inline + guarded ALTER, ~2 sites each) |
 
 ## S122 — Compensation-model DB CHECK + default correction (TASK-12200)
@@ -105,10 +111,15 @@ fallback — it is NOT dropped this sprint.
 
 ### Schema (apply the guarded blocks for a legacy DB)
 
-The two new tables are `CREATE TABLE IF NOT EXISTS` (init.sql ~L563-589), so they apply on
-both greenfield and legacy. On an incremental upgrade, run those blocks (incl. the partial
-unique index `idx_enheder_active_name ON enheder (organisation_id, lower(name)) WHERE
-deleted_at IS NULL` and the `idx_user_enheder_enhed` index).
+**[SUPERSEDED (QUAL-012) — the `enheder`/`user_enheder` tables described in this S97 section were
+REPLACED by `units`/`unit_leaders`/`users.unit_id` via ADR-038 (S103) as a GREENFIELD RESEED, not a
+migration (D9). A current `init.sql` has no `enheder` tables + no `idx_enheder_active_name`, so these
+blocks no longer exist to apply; a pre-ADR-038 legacy DB is reseeded, not upgraded through this section.
+For the current unit model grep `CREATE TABLE ... units` + `unit_leaders` in init.sql.]**
+
+(Historical, for provenance:) the two enheder tables were `CREATE TABLE IF NOT EXISTS` (so they applied
+on both greenfield and legacy at S97), incl. the partial unique index `idx_enheder_active_name ON enheder
+(organisation_id, lower(name)) WHERE deleted_at IS NULL` and `idx_user_enheder_enhed`.
 
 ### Data backfill (`EnhedBackfillSeeder`, runs at app startup)
 
@@ -146,7 +157,7 @@ SELECT COUNT(*) FROM user_enheder;
 
 ## Known Ordering Gap
 
-**Entitlement_configs seed data** (init.sql ~L1358): The seed INSERT includes `effective_from` in the column list, but the base `CREATE TABLE` at ~L1289 does NOT include `effective_from` (it's added by the S30 guarded ALTER at ~L1787). On a greenfield deployment this works because the full init.sql runs top-to-bottom. On a pre-S30 legacy DB, the ALTER must be applied BEFORE the seed data can be re-inserted.
+**Entitlement_configs seed data** (grep `INSERT INTO entitlement_configs`): The seed INSERT includes `effective_from` in the column list, but the base `CREATE TABLE ... entitlement_configs` does NOT include `effective_from` (it is added by the S30 guarded ALTER — grep `s30-d2-ec-effective-dating`). On a greenfield deployment this works because the full init.sql runs top-to-bottom. On a pre-S30 legacy DB, the ALTER must be applied BEFORE the seed data can be re-inserted. (QUAL-012: line pointers replaced with durable greps.)
 
 ## Verification
 

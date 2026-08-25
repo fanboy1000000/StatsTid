@@ -79,7 +79,7 @@ public sealed record SkemaDayHoursRow(
 /// ApprovalResponses.cs (no 6-key sibling exists).</summary>
 public sealed record SkemaApprovalInfo(
     Guid PeriodId,
-    // Authority: the approval_periods status CHECK, docker/postgres/init.sql:1103 (5-state) —
+    // Authority: the approval_periods status CHECK, docker/postgres/init.sql:1119 (5-state) —
     // the same set the S116 ApprovalResponses records declare (re-cited per the S120 Enums row).
     [property: AllowedValues("DRAFT", "SUBMITTED", "EMPLOYEE_APPROVED", "APPROVED", "REJECTED")]
     string Status,

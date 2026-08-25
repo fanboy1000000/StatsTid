@@ -24,7 +24,7 @@ public sealed record CompensatoryRestItem(
     DateOnly SourceDate,
     DateOnly? CompensatoryDate,
     decimal Hours,
-    // Authority: the compensatory_rest status CHECK, docker/postgres/init.sql:1337
+    // Authority: the compensatory_rest status CHECK, docker/postgres/init.sql:1419
     // (PENDING / GRANTED / EXPIRED).
     [property: AllowedValues("PENDING", "GRANTED", "EXPIRED")]
     string Status,

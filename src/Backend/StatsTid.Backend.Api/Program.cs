@@ -17,6 +17,12 @@ using StatsTid.SharedKernel.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// QUAL-008 render fold-in — the correlation id is an ambient log SCOPE (CorrelationIdMiddleware),
+// but the DEFAULT console sink renders scopes only when IncludeScopes is enabled. Turning it on
+// here makes every request-scoped log line carry CorrelationId in the console output. Structured
+// sinks (Serilog/OpenTelemetry) capture scopes without this; this closes it for the default sink.
+builder.Logging.AddSimpleConsole(options => options.IncludeScopes = true);
+
 var connectionString = builder.Configuration.GetConnectionString("EventStore")
     ?? "Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev";
 
@@ -483,6 +489,13 @@ using (var scope = app.Services.CreateScope())
 // ── Middleware ──
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseAuthentication();
+// QUAL-009 / SEC-038 — the denial audit-ROW writer, registered BEFORE UseAuthorization on purpose:
+// an authorization denial short-circuits the pipeline, so a middleware placed AFTER authorization
+// (like AuditLoggingMiddleware below) never runs on a 403/401. Sitting here, this middleware is
+// still on the stack when authorization short-circuits and writes an audit_log row for admin-strict
+// /mutating denials only (deny-by-default). It is denial-gated, so it never double-writes with the
+// allowed-request row that AuditLoggingMiddleware writes downstream.
+app.UseMiddleware<PolicyDenialAuditRowMiddleware>();
 app.UseAuthorization();
 app.UseMiddleware<AuditLoggingMiddleware>();
 

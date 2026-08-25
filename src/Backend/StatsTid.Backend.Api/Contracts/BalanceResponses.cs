@@ -24,7 +24,7 @@ namespace StatsTid.Backend.Api.Contracts;
 /// complex member on both parents — rides the S117 allOf nullable-complex wrapper.</summary>
 public sealed record SettlementDispositionInfo(
     // Authority: the vacation_settlements settlement_state DB CHECK,
-    // docker/postgres/init.sql:2918 (PENDING_REVIEW / SETTLED / REVERSED).
+    // docker/postgres/init.sql:3019 (PENDING_REVIEW / SETTLED / REVERSED).
     [property: AllowedValues("PENDING_REVIEW", "SETTLED", "REVERSED")]
     string State,
     decimal TransferDays,   // §21 — to next-year carryover_in
@@ -32,8 +32,8 @@ public sealed record SettlementDispositionInfo(
     decimal ForfeitDays,    // §34 — the D9 expiring bucket
     bool ForfeitPending,
     // Authority: the NAMED constraint vacation_settlements_review_disposition,
-    // docker/postgres/init.sql:2980-2983 (FORFEIT / DEFER / MODREGNING / WAIVED /
-    // FERIEHINDRING; nullable) + the legacy DROP/re-ADD convergence at init.sql:3672-3680.
+    // docker/postgres/init.sql:3081-3084 (FORFEIT / DEFER / MODREGNING / WAIVED /
+    // FERIEHINDRING; nullable) + the legacy DROP/re-ADD convergence at init.sql:3773-3781.
     // `required`/`nullable` are ORTHOGONAL to the enum set (S113): null is admissible iff
     // nullable — the set constrains only non-null values.
     [property: AllowedValues("FORFEIT", "DEFER", "MODREGNING", "WAIVED", "FERIEHINDRING")]

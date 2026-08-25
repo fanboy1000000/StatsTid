@@ -11,7 +11,7 @@ namespace StatsTid.Backend.Api.Contracts;
 // dead `{configId}` fallback branch ceases to exist — the 201 is ALWAYS the full entity).
 //
 // [property: AllowedValues] discriminators (S113 strict-types mechanism), authorities cited:
-//   status    {DRAFT, ACTIVE, ARCHIVED} — init.sql:1249 CHECK (agreement_configs.status) +
+//   status    {DRAFT, ACTIVE, ARCHIVED} — init.sql:1308 CHECK (agreement_configs.status) +
 //             the CLR AgreementConfigStatus enum's total .ToString() projection + the
 //             publish/archive response literals.
 //   normModel {WEEKLY_HOURS, ANNUAL_ACTIVITY} — the CLR NormModel enum's total .ToString()
@@ -166,7 +166,7 @@ public sealed record AgreementConfigWithEntitlementsResponse(
 /// emitted; <c>archivedConfigId</c>/<c>publishedAt</c> are nullable-valued
 /// (NULLABLE-ALWAYS-PRESENT, never optional-key — the S113 required/nullable orthogonality).
 /// <c>status</c> is the literal "ACTIVE" on this path (typed with the full status set — the
-/// same init.sql:1249 authority).
+/// same init.sql:1308 authority).
 /// </summary>
 public sealed record AgreementConfigPublishResponse(
     Guid ConfigId,

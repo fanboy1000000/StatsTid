@@ -14,7 +14,7 @@ namespace StatsTid.Backend.Api.Contracts;
 // existing wire (forbidden).
 //
 // Enum authority (OQ-3, owner-ruled S116): overtime status = the overtime_pre_approvals status
-// CHECK (init.sql:1858 — PENDING / APPROVED / REJECTED).
+// CHECK (init.sql:1959 — PENDING / APPROVED / REJECTED).
 
 /// <summary>One element of the <c>GET /api/overtime/{employeeId}/pre-approvals</c> BARE ARRAY
 /// (declared <c>.Produces&lt;IEnumerable&lt;OvertimePreApprovalListItem&gt;&gt;</c>) — the
@@ -29,7 +29,7 @@ public sealed record OvertimePreApprovalListItem(
     decimal MaxHours,
     string? ApprovedBy,
     DateTime? ApprovedAt,
-    // Authority: overtime_pre_approvals status CHECK, init.sql:1858.
+    // Authority: overtime_pre_approvals status CHECK, init.sql:1959.
     [property: AllowedValues("PENDING", "APPROVED", "REJECTED")]
     string Status,
     string? Reason,
@@ -44,7 +44,7 @@ public sealed record OvertimePreApprovalCreatedResponse(
     DateOnly PeriodStart,
     DateOnly PeriodEnd,
     decimal MaxHours,
-    // Authority: overtime_pre_approvals status CHECK, init.sql:1858.
+    // Authority: overtime_pre_approvals status CHECK, init.sql:1959.
     [property: AllowedValues("PENDING", "APPROVED", "REJECTED")]
     string Status,
     string? Reason);
@@ -56,7 +56,7 @@ public sealed record OvertimePreApprovalCreatedResponse(
 /// to the reject wire.</summary>
 public sealed record OvertimePreApprovalApproveResponse(
     Guid Id,
-    // Authority: overtime_pre_approvals status CHECK, init.sql:1858.
+    // Authority: overtime_pre_approvals status CHECK, init.sql:1959.
     [property: AllowedValues("PENDING", "APPROVED", "REJECTED")]
     string Status,
     string? ApprovedBy,
@@ -66,7 +66,7 @@ public sealed record OvertimePreApprovalApproveResponse(
 /// (NO approvedBy).</summary>
 public sealed record OvertimePreApprovalRejectResponse(
     Guid Id,
-    // Authority: overtime_pre_approvals status CHECK, init.sql:1858.
+    // Authority: overtime_pre_approvals status CHECK, init.sql:1959.
     [property: AllowedValues("PENDING", "APPROVED", "REJECTED")]
     string Status,
     string? Reason);
@@ -86,7 +86,7 @@ public sealed record OvertimePreApprovalAdminListItem(
     decimal MaxHours,
     string? ApprovedBy,
     DateTime? ApprovedAt,
-    // Authority: overtime_pre_approvals status CHECK, init.sql:1858.
+    // Authority: overtime_pre_approvals status CHECK, init.sql:1959.
     [property: AllowedValues("PENDING", "APPROVED", "REJECTED")]
     string Status,
     string? Reason,

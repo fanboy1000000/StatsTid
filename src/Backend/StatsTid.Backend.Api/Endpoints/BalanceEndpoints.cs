@@ -629,7 +629,8 @@ public static class BalanceEndpoints
         return app;
     }
 
-    // VACATION/SPECIAL_HOLIDAY reset in September; CARE_DAY/SENIOR_DAY are calendar-year. The
+    // VACATION resets in September (ferieår); SPECIAL_HOLIDAY resets in January (1 Jan, calendar-year —
+    // a pre-S80 defect wrongly said September). CARE_DAY/SENIOR_DAY are calendar-year. The
     // matrix renders these four categories (in this order) plus the Arbejdstid group (FE-side).
     private static readonly string[] YearOverviewCategoryTypes =
         { "VACATION", "SPECIAL_HOLIDAY", "CARE_DAY", "SENIOR_DAY" };

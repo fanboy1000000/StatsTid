@@ -43,8 +43,8 @@ public sealed record PayoutPendingListResponse(
 /// <summary>The nested successor body of <see cref="SettlementReversalResponse"/> — present only
 /// when the REVERSE_AND_SUPERSEDE mode produced a superseding settlement row in the same tx.
 /// Enum authorities: <paramref name="SettlementState"/> = the vacation_settlements
-/// <c>settlement_state</c> DB CHECK (docker/postgres/init.sql:2918);
-/// <paramref name="Trigger"/> = the <c>trigger</c> DB CHECK (docker/postgres/init.sql:2919).</summary>
+/// <c>settlement_state</c> DB CHECK (docker/postgres/init.sql:3019);
+/// <paramref name="Trigger"/> = the <c>trigger</c> DB CHECK (docker/postgres/init.sql:3020).</summary>
 public sealed record SettlementSuccessor(
     int Sequence,
     [property: AllowedValues("PENDING_REVIEW", "SETTLED", "REVERSED")] string SettlementState,
@@ -76,7 +76,7 @@ public sealed record SettlementReversalResponse(
 /// <summary>The POST /api/admin/employees/{employeeId}/termination-payout-request 201 body — the
 /// created §26 request row + the snapshot-COPIED quantities (ADR-033 D3 — never recomputed).
 /// <paramref name="State"/> enum authority: the termination_payout_requests <c>state</c> DB CHECK
-/// (docker/postgres/init.sql:3480) — the FULL {OPEN, LINE_STAGED, VOIDED_BY_REVERSAL} superset.
+/// (docker/postgres/init.sql:3581) — the FULL {OPEN, LINE_STAGED, VOIDED_BY_REVERSAL} superset.
 /// Enum-fidelity is MEMBERSHIP: this endpoint always emits OPEN (a freshly-created request), but
 /// the CHECK is the durable authority — the S69/S71 machinery advances the row to the other
 /// members, and a narrower declared set would turn a future read surface into a liar.</summary>
