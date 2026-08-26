@@ -292,7 +292,11 @@ public sealed class EmploymentWindowCheckMigrationTests : IAsyncLifetime
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
+        // CA2100-justified (QUAL-073 ratchet): the DDL is either a marker-extracted verbatim
+        // init.sql segment or a compile-time test constant — never user input.
+#pragma warning disable CA2100
         await using var cmd = new NpgsqlCommand(ddl, conn);
+#pragma warning restore CA2100
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -318,7 +322,11 @@ public sealed class EmploymentWindowCheckMigrationTests : IAsyncLifetime
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
+        // CA2100-justified (QUAL-073 ratchet): SQL is a compile-time test constant; values go
+        // through parameters below — never user input.
+#pragma warning disable CA2100
         await using var cmd = new NpgsqlCommand(sql, conn);
+#pragma warning restore CA2100
         for (var i = 0; i < args.Length; i++)
             cmd.Parameters.AddWithValue("p" + i, args[i]);
         return await cmd.ExecuteScalarAsync();

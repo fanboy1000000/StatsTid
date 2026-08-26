@@ -1237,7 +1237,11 @@ public sealed class SettlementReversalTests : IAsyncLifetime
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
+        // CA2100-justified (QUAL-073 ratchet): table/where are compile-time test constants;
+        // values go through parameters — never user input.
+#pragma warning disable CA2100
         await using var cmd = new NpgsqlCommand($"SELECT COUNT(*) FROM {table} WHERE {whereClause}", conn);
+#pragma warning restore CA2100
         foreach (var (name, value) in ps)
             cmd.Parameters.AddWithValue(name, value);
         return Convert.ToInt64(await cmd.ExecuteScalarAsync());
@@ -1247,7 +1251,11 @@ public sealed class SettlementReversalTests : IAsyncLifetime
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
+        // CA2100-justified (QUAL-073 ratchet): SQL is a compile-time test constant; values go
+        // through parameters below — never user input.
+#pragma warning disable CA2100
         await using var cmd = new NpgsqlCommand(sql, conn);
+#pragma warning restore CA2100
         foreach (var (name, value) in ps)
             cmd.Parameters.AddWithValue(name, value);
         await cmd.ExecuteNonQueryAsync();
