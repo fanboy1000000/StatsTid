@@ -6273,6 +6273,8 @@ export interface components {
             primaryOrgId: string;
             agreementCode: string;
             okVersion: string;
+            /** Format: date */
+            employmentStartDate?: string | null;
             approverId?: string | null;
         };
         "StatsTid.Backend.Api.Endpoints.AdminEndpoints.GrantRoleRequest": {

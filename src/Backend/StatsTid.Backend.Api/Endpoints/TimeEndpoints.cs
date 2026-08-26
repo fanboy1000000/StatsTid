@@ -29,6 +29,11 @@ public static class TimeEndpoints
             // S128 / TASK-12803 — the in-transaction approval-period read (the (conn, tx) overload
             // only; see the in-lock check below).
             ApprovalPeriodRepository approvalRepo,
+            // S136 / TASK-13603 — the subject read this endpoint never had (terminated-INCLUSIVE,
+            // ADR-040 D3 / SEC-046) + the in-lock employment-window read (the (conn, tx) surface
+            // only; the SharedKernel self-managed twin would read OUTSIDE the advisory lock).
+            UserRepository userRepo,
+            IEmploymentWindowResolverInTx employmentWindowResolver,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -63,13 +68,65 @@ public static class TimeEndpoints
                 // an employee's time entry in ANY period state. (S128 / TASK-12803 closed that: the
                 // in-lock period check inside the transaction below now enforces the SAME
                 // ApprovalPeriodSaveLock the Skema save enforces.)
+                //
+                // ── S136 / TASK-13603 — TERMINATED-INCLUSIVE validator swap (ADR-040 D3) ─────────
+                // Surface 1 of the S70 R9c allowlist extension this task makes (mandatory
+                // Security-invariant review): the shared ValidateEmployeeAccessAsync resolves its
+                // target ACTIVE-ONLY, so a deactivated leaver was "Target employee not found" (403)
+                // even to in-scope HR — locking HR out of the routine final-month correction. The
+                // IncludingTerminated validator (same writeFloor semantics for ACTIVE targets, so
+                // the S124 floor + self-exemption above are byte-preserved) additionally admits a
+                // TERMINATED subject via its R9b/R9f1 gates: only a scope that is ITSELF LocalHR or
+                // above may admit one, in both the GLOBAL and the CoversOrg branch. Employee-role
+                // actors never reach this branch (handled above); Employee-SHAPED actors (no role /
+                // all-Employee scopes) are denied outright by the validator's no-own-data-branch
+                // decision (R9b) — strictly fail-closed relative to the old validator.
                 var writeFloor = string.Equals(request.EmployeeId, actor.ActorId, StringComparison.Ordinal)
                     ? null
                     : StatsTidRoles.LocalHR;
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
+                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
                     actor, request.EmployeeId, writeFloor, ct);
                 if (!allowed)
                     return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+            }
+
+            // ── S136 / TASK-13603 — THE SUBJECT READ (surface 2; the SEC-046 closure) ────────────
+            // This endpoint never loaded the subject's users row at all, which was SEC-046's live
+            // surface: a TERMINATED employee's still-valid JWT (8h lifetime) sailed through the
+            // Employee own-data branch above — the only access check that path has — and could
+            // register time for ANY date. The read is the S70 R9c terminated-INCLUSIVE repository
+            // path (an allowlist extension, in the mandatory Security review) because the ACTIVE-ONLY
+            // read would turn every leaver into a 404 and re-break the HR correction flow the
+            // validator swap above just fixed.
+            var subject = await userRepo.GetByIdIncludingTerminatedAsync(request.EmployeeId, ct);
+            if (subject is null)
+                return Results.NotFound(new { error = "Employee not found" });
+
+            // ADR-040 D3: the SELF-EXEMPTION YIELDS TO SUBJECT DEACTIVATION. is_active governs
+            // login/session for the ACTOR; the SUBJECT's deactivation state selects the role floor
+            // for writes — HROrAbove, even when subject == actor. An Employee writing for THEMSELVES
+            // is fine while active (unchanged), but a deactivated self is not exempt: Employee-role
+            // actors bypass the scope validator entirely (the own-data branch above), so THIS check
+            // is the load-bearing SEC-046 closure for them. For non-Employee actors the
+            // IncludingTerminated validator already enforced the stronger PER-SCOPE floor (R9f1);
+            // this primary-role re-check is defense-in-depth there and can never deny an actor that
+            // validator admitted (its R9b gate already requires primary role ≥ LocalHR for a
+            // terminated subject).
+            //
+            // S136 Step-5a (Codex BLOCKER 1) — this pre-transaction check is the ADVISORY FAST
+            // PATH (advisory-then-authoritative, the house pattern the approval-period check
+            // already follows): it reads on a pooled connection, outside the write transaction
+            // and outside EmployeeConsumptionLock, so a deactivation that commits while this
+            // request waits on the lock is invisible to it. The AUTHORITATIVE D3 floor is the
+            // in-lock subject-state re-check inside the transaction below.
+            if (!subject.IsActive &&
+                (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
+            {
+                return Results.Json(new
+                {
+                    error = "Access denied",
+                    reason = "Writes for a deactivated employee require LocalHR or above"
+                }, statusCode: 403);
             }
 
             // OK version MUST be resolved server-side from the entry date (ADR-003).
@@ -158,6 +215,73 @@ public static class TimeEndpoints
                     // deadlock; there is exactly one.
                     await StatsTid.Backend.Api.Services.EmployeeConsumptionLock.AcquireAsync(
                         conn, tx, request.EmployeeId, ct);
+
+                    // ── S136 Step-5a (Codex BLOCKER 1 — the SEC-046 race) — THE AUTHORITATIVE
+                    // SUBJECT-STATE RE-CHECK, IN-LOCK ─────────────────────────────────────────────
+                    // The D3 role floor above was decided from the UNLOCKED pre-transaction subject
+                    // read (the advisory fast path). The deactivation writers — the employment-date
+                    // PUTs' R1 lifecycle and the Step-A settlement flip — commit under this SAME
+                    // EmployeeConsumptionLock, so a deactivation can land while this request waits
+                    // on the acquire above; without this re-read a still-live Employee token would
+                    // write for a just-deactivated subject. Re-read is_active on THIS (conn, tx) —
+                    // under the lock, seeing the winner's commit via the ReadCommitted pin — and
+                    // re-enforce the SAME D3 floor, same 403 shape as the pre-check.
+                    var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(
+                        conn, tx, request.EmployeeId, ct);
+                    if (lockedSubject is null)
+                    {
+                        // The row vanished between the pre-check and the lock (no production path
+                        // hard-deletes users; defensive symmetry with the pre-check's 404).
+                        await tx.RollbackAsync(ct);
+                        return Results.NotFound(new { error = "Employee not found" });
+                    }
+                    if (!lockedSubject.IsActive &&
+                        (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
+                    {
+                        // No write has been issued yet; rollback explicitly and refuse with the
+                        // pre-check's exact 403 shape (one contract, whichever check fires).
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(new
+                        {
+                            error = "Access denied",
+                            reason = "Writes for a deactivated employee require LocalHR or above"
+                        }, statusCode: 403);
+                    }
+
+                    // ── S136 / TASK-13603 — THE EMPLOYMENT-WINDOW GATE (ADR-040 D1–D3), IN-LOCK ────
+                    // The AUTHORITATIVE check that the entry date lies inside the subject's
+                    // employment window, refused date-free via the shared EmploymentWindowGate (ONE
+                    // predicate + ONE 422 construction site with the Skema save — see that class for
+                    // the do-not-add-date-fields hard rule).
+                    //
+                    // Placement is the LOCK REGIME (S136 refinement, Codex-B1): the employment-date
+                    // PUTs acquire this SAME EmployeeConsumptionLock as their first in-tx statement
+                    // and evaluate their strand/re-hire guards inside it — so evaluating the window
+                    // HERE, after our acquire, on the (conn, tx) resolver overload, means a
+                    // concurrent window-edit/registration pair cannot interleave into out-of-window
+                    // data: whichever commits second sees the other's committed state. All three
+                    // ingredients are load-bearing (the same PAT-015 story as the approval check
+                    // below): in-lock, in-transaction overload (a self-managed read opens a private
+                    // connection OUTSIDE the lock), and the ReadCommitted pin above (under
+                    // RepeatableRead the snapshot predates the lock grant and this read would miss
+                    // the window edit we blocked for).
+                    //
+                    // IN-TX ORDER RULE (fixed total order, shared verbatim with the Skema save so
+                    // two writers can never deadlock): EmployeeConsumptionLock acquisition FIRST,
+                    // then the D3 subject-state re-check above, then this window gate, then the
+                    // approval-period status check. Access (403) outranks the window, and the window
+                    // outranks the approval status deliberately — non-employment is the strongest
+                    // fact about a date (the ADR-040 D5 tie-break spirit), so an out-of-window date
+                    // in a locked month reports 422 outside_employment_period, not the 409.
+                    var windowStatus = await employmentWindowResolver.GetStatusAsync(
+                        conn, tx, request.EmployeeId, request.Date, ct);
+                    if (StatsTid.Backend.Api.Services.EmploymentWindowGate.IsOutsideEmploymentWindow(windowStatus))
+                    {
+                        // No write has been issued yet (the enqueue below is this tx's first write);
+                        // rollback explicitly and return the shared date-free 422.
+                        await tx.RollbackAsync(ct);
+                        return StatsTid.Backend.Api.Services.EmploymentWindowGate.OutsideEmploymentPeriod();
+                    }
 
                     // ── S128 / TASK-12803 — THE APPROVAL-STATUS CHECK (S127 FU-D1, owner ruling R3) ──
                     // The lock above stops this write racing INSIDE a send; this check stops it

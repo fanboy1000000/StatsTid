@@ -1891,9 +1891,20 @@ public static class ApprovalEndpoints
             ?? user.AgreementCode;
         var okVersion = OkVersionResolver.ResolveVersion(monthStart);
 
-        // ── (5d) WORKDAY COVERAGE VALIDATION ─────────────────────────────────────────────────────
+        // ── (5d) WORKDAY COVERAGE VALIDATION — WINDOW-AWARE (S136 / TASK-13606, ADR-040 D6) ──────
         // Every expected workday in the month must carry at least one time entry or absence
-        // registration. Fires BEFORE the allocation gate; its {missingDays} 422 shape is unchanged.
+        // registration — and a day is EXPECTED only if the subject is EMPLOYED on it. Without the
+        // window intersection at step 2, a mid-month hire could never cover their pre-hire weekdays
+        // once the D3 registration gates refuse out-of-window writes, so their first month could
+        // never be sent and D6's "a partially-employed month is approvable as a whole" would be
+        // unreachable by construction. Fires BEFORE the allocation gate; the {missingDays} 422
+        // shape is unchanged, and for a windowless employee (both dates NULL — D2 unbounded) the
+        // intersection is the identity, so pre-window behaviour is byte-identical (the standing
+        // characterization pin in AllocationPredicateCharacterizationTests is the evidence).
+        //
+        // NAMED DEFERRAL (refinement Reviewer-N2): the subject read at (5c) is ACTIVE-ONLY, so a
+        // DEACTIVATED leaver's final in-window month still cannot be SENT even by HR — deliberately
+        // deferred to Increment 2/3 scoping, not an oversight to "fix" here.
 
         // 1. Danish public holidays in range. On the tx connection — static reference data, and it
         //    saves a pooled connection.
@@ -1909,7 +1920,29 @@ public static class ApprovalEndpoints
                 holidays.Add(holidayReader.GetFieldValue<DateOnly>(0));
         }
 
-        // 2. Expected workdays (weekdays minus public holidays).
+        // 2. Expected workdays: weekdays, minus public holidays, INTERSECTED with the employment
+        //    window (ADR-040 D6 — the window enters the send gate as a filter on what is expected,
+        //    never as a change to the month's whole-geometry).
+        //
+        //    WINDOW SOURCE — the in-tx subject row, not a second read. The user row at (5c) was
+        //    read on THIS (conn, tx) under the advisory lock, and UserRepository.ReadUser hydrates
+        //    User.EmploymentStartDate/EmploymentEndDate from the same users columns
+        //    IEmploymentWindowResolverInTx would SELECT on the same (conn, tx) — so consulting the
+        //    resolver here would be a second identical in-lock read of the same row for no extra
+        //    consistency (one users-row read per send is the right shape; never a per-day DB loop).
+        //    The in-memory test below replicates EmploymentWindowResolver.Evaluate EXACTLY:
+        //    NULL = unbounded on that side (D2), end date INCLUSIVE — the last day employed (D1),
+        //    date == start and date == end are both EMPLOYED. If this section ever stops having the
+        //    subject row in hand, switch to IEmploymentWindowResolverInTx on (conn, tx) — never a
+        //    self-managed read, which would sit outside the lock (the TimeEndpoints PAT-015 race).
+        //
+        //    ⚠ SPELLS-INCREMENT REVISIT (S136 Step-7a Reviewer W1): this inlined predicate BAKES IN
+        //    the single-spell interval assumption that the Skema gate's per-date resolver usage
+        //    deliberately avoids (ADR-040 D1: consumers must not assume the window's shape). Correct
+        //    today — storage IS one spell — but when employment becomes a spells LIST (the re-hire
+        //    increment), this loop would silently count a mid-career gap month as employed while the
+        //    writers refuse it. When the spells storage lands, replace this in-memory test with
+        //    per-date IEmploymentWindowResolverInTx calls on this same (conn, tx), like the writers.
         var expectedWorkdays = new List<DateOnly>();
         for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
         {
@@ -1917,7 +1950,32 @@ public static class ApprovalEndpoints
                 continue;
             if (holidays.Contains(d))
                 continue;
+            // ADR-040 D1/D2: before a set start, or after a set (inclusive) end ⇒ NOT_EMPLOYED ⇒
+            // the day is not expected. A NULL side passes through unbounded.
+            if (user.EmploymentStartDate.HasValue && d < user.EmploymentStartDate.Value)
+                continue;
+            if (user.EmploymentEndDate.HasValue && d > user.EmploymentEndDate.Value)
+                continue;
             expectedWorkdays.Add(d);
+        }
+
+        // 2b. THE VACUOUS CASE REFUSES (ADR-040 D6; refinement Reviewer-N1 — dual-lens ruling). An
+        //     empty intersection means the month lies entirely outside the employment window.
+        //     Falling through instead would make such a month vacuously SENDABLE (zero expected
+        //     workdays ⇒ zero uncovered days ⇒ coverage passes on an empty month) — but a fully
+        //     non-employed month carries nothing approvable, so it is refused outright. The body is
+        //     DATE-FREE per D3's redaction rule: employment dates are HR-scoped (User.cs), and an
+        //     error shape that echoed them could be binary-searched by probing months. A windowless
+        //     employee cannot reach this branch: D2 makes the intersection the identity, and no
+        //     Danish month has every weekday as a public holiday.
+        if (expectedWorkdays.Count == 0)
+        {
+            return Results.UnprocessableEntity(new
+            {
+                error = "month_outside_employment_period",
+                kind = "employment-window",
+                message = "Måneden ligger uden for ansættelsesperioden og kan ikke sendes til godkendelse.",
+            });
         }
 
         // 3. Time entries and absences for the employee + month.

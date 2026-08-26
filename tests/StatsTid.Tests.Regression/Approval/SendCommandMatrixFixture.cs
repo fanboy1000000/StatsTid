@@ -119,8 +119,10 @@ public abstract class SendCommandMatrixTestBase
     /// <summary>Covers March's expected weekdays (minus <paramref name="gap"/>) with full-day VACATION
     /// absences. Absences satisfy the coverage check and are read from a table NEITHER side of the
     /// allocation gate touches, so a covered month is vacuously balanced unless work/allocation rows
-    /// are added.</summary>
-    protected async Task CoverMonthWithAbsencesAsync(string employeeId, DateOnly? gap = null)
+    /// are added. <paramref name="from"/> (S136 / TASK-13606) limits coverage to days ≥ that date —
+    /// the mid-month-hire cases cover exactly the employed span and nothing before it, which is the
+    /// point: the window-aware gate must not demand the uncovered pre-hire days.</summary>
+    protected async Task CoverMonthWithAbsencesAsync(string employeeId, DateOnly? gap = null, DateOnly? from = null)
     {
         await using var conn = new NpgsqlConnection(Fx.ConnectionString);
         await conn.OpenAsync();
@@ -138,6 +140,8 @@ public abstract class SendCommandMatrixTestBase
         for (var d = MarchStart; d <= MarchEnd; d = d.AddDays(1))
         {
             if (d == gap || d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                continue;
+            if (from.HasValue && d < from.Value)
                 continue;
             await InsertAbsenceRowAsync(conn, employeeId, d, "VACATION", 7.4m);
         }
@@ -305,6 +309,26 @@ public abstract class SendCommandMatrixTestBase
         Assert.True(root.TryGetProperty("missingDays", out _), $"coverage 422 must carry missingDays: {raw}");
     }
 
+    /// <summary>The S136 employment-window refusal (TASK-13606, ADR-040 D6) — the THIRD 422,
+    /// discriminated by <c>kind:"employment-window"</c> (the allocation 422 carries
+    /// <c>kind:"allocation"</c>; the coverage 422 carries no <c>kind</c> at all). Also pins the D3
+    /// date-free contract: no <c>missingDays</c> and no date literal anywhere in the body, so
+    /// HR-scoped employment dates cannot be binary-searched through this shape.</summary>
+    protected static async Task AssertEmploymentWindow422Async(HttpResponseMessage rsp)
+    {
+        var raw = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.UnprocessableEntity,
+            $"expected 422, got {(int)rsp.StatusCode}: {raw}");
+        var root = JsonDocument.Parse(raw).RootElement;
+        Assert.Equal("month_outside_employment_period", root.GetProperty("error").GetString());
+        Assert.Equal("employment-window", root.GetProperty("kind").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("message").GetString()));
+        Assert.False(root.TryGetProperty("missingDays", out _),
+            $"employment-window 422 must be date-free — missingDays present: {raw}");
+        // D3 redaction: neither the month's dates nor the window's dates may appear in the body.
+        Assert.DoesNotContain("2026-", raw);
+    }
+
     protected static async Task AssertStatusAsync(HttpResponseMessage rsp, HttpStatusCode expected)
     {
         var raw = await rsp.Content.ReadAsStringAsync();
@@ -379,6 +403,26 @@ public abstract class SendCommandMatrixTestBase
         cmd.Parameters.AddWithValue("id", employeeId);
         var rows = await cmd.ExecuteNonQueryAsync();
         Assert.Equal(1, rows); // the user row must exist, or the "live differs from dated" premise is vacuous
+    }
+
+    /// <summary>
+    /// S136 / TASK-13606 (ADR-040 D6) — writes the employment window straight onto the <c>users</c>
+    /// row: the SAME columns the send gate's in-tx subject read (and <c>EmploymentWindowResolver</c>)
+    /// consume. NULL on a side = unbounded (D2); the end date is the last day employed, inclusive
+    /// (D1). A direct UPDATE, not the HR employment-date endpoints — this fixture seeds STATE, and
+    /// the strand/re-hire guards on those endpoints are not the rule under test here.
+    /// </summary>
+    protected async Task SetEmploymentWindowAsync(string employeeId, DateOnly? start, DateOnly? end)
+    {
+        await using var conn = new NpgsqlConnection(Fx.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE users SET employment_start_date = @s, employment_end_date = @e WHERE user_id = @id",
+            conn);
+        cmd.Parameters.AddWithValue("s", (object?)start ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("e", (object?)end ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("id", employeeId);
+        Assert.Equal(1, await cmd.ExecuteNonQueryAsync()); // the user row must exist, or the window premise is vacuous
     }
 
     protected async Task<Guid?> FindPeriodIdAsync(string employeeId, DateOnly start, DateOnly end)

@@ -98,6 +98,10 @@ public sealed class PublisherStallReadYourWriteTests : IAsyncLifetime
         await _factory.StopPublisherAsync();
 
         var employeeId = "EMP_RYW_T_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        // S136 / TASK-13603 — POST /api/time-entries now resolves the subject's users row
+        // (terminated-inclusive read, ADR-040 D3 / SEC-046) before writing, so the employee must
+        // exist. NULL employment dates ⇒ window-unbounded (D2); is_active=true ⇒ no role floor.
+        await SeedFullTimeEmployeeAsync(employeeId, "HK");
         var token = MintEmployeeToken(employeeId);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 

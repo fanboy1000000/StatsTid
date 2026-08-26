@@ -1085,6 +1085,15 @@ public static class VacationSettlementEndpoints
             // SETTLED + payout_days > 0 + not-yet-reconciled. accessibleOrgs == null ⇒ GlobalAdmin,
             // no org filter; else filter to the subtree. Parameterised array (no string interpolation
             // of identifiers); the @orgFilterOff flag short-circuits the org predicate for GlobalAdmin.
+            //
+            // SEC-047 — the users join carries NO is_active predicate BY DESIGN (owner-adjudicated
+            // 2026-08-26, S136 OQ-1a; twice flagged by sweeps as a suspected leak, refuted): this
+            // worklist EXISTS to show settled LEAVERS' unreconciled §24/§26 payouts, and Step-A
+            // lifecycle deactivation flips every leaver to is_active = FALSE — an is_active filter
+            // would empty exactly the rows the endpoint exists for. Access is bounded by the
+            // HROrAbove policy + the per-org LocalHR floor above; per ADR-040 D3, is_active is a
+            // LOGIN fact, not a data-visibility fact. Do NOT "fix" this by adding the filter; if
+            // this endpoint's audience is ever widened, the absent filter must be re-adjudicated.
             await using var cmd = new NpgsqlCommand(
                 """
                 SELECT s.employee_id, s.entitlement_type, s.entitlement_year, s.sequence,

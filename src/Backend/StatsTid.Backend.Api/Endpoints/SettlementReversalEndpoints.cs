@@ -290,7 +290,9 @@ public static class SettlementReversalEndpoints
             }, statusCode: 403),
 
             // CarryoverWritingRow (D-A), ReconciledRow (R4), AffectedSpanConflict (B2/R13 —
-            // the reason NAMES every blocker), SupersedeNotEligible, SupersedeCarryoverConflict.
+            // the reason NAMES every blocker), SupersedeNotEligible, SupersedeCarryoverConflict,
+            // StrandedRegistrations (S136 — the narrowing-only D3 strand guard; the reason carries
+            // the stranded months + per-family counts).
             _ => Results.Json(new
             {
                 error = result.FailureReason,

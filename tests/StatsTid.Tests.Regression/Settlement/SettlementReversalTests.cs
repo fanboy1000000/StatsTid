@@ -538,6 +538,117 @@ public sealed class SettlementReversalTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // S136 Step-5a (Codex BLOCKER 2 + owner ruling 2026-08-26) — the ADR-040 D3 strand guard
+    // on the reversal's subsumed end-date correction, NARROWING-ONLY (the shared
+    // EmploymentWindowStrandCheck query, in-lock, after the B2 span guard, before the
+    // lifecycle writer). Two pins, both halves of the ruled predicate:
+    //   • a NARROWING correction with stranded registrations is refused (FULL rollback);
+    //   • a WIDENING correction proceeds even with data outside the OLD window — the check
+    //     must not run at all there (an always-run whole-window check would refuse it).
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Narrowing correction (2026-02-28 → 2025-12-31) with a registration INSIDE the
+    /// recorded window but OUTSIDE the corrected one (2026-01-15) → StrandedRegistrations,
+    /// FULL rollback (R4: nothing reversed, no lifecycle write, no events), the stranded month
+    /// + counts named in the reason (the PUTs' pointer contract). RED-on-old: pre-fix this
+    /// second end-date writer had NO strand check and the correction committed, orphaning the
+    /// January registration.</summary>
+    [Fact]
+    public async Task ReverseSupersede_NarrowingCorrection_StrandedRegistration_FullRollback()
+    {
+        var (settle, reversal) = BootFixedClockServices(Clock);
+        var employeeId = await SeedEmployeeAsync();
+        await MarkLeaverAsync(employeeId, EndDate); // recorded end 2026-02-28
+        await SettleInOwnTxAsync(settle, employeeId, EndDateFerieaar, Termination);
+        await SeedTimeEntryProjectionAsync(employeeId, new DateOnly(2026, 1, 15));
+
+        var result = await reversal.ReverseAsync(new SettlementReversalCommand
+        {
+            EmployeeId = employeeId,
+            EntitlementType = VacationType,
+            EntitlementYear = EndDateFerieaar,
+            ExpectedSettlementSequence = 1,
+            ExpectedSettlementVersion = 1,
+            Mode = SettlementReversalMode.ReverseAndSupersede,
+            HasEndDateCorrection = true,
+            CorrectedEndDate = new DateOnly(2025, 12, 31), // narrows: new < recorded
+            ExpectedUserVersion = 1,
+            SupersedeGoLiveFloor = NarrowGoLive,
+            ActorId = OperatorId,
+            ActorRole = OperatorRole,
+            ActorOrgId = OrgId,
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(SettlementReversalFailure.StrandedRegistrations, result.Failure);
+        Assert.Contains("2026-01", result.FailureReason!);     // the month pointer …
+        Assert.Contains("timeEntries 1", result.FailureReason!); // … with its per-family count
+
+        // FULL rollback: the settlement row still ACTIVE at v1, the user tuple untouched,
+        // nothing emitted, no operator audit row.
+        var row = await ReadRowAsync(employeeId, EndDateFerieaar, 1);
+        Assert.Equal("SETTLED", row.State);
+        Assert.False(row.BareMarker);
+        Assert.Equal(1L, row.Version);
+
+        var user = await ReadUserTupleAsync(employeeId);
+        Assert.Equal(EndDate, user.EndDate);
+        Assert.False(user.IsActive);
+        Assert.Equal(1L, user.Version);
+
+        Assert.Equal(0L, await CountOutboxByTypeAsync(employeeId, "SettlementReversed"));
+        Assert.Equal(0L, await CountOutboxByTypeAsync(employeeId, "EmployeeEmploymentEndDateSet"));
+        Assert.Equal(0L, await CountAsync(
+            "vacation_settlement_audit", "employee_id = @e AND actor_id = @a",
+            ("e", employeeId), ("a", OperatorId)));
+    }
+
+    /// <summary>Widening correction (2026-02-28 → 2026-03-04, still passed at the 2026-03-05
+    /// clock ⇒ same ferieår, TERMINATION stays eligible) with a registration outside the OLD
+    /// window AND the corrected one (2026-04-10) → the reversal PROCEEDS (successor at
+    /// sequence 3, corrected end persisted). Pins the NARROWING-ONLY predicate falsifiably: an
+    /// always-run whole-window check would have refused on the pre-existing out-of-window row —
+    /// a widening cannot strand anything, and legitimate reversals must not be blocked by
+    /// damage this write did not cause.</summary>
+    [Fact]
+    public async Task ReverseSupersede_WideningCorrection_OutOfOldWindowData_Proceeds()
+    {
+        var (settle, reversal) = BootFixedClockServices(Clock);
+        var employeeId = await SeedEmployeeAsync();
+        await MarkLeaverAsync(employeeId, EndDate); // recorded end 2026-02-28
+        await SettleInOwnTxAsync(settle, employeeId, EndDateFerieaar, Termination);
+        await SeedTimeEntryProjectionAsync(employeeId, new DateOnly(2026, 4, 10)); // outside old AND new
+
+        var correctedEndDate = new DateOnly(2026, 3, 4); // widens: new > recorded
+        var result = await reversal.ReverseAsync(new SettlementReversalCommand
+        {
+            EmployeeId = employeeId,
+            EntitlementType = VacationType,
+            EntitlementYear = EndDateFerieaar,
+            ExpectedSettlementSequence = 1,
+            ExpectedSettlementVersion = 1,
+            Mode = SettlementReversalMode.ReverseAndSupersede,
+            HasEndDateCorrection = true,
+            CorrectedEndDate = correctedEndDate,
+            ExpectedUserVersion = 1,
+            SupersedeGoLiveFloor = NarrowGoLive,
+            ActorId = OperatorId,
+            ActorRole = OperatorRole,
+            ActorOrgId = OrgId,
+        });
+
+        Assert.True(result.Succeeded,
+            $"widening correction must skip the strand check and proceed; got {result.Failure}: {result.FailureReason}");
+        Assert.NotNull(result.SupersedingRow);
+        Assert.Equal(3, result.SupersedingRow!.Sequence);
+
+        var user = await ReadUserTupleAsync(employeeId);
+        Assert.Equal(correctedEndDate, user.EndDate);
+        Assert.False(user.IsActive); // still passed at the fixed clock ⇒ stays deactivated
+        Assert.Equal(2L, user.Version);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // D-A — zero-bucket-only: a carryover-WRITING row (transfer_days > 0) refuses, loudly.
     // ════════════════════════════════════════════════════════════════════════
 
@@ -976,6 +1087,22 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             """,
             ("e", employeeId), ("t", VacationType), ("y", year), ("s", settlementSequence),
             ("d", new DateOnly(2026, 3, 1)));
+    }
+
+    /// <summary>Direct <c>time_entries_projection</c> seed (the EmploymentDateGuardTests
+    /// pattern) — the S136 Step-5a strand pins key on the projection tables the shared
+    /// <c>EmploymentWindowStrandCheck</c> reads.</summary>
+    private async Task SeedTimeEntryProjectionAsync(string employeeId, DateOnly date)
+    {
+        await ExecAsync(
+            """
+            INSERT INTO time_entries_projection
+                (event_id, employee_id, date, hours, activity_type, agreement_code, ok_version,
+                 voluntary_unsocial_hours, occurred_at, outbox_id)
+            VALUES
+                (gen_random_uuid(), @emp, @date, 7.4, 'NORMAL', 'AC', 'OK24', FALSE, NOW(),
+                 (SELECT COALESCE(MAX(outbox_id), 0) + 1 FROM time_entries_projection))
+            """, ("emp", employeeId), ("date", date));
     }
 
     private async Task SeedTransferAgreementAsync(string employeeId, int year, decimal transferDays)

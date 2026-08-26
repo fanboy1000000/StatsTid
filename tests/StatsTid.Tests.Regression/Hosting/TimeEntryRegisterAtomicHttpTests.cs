@@ -31,13 +31,19 @@ namespace StatsTid.Tests.Regression.Hosting;
 /// self-managed (own-connection) overload that would survive the rollback — none of which the
 /// repo-direct legacy test can detect.</para>
 ///
-/// <para><b>Auth/seed cost (spike measurement):</b> the cheapest end of the family. The endpoint's
-/// policy is <c>EmployeeOrAbove</c> (<c>requireOrgScope:false</c>); an Employee acting on their OWN
-/// data (<c>request.EmployeeId == token sub</c>) short-circuits the org-scope validator, so a bare
-/// <c>role=Employee</c> token for the same id admits with NO scope. No approval-period row is
-/// seeded, so the in-lock save-lock check reads "no row ⇒ writable" and proceeds to the enqueue.
-/// Net: ZERO row seeding. Because the stream id <c>employee-{employeeId}</c> is chosen by the test,
-/// the outbox/event checks reuse the stream-keyed
+/// <para><b>Auth/seed cost (spike measurement, amended S136):</b> the cheapest end of the family.
+/// The endpoint's policy is <c>EmployeeOrAbove</c> (<c>requireOrgScope:false</c>); an Employee
+/// acting on their OWN data (<c>request.EmployeeId == token sub</c>) short-circuits the org-scope
+/// validator, so a bare <c>role=Employee</c> token for the same id admits with NO scope. No
+/// approval-period row is seeded, so the in-lock save-lock check reads "no row ⇒ writable" and
+/// proceeds to the enqueue. <b>S136 / TASK-13603 amendment:</b> the handler now RESOLVES THE
+/// SUBJECT (terminated-inclusive users read, ADR-040 D3 / SEC-046) and consults the employment
+/// window in-lock, so a <c>users</c> row IS a precondition (404 without one) — the original
+/// "ZERO row seeding" measurement no longer holds; the test seeds the canonical
+/// <see cref="StatsTid.Tests.Regression.TestSupport.RegressionSeed"/> employee (NULL employment
+/// dates ⇒ window-unbounded per ADR-040 D2, so the gate passes through and the rollback proof is
+/// unchanged). Because the stream id <c>employee-{employeeId}</c> is chosen by the test, the
+/// outbox/event checks reuse the stream-keyed
 /// <see cref="ForcedRollbackHarness.AssertNoOutboxRowAsync"/> /
 /// <see cref="ForcedRollbackHarness.AssertNoEventRowAsync"/> helpers directly (unlike the Pattern-B
 /// create, whose id is server-generated).</para>
@@ -70,6 +76,14 @@ public sealed class TimeEntryRegisterAtomicHttpTests : IAsyncLifetime
     {
         var employeeId = "EMP_FR_HTTP_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var streamId = $"employee-{employeeId}";
+
+        // S136 / TASK-13603 — the handler now resolves the subject (terminated-inclusive users
+        // read, ADR-040 D3) before opening the write tx, so the employee must exist. Seeded with
+        // NULL employment dates (window-unbounded, D2) and is_active=true, so the new gates pass
+        // through and this test still pins exactly what it always pinned: the atomic rollback.
+        // Direct-SQL seed, no outbox involvement — safe alongside the throwing host.
+        await StatsTid.Tests.Regression.TestSupport.RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, "STY02", "HK", "OK24", ensureOrg: false);
 
         using var throwingHost = _factory.WithThrowingOutbox();
         var client = throwingHost.CreateClient();

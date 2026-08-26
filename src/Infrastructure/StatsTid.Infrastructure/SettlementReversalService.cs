@@ -44,7 +44,10 @@ namespace StatsTid.Infrastructure;
 ///   FULL ferieår span <c>[min(ferieår(old), ferieår(new)) .. max(...)]</c> — old from the
 ///   in-lock user row, new from the command; the just-reversed row is already REVERSED in-tx
 ///   and thus excluded — refuses with FULL rollback (it would remain standing on superseded
-///   lifecycle facts); then apply the corrected end date via the
+///   lifecycle facts); then (S136 Step-5a) run the ADR-040 D3 strand guard on the corrected
+///   window, NARROWING-ONLY, via the shared <see cref="EmploymentWindowStrandCheck"/> — a
+///   narrowing correction that would orphan registered data refuses with FULL rollback (the
+///   stranded months named); then apply the corrected end date via the
 ///   SHARED <see cref="EmploymentEndDateLifecycleWriter"/> (R4 two-aggregate preconditions:
 ///   settlement CAS + <c>users.version</c> If-Match; the FULL PUT choreography — lifecycle
 ///   decision, versioned write, R1(e) side effects, R10 event, ADR-026 + users_audit rows),
@@ -283,6 +286,49 @@ public sealed class SettlementReversalService
                             "Reverse those first; a correction across additional settled years " +
                             "is not supported in slice 3b (SPRINT-71 R13 span semantics, " +
                             "fail-closed).", ct);
+                    }
+
+                    // (7b) S136 Step-5a (Codex BLOCKER 2 + owner ruling 2026-08-26) — the ADR-040
+                    // D3 STRAND GUARD on this SECOND end-date writer, NARROWING-ONLY. This leg
+                    // writes users.employment_end_date through the shared lifecycle writer exactly
+                    // like the admin end-date PUT, which runs the strand guard before its write —
+                    // pre-fix this path had none, so a subsumed correction could move the window
+                    // past existing registered data. Shared query (EmploymentWindowStrandCheck, the
+                    // same three-projection predicate as the PUTs), on THIS (conn, tx) under the
+                    // R12 advisory lock from (1) — authoritative against the registration writers,
+                    // which serialize on the same key. Runs AFTER the B2 span guard (a settlement
+                    // conflict keeps its pinned failure shape) and strictly BEFORE the lifecycle
+                    // writer's side effects.
+                    //
+                    // NARROWING-ONLY predicate (the owner ruling): the check runs only when this
+                    // write NARROWS the window — the corrected end is EARLIER than the recorded
+                    // end, or sets an end where none was (unbounded → bounded). A WIDENING (or
+                    // unchanged/cleared) end cannot strand anything that this write is responsible
+                    // for, and legitimate reversals must not be blocked by data that was already
+                    // outside the OLD window — so widenings skip the check entirely.
+                    var narrowsWindow = command.CorrectedEndDate is { } correctedEnd
+                        && (userBefore.EmploymentEndDate is not { } recordedEnd || correctedEnd < recordedEnd);
+                    if (narrowsWindow)
+                    {
+                        var strandedMonths = await EmploymentWindowStrandCheck.QueryStrandedMonthsAsync(
+                            conn, tx, command.EmployeeId,
+                            userBefore.EmploymentStartDate, command.CorrectedEndDate, ct);
+                        if (strandedMonths.Count > 0)
+                        {
+                            // The PUTs' pointer contract (months + per-family counts), carried in
+                            // the structured reason — the 7102 endpoint's catch-all maps this
+                            // failure to a 409 whose error IS this reason.
+                            var strandedList = string.Join("; ", strandedMonths.Select(m =>
+                                $"{m.Month} (timeEntries {m.TimeEntryCount}, absences {m.AbsenceCount}, " +
+                                $"workTime {m.WorkTimeCount})"));
+                            return await FailAsync(tx, SettlementReversalFailure.StrandedRegistrations,
+                                "The corrected end date would strand existing registrations outside " +
+                                $"the narrowed employment window — stranded months: {strandedList}. " +
+                                "Correct or remove the out-of-window registrations first (or choose " +
+                                "an end date that covers them) — the employment window is never " +
+                                "moved past existing registered data (ADR-040 D3 strand guard; " +
+                                "FULL rollback, nothing reversed).", ct);
+                        }
                     }
 
                     // R4 — the SUBSUMED end-date mutation via the ONE shared lifecycle writer
@@ -643,6 +689,13 @@ public enum SettlementReversalFailure
     /// end-date ferieår span — the correction would leave it on superseded lifecycle facts;
     /// FULL rollback, the blockers named in the reason (409).</summary>
     AffectedSpanConflict,
+
+    /// <summary>S136 Step-5a (Codex BLOCKER 2 + owner ruling 2026-08-26; the ADR-040 D3 strand
+    /// guard on the reversal's subsumed end-date correction): the NARROWING correction would
+    /// strand registered data outside the corrected window — FULL rollback, the stranded months
+    /// + per-family counts named in the reason (409). Widenings never raise this (the
+    /// narrowing-only predicate at the call site).</summary>
+    StrandedRegistrations,
 
     /// <summary>The supersession is ineligible against the corrected in-tx state — FULL rollback (409).</summary>
     SupersedeNotEligible,

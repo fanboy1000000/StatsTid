@@ -87,8 +87,15 @@ historical org questions remain unanswerable (recorded consequence).
 
 **Interim posture (between Increments 1 and 2):** an employee given a real window gets
 registration blocks while payroll/balances still treat them as full-period. Per ADR-040 D2 this
-bites nobody by default — **real windows stay OUT of the demo seed and shared fixtures until
-Increment 2 lands**; window-dependent tests opt in per employee.
+bites nobody by default — ~~real windows stay OUT of the demo seed and shared fixtures until
+Increment 2 lands~~; window-dependent tests opt in per employee.
+**[S136-dated correction, 2026-08-26 — the struck sentence rested on a FALSE premise]:** the demo
+seed had carried real employment windows all along (start dates on 100% of users, past end dates
+on ~3% — `DemoGenerator.cs`), unnoticed when this posture was ratified. Owner ruled (S136 OQ-2a):
+**reconcile, don't strip** — the seed keeps its windows; S136 TASK-13607 clamped the two collision
+cohorts (tenure-0 pre-hire activity; inverted `end < start` leaver pairs, RED-proven 11+4 at full
+scale) so enforcement lands green. Consequence accepted: demo users are window-enforced subjects
+one increment before payroll/balances respect windows.
 
 ## Architectural Constraints Verified
 

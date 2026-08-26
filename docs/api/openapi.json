@@ -9980,6 +9980,11 @@
           "okVersion": {
             "type": "string"
           },
+          "employmentStartDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
           "approverId": {
             "type": "string",
             "nullable": true

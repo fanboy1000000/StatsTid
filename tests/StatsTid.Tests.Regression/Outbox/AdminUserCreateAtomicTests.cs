@@ -249,6 +249,153 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
         }
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // S136 / ADR-040 — optional employmentStartDate on create: stored + audited.
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Create WITH <c>employmentStartDate</c> ⇒ the value lands in
+    /// <c>users.employment_start_date</c> AND in the CREATED <c>users_audit.new_data</c>
+    /// payload. The audit half is load-bearing: <c>new_data</c> is a hand-enumerated
+    /// subset (not a full-row snapshot), so a field missing there is a field whose
+    /// origin is unprovable after the fact (Auditability invariant).
+    /// </summary>
+    [Fact]
+    public async Task AdminUserCreate_WithEmploymentStartDate_StoresAndAuditsIt()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintAdminToken());
+
+        var newUserId = "emp_s136_esd_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var hireDate = new DateOnly(2026, 3, 1);
+
+        var body = new
+        {
+            userId = newUserId,
+            username = newUserId,
+            password = "TestPassword123!",
+            displayName = "S136 Hire-Date Test User",
+            email = (string?)null,
+            primaryOrgId = "STY01",
+            agreementCode = "AC",
+            okVersion = "OK24",
+            employmentStartDate = hireDate,
+        };
+
+        var rsp = await client.PostAsJsonAsync("/api/admin/users", body);
+        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+
+        // Stored: users.employment_start_date carries the sent date.
+        await using (var usersCmd = new NpgsqlCommand(
+            "SELECT employment_start_date FROM users WHERE user_id = @userId", conn))
+        {
+            usersCmd.Parameters.AddWithValue("userId", newUserId);
+            await using var reader = await usersCmd.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync(), $"Expected a users row for '{newUserId}'.");
+            Assert.False(reader.IsDBNull(0), "employment_start_date should be stored, not NULL.");
+            Assert.Equal(hireDate, reader.GetFieldValue<DateOnly>(0));
+        }
+
+        // Audited: the CREATED users_audit row's new_data contains the hire date
+        // (DateOnly serializes as ISO yyyy-MM-dd).
+        await using (var auditCmd = new NpgsqlCommand(
+            """
+            SELECT new_data->>'employmentStartDate'
+            FROM users_audit
+            WHERE user_id = @userId AND action = 'CREATED'
+            """, conn))
+        {
+            auditCmd.Parameters.AddWithValue("userId", newUserId);
+            var audited = await auditCmd.ExecuteScalarAsync();
+            Assert.Equal("2026-03-01", audited);
+        }
+    }
+
+    /// <summary>
+    /// Create WITHOUT <c>employmentStartDate</c> ⇒ NULL stored (ADR-040 D2:
+    /// NULL = "unbounded past" — every employment-window guard passes through),
+    /// and everything else about the create is unchanged: the CREATED audit row
+    /// still carries the other hand-enumerated fields, and the S31 live
+    /// employee_profiles row still exists.
+    /// </summary>
+    [Fact]
+    public async Task AdminUserCreate_WithoutEmploymentStartDate_StoresNull()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintAdminToken());
+
+        var newUserId = "emp_s136_noesd_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+
+        // Deliberately the pre-S136 body shape — no employmentStartDate key at all.
+        var body = new
+        {
+            userId = newUserId,
+            username = newUserId,
+            password = "TestPassword123!",
+            displayName = "S136 No-Hire-Date Test User",
+            email = (string?)null,
+            primaryOrgId = "STY01",
+            agreementCode = "AC",
+            okVersion = "OK24",
+        };
+
+        var rsp = await client.PostAsJsonAsync("/api/admin/users", body);
+        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+
+        // Stored: NULL (ADR-040 D2 unbounded past), not a defaulted date.
+        await using (var usersCmd = new NpgsqlCommand(
+            "SELECT employment_start_date FROM users WHERE user_id = @userId", conn))
+        {
+            usersCmd.Parameters.AddWithValue("userId", newUserId);
+            await using var reader = await usersCmd.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync(), $"Expected a users row for '{newUserId}'.");
+            Assert.True(reader.IsDBNull(0),
+                "employment_start_date must be NULL when the request omits it (ADR-040 D2).");
+        }
+
+        // Audit row unchanged in shape: the key is present (recorded as JSON null —
+        // the honest "no hire date was sent" fact) and the pre-existing fields survive.
+        await using (var auditCmd = new NpgsqlCommand(
+            """
+            SELECT jsonb_exists(new_data, 'employmentStartDate'),
+                   new_data->>'employmentStartDate',
+                   new_data->>'displayName',
+                   new_data->>'agreementCode'
+            FROM users_audit
+            WHERE user_id = @userId AND action = 'CREATED'
+            """, conn))
+        {
+            auditCmd.Parameters.AddWithValue("userId", newUserId);
+            await using var reader = await auditCmd.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync(),
+                $"Expected a CREATED users_audit row for '{newUserId}'.");
+            Assert.True(reader.GetBoolean(0),
+                "new_data must still enumerate employmentStartDate (as JSON null) when omitted.");
+            Assert.True(reader.IsDBNull(1), "Omitted hire date must audit as JSON null.");
+            Assert.Equal("S136 No-Hire-Date Test User", reader.GetString(2));
+            Assert.Equal("AC", reader.GetString(3));
+        }
+
+        // Everything else unchanged: the S31 live profile row still rides the same tx.
+        await using (var profileCmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM employee_profiles
+            WHERE employee_id = @employeeId AND effective_to IS NULL
+            """, conn))
+        {
+            profileCmd.Parameters.AddWithValue("employeeId", newUserId);
+            Assert.Equal(1L, Convert.ToInt64(await profileCmd.ExecuteScalarAsync()));
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static string MintAdminToken()

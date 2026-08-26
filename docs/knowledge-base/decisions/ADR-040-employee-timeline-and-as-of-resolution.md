@@ -149,6 +149,11 @@ Profile and agreement-code changes accept **future-dated and backdated** `effect
   manual path (`POST /api/payroll/recalculate`, single-period, no cascade).
   **End-date corrections that cross a settlement are excluded**: they keep ADR-033's
   reverse-then-re-settle rails and the existing 409 span guard, unchanged.
+  **Clarification (owner-ruled 2026-08-26, S136 Step 5a — both lenses hit the tension):** this
+  exclusion covers the *worklist/backdating policy* of D8 ONLY. **D3's strand guard is universal**
+  — an end-date write on the settlement rails that NARROWS the window runs the same strand check
+  (fail-closed, same pointer contract) inside the reversal's own locked transaction; a widening
+  write cannot strand anything and runs no check, so legitimate reversals are never blocked.
 
 ### D9 — Accrual respects both ends of the spell
 `AccrualMath.EarnedToDate` gains an end-cap (`asOf` clamped to the spell end), so the **running**

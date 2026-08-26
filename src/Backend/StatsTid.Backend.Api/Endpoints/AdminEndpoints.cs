@@ -887,8 +887,8 @@ public static class AdminEndpoints
                 // (1) users INSERT
                 await using var cmd = new NpgsqlCommand(
                     """
-                    INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, employment_category, is_active, created_at, updated_at)
-                    VALUES (@userId, @username, @passwordHash, @displayName, @email, @primaryOrgId, @agreementCode, @okVersion, 'Standard', TRUE, @now, @now)
+                    INSERT INTO users (user_id, username, password_hash, display_name, email, primary_org_id, agreement_code, ok_version, employment_category, employment_start_date, is_active, created_at, updated_at)
+                    VALUES (@userId, @username, @passwordHash, @displayName, @email, @primaryOrgId, @agreementCode, @okVersion, 'Standard', @employmentStartDate, TRUE, @now, @now)
                     """, conn, tx);
                 cmd.Parameters.AddWithValue("userId", request.UserId);
                 cmd.Parameters.AddWithValue("username", request.Username);
@@ -898,6 +898,8 @@ public static class AdminEndpoints
                 cmd.Parameters.AddWithValue("primaryOrgId", request.PrimaryOrgId);
                 cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode);
                 cmd.Parameters.AddWithValue("okVersion", request.OkVersion);
+                // NULL when omitted = ADR-040 D2 "unbounded past" (no backfill semantics change).
+                cmd.Parameters.AddWithValue("employmentStartDate", (object?)request.EmploymentStartDate ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("now", now);
                 await cmd.ExecuteNonQueryAsync(ct);
 
@@ -909,12 +911,17 @@ public static class AdminEndpoints
                 // is schema DEFAULT 1 from TASK-3501; version_before NULL (no
                 // predecessor); version_after = 1. password_hash deliberately
                 // EXCLUDED from new_data — audit JSONB must never carry credentials.
+                // new_data is a HAND-ENUMERATED subset (not a full-row snapshot): every field the
+                // create request can set must be listed here or its origin is unprovable later.
+                // employmentStartDate included per ADR-040 (null = D2 "unbounded past", recorded
+                // as-sent so the CREATED row reconstructs the hire date's origin).
                 var userNewData = JsonSerializer.Serialize(new
                 {
                     displayName = request.DisplayName,
                     email = request.Email,
                     primaryOrgId = request.PrimaryOrgId,
                     agreementCode = request.AgreementCode,
+                    employmentStartDate = request.EmploymentStartDate,
                 });
                 await using (var userAuditCmd = new NpgsqlCommand(
                     """
@@ -2981,6 +2988,12 @@ public static class AdminEndpoints
         public required string PrimaryOrgId { get; init; }
         public required string AgreementCode { get; init; }
         public required string OkVersion { get; init; }
+
+        // S136 / ADR-040 — OPTIONAL hire date. Omitted ⇒ users.employment_start_date NULL,
+        // which ADR-040 D2 defines as "unbounded past" (every employment-window guard passes
+        // through on a NULL side), so existing callers stay valid unchanged. No end date exists
+        // at create, so no cross-field ordering guard applies here.
+        public DateOnly? EmploymentStartDate { get; init; }
 
         // S74 R9 — OPTIONAL atomic create+assign. When supplied, the create tx ALSO creates the
         // new person's PRIMARY reporting line under this approver (same tree, cycle-guarded),

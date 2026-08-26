@@ -4409,3 +4409,118 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- S136 / TASK-13601 — users_employment_window_check (ADR-040 D1 data-layer
+--   backstop): an employment window may never END before it STARTS.
+--
+--   ADR-040 D1 makes the employment window a first-class domain fact — one
+--   spell today, stored in users.employment_start_date /
+--   employment_end_date. This CHECK is the data-layer backstop for it:
+--
+--     CHECK (employment_start_date IS NULL OR employment_end_date IS NULL
+--            OR employment_end_date >= employment_start_date)
+--
+--   The two NULL disjuncts are ADR-040 D2's "NULL means UNBOUNDED" rule in
+--   SQL — a NULL side always passes, so the constraint lands on existing
+--   data with NO backfill (every pre-window user is NULL-unbounded by
+--   construction). `>=` (not `>`): start = end is a legal ONE-DAY
+--   employment — the end date is the LAST day employed, inclusive (ADR-033
+--   semantics as pinned by S70 R1).
+--
+-- PLACEMENT (deliberate — the at-EOF S71/S85 convention, forced here): the
+-- base `CREATE TABLE IF NOT EXISTS users` (L510) cannot carry this CHECK
+-- inline because employment_start_date is NOT part of the base CREATE — it
+-- lands via the S60 file-scope ALTER (~L2888) — and employment_end_date only
+-- reaches a pre-S70 legacy DB via the guarded 's70-employment-end-date'
+-- block (~L3496). This section must therefore sit AFTER both in file order.
+-- The unconditional re-land ALTER below the segment must in turn sit AFTER
+-- the guarded census, so a violating legacy DB always halts on the census's
+-- operator-actionable RAISE, never on a raw 23514 from a bare ADD.
+--
+-- THE CENSUS FAILS LOUD — NO auto-repair (S136 refinement ruling, dual-lens
+-- reviewed): if any existing row has employment_end_date <
+-- employment_start_date, the segment RAISEs with the violating user_ids and
+-- constrains NOTHING. This deliberately DEVIATES from the S73
+-- remediate-before-constrain precedent: S73 had a deterministic, type-keyed
+-- correction (the D-A ruling says exactly which flag a CARE_DAY row must
+-- carry); an inverted employment window has none — whether the START or the
+-- END boundary is the wrong one is business history only an operator can
+-- know (ADR-040 D1), so a script must never choose. The RAISE rolls back
+-- this DO block's own ledger INSERT, so after the operator corrects the
+-- named rows a re-run executes the segment again in full (fix-then-rerun,
+-- never fix-then-unstick-the-ledger).
+--
+-- 3-path idempotent (the house guard pattern):
+--   • greenfield first apply — the census sees only the seed users above
+--     (they carry no employment dates) and the reconciled S136 demo seed is
+--     window-clean by construction; the named CHECK lands;
+--   • legacy first apply — census over the real rows, then DROP-then-ADD
+--     lands the same named CHECK (or the RAISE halts the whole apply);
+--   • any re-apply — the schema_migrations ledger short-circuits; the
+--     unconditional re-land ALTER below keeps the constraint present
+--     build-over-build (the S85/S122 outside-the-guard repair idiom).
+--
+-- The S136-EMPLOYMENT-WINDOW-CHECK-SEGMENT markers are extracted VERBATIM
+-- by EmploymentWindowCheckMigrationTests (the S71/S72/S73 harness pattern:
+-- the test replays this exact segment against a reconstructed pre-S136
+-- schema, twice, plus the violating-row RAISE path) — keep the marker lines
+-- intact and keep all S136 DDL between them.
+-- =========================================================================
+-- S136-EMPLOYMENT-WINDOW-CHECK-SEGMENT-BEGIN
+DO $$
+DECLARE
+    violating_count BIGINT;
+    violating_ids   TEXT;
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s136-employment-window-check', 'S136/TASK-13601 (ADR-040 D1 data-layer backstop): users_employment_window_check CHECK (employment_start_date IS NULL OR employment_end_date IS NULL OR employment_end_date >= employment_start_date) — the D2 NULL-unbounded disjuncts mean NO backfill. Census FAILS LOUD with the violating user_ids BEFORE constraining (NO auto-repair — which employment boundary is wrong is operator-owned business history; deliberate deviation from the S73 remediate-before-constrain precedent, whose correction was deterministic). The RAISE rolls back the ledger row, so fix-then-rerun re-executes the segment.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Census BEFORE constraining (fail-loud — see the section comment): the
+    -- predicate is the exact negation of the CHECK below.
+    SELECT COUNT(*), string_agg(user_id, ', ' ORDER BY user_id)
+      INTO violating_count, violating_ids
+      FROM users
+     WHERE employment_start_date IS NOT NULL
+       AND employment_end_date   IS NOT NULL
+       AND employment_end_date   <  employment_start_date;
+
+    IF violating_count > 0 THEN
+        RAISE EXCEPTION 's136-employment-window-check: % user row(s) have employment_end_date < employment_start_date (user_ids: %). Which employment boundary is wrong is business history an operator must decide (ADR-040 D1) — correct the named rows manually, then re-run; nothing was changed (this DO block, its ledger row included, rolls back with this exception).',
+            violating_count, violating_ids;
+    END IF;
+
+    -- DROP-then-ADD lands the SAME named CHECK on every path (the S73/S122
+    -- named-constraint idiom).
+    ALTER TABLE users
+    DROP CONSTRAINT IF EXISTS users_employment_window_check;
+
+    ALTER TABLE users
+    ADD CONSTRAINT users_employment_window_check
+    CHECK (employment_start_date IS NULL
+        OR employment_end_date IS NULL
+        OR employment_end_date >= employment_start_date);
+END
+$$;
+-- S136-EMPLOYMENT-WINDOW-CHECK-SEGMENT-END
+
+-- Unconditional re-land (the S85/S122 outside-the-guard repair idiom): the
+-- ledger short-circuits the segment on every re-apply, so this file-scope
+-- DROP-then-ADD is what keeps the constraint present build-over-build — the
+-- construction-enforcement form that the base users CREATE cannot carry
+-- inline (employment_start_date is not part of the base CREATE; see the
+-- section comment above). It sits AFTER the census segment BY DESIGN: a
+-- violating legacy DB halts on the census RAISE and never reaches this ADD.
+ALTER TABLE users
+DROP CONSTRAINT IF EXISTS users_employment_window_check;
+
+ALTER TABLE users
+ADD CONSTRAINT users_employment_window_check
+CHECK (employment_start_date IS NULL
+    OR employment_end_date IS NULL
+    OR employment_end_date >= employment_start_date);

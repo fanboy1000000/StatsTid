@@ -120,6 +120,13 @@ builder.Services.AddSingleton<EntitlementConfigRepository>();
 builder.Services.AddSingleton<EmployeeProfileRepository>();
 builder.Services.AddSingleton<UserAgreementCodeRepository>();
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
+// S136 / ADR-040 D1 — employment-window fact resolver, dual-binding per the IOutboxEnqueue
+// pattern: one concrete, exposed as the SharedKernel self-managed surface AND the
+// Infrastructure in-tx surface (the D3 strand/re-hire guards read in-lock through the
+// latter). Backend host only; the Payroll host waits for Increment 2 by design.
+builder.Services.AddSingleton<EmploymentWindowResolver>();
+builder.Services.AddSingleton<IEmploymentWindowResolver>(sp => sp.GetRequiredService<EmploymentWindowResolver>());
+builder.Services.AddSingleton<IEmploymentWindowResolverInTx>(sp => sp.GetRequiredService<EmploymentWindowResolver>());
 builder.Services.AddSingleton<EntitlementBalanceRepository>();
 builder.Services.AddSingleton<TimeEntryProjectionRepository>();
 builder.Services.AddSingleton<AbsenceProjectionRepository>();

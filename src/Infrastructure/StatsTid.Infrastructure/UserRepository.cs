@@ -218,65 +218,13 @@ public sealed class UserRepository
         throw new KeyNotFoundException($"User '{userId}' not found or inactive.");
     }
 
-    /// <summary>
-    /// S60 / TASK-6004 / ADR-030 — HR-only write of <c>users.employment_start_date</c>.
-    /// In-tx <c>(conn, tx)</c> overload so the admin employment-start endpoint can ride the
-    /// UPDATE and the <c>users_audit</c> row in one atomic unit per ADR-018 D3. Mirrors the
-    /// S59 <see cref="SetBirthDateAsync(NpgsqlConnection, NpgsqlTransaction, string, DateOnly?, long, CancellationToken)"/>
-    /// precedent exactly.
-    ///
-    /// <para>
-    /// <b>Admin-strict If-Match (ADR-019 D2).</b> Version-guarded: the UPDATE matches on
-    /// <c>version = @expectedVersion</c> and bumps <c>version + 1</c> (ADR-018 D7 row-version
-    /// contract). The caller is expected to have FOR-UPDATE'd + version-checked the row first
-    /// (via <see cref="GetByIdWithVersionAsync(NpgsqlConnection, NpgsqlTransaction, string, CancellationToken)"/>);
-    /// the <c>AND version = @expectedVersion</c> predicate here is defense-in-depth. Returns
-    /// the new version. Throws <see cref="OptimisticConcurrencyException"/> when no live row
-    /// matched the expected version (caller maps to 412); throws
-    /// <see cref="KeyNotFoundException"/> when no live row exists at all (caller maps to 404).
-    /// </para>
-    ///
-    /// <para>
-    /// <paramref name="employmentStartDate"/> may be <c>null</c> (clearing an unknown start date).
-    /// </para>
-    /// </summary>
-    public async Task<long> SetEmploymentStartDateAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        string userId, DateOnly? employmentStartDate, long expectedVersion, CancellationToken ct = default)
-    {
-        await using var cmd = new NpgsqlCommand(
-            """
-            UPDATE users
-               SET employment_start_date = @employmentStartDate,
-                   version = version + 1,
-                   updated_at = NOW()
-             WHERE user_id = @userId
-               AND is_active = TRUE
-               AND version = @expectedVersion
-            RETURNING version
-            """, conn, tx);
-        cmd.Parameters.AddWithValue("employmentStartDate", (object?)employmentStartDate ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("userId", userId);
-        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
-        var result = await cmd.ExecuteScalarAsync(ct);
-        if (result is long newVersion)
-            return newVersion;
-
-        // No row updated — distinguish "row gone" from "version mismatch" so the
-        // endpoint can map 404 vs 412 (mirrors SetBirthDateAsync / SoftDeleteAsync).
-        await using var probeCmd = new NpgsqlCommand(
-            "SELECT version FROM users WHERE user_id = @userId AND is_active = TRUE", conn, tx);
-        probeCmd.Parameters.AddWithValue("userId", userId);
-        var actual = await probeCmd.ExecuteScalarAsync(ct);
-        if (actual is long actualVersion)
-            throw new OptimisticConcurrencyException(
-                $"User '{userId}' version is {actualVersion}, but caller sent " +
-                $"If-Match: \"{expectedVersion}\"; refresh and retry.",
-                expectedVersion: expectedVersion,
-                actualVersion: actualVersion);
-
-        throw new KeyNotFoundException($"User '{userId}' not found or inactive.");
-    }
+    // NOTE (S136 Step-5a fix-forward, Reviewer WARNING 2 / adjudication (e)): the S60 / TASK-6004
+    // active-only `SetEmploymentStartDateAsync` that lived here was DELETED as production-dead —
+    // TASK-13604 moved the admin start-date PUT (its only caller) onto the terminated-inclusive
+    // SetEmploymentStartDateIncludingTerminatedAsync below, and the old method's XML doc claimed
+    // a caller that no longer existed. The active-only WRITE semantics survive in the
+    // SetBirthDateAsync shape above; the start-date write is allowlist-ruled terminated-inclusive
+    // (see the R9c banner below).
 
     // ═══════════════════════════════════════════════════════════════════════════
     // S70 / TASK-7003 / ADR-033 slice 3a (SPRINT-70 R9a) — terminated-INCLUSIVE reads
@@ -289,6 +237,26 @@ public sealed class UserRepository
     // a leaver is deactivated by the R2 Step-A flip BEFORE settlement, so those surfaces
     // must be able to address an `is_active = FALSE` row. Do NOT call these from any
     // other path without an explicit allowlist ruling.
+    //
+    // S136 / TASK-13603 (ADR-040 D3 / SEC-046) — DELIBERATE allowlist EXTENSION, ruled by
+    // the ratified ADR + the S136 refinement: the TWO REGISTRATION WRITERS join the
+    // allowlist — POST /api/time-entries and POST /api/skema/{id}/save (terminated-
+    // inclusive validator + terminated-inclusive SUBJECT reads: the pooled pre-check
+    // read AND, since the S136 Step-5a fix-forward, the in-tx in-lock subject-state
+    // re-check). Rationale: the active-only subject read 404'd a deactivated leaver for
+    // EVERYONE — HR included — blocking the routine final-month correction; the explicit
+    // D3 role floor at the endpoints (subject deactivated ⇒ HROrAbove) is what refuses
+    // everyone else, deliberately.
+    //
+    // S136 / TASK-13604 (ADR-040 D3) — SECOND extension, same ruling chain: the admin
+    // employment-START-date PUT joins the allowlist (terminated-inclusive validator +
+    // FOR-UPDATE read + the SetEmploymentStartDateIncludingTerminatedAsync write below).
+    // Rationale: per D3, role — not is_active — governs who may edit a deactivated
+    // leaver's employment record, and the ADR-040 D1 re-hire guard's target case (a
+    // CLOSED spell) implies the Step-A poller already flipped is_active=FALSE, so the
+    // guard was UNREACHABLE through the active-only trio. Both extensions keep the R9c
+    // shape: HROrAbove policy + LocalHR per-scope floor; Employee-role actors stay denied
+    // (for the registration writers: except their own ACTIVE-subject data, unchanged).
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -297,12 +265,16 @@ public sealed class UserRepository
     /// <see cref="GetByIdAsync(string, CancellationToken)"/>.
     ///
     /// <para>
-    /// <b>Allowlist-restricted (R9c):</b> for the SPRINT-70 terminated-aware surfaces only
+    /// <b>Allowlist-restricted (R9c):</b> for the SPRINT-70 terminated-aware surfaces
     /// (end-date endpoint, settlement resolve/reconcile-payout, year-overview via
-    /// <c>OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync</c>). The general
-    /// read paths stay active-only — a deactivated user must remain unaddressable everywhere
-    /// else (B2/S68 origin: HR could not reach a departed employee's settlement surfaces;
-    /// the fix is additive, NOT a relaxation of the shared filter).
+    /// <c>OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync</c>) — <b>plus,
+    /// since S136 / TASK-13603 (ADR-040 D3 / SEC-046), the TWO REGISTRATION WRITERS'
+    /// pre-transaction subject reads</b> (<c>POST /api/time-entries</c> and the Skema save):
+    /// their explicit D3 role floor needs the deactivated subject's row RESOLVED, not hidden
+    /// as a 404 (see the section banner above for the ruling). The general read paths stay
+    /// active-only — a deactivated user must remain unaddressable everywhere else (B2/S68
+    /// origin: HR could not reach a departed employee's settlement surfaces; the fix is
+    /// additive, NOT a relaxation of the shared filter).
     /// </para>
     /// </summary>
     public async Task<User?> GetByIdIncludingTerminatedAsync(string userId, CancellationToken ct = default)
@@ -330,8 +302,12 @@ public sealed class UserRepository
     /// settlement transaction, and Step B always runs AFTER Step A's deactivation flip, so the
     /// pass must read the leaver UNCONDITIONALLY through this overload (R9d: not keyed on
     /// <c>trigger == TERMINATION</c> — the active-employee case is a strict subset; the pass is
-    /// system-internal, access control does not ride the <c>is_active</c> filter). General
-    /// in-tx reads stay on the filtered overload.
+    /// system-internal, access control does not ride the <c>is_active</c> filter). <b>S136
+    /// Step-5a (Codex BLOCKER 1 — the SEC-046 race) added the two REGISTRATION WRITERS' in-lock
+    /// subject-state re-check</b>: both writers re-read <c>is_active</c> through this overload
+    /// under <c>EmployeeConsumptionLock</c> to re-enforce the ADR-040 D3 floor against a
+    /// deactivation that committed while they waited on the lock. General in-tx reads stay on
+    /// the filtered overload.
     /// </para>
     /// </summary>
     public async Task<User?> GetByIdIncludingTerminatedAsync(
@@ -352,12 +328,15 @@ public sealed class UserRepository
     ///
     /// <para>
     /// <b>Allowlist-restricted (R9c):</b> for TASK-7002's employment-end-date set/clear endpoint
-    /// ONLY — without this the endpoint could never read, correct, or clear a deactivated
+    /// — without this the endpoint could never read, correct, or clear a deactivated
     /// leaver's end date (the existing If-Match probes filter <c>is_active</c> and dead-end at
     /// 404 the moment the R2 flip lands). R1(c) reactivation (clear with
     /// <c>end_date_deactivated = TRUE</c>) MUST be able to FOR-UPDATE the inactive row it
-    /// reactivates. General admin edit paths stay on the filtered overload (soft-deleted users
-    /// are not addressable through admin edit).
+    /// reactivates. <b>S136 / TASK-13604 (ADR-040 D3) extends the allowlist</b> with the
+    /// employment-START-date PUT — same reasoning, same lock/read/guard/write choreography
+    /// (see <see cref="SetEmploymentStartDateIncludingTerminatedAsync"/>). General admin edit
+    /// paths stay on the filtered overload (soft-deleted users are not addressable through
+    /// admin edit).
     /// </para>
     /// </summary>
     public async Task<(User User, long Version)?> GetByIdWithVersionIncludingTerminatedAsync(
@@ -469,9 +448,85 @@ public sealed class UserRepository
             return newVersion;
 
         // No row updated — distinguish "row gone" from "version mismatch" so the endpoint can
-        // map 404 vs 412 (mirrors SetBirthDateAsync / SetEmploymentStartDateAsync, EXCEPT the
-        // probe deliberately carries no is_active filter: an inactive leaver's row must probe
-        // as a 412 version mismatch, never a false 404).
+        // map 404 vs 412 (mirrors SetBirthDateAsync, EXCEPT the probe deliberately carries no
+        // is_active filter: an inactive leaver's row must probe as a 412 version mismatch,
+        // never a false 404).
+        await using var probeCmd = new NpgsqlCommand(
+            "SELECT version FROM users WHERE user_id = @userId", conn, tx);
+        probeCmd.Parameters.AddWithValue("userId", userId);
+        var actual = await probeCmd.ExecuteScalarAsync(ct);
+        if (actual is long actualVersion)
+            throw new OptimisticConcurrencyException(
+                $"User '{userId}' version is {actualVersion}, but caller sent " +
+                $"If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: actualVersion);
+
+        throw new KeyNotFoundException($"User '{userId}' not found.");
+    }
+
+    /// <summary>
+    /// S136 / TASK-13604 (ADR-040 D1/D3) — guarded write of <c>users.employment_start_date</c>
+    /// with NO <c>is_active</c> filter. <b>A DELIBERATE S70 R9c ALLOWLIST EXTENSION</b> (ruled by
+    /// ADR-040 D3 + the S136 refinement — see the section banner above): the admin
+    /// employment-start-date PUT moves onto the terminated-inclusive pair because the ADR-040 D1
+    /// re-hire guard's target case (a CLOSED spell — end date set and passed) implies the Step-A
+    /// poller already flipped <c>is_active = FALSE</c>, so an active-only write shape dead-ends
+    /// at a false 404 there — and HR could never correct a deactivated leaver's start date at
+    /// all (the routine Danish-payroll correction case, the same B2/S68 origin as the end-date
+    /// surfaces). The S60 active-only <c>SetEmploymentStartDateAsync</c> this superseded was
+    /// DELETED in the S136 Step-5a fix-forward (production-dead once this became the PUT's only
+    /// writer). Mirrors <see cref="SetEmploymentEndDateIncludingTerminatedAsync"/>
+    /// minus the lifecycle tuple: the start date carries NO
+    /// <c>is_active</c>/<c>end_date_deactivated</c> choreography — it is a plain fact column
+    /// (ADR-030, preserved by ADR-040 D1).
+    ///
+    /// <para>
+    /// <b>Admin-strict If-Match (ADR-019 D2).</b> Version-guarded: matches on
+    /// <c>version = @expectedVersion</c> and bumps <c>version + 1</c> (ADR-018 D7). The caller is
+    /// expected to hold the ADR-032 D4 employee advisory lock, to have FOR-UPDATE'd +
+    /// version-checked the row via
+    /// <see cref="GetByIdWithVersionIncludingTerminatedAsync(NpgsqlConnection, NpgsqlTransaction, string, CancellationToken)"/>,
+    /// and to have evaluated the ADR-040 D1 re-hire / cross-field / D3 strand guards first — the
+    /// version predicate here is defense-in-depth. Returns the new version. Throws
+    /// <see cref="OptimisticConcurrencyException"/> when a row exists but no version matched
+    /// (caller maps to 412); throws <see cref="KeyNotFoundException"/> when no row exists at all
+    /// (caller maps to 404). Like the end-date twin — and unlike the active-only Set* shapes —
+    /// the probe carries no <c>is_active</c> filter: a deactivated leaver's row must probe as a
+    /// 412 version mismatch, never a false 404.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Allowlist-restricted (R9c, S136 extension):</b> TASK-13604's employment-start-date PUT
+    /// is the ONLY caller. General mutation paths stay active-only. Do NOT call this from any
+    /// other path without an explicit allowlist ruling.
+    /// </para>
+    /// </summary>
+    public async Task<long> SetEmploymentStartDateIncludingTerminatedAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string userId, DateOnly? employmentStartDate, long expectedVersion, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE users
+               SET employment_start_date = @employmentStartDate,
+                   version = version + 1,
+                   updated_at = NOW()
+             WHERE user_id = @userId
+               AND version = @expectedVersion
+            RETURNING version
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employmentStartDate", (object?)employmentStartDate ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("userId", userId);
+        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        if (result is long newVersion)
+            return newVersion;
+
+        // No row updated — distinguish "row gone" from "version mismatch" so the endpoint can
+        // map 404 vs 412 (mirrors SetEmploymentEndDateIncludingTerminatedAsync: the probe
+        // deliberately carries no is_active filter — an inactive leaver's row must probe as a
+        // 412 version mismatch, never a false 404).
         await using var probeCmd = new NpgsqlCommand(
             "SELECT version FROM users WHERE user_id = @userId", conn, tx);
         probeCmd.Parameters.AddWithValue("userId", userId);

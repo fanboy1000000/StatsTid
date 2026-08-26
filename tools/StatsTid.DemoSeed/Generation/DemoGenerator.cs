@@ -447,8 +447,22 @@ public sealed class DemoGenerator
         bool isActive = true;
         if (leaverAllowed && _rng.NextDouble() < 0.03)
         {
-            endDate = _referenceDate.AddDays(-_rng.Next(10, 300)).ToString("yyyy-MM-dd");
+            var end = _referenceDate.AddDays(-_rng.Next(10, 300));
+            // S136 / ADR-040 D1 spell shape: the DB CHECK refuses end < start, and a tenure-0
+            // draw can land the start AFTER the drawn end. Clamp the START down — the end stays
+            // in the recent past as designed. Post-draw clamp: no extra _rng draw, stream unmoved.
+            if (startDate > end)
+                startDate = end;
+            endDate = end.ToString("yyyy-MM-dd");
             isActive = false;
+        }
+        else if (startDate > ActivityMonthStart)
+        {
+            // S136 / ADR-040 D3: the employment-window write gate 422s registrations dated before
+            // the start, and activity is generated for ACTIVE users in the activity month — so an
+            // active tenure-0 start past that month's first day would pre-date the user's own
+            // registrations. Clamp to the month start. Post-draw: no extra _rng draw.
+            startDate = ActivityMonthStart;
         }
 
         return new DemoUser
@@ -504,12 +518,27 @@ public sealed class DemoGenerator
     /// guarantee below keeps its Godkend-tid roster populated regardless of the random sample.</summary>
     private const string LeaderPersonaUserId = "demo_styx1_0025";
 
+    /// <summary>First day of the activity month — the previous (last complete) calendar month
+    /// relative to <see cref="_referenceDate"/>. The SINGLE anchor shared by
+    /// <see cref="GenerateActivity"/> and the <see cref="MakeUser"/> start-date clamp: an active
+    /// user starting after this day would receive registrations pre-dating their own employment,
+    /// which the S136 window guard 422s (ADR-040 D3).</summary>
+    private DateOnly ActivityMonthStart
+    {
+        get
+        {
+            var m = _referenceDate.AddMonths(-1);
+            return new DateOnly(m.Year, m.Month, 1);
+        }
+    }
+
     // ── Activity (~ActivityFraction of ACTIVE users) ──
     private void GenerateActivity(List<DemoUser> users, DemoManifest manifest)
     {
         var active = users.Where(u => u.IsActive).ToList();
-        // Use a recent COMPLETE month relative to the reference date (avoids the current/boundary month).
-        var activityMonth = _referenceDate.AddMonths(-1);
+        // A recent COMPLETE month (avoids the current/boundary month) — the same anchor the
+        // MakeUser employment-start clamp respects.
+        var activityMonth = ActivityMonthStart;
         var year = activityMonth.Year;
         var month = activityMonth.Month;
         // S127 / TASK-12701b — the outcome vocabulary. "SUBMITTED" became "EMPLOYEE_APPROVED" when

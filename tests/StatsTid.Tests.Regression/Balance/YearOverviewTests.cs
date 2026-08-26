@@ -2199,6 +2199,9 @@ public sealed class YearOverviewTests : IAsyncLifetime
     /// BLOCKER-1 test to drive a partial-year accrual where the accrual-window end (31 Aug) and the §21
     /// 31-Dec settlement boundary yield DIFFERENT earned-at-boundary values. Citation:
     /// <c>users.employment_start_date</c> column at init.sql:2656 (S60/ADR-030, NULLABLE DATE).
+    /// DIRECT-SQL fixture helper, name coincidence only — NOT a caller of the (S136 Step-5a
+    /// DELETED) <c>UserRepository.SetEmploymentStartDateAsync</c>; the repository method had no
+    /// test callers.
     /// </summary>
     private async Task SetEmploymentStartDateAsync(string employeeId, DateOnly employmentStart)
     {

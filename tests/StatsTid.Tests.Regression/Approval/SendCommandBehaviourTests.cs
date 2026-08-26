@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Xunit;
 
 namespace StatsTid.Tests.Regression.Approval;
@@ -9,7 +10,9 @@ namespace StatsTid.Tests.Regression.Approval;
 ///
 /// <para>Covers AC-3 (allocation-gate falsifiability), AC-6 (the vacuous absence month), AC-9
 /// (<c>SUBMITTED</c> retired on production routes), AC-10 (the whole-month guard) and AC-12
-/// (server-resolved dimensions per arm). Every case reads its verdict off the HTTP response and the
+/// (server-resolved dimensions per arm). S136 / TASK-13606 adds the ADR-040 D6 window-aware
+/// coverage pins (mid-month hire sends whole; fully-out-of-window month refused; <c>== start</c>
+/// demanded and accepted). Every case reads its verdict off the HTTP response and the
 /// <c>approval_periods</c> row; none re-implements the rule under test.</para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -294,5 +297,145 @@ public sealed class SendCommandBehaviourTests : SendCommandMatrixTestBase
         Assert.Equal(Org, row.OrgId);          // corrected STY01 → STY02
         Assert.Equal("HK", row.AgreementCode); // corrected WRONG → HK (the DATED code, not the live AC cache)
         Assert.Equal("OK24", row.OkVersion);   // corrected OK21 → OK24
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════════════════
+    //  S136 / TASK-13606 — ADR-040 D6: window-aware coverage.
+    //
+    //  The send gate's expected-workday set is intersected with the employment window (users.
+    //  employment_start_date/_end_date; NULL = unbounded per D2, end inclusive per D1). These pins
+    //  cover the three ruled behaviours: (a) a mid-month hire's month sends AS A WHOLE with only
+    //  the employed span covered — through BOTH adapters, since one command serves both; (b) a
+    //  month entirely outside the window is REFUSED with the date-free employment-window 422, never
+    //  vacuously sent (Reviewer-N1); (c) the == start day is itself demanded and accepted (D1
+    //  boundary). The windowless byte-identity half of the AC is the STANDING pin in
+    //  AllocationPredicateCharacterizationTests (its fixture has no employment dates, so under D2
+    //  the intersection is the identity for it) — deliberately not duplicated here.
+    //
+    //  2026-03-15 is a SUNDAY, so a hire dated the 15th makes Monday the 16th the first expected
+    //  workday — which is exactly what makes case (c)'s single-missing-day assertion sharp.
+    // ════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// D6(a), month-keyed adapter. A hire dated mid-month (2026-03-15) covering ONLY the employed
+    /// span (weekdays 16..31) sends 200 — the pre-hire weekdays (2..13) are not demanded. Fails
+    /// against the pre-S136 gate, which demanded every weekday of the whole month and made a
+    /// mid-month hire's first month permanently unsendable once the D3 registration gates land.
+    /// </summary>
+    [Fact]
+    public async Task MidMonthHire_EmployedSpanCovered_MonthKeyed_SendsWholeMonth()
+    {
+        const string emp = "t13606_hire_send";
+        var hireDate = new DateOnly(2026, 3, 15);
+        await SeedEmployeeAsync(emp);
+        await SetEmploymentWindowAsync(emp, start: hireDate, end: null);
+        await CoverMonthWithAbsencesAsync(emp, gap: null, from: hireDate); // employed span ONLY
+
+        using var client = EmployeeClient(emp);
+        var rsp = await PostSendAsync(client, emp);
+
+        await AssertOkEmployeeApprovedAsync(rsp);
+        // Approved AS A WHOLE month (D6): the row keeps the full-month geometry, not a trimmed span.
+        var periodId = await FindPeriodIdAsync(emp, MarchStart, MarchEnd);
+        Assert.NotNull(periodId);
+        Assert.Equal("EMPLOYEE_APPROVED", (await ReadRowAsync(periodId!.Value))!.Status);
+    }
+
+    /// <summary>
+    /// D6(a), by-id adapter — the SAME behaviour through the second adapter, proving the window
+    /// intersection lives in the shared command, not in one route. The seeded DRAFT row spans the
+    /// whole month (the by-id whole-month guard requires that), while coverage exists only for the
+    /// employed span.
+    /// </summary>
+    [Fact]
+    public async Task MidMonthHire_EmployedSpanCovered_ById_SendsWholeMonth()
+    {
+        const string emp = "t13606_hire_byid";
+        var hireDate = new DateOnly(2026, 3, 15);
+        await SeedEmployeeAsync(emp);
+        await SetEmploymentWindowAsync(emp, start: hireDate, end: null);
+        await CoverMonthWithAbsencesAsync(emp, gap: null, from: hireDate);
+        var periodId = await SeedApprovalRowAsync(emp, "DRAFT", MarchStart, MarchEnd);
+
+        using var client = EmployeeClient(emp);
+        var rsp = await PostEmployeeApproveAsync(client, periodId);
+
+        await AssertOkEmployeeApprovedAsync(rsp);
+        Assert.Equal("EMPLOYEE_APPROVED", (await ReadRowAsync(periodId))!.Status);
+    }
+
+    /// <summary>
+    /// D6(b), month-keyed adapter (Reviewer-N1's vacuous case). The employment window starts AFTER
+    /// the month (hired 2026-04-01), and NOTHING is registered — precisely the setup where a naive
+    /// intersection would leave zero expected workdays, zero uncovered days, and a vacuous 200.
+    /// The ruled behaviour is the date-free employment-window 422, and no row is written (the tx
+    /// rolls back before the create arm). Fails open — returns 200 — if the vacuous-refuse branch
+    /// is ever removed.
+    /// </summary>
+    [Fact]
+    public async Task MonthEntirelyBeforeWindow_Uncovered_RefusedEmploymentWindow_NoRowWritten()
+    {
+        const string emp = "t13606_outside_send";
+        await SeedEmployeeAsync(emp);
+        await SetEmploymentWindowAsync(emp, start: new DateOnly(2026, 4, 1), end: null);
+        // Deliberately NO coverage at all: the empty month is the vacuous-send hazard under test.
+
+        using var client = EmployeeClient(emp);
+        var rsp = await PostSendAsync(client, emp);
+
+        await AssertEmploymentWindow422Async(rsp);
+        Assert.False(await RowExistsAsync(emp, MarchStart, MarchEnd)); // nothing written
+    }
+
+    /// <summary>
+    /// D6(b), by-id adapter, other window side: employment ENDED before the month (end 2026-02-28,
+    /// inclusive last day employed). The pre-existing DRAFT row is refused with the same
+    /// employment-window 422 and left untouched — a leaver's fully-post-employment month cannot be
+    /// walked into the certified state through the re-send route either.
+    /// </summary>
+    [Fact]
+    public async Task MonthEntirelyAfterWindow_ById_RefusedEmploymentWindow_RowUntouched()
+    {
+        const string emp = "t13606_outside_byid";
+        await SeedEmployeeAsync(emp);
+        await SetEmploymentWindowAsync(emp, start: null, end: new DateOnly(2026, 2, 28));
+        var periodId = await SeedApprovalRowAsync(emp, "DRAFT", MarchStart, MarchEnd);
+
+        using var client = EmployeeClient(emp);
+        var rsp = await PostEmployeeApproveAsync(client, periodId);
+
+        await AssertEmploymentWindow422Async(rsp);
+        Assert.Equal("DRAFT", (await ReadRowAsync(periodId))!.Status); // untouched
+    }
+
+    /// <summary>
+    /// D6(c), the D1 boundary: <c>date == start</c> IS an expected workday — demanded, then
+    /// accepted. A hire dated Monday 2026-03-16 with everything from the 17th covered gets the
+    /// coverage 422 naming EXACTLY the start day (one element — which simultaneously proves the
+    /// pre-hire weekdays 2..13 are NOT demanded); covering the start day makes the same send 200.
+    /// Fails if the intersection ever treats the start date itself as pre-hire (an exclusive-start
+    /// off-by-one), or demands any pre-hire day.
+    /// </summary>
+    [Fact]
+    public async Task HireStartDay_IsDemanded_ThenAccepted_Boundary()
+    {
+        const string emp = "t13606_boundary";
+        var hireDate = new DateOnly(2026, 3, 16); // a Monday
+        await SeedEmployeeAsync(emp);
+        await SetEmploymentWindowAsync(emp, start: hireDate, end: null);
+        await CoverMonthWithAbsencesAsync(emp, gap: null, from: hireDate.AddDays(1)); // start day left bare
+
+        using var client = EmployeeClient(emp);
+
+        // Demanded: the ordinary coverage 422 (no kind), missing EXACTLY the start day.
+        var refused = await PostSendAsync(client, emp);
+        await AssertCoverage422Async(refused);
+        var body = JsonDocument.Parse(await refused.Content.ReadAsStringAsync()).RootElement;
+        var missing = body.GetProperty("missingDays").EnumerateArray().Select(d => d.GetString()).ToList();
+        Assert.Equal(new[] { hireDate.ToString("yyyy-MM-dd") }, missing);
+
+        // Accepted: covering == start completes the month (D1: the start day is EMPLOYED).
+        await InsertAbsenceAsync(emp, hireDate, "VACATION", 7.4m);
+        await AssertOkEmployeeApprovedAsync(await PostSendAsync(client, emp));
     }
 }
