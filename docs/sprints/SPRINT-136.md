@@ -8,7 +8,7 @@
 | **End Date** | 2026-08-26 |
 | **Orchestrator Approved** | yes — 2026-08-26 |
 | **Build Verified** | yes — `dotnet build StatsTid.sln` Release **0 errors** on the final merged tree (post-Step-7a absorptions) |
-| **Test Verified** | Local: unit **1005/1005** (+10) · DemoSeed **165/165** (+12) · non-Docker regression **102/102**. **~60 new Docker-gated regression facts CI-pending** (no local Docker — the established close posture): the guard/gate/race/migration/reversal/coverage pins verify in the CI run this close push triggers, and per the S134 lesson **this push is WATCHED to verdict**. |
+| **Test Verified** | **✅ CI GREEN `32974809403`** (all 7 jobs, 2026-08-26, watched to verdict per the S134 lesson): unit **1005/1005** (+10) · DemoSeed **165/165** (+12) · regression **1672/1672** (+74 — every guard/gate/race/migration/reversal/coverage pin passed on FIRST CI execution) · smoke + E2E + frontend + docs green. One remediation on the way: the close push failed the CA2100 ratchet (3 new test-helper sites) → 4 justified suppressions + baseline ratcheted DOWN 116→115 (`0016f33`). |
 
 ## Sprint Goal
 
