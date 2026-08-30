@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="coverlet.collector" Version="10.0.1" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="7.5.1" />
     <!-- S134 TASK-13404 (QUAL-003): the composed-stack calc-audit probe seeds an APPROVED period +
          reads audit_log / segment_manifests directly against the composed Postgres (localhost:5432),
