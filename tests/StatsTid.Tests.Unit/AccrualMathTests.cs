@@ -168,4 +168,143 @@ public class AccrualMathTests
         Assert.Equal(a, b);
         Assert.Equal(b, c);
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // S137 / ADR-040 D9 — the employment END-cap (accrual stops at the last employed day).
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// The marquee D9 case: a leaver whose last employed day is 15 Mar 2026, read at the ferieår's
+    /// end (31 Aug 2026). Without the cap the read would show the full 12 months (25 d); with it
+    /// the as-of is clamped to 15 Mar, so Sep..Mar = 7 accrual months ⇒ 25 × 7/12. The running
+    /// balance stops rising at the leave date.
+    /// </summary>
+    [Fact]
+    public void EarnedToDate_AsOfAfterEmploymentEnd_ClampsToEmploymentEnd()
+    {
+        var employmentEnd = new DateOnly(2026, 3, 15);
+        var asOf = new DateOnly(2026, 8, 31);
+
+        var earned = AccrualMath.EarnedToDate(25m, 1.0m, FerieaarStart, null, asOf, employmentEnd);
+
+        Assert.Equal(25m * 7 / 12m, earned);
+        // And the uncapped read really would have been the full year — the cap is load-bearing.
+        Assert.Equal(25m, AccrualMath.EarnedToDate(25m, 1.0m, FerieaarStart, null, asOf));
+    }
+
+    /// <summary>
+    /// A leaver's curve PLATEAUS: every month-end AFTER the leave date yields the same earned as the
+    /// leave month itself (the Balance /series and year-overview matrix pin this end-to-end).
+    /// </summary>
+    [Theory]
+    [InlineData(2026, 3, 31)]
+    [InlineData(2026, 4, 30)]
+    [InlineData(2026, 6, 30)]
+    [InlineData(2026, 8, 31)]
+    [InlineData(2027, 1, 31)]
+    public void EarnedToDate_EveryAsOfAfterEmploymentEnd_EqualsTheLeaveMonthValue(int y, int m, int d)
+    {
+        var employmentEnd = new DateOnly(2026, 3, 15);
+        var atLeaveDate = AccrualMath.EarnedToDate(25m, 1.0m, FerieaarStart, null, employmentEnd, employmentEnd);
+
+        var later = AccrualMath.EarnedToDate(25m, 1.0m, FerieaarStart, null, new DateOnly(y, m, d), employmentEnd);
+
+        Assert.Equal(atLeaveDate, later);
+        Assert.Equal(25m * 7 / 12m, later);
+    }
+
+    /// <summary>
+    /// Idempotence pin (the sites-9/10 argument): when asOf is ON or BEFORE the employment end, the
+    /// cap is a no-op — the 6-arg call equals the 5-arg call exactly. This is why the ADR-033
+    /// settlement rails that already valuate AT the end date are unaffected by opting in.
+    /// </summary>
+    [Theory]
+    [InlineData(2025, 9, 30)]   // well before the end
+    [InlineData(2026, 1, 31)]
+    [InlineData(2026, 3, 14)]   // day before the end
+    [InlineData(2026, 3, 15)]   // ON the end date (inclusive — the last employed day counts)
+    public void EarnedToDate_AsOfOnOrBeforeEmploymentEnd_IsIdentity(int y, int m, int d)
+    {
+        var employmentEnd = new DateOnly(2026, 3, 15);
+        var asOf = new DateOnly(y, m, d);
+
+        var capped = AccrualMath.EarnedToDate(25m, 1.0m, FerieaarStart, null, asOf, employmentEnd);
+        var uncapped = AccrualMath.EarnedToDate(25m, 1.0m, FerieaarStart, null, asOf);
+
+        Assert.Equal(uncapped, capped);
+    }
+
+    /// <summary>
+    /// An employment end BEFORE the ferieår start ⇒ 0: the person had already left when this
+    /// ferieår began, so nothing of it was earned (the mirror of "start after asOf ⇒ 0").
+    /// </summary>
+    [Fact]
+    public void EarnedToDate_EmploymentEndBeforeFerieaarStart_ReturnsZero()
+    {
+        var employmentEnd = new DateOnly(2025, 6, 30); // left before 1 Sep 2025
+        var asOf = new DateOnly(2026, 2, 28);
+
+        var earned = AccrualMath.EarnedToDate(25m, 1.0m, FerieaarStart, null, asOf, employmentEnd);
+
+        Assert.Equal(0m, earned);
+    }
+
+    /// <summary>
+    /// End-cap and start pro-ration compose: hired 1 Nov 2025, left 15 Feb 2026, read in August ⇒
+    /// Nov,Dec,Jan,Feb = 4 months.
+    /// </summary>
+    [Fact]
+    public void EarnedToDate_MidFerieaarHireAndLeaver_ComposesStartAndEnd()
+    {
+        var employmentStart = new DateOnly(2025, 11, 1);
+        var employmentEnd = new DateOnly(2026, 2, 15);
+        var asOf = new DateOnly(2026, 8, 31);
+
+        var earned = AccrualMath.EarnedToDate(25m, 1.0m, FerieaarStart, employmentStart, asOf, employmentEnd);
+
+        Assert.Equal(25m * 4 / 12m, earned);
+    }
+
+    /// <summary>
+    /// An end date before the hire date (inconsistent data) yields 0 rather than a negative or a
+    /// throw — the clamp moves asOf before the accrual start, and the existing "before start ⇒ 0"
+    /// edge absorbs it.
+    /// </summary>
+    [Fact]
+    public void EarnedToDate_EmploymentEndBeforeEmploymentStart_ReturnsZero_NeverNegative()
+    {
+        var earned = AccrualMath.EarnedToDate(
+            25m, 1.0m, FerieaarStart,
+            employmentStart: new DateOnly(2026, 2, 1),
+            asOf: new DateOnly(2026, 8, 31),
+            employmentEnd: new DateOnly(2025, 12, 31));
+
+        Assert.Equal(0m, earned);
+    }
+
+    /// <summary>
+    /// Byte-identical legacy behaviour: a null employmentEnd equals the 5-arg call across a matrix
+    /// of quotas / fractions / hire dates / as-ofs — every pre-S137 caller that has not opted in
+    /// computes exactly what it did before.
+    /// </summary>
+    [Theory]
+    [InlineData(25, 1.0, null, 2025, 9, 30)]
+    [InlineData(25, 1.0, null, 2026, 8, 31)]
+    [InlineData(25, 1.0, null, 2027, 3, 1)]     // past the ferieår (clamps to 12)
+    [InlineData(25, 0.8, "2025-10-01", 2025, 12, 31)]
+    [InlineData(5, 1.0, null, 2025, 9, 1)]      // SPECIAL_HOLIDAY first month
+    [InlineData(5, 0.5, "2025-11-01", 2026, 2, 1)]
+    [InlineData(25, 1.0, "2026-06-01", 2026, 2, 1)] // hire after asOf ⇒ 0 in both
+    [InlineData(25, 1.0, null, 2025, 8, 31)]    // before the ferieår ⇒ 0 in both
+    public void EarnedToDate_NullEmploymentEnd_EqualsFiveArgCall_ByteIdentical(
+        int quota, double fraction, string? hire, int y, int m, int d)
+    {
+        DateOnly? employmentStart = hire is null ? null : DateOnly.Parse(hire);
+        var asOf = new DateOnly(y, m, d);
+
+        var legacy = AccrualMath.EarnedToDate((decimal)quota, (decimal)fraction, FerieaarStart, employmentStart, asOf);
+        var withNullEnd = AccrualMath.EarnedToDate((decimal)quota, (decimal)fraction, FerieaarStart, employmentStart, asOf, employmentEnd: null);
+
+        Assert.Equal(legacy, withNullEnd);
+    }
 }

@@ -148,13 +148,18 @@ public static class BalanceEndpoints
             // hard-coded 1.0m.
             var partTimeFraction = datedProfile?.PartTimeFraction ?? 1.0m;
 
-            // Get agreement config — try DB first (ACTIVE), fall back to central static config
-            var dbConfig = await configRepo.GetActiveAsync(agreementCode, user.OkVersion, ct);
+            // Get agreement config — try DB first (ACTIVE), fall back to central static config.
+            // S137 / ADR-040 D4 (QUAL-147): the OK version is the one governing the MONTH BEING
+            // READ (resolved from monthEnd — the seam's existing as-of anchor, see the dated
+            // part-time fraction above), NOT the live user.OkVersion, so a past OK24 month for a
+            // now-OK26 employee is valued under the OK24 norm.
+            var monthOkVersion = OkVersionResolver.ResolveVersion(monthEnd);
+            var dbConfig = await configRepo.GetActiveAsync(agreementCode, monthOkVersion, ct);
             var weeklyNormHours = dbConfig?.WeeklyNormHours
-                ?? CentralAgreementConfigs.TryGetConfig(agreementCode, user.OkVersion)?.WeeklyNormHours
+                ?? CentralAgreementConfigs.TryGetConfig(agreementCode, monthOkVersion)?.WeeklyNormHours
                 ?? 37.0m;
             var hasMerarbejde = dbConfig?.HasMerarbejde
-                ?? CentralAgreementConfigs.TryGetConfig(agreementCode, user.OkVersion)?.HasMerarbejde
+                ?? CentralAgreementConfigs.TryGetConfig(agreementCode, monthOkVersion)?.HasMerarbejde
                 ?? false;
 
             var weekdays = 0;
@@ -297,7 +302,9 @@ public static class BalanceEndpoints
                 // null ⇒ full-ferieår, never fail-closed). asOf = the requested MONTH-END (the same
                 // anchor as the Skema seam, so the two seams agree for the same as-of date).
                 // ferieaarStart = the entitlement-year start (reset_month). IMMEDIATE types keep
-                // their full quota as "earned".
+                // their full quota as "earned". S137 / ADR-040 D9 — the HR-managed
+                // user.EmploymentEndDate is threaded as the end-cap so a leaver's RUNNING balance
+                // stops accruing at the last employed day (null ⇒ open-ended, unchanged).
                 var isMonthlyAccrual = string.Equals(
                     ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal);
 
@@ -306,7 +313,7 @@ public static class BalanceEndpoints
                 {
                     earned = AccrualMath.EarnedToDate(
                         ec.AnnualQuota, 1.0m, entitlementYearStart,
-                        user.EmploymentStartDate, monthEnd);
+                        user.EmploymentStartDate, monthEnd, user.EmploymentEndDate);
                 }
                 else
                 {
@@ -570,7 +577,9 @@ public static class BalanceEndpoints
                 // part-time bend is gone). annualQuota comes from the dated config effective at
                 // ferieaarStart (constant across the curve). employmentStart is threaded through
                 // AccrualMath, so a mid-ferieår hire's curve starts at 0 until the accrual start
-                // (ADR-030 D6) and only ever rises.
+                // (ADR-030 D6) and only ever rises. S137 / ADR-040 D9 — employmentEnd is threaded
+                // too, so a leaver's curve PLATEAUS at the leave-month value (still monotonic
+                // non-decreasing: the post-end points repeat the last employed month's earned).
                 var points = new List<BalanceSeriesPoint>();
                 for (var i = 0; i < 12; i++)
                 {
@@ -581,7 +590,7 @@ public static class BalanceEndpoints
 
                     var earned = AccrualMath.EarnedToDate(
                         ec.AnnualQuota, 1.0m, ferieaarStart,
-                        user.EmploymentStartDate, pointMonthEnd);
+                        user.EmploymentStartDate, pointMonthEnd, user.EmploymentEndDate);
 
                     // The point matching the requested (year, month) is "now" — its earned value
                     // is byte-identical to /summary's earned for the same key (both call
@@ -1038,9 +1047,12 @@ public static class BalanceEndpoints
                         employeeId, type, entYear, ct);
                     var carryoverIn = balance?.CarryoverIn ?? 0m;
 
+                    // S137 / ADR-040 D9 — user.EmploymentEndDate caps the running saldo at the
+                    // last employed day (post-end months repeat the leave-month value).
                     var earned = string.Equals(ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
                         ? AccrualMath.EarnedToDate(
-                            ec.AnnualQuota, 1.0m, ferieaarStart, user.EmploymentStartDate, monthEnd)
+                            ec.AnnualQuota, 1.0m, ferieaarStart, user.EmploymentStartDate, monthEnd,
+                            user.EmploymentEndDate)
                         : ec.AnnualQuota; // IMMEDIATE: full quota earned up-front.
 
                     // S80 / TASK-8001 (BLOCKER 2 fix) — the afholdt subtracted must be the bookings of
@@ -1137,11 +1149,14 @@ public static class BalanceEndpoints
                 var closedUsed = closedBalance?.Used ?? 0m;
                 var closedPlanned = closedBalance?.Planned ?? 0m;
 
+                // S137 / ADR-040 D9 — user.EmploymentEndDate caps the earned-at-boundary too, so
+                // the display-only disposition projection for a leaver agrees with what the
+                // termination settlement crystallizes (earned to the end date, not the ferieår end).
                 var earnedAtBoundary =
                     string.Equals(closedConfig.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
                         ? AccrualMath.EarnedToDate(
                             closedConfig.AnnualQuota, 1.0m, closedFerieaarStart,
-                            user.EmploymentStartDate, boundaryDate)
+                            user.EmploymentStartDate, boundaryDate, user.EmploymentEndDate)
                         : closedConfig.AnnualQuota;
 
                 var transferableRaw = earnedAtBoundary + closedCarryoverIn - closedUsed - closedPlanned;
@@ -1241,9 +1256,12 @@ public static class BalanceEndpoints
                 var carryoverIn = balance?.CarryoverIn ?? 0m;
                 var used = balance?.Used ?? 0m;
                 var planned = balance?.Planned ?? 0m;
+                // S137 / ADR-040 D9 — the today-tile's running remaining stops accruing at the
+                // last employed day (user.EmploymentEndDate; null ⇒ open-ended, unchanged).
                 var earned = string.Equals(ec.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
                     ? AccrualMath.EarnedToDate(
-                        ec.AnnualQuota, 1.0m, ferieaarStart, user.EmploymentStartDate, today)
+                        ec.AnnualQuota, 1.0m, ferieaarStart, user.EmploymentStartDate, today,
+                        user.EmploymentEndDate)
                     : ec.AnnualQuota;
 
                 // ── S68 / TASK-6807 (ADR-033 D6 clarification) — settled CURRENT-ferieår tile ──

@@ -190,3 +190,47 @@ latent 500 path the moment real windows exist, without touching the profile reso
   windowless exports.
 - **SYSTEM_TARGET.md** gains an employee-lifecycle section stating the requirement this ADR
   implements (the spec is currently silent on hiring, position change, and termination-as-process).
+- **D9 premise precision note (S137, 2026-08-26 owner ruling OQ-1a):** the sentence "closing the current
+  asymmetry where only the settlement crystallization caps correctly" was true for the VACATION settlement
+  sites (valued at `valuationBoundary`, sites 9/10) but NOT for the SPECIAL_HOLIDAY settlement capture
+  (`VacationSettlementService` site 8), which computed earned-to-`AccrualEnd` (31 Dec) regardless of the
+  leave date — a mid-year leaver was over-credited. Fixed S137 (TASK-13703) as a deliberate settlement-value change,
+  RED-on-old by ARITHMETIC (the unit pin asserts the uncapped call still returns the full quota) plus documented old values — the Docker settlement pin verifies the NEW value in CI — on the ADR-033 rails (a 30-Jun leaver settles 2.5 særlige feriedage where
+  the old code produced 5.0). Via the settlement poller the over-count was latent (the S80 BLOCKER-1 passed-
+  end-date guard fires first); the cap is what makes the value right when the termination-interaction slice
+  routes leavers here.
+- **D5 × ADR-016 D4 — employment edges are TRUNCATIONS, not splits (owner ruling 2026-09-02, S137
+  TASK-13707):** D5's typed segments collided with ADR-016 D4's refusal of interior boundaries for
+  `AlignedWindow`/`Reject` rules — in the live rule set (four AlignedWindow rules) every mid-month hire or
+  leave would have REFUSED the month instead of paying it. Ruled: the D4 refusal keys on how many EMPLOYED
+  segments a whole-window rule would be EVALUATED in, not on boundary count. A whole-window rule is unsafe to
+  SPLIT because two half-evaluations cannot be merged; an employment edge does not split evaluation (the
+  NOT_EMPLOYED side evaluates nothing), so the rule runs once over a shorter span — the same class of input
+  it already sees at every month edge. ≤ 1 EMPLOYED segment plans; ≥ 2 (a profile change while employed, two
+  spells) still refuses. Windowless callers are behavior-identical. The remaining genuine-split refusal is
+  registered as QUAL-149 (the S64 F4-1(b) gap with its true scope) — the "mid-month fraction change pays per
+  span" AC of Increment 2 is proven under the straddle-safe test rule set and pinned as REFUSED under the
+  live set until norm/overtime are reclassified with a pro-rating merger.
+- **D7 precision note (S137 Reviewer NOTE, 2026-09-02):** the planner's D4 refusal messages carry the
+  period, the EMPLOYED-segment count and the interior boundary CAUSE names (e.g. `EmploymentStarted`) — never
+  a segment date. On a ≥ 2-EMPLOYED refusal that message can reveal that an employment edge EXISTS inside the
+  period, via the Payroll host's unhandled-exception path only (audience: payroll operators; no client-facing
+  handler echoes it). Acceptable under D7 as written — recorded so a later sweep does not re-find it. **Two further
+  precisions (S137 Step-7a close):** export-line `PeriodStart/PeriodEnd` stamps that equal a hire or leave date are the
+  payroll boundary's LEGITIMATE content — the payroll system must know the paid period; D7's word "export" does not bar
+  them. The remaining segment-date-bearing Payroll-host diagnostics (incl. the resolver's own fail-loud throw on a
+  data-integrity fault) are registered as QUAL-151 for the production-hardening pass (log-redaction posture).
+- **D2 × admin create — the DEFAULT hire date (owner ruling 2026-09-02, S137 TASK-13708):** an employee
+  created through the admin endpoint WITHOUT an employment start date used to get NULL (D2 "unbounded past")
+  while the same transaction stamped the first profile row `effective_from = today`. With D5 live, that
+  creation month had a mid-month profile boundary and no employment edge — a genuine split (refused) for
+  payroll and a month-start profile-not-found 500 for compliance. Ruled: when omitted, the hire date DEFAULTS
+  to the profile's `effective_from` ("unknown hire date" = "hired today"); explicitly supplied dates are
+  unchanged; seeded/legacy NULLs keep D2's unbounded meaning. The audit CREATED row records that the date was
+  defaulted. The alternatives — register the residual, or make the field mandatory — were presented; the
+  default keeps the S136 optional wire contract while making every new hire's first month plannable by
+  construction. **Consequence to know (S137 Step-7a Reviewer WARNING, recorded):** the defaulted date also
+  becomes the employee's window START for the Increment-1 write gates — an admin who creates a person WITHOUT a
+  hire date can no longer back-fill that person's pre-creation registrations until the hire date is corrected
+  (supply it at create, or edit it first). The admin create form surfacing the hire date pre-filled with
+  today and editable (and an edit path that allows backdating) is the Increment-4 lifecycle-UX item.

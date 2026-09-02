@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -39,6 +40,14 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// short-circuit path. A genuine in-tx rollback (e.g. on outbox throw) is covered
 /// by the retired <c>Outbox.AdminAtomicTests</c>' related sub-shape (i) test against
 /// <c>POST /api/admin/organizations</c> + S26 <c>TxContractTests</c>.
+/// </para>
+///
+/// <para>
+/// S136 / S137 hire-date pins (bottom of the class): the optional
+/// <c>employmentStartDate</c> is stored verbatim when supplied and — since the S137 /
+/// TASK-13708 owner ruling (2026-09-02) — DEFAULTS to the profile row's
+/// <c>effective_from</c> (today) when omitted, with the CREATED <c>users_audit</c> row
+/// recording the effective value plus an <c>employmentStartDateDefaulted</c> marker.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -251,14 +260,17 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
 
     // ═════════════════════════════════════════════════════════════════════════
     // S136 / ADR-040 — optional employmentStartDate on create: stored + audited.
+    // S137 / TASK-13708 — omitted ⇒ defaults to the profile's effective_from.
     // ═════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Create WITH <c>employmentStartDate</c> ⇒ the value lands in
+    /// Create WITH <c>employmentStartDate</c> ⇒ the value lands VERBATIM in
     /// <c>users.employment_start_date</c> AND in the CREATED <c>users_audit.new_data</c>
-    /// payload. The audit half is load-bearing: <c>new_data</c> is a hand-enumerated
-    /// subset (not a full-row snapshot), so a field missing there is a field whose
-    /// origin is unprovable after the fact (Auditability invariant).
+    /// payload, with the S137 <c>employmentStartDateDefaulted</c> marker <c>false</c>
+    /// (the admin supplied it; the system did not default it). The audit half is
+    /// load-bearing: <c>new_data</c> is a hand-enumerated subset (not a full-row
+    /// snapshot), so a field missing there is a field whose origin is unprovable after
+    /// the fact (Auditability invariant).
     /// </summary>
     [Fact]
     public async Task AdminUserCreate_WithEmploymentStartDate_StoresAndAuditsIt()
@@ -301,35 +313,68 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
         }
 
         // Audited: the CREATED users_audit row's new_data contains the hire date
-        // (DateOnly serializes as ISO yyyy-MM-dd).
+        // (DateOnly serializes as ISO yyyy-MM-dd) AND the S137 marker says it was
+        // SUPPLIED, not defaulted.
         await using (var auditCmd = new NpgsqlCommand(
             """
-            SELECT new_data->>'employmentStartDate'
+            SELECT new_data->>'employmentStartDate',
+                   (new_data->>'employmentStartDateDefaulted')::boolean
             FROM users_audit
             WHERE user_id = @userId AND action = 'CREATED'
             """, conn))
         {
             auditCmd.Parameters.AddWithValue("userId", newUserId);
-            var audited = await auditCmd.ExecuteScalarAsync();
-            Assert.Equal("2026-03-01", audited);
+            await using var reader = await auditCmd.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync(),
+                $"Expected a CREATED users_audit row for '{newUserId}'.");
+            Assert.Equal("2026-03-01", reader.GetString(0));
+            Assert.False(reader.IsDBNull(1),
+                "new_data must carry employmentStartDateDefaulted (S137 / TASK-13708).");
+            Assert.False(reader.GetBoolean(1),
+                "A supplied hire date must audit as employmentStartDateDefaulted=false.");
         }
     }
 
     /// <summary>
-    /// Create WITHOUT <c>employmentStartDate</c> ⇒ NULL stored (ADR-040 D2:
-    /// NULL = "unbounded past" — every employment-window guard passes through),
-    /// and everything else about the create is unchanged: the CREATED audit row
-    /// still carries the other hand-enumerated fields, and the S31 live
-    /// employee_profiles row still exists.
+    /// Create WITHOUT <c>employmentStartDate</c> ⇒ the stored hire date IS the live
+    /// profile row's <c>effective_from</c> (today, UTC) — never NULL from this path.
+    ///
+    /// <para>
+    /// FLIPPED PIN — S137 / TASK-13708, OWNER RULING 2026-09-02 ("default the hire date
+    /// to the profile date at admin create"). The S136 version of this test
+    /// (<c>AdminUserCreate_WithoutEmploymentStartDate_StoresNull</c>) asserted the OLD
+    /// expectation: omitted ⇒ <c>users.employment_start_date IS NULL</c> (ADR-040 D2
+    /// "unbounded past") and <c>new_data->>'employmentStartDate'</c> audited as JSON null.
+    /// That shape is now WRONG by ruling, so this test is RED against the S136 handler by
+    /// construction. WHY it changed (plain language): S137 made profile effective dates
+    /// payroll segment boundaries; a hire without a recorded hire date got a profile row
+    /// dated today inside an unbounded employment window, so the creation month held a
+    /// mid-month profile boundary with no employment edge to explain it — the planner
+    /// refused the month and the compliance check fell into the old profile-not-found 500.
+    /// Recording the hire date makes that same date an EmploymentStarted edge, which
+    /// outranks the profile-change cause and makes the first month plannable.
+    /// </para>
+    ///
+    /// <para>
+    /// Pins: (1) users.employment_start_date == live employee_profiles.effective_from,
+    /// both non-NULL, read in ONE statement so they are compared on the same snapshot;
+    /// (2) the CREATED users_audit row carries that EFFECTIVE date with
+    /// <c>employmentStartDateDefaulted = true</c> (an auditor can tell a defaulted date
+    /// from a coincidentally-supplied one); (3) the EmployeeProfileCreated outbox event's
+    /// effectiveFrom equals the same date (row/event parity, ADR-018 D3 — now shared-
+    /// variable by construction in the handler); (4) the other hand-enumerated audit fields
+    /// and the S31 single-live-profile invariant are unchanged. Seeded/legacy NULLs are
+    /// NOT in scope here — the ruling changes only what a NEW admin create stores.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task AdminUserCreate_WithoutEmploymentStartDate_StoresNull()
+    public async Task AdminUserCreate_WithoutEmploymentStartDate_DefaultsToProfileEffectiveFrom()
     {
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintAdminToken());
 
-        var newUserId = "emp_s136_noesd_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var newUserId = "emp_s137_dflt_" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
         // Deliberately the pre-S136 body shape — no employmentStartDate key at all.
         var body = new
@@ -337,7 +382,7 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
             userId = newUserId,
             username = newUserId,
             password = "TestPassword123!",
-            displayName = "S136 No-Hire-Date Test User",
+            displayName = "S137 Defaulted-Hire-Date Test User",
             email = (string?)null,
             primaryOrgId = "STY01",
             agreementCode = "AC",
@@ -350,23 +395,46 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
 
-        // Stored: NULL (ADR-040 D2 unbounded past), not a defaulted date.
-        await using (var usersCmd = new NpgsqlCommand(
-            "SELECT employment_start_date FROM users WHERE user_id = @userId", conn))
+        // (1) Stored: users.employment_start_date == the LIVE profile row's effective_from,
+        //     neither NULL. One statement, one snapshot — the two columns are compared as
+        //     the database holds them, not via two reads that could straddle midnight.
+        DateOnly effectiveFrom;
+        await using (var joinCmd = new NpgsqlCommand(
+            """
+            SELECT u.employment_start_date, p.effective_from
+            FROM users u
+            JOIN employee_profiles p
+              ON p.employee_id = u.user_id AND p.effective_to IS NULL
+            WHERE u.user_id = @userId
+            """, conn))
         {
-            usersCmd.Parameters.AddWithValue("userId", newUserId);
-            await using var reader = await usersCmd.ExecuteReaderAsync();
-            Assert.True(await reader.ReadAsync(), $"Expected a users row for '{newUserId}'.");
-            Assert.True(reader.IsDBNull(0),
-                "employment_start_date must be NULL when the request omits it (ADR-040 D2).");
+            joinCmd.Parameters.AddWithValue("userId", newUserId);
+            await using var reader = await joinCmd.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync(),
+                $"Expected a users row joined to one live employee_profiles row for '{newUserId}'.");
+            Assert.False(reader.IsDBNull(0),
+                "employment_start_date must NOT be NULL when omitted — S137 / TASK-13708 defaults it " +
+                "to the profile's effective_from (the S136 'omitted ⇒ NULL' behaviour is retired).");
+            Assert.False(reader.IsDBNull(1), "The live profile row must carry effective_from.");
+            var storedStart = reader.GetFieldValue<DateOnly>(0);
+            effectiveFrom = reader.GetFieldValue<DateOnly>(1);
+            Assert.Equal(effectiveFrom, storedStart);
+            // "Hired today": the shared value is today (UTC). ±1 day tolerates a midnight
+            // straddle between the POST and this read; anything else is a wrong default.
+            var utcToday = DateOnly.FromDateTime(DateTime.UtcNow);
+            Assert.InRange(storedStart.DayNumber, utcToday.DayNumber - 1, utcToday.DayNumber + 1);
+            Assert.False(await reader.ReadAsync(),
+                $"Expected exactly one live profile row for '{newUserId}', found more than one.");
         }
+        var effectiveFromIso = effectiveFrom.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-        // Audit row unchanged in shape: the key is present (recorded as JSON null —
-        // the honest "no hire date was sent" fact) and the pre-existing fields survive.
+        // (2) Audited: the CREATED users_audit row records the EFFECTIVE (defaulted) date —
+        //     not JSON null as in S136 — plus the marker that says the system defaulted it.
+        //     The pre-existing hand-enumerated fields survive.
         await using (var auditCmd = new NpgsqlCommand(
             """
-            SELECT jsonb_exists(new_data, 'employmentStartDate'),
-                   new_data->>'employmentStartDate',
+            SELECT new_data->>'employmentStartDate',
+                   (new_data->>'employmentStartDateDefaulted')::boolean,
                    new_data->>'displayName',
                    new_data->>'agreementCode'
             FROM users_audit
@@ -377,14 +445,34 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
             await using var reader = await auditCmd.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync(),
                 $"Expected a CREATED users_audit row for '{newUserId}'.");
-            Assert.True(reader.GetBoolean(0),
-                "new_data must still enumerate employmentStartDate (as JSON null) when omitted.");
-            Assert.True(reader.IsDBNull(1), "Omitted hire date must audit as JSON null.");
-            Assert.Equal("S136 No-Hire-Date Test User", reader.GetString(2));
+            Assert.False(reader.IsDBNull(0),
+                "new_data.employmentStartDate must be the effective stored date, not JSON null.");
+            Assert.Equal(effectiveFromIso, reader.GetString(0));
+            Assert.False(reader.IsDBNull(1),
+                "new_data must carry employmentStartDateDefaulted (S137 / TASK-13708).");
+            Assert.True(reader.GetBoolean(1),
+                "An omitted hire date must audit as employmentStartDateDefaulted=true.");
+            Assert.Equal("S137 Defaulted-Hire-Date Test User", reader.GetString(2));
             Assert.Equal("AC", reader.GetString(3));
         }
 
-        // Everything else unchanged: the S31 live profile row still rides the same tx.
+        // (3) Row/event parity: the EmployeeProfileCreated event on the profile stream
+        //     carries the SAME effectiveFrom as the row (and therefore as the hire date).
+        //     The handler now feeds one variable to the row, the event and the hire date.
+        var profileStreamId = $"employee-profile-{newUserId}";
+        await using (var profileEventCmd = new NpgsqlCommand(
+            """
+            SELECT event_payload ->> 'effectiveFrom'
+            FROM outbox_events
+            WHERE stream_id = @streamId AND event_type = 'EmployeeProfileCreated'
+            """, conn))
+        {
+            profileEventCmd.Parameters.AddWithValue("streamId", profileStreamId);
+            var eventEffectiveFrom = await profileEventCmd.ExecuteScalarAsync();
+            Assert.Equal(effectiveFromIso, eventEffectiveFrom);
+        }
+
+        // (4) Everything else unchanged: the S31 live profile row still rides the same tx.
         await using (var profileCmd = new NpgsqlCommand(
             """
             SELECT COUNT(*) FROM employee_profiles

@@ -18,15 +18,20 @@ public interface IEmploymentProfileResolver
     /// <paramref name="asOfDate"/>. Never throws on missing-row — caller decides
     /// fail-closed vs fallback semantic per ADR-023 D3.
     ///
-    /// Dated fields (<c>weekly_norm_hours</c>, <c>part_time_fraction</c>, <c>position</c>)
-    /// are sourced from <c>employee_profiles</c> with the end-exclusive predicate
+    /// Dated fields (<c>part_time_fraction</c>, <c>position</c>) are sourced from
+    /// <c>employee_profiles</c> with the end-exclusive predicate
     /// <c>effective_from &lt;= asOfDate AND (effective_to IS NULL OR effective_to &gt; asOfDate)</c>.
     /// <c>agreement_code</c> is sourced from <c>user_agreement_codes</c> with the
     /// same end-exclusive predicate per S34 / ADR-023 D2 option (b) — closes
     /// ADR-016 D10 retroactive-replay determinism for the 4th and final rule-
-    /// engine input. Remaining sibling fields (<c>ok_version</c>,
-    /// <c>employment_category</c>, <c>primary_org_id</c>) are joined live from
-    /// <c>users</c> — none feeds replay-sensitive rule-engine logic.
+    /// engine input. <c>ok_version</c> is a PURE FUNCTION OF THE DATE
+    /// (<c>OkVersionResolver.ResolveVersion(asOfDate)</c>, ADR-003) — S137 / ADR-040 D4
+    /// moved that overlay INTO the implementation so every consumer is correct by
+    /// construction (QUAL-147 closed; before S137 it was joined live from <c>users</c>).
+    /// <c>employment_category</c> is the DATED <c>employee_profiles</c> column since S137,
+    /// with a COALESCE to the live <c>users</c> value (dated == live by construction this
+    /// increment). The one remaining live-joined sibling is <c>primary_org_id</c>
+    /// (org/unit membership history is a named follow-up program, ADR-040 D4 tail).
     /// </summary>
     Task<EmploymentProfile?> GetByEmployeeIdAtAsync(
         string employeeId, DateOnly asOfDate, CancellationToken ct = default);

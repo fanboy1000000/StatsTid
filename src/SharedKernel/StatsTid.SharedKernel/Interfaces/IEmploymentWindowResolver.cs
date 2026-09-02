@@ -55,4 +55,34 @@ public interface IEmploymentWindowResolver
     /// </summary>
     Task<EmploymentWindowStatus> GetStatusAsync(
         string employeeId, DateOnly date, CancellationToken ct = default);
+
+    /// <summary>
+    /// S137 / ADR-040 D5 — the RANGE-scoped window read: every employment spell of
+    /// <paramref name="employeeId"/> that overlaps <c>[from, to]</c> (both INCLUSIVE),
+    /// as raw <see cref="EmploymentWindow"/> date pairs. Exists because segmentation
+    /// consumers (the payroll planner) need TRANSITION DATES to place boundaries, not a
+    /// per-date EMPLOYED/NOT_EMPLOYED verdict — a per-date loop over
+    /// <see cref="GetStatusAsync(string, DateOnly, CancellationToken)"/> would be O(days)
+    /// round-trips and still not name the edges.
+    ///
+    /// <para>
+    /// <b>Deliberately LIST-shaped (spells-proof):</b> today this returns 0-or-1 entries
+    /// — the single <c>users</c>-row window, when it overlaps <c>[from, to]</c> (a
+    /// both-NULL window is unbounded per D2 and so always counts as ONE unbounded
+    /// entry). When the deferred spells increment (re-hire, ADR-040 D1 tail) lands, it
+    /// returns the genuine list — so "spells = storage + resolver only" holds for this
+    /// method too: no consumer signature changes. An EMPTY list means "the window is
+    /// known and no employed day falls in <c>[from, to]</c>" — callers must treat it as
+    /// fully NOT_EMPLOYED, never as "no information".
+    /// </para>
+    ///
+    /// <para>
+    /// Same contract as <see cref="GetStatusAsync(string, DateOnly, CancellationToken)"/>
+    /// otherwise: self-managed connection, NO <c>is_active</c> filtering (the window is a
+    /// date fact — D3), and fail-loud <see cref="InvalidOperationException"/> when no
+    /// <c>users</c> row exists for the employee.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<EmploymentWindow>> GetWindowsAsync(
+        string employeeId, DateOnly from, DateOnly to, CancellationToken ct = default);
 }

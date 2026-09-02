@@ -383,7 +383,13 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryRuleClassificationProvider(TestFixtures.RuleSet),
             localAgreementProfileRepo: null,
-            profileResolver: resolver);
+            profileResolver: resolver,
+            // S137 Step-5a (ADR-040 D7 coupling): a profile resolver WITHOUT the employment-window
+            // resolver is refused by the PCS constructor — that pairing is exactly the dropped-DI
+            // shape that would silently pay a leaver for the whole month. The real self-managed
+            // resolver is harmless here: plan-first calls never consult it, and the shim would read
+            // the seeded users row's unbounded window → every segment EMPLOYED, as before.
+            employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory));
     }
 
     // ─── QUAL-015: resolver-sensitive rule-engine stub ───────────────────────

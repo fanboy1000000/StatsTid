@@ -41,20 +41,44 @@ public static class AccrualMath
     /// does NOT fail-closed: a missing hire date must not wrongly deny already-earned vacation
     /// (opposite polarity from the S59 DOB age gate, which gates eligibility). An employment
     /// start AFTER <paramref name="asOf"/> yields zero earned.</para>
+    ///
+    /// <para><b>Accrual end (leavers — S137 / ADR-040 D9):</b> accrual stops at the last employed
+    /// day. When <paramref name="employmentEnd"/> has a value and <paramref name="asOf"/> falls
+    /// AFTER it, <paramref name="asOf"/> is clamped to <paramref name="employmentEnd"/> BEFORE the
+    /// month arithmetic, so the running balance a leaver (or HR) sees stops rising at the leave
+    /// date instead of accruing all the way to the ferieår end. The clamp lives HERE, inside the
+    /// single-source math, never at a call site (the S61 single-source guard forbids call-site
+    /// formula work). Idempotent by construction when <c>asOf &lt;= employmentEnd</c> — an in-window
+    /// as-of is untouched, which is why the settlement rails that already valuate AT the end date
+    /// (ADR-033) are unaffected when they opt in. A null <paramref name="employmentEnd"/> means
+    /// open-ended employment — today's behaviour, byte-identical for every pre-S137 caller. An
+    /// <paramref name="employmentEnd"/> BEFORE the accrual start yields zero earned (nothing was
+    /// earned in a ferieår the person had already left — the mirror of "start after asOf ⇒ 0").</para>
     /// </summary>
     /// <param name="annualQuota">Full annual entitlement in days (e.g. VACATION 25, SPECIAL_HOLIDAY 5).</param>
     /// <param name="partTimeFraction">Dated employment fraction; 1.0 = full-time.</param>
     /// <param name="ferieaarStart">First day of the current ferieår (e.g. 1 Sep).</param>
     /// <param name="employmentStart">HR-managed hire date; null ⇒ full-ferieår assumption.</param>
     /// <param name="asOf">The consumption as-of date (absence date / month-end). Never wall-clock.</param>
+    /// <param name="employmentEnd">HR-managed LAST employed day (INCLUSIVE, ADR-040 D1); null ⇒
+    /// open-ended (no end-cap — the pre-S137 behaviour). Optional and trailing so every existing
+    /// caller compiles unchanged and opts in explicitly.</param>
     /// <returns>Exact fractional days earned so far in the ferieår (never negative).</returns>
     public static decimal EarnedToDate(
         decimal annualQuota,
         decimal partTimeFraction,
         DateOnly ferieaarStart,
         DateOnly? employmentStart,
-        DateOnly asOf)
+        DateOnly asOf,
+        DateOnly? employmentEnd = null)
     {
+        // S137 / ADR-040 D9 — end-cap: nothing accrues after the last employed day. Clamp the
+        // as-of to the spell end BEFORE counting months; a null end is open-ended (no-op).
+        if (employmentEnd.HasValue && asOf > employmentEnd.Value)
+        {
+            asOf = employmentEnd.Value;
+        }
+
         // Accrual begins at the later of ferieår start and employment start.
         var accrualStart = ferieaarStart;
         if (employmentStart.HasValue && employmentStart.Value > accrualStart)

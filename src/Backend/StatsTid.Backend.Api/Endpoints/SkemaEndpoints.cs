@@ -1354,9 +1354,12 @@ public static class SkemaEndpoints
                             // SPECIAL_HOLIDAY (and any other MONTHLY_ACCRUAL type) — no forskud
                             // (ferieaftale §13 stk.4): capped at earned-to-date AS-OF the absence
                             // date (asOf stays firstAbsenceDate, NOT the ferieår end).
+                            // S137 / ADR-040 D9 — user.EmploymentEndDate threaded for uniformity with
+                            // the Balance reads; idempotent here post-Increment-1 (bookings are
+                            // window-gated, so firstAbsenceDate <= end whenever this runs).
                             accruableCap = AccrualMath.EarnedToDate(
                                 config.AnnualQuota, 1.0m, entitlementYearStart,
-                                user.EmploymentStartDate, firstAbsenceDate);
+                                user.EmploymentStartDate, firstAbsenceDate, user.EmploymentEndDate);
                         }
 
                         guardCap = accruableCap;                       // carryover-EXCLUDED

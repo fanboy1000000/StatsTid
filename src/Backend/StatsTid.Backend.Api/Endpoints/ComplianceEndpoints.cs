@@ -14,6 +14,40 @@ namespace StatsTid.Backend.Api.Endpoints;
 
 public static class ComplianceEndpoints
 {
+    /// <summary>
+    /// The RuleId the rule engine's legacy <c>/api/rules/check-compliance</c> entry point echoes
+    /// (<c>RestPeriodRule.RuleId</c>). Mirrored as a string because the Backend may not reference
+    /// the RuleEngine assembly (PAT-005 keeps that boundary HTTP-only) — used ONLY to construct the
+    /// S137 "nothing to check" empty result in the SAME wire shape the rule engine would return.
+    /// </summary>
+    private const string ComplianceRuleId = "REST_PERIOD_CHECK";
+
+    /// <summary>
+    /// S137 / ADR-040 D10 — the first employed day of <c>[monthStart, monthEnd]</c> given the
+    /// employment windows overlapping it, or <c>null</c> when the union of
+    /// (each window ∩ the month) is EMPTY (no employed day in the month). Pure: each window is
+    /// clipped to the month with the ADR-040 D1/D2 semantics (end INCLUSIVE; a <c>null</c> side is
+    /// unbounded, so it clips to the month edge), and the earliest clipped start wins. Written over
+    /// a LIST so the deferred spells increment (re-hire) changes nothing here. Public so the pure
+    /// union semantics are pinned by a non-Docker test (ComplianceWindowUnionTests) — the HTTP
+    /// handler is the only production caller.
+    /// </summary>
+    public static DateOnly? FirstEmployedDayInMonth(
+        IReadOnlyList<EmploymentWindow> windows, DateOnly monthStart, DateOnly monthEnd)
+    {
+        DateOnly? first = null;
+        foreach (var window in windows)
+        {
+            var clippedStart = window.Start is { } s && s > monthStart ? s : monthStart;
+            var clippedEnd = window.End is { } e && e < monthEnd ? e : monthEnd;
+            if (clippedStart > clippedEnd)
+                continue; // this window contributes no day to the month
+            if (first is null || clippedStart < first.Value)
+                first = clippedStart;
+        }
+        return first;
+    }
+
     public static WebApplication MapComplianceEndpoints(this WebApplication app)
     {
         // ── GET /api/compliance/{employeeId}/period — Check compliance for a period ──
@@ -25,6 +59,8 @@ public static class ComplianceEndpoints
             IHttpClientFactory httpClientFactory,
             TimeEntryProjectionRepository timeEntryProjectionRepo,
             IEmploymentProfileResolver profileResolver,
+            // S137 / ADR-040 D7/D10 — the employment-window fact, read server-side (never on the wire).
+            IEmploymentWindowResolver windowResolver,
             OrgScopeValidator scopeValidator,
             DesignatedApproverAuthorizer designatedAuthorizer,
             // S128 / TASK-12804 (RES-002) — period resolution for the leader-tier month gate.
@@ -85,6 +121,39 @@ public static class ComplianceEndpoints
                     return ApprovalReadTier.MonthNotSubmittedForbidden();
             }
 
+            // ── S137 / ADR-040 D7 + D10 — ask "employed?" BEFORE asking "what profile?" ────────
+            // WHY: since S136 a new employee's profile row starts at the HIRE date (not at the
+            // beginning of time), so resolving the profile at monthStart for a mid-month hire hits
+            // the resolver's fail-closed null → EmployeeProfileNotFoundException → 500 — for a
+            // perfectly ordinary month. And a month entirely BEFORE the hire (or entirely AFTER the
+            // leave date) has nothing to check at all. So the window is consulted first, server-side
+            // (D7: employment dates never enter the wire DTO, the error body, or the response), and
+            // the profile is resolved at the FIRST employed day of the month. The check itself keeps
+            // whole-month geometry (ADR-040 Assumption 3 / D6): periodStart/periodEnd are still the
+            // calendar month — Increment 1's write gates already keep out-of-window entries from
+            // existing, so the rule engine sees exactly the employed span's registrations.
+            //
+            // Specified over ALL returned windows (the union of each window ∩ the month) so the
+            // deferred spells increment (re-hire) needs no consumer change here: today the resolver
+            // returns 0-or-1 windows; an EMPTY list means "known — no employed day in this month"
+            // (never "no information", per the IEmploymentWindowResolver contract).
+            var windows = await windowResolver.GetWindowsAsync(employeeId, monthStart, monthEnd, ct);
+            var firstEmployedDay = FirstEmployedDayInMonth(windows, monthStart, monthEnd);
+            if (firstEmployedDay is null)
+            {
+                // Nothing to check: no employed day falls inside this month. Return the EXISTING
+                // wire shape with zero violations — no profile resolution, no rule-engine call.
+                // (Same fields the rule engine would echo for an empty period; no new wire fields.)
+                return Results.Ok(new ComplianceCheckResult
+                {
+                    RuleId = ComplianceRuleId,
+                    EmployeeId = employeeId,
+                    Success = true,
+                    Violations = Array.Empty<ComplianceViolation>(),
+                    Warnings = Array.Empty<ComplianceViolation>(),
+                });
+            }
+
             // Fetch time entries from projection (sync-in-tx with the POST that wrote them — read-your-write per ADR-018 D12).
             // ADR-039 D5b (GAP-B, no dropped hours at a period edge): widen the read's LOWER bound
             // by one day. A midnight-crossing shift filed on the LAST day of the PREVIOUS month
@@ -140,11 +209,21 @@ public static class ComplianceEndpoints
             // EmploymentProfileResolver. Non-PCS rule-engine HTTP caller →
             // fail-closed on null (caller maps to 500 via existing middleware per
             // ADR-023 D3). Replaces hardcoded WeeklyNormHours=37.0m +
-            // EmploymentCategory="STANDARD" defaults; dated weekly_norm_hours +
-            // live-joined agreement_code/ok_version/employment_category come
-            // from the resolver per ADR-023 D2 (employment_category gap is
-            // Phase 4e launch-blocking).
-            var profile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, monthStart, ct)
+            // EmploymentCategory="STANDARD" defaults. Post-S137 (ADR-040 D4) every field the
+            // resolver returns is dated: part-time fraction / position / employment_category
+            // from employee_profiles, agreement_code from user_agreement_codes, and ok_version
+            // resolved from the as-of DATE itself (QUAL-147 closed — no per-caller overlay).
+            // S137 / ADR-040 D10 — the as-of is the FIRST EMPLOYED DAY of the month (see the
+            // window read above): monthStart for a windowless / already-employed employee (the
+            // pre-S137 anchor, byte-identical), the hire date for a mid-month hire.
+            // ADR-040 D7 (S137 Step-7a Codex WARNING, absorbed): the fail-closed exception is
+            // anchored on monthStart — CALLER INPUT — not on firstEmployedDay. For a mid-month
+            // hire firstEmployedDay IS the hire date, and EmployeeProfileNotFoundException puts
+            // its as-of date in the message, which reaches exception logs and could reach a
+            // detailed 500 body — an employment date must not leak through either. The resolver
+            // was still asked at firstEmployedDay (the correct D10 as-of); only the reported
+            // anchor is the month the caller named. Diagnostics keep the month + employee id.
+            var profile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, firstEmployedDay.Value, ct)
                 ?? throw new EmployeeProfileNotFoundException(employeeId, monthStart);
 
             var complianceRequest = new

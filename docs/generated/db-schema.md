@@ -286,6 +286,7 @@
 | version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
+| employment_category | TEXT | Yes |  |  |
 
 **Indexes:**
 - `idx_employee_profiles_live` (UNIQUE) on (employee_id) WHERE effective_to IS NULL

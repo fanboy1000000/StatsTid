@@ -106,6 +106,8 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
 
         Assert.True(result.Success);
         Assert.Equal(manifestId, result.ManifestId);
+
+        await AssertStoredSegmentReplaysToEmployedAsync(manifestId);
     }
 
     // -------------------------------------------------------------------
@@ -131,6 +133,23 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
 
         Assert.True(result.Success);
         Assert.Equal(manifestId, result.ManifestId);
+
+        await AssertStoredSegmentReplaysToEmployedAsync(manifestId);
+    }
+
+    /// <summary>
+    /// S137 / ADR-040 D5's mandated replay pin: both legacy rows above are PRE-D5 shapes —
+    /// their JSON has NO <c>employmentStatus</c> key — and the deserialized segment MUST
+    /// default to EMPLOYED. A NOT_EMPLOYED default would make historical replays silently
+    /// evaluate zero rules and emit zero export lines. (The default is structural:
+    /// EMPLOYED is pinned to 0 in <see cref="EmploymentWindowStatus"/>, and the
+    /// <c>PlannedSegment</c> constructor parameter defaults to it on an absent key.)
+    /// </summary>
+    private async Task AssertStoredSegmentReplaysToEmployedAsync(Guid manifestId)
+    {
+        var storedJson = await ReadSegmentsJsonAsync(manifestId);
+        var segment = Assert.Single(TestFixtures.DeserializeSegments(storedJson));
+        Assert.Equal(EmploymentWindowStatus.EMPLOYED, segment.EmploymentStatus);
     }
 
     // -------------------------------------------------------------------

@@ -232,6 +232,105 @@ public sealed class EmploymentWindowResolverTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════
+    // S137 / ADR-040 D5 — GetWindowsAsync (the range-scoped, spells-proof
+    // list read for segmentation): 0-or-1 entries today; an EMPTY list means
+    // "window known, nothing employed in [from, to]" — never "no information".
+    // Same D1 (end-inclusive) / D2 (NULL-unbounded) / fail-loud contract as
+    // GetStatusAsync.
+    // ═════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task GetWindowsAsync_OverlappingRange_ReturnsSingleWindowVerbatim()
+    {
+        var windows = await _selfManaged.GetWindowsAsync(
+            BoundedEmployee, new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30));
+
+        var window = Assert.Single(windows);
+        Assert.Equal(Start, window.Start);
+        Assert.Equal(End, window.End);
+    }
+
+    /// <summary>Boundary overlap, both fenceposts: a range whose LAST day is the window
+    /// start, and one whose FIRST day is the (inclusive) window end, both overlap —
+    /// [from, to] and [start, end] are all inclusive (ADR-040 D1).</summary>
+    [Theory]
+    [InlineData("2026-03-01", "2026-03-10")] // to == start
+    [InlineData("2026-06-20", "2026-06-30")] // from == end (last day employed)
+    public async Task GetWindowsAsync_RangeTouchingWindowEdge_Overlaps(string from, string to)
+    {
+        var windows = await _selfManaged.GetWindowsAsync(BoundedEmployee, D(from), D(to));
+
+        Assert.Single(windows);
+    }
+
+    /// <summary>Empty list = "window known, no employed day in range" — the caller-side
+    /// meaning is fully NOT_EMPLOYED, never "no information" (the planner types every
+    /// segment NOT_EMPLOYED on an empty list).</summary>
+    [Theory]
+    [InlineData("2026-01-01", "2026-03-09")] // range ends the day before the window opens
+    [InlineData("2026-06-21", "2026-07-31")] // range starts the day after the last employed day
+    public async Task GetWindowsAsync_NonOverlappingRange_ReturnsEmpty(string from, string to)
+    {
+        var windows = await _selfManaged.GetWindowsAsync(BoundedEmployee, D(from), D(to));
+
+        Assert.Empty(windows);
+    }
+
+    /// <summary>D2: a both-NULL window is unbounded and counts as ONE unbounded entry
+    /// for ANY range — this is what keeps every existing (windowless) employee EMPLOYED
+    /// with no backfill.</summary>
+    [Fact]
+    public async Task GetWindowsAsync_BothNullWindow_ReturnsOneUnboundedEntry()
+    {
+        var windows = await _selfManaged.GetWindowsAsync(
+            OpenEmployee, new DateOnly(2026, 1, 1), new DateOnly(2026, 1, 31));
+
+        var window = Assert.Single(windows);
+        Assert.Null(window.Start);
+        Assert.Null(window.End);
+    }
+
+    /// <summary>NULL-sided windows overlap through the unbounded side (D2) and return
+    /// their dates verbatim — the planner needs the raw transition dates, not a clamp.</summary>
+    [Fact]
+    public async Task GetWindowsAsync_NullSidedWindows_OverlapThroughUnboundedSide()
+    {
+        // NULL start: any range at/before the end date overlaps.
+        var nullStart = Assert.Single(await _selfManaged.GetWindowsAsync(
+            NullStartEmployee, new DateOnly(2020, 1, 1), new DateOnly(2020, 1, 31)));
+        Assert.Null(nullStart.Start);
+        Assert.Equal(End, nullStart.End);
+
+        // NULL end: any range at/after the start date overlaps.
+        var nullEnd = Assert.Single(await _selfManaged.GetWindowsAsync(
+            NullEndEmployee, new DateOnly(2030, 1, 1), new DateOnly(2030, 1, 31)));
+        Assert.Equal(Start, nullEnd.Start);
+        Assert.Null(nullEnd.End);
+    }
+
+    /// <summary>Same fail-loud missing-subject contract as GetStatusAsync — a missing
+    /// users row is a caller bug, never an empty list.</summary>
+    [Fact]
+    public async Task GetWindowsAsync_MissingUser_ThrowsInvalidOperationException()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _selfManaged.GetWindowsAsync(
+                "EMP-WIN-DOES-NOT-EXIST", new DateOnly(2026, 4, 1), new DateOnly(2026, 4, 30)));
+        Assert.Contains("EMP-WIN-DOES-NOT-EXIST", ex.Message);
+    }
+
+    /// <summary>An inverted range throws instead of returning an empty list — empty is a
+    /// legitimate domain answer ("nothing employed in range") and must never mask a
+    /// caller's date-arithmetic bug.</summary>
+    [Fact]
+    public async Task GetWindowsAsync_InvertedRange_ThrowsArgumentException()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => _selfManaged.GetWindowsAsync(
+                BoundedEmployee, new DateOnly(2026, 4, 30), new DateOnly(2026, 4, 1)));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
     // Helpers
     // ═════════════════════════════════════════════════════════════════════
 

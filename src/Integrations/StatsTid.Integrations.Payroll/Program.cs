@@ -60,6 +60,23 @@ builder.Services.AddHostedService<SettlementExportEmitter>();
 // resolver activation (run 32841900233).
 builder.Services.AddSingleton<UserAgreementCodeRepository>();
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
+// S137 TASK-13702 (ADR-040 D5/D7): the employment-window read PCS consumes when it plans a
+// calculation — BuildPlanForLegacyCallersAsync asks "employed when?" via GetWindowsAsync and
+// turns the answer into EmploymentStarted/EmploymentEnded boundaries + EMPLOYED/NOT_EMPLOYED
+// segment typing. Read server-side inside THIS host (D7): the EmploymentProfile wire DTO never
+// carries employment dates. Registered next to IEmploymentProfileResolver because the two are
+// consulted in D10 order (employed? FIRST, then which profile?) at the same planning seam.
+// Only the SELF-MANAGED SharedKernel surface is registered here — deliberately NOT the
+// Infrastructure IEmploymentWindowResolverInTx sibling: planning is a pure read outside any
+// advisory lock, and this host has no write transaction for a window read to ride.
+builder.Services.AddSingleton<EmploymentWindowResolver>();
+builder.Services.AddSingleton<IEmploymentWindowResolver>(sp => sp.GetRequiredService<EmploymentWindowResolver>());
+// S137 TASK-13702 (ADR-040 D5): the employee_profiles history read (GetEffectiveFromDatesAsync)
+// that feeds the now-ACTIVE EmployeeProfileChange boundary — a mid-period part-time-fraction
+// or position change splits the calculation so each span resolves its own dated profile.
+// Optional dependency of PeriodCalculationService (null in direct-construction fixtures →
+// no profile-change boundaries, pre-S137 behavior).
+builder.Services.AddSingleton<EmployeeProfileRepository>();
 builder.Services.AddSingleton<PayrollMappingService>();
 builder.Services.AddSingleton<PayrollExportService>();
 // S90 / TASK-9004 (ADR-034): the corrections seam over payroll_export_records — reads

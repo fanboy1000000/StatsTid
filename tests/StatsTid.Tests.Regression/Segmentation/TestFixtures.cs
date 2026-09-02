@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
@@ -30,19 +29,23 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// </summary>
 internal static class TestFixtures
 {
-    // S132 TASK-132-2b (QUAL-002): MIRRORS PeriodCalculationService.JsonOptions — camelCase +
-    // JsonStringEnumConverter(allowIntegerValues:true). Used by the encoding tests to model the
+    // S132 TASK-132-2b (QUAL-002) → S137 Step-5a: THE REAL PeriodCalculationService.JsonOptions
+    // object — the production segments_jsonb writer/reader — obtained by reflection, no longer a
+    // hand-copied replica with a "KEEP IN SYNC" promise. The encoding tests use it to model the
     // production projection deserialization contract when comparing a live-written manifest row to
-    // its rebuilt-from-events twin. KEEP IN SYNC with PCS.JsonOptions. (PCS.JsonOptions is a private
-    // field and cannot be reached from the test project: the Web-SDK Payroll assembly cannot expose
-    // internals here without a Program-type clash against Backend.Api, and the public ReplayAsync
-    // does not surface segment-level BoundaryCause.)
-    public static readonly JsonSerializerOptions ManifestReadOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-        Converters = { new JsonStringEnumConverter(namingPolicy: null, allowIntegerValues: true) }
-    };
+    // its rebuilt-from-events twin; binding to the real instance means any drift in PCS's options
+    // (e.g. a DefaultIgnoreCondition someone adds) is EXERCISED here instead of hidden by a stale
+    // copy. Reflection is required because the Web-SDK Payroll assembly cannot expose internals to
+    // this project without a Program-type clash against Backend.Api. Renaming the private field
+    // fails loudly at fixture load (the throw below) rather than silently diverging.
+    public static readonly JsonSerializerOptions ManifestReadOptions =
+        (JsonSerializerOptions?)typeof(PeriodCalculationService)
+            .GetField("JsonOptions", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+            ?.GetValue(null)
+        ?? throw new InvalidOperationException(
+            "PeriodCalculationService.JsonOptions (private static) was not found by reflection — " +
+            "the field was renamed or made non-static. Update TestFixtures.ManifestReadOptions; " +
+            "do NOT reintroduce a hand-copied replica.");
 
     public static List<PlannedSegment> DeserializeSegments(string segmentsJson) =>
         JsonSerializer.Deserialize<List<PlannedSegment>>(segmentsJson, ManifestReadOptions)

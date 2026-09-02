@@ -1,4 +1,5 @@
 using Npgsql;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -15,17 +16,43 @@ namespace StatsTid.Infrastructure;
 /// determinism gap).
 ///
 /// <para>
-/// <b>Dated vs live split (ADR-023 D1/D2, post-TASK-3406).</b> Dated fields
-/// (<c>weekly_norm_hours</c>, <c>part_time_fraction</c>, <c>position</c>) come from
+/// <b>Dated vs live split (ADR-023 D1/D2 · ADR-040 D4, post-S137).</b> Dated fields
+/// (<c>part_time_fraction</c>, <c>position</c>, <c>employment_category</c>) come from
 /// <c>employee_profiles</c> with the end-exclusive predicate
 /// <c>effective_from &lt;= asOfDate AND (effective_to IS NULL OR effective_to &gt; asOfDate)</c>
 /// — the same temporal predicate the S29 WageTypeMapping versioned-history sub-sprint
-/// uses for ADR-018 D14 export-time effective-date lookup. <c>AgreementCode</c> is now
-/// dated too, sourced via <see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/>
-/// (TASK-3402) under the identical end-exclusive predicate. The remaining live fields
-/// (<c>ok_version</c>, <c>employment_category</c>, <c>primary_org_id</c>) stay joined
-/// live from <c>users</c> — they are out of S34 scope and remain documented determinism
-/// gaps tracked for future Phase 4e iterations.
+/// uses for ADR-018 D14 export-time effective-date lookup. (<c>weekly_norm_hours</c> is
+/// NOT read here — it lives in the agreement config, not on the profile row.)
+/// <c>AgreementCode</c> is dated too, sourced via
+/// <see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/> (TASK-3402) under the
+/// identical end-exclusive predicate. The ONE remaining live field is <c>primary_org_id</c>
+/// — org-membership history is the ADR-040 D4 named follow-up program.
+/// </para>
+///
+/// <para>
+/// <b>OK-version is a function of the date, not a stored value (S137 / ADR-040 D4 — closes
+/// QUAL-147).</b> Which collective agreement version (OK24, OK26, …) governs a day is fixed by
+/// the calendar — the agreement itself says when it takes effect — so the OK-version for any
+/// as-of date needs NO storage: <see cref="OkVersionResolver.ResolveVersion"/> (ADR-003) answers
+/// it purely from the date. Before S137 this resolver returned the LIVE <c>users.ok_version</c>
+/// column, so a historical read (a March-2026 compliance check or balance for an employee whose
+/// row already says OK26) was labelled with TODAY's version — and only the payroll calculation
+/// path patched this by overlaying the date-resolved version per caller (QUAL-147: the overlay
+/// existed in one consumer and was missing from compliance and the historical balance reads).
+/// Moving the date-resolution INTO the resolver makes every consumer correct by construction at
+/// once — there is no per-caller overlay left to forget. <c>users.ok_version</c> itself is still
+/// written by the admin paths and read by live-only consumers; its retirement is a later
+/// increment, out of scope here.
+/// </para>
+///
+/// <para>
+/// <b>Dated employment_category read posture (S137 Wave 1, ADR-040 D4).</b> The dated
+/// <c>employee_profiles.employment_category</c> column landed NULLABLE with every production
+/// write path copying the <c>users</c> value same-tx, so dated == live holds by construction this
+/// increment. The read is <c>COALESCE(ep.employment_category, u.employment_category)</c>: the
+/// dated cell is preferred, and a NULL cell (a row a write path missed) degrades to the
+/// definitionally-correct live value rather than crashing or mislabelling (the ruled
+/// Reviewer-B1 fail-safe). Editing the category per date is Increment 3.
 /// </para>
 ///
 /// <para>
@@ -100,19 +127,18 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
     public async Task<EmploymentProfile?> GetByEmployeeIdAtAsync(
         string employeeId, DateOnly asOfDate, CancellationToken ct = default)
     {
-        // Dated fields from employee_profiles via the end-exclusive temporal predicate;
-        // remaining live fields from users per ADR-023 D2 (documented determinism gap —
-        // future Phase 4e work will move ok_version / employment_category /
-        // primary_org_id into dated history tables too). agreement_code is NO LONGER
-        // joined here — TASK-3406 cutover sources it from UserAgreementCodeRepository
-        // below to close the PCS-replay leg of the gap.
+        // Dated fields from employee_profiles via the end-exclusive temporal predicate.
+        // S137 / ADR-040 D4: ok_version is NO LONGER selected — it is a pure function of
+        // asOfDate (OkVersionResolver, see the class doc; closes QUAL-147); employment_category
+        // now reads the DATED ep column with the COALESCE-to-live fail-safe. The only live field
+        // left is primary_org_id (org-history is the named follow-up). agreement_code is NOT
+        // joined here — TASK-3406 sources it from UserAgreementCodeRepository below.
         const string sql =
             """
             SELECT
                 ep.part_time_fraction,
                 ep.position,
-                u.ok_version,
-                u.employment_category,
+                COALESCE(ep.employment_category, u.employment_category) AS employment_category,
                 u.primary_org_id
             FROM employee_profiles ep
             INNER JOIN users u ON u.user_id = ep.employee_id
@@ -129,7 +155,6 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
 
         decimal partTimeFraction;
         string? position;
-        string okVersion;
         string employmentCategory;
         string orgId;
 
@@ -146,10 +171,13 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
             position = reader.IsDBNull(reader.GetOrdinal("position"))
                 ? null
                 : reader.GetString(reader.GetOrdinal("position"));
-            okVersion = reader.GetString(reader.GetOrdinal("ok_version"));
             employmentCategory = reader.GetString(reader.GetOrdinal("employment_category"));
             orgId = reader.GetString(reader.GetOrdinal("primary_org_id"));
         }
+
+        // S137 / ADR-040 D4 (QUAL-147) — the OK version governing asOfDate, resolved from the
+        // calendar (ADR-003), never from the live users column. Deterministic and storage-free.
+        var okVersion = OkVersionResolver.ResolveVersion(asOfDate);
 
         // S34 / TASK-3406 — dated agreement-code lookup. The two-query read-consistency
         // note in the class xmldoc explains why the same-snapshot guarantee is not needed

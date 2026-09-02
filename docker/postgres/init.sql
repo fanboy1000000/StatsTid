@@ -576,6 +576,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_profiles_live
 CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_profiles_history
     ON employee_profiles (employee_id, effective_from);
 
+-- S137 / ADR-040 D4 (TASK-13704) — employment_category becomes a DATED column on
+-- employee_profiles so "what category was this employee in March?" is answerable
+-- (today the value lives only as a LIVE column on users). NULLABLE BY RULED DESIGN,
+-- no CHECK: reads COALESCE to users.employment_category, so a missed write degrades
+-- to the definitionally-correct live value — never a crash or a mislabel (the
+-- Reviewer-B1 fail-safe posture); the NOT-NULL tightening is Increment 3, together
+-- with editability (DTOs / event payloads / 3-case writer fields). ADD COLUMN
+-- IF NOT EXISTS at file scope (the S59 birth_date / S74 ALTER-in-segment idiom):
+-- the base CREATE above is untouched, so greenfield and legacy DBs converge on the
+-- same shape here. The HISTORY-covering backfill for legacy rows lives in the
+-- ledger-guarded S137-PROFILE-CATEGORY-SEGMENT near the bottom of this file.
+ALTER TABLE employee_profiles ADD COLUMN IF NOT EXISTS employment_category TEXT NULL;
+
 -- employee_profile_audit (singular; mirrors wage_type_mapping_audit post-S25
 -- shape). version_before + version_after baked into the base CREATE (NOT a
 -- separate ALTER) because this table is brand-new in S31. action CHECK includes
@@ -4524,3 +4537,74 @@ ADD CONSTRAINT users_employment_window_check
 CHECK (employment_start_date IS NULL
     OR employment_end_date IS NULL
     OR employment_end_date >= employment_start_date);
+
+-- =========================================================================
+-- S137 / ADR-040 D4 (TASK-13704) — employee_profiles.employment_category:
+-- the dated-category legacy upgrade (column + HISTORY-covering backfill)
+--
+-- WHY: ADR-040 D4 dates employment_category. The greenfield column is the
+-- file-scope ADD COLUMN IF NOT EXISTS after the employee_profiles CREATE
+-- (~L590). This ledger-guarded segment is what upgrades a PRE-S137 database:
+-- it lands the same column, then backfills EVERY existing row — history rows
+-- (effective_to IS NOT NULL) included, because idx_employee_profiles_history
+-- means closed predecessors exist and each one must answer "what category
+-- was this employee then?" — from the employee's LIVE users.employment_category.
+--
+-- Copying the LIVE value onto history rows is CORRECT, not an approximation:
+-- users.employment_category has been write-once since inception (no UPDATE
+-- path exists until Increment 3), so the live value IS the value that held
+-- over every historical row's window. dated == live is the S137 invariant;
+-- all four production INSERT paths (EmployeeProfileRepository.CreateAsync /
+-- InsertLiveRowAsync, EmployeeProfileSeeder, AdminEndpoints user-create)
+-- populate the column same-tx from users going forward.
+--
+-- NULLABLE by ruled design, NO CHECK, NO fail-loud census (deliberately
+-- unlike the S136 segment above: an inverted employment window is operator-
+-- owned business history, whereas a NULL category has a definitionally-
+-- correct repair — the COALESCE-to-users read absorbs it). The NOT-NULL
+-- tightening is Increment 3.
+--
+-- 3-path idempotent (the house guard pattern):
+--   • greenfield first apply — the file-scope ALTER above already landed the
+--     column; the ADD COLUMN no-ops and the backfill sees zero rows
+--     (employee_profiles is deliberately NOT pre-seeded by init.sql — the
+--     EmployeeProfileSeeder populates it at app boot, with the category);
+--   • legacy first apply — ADD COLUMN lands the column, the backfill covers
+--     every existing row (history + live) from users;
+--   • any re-apply — the schema_migrations ledger short-circuits. Rows are
+--     never overwritten: the backfill's IS NULL predicate is belt-and-
+--     suspenders on top of the ledger guard.
+--
+-- The S137-PROFILE-CATEGORY-SEGMENT markers are extracted VERBATIM by
+-- ProfileCategoryMigrationTests (the S71/S72/S73/S136 harness pattern: the
+-- test replays this exact segment against a reconstructed pre-S137 schema,
+-- twice) — keep the marker lines intact and keep all S137 DDL between them.
+-- =========================================================================
+-- S137-PROFILE-CATEGORY-SEGMENT-BEGIN
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s137-profile-category-dating', 'S137/TASK-13704 (ADR-040 D4): employee_profiles.employment_category TEXT NULL (dated category; NULLABLE by ruled design, no CHECK — reads COALESCE to users.employment_category so a missed write degrades to the live value; NOT-NULL tightening = Increment 3) + HISTORY-covering backfill from users.employment_category over every existing row incl. closed predecessors (correct, not approximate: users'' category is write-once until Increment 3, so live == the value that held over every historical window). All four production INSERT paths populate the column same-tx from users going forward.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Lands the column on a pre-S137 database (no-op on greenfield, where the
+    -- file-scope ALTER after the base CREATE already carried it).
+    ALTER TABLE employee_profiles
+    ADD COLUMN IF NOT EXISTS employment_category TEXT NULL;
+
+    -- HISTORY-COVERING backfill: every row (history rows included — the
+    -- history unique index means closed predecessors exist) copies the
+    -- employee's live users.employment_category. IS NULL predicate keeps a
+    -- partial re-run from ever overwriting an already-valued row.
+    UPDATE employee_profiles ep
+       SET employment_category = u.employment_category
+      FROM users u
+     WHERE u.user_id = ep.employee_id
+       AND ep.employment_category IS NULL;
+END
+$$;
+-- S137-PROFILE-CATEGORY-SEGMENT-END

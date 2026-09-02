@@ -8,10 +8,15 @@ namespace StatsTid.Infrastructure;
 /// fields previously sourced from request payloads (TimeEndpoints) or hardcoded constants
 /// (ComplianceEndpoints): <c>part_time_fraction</c> and <c>position</c>.
 /// (<c>weekly_norm_hours</c> removed in S53 TASK-5306 — norm hours sourced from config chain.)
-/// Sibling fields (<c>agreement_code</c>, <c>ok_version</c>, <c>employment_category</c>,
-/// <c>primary_org_id</c>) stay on the <c>users</c> table per S31 refinement Q3 LEAVE and are
-/// joined in at read time so <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>
-/// returns a fully-hydrated <see cref="EmploymentProfile"/>.
+/// Sibling fields (<c>agreement_code</c>, <c>ok_version</c>, <c>primary_org_id</c>) stay on
+/// the <c>users</c> table per S31 refinement Q3 LEAVE and are joined in at read time so
+/// <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/> returns a fully-hydrated
+/// <see cref="EmploymentProfile"/>. <c>employment_category</c> left that set in S137
+/// (ADR-040 D4): it is now a DATED column on <c>employee_profiles</c>, populated same-tx
+/// from <c>users</c> by every production INSERT path and read via
+/// <c>COALESCE(ep.employment_category, u.employment_category)</c> — a missed write degrades
+/// to the definitionally-correct live value, never a crash or a mislabel (NULLABLE by ruled
+/// design; the NOT-NULL tightening and editability are Increment 3).
 ///
 /// <para>
 /// <b>S31 scope — data-plane only.</b> The repository is consumed by TASK-3107 admin CRUD,
@@ -164,6 +169,58 @@ public sealed class EmployeeProfileRepository
     }
 
     /// <summary>
+    /// S137 / TASK-13704 — history read consumed by the S137 payroll planner (TASK-13702):
+    /// the <c>effective_from</c> dates of this employee's profile rows STRICTLY INSIDE the
+    /// range <c>(afterExclusive, toInclusive]</c>, ascending. Each date is a day on which a
+    /// new profile row took effect (history rows included — the history unique index means
+    /// closed predecessors exist), i.e. the planner's <c>EmployeeProfileChange</c> segment-
+    /// boundary feed per ADR-040 D5: a boundary date is the FIRST day of the NEW segment,
+    /// which is exactly a successor row's <c>effective_from</c>.
+    ///
+    /// <para>
+    /// <b>Range semantics (the recurring fencepost hazard, stated so callers don't guess):</b>
+    /// <paramref name="afterExclusive"/> is EXCLUDED — the planner passes the period start
+    /// here because a row taking effect ON the period start creates no INTERIOR boundary
+    /// (the segment already starts there); <paramref name="toInclusive"/> is INCLUDED.
+    /// Uniqueness per date is by construction (<c>idx_employee_profiles_history</c> — at
+    /// most one row per (employee_id, effective_from)), so no DISTINCT is needed.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Self-managed connection, LIVE + HISTORY rows, read-only, outside locks</b> —
+    /// matches the repo's self-managed read style (<see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>):
+    /// planning is a pure read that never rides a write transaction. Deliberately NO
+    /// <c>effective_to</c> filter: the live row's <c>effective_from</c> is a change date
+    /// exactly like a closed predecessor's.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<DateOnly>> GetEffectiveFromDatesAsync(
+        string employeeId, DateOnly afterExclusive, DateOnly toInclusive,
+        CancellationToken ct = default)
+    {
+        const string sql =
+            """
+            SELECT effective_from
+            FROM employee_profiles
+            WHERE employee_id = @employeeId
+              AND effective_from > @afterExclusive
+              AND effective_from <= @toInclusive
+            ORDER BY effective_from
+            """;
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("afterExclusive", afterExclusive);
+        cmd.Parameters.AddWithValue("toInclusive", toInclusive);
+        var dates = new List<DateOnly>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            dates.Add(reader.GetFieldValue<DateOnly>(0));
+        return dates;
+    }
+
+    /// <summary>
     /// <b>LIVE-only single-purpose shared codepath (S34 / TASK-3413 audit lock).</b> The
     /// SQL below filters <c>WHERE ep.effective_to IS NULL</c> (the partial-unique-index
     /// predicate) and JOINs <c>u.agreement_code</c> off the LIVE <c>users</c> tail; the
@@ -183,11 +240,16 @@ public sealed class EmployeeProfileRepository
     {
         // S31 employee_profiles columns are the source of truth for
         // part_time_fraction and position (weekly_norm_hours removed in S53 TASK-5306). The sibling fields (agreement_code, ok_version,
-        // employment_category, primary_org_id) stay on `users` per refinement Q3 LEAVE and
-        // are joined in here so the returned EmploymentProfile is consumable by PCS / rule
-        // engine paths unchanged. `ep.version` joins in the row's optimistic-concurrency
-        // token for callers that need it on the ETag header (Step 7a P2 fix — same-snapshot
-        // read kills the GET race against concurrent admin edits).
+        // primary_org_id) stay on `users` per refinement Q3 LEAVE and are joined in here so
+        // the returned EmploymentProfile is consumable by PCS / rule engine paths unchanged.
+        // employment_category (S137 / ADR-040 D4): the DATED ep column is preferred, with
+        // COALESCE to the live users value — for a live-row read the two are equal by the
+        // S137 dated==live invariant, and a NULL dated cell (a missed write) degrades to the
+        // definitionally-correct live value instead of crashing or mislabeling (the ruled
+        // fail-safe posture; the NOT-NULL tightening is Increment 3). `ep.version` joins in
+        // the row's optimistic-concurrency token for callers that need it on the ETag header
+        // (Step 7a P2 fix — same-snapshot read kills the GET race against concurrent admin
+        // edits).
         const string sql =
             """
             SELECT
@@ -196,7 +258,7 @@ public sealed class EmployeeProfileRepository
                 ep.version,
                 u.agreement_code,
                 u.ok_version,
-                u.employment_category,
+                COALESCE(ep.employment_category, u.employment_category) AS employment_category,
                 u.primary_org_id
             FROM employee_profiles ep
             INNER JOIN users u ON u.user_id = ep.employee_id
@@ -272,15 +334,21 @@ public sealed class EmployeeProfileRepository
         // Stamping today makes the freshly-created row sit in the same-day window for
         // any same-day PUT (Case B routing → version bump), matching pre-S33 admin
         // expectations.
+        // S137 / ADR-040 D4 — employment_category is populated same-tx from the users value
+        // via the scalar subselect below (same conn+tx, so it sees an uncommitted users row
+        // in this transaction; the employee_id FK guarantees the row exists). dated==live is
+        // the S137 invariant; users' category is write-once until Increment 3, so
+        // copy-from-users == copy-from-predecessor by construction.
         var newProfileId = Guid.NewGuid();
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
                 profile_id, employee_id, part_time_fraction, position,
-                effective_from, effective_to, version)
+                effective_from, effective_to, version, employment_category)
             VALUES (
                 @profileId, @employeeId, @partTimeFraction, @position,
-                @effectiveFrom, NULL, 1)
+                @effectiveFrom, NULL, 1,
+                (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
             RETURNING profile_id, version
             """, conn, tx);
         cmd.Parameters.AddWithValue("profileId", newProfileId);
@@ -734,15 +802,22 @@ public sealed class EmployeeProfileRepository
         NpgsqlConnection conn, NpgsqlTransaction tx,
         EmployeeProfileSupersedeRequest req, long nextVersion, CancellationToken ct)
     {
+        // S137 / ADR-040 D4 — employment_category is populated same-tx from the users value
+        // via the scalar subselect below; this single site serves BOTH SupersedeAndCreateAsync
+        // Case A (net-new live row) and Case C (successor row after a supersession), so a
+        // superseded profile's successor carries the dated category too. dated==live is the
+        // S137 invariant; users' category is write-once until Increment 3, so
+        // copy-from-users == copy-from-predecessor by construction.
         var newProfileId = Guid.NewGuid();
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
                 profile_id, employee_id, part_time_fraction, position,
-                effective_from, effective_to, version)
+                effective_from, effective_to, version, employment_category)
             VALUES (
                 @profileId, @employeeId, @partTimeFraction, @position,
-                @effectiveFrom, NULL, @version)
+                @effectiveFrom, NULL, @version,
+                (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
             RETURNING profile_id, version
             """, conn, tx);
         cmd.Parameters.AddWithValue("profileId", newProfileId);

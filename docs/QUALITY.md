@@ -1,7 +1,38 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 134 -->
+<!-- anchor-sprint: 137 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
+
+## S137 re-grade (2026-09-02) — time-control Increment 2: the calculation side obeys the employee timeline
+
+S137 made payroll and the read side respect hire and leave dates (ADR-040 D4/D5/D9/D10). What changed for
+the grades is not "more features" but **correctness that used to be silently wrong is now right by
+construction, with tests that can fail**: a mid-month leaver's non-employed days no longer evaluate rules or
+export pay lines; the OK-version (agreement version) is derived from the date being asked about inside the
+one resolver every consumer uses (QUAL-147 closed); running balances stop at the leave date; a real
+settlement over-count was fixed. Two design collisions were surfaced BY implementation and owner-ruled rather
+than traded ad hoc (the ADR-016 D4 refusal vs D5 typed segments → truncation semantics; the admin-create
+undated hire → default to the profile date). Per-fix detail: `docs/sprints/SPRINT-137.md`; register rows
+QUAL-147 (fixed), QUAL-148/149/150 (registered).
+
+| Domain | S134 → S137 | Movement rests on (S137) |
+|--------|-------------|--------------------------|
+| **Payroll Integration** | B → **B+** ▲ | Typed EMPLOYED/NOT_EMPLOYED segments in the manifest; the skip precedes profile resolution (D10); BOTH halves of the "all evaluations failed" short-circuit fixed (latent since S20); windowless byte-parity pinned PER WRITER against the REAL `JsonOptions` object (the hand-copied replicas retired at Step-5a); the DI-wired path FAILS LOUD if the window resolver is dropped. **Not A:** a profile-change split still refuses under the live rule set (QUAL-149) and the wage-type key is plan-wide (QUAL-150, coupled) — both registered, owner-routed; the end-to-end Docker pins verify in the CI close run, not locally. |
+| **Domain Correctness** | B− → **B** ▲ | **FIXED:** QUAL-147 structurally (every resolver consumer date-correct at once; the one non-resolver consumer re-anchored); D9 end-cap inside the single-source `AccrualMath` (sites 1–5, 7, 8); the leaver SPECIAL_HOLIDAY settlement over-count (owner-ruled, RED-on-old by arithmetic: 2.5 vs 5.0). **Remains:** QUAL-148 (the live-OK family, adjudicated sweep), QUAL-149/150, QUAL-123, the forskudsferie leaver cut (domain fork, Phase-B-adjacent). |
+| **SharedKernel (Segmentation)** | A− → **A−** (held, ▲ posture) | New causes + typing land without touching the fail-closed `PlannedCalculation` invariant; the D4 refusal now keys on EVALUATED segments — complete by construction (the hand-maintained source mirror retired: PAT-023); exception messages carry counts + causes, never dates. Legibility debt named, not hidden: the `OkTransition` sentinel on boundary-less manifests and the "cause names the ENDING transition" convention (FAIL-007) — a later-increment sentinel. |
+| **Backend API** | A → **A** (held) | Compliance asks "employed?" before "which profile?" (PAT-022; the pre-hire 500 path closed for hire-dated employees); Balance reads month-resolved OK + end-capped accrual; admin create defaults the hire date so a new hire's first month is plannable by construction. No wire-shape change anywhere (D7 held: no employment date in any DTO/body). |
+| **Test Suite (cross-cutting)** | B → **B** (held, ▲ posture) | +84 locally-run pins (1005 → 1089) incl. live-`RuleRegistry` truncation pins, the DB-free merge-backstop pins, coupling pins, and a reference-identity pin that makes byte-parity theater impossible to reintroduce. **Held at B, not B+:** ~40 new Docker-gated pins (payroll E2E, compliance window, resolver date-overlay, leaver end-cap, settlement RED-on-old, migration replay) cannot run on the dev machine and are verified only by the CI close run — the honest posture is "green when CI says so." |
+
+*(Domains not listed — Rule Engine, Infrastructure, Security, Frontend, Schema, Docker, CI/Tooling,
+Documentation — are unchanged by S137; the schema gained one nullable dated column with a ledger-guarded
+history-covering backfill, reviewed and approved at merge.)*
+
+**PM reading.** Increment 2 is where the employment timeline stopped being a stored fact and became a
+CALCULATED one. The grades move where correctness moved (Payroll, Domain Correctness) and hold where the
+evidence is still CI-only (the test suite) or where a known, named limitation remains (the live rule set
+refuses a mid-month part-time change — a domain question about pro-rating a weekly norm across a mid-week
+change that nobody has sourced yet, now QUAL-149). Two collisions between earlier decisions and this one
+were found by building, escalated, and ruled — that is the governance working as designed.
 
 ## S134 remediation re-grade (2026-08-25) — audit-scope + observability + docs landed (fix-next program COMPLETE)
 

@@ -841,8 +841,22 @@ public sealed class VacationSettlementService
         // accrual-window end, so feeding the later boundary would over-count a mid-year hire). Flat
         // day-count (fraction 1.0m per ADR-031). MONTHLY_ACCRUAL accrues to the accrual end; an
         // IMMEDIATE config grants the full quota up-front.
+        //
+        // S137 / ADR-040 D9 — OWNER RULING 2026-08-26 (OQ-1a): the leaver END-cap. Before S137 this
+        // line valued a leaver's særlige feriedage to 31 Dec Y REGARDLESS of the leave date, so an
+        // employee who left 30 Jun Y was credited a full year's 5 days (over-count: 5.0 instead of
+        // 5 × 6/12 = 2.5). The owner ruled this a DELIBERATE settlement-value change on the ADR-033
+        // rails, fixed by threading user.EmploymentEndDate as AccrualMath's end-cap: earned now
+        // stops at the last employed day (null end ⇒ open-ended, byte-identical to before). Note
+        // the S80 BLOCKER-1 leaver guard in SettleAsync still fails a PASSED-end-date SPECIAL_HOLIDAY
+        // tuple closed (R12 non-goal); the cap governs the reachable case — an end date recorded but
+        // not yet passed at settle time — and makes the value correct by construction when the
+        // termination-interaction slice eventually routes leavers here. RED-on-old provenance:
+        // SpecialHolidayLeaverAccrualCapTests (mid-year leaver settles 2.5, the old code paid 5.0).
         var earned = string.Equals(datedConfig.AccrualModel, MonthlyAccrualModel, StringComparison.Ordinal)
-            ? AccrualMath.EarnedToDate(datedConfig.AnnualQuota, 1.0m, accrualStart, user.EmploymentStartDate, period.AccrualEnd)
+            ? AccrualMath.EarnedToDate(
+                datedConfig.AnnualQuota, 1.0m, accrualStart, user.EmploymentStartDate, period.AccrualEnd,
+                user.EmploymentEndDate)
             : datedConfig.AnnualQuota;
 
         // Used = the recorded SPECIAL_HOLIDAY feriedage within the TAKING window [1 May Y+1, 30 Apr Y+2]

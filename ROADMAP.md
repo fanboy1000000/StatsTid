@@ -138,15 +138,36 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Tier-probe log noise** — every legitimate leader read logs a spurious "Access denied" WARNING. [S128 FU-A]
 
 ### Correctness / domain
-- **Employment lifecycle time-control — PROMOTED (S135, 2026-08-25).** The a–h gap capture
-  graduated into **ADR-040 "Employee timeline & as-of resolution"** (ratified) + the four-increment
-  program plan in `SPRINT-135.md` §Program Plan. Remaining backlog residue lives as named items:
-  **Increments 1–4 await pickup** (Increment 1 enforcement core = next-sprint candidate; closes
-  SEC-046 · Increment 2 closes QUAL-147); **org/unit membership history** (model decided in
-  ADR-040 D4, implementation its own program — until then "which org in March?" stays
-  unanswerable); **re-hire spells** (ADR-040 D1 tail — the guard ships in Increment 1, the second
-  spell later); **OQ-4** (do IMMEDIATE-grant entitlements pro-rate at mid-year hire? → Phase B
-  expert list).
+- **Employment lifecycle time-control — RUNNING (ADR-040; program plan `SPRINT-135.md` §Program Plan).**
+  **Increment 1 (S136) SHIPPED** (enforcement core, SEC-046 closed). **Increment 2 (S137) — calculation
+  correctness** (typed EMPLOYED/NOT_EMPLOYED segments, accrual end-cap, QUAL-147 closed, dated category
+  read-side). Remaining: **Increment 3** (temporal editing, ADR-040 D8 — plus the S137 deferrals: category
+  EDITABILITY [DTOs / 3-case writer / event payload / NOT-NULL tightening] and the S136 leaver-send dead-end)
+  · **Increment 4** (lifecycle UX) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
+  until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail) · **OQ-4** (IMMEDIATE-
+  grant pro-rating at mid-year hire → Phase B expert list). **S137-owed items by increment:** Increment 3 —
+  the retroactive-correction seam inherits window typing through the shim but is UNPINNED (one Docker pin:
+  export a windowless month → record a mid-month end date → correct → claw-back deltas cover only post-end
+  days, correction manifest carries the NOT_EMPLOYED suffix); `EmploymentWindow.Overlaps/ClipTo` helpers; the
+  backfill write-once precondition · Increment 4 — the admin CREATE form surfaces the hire date pre-filled
+  with today and editable, and the edit path allows backdating (because the S137 "hired today" default
+  makes an undated create unable to back-fill pre-creation registrations until the date is corrected) ·
+  TASK-2010 (retire the `[Obsolete]` planless shim): S137's PCS ctor coupling guard + window/profile-date
+  hydration block are part of its removal scope (the constructor is becoming a policy site — Reviewer NOTE).
+- **AlignedWindow rules at a GENUINE split in the live rule set (QUAL-149; the S64 F4-1(b) gap — re-registered,
+  it had fallen out of this file).** A mid-month part-time/position change while employed, or two spells in one
+  month, is REFUSED by the planner (ADR-016 D4) in the Payroll host's live wiring → raw 500 at
+  `calculate-and-export`. S137's owner ruling cleared hire/leave edges as truncations only. Fix needs a
+  DOMAIN decision (how a weekly norm pro-rates across a mid-week fraction change) → reclassify norm/overtime
+  as Mergeable with a pro-rating merger, or complete the shrink stub / pre-split contract. Increment 3
+  candidate. **Coupled: QUAL-150** — the wage-type-mapping natural key is snapshotted once per plan from the caller
+  profile (ADR-020 D1.5), so the moment profile-change splits become plannable, a mid-period POSITION change
+  would map the second segment with the old position's lønart; the per-segment dated key must land FIRST
+  (Step-5a Codex, S137). [S64 F4-1(b) · S137 TASK-13707 · QUAL-149/150]
+- **Forskudsferie (§7 advance-vacation) cap for LEAVERS — site 6.** `SkemaEndpoints` caps VACATION forskud at
+  earned-to-`ferieaarEnd` regardless of a recorded leave date (manager approval IS the §7 agreement). Capping at
+  the leave date would change bookability — a genuine domain fork, deliberately NOT taken in S137's D9 end-cap
+  (sites 1–5, 7, 8 opted in). Phase-B-adjacent domain question. [S137 refinement scope cut]
 - **Demo-seed write-free rerun** — the loader-evidence arm is written but unobserved (no container
   runtime on the dev machine). [S128 FU-C]
 

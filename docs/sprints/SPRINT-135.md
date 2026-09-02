@@ -70,6 +70,15 @@ fraction-flat per ADR-031**; a windowless employee's export is byte-identical to
 (parity test); a pre-D5 segment manifest replays with the EMPLOYED default (replay-parity test);
 a leaver's running balance stops accruing at the end date; compliance + historical balance reads
 use the date-resolved OK version. Step-5a high-risk review mandatory (payroll boundary).
+**[S137-dated note, 2026-09-02 — Increment 2 landed with ONE AC narrowed by a pre-existing gap]:** the
+"mid-month `part_time_fraction` change produces a segment boundary and different norm/pay outputs per span"
+AC is PROVEN under the straddle-safe test rule set and PINNED AS REFUSED under the live `RuleRegistry` set:
+ADR-016 D4 refuses a whole-window (`AlignedWindow`) rule evaluated in ≥ 2 EMPLOYED segments (the S64 F4-1(b)
+gap, re-registered as QUAL-149). Owner ruling 2026-09-02: hire/leave edges are TRUNCATIONS (≤ 1 EMPLOYED
+segment plans — the leaver/starter ACs hold in the live wiring); a profile-change split while employed
+stays refused until norm/overtime are reclassified with a pro-rating merger (Increment 3 candidate). The
+leaver SPECIAL_HOLIDAY settlement over-count (D9's premise exception) was fixed in-sprint by owner ruling
+(OQ-1a); category EDITABILITY is Increment 3 — **PRECONDITION (S137 Reviewer NOTE):** the S137 backfill copied the LIVE `users.employment_category` onto every history row on the premise that the column has been write-once since inception; when editability lands it must NOT retro-apply a new value to already-migrated history rows (a dated change starts a new row). Also owed to Increment 3 from S137: `EmploymentWindow.Overlaps/ClipTo/FirstNotEmployedDay` helpers replacing three hand-rolled window∩range predicates; a `PeriodStart` cause sentinel for boundary-less manifests; a retroactive-correction window pin. **Increment 4 gains (S137 TASK-13708 consequence):** the admin CREATE form surfaces the hire date pre-filled with today + editable, and the edit path allows backdating — an undated create now defaults to "hired today", which blocks back-filling pre-creation registrations until corrected.
 
 **Increment 3 — temporal editing**: ADR-040 D8 — future-dated + backdated profile/agreement
 changes (ADR-023 D8 reopened); the backdate-across-exported-month diagnostic worklist. *ACs:* a

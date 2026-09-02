@@ -93,6 +93,20 @@ public sealed class PeriodCalculationService
     // copy-caller-profile path is preserved when this is null (refinement cycle 2
     // Codex W absorption — S29 _localAgreementProfileRepo precedent at line 86).
     private readonly IEmploymentProfileResolver? _profileResolver;
+    // S137 TASK-13702 (ADR-040 D5/D7): optional resolver for the employee's employment
+    // window(s). Hydrates BoundarySources.EmploymentStartedDates/EmploymentEndedDates and
+    // types every planned segment EMPLOYED / NOT_EMPLOYED on the legacy shim path. Read
+    // server-side inside this host (D7) — the EmploymentProfile wire DTO never carries the
+    // dates. Optional per the _profileResolver precedent: when null (direct-construction
+    // test fixtures) the planner receives null windows and the plan is byte-identical to
+    // pre-S137 (every segment EMPLOYED, no employmentStatus key serialized).
+    private readonly IEmploymentWindowResolver? _employmentWindowResolver;
+    // S137 TASK-13702 (ADR-040 D5): optional repository for the employee_profiles
+    // effective_from dates inside the period — activates the ADR-016 D5b-reserved
+    // EmployeeProfileChange boundary (a mid-period part_time_fraction / position change
+    // now splits the calculation so each span resolves its own dated profile). Same
+    // null-tolerance as the two optional dependencies above.
+    private readonly EmployeeProfileRepository? _employeeProfileRepo;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
 
@@ -143,6 +157,15 @@ public sealed class PeriodCalculationService
     // is a wire-format change out of QUAL-002's scope, deferred to its own task with its own tests.
     // No consumer depends on segments_jsonb byte-identity; the D10 manifest⋈audit join keys on
     // manifest_id.
+    //
+    // PARTIAL REVERSAL (S137 TASK-13702, 2026-09-02): the sentence above is now only half true.
+    // The two-writer null-snapshot delta ("snapshot":null vs an absent key) REMAINS the deliberate
+    // QUAL-146 residual — this object is also the rule-engine HTTP wire format and is NOT changed
+    // here. But as of S137 the WINDOWLESS byte-shape of a segment IS pinned per writer by
+    // SegmentSerializationParityTests: PlannedSegment.EmploymentStatus serializes as an ABSENT key
+    // for EMPLOYED (WhenWritingDefault), so a windowless employee's segments_jsonb is byte-identical
+    // to pre-S137 output under THESE options. Adding a DefaultIgnoreCondition here would now also
+    // break that pin, not only the wire format.
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -159,7 +182,9 @@ public sealed class PeriodCalculationService
         ILogger<PeriodCalculationService> logger,
         IRuleClassificationProvider? classificationProvider = null,
         LocalAgreementProfileRepository? localAgreementProfileRepo = null,
-        IEmploymentProfileResolver? profileResolver = null)
+        IEmploymentProfileResolver? profileResolver = null,
+        IEmploymentWindowResolver? employmentWindowResolver = null,
+        EmployeeProfileRepository? employeeProfileRepo = null)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
@@ -185,6 +210,42 @@ public sealed class PeriodCalculationService
         // falls back to copying the caller-supplied profile (pre-S33 behavior).
         // DI-registered code paths get fail-closed semantics per ADR-023 D3.
         _profileResolver = profileResolver;
+        // S137 TASK-13702 (ADR-040 D5/D7): null-tolerant ONLY on the legacy fixture path —
+        // when NO profile resolver is wired either, BuildPlanForLegacyCallersAsync passes null
+        // employment windows + null employment boundary dates to the planner, which is the
+        // pre-S137 plan byte-for-byte.
+        //
+        // S137 Step-5a (Reviewer WARNING 1) — the two resolvers are COUPLED on the DI-wired
+        // path. Plain-language: a null window resolver is not a harmless "feature off"; it
+        // means the planner treats every employee as employed for the whole period, so a
+        // leaver is paid for every day after their employment_end_date — a WRONG PAYROLL
+        // VALUE, silently. If the Payroll host ever dropped the IEmploymentWindowResolver
+        // registration, nothing would notice: the CI smoke probe's employee has NULL dates,
+        // so its export would look identical. The profile resolver is the marker of the
+        // DI-wired, fail-closed path (ADR-023 D3 — see its comment above); having it without
+        // the window resolver is therefore always a wiring defect, never an intended mode,
+        // and we refuse to construct so the host's FIRST calculation (and the smoke probe)
+        // fails loudly instead of paying wrong. The EmployeeProfileRepository below stays
+        // null-tolerant: its absence only loses EmployeeProfileChange boundaries (a coarser
+        // plan, not an over-payment), so it is named in the message but not enforced.
+        if (profileResolver is not null && employmentWindowResolver is null)
+        {
+            throw new InvalidOperationException(
+                "PeriodCalculationService was constructed with an IEmploymentProfileResolver (the " +
+                "DI-wired, fail-closed profile path) but WITHOUT an IEmploymentWindowResolver. On this " +
+                "path a null window resolver is not a fallback — it plans every employee as EMPLOYED " +
+                "for the whole period and re-pays leavers for days after their employment_end_date " +
+                "(ADR-040 D5/D7). Fix the wiring: the Payroll host must register " +
+                "EmploymentWindowResolver + IEmploymentWindowResolver (src/Integrations/" +
+                "StatsTid.Integrations.Payroll/Program.cs — the AddSingleton<IEmploymentWindowResolver> " +
+                "registration beside IEmploymentProfileResolver, L72-73 at the time of writing) and " +
+                "EmployeeProfileRepository (L79 — optional: feeds the EmployeeProfileChange boundary). " +
+                "Test fixtures that supply a profile resolver must supply a window resolver too.");
+        }
+        _employmentWindowResolver = employmentWindowResolver;
+        // S137 TASK-13702 (ADR-040 D5): null-tolerant — when unregistered, no
+        // EmployeeProfileChange boundaries are hydrated (pre-S137 behavior).
+        _employeeProfileRepo = employeeProfileRepo;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
 
@@ -373,11 +434,48 @@ public sealed class PeriodCalculationService
         var perSegmentExportLines = new List<List<PayrollExportLine>>(plan.Segments.Count);
         decimal flexBalanceCarry = previousFlexBalance;
         int totalFailures = 0;
-        int rulesAttemptedPerSegment = 0; // computed from the first segment's evaluation
+        // S137 TASK-13702 (Codex-B2, first half): the per-segment attempt budget is captured
+        // from the FIRST EMPLOYED segment actually evaluated — NOT from segment 0, which may
+        // be a NOT_EMPLOYED (pre-hire) segment that evaluates nothing. Capturing from segment
+        // 0 would leave this at 0 and silently disarm the total-failure short-circuit below.
+        int rulesAttemptedPerSegment = 0;
+        // S137 TASK-13702 (Codex-B2, second half): the short-circuit denominator counts only
+        // the segments that were evaluated. Multiplying by plan.Segments.Count would over-
+        // state the budget by 6 per skipped segment, so a plan with one EMPLOYED segment
+        // whose every call failed (6 failures) would compare against 12 and NOT short-circuit
+        // — returning a "successful" calculation with zero rule results.
+        int employedSegmentCount = 0;
 
         for (int s = 0; s < plan.Segments.Count; s++)
         {
             var segment = plan.Segments[s];
+
+            // ---------------------------------------------------------------
+            // ADR-040 D5 / D10 (S137 TASK-13702) — the NOT_EMPLOYED skip point. This branch
+            // runs FIRST in the loop body, BEFORE the profile resolution below: callers ask
+            // "employed?" before "what profile?" (D10). A post-S136 employee's profile row
+            // starts at hire, so resolving a profile for a pre-hire segment would hit the
+            // resolver's fail-closed path (EmployeeProfileNotFoundException → a real 500).
+            //
+            // What a NOT_EMPLOYED segment does NOT do: no profile resolution, no rule
+            // evaluation (zero rule-engine calls), no export-line mapping. What it DOES do:
+            // contribute an EMPTY rule-result list and an EMPTY export-line list at its own
+            // index — never a synthesized row. A synthesized zero-delta FLEX_BALANCE row
+            // would perturb MergePerSegmentRuleResults (which seeds rule order from the
+            // first non-empty segment) and corrupt the flex carry. With an empty list,
+            // ExtractFlexDelta yields null and flexBalanceCarry passes through UNCHANGED
+            // to the next EMPLOYED segment. The segment itself stays in plan.Segments, so
+            // BuildManifest still records it — non-employment is structurally explicit in
+            // the audit-of-record (D5), never encoded as "norm 0".
+            // ---------------------------------------------------------------
+            if (segment.EmploymentStatus == EmploymentWindowStatus.NOT_EMPLOYED)
+            {
+                perSegmentRuleResults.Add(new List<CalculationResult>());
+                perSegmentExportLines.Add(new List<PayrollExportLine>());
+                continue;
+            }
+            employedSegmentCount++;
+
             var segmentOkVersion = OkVersionResolver.ResolveVersion(segment.StartDate);
 
             // Caller-supplied profile.OkVersion may be stale (pre-S20 callers commonly send
@@ -396,14 +494,24 @@ public sealed class PeriodCalculationService
             // (via EmploymentProfileResolver) instead of copying caller-supplied profile.
             // Legacy test-fixture path preserved when resolver is null (refinement
             // cycle 2 Codex W absorption — S29 _localAgreementProfileRepo precedent).
+            // ADR-040 D7 (S137 Step-7a Codex cycle-2 WARNING, absorbed): the resolver is asked at
+            // segment.StartDate (the correct D10 as-of), but the fail-closed exception is anchored on
+            // plan.PeriodStart — CALLER INPUT. For a starter's first EMPLOYED segment, StartDate IS the
+            // hire date, and EmployeeProfileNotFoundException embeds its as-of date in the message,
+            // which reaches exception logs and could reach a detailed 500 body — an employment date
+            // must not leak through either. Diagnostics keep the employee id + the period.
             var segmentProfile = _profileResolver is not null
                 ? (await _profileResolver.GetByEmployeeIdAtAsync(profile.EmployeeId, segment.StartDate, ct))
-                    ?? throw new EmployeeProfileNotFoundException(profile.EmployeeId, segment.StartDate)
+                    ?? throw new EmployeeProfileNotFoundException(profile.EmployeeId, plan.PeriodStart)
                 : profile;
 
-            // OkVersion server-resolution overlay (ADR-003 preserved separately —
-            // resolver returns live ok_version from users; segment-resolved override
-            // applies for OK24 boundary).
+            // OkVersion server-resolution overlay (ADR-003: the OK version is a pure
+            // function of the date). S137 (TASK-13703, QUAL-147) made the resolver return
+            // the DATE-resolved OK version for segment.StartDate, so on the DI-wired path
+            // this overlay is a no-op — it is KEPT as defense-in-depth for the nullable-
+            // resolver fixture path (segmentProfile == the caller-supplied profile, whose
+            // OkVersion may be stale for a straddling period) and as a guard should the
+            // resolver ever regress to a live read.
             if (!string.Equals(segmentProfile.OkVersion, segmentOkVersion, StringComparison.Ordinal))
                 segmentProfile = segmentProfile with { OkVersion = segmentOkVersion };
 
@@ -420,7 +528,8 @@ public sealed class PeriodCalculationService
                 segment.StartDate, segment.EndDate, flexBalanceCarry, ct);
 
             totalFailures += segmentFailureCount;
-            if (s == 0)
+            // First EMPLOYED segment evaluated (not `s == 0` — see the Codex-B2 note above).
+            if (employedSegmentCount == 1)
                 rulesAttemptedPerSegment = segmentAttempted;
 
             // Stamp every rule result on this segment with the manifest id so downstream
@@ -451,17 +560,28 @@ public sealed class PeriodCalculationService
             perSegmentExportLines.Add(segmentExportLines);
         }
 
-        // If ALL rule evaluations across ALL segments failed, treat the whole calculation as
-        // failed. The denominator is computed from the first segment's actual attempt count
-        // (no magic constant) so adding/removing rule calls doesn't silently break the
-        // short-circuit.
-        var totalRules = rulesAttemptedPerSegment * plan.Segments.Count;
+        // If ALL rule evaluations across ALL EMPLOYED segments failed, treat the whole
+        // calculation as failed. The denominator is the first evaluated segment's actual
+        // attempt count (no magic constant) times the number of segments actually evaluated
+        // (S137 TASK-13702 / Codex-B2 — NOT plan.Segments.Count, which counts skipped
+        // NOT_EMPLOYED segments that attempted nothing). Two consequences, both pinned by
+        // EmploymentWindowSegmentSkipTests:
+        //   (i)  a plan whose segment 0 is NOT_EMPLOYED still short-circuits when every
+        //        EMPLOYED evaluation fails (the budget is captured from the first EMPLOYED
+        //        segment, not from segment 0);
+        //   (ii) a plan with ZERO employed segments has totalRules == 0, so it never
+        //        short-circuits: it returns Success == true with no rule results, no export
+        //        lines, and a manifest whose segments are all NOT_EMPLOYED. That is the RULED
+        //        semantics — "nothing to calculate" is a successful, auditable calculation
+        //        (the manifest records WHY nothing was paid), not a failure.
+        var totalRules = rulesAttemptedPerSegment * employedSegmentCount;
         if (totalRules > 0 && totalFailures >= totalRules)
         {
             _logger.LogError(
-                "All {TotalRules} rule evaluations failed across {SegmentCount} segment(s) for employee " +
-                "{EmployeeId} manifest {ManifestId} period {PeriodStart}-{PeriodEnd}",
-                totalRules, plan.Segments.Count, profile.EmployeeId, plan.ManifestId, plan.PeriodStart, plan.PeriodEnd);
+                "All {TotalRules} rule evaluations failed across {EmployedSegmentCount} employed segment(s) " +
+                "(of {SegmentCount}) for employee {EmployeeId} manifest {ManifestId} period {PeriodStart}-{PeriodEnd}",
+                totalRules, employedSegmentCount, plan.Segments.Count, profile.EmployeeId, plan.ManifestId,
+                plan.PeriodStart, plan.PeriodEnd);
 
             var failResult = new PeriodCalculationResult
             {
@@ -564,9 +684,10 @@ public sealed class PeriodCalculationService
     // -------------------------------------------------------------------
     [Obsolete(
         "Use CalculateAsync(PlannedCalculation, …) or CalculateWithOutcomeAsync(PlannedCalculation, …). " +
-        "Boundary sources are limited to OK-transitions plus LocalProfileActivations (S21) in this path; " +
-        "full segmentation requires explicit PlannedCalculation construction. The single surviving caller " +
-        "is the /calculate-and-export endpoint; full retirement is deferred per S20 Step 0b W2.",
+        "Boundary sources are limited to OK-transitions, LocalProfileActivations (S21), employment-window " +
+        "and employee-profile-change dates (S137) in this path; full segmentation requires explicit " +
+        "PlannedCalculation construction. The single surviving caller is the /calculate-and-export " +
+        "endpoint; full retirement is deferred per S20 Step 0b W2.",
         error: false)]
     public async Task<PeriodCalculationResult> CalculateAsync(
         EmploymentProfile profile,
@@ -627,9 +748,10 @@ public sealed class PeriodCalculationService
     /// </summary>
     [Obsolete(
         "Use CalculateWithOutcomeAsync(PlannedCalculation, …). Boundary sources are limited to " +
-        "OK-transitions plus LocalProfileActivations (S21) in this path; full segmentation requires " +
-        "explicit PlannedCalculation construction. The single surviving caller is the " +
-        "/calculate-and-export endpoint (S134 QUAL-003); full retirement is deferred per S20 Step 0b W2.",
+        "OK-transitions, LocalProfileActivations (S21), employment-window and employee-profile-change " +
+        "dates (S137) in this path; full segmentation requires explicit PlannedCalculation construction. " +
+        "The single surviving caller is the /calculate-and-export endpoint (S134 QUAL-003); full " +
+        "retirement is deferred per S20 Step 0b W2.",
         error: false)]
     public async Task<PeriodCalculationOutcome> CalculateWithOutcomeAsync(
         EmploymentProfile profile,
@@ -661,9 +783,33 @@ public sealed class PeriodCalculationService
     /// PlannedCalculation-first signature yet. Hydrates an OK-version boundary source from
     /// <see cref="OkVersionResolver"/> — S20's end-to-end boundary — and (S21 TASK-2108,
     /// ADR-017 D9c) local-agreement-profile activation boundaries from
-    /// <see cref="LocalAgreementProfileRepository"/>. Agreement-config / position-override
-    /// / EU WTD boundary hydration remain extension points that TASK-2009/TASK-2010 callers
-    /// will populate when they construct plans directly.
+    /// <see cref="LocalAgreementProfileRepository"/>, and (S137 TASK-13702, ADR-040 D5/D7)
+    /// the employee's employment window(s) from <see cref="IEmploymentWindowResolver"/> plus
+    /// <c>employee_profiles</c> effective-from dates from <see cref="EmployeeProfileRepository"/>.
+    /// Agreement-config / position-override / EU WTD boundary hydration remain extension
+    /// points that TASK-2009/TASK-2010 callers will populate when they construct plans directly.
+    ///
+    /// <para>
+    /// <strong>Employment-window fenceposts (ADR-040 D1 — the recurring inclusive/exclusive
+    /// hazard, stated once here):</strong> a boundary date is always the FIRST day of the NEW
+    /// segment. A window's <c>Start</c> is itself the first employed day, so it is passed
+    /// as-is (the pre-hire NOT_EMPLOYED prefix ends at <c>Start − 1</c>). A window's
+    /// <c>End</c> is INCLUSIVE (the last day employed), so the boundary is <c>End + 1</c>
+    /// — the first NOT-employed day. Passing <c>End</c> itself is the classic off-by-one
+    /// that would cut the last paid day out of the employed segment. Raw dates are passed;
+    /// <c>BoundaryDetector</c> filters to the period interior itself. The same windows are
+    /// handed to <see cref="PeriodPlanner.Plan"/> to TYPE the resulting segments — the
+    /// planner never derives boundaries from windows (it fail-safes a straddling segment to
+    /// EMPLOYED), so boundary hydration and typing must come from the same read, as here.
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>Null-resolver byte-identity:</strong> when neither S137 dependency is wired
+    /// (direct-construction fixtures), the new <see cref="BoundarySources"/> fields and the
+    /// planner's <c>employmentWindows</c> stay <c>null</c> — the planner treats null as
+    /// "windowless", every segment types EMPLOYED, and the serialized plan is byte-identical
+    /// to pre-S137 output (the EMPLOYED key is omitted by <c>WhenWritingDefault</c>).
+    /// </para>
     ///
     /// <para>
     /// The resolved <see cref="RuleClassification"/> set comes from the same
@@ -725,13 +871,57 @@ public sealed class PeriodCalculationService
                     ct);
         }
 
+        // Employment window(s) — ADR-040 D5/D7 (S137 TASK-13702). Read server-side inside
+        // this host via IEmploymentWindowResolver (the DTO never carries the dates, D7). The
+        // resolver's list is spells-proof: 0-or-1 entries today, a genuine list once re-hire
+        // spells land — this loop is already list-shaped. An EMPTY list means "the window is
+        // known and no employed day falls in the period" → the planner types every segment
+        // NOT_EMPLOYED. null (resolver not wired) means "windowless" → every segment EMPLOYED.
+        IReadOnlyList<EmploymentWindow>? employmentWindows = null;
+        List<DateOnly>? employmentStartedDates = null;
+        List<DateOnly>? employmentEndedDates = null;
+        if (_employmentWindowResolver is not null)
+        {
+            employmentWindows = await _employmentWindowResolver.GetWindowsAsync(
+                profile.EmployeeId, periodStart, periodEnd, ct);
+
+            employmentStartedDates = new List<DateOnly>(employmentWindows.Count);
+            employmentEndedDates = new List<DateOnly>(employmentWindows.Count);
+            foreach (var window in employmentWindows)
+            {
+                // Start IS the first employed day → boundary at Start (fencepost, see XML doc).
+                if (window.Start is { } start)
+                    employmentStartedDates.Add(start);
+
+                // End is INCLUSIVE (last day employed) → boundary at End + 1, the first
+                // NOT-employed day. The MaxValue guard only avoids an ArgumentOutOfRange on a
+                // sentinel 9999-12-31 end date, which can never be interior to a period anyway.
+                if (window.End is { } end && end < DateOnly.MaxValue)
+                    employmentEndedDates.Add(end.AddDays(1));
+            }
+        }
+
+        // employee_profiles effective_from dates STRICTLY inside (periodStart, periodEnd]
+        // — ADR-040 D5 activates the ADR-016 D5b-reserved EmployeeProfileChange cause. A
+        // row taking effect ON periodStart is not an interior boundary (the segment already
+        // starts there), hence afterExclusive = periodStart (documented on the repository).
+        IReadOnlyList<DateOnly>? employeeProfileEffectiveDates = null;
+        if (_employeeProfileRepo is not null)
+        {
+            employeeProfileEffectiveDates = await _employeeProfileRepo.GetEffectiveFromDatesAsync(
+                profile.EmployeeId, afterExclusive: periodStart, toInclusive: periodEnd, ct);
+        }
+
         var sources = new BoundarySources(
             OkTransitions: okTransitions,
             AgreementConfigPromotions: Array.Empty<(DateOnly, string)>(),
             PositionOverrideEffectiveDates: Array.Empty<(DateOnly, string)>(),
             EuWtdRulesetTransitions: Array.Empty<(DateOnly, int, int)>(),
             NonDatedSourceValues: new Dictionary<string, object?>(),
-            LocalProfileActivations: localProfileActivations);
+            LocalProfileActivations: localProfileActivations,
+            EmploymentStartedDates: employmentStartedDates,
+            EmploymentEndedDates: employmentEndedDates,
+            EmployeeProfileEffectiveDates: employeeProfileEffectiveDates);
 
         // ADR-020 D1 (S29 TASK-2907) — planner-enrollment seam for non-rule snapshot
         // contracts. Register the wage-type-mapping natural-key triple as a replay-stable
@@ -743,6 +933,14 @@ public sealed class PeriodCalculationService
         // Position is normalized to "" when null per the canonical empty-string fallback
         // convention (PayrollMappingService.GetMappingAsync XML doc + S29 TASK-2904
         // GetByKeyAtAsync replication).
+        //
+        // QUAL-150 (S137 Step-5a, Codex WARNING — registered, coupled to QUAL-149): this key is
+        // hydrated ONCE PER PLAN from the CALLER profile (ADR-020 D1.5), so after a mid-period
+        // POSITION change (an EmployeeProfileChange boundary since S137) the post-change segment
+        // would still map export lines with the OLD position's lønart. Unreachable in the live
+        // rule set today (profile-change splits REFUSE — QUAL-149); the per-segment DATED key
+        // must land before/with the increment that makes such splits plannable. Do not "fix"
+        // here without the ADR-020 D1.5 amendment — see the register row.
         var enrollment = new PlannerEnrollment();
         enrollment.RegisterSnapshotContract("WtmNaturalKey", p => new WtmNaturalKey(
             OkVersion: p.OkVersion,
@@ -760,7 +958,10 @@ public sealed class PeriodCalculationService
             sources: sources,
             options: PlannerOptions.Default,
             enrollment: enrollment,
-            profile: profile);
+            profile: profile,
+            // ADR-040 D5: the SAME windows that fed the boundary dates above type the
+            // segments (null → windowless → all EMPLOYED, byte-identical to pre-S137).
+            employmentWindows: employmentWindows);
     }
 
     // -------------------------------------------------------------------

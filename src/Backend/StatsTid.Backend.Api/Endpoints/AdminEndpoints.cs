@@ -880,6 +880,34 @@ public static class AdminEndpoints
             // position=NULL. EffectiveFrom uses 0001-01-01 anchor (same as backfill)
             // for consistent "always here" semantics; HR overrides via TASK-3107
             // PUT /api/admin/employee-profiles/{employeeId}.
+            // S137 / TASK-13708 (OWNER RULING 2026-09-02) — ONE date for the whole create.
+            // `effectiveFrom` (today, UTC) is the profile row's effective_from (S33 today-stamp,
+            // step (2) below) AND the EmployeeProfileCreated event's EffectiveFrom (step (4)),
+            // AND — when the request omits a hire date — the stored employment_start_date
+            // (step (1)). Computed ONCE here so the three can never disagree (e.g. a midnight
+            // straddle between two separate UtcNow reads would otherwise leave a profile
+            // boundary one day off its employment edge — exactly the unplannable shape the
+            // ruling exists to prevent).
+            //
+            // WHY the default (plain language): S137 made profile effective dates payroll
+            // segment boundaries. A new hire created WITHOUT a hire date used to get a profile
+            // row dated today but an UNBOUNDED employment window (NULL = ADR-040 D2 "unbounded
+            // past"). The creation month then contained a mid-month profile boundary with no
+            // employment edge to explain it — the planner treated it as a genuine split of a
+            // whole-window rule (two EMPLOYED segments) and REFUSED the month, and the compliance
+            // check resolved the profile at month-start (before the row existed) and hit the old
+            // profile-not-found 500. With the hire date recorded, the same date is an
+            // EmploymentStarted edge that outranks the profile-change cause in the tie-break, the
+            // pre-hire span is typed NOT_EMPLOYED, and the month plans. The owner ruled (fork
+            // presented: register / default / reject): "unknown hire date" means "hired today".
+            // An explicitly supplied date is stored verbatim as before. Seeded/legacy users whose
+            // employment_start_date is already NULL are NOT backfilled — D2 semantics are
+            // unchanged for them; this only changes what a NEW admin create stores when the
+            // field is omitted.
+            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow);
+            var employmentStartDateDefaulted = request.EmploymentStartDate is null;
+            var employmentStartDate = request.EmploymentStartDate ?? effectiveFrom;
+
             await using var tx = await conn.BeginTransactionAsync(ct);
 
             try
@@ -898,8 +926,10 @@ public static class AdminEndpoints
                 cmd.Parameters.AddWithValue("primaryOrgId", request.PrimaryOrgId);
                 cmd.Parameters.AddWithValue("agreementCode", request.AgreementCode);
                 cmd.Parameters.AddWithValue("okVersion", request.OkVersion);
-                // NULL when omitted = ADR-040 D2 "unbounded past" (no backfill semantics change).
-                cmd.Parameters.AddWithValue("employmentStartDate", (object?)request.EmploymentStartDate ?? DBNull.Value);
+                // S136 stored NULL here when omitted (ADR-040 D2 "unbounded past"). S137 /
+                // TASK-13708 owner ruling 2026-09-02: omitted ⇒ the profile's effective_from
+                // (today) — never NULL from this path any more. See the block above the tx for why.
+                cmd.Parameters.AddWithValue("employmentStartDate", employmentStartDate);
                 cmd.Parameters.AddWithValue("now", now);
                 await cmd.ExecuteNonQueryAsync(ct);
 
@@ -913,15 +943,21 @@ public static class AdminEndpoints
                 // EXCLUDED from new_data — audit JSONB must never carry credentials.
                 // new_data is a HAND-ENUMERATED subset (not a full-row snapshot): every field the
                 // create request can set must be listed here or its origin is unprovable later.
-                // employmentStartDate included per ADR-040 (null = D2 "unbounded past", recorded
-                // as-sent so the CREATED row reconstructs the hire date's origin).
+                // employmentStartDate (ADR-040) is the EFFECTIVE STORED value — S137 / TASK-13708
+                // defaults an omitted hire date to the profile's effective_from, so recording the
+                // as-sent value (S136 behaviour: JSON null when omitted) would no longer match the
+                // row. employmentStartDateDefaulted (S137, additive) tells an auditor whether that
+                // date was supplied by the admin (false) or defaulted by the system (true) — without
+                // it a defaulted date and a coincidentally-supplied same date are indistinguishable
+                // after the fact.
                 var userNewData = JsonSerializer.Serialize(new
                 {
                     displayName = request.DisplayName,
                     email = request.Email,
                     primaryOrgId = request.PrimaryOrgId,
                     agreementCode = request.AgreementCode,
-                    employmentStartDate = request.EmploymentStartDate,
+                    employmentStartDate,
+                    employmentStartDateDefaulted,
                 });
                 await using (var userAuditCmd = new NpgsqlCommand(
                     """
@@ -952,20 +988,31 @@ public static class AdminEndpoints
                 // on the first PUT (because '0001-01-01' < today), creating a brand-new
                 // successor row at version=1 instead of UPDATE-in-place at version=2.
                 // Stamping today aligns same-day-edit semantics with admin expectations.
+                // S137 / TASK-13708 — the stamp is the shared `effectiveFrom` computed above the
+                // tx: the SAME value the users row stores as employment_start_date when the request
+                // omitted a hire date (row/row parity by construction, see the block above the tx).
+                // S137 / ADR-040 D4 (TASK-13704) — employment_category is populated same-tx
+                // from the users value via the scalar subselect (the users INSERT at (1)
+                // above wrote it in THIS transaction, so the subselect sees it; today that
+                // value is the hardcoded 'Standard', and the subselect keeps this site
+                // correct-by-construction if (1) ever changes). dated==live is the S137
+                // invariant; users' category is write-once until Increment 3, so
+                // copy-from-users == copy-from-predecessor by construction.
                 var profileId = Guid.NewGuid();
                 await using var profileCmd = new NpgsqlCommand(
                     """
                     INSERT INTO employee_profiles
                         (profile_id, employee_id, part_time_fraction, position,
-                         effective_from)
+                         effective_from, employment_category)
                     VALUES
                         (@profileId, @employeeId, @partTimeFraction, NULL,
-                         @effectiveFrom)
+                         @effectiveFrom,
+                         (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
                     """, conn, tx);
                 profileCmd.Parameters.AddWithValue("profileId", profileId);
                 profileCmd.Parameters.AddWithValue("employeeId", request.UserId);
                 profileCmd.Parameters.AddWithValue("partTimeFraction", 1.000m);
-                profileCmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
+                profileCmd.Parameters.AddWithValue("effectiveFrom", effectiveFrom);
                 await profileCmd.ExecuteNonQueryAsync(ct);
 
                 // (2b) employee_profile_audit CREATED row in-tx (Step 7a P2 fix —
@@ -1093,13 +1140,16 @@ public static class AdminEndpoints
                 // L383 carries today; pre-fix this event claimed '0001-01-01' (seeder
                 // convention from S31 TASK-3108). Phase 4e replay consumers reconstructing
                 // employee profile timelines from the event stream now see consistent state.
+                // S137 / TASK-13708 — parity is now BY CONSTRUCTION: the event carries the same
+                // `effectiveFrom` variable the row was stamped with (previously a second, independent
+                // UtcNow read that could straddle midnight). Event schema unchanged (DEP-003).
                 var profileEvent = new EmployeeProfileCreated
                 {
                     ProfileId = profileId,
                     EmployeeId = request.UserId,
                     PartTimeFraction = 1.000m,
                     Position = null,
-                    EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                    EffectiveFrom = effectiveFrom,
                     ActorId = actor.ActorId,
                     ActorRole = actor.ActorRole,
                     CorrelationId = actor.CorrelationId,
@@ -2989,10 +3039,14 @@ public static class AdminEndpoints
         public required string AgreementCode { get; init; }
         public required string OkVersion { get; init; }
 
-        // S136 / ADR-040 — OPTIONAL hire date. Omitted ⇒ users.employment_start_date NULL,
-        // which ADR-040 D2 defines as "unbounded past" (every employment-window guard passes
-        // through on a NULL side), so existing callers stay valid unchanged. No end date exists
-        // at create, so no cross-field ordering guard applies here.
+        // S136 / ADR-040 — OPTIONAL hire date (the wire contract is unchanged since S136).
+        // S137 / TASK-13708 (owner ruling 2026-09-02): omitted ⇒ the handler DEFAULTS
+        // users.employment_start_date to the first profile row's effective_from (today) —
+        // "unknown hire date" means "hired today" — so a new hire's creation month is
+        // plannable by construction (an EmploymentStarted edge, not an unexplained profile
+        // boundary). The audit CREATED row records that the date was defaulted. Seeded/legacy
+        // NULLs keep ADR-040 D2's "unbounded past" meaning; this path no longer writes NULL.
+        // No end date exists at create, so no cross-field ordering guard applies here.
         public DateOnly? EmploymentStartDate { get; init; }
 
         // S74 R9 — OPTIONAL atomic create+assign. When supplied, the create tx ALSO creates the

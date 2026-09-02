@@ -92,13 +92,19 @@ public static class EmployeeProfileSeeder
                 // EmployeeProfileRepository.InsertLiveRowAsync now stamps
                 // supersedingVersion = predecessor.Version + 1, so the ETag monotonicity
                 // contract holds across the supersession.
+                // S137 / ADR-040 D4 — employment_category is populated same-tx from the
+                // users value via the scalar subselect (the seeder iterates user_ids read
+                // from users, so the row exists). dated==live is the S137 invariant; users'
+                // category is write-once until Increment 3, so copy-from-users ==
+                // copy-from-predecessor by construction.
                 var profileId = Guid.NewGuid();
                 await using var insertCmd = new NpgsqlCommand(
                     """
                     INSERT INTO employee_profiles
-                        (profile_id, employee_id, part_time_fraction, position)
+                        (profile_id, employee_id, part_time_fraction, position, employment_category)
                     VALUES
-                        (@profileId, @employeeId, @partTimeFraction, NULL)
+                        (@profileId, @employeeId, @partTimeFraction, NULL,
+                         (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
                     """, conn, tx);
                 insertCmd.Parameters.AddWithValue("profileId", profileId);
                 insertCmd.Parameters.AddWithValue("employeeId", employeeId);

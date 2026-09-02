@@ -63,6 +63,17 @@ When `true` and there's disagreement, the planner **shrinks** (not expands) the 
 
 `(reject, *, *)` rules ignore the flag — period straddle is always 4xx. `reject` is a first-class option (Step 0b BLOCKER B2); the framework does not pre-commit to "evaluate union with dominant config" as the only fallback.
 
+**D4 amendment 2026-09-02 (S137 TASK-13707, owner-ruled — see ADR-040 §Consequences):** the refusal keys on
+EVALUATED segments, not on interior boundaries. With ADR-040 D5's typed EMPLOYED/NOT_EMPLOYED segments, a
+boundary that merely TRUNCATES evaluation (a hire or leave edge — the NOT_EMPLOYED side evaluates nothing)
+is not a split: an `AlignedWindow` or `Reject` rule runs exactly once, over a shorter span, and its result
+reaches the merger as a single segment. The planner therefore refuses iff such a rule would be evaluated in
+≥ 2 EMPLOYED segments (a profile change while employed; two spells in one month). For callers without
+employment windows every segment is EMPLOYED, so the pre-S137 behavior is unchanged: any interior boundary
+refuses. The former `HasAnyInteriorBoundary` source-mirror is retired — counting typed segments is complete
+by construction over every boundary source. The genuine-split refusal in the live rule set remains the S64
+F4-1(b) follow-up, re-registered as QUAL-149.
+
 ### D5 — Implementation scope: OK-version end-to-end + extension points
 
 In scope:

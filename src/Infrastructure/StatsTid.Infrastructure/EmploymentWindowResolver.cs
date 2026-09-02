@@ -11,6 +11,9 @@ namespace StatsTid.Infrastructure;
 /// end date INCLUSIVE — the last day employed (D1: <c>date == end</c> ⇒ EMPLOYED,
 /// <c>date == start</c> ⇒ EMPLOYED); NULL = unbounded on that side (D2), so both-NULL
 /// employees are employed on every date and enforcement needs no backfill.
+/// S137 (ADR-040 D5) adds <see cref="GetWindowsAsync"/> — the range-scoped, list-shaped
+/// (spells-proof) window read segmentation consumers use to place employment boundaries;
+/// same D1/D2/D3 semantics, same fail-loud missing-user contract.
 ///
 /// <para>
 /// <b>Deliberately NO <c>is_active</c> / <c>end_date_deactivated</c> filter (ADR-040 D3).</b>
@@ -72,6 +75,40 @@ public sealed class EmploymentWindowResolver : IEmploymentWindowResolver, IEmplo
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<EmploymentWindow>> GetWindowsAsync(
+        string employeeId, DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        // Fail-loud on an inverted range: an empty result here would read as "no employed
+        // days in the range" (a legitimate domain answer) and silently mask the caller's
+        // date arithmetic bug — the same fail-loud stance as the missing-user case.
+        if (to < from)
+        {
+            throw new ArgumentException(
+                $"Employment-window range query is inverted: to ({to:yyyy-MM-dd}) is before " +
+                $"from ({from:yyyy-MM-dd}). EmployeeId='{employeeId}'.",
+                nameof(to));
+        }
+
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(Sql, conn);
+        var (start, end) = await ReadWindowRowAsync(cmd, employeeId, ct);
+
+        // Overlap test for [start, end] vs [from, to], both end-INCLUSIVE (ADR-040 D1);
+        // a NULL side is unbounded (D2), so a both-NULL window overlaps every range —
+        // that is why it counts as ONE unbounded entry, never an empty list.
+        var overlaps = (!start.HasValue || start.Value <= to)
+                    && (!end.HasValue || end.Value >= from);
+
+        // 0-or-1 entries while storage is the single users-row spell (ADR-040 D1); the
+        // deferred spells increment changes THIS body (query a spells table), never the
+        // list-shaped contract — the "spells = storage + resolver only" promise.
+        return overlaps
+            ? new[] { new EmploymentWindow(start, end) }
+            : Array.Empty<EmploymentWindow>();
+    }
+
+    /// <inheritdoc />
     public async Task<EmploymentWindowStatus> GetStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, DateOnly date, CancellationToken ct = default)
@@ -84,6 +121,18 @@ public sealed class EmploymentWindowResolver : IEmploymentWindowResolver, IEmplo
 
     private static async Task<EmploymentWindowStatus> ExecuteAsync(
         NpgsqlCommand cmd, string employeeId, DateOnly date, CancellationToken ct)
+    {
+        var (start, end) = await ReadWindowRowAsync(cmd, employeeId, ct);
+        return Evaluate(date, start, end);
+    }
+
+    /// <summary>
+    /// Executes the shared single-spell SELECT and returns the raw window dates —
+    /// the one row-reading path both <c>GetStatusAsync</c> and <c>GetWindowsAsync</c>
+    /// funnel through, so the fail-loud missing-user contract cannot drift between them.
+    /// </summary>
+    private static async Task<(DateOnly? Start, DateOnly? End)> ReadWindowRowAsync(
+        NpgsqlCommand cmd, string employeeId, CancellationToken ct)
     {
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -101,7 +150,7 @@ public sealed class EmploymentWindowResolver : IEmploymentWindowResolver, IEmplo
 
         DateOnly? start = reader.IsDBNull(0) ? null : reader.GetFieldValue<DateOnly>(0);
         DateOnly? end = reader.IsDBNull(1) ? null : reader.GetFieldValue<DateOnly>(1);
-        return Evaluate(date, start, end);
+        return (start, end);
     }
 
     private static EmploymentWindowStatus Evaluate(DateOnly date, DateOnly? start, DateOnly? end)
