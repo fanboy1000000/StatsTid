@@ -8,7 +8,7 @@
 | **End Date** | 2026-09-02 |
 | **Orchestrator Approved** | yes — 2026-09-02 (Step-5a dual-lens terminal; Step-7a Codex terminal at cycle 3; Reviewer close verdict in `.claude/reviews/SPRINT-137-step7a-reviewer.md`) |
 | **Build Verified** | yes — `dotnet build StatsTid.sln -c Release --no-incremental` **0 errors** on the final tree (CA2100 distinct sites 115 = CI baseline) |
-| **Test Verified** | local: unit **1089/1089** (+84) · DemoSeed **165/165** · regression non-Docker **113/113** (+11) — all green on the final tree; Docker-gated pins (~43 new facts) + smoke + frontend: **CI-pending** — watched close run, backfilled here when green (Docker unavailable on the owner's machine, standing instruction 2026-09-02) |
+| **Test Verified** | **✅ CI GREEN `33622368503`** (all 7 jobs, 2026-09-02, watched to verdict): unit **1089/1089** (+84) · DemoSeed **165/165** · regression **1734/1734** (+62 vs the S136 run — every S137 Docker-gated pin passed on FIRST CI execution: window resolver, category dating, migration replay ×2, legacy-row replay, 4 payroll E2E + 3 live-ruleset, 10 resolver date-overlay, 6 compliance window, 9 leaver end-cap, 4 settlement RED-on-old, the flipped admin-create pin, the two marquee fixtures on the real window resolver) · smoke + E2E + frontend + docs + gitleaks + lizard green; CA2100 115 = baseline in CI. Local before push: unit 1089 · DemoSeed 165 · regression non-Docker 113 (Docker unavailable on the owner's machine). |
 
 ## Sprint Goal
 
@@ -451,13 +451,13 @@ S136 close (`docs/sprints/SPRINT-136.md` Test Summary + the INDEX row).
 | Unit | 1005 | **1089** | **+84** | green locally (Wave 1 segmentation + parity pins; 13702's 15; 13703's 21 accrual cases; 13707's 16 truncation pins; Step-5a absorptions: 4 coupling + 3 merge-backstop + 1 parity-identity; net of renames) |
 | DemoSeed | 165 | **165** | ±0 | green locally |
 | Regression, non-Docker subset (`Category!=Docker`) | 102 | **113** | **+11** | green locally (the pure compliance union-semantics pins) |
-| Regression, Docker-gated | 1672 total in the S136 CI run | — | ~+43 new facts (Wave 1: window-resolver range legs, category dating, migration replay ×2, legacy-row replay legs · Wave 2: 4 payroll E2E, 10 resolver date-overlay, 6 compliance window, 9 leaver end-cap, 4 settlement RED-on-old · 2b: 3 live-ruleset · 2c: 1 flipped + 1 extended admin-create) | **CI-pending — verifies in the watched close run** (Docker unavailable on the owner's machine, standing instruction 2026-09-02) |
+| Regression, Docker-gated (CI) | 1672 total in the S136 CI run | **1734 total in run 33622368503** | **+62** new facts (Wave 1: window-resolver range legs, category dating, migration replay ×2, legacy-row replay legs · Wave 2: 4 payroll E2E, 10 resolver date-overlay, 6 compliance window, 9 leaver end-cap, 4 settlement RED-on-old · 2b: 3 live-ruleset · 2c: 1 flipped + 1 extended admin-create) | **✅ CI GREEN — all passed on first CI execution** (Docker unavailable on the owner's machine, standing instruction 2026-09-02) |
 | Smoke | 6 (CI) | — | ±0 | CI (composed stack) |
 | Frontend | 735 (S128, last change) | 735 | ±0 (not re-run — no frontend change this sprint) | CI |
 | Full solution build | — | Release, `--no-incremental`, **0 errors / 145 pre-existing warnings**; **CA2100 distinct sites 115 = baseline** | — | ✅ |
 
 **Arithmetic check:** locally-run total 1005 + 165 + 102 = 1272 → 1089 + 165 + 113 = **1367 (+95)**; the Docker-
-gated and CI-only suites are reported by the CI run and backfilled on the header line when green.
+gated and CI-only suites: run `33622368503` — regression **1734/1734** (+62), smoke + E2E + frontend green; backfilled 2026-09-02.
 
 
 ## Sprint Retrospective
