@@ -100,6 +100,30 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
 
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
 
+    /// <summary>
+    /// The first Monday-to-Friday on or after <paramref name="from"/>. Every SEEDED absence this
+    /// file revalues must go through it.
+    ///
+    /// <para>
+    /// Why (S138 CI iteration 3): an entitlement-consuming absence cannot exist on a zero-norm day.
+    /// The Skema save guard rejects one with a 422 (ADR-032 D3 — you cannot consume a feriedag on a
+    /// non-working day), and `DailyNormCalculator` returns a 0 norm for Saturday and Sunday. The
+    /// revaluation therefore divides hours by a zero divisor, gets no meaningful value, and skips
+    /// the absence entirely BEFORE it can notice the year is settled — so no group is skipped, no
+    /// skip is reported, and no worklist row is raised. Seeding a weekend absence tests a state the
+    /// product forbids, and whether that happens depends on which weekday CI runs, since the dates
+    /// here are offsets from <see cref="Today"/>. Two pins failed on exactly this. Mirrors
+    /// <c>Adr032RevaluationTests.NextWeekday</c>, which the sibling suite already carries.
+    /// </para>
+    /// </summary>
+    private static DateOnly OnWeekday(DateOnly from)
+    {
+        var d = from;
+        while (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            d = d.AddDays(1);
+        return d;
+    }
+
     // ═════════════════════════════════════════════════════════════════════
     // 1. The split — a backdate INTO a closed history row
     // ═════════════════════════════════════════════════════════════════════
@@ -425,8 +449,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             (t60, t30, 1.000m, null),
             (t30, null, 1.000m, null));
 
-        var inside = t60.AddDays(10);   // inside [t45, t30) after the split below
-        var outside = t30.AddDays(5);   // covered by the successor row
+        var inside = OnWeekday(t60.AddDays(10));   // inside [t45, t30) after the split below
+        var outside = OnWeekday(t30.AddDays(5));   // covered by the successor row
         await SeedAbsenceAsync(employeeId, inside, "VACATION", hours: 7.4m, feriedage: 1.0m);
         await SeedAbsenceAsync(employeeId, outside, "VACATION", hours: 7.4m, feriedage: 1.0m);
 
@@ -467,7 +491,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         var t60 = Today.AddDays(-60);
         await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-400), null, 1.000m, null));
 
-        var absenceDay = t60;
+        var absenceDay = OnWeekday(t60);
         await SeedAbsenceAsync(employeeId, absenceDay, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
 
         // SPECIAL_HOLIDAY reset_month is 1 (seeded config); the resolver maps the taking window to
@@ -515,7 +539,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-400), null, 1.000m, null));
 
         // The settled year's absence is in the PAST — outside the [today, ∞) corrected interval.
-        var pastAbsence = Today.AddDays(-60);
+        var pastAbsence = OnWeekday(Today.AddDays(-60));
         await SeedAbsenceAsync(employeeId, pastAbsence, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
         var settledYear = EntitlementPeriodResolver
             .Resolve(EntitlementPeriodResolver.SpecialHolidayType, 1, pastAbsence).EntitlementYear;
@@ -549,7 +573,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-400), null, 1.000m, null));
 
         // An absence already booked 30 days AHEAD — inside the corrected interval [today, ∞).
-        var futureAbsence = Today.AddDays(30);
+        var futureAbsence = OnWeekday(Today.AddDays(30));
         await SeedAbsenceAsync(employeeId, futureAbsence, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
         var settledYear = EntitlementPeriodResolver
             .Resolve(EntitlementPeriodResolver.SpecialHolidayType, 1, futureAbsence).EntitlementYear;

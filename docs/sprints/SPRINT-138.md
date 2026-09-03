@@ -625,6 +625,70 @@ pin than the original, because the split not overwriting history is the actual c
 
 **Local re-verification after all four:** Release build 0 errors, Unit 1235/1235, DemoSeed 165/165, non-Docker
 Regression 102/102.
+
+## CI remediation — iteration 2 (run `33797742939`, 2 of 1799 regression facts red)
+
+Four of the five iteration-1 remediations are CONFIRMED by this run: the worklist ordering fix, the
+rewritten degradation pin and the corrected lifecycle-split pin all passed, and the six failures fell to
+two. The remaining two are the pair of settled-year SKIP-path pins
+(`PUT_Backdate_SkipsSettledSpecialHolidayYear_…` expecting 2 triggers and getting 1;
+`PUT_TodayDatedEdit_WhoseRevaluationSkipsASettledGroup_…` finding no row at all). Both symptoms have one
+explanation: the revaluation returns an EMPTY set of skipped groups, so the skip path is a no-op.
+
+That means the absence-type correction in iteration 1 was NECESSARY but not SUFFICIENT — the seed was
+genuinely wrong, and fixing it exposed a second cause underneath rather than clearing the path. Worth
+naming, because "the fix reduced the failures" is not the same as "the fix was the cause".
+
+### The second cause, found by trace: the absences were seeded on a WEEKEND
+
+Plain language first. Days off do not consume holiday. A Saturday has a working norm of zero hours, so
+booking a feriedag on one is meaningless, and the system refuses it: the Skema save guard answers 422
+(ADR-032 D3 — you cannot consume a holiday on a non-working day). Both failing pins seeded their absence
+directly into the projection table, bypassing that guard, and both landed on a weekend.
+
+What that does to the revaluation, step by step:
+
+1. `DailyNormCalculator` returns a full-day norm of **0** for Saturday and Sunday.
+2. Feriedage is hours ÷ full-day-hours (ADR-032 D3), and dividing by zero has no meaningful answer, so
+   `ConsumptionCalculator.ToFeriedage` returns null.
+3. The revaluation's loop therefore `continue`s on that absence — BEFORE it reaches the settled-year
+   check. The `(SPECIAL_HOLIDAY, year)` group is never created, nothing is skipped, and the skip list
+   comes back empty.
+4. An empty skip list makes `WriteForSkippedSettledYearsAsync` a no-op, which is exactly the two
+   symptoms: one trigger instead of two in the backdate pin (the date path's), and no row at all in the
+   today-dated pin (where the date path correctly abstains).
+
+**This is a TEST defect and the production behaviour is right.** Refusing to divide by a zero norm is
+the correct answer; manufacturing a revaluation there would be the actual bug. The sibling suite already
+knew this — `Adr032RevaluationTests` carries a `NextWeekday` helper for precisely this reason, with the
+comment "keeps bookings on positive-norm days so the per-day guard passes". This file was written
+without it.
+
+**The uncomfortable part: these pins were never permanently red — they were weekday-dependent.** Every
+date in the file is an offset from `DateTime.UtcNow`, so a fixed offset lands on a weekend two days in
+seven. The backdate pin (offset −60) fails only when CI runs on a Wednesday or Thursday; the today-dated
+pin (offset +30) only on a Thursday or Friday. The close run was a Thursday, the one weekday where both
+fail at once. Had it been a Monday, the sprint would have closed green with two pins that prove nothing
+and a third latent flake still hidden.
+
+**FIXED:** an `OnWeekday` nudge, applied to all five seeded absence dates in the file, not just the two
+that failed. Two of the other three matter:
+
+- `PUT_Backdate_RevaluesOnlyInsideTheWrittenInterval` — the pin cited as proof the revaluation machinery
+  works — carries the same flake at offset −50 and would fail on a Sunday or Monday. It was proof five
+  days in seven.
+- The same test's "outside the interval" absence was at a weekend on the close date, so its
+  "value untouched" assertion held because of the weekend skip, not because of the interval boundary it
+  claims to pin. It only now tests what it says it tests.
+
+The nudge moves a date by at most two days; every one stays inside the interval its test needs, and both
+SPECIAL_HOLIDAY entitlement years are unchanged by the shift.
+
+**Registered: `QUAL-153`.** The nudge is a per-site guard, not the durable answer. The structural fix is
+a FIXED `TimeProvider` injected into the test host for the date-sensitive suites, so a pin's meaning
+stops depending on the day CI runs, plus a sweep for the same pattern elsewhere. Sized as its own task.
+
+**Local re-verification:** Release build 0 errors, non-Docker Regression 102/102, Unit 1235/1235.
 ## Sprint Retrospective
 
 **What shipped, in one paragraph a non-engineer can use.** Until this sprint, an employee's profile could only
@@ -666,6 +730,7 @@ no downstream number is silently rewritten (ADR-013's bound, held).
 - **A "registered follow-up" is a claim that must be checkable.** The `required EffectiveFrom` item was written
   as registered with nothing behind it (now `QUAL-152`). Registration means a row exists, not that the sentence
   was typed.
+- **A pin whose dates float with the calendar is not a pin.** The two failures that survived the first remediation were not permanently red — they failed only on certain weekdays, because every date in the file is an offset from the current date and a fixed offset lands on a weekend two days in seven. The close run happened to be the one weekday where both failed. On a Monday the sprint would have closed green with two pins proving nothing and a third latent flake unnoticed. Registered as QUAL-153: the durable fix is a fixed clock in the test host, not a nudge per site.
 - **The Docker gap is a test-quality risk, not just a slower feedback loop.** Six pins failed in CI and only ONE was a product defect. The other five were tests that could not run here: one still demanded behaviour a review had removed, two seeded an absence type that does not exist (so they proved nothing while appearing to pass the review), and one asserted a geometry the seeder makes impossible. Pins written against a database nobody can run locally need the same scrutiny as production code, because nothing else checks them until the close run.
 - **My own two errors, recorded.** I wrote a 422 message by passing a sentence into a noun slot, producing text
   no HR user could parse — the internal lens caught it. And I stated the settled-year rule as "the boundary test
