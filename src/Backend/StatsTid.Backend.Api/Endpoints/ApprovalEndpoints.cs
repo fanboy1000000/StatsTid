@@ -1767,8 +1767,9 @@ public static class ApprovalEndpoints
     /// <para><b>Ordering is the contract.</b> The by-id route's checks all used to run BEFORE its
     /// transaction opened, which made them advisory. Required order, both adapters:
     /// (1) adapter pre-read → (2) tx at READ COMMITTED → (3) advisory lock, first statement →
-    /// (4) authoritative re-read by natural key → (5) role floor, then coverage, then allocation →
-    /// (6) conditional transition, follow-up UPDATE, event, audit.</para>
+    /// (4) authoritative re-read by natural key → (5) role floor + the ADR-040 D3 subject-state
+    /// floor (S138), then coverage, then allocation → (6) conditional transition, follow-up UPDATE,
+    /// event, audit.</para>
     /// </summary>
     /// <param name="monthStart">The first day of the month. Server-derived on both adapters.</param>
     /// <param name="monthEnd">The last day of that same month.</param>
@@ -1841,13 +1842,91 @@ public static class ApprovalEndpoints
 
         if (actor.ActorRole != StatsTidRoles.Employee)
         {
+            // ── S138 / TASK-13805 — TERMINATED-INCLUSIVE validator swap (ADR-040 D3) ─────────────
+            // The shared ValidateEmployeeAccessAsync resolves its target ACTIVE-ONLY, so a
+            // deactivated leaver was 403 "Target employee not found" even to in-scope HR — the first
+            // half of the "leaver-send dead-end" (see (5a′) below for the whole story). The
+            // IncludingTerminated validator is behaviour-IDENTICAL for an ACTIVE target under the
+            // same floor (the S127 R2/R4 matrix is byte-preserved, self-exemption included) and
+            // additionally admits a TERMINATED subject only through a scope that is ITSELF LocalHR
+            // or above (R9b primary-role gate + R9f1 per-scope floor, GLOBAL and CoversOrg branches
+            // alike). Employee-role actors never reach this branch (handled above); Employee-SHAPED
+            // actors (no role / all-Employee scopes) are denied outright by its no-own-data-branch
+            // decision — strictly fail-closed relative to the old validator. Same swap, same
+            // reasoning, as TimeEndpoints.cs / SkemaEndpoints.cs (S136 / TASK-13603).
             var sendFloor = string.Equals(employeeId, actor.ActorId, StringComparison.Ordinal)
                 ? null
                 : StatsTidRoles.LocalHR;
-            var (allowed, reason) = await svc.ScopeValidator.ValidateEmployeeAccessAsync(
+            var (allowed, reason) = await svc.ScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
                 actor, employeeId, sendFloor, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+        }
+
+        // ── (5a′) THE SUBJECT READ — TERMINATED-INCLUSIVE, IN-LOCK — AND THE ADR-040 D3 FLOOR ────
+        //
+        // S138 / TASK-13805 — closes the "leaver-send dead-end" S136 deferred (SPRINT-136 "Open
+        // follow-ups"; the TASK-13606 named deferral that used to sit at (5d) below).
+        //
+        // WHY, in plain terms: when an employee leaves, payroll still has to close out their FINAL
+        // month — that last, partially-employed month is exactly the one payroll needs certified.
+        // But leaving flips users.is_active to FALSE, and until S138 this command read its subject
+        // through ACTIVE-ONLY paths in two places: the scope validator at (5a), whose target read
+        // filtered is_active (in-scope HR got 403 "Target employee not found"), and the subject read
+        // here, which returned null (even a GlobalAdmin got 404 "Employee not found"). Net effect: a
+        // departed employee's month could be sent by NOBODY — a payroll-correctness dead-end, not a
+        // security feature. Both reads now use the S70 R9c terminated-INCLUSIVE pair the two
+        // registration writers adopted in S136 / TASK-13603, so the leaver is ADDRESSABLE, and
+        // ADR-040 D3 then decides WHO may act:
+        //   • is_active governs the ACTOR's login/session only — it is not a data-visibility fact;
+        //   • the SUBJECT's deactivation selects the role floor: LocalHR or above. For HR-tier actors
+        //     the validator above already enforced it per ADMITTING SCOPE, so a sub-HR leader in
+        //     scope, HR out of scope, and a mixed HR@A + Leader@B token are all 403 there;
+        //   • the self-exemption YIELDS to subject deactivation: a terminated employee's own
+        //     still-valid JWT (up to 8h) cannot send — SEC-046 stays closed. Employee-role actors
+        //     never reach the validator (the own-periods short-circuit above), so THIS check is the
+        //     load-bearing closure for them. It is a deliberate 403 (a decision, auditable) where
+        //     the old active-only read produced an accidental 404 — the same status change S136
+        //     recorded for the Skema save. For non-Employee actors this re-check is defence in
+        //     depth: it can never deny an actor the validator admitted (R9b already requires
+        //     primary role ≥ LocalHR for a terminated subject).
+        //
+        // WHY THIS IS THE AUTHORITATIVE CHECK, with no advisory/authoritative two-step: the S136
+        // writers read the subject BEFORE their transaction and had to RE-READ it under the lock
+        // (S136 Step-5a Codex B1). This command never reads the subject before the lock — the lock
+        // is the tx's first statement at (3), and BOTH subject reads run after it: the validator's
+        // on a pooled connection (autocommit, sees the latest commit) and this one on (conn, tx)
+        // under the ReadCommitted pin. The deactivation writers (the employment-date PUTs' R1
+        // lifecycle, the Step-A settlement flip) commit under this SAME EmployeeConsumptionLock, so
+        // no deactivation can land between these reads and our commit; any is_active writer NOT
+        // enrolled in the lock is still seen at its latest committed state by this in-tx read. The
+        // floor is enforced on THIS row, and the same row feeds (5c)/(5d) — one users-row read per
+        // send, as before. Placed BEFORE the (5b) status gate because it is an ACCESS decision, and
+        // this command's own ordering (like the writers' in-tx order rule) puts access ahead of
+        // status: an unauthorised actor is refused before learning what state the month is in.
+        //
+        // What did NOT change: the employment WINDOW binds every actor at (5d), HR included (a
+        // fully post-employment month is still the date-free 422); the (5b) source-state gate, the
+        // coverage and allocation gates, the payroll-export lock and the S127 send-command family
+        // are untouched; the R4 floor for ACTIVE subjects is byte-identical, so the S127
+        // authorization matrix and the windowless characterization pin stay green. No employment
+        // date enters any response body (D3 redaction).
+        var user = await svc.UserRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct);
+        if (user is null)
+            return Results.NotFound(new { error = "Employee not found" });
+
+        if (!user.IsActive &&
+            (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
+        {
+            // Nothing has been written; the disposed tx rolls back. The reason string is the
+            // writers' exact D3 contract (TimeEndpoints.cs / SkemaEndpoints.cs) — one string across
+            // every write surface, whichever check fires. It names termination STATUS, never a
+            // date (the S136 Reviewer-N1 "status oracle" residual, accepted as bounded).
+            return Results.Json(new
+            {
+                error = "Access denied",
+                reason = "Writes for a deactivated employee require LocalHR or above"
+            }, statusCode: 403);
         }
 
         // ── (5b) THE SOURCE-STATE GATE ───────────────────────────────────────────────────────────
@@ -1881,10 +1960,10 @@ public static class ApprovalEndpoints
         //   • org_id       — the employee's CURRENT primary org (deliberate). It is the same value the
         //     audit projection resolves as ResolvedTargetOrgId, so the row and its audit trail cannot
         //     disagree about which organisation the month belongs to.
-        var user = await svc.UserRepo.GetByIdAsync(conn, tx, employeeId, ct);
-        if (user is null)
-            return Results.NotFound(new { error = "Employee not found" });
-
+        //
+        // The subject row is the one read in-lock at (5a′) — S138 moved the read up there because
+        // it became an ACCESS input (the D3 floor); the dimensions below are resolved off that same
+        // row, so there is still exactly one users-row read per send.
         var orgId = user.PrimaryOrgId;
         var agreementCode =
             await svc.UserAgreementCodeRepo.GetByUserIdAtAsync(employeeId, monthStart, ct)
@@ -1902,9 +1981,10 @@ public static class ApprovalEndpoints
         // intersection is the identity, so pre-window behaviour is byte-identical (the standing
         // characterization pin in AllocationPredicateCharacterizationTests is the evidence).
         //
-        // NAMED DEFERRAL (refinement Reviewer-N2): the subject read at (5c) is ACTIVE-ONLY, so a
-        // DEACTIVATED leaver's final in-window month still cannot be SENT even by HR — deliberately
-        // deferred to Increment 2/3 scoping, not an oversight to "fix" here.
+        // (The S136 refinement's Reviewer-N2 NAMED DEFERRAL — "the subject read is ACTIVE-ONLY, so a
+        // DEACTIVATED leaver's final in-window month still cannot be SENT even by HR" — was CLOSED by
+        // S138 / TASK-13805 at (5a′): both subject reads are terminated-inclusive under the D3 floor,
+        // so the window intersection below now actually reaches a leaver's final month.)
 
         // 1. Danish public holidays in range. On the tx connection — static reference data, and it
         //    saves a pooled connection.
@@ -1924,7 +2004,7 @@ public static class ApprovalEndpoints
         //    window (ADR-040 D6 — the window enters the send gate as a filter on what is expected,
         //    never as a change to the month's whole-geometry).
         //
-        //    WINDOW SOURCE — the in-tx subject row, not a second read. The user row at (5c) was
+        //    WINDOW SOURCE — the in-tx subject row, not a second read. The user row at (5a′) was
         //    read on THIS (conn, tx) under the advisory lock, and UserRepository.ReadUser hydrates
         //    User.EmploymentStartDate/EmploymentEndDate from the same users columns
         //    IEmploymentWindowResolverInTx would SELECT on the same (conn, tx) — so consulting the
@@ -2188,7 +2268,7 @@ public static class ApprovalEndpoints
             ActorPrimaryOrgId: actor.OrgId,
             CorrelationId: actor.CorrelationId,
             OccurredAt: new DateTimeOffset(@event.OccurredAt),
-            // The employee row was read in-tx at (5c) and its absence already returned 404, so this
+            // The employee row was read in-tx at (5a′) and its absence already returned 404, so this
             // is the same value org_id was just set to — no second lookup, no way to disagree.
             ResolvedTargetOrgId: user.PrimaryOrgId);
         var auditRow = svc.AuditMapper.Map(@event, auditCtx);

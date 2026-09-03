@@ -116,7 +116,12 @@ public sealed class OrgScopeValidator
     /// S70 / TASK-7003 (SPRINT-70 R9b, ADR-033 slice 3a) — terminated-INCLUSIVE employee-access
     /// validation for the R9c allowlist surfaces ONLY (the employment-end-date set/clear endpoint,
     /// the settlement manual-resolve endpoint, the reconcile-payout endpoint, and the year-overview
-    /// read). Resolves the target via
+    /// read; since S136 / TASK-13603 the two REGISTRATION WRITERS (time-entries POST, Skema save) and
+    /// since S138 / TASK-13805 the approval SEND command, and since S138 / TASK-13802 the employee-profile GET + PUT +
+    /// the dedicated agreement-code endpoint — each with the ADR-040 D3 role floor as
+    /// <c>roleFloor</c>, so a deactivated subject is addressable ONLY by an admitting scope that is
+    /// itself LocalHR+; the general read paths stay active-only).
+    /// Resolves the target via
     /// <see cref="UserRepository.GetByIdIncludingTerminatedAsync(string, CancellationToken)"/> so a
     /// deactivated leaver IS addressable (the S68 B2 fix), then applies the EXISTING
     /// <see cref="RoleScope.CoversOrg"/>/<c>PrimaryOrgId</c> subtree check unchanged. The shared

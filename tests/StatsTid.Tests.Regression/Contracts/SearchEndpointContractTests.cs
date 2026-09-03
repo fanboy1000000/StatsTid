@@ -124,8 +124,10 @@ public sealed class SearchEndpointContractTests : IAsyncLifetime
 
         await using (var cmd = new NpgsqlCommand(
             """
-            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from)
-            VALUES (@id, 1.000, 'Kontorchef', '0001-01-01')
+            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from,
+                                           employment_category)
+            VALUES (@id, 1.000, 'Kontorchef', '0001-01-01',
+                    (SELECT u.employment_category FROM users u WHERE u.user_id = @id))
             ON CONFLICT DO NOTHING
             """, conn))
         {

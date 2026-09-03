@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 67 tables** (50 primary, 17 audit).
+**Total: 68 tables** (51 primary, 17 audit).
 
 ---
 
@@ -286,7 +286,7 @@
 | version | BIGINT | No |  | 1 |
 | created_at | TIMESTAMPTZ | No |  | NOW() |
 | updated_at | TIMESTAMPTZ | No |  | NOW() |
-| employment_category | TEXT | Yes |  |  |
+| employment_category | TEXT | No |  |  |
 
 **Indexes:**
 - `idx_employee_profiles_live` (UNIQUE) on (employee_id) WHERE effective_to IS NULL
@@ -1396,6 +1396,38 @@
 **Indexes:**
 - `idx_payroll_export_records_period` on (period_id)
 
+## hr_backdate_worklist
+
+| Column | Type | Null | Key | Default |
+|--------|------|------|-----|---------|
+| worklist_id | UUID | No | PK |  |
+| employee_id | TEXT | No | FK→users |  |
+| kind | TEXT | No |  |  |
+| year | INT | Yes |  |  |
+| month | INT | Yes |  |  |
+| export_id | UUID | Yes |  |  |
+| entitlement_type | TEXT | Yes |  |  |
+| entitlement_year | INT | Yes |  |  |
+| triggers | JSONB | No |  |  |
+| created_at | TIMESTAMPTZ | No |  | NOW() |
+| created_by | TEXT | No |  |  |
+| resolved_at | TIMESTAMPTZ | Yes |  |  |
+| resolved_by | TEXT | Yes |  |  |
+| resolution | TEXT | Yes |  |  |
+| resolution_reason | TEXT | Yes |  |  |
+| version | BIGINT | No |  | 1 |
+
+**Table constraints:**
+- CONSTRAINT hr_backdate_worklist_kind_keys CHECK ( (kind = 'EXPORTED_MONTH' AND year IS NOT NULL AND month IS NOT NULL AND export_id IS NOT NULL AND entitlement_type IS NULL AND entitlement_year IS NULL) OR (kind = 'SETTLED_YEAR' AND entitlement_type IS NOT NULL AND entitlement_year IS NOT NULL AND year IS NULL AND month IS NULL AND export_id IS NULL) )
+- CONSTRAINT hr_backdate_worklist_month_range CHECK (month IS NULL OR month BETWEEN 1 AND 12)
+- CONSTRAINT hr_backdate_worklist_triggers_array CHECK ( jsonb_typeof(triggers) = 'array' AND jsonb_array_length(triggers) >= 1 )
+- CONSTRAINT hr_backdate_worklist_resolution_paired CHECK ( (resolved_at IS NULL AND resolved_by IS NULL AND resolution IS NULL) OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution IS NOT NULL) )
+
+**Indexes:**
+- `idx_hr_backdate_worklist_open_month` (UNIQUE) on (employee_id, year, month) WHERE resolved_at IS NULL AND kind = 'EXPORTED_MONTH'
+- `idx_hr_backdate_worklist_open_year` (UNIQUE) on (employee_id, entitlement_type, entitlement_year) WHERE resolved_at IS NULL AND kind = 'SETTLED_YEAR'
+- `idx_hr_backdate_worklist_employee_open` on (employee_id) WHERE resolved_at IS NULL
+
 ---
 
 ## Table Summary
@@ -1469,4 +1501,5 @@
 | 65 | user_absence_selections | -- |
 | 66 | manager_vikar | -- |
 | 67 | payroll_export_records | -- |
+| 68 | hr_backdate_worklist | -- |
 

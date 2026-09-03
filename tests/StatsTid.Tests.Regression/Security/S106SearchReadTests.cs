@@ -157,8 +157,10 @@ public sealed class S106SearchReadTests : IAsyncLifetime
         // A live employee_profiles row carrying the position (the search surfaces ep.position).
         await using (var cmd = new NpgsqlCommand(
             """
-            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from)
-            VALUES (@id, 1.000, @pos, '0001-01-01')
+            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from,
+                                           employment_category)
+            VALUES (@id, 1.000, @pos, '0001-01-01',
+                    (SELECT u.employment_category FROM users u WHERE u.user_id = @id))
             ON CONFLICT DO NOTHING
             """, conn))
         {

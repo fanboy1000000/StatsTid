@@ -26,8 +26,10 @@ namespace StatsTid.Tests.Regression.Admin;
 ///   <item>Item #5 — concurrent-admin-PUT race: barrier-synchronized two-thread
 ///     test asserting exactly one winner (200) + one loser (412), audit table
 ///     stamped with chronologically-correct version_before/version_after pairs.</item>
-///   <item>POST ETag stamp — net-new user POST stamps
-///     <c>ETag: "1"</c> + body <c>version: 1</c> + <c>users_audit</c> CREATED row.</item>
+///   <item>POST ETag stamp — a net-new user POST hands back the token the row COMMITTED at, and the
+///     <c>users_audit</c> chain covers every step. (S138: the agreement writer owns the
+///     <c>users.agreement_code</c> cache and bumps <c>users.version</c> with it, so a create
+///     commits at 2 — CREATED <c>NULL→1</c> plus the paired UPDATED <c>1→2</c>.)</item>
 /// </list>
 ///
 /// <para>
@@ -477,16 +479,33 @@ public sealed class AdminUserVersioningTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // Test 7 — POST stamps version=1 + ETag: "1" + CREATED audit row.
+    // Test 7 — POST hands back the COMMITTED token + a continuous users_audit chain.
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// POST /api/admin/users stamps <c>version=1</c> + <c>ETag: "1"</c> on the
-    /// 201 response and emits a <c>users_audit</c> CREATED row with
-    /// <c>version_before=NULL</c>, <c>version_after=1</c>, <c>previous_data=NULL</c>,
-    /// and <c>new_data</c> carrying displayName/email/primaryOrgId/agreementCode —
-    /// password_hash deliberately EXCLUDED per AdminEndpoints.cs:421 contract
-    /// ("audit JSONB must never carry credentials").
+    /// POST /api/admin/users hands back the token the row ACTUALLY committed at, and the
+    /// <c>users_audit</c> chain for the create is continuous.
+    ///
+    /// <para>
+    /// <b>FLIPPED by S138 Step-5a (Reviewer BLOCKER, absorbed) — RED-on-old.</b> <b>OLD:</b> the
+    /// response and the row were both asserted to be version <c>1</c>, and the single newest audit
+    /// row was the CREATED one. <b>Why that stopped being true:</b> S138 gave
+    /// <c>UserAgreementCodeRepository</c> ownership of the <c>users.agreement_code</c> cache and of
+    /// the <c>users.version</c> bump that goes with it (the agreement timeline's client token). The
+    /// create POST inserts the users row at 1 and THEN routes through that writer, so the row
+    /// commits at 2. The defect the Reviewer caught was not the extra bump — that is the token rule
+    /// working — but that the 201 still hard-coded <c>"1"</c>, so the admin UI's very next PUT
+    /// composed a stale <c>If-Match</c> and 412'd, and the 1 → 2 transition had no audit row at all.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>NEW, and pinned as the CONTRACT rather than as a magic number:</b> the ETag, the response
+    /// body and the stored row all agree (whatever the committed version is), and the audit chain
+    /// covers every step — a CREATED row at <c>NULL → 1</c> plus the paired UPDATED row at
+    /// <c>1 → committed</c> for the cache refresh. The coherence assertions carry the contract; the
+    /// one literal that remains — the stored version is 2 — is a deliberate TRIPWIRE, so that a
+    /// THIRD same-transaction <c>users</c> write is noticed here rather than absorbed silently.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task AdminPostUser_NewUser_StampsVersionAndETag()
@@ -509,30 +528,63 @@ public sealed class AdminUserVersioningTests : IAsyncLifetime
         });
         Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
 
-        // ETag header carries "1" + body carries version: 1.
+        // The token the caller is handed must be the one the row actually has — that coherence IS
+        // the contract, and it is what broke. The literal value is read from the row, not asserted
+        // as a constant, so the pin survives a future same-transaction users write.
         Assert.NotNull(rsp.Headers.ETag);
-        Assert.Equal("\"1\"", rsp.Headers.ETag!.Tag);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(1L, body.GetProperty("version").GetInt64());
+        var reportedVersion = body.GetProperty("version").GetInt64();
+        Assert.Equal($"\"{reportedVersion}\"", rsp.Headers.ETag!.Tag);
 
-        // users table: version=1.
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using (var userCmd = new NpgsqlCommand(
             "SELECT version FROM users WHERE user_id = @userId", conn))
         {
             userCmd.Parameters.AddWithValue("userId", newUserId);
-            Assert.Equal(1L, Convert.ToInt64(await userCmd.ExecuteScalarAsync()));
+            var storedVersion = Convert.ToInt64(await userCmd.ExecuteScalarAsync());
+            Assert.Equal(storedVersion, reportedVersion);
+            // The create does exactly two users-row writes: the INSERT (1) and the agreement
+            // writer's cache refresh (2). Stated so a THIRD would be noticed rather than absorbed.
+            Assert.Equal(2L, storedVersion);
         }
 
-        // users_audit CREATED row: previous_data NULL; new_data carries the
+        // The audit chain must be continuous — no version transition without a row explaining it.
+        // The cache refresh's UPDATED row is the newest, so the CREATED row is selected by action.
+        await using (var chainCmd = new NpgsqlCommand(
+            """
+            SELECT action, version_before, version_after
+            FROM users_audit
+            WHERE user_id = @userId
+            ORDER BY audit_id
+            """, conn))
+        {
+            chainCmd.Parameters.AddWithValue("userId", newUserId);
+            await using var chainReader = await chainCmd.ExecuteReaderAsync();
+
+            Assert.True(await chainReader.ReadAsync(), "POST must emit a users_audit CREATED row.");
+            Assert.Equal("CREATED", chainReader.GetString(0));
+            Assert.True(chainReader.IsDBNull(1), "CREATED audit must have NULL version_before.");
+            Assert.Equal(1L, chainReader.GetInt64(2));
+
+            Assert.True(await chainReader.ReadAsync(),
+                "S138: the agreement writer's users.agreement_code cache refresh bumps users.version, "
+                + "so it owes a paired users_audit UPDATED row — the 1 → 2 transition must not be silent.");
+            Assert.Equal("UPDATED", chainReader.GetString(0));
+            Assert.Equal(1L, chainReader.GetInt64(1));
+            Assert.Equal(reportedVersion, chainReader.GetInt64(2));
+
+            Assert.False(await chainReader.ReadAsync(), "No unexplained users_audit rows for a create.");
+        }
+
+        // users_audit CREATED row payload: previous_data NULL; new_data carries the
         // four whitelisted fields (NOT password_hash); version_before NULL;
         // version_after=1.
         await using (var auditCmd = new NpgsqlCommand(
             """
             SELECT action, previous_data, new_data, version_before, version_after
             FROM users_audit
-            WHERE user_id = @userId
+            WHERE user_id = @userId AND action = 'CREATED'
             ORDER BY audit_id DESC
             LIMIT 1
             """, conn))

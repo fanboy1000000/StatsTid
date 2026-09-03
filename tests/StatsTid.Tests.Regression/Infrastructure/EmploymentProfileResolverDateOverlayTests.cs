@@ -16,8 +16,20 @@ namespace StatsTid.Tests.Regression.Infrastructure;
 /// DATE (<c>OkVersionResolver</c>, ADR-003) instead of copying the live <c>users.ok_version</c>
 /// column — a March-2026 read for an employee whose row already says OK26 now correctly says OK24,
 /// for EVERY consumer at once (compliance, balances, payroll) with no per-caller overlay left to
-/// forget. <c>EmploymentCategory</c> now reads the DATED <c>employee_profiles</c> cell, degrading to
-/// the live value only when the cell is NULL (the Wave 1 COALESCE posture).
+/// forget. <c>EmploymentCategory</c> now reads the DATED <c>employee_profiles</c> cell.
+/// </para>
+///
+/// <para>
+/// <b>S138 / TASK-13804 update to the category posture (swept in by TASK-13809).</b> S137 landed the
+/// dated cell NULLABLE with a ruled fail-safe — every read did
+/// <c>COALESCE(dated, live)</c>, so a write path that "missed" the column degraded to the employee's
+/// live <c>users.employment_category</c> instead of crashing. That was a correct answer only while
+/// dated == live held by construction. S138 makes the category an EDITABLE dated field: a backdated
+/// change is a NEW dated row, and the live column is only the cache of the row covering TODAY, so a
+/// dated value may legitimately DIFFER from live and substituting live would MISLABEL history rather
+/// than rescue it. The column is therefore NOT NULL, the resolver reads
+/// <c>ep.employment_category</c> alone, and the failure surfaces at the write (SQL state 23502)
+/// where the bug is. The fact below pins that reversal, not the retired fallback.
 /// </para>
 ///
 /// <para>
@@ -33,6 +45,11 @@ public sealed class EmploymentProfileResolverDateOverlayTests : IAsyncLifetime
     private const string OrgId = "STY01";
     private const string LiveCategory = "Fuldmægtig";      // non-default, so defaults cannot mask a miss
     private const string DivergedCategory = "Chefkonsulent";
+    /// <summary>The <c>users.employment_category</c> schema default, which
+    /// <see cref="TestSupport.RegressionSeed"/> copies into the profile row it writes — so it is
+    /// the DATED value the seeded row carries, before the live column is moved to
+    /// <see cref="LiveCategory"/>.</summary>
+    private const string SeedTimeCategory = "Standard";
 
     private Segmentation.TestFixtures.DockerHarness _harness = null!;
     private EmploymentProfileResolver _resolver = null!;
@@ -77,23 +94,45 @@ public sealed class EmploymentProfileResolverDateOverlayTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // employment_category — dated cell preferred, COALESCE to live on NULL.
+    // employment_category — the DATED cell is the sole authority (S138: NOT NULL,
+    // no live fallback; a missed write fails at the INSERT, never at the read).
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// The seeded profile row carries a NULL dated category (the RegressionSeed shape — a row a
-    /// write path "missed"): the read degrades to the live users value (dated == live by the
-    /// fail-safe), never NULL / crash.
+    /// <b>S138 flip (TASK-13809), mirroring TASK-13804's sibling flip in
+    /// <c>ProfileCategoryDatingTests</c>.</b> This fact previously read
+    /// <c>EmploymentCategory_DatedCellNull_DegradesToLiveValue</c> and asserted S137's
+    /// <c>COALESCE(dated, live)</c> fail-safe: a NULL dated cell degraded to the live
+    /// <c>users.employment_category</c>. It is not deleted, because it was the pin for a POSTURE
+    /// and the posture REVERSED — so it now pins the reversal.
+    ///
+    /// <para>
+    /// Leg (a): the UPDATE that manufactured a "missed write" is REFUSED by the database
+    /// (<c>23502 not_null_violation</c>) — the read can no longer meet a NULL cell, so it needs no
+    /// fail-safe. Leg (b): after the refused write the resolver still returns the row's OWN dated
+    /// value, NOT the diverged live one. That divergence is deliberate here — the seed copies the
+    /// users category into the profile row and then moves the LIVE column to
+    /// <see cref="LiveCategory"/>, so a lingering COALESCE would be visible as the live value and
+    /// this leg would go red.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task EmploymentCategory_DatedCellNull_DegradesToLiveValue()
+    public async Task EmploymentCategory_NullingDatedCell_RefusedByNotNull_RowKeepsItsOwnValue()
     {
         var employeeId = await SeedAsync(okVersion: "OK24");
-        Assert.True(await DatedCategoryIsNullAsync(employeeId));
+
+        // The seed's dated cell is the users value AT SEED TIME (the schema default); SeedAsync
+        // then diverges the live column — the ordinary S138 shape after a backdated change.
+        Assert.Equal(SeedTimeCategory, await ReadDatedCategoryAsync(employeeId));
+        Assert.Equal(LiveCategory, await ReadUsersCategoryAsync(employeeId));
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(
+            () => NullDatedCategoryAsync(employeeId));
+        Assert.Equal("23502", ex.SqlState);
 
         var profile = await _resolver.GetByEmployeeIdAtAsync(employeeId, new DateOnly(2026, 3, 15));
 
-        Assert.Equal(LiveCategory, profile!.EmploymentCategory);
+        Assert.Equal(SeedTimeCategory, profile!.EmploymentCategory);
     }
 
     /// <summary>
@@ -171,7 +210,10 @@ public sealed class EmploymentProfileResolverDateOverlayTests : IAsyncLifetime
         await RegressionSeed.SeedEmployeeAsync(
             _harness.ConnectionString, employeeId, OrgId, "AC", okVersion,
             partTimeFraction: partTimeFraction, effectiveFrom: effectiveFrom, position: position);
-        // A NON-default live category so a COALESCE miss could never pass by coincidence of defaults.
+        // Move the LIVE users category to a NON-default value AFTER the seed. The profile row
+        // keeps the seed-time category (SeedTimeCategory), so dated != live by construction —
+        // any residual live-value fallback in a read shows up as a red assertion, never as a
+        // pass by coincidence of shared defaults.
         await SetUsersCategoryAsync(employeeId, LiveCategory);
         return employeeId;
     }
@@ -230,12 +272,24 @@ public sealed class EmploymentProfileResolverDateOverlayTests : IAsyncLifetime
         return (string)(await cmd.ExecuteScalarAsync())!;
     }
 
-    private async Task<bool> DatedCategoryIsNullAsync(string employeeId)
+    private async Task<string> ReadDatedCategoryAsync(string employeeId)
     {
         await using var conn = await OpenAsync();
         await using var cmd = new NpgsqlCommand(
-            "SELECT employment_category IS NULL FROM employee_profiles WHERE employee_id = @id AND effective_to IS NULL", conn);
+            "SELECT employment_category FROM employee_profiles WHERE employee_id = @id AND effective_to IS NULL", conn);
         cmd.Parameters.AddWithValue("id", employeeId);
-        return (bool)(await cmd.ExecuteScalarAsync())!;
+        return (string)(await cmd.ExecuteScalarAsync())!;
+    }
+
+    /// <summary>Attempts to NULL the dated cell. Post-S138 this ALWAYS throws
+    /// <see cref="PostgresException"/> with SQL state <c>23502</c> — the call is the falsification
+    /// instrument for the retired COALESCE fail-safe, never a successful mutation.</summary>
+    private async Task NullDatedCategoryAsync(string employeeId)
+    {
+        await using var conn = await OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE employee_profiles SET employment_category = NULL WHERE employee_id = @id AND effective_to IS NULL", conn);
+        cmd.Parameters.AddWithValue("id", employeeId);
+        await cmd.ExecuteNonQueryAsync();
     }
 }

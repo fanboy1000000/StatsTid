@@ -335,10 +335,11 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
             """
             INSERT INTO employee_profiles (
                 profile_id, employee_id, part_time_fraction, position,
-                effective_from, effective_to, version)
+                effective_from, effective_to, version, employment_category)
             VALUES (
                 gen_random_uuid(), @employeeId, 1.000, NULL,
-                DEFAULT, NULL, 1)
+                DEFAULT, NULL, 1,
+                (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
             ON CONFLICT DO NOTHING
             """, conn))
         {

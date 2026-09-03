@@ -464,6 +464,45 @@
         }
       }
     },
+    "/api/admin/users/{userId}/agreement-code": {
+      "put": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.UpdateUserAgreementCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.UserAgreementCodeUpdatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/admin/users/{userId}/roles": {
       "get": {
         "tags": [
@@ -3311,6 +3350,84 @@
         }
       }
     },
+    "/api/hr/backdate-worklist": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "open",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BackdateWorklistRow"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hr/backdate-worklist/{worklistId}/resolve": {
+      "post": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "worklistId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ResolveBackdateWorklistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BackdateWorklistResolveResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/balance/{employeeId}/summary": {
       "get": {
         "tags": [
@@ -5648,6 +5765,208 @@
           },
           "selected": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BackdateWorklistResolveResponse": {
+        "required": [
+          "employeeId",
+          "resolution",
+          "resolvedAt",
+          "version",
+          "worklistId"
+        ],
+        "type": "object",
+        "properties": {
+          "worklistId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BackdateWorklistRow": {
+        "required": [
+          "createdAt",
+          "createdBy",
+          "employeeId",
+          "entitlementType",
+          "entitlementYear",
+          "exportId",
+          "kind",
+          "month",
+          "recalcBlockedBy",
+          "recalculatedSince",
+          "resolution",
+          "resolutionReason",
+          "resolvedAt",
+          "resolvedBy",
+          "reversedSince",
+          "triggers",
+          "version",
+          "worklistId",
+          "year"
+        ],
+        "type": "object",
+        "properties": {
+          "worklistId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "month": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "exportId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "entitlementType": {
+            "type": "string",
+            "nullable": true
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.BackdateWorklistTriggerDto"
+            }
+          },
+          "recalcBlockedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recalculatedSince": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "reversedSince": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resolvedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "resolution": {
+            "type": "string",
+            "nullable": true
+          },
+          "resolutionReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.BackdateWorklistTriggerDto": {
+        "required": [
+          "actorId",
+          "appendedAt",
+          "baselineContentHash",
+          "baselineSettlementSequence",
+          "baselineSettlementState",
+          "effectiveFrom",
+          "eventId",
+          "kind",
+          "recalcBlockedBy",
+          "recalculatedSince",
+          "reversedSince"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "appendedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actorId": {
+            "type": "string"
+          },
+          "baselineContentHash": {
+            "type": "string",
+            "nullable": true
+          },
+          "baselineSettlementSequence": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "baselineSettlementState": {
+            "type": "string",
+            "nullable": true
+          },
+          "recalculatedSince": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "reversedSince": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "recalcBlockedBy": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -8145,6 +8464,18 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.ResolveBackdateWorklistRequest": {
+        "type": "object",
+        "properties": {
+          "resolution": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.RoleGrantResponse": {
         "required": [
           "assignedAt",
@@ -9421,6 +9752,55 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.UpdateUserAgreementCodeRequest": {
+        "type": "object",
+        "properties": {
+          "agreementCode": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.UserAgreementCodeUpdatedResponse": {
+        "required": [
+          "agreementCode",
+          "effectiveFrom",
+          "effectiveTo",
+          "noOp",
+          "userId",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "agreementCode": {
+            "type": "string"
+          },
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "noOp": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.UserCreatedResponse": {
         "required": [
           "agreementCode",
@@ -10528,6 +10908,10 @@
             "format": "double"
           },
           "position": {
+            "type": "string",
+            "nullable": true
+          },
+          "employmentCategory": {
             "type": "string",
             "nullable": true
           }

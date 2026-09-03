@@ -122,7 +122,7 @@ and merged only on Orchestrator approval; cross-domain touches carry explicit au
 - **Start-date GET terminated-inclusive extension** (Step-5a adjudication (c)) — UX/consistency,
   fail-closed today; its own R9c ruling when picked up.
 - **Leaver-send dead-end** (13606 named deferral): the send's subject read is active-only, so a
-  deactivated leaver's month cannot be sent even by HR — routed to Increment 2/3 scoping.
+  deactivated leaver's month cannot be sent even by HR — routed to Increment 2/3 scoping. **→ FIXED S138 TASK-13805** (both active-only reads in `ExecuteSendAsync` switched to the terminated-inclusive pair with the D3 floor; SEC-046 held).
 - **403 reason-string status oracle** (Reviewer N1, ACCEPTED): in-scope sub-HR actors can infer
   termination STATUS (never dates) from the terminated-floor reason string on the writers —
   accepted as bounded; harmonize only with a deliberate ruling.

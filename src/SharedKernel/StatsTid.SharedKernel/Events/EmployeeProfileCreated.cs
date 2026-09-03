@@ -20,6 +20,11 @@ public sealed class EmployeeProfileCreated : DomainEventBase
     public required decimal PartTimeFraction { get; init; }
     public string? Position { get; init; }
 
+    // S138 / TASK-13801 (ADR-040 D4/D8) — the dated fourth field, written on every row the
+    // writer produces. Additive and optional (not `required`): pre-S138 payloads deserialize
+    // with null; EventSerializer registrations are unchanged.
+    public string? EmploymentCategory { get; init; }
+
     // Temporal validity — always today's date in S31 live path;
     // '0001-01-01' for backfill rows.
     public required DateOnly EffectiveFrom { get; init; }

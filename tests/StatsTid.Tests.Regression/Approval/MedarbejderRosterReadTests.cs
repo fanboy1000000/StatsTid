@@ -225,8 +225,10 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         {
             await using var ins = new NpgsqlCommand(
                 """
-                INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from, effective_to)
-                VALUES (@emp, 1.000, @pos, '0001-01-01', NULL)
+                INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from, effective_to,
+                                               employment_category)
+                VALUES (@emp, 1.000, @pos, '0001-01-01', NULL,
+                        (SELECT u.employment_category FROM users u WHERE u.user_id = @emp))
                 """, conn);
             ins.Parameters.AddWithValue("emp", employeeId);
             ins.Parameters.AddWithValue("pos", (object?)position ?? DBNull.Value);

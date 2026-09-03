@@ -46,13 +46,24 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// <b>Dated employment_category read posture (S137 Wave 1, ADR-040 D4).</b> The dated
-/// <c>employee_profiles.employment_category</c> column landed NULLABLE with every production
-/// write path copying the <c>users</c> value same-tx, so dated == live holds by construction this
-/// increment. The read is <c>COALESCE(ep.employment_category, u.employment_category)</c>: the
-/// dated cell is preferred, and a NULL cell (a row a write path missed) degrades to the
-/// definitionally-correct live value rather than crashing or mislabelling (the ruled
-/// Reviewer-B1 fail-safe). Editing the category per date is Increment 3.
+/// <b>Dated employment_category read posture (S138 / TASK-13804, ADR-040 D4 — the S137
+/// fail-safe retired).</b> The dated <c>employee_profiles.employment_category</c> cell is the
+/// authority for an as-of read, full stop: the column is NOT NULL since S138, so there is
+/// nothing to fall back to and nothing to guard against.
+/// </para>
+///
+/// <para>
+/// History of the posture, because the change is easy to misread. S137 landed the column
+/// NULLABLE and every read did <c>COALESCE(ep.employment_category, u.employment_category)</c> —
+/// a deliberate fail-safe while only the four INSERT paths had been taught to fill the column:
+/// a missed write degraded to the live <c>users</c> value, which was then ALWAYS the right
+/// answer because <c>users.employment_category</c> was write-once, so dated == live held by
+/// construction. S138 makes the category an EDITABLE dated field, and that premise dies: a
+/// BACKDATED category change is a NEW dated row, and <c>users.employment_category</c> becomes
+/// merely the CACHE of the row covering TODAY. Substituting the live value into a March read
+/// would therefore MISLABEL history rather than rescue it — so the column is NOT NULL (the
+/// ledger-guarded <c>s138-profile-category-not-null</c> segment in init.sql tightens legacy
+/// databases after a fail-loud census) and the COALESCE is gone.
 /// </para>
 ///
 /// <para>
@@ -129,16 +140,18 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
     {
         // Dated fields from employee_profiles via the end-exclusive temporal predicate.
         // S137 / ADR-040 D4: ok_version is NO LONGER selected — it is a pure function of
-        // asOfDate (OkVersionResolver, see the class doc; closes QUAL-147); employment_category
-        // now reads the DATED ep column with the COALESCE-to-live fail-safe. The only live field
-        // left is primary_org_id (org-history is the named follow-up). agreement_code is NOT
-        // joined here — TASK-3406 sources it from UserAgreementCodeRepository below.
+        // asOfDate (OkVersionResolver, see the class doc; closes QUAL-147).
+        // S138 / TASK-13804: employment_category reads the DATED ep cell ALONE — the S137
+        // COALESCE-to-users fail-safe is retired now that the column is NOT NULL and a dated
+        // value may legitimately differ from the live cache (see the class doc). The only live
+        // field left is primary_org_id (org-history is the named follow-up). agreement_code is
+        // NOT joined here — TASK-3406 sources it from UserAgreementCodeRepository below.
         const string sql =
             """
             SELECT
                 ep.part_time_fraction,
                 ep.position,
-                COALESCE(ep.employment_category, u.employment_category) AS employment_category,
+                ep.employment_category,
                 u.primary_org_id
             FROM employee_profiles ep
             INNER JOIN users u ON u.user_id = ep.employee_id

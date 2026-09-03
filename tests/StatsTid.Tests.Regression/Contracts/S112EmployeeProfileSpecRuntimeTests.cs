@@ -128,10 +128,11 @@ public sealed class S112EmployeeProfileSpecRuntimeTests : IAsyncLifetime
         // carries a NON-null position so the nullable string is exercised with a value.
         await using (var cmd = new NpgsqlCommand(
             """
-            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from) VALUES
-                (@get, 1.000, 'Konsulent', '0001-01-01'),
-                (@put, 1.000, 'Konsulent', '0001-01-01'),
-                (@del, 1.000, 'Konsulent', '0001-01-01')
+            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from,
+                                           employment_category) VALUES
+                (@get, 1.000, 'Konsulent', '0001-01-01', (SELECT u.employment_category FROM users u WHERE u.user_id = @get)),
+                (@put, 1.000, 'Konsulent', '0001-01-01', (SELECT u.employment_category FROM users u WHERE u.user_id = @put)),
+                (@del, 1.000, 'Konsulent', '0001-01-01', (SELECT u.employment_category FROM users u WHERE u.user_id = @del))
             ON CONFLICT DO NOTHING
             """, conn))
         {

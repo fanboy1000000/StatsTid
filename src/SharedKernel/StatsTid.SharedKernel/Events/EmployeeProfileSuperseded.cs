@@ -25,9 +25,20 @@ public sealed class EmployeeProfileSuperseded : DomainEventBase
     public required DateOnly PredecessorEffectiveTo { get; init; }
     public required DateOnly NewEffectiveFrom { get; init; }
 
+    // S138 / TASK-13801 (ADR-040 D8) — where the NEW row ends: null = it is the open row (the
+    // pre-S138 Case C shape); a date = D8's insert-between (the covering row was a history row
+    // and the new row runs [NewEffectiveFrom, NewEffectiveTo), later rows untouched). Additive
+    // and optional (not `required`): pre-S138 payloads deserialize with null.
+    public DateOnly? NewEffectiveTo { get; init; }
+
     // New-row payload (post-mutation state of the successor)
     public required decimal PartTimeFraction { get; init; }
     public string? Position { get; init; }
+
+    // S138 / TASK-13801 (ADR-040 D4/D8) — the dated fourth field, written on every row the
+    // writer produces. Additive and optional (not `required`): pre-S138 payloads deserialize
+    // with null; EventSerializer registrations are unchanged.
+    public string? EmploymentCategory { get; init; }
 
     // Optimistic-concurrency row-versions
     public required long PredecessorVersion { get; init; }

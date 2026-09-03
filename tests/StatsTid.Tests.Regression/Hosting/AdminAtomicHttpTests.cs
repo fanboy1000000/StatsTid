@@ -161,8 +161,8 @@ public sealed class AdminAtomicHttpTests : IAsyncLifetime
             INSERT INTO users (user_id, username, password_hash, display_name, primary_org_id, agreement_code, ok_version)
             VALUES (@userId, @username, 'x', 'Forced-Rollback HTTP User', @orgId, 'AC', 'OK24')
             ON CONFLICT (user_id) DO NOTHING;
-            INSERT INTO employee_profiles (employee_id)
-            VALUES (@userId)
+            INSERT INTO employee_profiles (employee_id, employment_category)
+            VALUES (@userId, (SELECT u.employment_category FROM users u WHERE u.user_id = @userId))
             ON CONFLICT DO NOTHING;
             INSERT INTO user_agreement_codes (assignment_id, user_id, agreement_code)
             VALUES (gen_random_uuid(), @userId, 'AC')

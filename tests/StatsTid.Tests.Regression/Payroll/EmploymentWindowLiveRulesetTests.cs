@@ -291,8 +291,9 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
             """
             INSERT INTO employee_profiles (
                 profile_id, employee_id, part_time_fraction, position,
-                effective_from, effective_to, version)
-            VALUES (gen_random_uuid(), @id, @fraction, NULL, @from, NULL, 1)
+                effective_from, effective_to, version, employment_category)
+            VALUES (gen_random_uuid(), @id, @fraction, NULL, @from, NULL, 1,
+                    (SELECT u.employment_category FROM users u WHERE u.user_id = @id))
             """, conn, tx))
         {
             insert.Parameters.AddWithValue("id", employeeId);

@@ -1,7 +1,35 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 137 -->
+<!-- anchor-sprint: 138 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
+
+## S138 re-grade (2026-09-03) — time-control Increment 3: history becomes correctable
+
+S138 makes dated corrections legal. Before it, an employee's profile could only change as of today, so a fact
+learned late could never be recorded in the months it actually applied to. Now a change carries its effective
+date, the covering row is CLOSED at that date rather than overwritten, and both sides of the split stay
+resolvable forever. What moves the grades is not the feature but its honesty: a correction that reaches into
+an already-exported month or an already-settled holiday year is recorded in full, the affected downstream
+number is NOT silently rewritten, and the gap lands on an HR worklist that names it. Per-fix detail:
+`docs/sprints/SPRINT-138.md`; register rows QUAL-152 (new), QUAL-149/150 (now visible where HR works).
+
+| Domain | S137 → S138 | Movement rests on (S138) |
+|--------|-------------|--------------------------|
+| **Infrastructure** | B → **B+** ▲ | The write decision is a PURE function — `TemporalWriteRouter` takes the timeline and the request and returns a case (A/B'/C'/E/G/T), with no database, no clock and no I/O, so the hardest logic in the sprint is pinned by a 44-case matrix that runs without Docker (PAT-025). Both dated repositories share it instead of hand-rolling the same six cases twice. **Not A−:** the two repositories still duplicate their SQL shape around the shared decision, and the worklist repository carries a degraded path (a settlement with no baseline) that is correct but untested outside CI. |
+| **Auditability** | A → **A** (held, ▲ posture) | Every insert-between now writes SUPERSEDED + CREATED with the closing date, so a split is readable as two facts rather than one mutation; the cache writes bump `users.version` WITH their paired `users_audit` row — a real chain gap on the create path was caught at Step-5a and closed, and its pin rewritten to assert chain CONTINUITY rather than row presence. Held at A rather than raised because the strongest new evidence (the Docker-gated audit-chain matrices) is CI-only. |
+| **Domain Correctness** | B → **B** (held) | The settled-year rule is now a CONJUNCTION with an INCLUSIVE boundary, and the concept is named for what it is — the last day the settlement VALUED, not when it was taken. That rename is the substance, not cosmetics: the wrong name is what made the off-by-one easy to write and invisible to three review passes. A comment claiming category corrections revalue was corrected (category is not in the norm-config key) and given a tripwire. **Held, not raised:** QUAL-148/149/150 all remain, and future-dating is deliberately absent until the "current ≠ live" read model lands. |
+| **Backend API** | A → **A−** ▼ | Two capability-level defects shipped to review: the profile GET refused TERMINATED employees, making the whole correction feature unreachable end to end for the most common case, and the create POST returned an ETag from before its own version bump. Both are fixed, but both passed every unit test — the parts were pinned and the human path was not. The grade records that gap honestly; it returns to A when an end-to-end pin walks the sequence a person walks. `QUAL-152` also stands: the omitted-date rule is enforced by a guard rather than stated in the wire contract. |
+| **Test Suite (cross-cutting)** | B → **B** (held, ▲ posture) | +146 locally-run pins (1089 → 1235), the largest single-sprint addition in the program, and most of it runs WITHOUT Docker because the router is pure. **Held at B:** ~70 new Docker-gated pins (both writers × live/history/gap, concurrency, the worklist matrices, the NOT-NULL census, migration replay) are verified only by the CI close run. Same honest posture as S137 — green when CI says so. |
+
+*(Domains not listed — Rule Engine, Payroll Integration, SharedKernel, Security, Frontend, Docker,
+CI/Tooling, Documentation — are unchanged by S138. The schema gained the worklist table and tightened
+`employee_profiles.employment_category` to NOT NULL behind a ledger-guarded segment, reviewed at merge.)*
+
+**PM reading.** Increment 3 is the sprint where the system stopped pretending the past is fixed. The valuable
+part is not that HR can now backdate — it is that backdating cannot quietly corrupt anything: numbers already
+sent to payroll or already settled are left alone, and the discrepancy is surfaced as work rather than
+absorbed as drift. The one grade that went DOWN did so because two defects made a shipped capability
+unusable while every test passed, which is exactly the failure the grading is meant to catch.
 
 ## S137 re-grade (2026-09-02) — time-control Increment 2: the calculation side obeys the employee timeline
 

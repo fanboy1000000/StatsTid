@@ -234,3 +234,77 @@ latent 500 path the moment real windows exist, without touching the profile reso
   hire date can no longer back-fill that person's pre-creation registrations until the hire date is corrected
   (supply it at create, or edit it first). The admin create form surfacing the hire date pre-filled with
   today and editable (and an edit path that allows backdating) is the Increment-4 lifecycle-UX item.
+
+## Amendment 2026-09-02 — D8 split by owner ruling (S138 refinement, dual-lens converged)
+
+**What changes.** D8 named two policies — future-dating and backdating — and claimed "consumers already resolve
+as-of (D4), so no scheduler is needed". The S138 seam recon showed that claim holds for RESOLVER-fed readers only.
+The open-ended-row readers (`UserAgreementCodeRepository.GetCurrentAsync`, which feeds the login token; the
+profile GET/ETag; the profile DELETE pre-read; the profile PUT's lock) and the two live caches
+(`users.agreement_code`, `users.employment_category`, read at ~200 sites) all treat "the open-ended row" as
+"current". A future-dated row would therefore put a not-yet-effective agreement into login tokens and the
+profile editor — a Security AND Domain-correctness breach — and the caches could not refresh on the effective
+date without a scheduler. Backdated and today-dated writes have no such problem: the writer knows whether the
+row covering today changed.
+
+**Ruling (owner, 2026-09-02):** Increment 3 ships **backdating + today-dated** changes with the diagnostic
+worklist; **future-dating moves to Increment 4** together with the date picker, under a named PRECONDITION —
+the "current ≠ live" read model: the four open-ended readers become as-of-today readers, and the `users.*`
+caches get an explicit strategy (dated reads vs derived-at-write with a refresh). The SPRINT-135 program plan's
+Increment-3 AC "a future-dated position change applies on its effective date" moves to Increment 4 accordingly.
+
+**Also ruled with it (S138 OQ-2):** a backdate whose interval reaches a SETTLED ferieår does NOT revalue that
+year's consumption (feriedage IS fraction-dependent — ADR-032 D3/D4 — even though the day-count quota is not —
+ADR-031): the revaluation SKIPS every (type, year) group with an active ADR-033 settlement, and each such year
+lands a SETTLED_YEAR row on the HR worklist pointing at the reverse-then-re-settle path, for every trigger kind.
+"Settled" is not "exported" — the two facts are independent — so the flag is keyed on `vacation_settlements`,
+not on `payroll_export_records`. (NARROWED 2026-09-03 — "reaches a SETTLED ferieår" is a CONJUNCTION
+of two tests, not the entitlement-window test alone; see the 2026-09-03 sub-amendment below for the rule as
+implemented.)
+
+**Replay vs re-plan (stated, S138).** Manifest replay stays historical-manifest replay: frozen segments, each
+resolved at its frozen start from CURRENT dated history. A backdate INTERIOR to a frozen segment is therefore
+invisible to replay by construction; the corrected truth reaches payroll only through the correction RE-PLAN
+(`POST /api/payroll/recalculate`), which is exactly what the worklist row points at.
+
+## Amendment 2026-09-03 — the settled-year selection rule is a CONJUNCTION (S138 implementation, owner ruling)
+
+**Why this exists.** The 2026-09-02 amendment above ruled *that* a correction reaching a settled ferieår skips
+revaluation and raises a worklist row. It did not say *which* years a given correction selects, and the sentence
+it does carry — "a backdate whose interval reaches a SETTLED ferieår" — reads as a single test on the
+entitlement window. Implementing it that way over-flags. This sub-amendment states the rule the code enforces.
+It NARROWS the 2026-09-02 wording; it does not reopen the skip-and-flag policy, which stands unchanged.
+
+**The rule.** A year is selected when BOTH halves hold:
+
+- **(a) The correction reaches the settlement's valuation boundary.** A settlement is a photograph: at one
+  moment we valued a holiday year and froze the numbers (ADR-033). A correction can only make that photograph
+  wrong if it changes something on or before the LAST DAY the settlement counted. Formally, with
+  `correctedIntervalStart <= boundary`, INCLUSIVE — a correction landing exactly ON the boundary day changes a
+  day the settlement valued, because the settlement's own day query is inclusive at both ends.
+- **(b) The corrected interval overlaps that entitlement year's accrual window OR its taking window**
+  (per-type geometry from `EntitlementPeriodResolver`; SPECIAL_HOLIDAY's entitlement year is the accrual year
+  whose taking window opens the following May).
+
+**Why neither half alone.** Each over-flags on a different axis, which is what makes the conjunction the
+answer rather than a preference:
+
+- Window-only (what the 2026-09-02 wording implies) flags a correction that lands entirely AFTER the
+  settlement was taken — inside the year's window, but past every day the photograph counted. Nothing the
+  settlement valued moved, so there is nothing for HR to reverse.
+- Boundary-only flags every old correction against every settlement of every other entitlement type and year,
+  because "before the freeze" is true of most of history. HR would get a wall of rows with no year to act on.
+
+**Trade-off accepted.** The conjunction can under-flag in one shape: a correction that starts after a
+settlement's boundary but changes an input the settlement extrapolated forward. We take that, because
+ADR-033 settlements value days already counted, not future days, so the shape is not reachable today. If
+settlements ever project forward, half (a) is the half to revisit.
+
+**Precision, not policy.** The rule selects which HR follow-up rows are raised. It does not gate, block, or
+alter the correction itself — the write always lands and the truth is always recorded (ADR-013's bound:
+a diagnostic list, never an approval workflow).
+
+Enforced by `BackdateWorklistDerivation.SettledYearThreatened` (the composition),
+`CorrectionReachesSettlementBoundary` (half a) and `CorrectionTouchesEntitlementWindow` (half b);
+pinned in `tests/StatsTid.Tests.Unit/Worklist/BackdateWorklistDerivationTests.cs`, including the
+boundary-day case.

@@ -269,7 +269,12 @@ public sealed class UserRepository
     /// (end-date endpoint, settlement resolve/reconcile-payout, year-overview via
     /// <c>OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync</c>) — <b>plus,
     /// since S136 / TASK-13603 (ADR-040 D3 / SEC-046), the TWO REGISTRATION WRITERS'
-    /// pre-transaction subject reads</b> (<c>POST /api/time-entries</c> and the Skema save):
+    /// pre-transaction subject reads</b> (<c>POST /api/time-entries</c> and the Skema save) — <b>and, since
+    /// S138 / TASK-13805, the approval SEND command</b> (<c>ApprovalEndpoints.ExecuteSendAsync</c>, whose single
+    /// in-tx subject read after the advisory lock IS the authoritative D3 check — a departed employee's FINAL
+    /// month is exactly the one payroll needs certified) — <b>and, since S138 / TASK-13802, the employee-profile
+    /// PUT's subject read</b> (HR correcting a departed employee's last months is the ordinary backdating case;
+    /// that endpoint has no <c>is_active</c> switch, so admitting a leaver cannot become a reactivation path):
     /// their explicit D3 role floor needs the deactivated subject's row RESOLVED, not hidden
     /// as a 404 (see the section banner above for the ruling). The general read paths stay
     /// active-only — a deactivated user must remain unaddressable everywhere else (B2/S68
@@ -304,7 +309,12 @@ public sealed class UserRepository
     /// <c>trigger == TERMINATION</c> — the active-employee case is a strict subset; the pass is
     /// system-internal, access control does not ride the <c>is_active</c> filter). <b>S136
     /// Step-5a (Codex BLOCKER 1 — the SEC-046 race) added the two REGISTRATION WRITERS' in-lock
-    /// subject-state re-check</b>: both writers re-read <c>is_active</c> through this overload
+    /// subject-state re-check</b>: both writers re-read <c>is_active</c> through this overload — <b>and S138 /
+    /// TASK-13805 added the approval SEND command</b> (<c>ExecuteSendAsync</c> step 5a′: the advisory lock is the
+    /// transaction's first statement, so its one in-tx read through this overload is authoritative) — <b>and S138 /
+    /// TASK-13802's dedicated agreement-code endpoint</b> (<c>PUT /api/admin/users/{userId}/agreement-code</c>,
+    /// whose locked read must resolve a departed subject; the GENERAL users PUT stays active-only so it can never
+    /// reactivate a leaver)
     /// under <c>EmployeeConsumptionLock</c> to re-enforce the ADR-040 D3 floor against a
     /// deactivation that committed while they waited on the lock. General in-tx reads stay on
     /// the filtered overload.

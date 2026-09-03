@@ -25,28 +25,15 @@ public static class ComplianceEndpoints
     /// <summary>
     /// S137 / ADR-040 D10 — the first employed day of <c>[monthStart, monthEnd]</c> given the
     /// employment windows overlapping it, or <c>null</c> when the union of
-    /// (each window ∩ the month) is EMPTY (no employed day in the month). Pure: each window is
-    /// clipped to the month with the ADR-040 D1/D2 semantics (end INCLUSIVE; a <c>null</c> side is
-    /// unbounded, so it clips to the month edge), and the earliest clipped start wins. Written over
-    /// a LIST so the deferred spells increment (re-hire) changes nothing here. Public so the pure
-    /// union semantics are pinned by a non-Docker test (ComplianceWindowUnionTests) — the HTTP
-    /// handler is the only production caller.
+    /// (each window ∩ the month) is EMPTY (no employed day in the month). Since S138
+    /// (TASK-13806) the union arithmetic is <see cref="EmploymentWindow.FirstEmployedDayWithin(IReadOnlyList{EmploymentWindow}, DateOnly, DateOnly)"/>
+    /// on the record itself (ADR-040 D1/D2 semantics, spells-proof LIST form), pinned by the
+    /// Unit-suite <c>ComplianceWindowUnionTests</c> — so this is private again: the HTTP handler
+    /// is the only caller, and nothing on an endpoints class needs to be public for a test.
     /// </summary>
-    public static DateOnly? FirstEmployedDayInMonth(
+    private static DateOnly? FirstEmployedDayInMonth(
         IReadOnlyList<EmploymentWindow> windows, DateOnly monthStart, DateOnly monthEnd)
-    {
-        DateOnly? first = null;
-        foreach (var window in windows)
-        {
-            var clippedStart = window.Start is { } s && s > monthStart ? s : monthStart;
-            var clippedEnd = window.End is { } e && e < monthEnd ? e : monthEnd;
-            if (clippedStart > clippedEnd)
-                continue; // this window contributes no day to the month
-            if (first is null || clippedStart < first.Value)
-                first = clippedStart;
-        }
-        return first;
-    }
+        => EmploymentWindow.FirstEmployedDayWithin(windows, monthStart, monthEnd);
 
     public static WebApplication MapComplianceEndpoints(this WebApplication app)
     {

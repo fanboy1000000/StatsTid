@@ -447,9 +447,10 @@ public static class PeriodPlanner
 
         foreach (var window in employmentWindows)
         {
-            var endsBeforeWindowOpens = window.Start.HasValue && segmentEnd < window.Start.Value;
-            var startsAfterWindowCloses = window.End.HasValue && segmentStart > window.End.Value;
-            if (!endsBeforeWindowOpens && !startsAfterWindowCloses)
+            // S138 / TASK-13806: the D1/D2 window∩segment test lives on the record
+            // (both ends inclusive; a null side unbounded) — the same predicate the
+            // resolver's range filter uses, so the two cannot drift apart.
+            if (window.Overlaps(segmentStart, segmentEnd))
                 return EmploymentWindowStatus.EMPLOYED;
         }
 

@@ -121,8 +121,12 @@ public abstract class SendCommandMatrixTestBase
     /// allocation gate touches, so a covered month is vacuously balanced unless work/allocation rows
     /// are added. <paramref name="from"/> (S136 / TASK-13606) limits coverage to days ≥ that date —
     /// the mid-month-hire cases cover exactly the employed span and nothing before it, which is the
-    /// point: the window-aware gate must not demand the uncovered pre-hire days.</summary>
-    protected async Task CoverMonthWithAbsencesAsync(string employeeId, DateOnly? gap = null, DateOnly? from = null)
+    /// point: the window-aware gate must not demand the uncovered pre-hire days. <paramref name="to"/>
+    /// (S138 / TASK-13805) is the mirror on the other side — days &gt; that date are left bare, so a
+    /// LEAVER's final month is seeded the way ADR-040 D3 would have allowed it to be registered:
+    /// facts up to and including the last day employed, nothing after.</summary>
+    protected async Task CoverMonthWithAbsencesAsync(
+        string employeeId, DateOnly? gap = null, DateOnly? from = null, DateOnly? to = null)
     {
         await using var conn = new NpgsqlConnection(Fx.ConnectionString);
         await conn.OpenAsync();
@@ -142,6 +146,8 @@ public abstract class SendCommandMatrixTestBase
             if (d == gap || d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
                 continue;
             if (from.HasValue && d < from.Value)
+                continue;
+            if (to.HasValue && d > to.Value)
                 continue;
             await InsertAbsenceRowAsync(conn, employeeId, d, "VACATION", 7.4m);
         }
@@ -423,6 +429,24 @@ public abstract class SendCommandMatrixTestBase
         cmd.Parameters.AddWithValue("e", (object?)end ?? DBNull.Value);
         cmd.Parameters.AddWithValue("id", employeeId);
         Assert.Equal(1, await cmd.ExecuteNonQueryAsync()); // the user row must exist, or the window premise is vacuous
+    }
+
+    /// <summary>
+    /// S138 / TASK-13805 — flips the <c>users</c> row to <c>is_active = FALSE</c> directly, the way
+    /// <c>Security.TerminatedEmployeeAccessTests</c> seeds its leavers. The send command's access
+    /// layer keys on <c>is_active = FALSE</c> however it came about (the end-date lifecycle flip, the
+    /// Step-A settlement flip, or an admin edit), so this fixture seeds the STATE and leaves the
+    /// lifecycle writers to their own suites. The returned row count is asserted so a typo'd id
+    /// cannot silently leave the "deactivated leaver" premise vacuous.
+    /// </summary>
+    protected async Task DeactivateEmployeeAsync(string employeeId)
+    {
+        await using var conn = new NpgsqlConnection(Fx.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE users SET is_active = FALSE, updated_at = NOW() WHERE user_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", employeeId);
+        Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
     }
 
     protected async Task<Guid?> FindPeriodIdAsync(string employeeId, DateOnly start, DateOnly end)

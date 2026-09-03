@@ -606,37 +606,61 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// PUT with EffectiveFrom = yesterday → 422 with a structured body
-    /// naming the <c>provided</c> + <c>expected</c> dates. The validator
-    /// fires BEFORE If-Match parsing so we don't need to send a valid
-    /// If-Match here.
+    /// <b>PREMISE FLIPPED IN S138 / TASK-13802 (ADR-040 D8 as amended 2026-09-02).</b>
+    ///
+    /// <para>
+    /// OLD pin (S33): a PUT with <c>EffectiveFrom = yesterday</c> returned 422 with a structured
+    /// body naming <c>provided</c> + <c>expected</c> — the ADR-023 D8 same-day-ONLY-edit rule.
+    /// NEW behaviour: BACKDATING IS THE FEATURE. HR can record that a change actually took effect
+    /// on a past date, so yesterday is a legal, routed write; only the FUTURE is still refused,
+    /// and its 422 body is now DATE-FREE (it shares a shape with the employment-start-floor
+    /// refusal, which must never echo the hire date).
+    /// </para>
+    ///
+    /// <para>
+    /// The pin is kept — rewritten to assert the NEW truth rather than deleted — so the flip is
+    /// visible in the suite rather than silently absent. emp001's seeded live row starts at TODAY
+    /// and emp001 has no recorded employment start, so a write dated yesterday routes case E
+    /// (insert before the first row): a CLOSED row <c>[yesterday, today)</c> is inserted, nothing
+    /// is closed, and the pre-existing live row is untouched.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task PUT_BackdatedEffectiveFrom_Returns422()
+    public async Task PUT_BackdatedEffectiveFrom_NowWritesDatedHistory()
     {
         var client = AuthorizedClient();
-        var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var yesterday = today.AddDays(-1);
 
         var rsp = await PutEmployeeProfileAsync(client, "emp001",
             effectiveFrom: yesterday,
-            weeklyNormHours: 37.0m, partTimeFraction: 1.000m, position: null,
+            weeklyNormHours: 37.0m, partTimeFraction: 0.500m, position: "Backdated",
             ifMatch: "\"1\"");
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
-        // Body carries `provided` + `expected` as ISO-8601 yyyy-MM-dd
-        // strings (System.Text.Json serializes DateOnly that way by
-        // default — there is no JsonElement.GetDateOnly() in .NET 8).
-        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(yesterday.ToString("yyyy-MM-dd"),
-            body.GetProperty("provided").GetString());
-        Assert.Equal(DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd"),
-            body.GetProperty("expected").GetString());
+        // A closed row [yesterday, today) now exists carrying the corrected values; the live row
+        // still starts today and keeps its own values.
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT part_time_fraction, effective_to
+            FROM employee_profiles
+            WHERE employee_id = 'emp001' AND effective_from = @yesterday
+            """, conn);
+        cmd.Parameters.AddWithValue("yesterday", yesterday);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), "expected the backdated history row to exist.");
+        Assert.Equal(0.500m, reader.GetDecimal(0));
+        Assert.Equal(today, reader.GetFieldValue<DateOnly>(1));
     }
 
     /// <summary>
-    /// PUT with EffectiveFrom = tomorrow → 422 (same validator branch as
-    /// backdated). Locks the symmetric rejection per refinement cycle 2
-    /// Codex W absorption — same-day-ONLY-edit is two-sided, not one-sided.
+    /// PUT with EffectiveFrom = tomorrow → 422. S138 / TASK-13802 narrows what this pins: the
+    /// rejection is no longer "two-sided same-day-only" (backdating is now legal — see the flipped
+    /// pin above) but the standing FUTURE-dating refusal (ADR-040 D8 amendment: future-dating
+    /// needs the "current ≠ live" read model and moves to Increment 4). Status only is asserted —
+    /// the body is deliberately DATE-FREE now.
     /// </summary>
     [Fact]
     public async Task PUT_FutureDatedEffectiveFrom_Returns422()

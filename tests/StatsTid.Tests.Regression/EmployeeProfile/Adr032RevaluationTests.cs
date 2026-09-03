@@ -317,8 +317,10 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
         // predecessor keeps the test independent of the seeder's effective_from convention.
         await using (var profileCmd = new NpgsqlCommand(
             """
-            INSERT INTO employee_profiles (profile_id, employee_id, part_time_fraction, effective_from, effective_to, version)
-            VALUES (gen_random_uuid(), @e, 1.000, @today, NULL, 1)
+            INSERT INTO employee_profiles (profile_id, employee_id, part_time_fraction, effective_from, effective_to, version,
+                                           employment_category)
+            VALUES (gen_random_uuid(), @e, 1.000, @today, NULL, 1,
+                    (SELECT u.employment_category FROM users u WHERE u.user_id = @e))
             ON CONFLICT (employee_id, effective_from) DO UPDATE SET part_time_fraction = EXCLUDED.part_time_fraction
             """, conn))
         {

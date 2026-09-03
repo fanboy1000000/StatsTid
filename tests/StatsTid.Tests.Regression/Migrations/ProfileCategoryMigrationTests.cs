@@ -30,7 +30,9 @@ namespace StatsTid.Tests.Regression.Migrations;
 ///   <item>greenfield — the full init.sql applies twice (the file-scope ADD COLUMN after the
 ///     base CREATE + the ledger-guarded segment converge; the backfill no-ops because
 ///     init.sql deliberately does NOT pre-seed employee_profiles — the app-boot seeder owns
-///     that, category included) and the column exists nullable on the real table.</item>
+///     that, category included) and the column exists on the real table — NOT NULL since
+///     S138 / TASK-13804 (the greenfield assertion was flipped there; the legacy facts, which
+///     replay the S137 segment alone, still pin the S137-era nullable shape).</item>
 /// </list>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -215,14 +217,25 @@ public sealed class ProfileCategoryMigrationTests : IAsyncLifetime
     /// idempotent alongside the (idempotent) file-scope ALTER. The backfill no-ops on
     /// greenfield BY DESIGN — init.sql does not pre-seed employee_profiles (the app-boot
     /// EmployeeProfileSeeder owns that, category included), pinned by the zero-row census.
+    ///
+    /// <para>
+    /// <b>S138 / TASK-13804 flip.</b> This fact used to assert the greenfield column is
+    /// NULLABLE. It is not any more: S138 tightened it to NOT NULL (the file-scope ADD COLUMN
+    /// on the empty table, plus the ledger-guarded <c>s138-profile-category-not-null</c>
+    /// segment for legacy DBs). The LEGACY fact above still asserts nullable and is untouched
+    /// — it replays the S137 segment ALONE, which is exactly the S137-era shape it pins.
+    /// Whether greenfield ends NOT NULL is now pinned by
+    /// <c>ProfileCategoryNotNullMigrationTests</c>; the assertion is kept here too because a
+    /// silent reversal of it would mean the S137 and S138 segments had stopped agreeing.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Migration_S137_Greenfield_FullInitSql_DoubleApply_ColumnPresentNullable()
+    public async Task Migration_S137_Greenfield_FullInitSql_DoubleApply_ColumnPresentNotNullSinceS138()
     {
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
 
         Assert.True(await ColumnExistsAsync());
-        Assert.True(await ColumnIsNullableAsync());
+        Assert.False(await ColumnIsNullableAsync()); // S138 / TASK-13804 (was: True)
         Assert.Equal(1, await CountLedgerRowsAsync());
 
         // Second apply (the standing down -v && up re-run): file-scope ALTER no-ops, the

@@ -142,6 +142,9 @@ builder.Services.AddSingleton<DesignatedApproverAuthorizer>(); // S74 / TASK-740
 builder.Services.AddSingleton<EmployeeEntitlementEligibilityRepository>(); // S59
 builder.Services.AddSingleton<VacationTransferAgreementRepository>(); // S68 ADR-033 slice 1a
 builder.Services.AddSingleton<VacationSettlementRepository>(); // S68 ADR-033 slice 1a
+// S138 / TASK-13803 (ADR-040 D8, Increment 3) — the HR backdate diagnostic worklist. Stateless over the
+// DI'd outbox + audit-projection mapper/repo (the EmploymentEndDateLifecycleWriter shape) ⇒ singleton-safe.
+builder.Services.AddSingleton<HrBackdateWorklistRepository>();
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 // S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
 // Mapper + marker registered together so the registry's RegisteredEventTypeNames filter
@@ -348,6 +351,14 @@ builder.Services.AddSingleton<IAuditProjectionMapper<UnitLeaderRemoved>, UnitLea
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UnitLeaderRemoved), nameof(UnitLeaderRemoved)));
 builder.Services.AddSingleton<IAuditProjectionMapper<UserUnitChanged>, UserUnitChangedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(UserUnitChanged), nameof(UserUnitChanged)));
+// S138 / TASK-13803 (ADR-040 D8, Increment 3) — the HR backdate diagnostic worklist pair. Both
+// TENANT_TARGETED with target_org_id = the employee's home Organisation (resolved in-tx by the
+// repository, which emits through the SharedKernel mapper interface — the Infrastructure-side
+// EmploymentEndDateLifecycleWriter precedent). Mapper + marker registered together.
+builder.Services.AddSingleton<IAuditProjectionMapper<BackdateWorklistRowCreated>, BackdateWorklistRowCreatedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(BackdateWorklistRowCreated), nameof(BackdateWorklistRowCreated)));
+builder.Services.AddSingleton<IAuditProjectionMapper<BackdateWorklistRowResolved>, BackdateWorklistRowResolvedAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(BackdateWorklistRowResolved), nameof(BackdateWorklistRowResolved)));
 
 // ── Services ──
 builder.Services.AddSingleton<ConfigResolutionService>();

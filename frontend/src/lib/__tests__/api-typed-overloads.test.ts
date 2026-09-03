@@ -387,11 +387,18 @@ describe('S112 typed derivation — real committed spec', () => {
     // 5-member echo, zero FE callers, typed anyway per the greenfield
     // precedent) and +2 PUTs (skema row-preferences, JSON 200; overtime
     // compensation-choice, JSON 200 — both UNCONDITIONED).
+    // S138 / TASK-13802 + TASK-13803 (ADR-040 Increment 3, temporal editing) —
+    // +1 PUT: the DEDICATED agreement-code endpoint, which exists so HR can
+    // correct a DEPARTED employee's dated agreement history without the general
+    // users PUT having to admit inactive subjects (that would be a reactivation
+    // side-door). +1 POST: the HR backdate-worklist resolve. The worklist GET is
+    // a read and lands on the get union by the same admission rule.
     expectTypeOf<TypedPathIn<paths, 'put'>>().toEqualTypeOf<
       | '/api/admin/organizations/{orgId}'
       | '/api/admin/organizations/{orgId}/move'
       | '/api/admin/users/{userId}'
       | '/api/admin/users/{userId}/unit'
+      | '/api/admin/users/{userId}/agreement-code'
       | '/api/admin/units/{id}'
       | '/api/admin/units/{id}/move'
       | '/api/admin/employee-profiles/{employeeId}'
@@ -453,6 +460,9 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/vacation-settlements/{employeeId}/{entitlementType}/{entitlementYear}/reconcile-payout'
       | '/api/admin/employees/{employeeId}/termination-payout-request'
       | '/api/admin/employees/{employeeId}/settlement-reversal'
+      // S138 / TASK-13803 — the HR backdate worklist's resolve action (RECALCULATED
+      // or DISMISSED + reason, If-Match guarded). The list itself is a GET.
+      | '/api/hr/backdate-worklist/{worklistId}/resolve'
       | '/api/auth/login'
       | '/api/agreement-configs'
       | '/api/agreement-configs/{configId}/clone'

@@ -7,6 +7,7 @@ using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
+using StatsTid.Infrastructure.Temporal;
 using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Exceptions;
@@ -22,6 +23,25 @@ public static class AdminEndpoints
     {
         "MAO", "ORGANISATION"
     };
+
+    /// <summary>
+    /// S138 / TASK-13802 — the DATE-FREE future-dating refusal shared by the users PUT's
+    /// agreement-code path and the dedicated agreement-code endpoint. Deliberately carries no
+    /// <c>provided</c> / <c>expected</c> dates: it is the sibling of the writer's
+    /// employment-start-floor refusal, and THAT one must never echo the employee's hire date to
+    /// the wire (an HR-scoped field, same handling class as the birth date). Keeping both refusals
+    /// on one date-free shape means a client cannot tell the two apart by probing — and cannot
+    /// learn a date it was not shown.
+    /// </summary>
+    private const string FutureDatedAgreementCodeError =
+        "EffectiveFrom cannot be in the future; an agreement-code change may be recorded for today or any past date.";
+
+    /// <summary>
+    /// S138 / TASK-13802 — the missing-date refusal shared by both agreement-code surfaces. Kept
+    /// separate from the future-dating message because it names a MALFORMED REQUEST, not a policy.
+    /// </summary>
+    private const string MissingEffectiveFromError =
+        "EffectiveFrom is required and must be a real date.";
 
     // ── Role ID to hierarchy-level mapping for privilege check ──
     private static readonly Dictionary<string, int> RoleHierarchy = new(StringComparer.OrdinalIgnoreCase)
@@ -908,6 +928,15 @@ public static class AdminEndpoints
             var employmentStartDateDefaulted = request.EmploymentStartDate is null;
             var employmentStartDate = request.EmploymentStartDate ?? effectiveFrom;
 
+            // S138 Step-5a (Reviewer BLOCKER, absorbed): the committed `users.version` for THIS
+            // create. The users INSERT below writes version 1, but step (2c) then routes through
+            // UserAgreementCodeRepository, which since S138 owns the `users.agreement_code` cache
+            // and bumps `users.version` with it — so the row commits at 2, not 1. The 201 must hand
+            // the caller the token the row ACTUALLY has, or the admin UI's very next PUT composes a
+            // stale If-Match and 412s. Sourced from the party that performed the bump (never
+            // recomputed as "expected + 1") — the same one-authority-per-fact rule the users PUT uses.
+            long createdUsersVersion = 1L;
+
             await using var tx = await conn.BeginTransactionAsync(ct);
 
             try
@@ -1101,6 +1130,43 @@ public static class AdminEndpoints
                     agreementAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
                     agreementAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
                     await agreementAuditCmd.ExecuteNonQueryAsync(ct);
+                }
+
+                // (2d′) S138 Step-5a (Reviewer BLOCKER, absorbed) — the paired users_audit row for
+                // the cache refresh's version bump. The writer above owns `users.agreement_code`
+                // and moves `users.version` with it; S138's standing rule is that a cache refresh
+                // IS a users-row write and therefore owes an audit row (honoured on the users PUT,
+                // the dedicated agreement-code endpoint and the profile PUT). Without this the
+                // version chain skips 1 → 2 with nothing recording why, which is precisely the
+                // "reconstructable after the fact" property the audit trail exists to hold.
+                if (agreementResult.UsersCacheWritten)
+                {
+                    createdUsersVersion = agreementResult.UsersVersionAfter ?? createdUsersVersion;
+                    var cachePrev = JsonSerializer.Serialize(new { agreementCode = agreementResult.PreviousAgreementCodeCache });
+                    var cacheNew = JsonSerializer.Serialize(new { agreementCode = agreementResult.NewAgreementCodeCache });
+                    await using var cacheAuditCmd = new NpgsqlCommand(
+                        """
+                        INSERT INTO users_audit (
+                            user_id, action,
+                            previous_data, new_data,
+                            version_before, version_after,
+                            actor_id, actor_role)
+                        VALUES (
+                            @userId, 'UPDATED',
+                            @previousData::jsonb, @newData::jsonb,
+                            @versionBefore, @versionAfter,
+                            @actorId, @actorRole)
+                        """, conn, tx);
+                    cacheAuditCmd.Parameters.AddWithValue("userId", request.UserId);
+                    cacheAuditCmd.Parameters.AddWithValue("previousData", cachePrev);
+                    cacheAuditCmd.Parameters.AddWithValue("newData", cacheNew);
+                    cacheAuditCmd.Parameters.AddWithValue(
+                        "versionBefore", (object?)agreementResult.UsersVersionBefore ?? DBNull.Value);
+                    cacheAuditCmd.Parameters.AddWithValue(
+                        "versionAfter", (object?)agreementResult.UsersVersionAfter ?? DBNull.Value);
+                    cacheAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
+                    cacheAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
+                    await cacheAuditCmd.ExecuteNonQueryAsync(ct);
                 }
 
                 // (3) UserCreated outbox emit in-tx (BEFORE CommitAsync) so the
@@ -1364,10 +1430,13 @@ public static class AdminEndpoints
 
             // S35 / TASK-3506 — stamp ETag: "1" on the 201 response so the admin
             // UI's subsequent PUT can compose a coherent If-Match without a
-            // round-trip through the new GET. version=1 is the schema DEFAULT from
-            // TASK-3501. Precedents: S25 AgreementConfigEndpoints L78/104/143 +
+            // round-trip through the new GET. S138 Step-5a: the value is the COMMITTED version,
+            // not the schema default — step (2c) routes through the agreement writer, which owns
+            // the users.agreement_code cache and bumps users.version with it, so a create commits
+            // at 2. Hard-coding "1" here handed the caller a token the row no longer had.
+            // Precedents: S25 AgreementConfigEndpoints L78/104/143 +
             // PositionOverrideEndpoints L64.
-            context.Response.Headers.ETag = "\"1\"";
+            context.Response.Headers.ETag = $"\"{createdUsersVersion}\"";
             // S112 / TASK-11201 — named record (UserCreatedResponse) replaces the anonymous shape;
             // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
             return Results.Created($"/api/admin/users/{request.UserId}", new UserCreatedResponse(
@@ -1378,7 +1447,7 @@ public static class AdminEndpoints
                 request.PrimaryOrgId,
                 request.AgreementCode,
                 request.OkVersion,
-                1L));
+                createdUsersVersion));
         }).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR
         .Produces<UserCreatedResponse>(StatusCodes.Status201Created); // S112 / TASK-11201
 
@@ -1409,6 +1478,8 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             DbConnectionFactory dbFactory,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            // S138 / TASK-13803 — the HR diagnostic worklist writers (in-tx).
+            HrBackdateWorklistRepository worklistRepo,
             ReportingLineRepository reportingLineRepo,
             UnitRepository unitRepo,
             ManagerVikarRepository vikarRepo,
@@ -1475,34 +1546,43 @@ public static class AdminEndpoints
                     return Results.BadRequest(new { error = "A user's primary org must be an Organisation (a MAO holds no employees)." });
             }
 
-            // S34 / TASK-3407 — agreement_code mutation predicate (null-safe + Ordinal
-            // compare per S33 TASK-3309 precedent — codes are identifiers, not
-            // culture-sensitive text). When false, the agreement_code routing branch
-            // below is skipped entirely and behaviour matches S33 verbatim.
-            var agreementCodeMutated = request.AgreementCode is not null &&
-                !string.Equals(request.AgreementCode, existingUser.AgreementCode, StringComparison.Ordinal);
+            // S138 / TASK-13802 — the agreement-code branch is now entered whenever the request
+            // CARRIES a code, and whether it actually MUTATED anything is decided by the WRITER
+            // (its `IsNoOp`, computed inside the lock against the row COVERING the requested date).
+            //
+            // Why the change: the pre-S138 predicate compared the request against the LIVE cache
+            // (`users.agreement_code` = the code as of today). For a today-dated write that is
+            // right, but for a BACKDATE it is exactly wrong — "she was actually on HK from the
+            // 10th, and back on AC since the 20th" carries a code equal to today's and would have
+            // silently no-op'd, losing a real correction to history (refinement recon discovery 8).
+            // The writer compares against the covering row instead, which is right in both cases.
+            var agreementCodeSupplied = request.AgreementCode is not null;
 
-            // S34 / TASK-3407 — EffectiveFrom validator (ADR-023 D8 same-day-only-edit
-            // narrowing). Only gated on the agreement_code mutation path: when the
-            // admin is not editing agreement_code (e.g. just updating display_name or
-            // email), EffectiveFrom is irrelevant and skipping the validator preserves
-            // the no-mutation path's S33 behaviour unchanged. DateTime.UtcNow (not
-            // local time) aligns with the frontend's
-            // `new Date().toISOString().slice(0,10)` UTC extraction (TASK-3409 sync).
-            // Rejects both backdated AND future-dated values with 422.
-            if (agreementCodeMutated)
-            {
-                var today = DateOnly.FromDateTime(DateTime.UtcNow);
-                if (request.EffectiveFrom != today)
-                {
-                    return Results.UnprocessableEntity(new
-                    {
-                        error = "EffectiveFrom must equal today (UTC).",
-                        provided = request.EffectiveFrom,
-                        expected = today,
-                    });
-                }
-            }
+            // S138 / TASK-13802 — EffectiveFrom validator, widened from "== today" to "<= today"
+            // (ADR-040 D8 as amended: backdating + today now; future-dating is Increment 4, because
+            // a not-yet-effective row would be read as "current" by the login token and the
+            // ~200 live-cache readers). Still gated on the agreement-code path: when the admin is
+            // only updating display_name or email, EffectiveFrom is irrelevant and skipping the
+            // validator preserves the no-mutation path's behaviour verbatim. DateTime.UtcNow (not
+            // local time) aligns with the frontend's `new Date().toISOString().slice(0,10)` UTC
+            // extraction (TASK-3409 sync). The refusal body is DATE-FREE — it shares a shape with
+            // the writer's employment-start-floor refusal, which must never echo the hire date.
+            //
+            // The PRESENCE guard comes first: `EffectiveFrom` is a non-nullable DateOnly, so a
+            // request that OMITS it binds the .NET default 0001-01-01. Pre-S138 the "== today"
+            // rule rejected that as a side effect; now that any past date is legal, the sentinel
+            // would route as a correction covering ALL recorded history (0001-01-01 is also the
+            // backfill seeder's start). A missing date is a malformed request, not a backdate.
+            if (agreementCodeSupplied && request.EffectiveFrom == default)
+                return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
+            if (agreementCodeSupplied && request.EffectiveFrom > DateOnly.FromDateTime(DateTime.UtcNow))
+                return Results.UnprocessableEntity(new { error = FutureDatedAgreementCodeError });
+
+            // NOTE (S138, deliberately unchanged): this endpoint stays ACTIVE-ONLY. Its
+            // `is_active` / `isDeactivating` choreography is the sanctioned deactivation path, and
+            // widening the lock here would open a reactivation side-door. HR corrects a DEPARTED
+            // employee's agreement code through the dedicated terminated-inclusive endpoint below
+            // (`PUT /api/admin/users/{userId}/agreement-code`).
 
             // Atomic UPDATE + outbox-emit per ADR-018 D3 (S26 TASK-2605b):
             // inline users UPDATE and UserUpdated outbox enqueue ride a single
@@ -1537,6 +1617,11 @@ public static class AdminEndpoints
             string? newEmail = existingUser.Email;
             string newPrimaryOrgId = existingUser.PrimaryOrgId;
             string newAgreementCode = existingUser.AgreementCode;
+            // S138 / TASK-13802 — the post-commit users token, hoisted for the same reason as the
+            // four fields above. It can no longer be recomputed as `expectedVersion + 1` outside
+            // the try: under the ONE-BUMP rule the bump may have been performed by the agreement
+            // WRITER, and we take the value from its own observation (`UsersVersionAfter`).
+            long newUserVersion = expectedVersion + 1;
 
             try
             {
@@ -1650,92 +1735,108 @@ public static class AdminEndpoints
                     newUnitId = request.UnitId;
                 }
 
-                // S34 / TASK-3407 — predecessor snapshot read in-tx (only when
-                // agreement_code mutated). Captures the full row state for the
-                // UserAgreementCodeSuperseded event payload (PredecessorAssignmentId,
-                // PredecessorEffectiveFrom, OldAgreementCode, VersionBefore) on Case C
-                // and the audit row's version_before on Case B/C. Mirrors the
-                // EmployeeProfileEndpoints PUT pre-tx-read pattern (PredecessorSnapshot).
+                // ═══ S138 / TASK-13802 — the agreement-code write, hoisted AHEAD of the users
+                // UPDATE (it used to run after it) ═══
                 //
-                // S34 Step 7a cycle 1 absorption (Codex BLOCKER-1+2 / Reviewer WARNING-1
-                // convergent): this SELECT uses FOR UPDATE so the row-level lock is held
-                // from snapshot through to SupersedeAndCreateAsync's own AcquireLockAsync
-                // (re-entrant within the same tx). Combined with passing
-                // expectedVersion=predecessor.Version below, audit `previous_data` JSONB
-                // + `version_before` column + the UserAgreementCodeSuperseded event payload
-                // are guaranteed to reflect the same row state that SupersedeAndCreateAsync
-                // operates on — no audit-trail drift under concurrent admin edits.
-                // Skipped on the no-mutation path.
+                // Why the move: the writer (TASK-13801) now owns BOTH the `users.agreement_code`
+                // cache and the `users.version` bump, because the cache means "the code as of
+                // TODAY" and only the writer knows which row covers today after a split. Running
+                // it BEFORE the endpoint's own `UPDATE users` is what lets us keep the ONE-BUMP
+                // rule (see below) — we must know whether the writer wrote before we decide
+                // whether the endpoint's UPDATE should bump. The EMISSIONS (the audit row, the
+                // Changed / Superseded events) stay in their original position further down, so
+                // the outbox order UserUpdated → UserAgreementCodeChanged is preserved.
+                //
+                // S34 / TASK-3407 — predecessor snapshot read in-tx (only when a code is
+                // supplied), FOR UPDATE so the row lock is held from snapshot through to the
+                // writer's own timeline lock (re-entrant within the same tx). It supplies the
+                // defence-in-depth `expectedVersion` below; every "before"-shaped FACT now comes
+                // from the writer's own COVERING pre-image instead (S138 recon discovery 8).
                 AgreementPredecessorSnapshot? agreementPredecessor = null;
-                if (agreementCodeMutated)
+                SaveUserAgreementCodeResult? agreementResult = null;
+                if (agreementCodeSupplied)
                 {
-                    await using var preCmd = new NpgsqlCommand(
+                    await using (var preCmd = new NpgsqlCommand(
                         """
                         SELECT assignment_id, agreement_code, effective_from, version
                         FROM user_agreement_codes
                         WHERE user_id = @userId AND effective_to IS NULL
                         FOR UPDATE
-                        """, conn, tx);
-                    preCmd.Parameters.AddWithValue("userId", userId);
-                    await using var preReader = await preCmd.ExecuteReaderAsync(ct);
-                    if (await preReader.ReadAsync(ct))
+                        """, conn, tx))
                     {
-                        agreementPredecessor = new AgreementPredecessorSnapshot(
-                            AssignmentId: preReader.GetGuid(0),
-                            AgreementCode: preReader.GetString(1),
-                            EffectiveFrom: preReader.GetFieldValue<DateOnly>(2),
-                            Version: preReader.GetInt64(3));
+                        preCmd.Parameters.AddWithValue("userId", userId);
+                        await using var preReader = await preCmd.ExecuteReaderAsync(ct);
+                        if (await preReader.ReadAsync(ct))
+                        {
+                            agreementPredecessor = new AgreementPredecessorSnapshot(
+                                AssignmentId: preReader.GetGuid(0),
+                                AgreementCode: preReader.GetString(1),
+                                EffectiveFrom: preReader.GetFieldValue<DateOnly>(2),
+                                Version: preReader.GetInt64(3));
+                        }
+                        // If null: no live row exists — the backfill seeder didn't run for this
+                        // user, or the user predates S34. The writer routes case A and INSERTs a
+                        // fresh row since expectedVersion is then null. The safety net keeps the
+                        // PUT resilient against stragglers; admin POST always seeds the row.
                     }
-                    // If null: no live row exists — backfill seeder didn't run for
-                    // this user, or the user was created pre-S34 and somehow missed
-                    // the seeder. SupersedeAndCreateAsync will route to Case A and
-                    // INSERT a fresh row at v=1 since expectedVersion is null. The
-                    // safety-net branch keeps the PUT path resilient against
-                    // pre-S34 stragglers; admin POST always seeds the row explicitly.
 
-                    // S34 Step 7a cycle 2 absorption (Codex BLOCKER-1) — re-validate
-                    // agreementCodeMutated against the FOR-UPDATE'd canonical source.
-                    // The pre-tx existingUser.AgreementCode snapshot at L610-611 can
-                    // be stale under concurrent admin edits; once we hold the row
-                    // lock, the predecessor's agreement_code is the authoritative
-                    // "before" value. If a peer admin already applied the requested
-                    // change while we waited on the lock, this PUT becomes a no-op
-                    // on the agreement-code dimension — skip SupersedeAndCreateAsync
-                    // + audit + Changed/Superseded emission to avoid (a) a spurious
-                    // version bump, (b) emitting UserAgreementCodeChanged with stale
-                    // OldAgreementCode that misreports the lineage as <pre-lock>→<new>
-                    // when the actual transition is <new>→<new>. Case A safety-net
-                    // (predecessor null) falls back to existingUser.AgreementCode
-                    // since there is no canonical row to read from.
-                    // S35 / TASK-3506 — fallback resolves against the locked users
-                    // row (TASK-3506 Step 2) rather than the pre-tx existingUser
-                    // snapshot, so the entire canonical path operates off locked
-                    // state. agreementPredecessor still wins when its row exists
-                    // (it's also FOR-UPDATE'd above); the safety-net fallback
-                    // (predecessor null) reads from lockedUser, never the stale
-                    // pre-tx snapshot.
-                    var canonicalOldAgreementCode =
-                        agreementPredecessor?.AgreementCode ?? lockedUser.AgreementCode;
-                    if (string.Equals(request.AgreementCode, canonicalOldAgreementCode, StringComparison.Ordinal))
-                    {
-                        agreementCodeMutated = false;
-                    }
+                    // S138 / TASK-13802 — the generalized dated write. `expectedVersion` keeps its
+                    // pre-S138 defence-in-depth meaning (the open AGREEMENT ROW's version, observed
+                    // under the FOR UPDATE above — NOT the client token, which is `users.version`
+                    // and was validated against `lockedVersion` further up). The employment-start
+                    // floor rides along so a correction cannot predate the hire (date-free refusal).
+                    agreementResult = await userAgreementCodeRepo.SupersedeAndCreateAsync(
+                        conn, tx,
+                        new UserAgreementCodeSupersedeRequest(
+                            UserId: userId,
+                            AgreementCode: request.AgreementCode!,
+                            EffectiveFrom: request.EffectiveFrom,
+                            EmploymentStartDate: lockedUser.EmploymentStartDate),
+                        expectedVersion: agreementPredecessor?.Version,
+                        ct);
                 }
 
-                // S35 / TASK-3506 — UPDATE bumps users.version per ADR-018 D7 row-
-                // version contract. Null-fallbacks resolve against the locked row
-                // (lockedUser), NOT the stale pre-tx existingUser — closes audit-
-                // trail drift item #4 from S34 deferred. newVersion = lockedVersion + 1
-                // is bound to a local for both the users_audit row below and the
-                // ETag/version stamped on the 200 response. The four newX values
-                // (declared outside the try block per Step 7a cycle 1 Reviewer W2
-                // absorption) are assigned here so the response builder at L1230+
-                // can source them from the locked-row snapshot.
-                var newVersion = lockedVersion + 1;
+                // S138 — "did the agreement code actually change?" is the WRITER's verdict, never a
+                // comparison against the live cache. `IsNoOp` means the request equalled the row
+                // COVERING the requested date, so nothing at all was written (no row, no version
+                // bump, no cache write) — and the endpoint skips the audit row, both events and the
+                // worklist. Conversely a BACKDATED code equal to today's code is NOT a no-op: it
+                // changes history, so it writes.
+                var agreementCodeMutated = agreementResult is { IsNoOp: false };
+
+                // S35 / TASK-3506 — null-fallbacks resolve against the locked row (lockedUser),
+                // NOT the stale pre-tx existingUser — closes audit-trail drift item #4 from S34
+                // deferred. The four newX values (declared outside the try block per Step 7a
+                // cycle 1 Reviewer W2 absorption) are assigned here so the response builder can
+                // source them from the locked-row snapshot.
+                //
+                // ═══ S138 / TASK-13802 — THE ONE-BUMP RULE ═══
+                // `users.version` is the client's single concurrency token for this aggregate, and
+                // it must move EXACTLY ONCE per request — no more (a double bump would 412 the
+                // caller's own next edit and mint a token nobody was handed) and no less. Two
+                // parties can now write the users row in one transaction, so exactly one of them
+                // owns the bump:
+                //   • the request carries an agreement-code change the WRITER actually wrote
+                //     ⇒ the REPOSITORY owns the bump (it refreshes `users.agreement_code` from the
+                //       row covering today and bumps atomically with the agreement row), and the
+                //       endpoint's `UPDATE users` below omits `version = version + 1`;
+                //   • otherwise (no code supplied, or the writer no-op'd)
+                //     ⇒ the endpoint's `UPDATE users` performs the single bump, exactly as before.
+                // Either way the post-commit token is `lockedVersion + 1`, which is what the ETag,
+                // the `users_audit.version_after` column and the response body all carry. When the
+                // writer ran, we source it from `UsersVersionAfter` (its own observation) rather
+                // than recomputing it — one authority per fact.
+                //
+                // The endpoint's UPDATE also DROPS `agreement_code` from its SET list entirely:
+                // the cache means "the code as of TODAY" and only the writer knows which row
+                // covers today after a split, so writing the REQUEST value here would corrupt the
+                // cache on every historical correction.
+                var newVersion = agreementResult?.UsersVersionAfter ?? (lockedVersion + 1);
+                newUserVersion = newVersion;
                 newDisplayName = request.DisplayName ?? lockedUser.DisplayName;
                 newEmail = request.Email ?? lockedUser.Email;
                 newPrimaryOrgId = request.PrimaryOrgId ?? lockedUser.PrimaryOrgId;
-                newAgreementCode = request.AgreementCode ?? lockedUser.AgreementCode;
+                newAgreementCode = agreementResult?.NewAgreementCodeCache ?? lockedUser.AgreementCode;
 
                 // S52 / ADR-027 deferred — detect user deactivation (was active,
                 // request explicitly sets is_active = false). lockedUser.IsActive is
@@ -1743,26 +1844,39 @@ public static class AdminEndpoints
                 var newIsActive = request.IsActive ?? lockedUser.IsActive;
                 var isDeactivating = lockedUser.IsActive && !newIsActive;
 
-                await using var cmd = new NpgsqlCommand(
-                    """
-                    UPDATE users
-                    SET display_name = @displayName,
-                        email = @email,
-                        primary_org_id = @primaryOrgId,
-                        unit_id = @unitId,
-                        agreement_code = @agreementCode,
-                        is_active = @isActive,
-                        version = version + 1,
-                        updated_at = @now
-                    WHERE user_id = @userId AND is_active = TRUE
-                    """, conn, tx);
+                // Two LITERAL statements, each passed straight to its own constructor (never a
+                // variable, never a concatenation — CA2100 discipline): identical apart from the
+                // `version = version + 1` clause the one-bump rule selects.
+                await using var cmd = agreementCodeMutated
+                    ? new NpgsqlCommand(
+                        """
+                        UPDATE users
+                        SET display_name = @displayName,
+                            email = @email,
+                            primary_org_id = @primaryOrgId,
+                            unit_id = @unitId,
+                            is_active = @isActive,
+                            updated_at = @now
+                        WHERE user_id = @userId AND is_active = TRUE
+                        """, conn, tx)
+                    : new NpgsqlCommand(
+                        """
+                        UPDATE users
+                        SET display_name = @displayName,
+                            email = @email,
+                            primary_org_id = @primaryOrgId,
+                            unit_id = @unitId,
+                            is_active = @isActive,
+                            version = version + 1,
+                            updated_at = @now
+                        WHERE user_id = @userId AND is_active = TRUE
+                        """, conn, tx);
                 cmd.Parameters.AddWithValue("displayName", newDisplayName);
                 cmd.Parameters.AddWithValue("email", (object?)newEmail ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("primaryOrgId", newPrimaryOrgId);
                 // S104 / ADR-038 D8 — on a TRANSFER newUnitId = request.UnitId (the old-Organisation
                 // unit_id is reset); on a non-transfer PUT newUnitId = currentUnitId (an untouched no-op).
                 cmd.Parameters.AddWithValue("unitId", (object?)newUnitId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("agreementCode", newAgreementCode);
                 cmd.Parameters.AddWithValue("isActive", newIsActive);
                 cmd.Parameters.AddWithValue("now", now);
                 cmd.Parameters.AddWithValue("userId", userId);
@@ -1866,65 +1980,46 @@ public static class AdminEndpoints
                 // changed" signal AND the cross-day supersession lifecycle event).
                 if (agreementCodeMutated)
                 {
-                    // S34 Step 7a cycle 1 absorption — pass
-                    // expectedVersion=predecessor.Version (defense-in-depth on top of the
-                    // FOR UPDATE lock above). If the lock somehow released between the
-                    // predecessor read and this call, the repository's optimistic
-                    // concurrency check at UserAgreementCodeRepository.cs:266-273 would
-                    // throw OptimisticConcurrencyException → 412 rather than silently
-                    // proceeding with stale audit metadata.
-                    var agreementResult = await userAgreementCodeRepo.SupersedeAndCreateAsync(
-                        conn, tx,
-                        new UserAgreementCodeSupersedeRequest(
-                            UserId: userId,
-                            AgreementCode: request.AgreementCode!,
-                            EffectiveFrom: request.EffectiveFrom),
-                        expectedVersion: agreementPredecessor?.Version,
-                        ct);
+                    // S138 / TASK-13802 — the write itself already happened above (hoisted so the
+                    // one-bump rule can see its verdict); what remains here is the NARRATION, in
+                    // its original position so the outbox order UserUpdated → UserAgreementCodeChanged
+                    // is byte-for-byte preserved.
+                    var agreementWrite = agreementResult!;
 
-                    // Audit row — action + version-transition columns discriminated
-                    // by outcome:
-                    //   Case B Updated:    action=UPDATED,    version_before=predecessor.Version, version_after=result.Version
-                    //   Case C Superseded: action=SUPERSEDED, version_before=predecessor.Version, version_after=result.Version
-                    //   Case A Created:    action=CREATED,    version_before=NULL,                version_after=result.Version
-                    // version_before is the predecessor's row-version (NOT NULL on
-                    // B/C because we snapshotted it above; NULL on A because there
-                    // is no predecessor). Mirrors EmployeeProfileEndpoints PUT
-                    // precedent (L366-367) — the audit chain narrates the visible
-                    // state delta on the user's agreement-code lineage.
-                    string auditAction;
-                    long? auditVersionBefore;
-                    switch (agreementResult.Outcome)
+                    // S138 — every "before"-shaped fact comes from the writer's COVERING pre-image
+                    // (the row that actually covered the requested date), not from the open row.
+                    var agreementCovering = agreementWrite.Covering;
+
+                    // Audit row — action + version-transition columns discriminated by the ROUTED
+                    // case, still inside the 4-valued action CHECK (no enum widening):
+                    //   B' in-place edit                   → UPDATED
+                    //   C' split (open OR history covering)→ SUPERSEDED
+                    //   nothing closed (A / E / G / T)     → CREATED
+                    // version_before / version_after stay the agreement ROW's own version — the
+                    // existing contract of this audit table (the CLIENT token is `users.version`,
+                    // narrated by the users_audit row instead). NULL before when no row covered.
+                    var auditAction = agreementWrite.Kind switch
                     {
-                        case SaveUserAgreementCodeOutcome.Updated:
-                            auditAction = "UPDATED";
-                            auditVersionBefore = agreementPredecessor!.Version;
-                            break;
-                        case SaveUserAgreementCodeOutcome.Superseded:
-                            auditAction = "SUPERSEDED";
-                            auditVersionBefore = agreementPredecessor!.Version;
-                            break;
-                        case SaveUserAgreementCodeOutcome.Created:
-                            auditAction = "CREATED";
-                            auditVersionBefore = null;
-                            break;
-                        default:
-                            throw new InvalidOperationException(
-                                $"Unhandled SaveUserAgreementCodeOutcome value '{agreementResult.Outcome}'.");
-                    }
-                    var previousData = agreementPredecessor is null
+                        TemporalWriteKind.Updated => "UPDATED",
+                        TemporalWriteKind.Superseded or TemporalWriteKind.Inserted => "SUPERSEDED",
+                        _ => "CREATED",
+                    };
+                    var auditVersionBefore = agreementCovering?.Version;
+                    var previousData = agreementCovering is null
                         ? null
                         : JsonSerializer.Serialize(new
                         {
                             userId,
-                            agreementCode = agreementPredecessor.AgreementCode,
-                            effectiveFrom = agreementPredecessor.EffectiveFrom.ToString("yyyy-MM-dd"),
+                            agreementCode = agreementCovering.AgreementCode,
+                            effectiveFrom = agreementCovering.EffectiveFrom.ToString("yyyy-MM-dd"),
+                            effectiveTo = agreementCovering.EffectiveTo?.ToString("yyyy-MM-dd"),
                         });
                     var newData = JsonSerializer.Serialize(new
                     {
                         userId,
                         agreementCode = request.AgreementCode,
                         effectiveFrom = request.EffectiveFrom.ToString("yyyy-MM-dd"),
+                        effectiveTo = agreementWrite.NewEffectiveTo?.ToString("yyyy-MM-dd"),
                     });
                     await using (var agreementAuditCmd = new NpgsqlCommand(
                         """
@@ -1940,7 +2035,7 @@ public static class AdminEndpoints
                             @actorId, @actorRole)
                         """, conn, tx))
                     {
-                        agreementAuditCmd.Parameters.AddWithValue("assignmentId", agreementResult.AssignmentId);
+                        agreementAuditCmd.Parameters.AddWithValue("assignmentId", agreementWrite.AssignmentId);
                         agreementAuditCmd.Parameters.AddWithValue("userId", userId);
                         agreementAuditCmd.Parameters.AddWithValue("action", auditAction);
                         agreementAuditCmd.Parameters.AddWithValue("previousData",
@@ -1948,7 +2043,7 @@ public static class AdminEndpoints
                         agreementAuditCmd.Parameters.AddWithValue("newData", newData);
                         agreementAuditCmd.Parameters.AddWithValue("versionBefore",
                             auditVersionBefore is null ? (object)DBNull.Value : auditVersionBefore.Value);
-                        agreementAuditCmd.Parameters.AddWithValue("versionAfter", agreementResult.Version);
+                        agreementAuditCmd.Parameters.AddWithValue("versionAfter", agreementWrite.Version);
                         agreementAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
                         agreementAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
                         await agreementAuditCmd.ExecuteNonQueryAsync(ct);
@@ -1966,17 +2061,13 @@ public static class AdminEndpoints
                     // identical fix on the audit `previous_data` JSONB above + the
                     // UserAgreementCodeSuperseded event payload below — all three sites
                     // now flow off the same locked row state.
-                    // S35 Step 7a cycle 1 absorption (Reviewer W1) — Case A safety-net
-                    // (no live row exists) now falls back to lockedUser.AgreementCode,
-                    // never the pre-tx existingUser snapshot. Closes the remaining
-                    // outer-users-UPDATE stale-snapshot residual on item #4 from S34
-                    // deferred. Mirrors the canonicalOldAgreementCode fallback at L882
-                    // exactly — both fallback sites now flow off the FOR-UPDATE'd
-                    // users row.
+                    // S138 / TASK-13802 — OldAgreementCode is the COVERING row's code (what the
+                    // requested date actually said before this write), falling back to the locked
+                    // users row only when nothing covered the date at all (a gap / first-ever row).
                     var agreementChangedEvent = new UserAgreementCodeChanged
                     {
                         UserId = userId,
-                        OldAgreementCode = agreementPredecessor?.AgreementCode ?? lockedUser.AgreementCode,
+                        OldAgreementCode = agreementCovering?.AgreementCode ?? lockedUser.AgreementCode,
                         NewAgreementCode = request.AgreementCode!,
                         EffectiveFrom = request.EffectiveFrom,
                         ActorId = actor.ActorId,
@@ -2006,20 +2097,27 @@ public static class AdminEndpoints
                     // canonical user-{userId} stream per TASK-3309 + backfill seeder
                     // convention. Under end-exclusive semantics (ADR-018 D9), the
                     // predecessor's effective_to == new row's effective_from.
-                    if (agreementResult.Outcome == SaveUserAgreementCodeOutcome.Superseded)
+                    //
+                    // S138 / TASK-13802 — the split now has TWO shapes and both emit it:
+                    // `Superseded` = the covering row was the OPEN one (the classic cross-day
+                    // supersession; NewEffectiveTo null), `Inserted` = the covering row was a
+                    // HISTORY row (D8's insert-between; NewEffectiveTo carries where the new row
+                    // ends, and the rows after it are untouched).
+                    if (agreementWrite.Kind is TemporalWriteKind.Superseded or TemporalWriteKind.Inserted)
                     {
                         var supersededEvent = new UserAgreementCodeSuperseded
                         {
-                            PredecessorAssignmentId = agreementPredecessor!.AssignmentId,
-                            NewAssignmentId = agreementResult.AssignmentId,
+                            PredecessorAssignmentId = agreementCovering!.AssignmentId,
+                            NewAssignmentId = agreementWrite.AssignmentId,
                             UserId = userId,
-                            PredecessorEffectiveFrom = agreementPredecessor.EffectiveFrom,
+                            PredecessorEffectiveFrom = agreementCovering.EffectiveFrom,
                             PredecessorEffectiveTo = request.EffectiveFrom,
                             NewEffectiveFrom = request.EffectiveFrom,
-                            OldAgreementCode = agreementPredecessor.AgreementCode,
+                            NewEffectiveTo = agreementWrite.NewEffectiveTo,
+                            OldAgreementCode = agreementCovering.AgreementCode,
                             NewAgreementCode = request.AgreementCode!,
-                            VersionBefore = agreementPredecessor.Version,
-                            VersionAfter = agreementResult.Version,
+                            VersionBefore = agreementCovering.Version,
+                            VersionAfter = agreementWrite.Version,
                             ActorId = actor.ActorId,
                             ActorRole = actor.ActorRole,
                             CorrelationId = actor.CorrelationId,
@@ -2039,6 +2137,24 @@ public static class AdminEndpoints
                         var uacSupersededRow = uacSupersededMapper.Map(supersededEvent, uacSupersededCtx);
                         await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, uacSupersededOutboxId, supersededEvent.EventType, uacSupersededRow, uacSupersededCtx, ct);
                     }
+
+                    // ── S138 / TASK-13803 + TASK-13802 — the HR diagnostic worklist ──
+                    // Nothing recalculates automatically (ADR-013). What an agreement-code
+                    // correction owes payroll and HR is VISIBILITY: every already-EXPORTED month
+                    // and every ACTIVE-settlement holiday year the written interval touches gets a
+                    // worklist row (or a trigger appended to an open one), written in THIS
+                    // transaction alongside its outbox event. Interval = the row the writer
+                    // produced, [NewEffectiveFrom, NewEffectiveTo) — null upper bound = open.
+                    var agreementTrigger = new WorklistTrigger(
+                        WorklistTriggerKinds.AgreementCodeChange,
+                        agreementChangedEvent.EventId,
+                        agreementWrite.NewEffectiveFrom ?? request.EffectiveFrom,
+                        actor.ActorId ?? "unknown");
+                    var agreementWorklistFrom = agreementWrite.NewEffectiveFrom ?? request.EffectiveFrom;
+                    await worklistRepo.WriteForExportedMonthsAsync(
+                        conn, tx, userId, agreementTrigger, agreementWorklistFrom, agreementWrite.NewEffectiveTo, ct);
+                    await worklistRepo.WriteForSettledYearsAsync(
+                        conn, tx, userId, agreementTrigger, agreementWorklistFrom, agreementWrite.NewEffectiveTo, ct);
                 }
 
                 // S52 / ADR-027 deferred — when deactivating a user who is a manager,
@@ -2194,6 +2310,15 @@ public static class AdminEndpoints
                     actualVersion = ex.ActualVersion,
                 }, statusCode: 412);
             }
+            catch (TemporalWriteRejectedException ex)
+            {
+                // S138 / TASK-13802 — the writer's two pure refusals: a FUTURE date (defence in
+                // depth behind the validator above) and a date BEFORE the employee's employment
+                // start. Both surface as a 422 whose body is DATE-FREE by construction — the
+                // exception's own messages never carry a date, so the hire date cannot leak.
+                await tx.RollbackAsync(ct);
+                return Results.UnprocessableEntity(new { error = ex.Message });
+            }
             catch (ConcurrentSeedConflictException ex)
             {
                 // S35 / TASK-3502 — Case A concurrent-create race on
@@ -2223,11 +2348,13 @@ public static class AdminEndpoints
 
             // S35 / TASK-3506 — stamp ETag: "<newVersion>" + carry `version` in
             // the body so the admin UI can compose the next If-Match without
-            // re-GETting. ADR-019 D2 explicit ETag contract. newVersion is
-            // mechanically expectedVersion + 1: the If-Match precondition has
-            // already been validated against lockedVersion inside the tx (412
-            // would otherwise have short-circuited via the explicit OCE catch),
-            // and the UPDATE statement bumps version by exactly 1.
+            // re-GETting. ADR-019 D2 explicit ETag contract.
+            //
+            // S138 / TASK-13802 — the token is now taken from the local assigned INSIDE the tx
+            // (the ONE-BUMP rule: when the agreement writer wrote, IT owned the bump and reported
+            // `UsersVersionAfter`; otherwise the endpoint's own UPDATE bumped). It is still
+            // mechanically `expectedVersion + 1` in both branches — exactly one bump per request —
+            // but it is now SOURCED from the party that performed it rather than recomputed.
             //
             // S35 Step 7a cycle 1 absorption (Reviewer W2) — body fields are
             // sourced from the four newX locals (hoisted above the try block,
@@ -2239,7 +2366,6 @@ public static class AdminEndpoints
             // snapshot rather than relying on the global If-Match invariant
             // to make existingUser converge with lockedUser. Mirrors the
             // EmployeeProfileEndpoints PUT precedent (builds response inside tx).
-            var newUserVersion = expectedVersion + 1;
             context.Response.Headers.ETag = $"\"{newUserVersion}\"";
             // S112 / TASK-11201 — named record (UserUpdatedResponse) replaces the anonymous shape;
             // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
@@ -2252,6 +2378,408 @@ public static class AdminEndpoints
                 newUserVersion));
         })).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page surface opened to LocalHR. S78 R9: extra ) closes TreeRootDriftRetry.RunAsync
         .Produces<UserUpdatedResponse>(StatusCodes.Status200OK); // S112 / TASK-11201
+
+        // ═══════════════════════════════════════════
+        // 5b. PUT /api/admin/users/{userId}/agreement-code
+        //     — S138 / TASK-13802 (ADR-040 D8 as amended 2026-09-02). NEW.
+        //
+        // WHAT THIS IS FOR, in plain language. HR sometimes learns after the fact that a person was
+        // on a different collective agreement than the record says — including a person who has
+        // since LEFT. Their final months are exactly the ones payroll still has to get right, so
+        // "we can't touch leavers" is not an acceptable answer. The general
+        // PUT /api/admin/users/{userId} cannot serve that case: it also owns the `is_active`
+        // switch, and widening its lock to reach a deactivated subject would hand anyone with that
+        // route a way to REACTIVATE a departed employee as a side effect of an unrelated edit. So
+        // the leaver correction gets its own narrow surface instead — two fields, no lifecycle
+        // switch, terminated-inclusive reads behind a LocalHR floor. It cannot reactivate anyone,
+        // and the leaver's OWN token cannot use it (the terminated-inclusive validator refuses
+        // Employee-only actors outright — SEC-046).
+        //
+        // It is otherwise the users PUT's agreement branch, in full: the `<= today` validator, the
+        // same dated writer, `UserAgreementCodeChanged` always plus `UserAgreementCodeSuperseded`
+        // when a row was split, the `user_agreement_codes_audit` row, the `users_audit` row for
+        // the `users.version` bump the writer performs, the ADR-026 audit projections, and both HR
+        // worklist writers over the written interval.
+        //
+        // Where a LEAVER's token comes from (S138 Step-5a, Reviewer NOTE — stated because it is not
+        // obvious and the obvious guess is wrong): this endpoint exists precisely to correct a
+        // DEPARTED employee, but `GET /api/admin/users/{userId}` is active-only and 404s for exactly
+        // that subject. The terminated-inclusive source is
+        // `GET /api/admin/employees/{employeeId}/employment-end-date`, which stamps the same
+        // `users.version`. The profile side has no such asymmetry — S138 widened its GET alongside
+        // its PUT — but the users GET was deliberately NOT widened: its DTO carries
+        // `employment_end_date`, so widening it is an ADR-040 D7 judgement this sprint did not need
+        // to make, whereas the profile row carries no employment dates at all.
+        //
+        // Concurrency: If-Match on `users.version` — the ONE client token for this aggregate
+        // (`user_agreement_codes.version` is a repository-internal row version and is never issued
+        // to a client). 428 missing/malformed, 412 stale, 404 unknown user, 403 out of scope,
+        // 422 future-dated or before the employment start (both DATE-FREE), 409 on a lost
+        // insert race.
+        // ═══════════════════════════════════════════
+        app.MapPut("/api/admin/users/{userId}/agreement-code", async (
+            string userId,
+            UpdateUserAgreementCodeRequest request,
+            UserRepository userRepo,
+            OrgScopeValidator scopeValidator,
+            DbConnectionFactory dbFactory,
+            UserAgreementCodeRepository userAgreementCodeRepo,
+            HrBackdateWorklistRepository worklistRepo,
+            IOutboxEnqueue outbox,
+            IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
+            IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
+            AuditProjectionRepository auditRepo,
+            HttpContext context,
+            CancellationToken ct) =>
+        {
+            var actor = context.GetActorContext();
+
+            // Subject resolution FIRST, terminated-inclusive — a departed employee must resolve as
+            // a real subject here, not dead-end as a 404 (the whole point of the endpoint).
+            var subject = await userRepo.GetByIdIncludingTerminatedAsync(userId, ct);
+            if (subject is null)
+                return Results.NotFound(new { error = "User not found" });
+
+            // Cross-org binding with the LocalHR floor. For a TERMINATED subject the ADMITTING
+            // scope must itself be LocalHR or above (the S76 B1 / R9f1 invariant), so a leader
+            // scope covering the org cannot reach a leaver, and an Employee-only actor — including
+            // the leaver themselves — is refused outright (SEC-046). The refusal names the STATUS
+            // only; it never carries a date.
+            var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
+                actor, userId, StatsTidRoles.LocalHR, ct);
+            if (!allowed)
+                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            if (string.IsNullOrWhiteSpace(request.AgreementCode))
+                return Results.BadRequest(new { error = "AgreementCode is required." });
+
+            // Presence first (see the users PUT for the reasoning): an omitted non-nullable
+            // DateOnly binds 0001-01-01, which any-past-date legality would otherwise turn into a
+            // correction covering all recorded history.
+            if (request.EffectiveFrom == default)
+                return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
+
+            // Backdating + today are legal; the future is not (date-free, ADR-040 D8 amendment).
+            if (request.EffectiveFrom > DateOnly.FromDateTime(DateTime.UtcNow))
+                return Results.UnprocessableEntity(new { error = FutureDatedAgreementCodeError });
+
+            // Admin-strict If-Match on `users.version` (ADR-019 D2) — 428 on missing / malformed /
+            // If-None-Match: *.
+            if (!EtagHeaderHelper.TryParseIfMatch(
+                    context.Request, out var expectedVersion, out var headerError))
+                return Results.Json(new { error = headerError }, statusCode: 428);
+
+            var actorId = actor.ActorId ?? "unknown";
+            var actorRole = actor.ActorRole ?? "unknown";
+            var streamId = $"user-{userId}";
+
+            await using var conn = dbFactory.Create();
+            await conn.OpenAsync(ct);
+            await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            try
+            {
+                // In-tx FOR-UPDATE re-read of the users row, terminated-INCLUSIVE. This locked
+                // snapshot — not the pre-tx read above — is canonical for the If-Match check, the
+                // employment-start floor and the audit row's previous_data. Lock order matches the
+                // general users PUT: users first, then user_agreement_codes (the writer's own
+                // timeline lock), so the two handlers cannot deadlock against each other.
+                var lockedHit = await userRepo.GetByIdWithVersionIncludingTerminatedAsync(conn, tx, userId, ct);
+                if (lockedHit is null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.NotFound(new { error = "User not found" });
+                }
+                var (lockedUser, lockedVersion) = lockedHit.Value;
+                if (lockedVersion != expectedVersion)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new
+                    {
+                        error = "Concurrency precondition failed",
+                        expectedVersion,
+                        actualVersion = lockedVersion,
+                    }, statusCode: 412);
+                }
+
+                // The generalized dated write (TASK-13801): routes against the row COVERING the
+                // requested date, refreshes `users.agreement_code` from the row covering TODAY
+                // (never from the request — a historical correction leaves it untouched by
+                // construction) and bumps `users.version` atomically with the agreement row. That
+                // bump IS the client token's move; nothing else in this handler touches
+                // `users.version`, so there is exactly ONE bump per request.
+                //
+                // `expectedVersion: null` on purpose — the repository's own optimistic check is on
+                // the AGREEMENT ROW's internal version, which no client holds. The client's
+                // precondition was already enforced above against `users.version` under the
+                // FOR-UPDATE lock, which is the token this aggregate actually issues.
+                SaveUserAgreementCodeResult result;
+                try
+                {
+                    result = await userAgreementCodeRepo.SupersedeAndCreateAsync(
+                        conn, tx,
+                        new UserAgreementCodeSupersedeRequest(
+                            UserId: userId,
+                            AgreementCode: request.AgreementCode,
+                            EffectiveFrom: request.EffectiveFrom,
+                            EmploymentStartDate: lockedUser.EmploymentStartDate),
+                        expectedVersion: null,
+                        ct);
+                }
+                catch (TemporalWriteRejectedException ex)
+                {
+                    // Future-dated (defence in depth) or before the employment start. DATE-FREE.
+                    await tx.RollbackAsync(ct);
+                    return Results.UnprocessableEntity(new { error = ex.Message });
+                }
+                catch (ConcurrentSeedConflictException ex)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Conflict(new
+                    {
+                        error = "User agreement-code assignment changed concurrently; refresh and retry.",
+                        userId = ex.UserId,
+                    });
+                }
+
+                // The same-values no-op (the S23 shape): the request equalled the row already
+                // covering that date, so nothing was written — no row, no event, no bump. 200 with
+                // the UNCHANGED token, because the requested state already holds. Note the
+                // comparison is against the COVERING row: a backdated code equal to TODAY's code
+                // is a real change to history and does NOT land here.
+                //
+                // S138 / TASK-13810 (owner ruling 2026-09-03) — THE SHARED RESPONSE RULE, stated so
+                // the next reader sees a rule and not a coincidence: both correction endpoints
+                // answer with the state AS OF TODAY. Here that is `lockedUser.AgreementCode`, the
+                // live `users.agreement_code` cache, which by the writer's cache rule always mirrors
+                // the row covering today. The profile PUT was changed to match (it used to echo the
+                // values written). Consequence, intended: after a purely historical correction the
+                // body does NOT reflect what the caller just sent — the written interval is on the
+                // timeline and in the emitted events; the body is about today.
+                if (result.IsNoOp)
+                {
+                    await tx.CommitAsync(ct);
+                    context.Response.Headers.ETag = $"\"{lockedVersion}\"";
+                    return Results.Ok(new UserAgreementCodeUpdatedResponse(
+                        userId,
+                        lockedUser.AgreementCode,
+                        result.NewEffectiveFrom ?? request.EffectiveFrom,
+                        result.NewEffectiveTo,
+                        NoOp: true,
+                        lockedVersion));
+                }
+
+                var covering = result.Covering;
+                var newUsersVersion = result.UsersVersionAfter ?? (lockedVersion + 1);
+                var writtenFrom = result.NewEffectiveFrom ?? request.EffectiveFrom;
+
+                // user_agreement_codes_audit — action per the ROUTED case, inside the existing
+                // 4-valued CHECK (no enum widening): B' in-place → UPDATED; C' split (open OR
+                // history covering row) → SUPERSEDED; nothing closed (A / E / G / T) → CREATED.
+                // version_before/after stay the agreement ROW's own version, this table's existing
+                // contract; the CLIENT token's transition is narrated by the users_audit row below.
+                var auditAction = result.Kind switch
+                {
+                    TemporalWriteKind.Updated => "UPDATED",
+                    TemporalWriteKind.Superseded or TemporalWriteKind.Inserted => "SUPERSEDED",
+                    _ => "CREATED",
+                };
+                var previousData = covering is null
+                    ? null
+                    : JsonSerializer.Serialize(new
+                    {
+                        userId,
+                        agreementCode = covering.AgreementCode,
+                        effectiveFrom = covering.EffectiveFrom.ToString("yyyy-MM-dd"),
+                        effectiveTo = covering.EffectiveTo?.ToString("yyyy-MM-dd"),
+                    });
+                var newData = JsonSerializer.Serialize(new
+                {
+                    userId,
+                    agreementCode = request.AgreementCode,
+                    effectiveFrom = writtenFrom.ToString("yyyy-MM-dd"),
+                    effectiveTo = result.NewEffectiveTo?.ToString("yyyy-MM-dd"),
+                });
+                await using (var agreementAuditCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO user_agreement_codes_audit (
+                        assignment_id, user_id, action,
+                        previous_data, new_data,
+                        version_before, version_after,
+                        actor_id, actor_role)
+                    VALUES (
+                        @assignmentId, @userId, @action,
+                        @previousData::jsonb, @newData::jsonb,
+                        @versionBefore, @versionAfter,
+                        @actorId, @actorRole)
+                    """, conn, tx))
+                {
+                    agreementAuditCmd.Parameters.AddWithValue("assignmentId", result.AssignmentId);
+                    agreementAuditCmd.Parameters.AddWithValue("userId", userId);
+                    agreementAuditCmd.Parameters.AddWithValue("action", auditAction);
+                    agreementAuditCmd.Parameters.AddWithValue("previousData",
+                        previousData is null ? (object)DBNull.Value : previousData);
+                    agreementAuditCmd.Parameters.AddWithValue("newData", newData);
+                    agreementAuditCmd.Parameters.AddWithValue("versionBefore",
+                        covering is null ? (object)DBNull.Value : covering.Version);
+                    agreementAuditCmd.Parameters.AddWithValue("versionAfter", result.Version);
+                    agreementAuditCmd.Parameters.AddWithValue("actorId", actorId);
+                    agreementAuditCmd.Parameters.AddWithValue("actorRole", actorRole);
+                    await agreementAuditCmd.ExecuteNonQueryAsync(ct);
+                }
+
+                // users_audit — the writer's cache refresh IS a users-row write (ADR-018 D7 /
+                // ADR-019 D8): it moved `users.version`, so the transition owes an audit row even
+                // when the cached CODE itself is unchanged (a historical-only correction still
+                // moves the token, and a stale users ETag must therefore 412 afterwards).
+                // password_hash deliberately excluded — audit JSONB never carries credentials.
+                var previousUserData = JsonSerializer.Serialize(new
+                {
+                    agreementCode = result.PreviousAgreementCodeCache ?? lockedUser.AgreementCode,
+                });
+                var newUserData = JsonSerializer.Serialize(new
+                {
+                    agreementCode = result.NewAgreementCodeCache ?? lockedUser.AgreementCode,
+                });
+                await using (var userAuditCmd = new NpgsqlCommand(
+                    """
+                    INSERT INTO users_audit (
+                        user_id, action,
+                        previous_data, new_data,
+                        version_before, version_after,
+                        actor_id, actor_role)
+                    VALUES (
+                        @userId, 'UPDATED',
+                        @previousData::jsonb, @newData::jsonb,
+                        @versionBefore, @versionAfter,
+                        @actorId, @actorRole)
+                    """, conn, tx))
+                {
+                    userAuditCmd.Parameters.AddWithValue("userId", userId);
+                    userAuditCmd.Parameters.AddWithValue("previousData", previousUserData);
+                    userAuditCmd.Parameters.AddWithValue("newData", newUserData);
+                    userAuditCmd.Parameters.AddWithValue("versionBefore", result.UsersVersionBefore ?? lockedVersion);
+                    userAuditCmd.Parameters.AddWithValue("versionAfter", newUsersVersion);
+                    userAuditCmd.Parameters.AddWithValue("actorId", actorId);
+                    userAuditCmd.Parameters.AddWithValue("actorRole", actorRole);
+                    await userAuditCmd.ExecuteNonQueryAsync(ct);
+                }
+
+                // UserAgreementCodeChanged — the narrow signal, emitted on EVERY real write (the
+                // preserved S33 contract), on the canonical user-{userId} stream. OldAgreementCode
+                // is the COVERING row's code (what the requested date actually said before this
+                // write), falling back to the locked users row only when nothing covered the date.
+                // ADR-026 audit projection is TENANT_TARGETED — the org comes from the
+                // TERMINATED-INCLUSIVE read, so a departed employee's correction still projects
+                // into their home org.
+                var agreementChangedEvent = new UserAgreementCodeChanged
+                {
+                    UserId = userId,
+                    OldAgreementCode = covering?.AgreementCode ?? lockedUser.AgreementCode,
+                    NewAgreementCode = request.AgreementCode,
+                    EffectiveFrom = writtenFrom,
+                    ActorId = actor.ActorId,
+                    ActorRole = actor.ActorRole,
+                    CorrelationId = actor.CorrelationId,
+                };
+                var changedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, agreementChangedEvent, ct);
+                var changedCtx = new AuditProjectionContext(
+                    ActorId: actor.ActorId,
+                    ActorPrimaryOrgId: actor.OrgId,
+                    CorrelationId: actor.CorrelationId,
+                    OccurredAt: new DateTimeOffset(agreementChangedEvent.OccurredAt),
+                    ResolvedTargetOrgId: lockedUser.PrimaryOrgId);
+                var changedRow = uacChangedMapper.Map(agreementChangedEvent, changedCtx);
+                await auditRepo.InsertAsync(conn, tx, agreementChangedEvent.EventId, changedOutboxId, agreementChangedEvent.EventType, changedRow, changedCtx, ct);
+
+                // UserAgreementCodeSuperseded — ADDITIONALLY when a row was actually CLOSED, in
+                // both split shapes: `Superseded` = the covering row was the OPEN one (the classic
+                // cross-day supersession; NewEffectiveTo null), `Inserted` = the covering row was
+                // a HISTORY row (D8's insert-between; NewEffectiveTo says where the new row ends,
+                // and the rows after it are untouched). Dual emission per the S25 precedent.
+                if (result.Kind is TemporalWriteKind.Superseded or TemporalWriteKind.Inserted)
+                {
+                    var supersededEvent = new UserAgreementCodeSuperseded
+                    {
+                        PredecessorAssignmentId = covering!.AssignmentId,
+                        NewAssignmentId = result.AssignmentId,
+                        UserId = userId,
+                        PredecessorEffectiveFrom = covering.EffectiveFrom,
+                        PredecessorEffectiveTo = writtenFrom,
+                        NewEffectiveFrom = writtenFrom,
+                        NewEffectiveTo = result.NewEffectiveTo,
+                        OldAgreementCode = covering.AgreementCode,
+                        NewAgreementCode = request.AgreementCode,
+                        VersionBefore = covering.Version,
+                        VersionAfter = result.Version,
+                        ActorId = actor.ActorId,
+                        ActorRole = actor.ActorRole,
+                        CorrelationId = actor.CorrelationId,
+                    };
+                    var supersededOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, supersededEvent, ct);
+                    var supersededCtx = new AuditProjectionContext(
+                        ActorId: actor.ActorId,
+                        ActorPrimaryOrgId: actor.OrgId,
+                        CorrelationId: actor.CorrelationId,
+                        OccurredAt: new DateTimeOffset(supersededEvent.OccurredAt),
+                        ResolvedTargetOrgId: lockedUser.PrimaryOrgId);
+                    var supersededRow = uacSupersededMapper.Map(supersededEvent, supersededCtx);
+                    await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, supersededOutboxId, supersededEvent.EventType, supersededRow, supersededCtx, ct);
+                }
+
+                // The HR diagnostic worklist (TASK-13803) — every already-EXPORTED month and every
+                // settled holiday year the correction reaches back into, written in THIS tx with
+                // its outbox event. Nothing recalculates automatically (ADR-013); the list is what
+                // tells HR which months and years the correction made stale.
+                //
+                // S138 / TASK-13810 — THE ASYMMETRY, stated where it is visible: the profile PUT
+                // calls a THIRD writer (WriteForSkippedSettledYearsAsync) for the settled groups its
+                // revaluation actually refused to re-record. This endpoint has no such call because
+                // an agreement-code change runs NO revaluation at all — it changes the wage-type KEY
+                // a line is booked under (ADR-020), not the consumption divisor (ADR-032 D3) — so
+                // there is no withheld correction to report and the date-based rule stands alone.
+                var trigger = new WorklistTrigger(
+                    WorklistTriggerKinds.AgreementCodeChange,
+                    agreementChangedEvent.EventId,
+                    writtenFrom,
+                    actorId);
+                await worklistRepo.WriteForExportedMonthsAsync(
+                    conn, tx, userId, trigger, writtenFrom, result.NewEffectiveTo, ct);
+                await worklistRepo.WriteForSettledYearsAsync(
+                    conn, tx, userId, trigger, writtenFrom, result.NewEffectiveTo, ct);
+
+                await tx.CommitAsync(ct);
+
+                context.Response.Headers.ETag = $"\"{newUsersVersion}\"";
+                // S138 / TASK-13810 — the SHARED RESPONSE RULE (see the no-op branch above):
+                // `NewAgreementCodeCache` is the code on the row covering TODAY, which the writer
+                // just refreshed the cache from — never the requested code. Behaviour UNCHANGED by
+                // TASK-13810; the profile PUT was brought to this same rule.
+                return Results.Ok(new UserAgreementCodeUpdatedResponse(
+                    userId,
+                    result.NewAgreementCodeCache ?? lockedUser.AgreementCode,
+                    writtenFrom,
+                    result.NewEffectiveTo,
+                    NoOp: false,
+                    newUsersVersion));
+            }
+            catch (OptimisticConcurrencyException ex)
+            {
+                await tx.RollbackAsync(ct);
+                return Results.Json(new
+                {
+                    error = "Concurrency precondition failed",
+                    expectedVersion = ex.ExpectedVersion,
+                    actualVersion = ex.ActualVersion,
+                }, statusCode: 412);
+            }
+            catch
+            {
+                if (tx.Connection is not null)
+                    await tx.RollbackAsync(ct);
+                throw;
+            }
+        }).RequireAuthorization("HROrAbove")
+        .Produces<UserAgreementCodeUpdatedResponse>(StatusCodes.Status200OK);
 
         // ═══════════════════════════════════════════
         // Role Assignment Endpoints

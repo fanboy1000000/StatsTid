@@ -19,6 +19,11 @@ public sealed class EmployeeProfileUpdated : DomainEventBase
     public required decimal PartTimeFraction { get; init; }
     public string? Position { get; init; }
 
+    // S138 / TASK-13801 (ADR-040 D4/D8) — the dated fourth field, written on every row the
+    // writer produces. Additive and optional (not `required`): pre-S138 payloads deserialize
+    // with null; EventSerializer registrations are unchanged.
+    public string? EmploymentCategory { get; init; }
+
     // Optimistic-concurrency row-version transition
     public required long VersionBefore { get; init; }
     public required long VersionAfter { get; init; }

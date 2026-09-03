@@ -28,9 +28,11 @@ public interface IEmploymentProfileResolver
     /// (<c>OkVersionResolver.ResolveVersion(asOfDate)</c>, ADR-003) — S137 / ADR-040 D4
     /// moved that overlay INTO the implementation so every consumer is correct by
     /// construction (QUAL-147 closed; before S137 it was joined live from <c>users</c>).
-    /// <c>employment_category</c> is the DATED <c>employee_profiles</c> column since S137,
-    /// with a COALESCE to the live <c>users</c> value (dated == live by construction this
-    /// increment). The one remaining live-joined sibling is <c>primary_org_id</c>
+    /// <c>employment_category</c> is the DATED <c>employee_profiles</c> column since S137 —
+    /// and since S138 / TASK-13804 that cell ALONE: the column is NOT NULL and the S137
+    /// COALESCE-to-<c>users</c> fail-safe is retired, because with the category editable per
+    /// date the live column is only the cache of the row covering TODAY and falling back to it
+    /// would mislabel a historical read. The one remaining live-joined sibling is <c>primary_org_id</c>
     /// (org/unit membership history is a named follow-up program, ADR-040 D4 tail).
     /// </summary>
     Task<EmploymentProfile?> GetByEmployeeIdAtAsync(

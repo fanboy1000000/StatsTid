@@ -188,28 +188,44 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// PUT with <c>EffectiveFrom = yesterday</c> AND a mutating <c>agreementCode</c>
-    /// returns 422 with a structured body naming the <c>provided</c> + <c>expected</c>
-    /// dates. The validator only fires when agreement_code mutates (no-op edits
-    /// without agreement_code change continue to ignore EffectiveFrom — preserves
-    /// S33 PUT path semantics).
+    /// <b>FLIPPED by S138 / TASK-13802 (ADR-040 D8 as amended 2026-09-02) — RED-on-old.</b>
+    /// <b>OLD expectation (S33/ADR-023 D8 same-day-only narrowing):</b> PUT with
+    /// <c>EffectiveFrom = yesterday</c> AND a mutating <c>agreementCode</c> returned
+    /// <b>422</b> with a body naming <c>provided</c> + <c>expected</c>.
+    /// <b>NEW:</b> a BACKDATED agreement code is a legal, audited correction — "this
+    /// employee was actually on HK from yesterday, not today". The writer splits the
+    /// dated timeline at the requested date instead of refusing it, so the request
+    /// returns <b>200</b> and history tells the truth on both sides of the split.
+    /// FUTURE-dating stays 422 (the sibling fact below) — that half of D8 is deferred
+    /// to Increment 4 with the "current ≠ live" read model.
+    ///
+    /// <para>
+    /// What the split looks like here: <c>emp001</c> is seeded with one OPEN
+    /// <c>user_agreement_codes</c> row at <c>'AC'</c> covering all of time
+    /// (<c>effective_from = '0001-01-01'</c>, the TASK-3403 backfill anchor). Backdating
+    /// to yesterday is router case C′ on an OPEN covering row: the predecessor is closed
+    /// at yesterday and a new open row <c>[yesterday, ∞)</c> carries <c>'HK'</c>. Because
+    /// that new row also covers TODAY, the denormalised <c>users.agreement_code</c> cache
+    /// follows it (the repository refreshes the cache from the row covering today — never
+    /// from the request), which is what the dated resolver reads back below.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task PUT_BackdatedEffectiveFrom_Returns422()
+    public async Task PUT_BackdatedEffectiveFrom_SplitsTheDatedTimeline()
     {
         var client = AuthorizedClient();
-        var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var yesterday = today.AddDays(-1);
+        var twoDaysAgo = today.AddDays(-2);
 
-        // S35 / TASK-3506 — admin-strict If-Match required on PUT. Capture
-        // ETag via GET first so the validator can run (without If-Match the
-        // endpoint returns 428 before reaching the EffectiveFrom check).
+        // S35 / TASK-3506 — admin-strict If-Match required on PUT. Capture the ETag via
+        // GET first (without If-Match the endpoint returns 428 before any validator runs).
         var getRsp = await client.GetAsync("/api/admin/users/emp001");
         Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
         var etag = getRsp.Headers.ETag;
         Assert.NotNull(etag);
 
-        // emp001 seeded at agreement_code='AC' — mutate to 'HK' with backdated
-        // EffectiveFrom to exercise the validator.
+        // emp001 seeded at agreement_code='AC' — correct it to 'HK' as of YESTERDAY.
         var req = new HttpRequestMessage(HttpMethod.Put, "/api/admin/users/emp001")
         {
             Content = JsonContent.Create(new
@@ -220,13 +236,34 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
         };
         req.Headers.IfMatch.Add(etag!);
         var rsp = await client.SendAsync(req);
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
 
-        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(yesterday.ToString("yyyy-MM-dd"),
-            body.GetProperty("provided").GetString());
-        Assert.Equal(DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd"),
-            body.GetProperty("expected").GetString());
+        // OLD: UnprocessableEntity. NEW: the correction is recorded.
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        var repo = new UserAgreementCodeRepository(_harness.Factory);
+        var resolver = new EmploymentProfileResolver(_harness.Factory, repo);
+
+        // Both sides of the split resolve to the truth: the predecessor still answers for
+        // the days before the correction, the successor from the correction date onward.
+        var before = await resolver.GetByEmployeeIdAtAsync("emp001", twoDaysAgo);
+        Assert.NotNull(before);
+        Assert.Equal("AC", before!.AgreementCode);
+
+        var atCorrection = await resolver.GetByEmployeeIdAtAsync("emp001", yesterday);
+        Assert.NotNull(atCorrection);
+        Assert.Equal("HK", atCorrection!.AgreementCode);
+
+        var now = await resolver.GetByEmployeeIdAtAsync("emp001", today);
+        Assert.NotNull(now);
+        Assert.Equal("HK", now!.AgreementCode);
+
+        // The live cache follows the row covering TODAY (repository-owned, never the
+        // request value) — so a same-day read of the denormalised column agrees.
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT agreement_code FROM users WHERE user_id = 'emp001'", conn);
+        Assert.Equal("HK", (string?)await cmd.ExecuteScalarAsync());
     }
 
     /// <summary>

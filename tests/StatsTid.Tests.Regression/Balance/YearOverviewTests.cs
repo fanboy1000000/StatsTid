@@ -2345,8 +2345,10 @@ public sealed class YearOverviewTests : IAsyncLifetime
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles
-                (profile_id, employee_id, part_time_fraction, effective_from, effective_to, version)
-            VALUES (gen_random_uuid(), @e, @f, @from, @to, @v)
+                (profile_id, employee_id, part_time_fraction, effective_from, effective_to, version,
+                 employment_category)
+            VALUES (gen_random_uuid(), @e, @f, @from, @to, @v,
+                    (SELECT u.employment_category FROM users u WHERE u.user_id = @e))
             ON CONFLICT (employee_id, effective_from) DO NOTHING
             """, conn);
         cmd.Parameters.AddWithValue("e", employeeId);

@@ -565,6 +565,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/users/{userId}/agreement-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    userId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UpdateUserAgreementCodeRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.UserAgreementCodeUpdatedResponse"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/users/{userId}/roles": {
         parameters: {
             query?: never;
@@ -3379,6 +3420,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/hr/backdate-worklist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    employeeId?: string;
+                    open?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.BackdateWorklistRow"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hr/backdate-worklist/{worklistId}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    worklistId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ResolveBackdateWorklistRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.BackdateWorklistResolveResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/balance/{employeeId}/summary": {
         parameters: {
             query?: never;
@@ -5062,6 +5182,62 @@ export interface components {
             sortOrder: number;
             selected: boolean;
         };
+        "StatsTid.Backend.Api.Contracts.BackdateWorklistResolveResponse": {
+            /** Format: uuid */
+            worklistId: string;
+            employeeId: string;
+            resolution: string;
+            /** Format: date-time */
+            resolvedAt: string;
+            /** Format: int64 */
+            version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.BackdateWorklistRow": {
+            /** Format: uuid */
+            worklistId: string;
+            employeeId: string;
+            kind: string;
+            /** Format: int32 */
+            year: number | null;
+            /** Format: int32 */
+            month: number | null;
+            /** Format: uuid */
+            exportId: string | null;
+            entitlementType: string | null;
+            /** Format: int32 */
+            entitlementYear: number | null;
+            triggers: components["schemas"]["StatsTid.Backend.Api.Contracts.BackdateWorklistTriggerDto"][];
+            recalcBlockedBy: string[];
+            recalculatedSince: boolean | null;
+            reversedSince: boolean | null;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: string;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            resolvedBy: string | null;
+            resolution: string | null;
+            resolutionReason: string | null;
+            /** Format: int64 */
+            version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.BackdateWorklistTriggerDto": {
+            kind: string;
+            /** Format: uuid */
+            eventId: string;
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date-time */
+            appendedAt: string;
+            actorId: string;
+            baselineContentHash: string | null;
+            /** Format: int32 */
+            baselineSettlementSequence: number | null;
+            baselineSettlementState: string | null;
+            recalculatedSince: boolean | null;
+            reversedSince: boolean | null;
+            recalcBlockedBy: string | null;
+        };
         "StatsTid.Backend.Api.Contracts.BalanceEntitlementRow": {
             type: string;
             label: string;
@@ -5784,6 +5960,10 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
+        "StatsTid.Backend.Api.Contracts.ResolveBackdateWorklistRequest": {
+            resolution?: string;
+            reason?: string;
+        };
         "StatsTid.Backend.Api.Contracts.RoleGrantResponse": {
             /** Format: uuid */
             assignmentId: string;
@@ -6123,6 +6303,22 @@ export interface components {
             name: string;
             path: string[];
         };
+        "StatsTid.Backend.Api.Contracts.UpdateUserAgreementCodeRequest": {
+            agreementCode?: string;
+            /** Format: date */
+            effectiveFrom?: string;
+        };
+        "StatsTid.Backend.Api.Contracts.UserAgreementCodeUpdatedResponse": {
+            userId: string;
+            agreementCode: string;
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string | null;
+            noOp: boolean;
+            /** Format: int64 */
+            version: number;
+        };
         "StatsTid.Backend.Api.Contracts.UserCreatedResponse": {
             userId: string;
             username: string;
@@ -6453,6 +6649,7 @@ export interface components {
             /** Format: double */
             partTimeFraction?: number;
             position?: string | null;
+            employmentCategory?: string | null;
         };
         "StatsTid.Backend.Api.Endpoints.EmploymentDateEndpoints.SetEmploymentEndDateRequest": {
             /** Format: date */

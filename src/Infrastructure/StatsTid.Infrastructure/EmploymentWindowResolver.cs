@@ -96,15 +96,16 @@ public sealed class EmploymentWindowResolver : IEmploymentWindowResolver, IEmplo
 
         // Overlap test for [start, end] vs [from, to], both end-INCLUSIVE (ADR-040 D1);
         // a NULL side is unbounded (D2), so a both-NULL window overlaps every range —
-        // that is why it counts as ONE unbounded entry, never an empty list.
-        var overlaps = (!start.HasValue || start.Value <= to)
-                    && (!end.HasValue || end.Value >= from);
+        // that is why it counts as ONE unbounded entry, never an empty list. The
+        // arithmetic is EmploymentWindow.Overlaps (S138 / TASK-13806) — the one shared
+        // predicate, so this filter and the planner's segment typing cannot drift apart.
+        var window = new EmploymentWindow(start, end);
 
         // 0-or-1 entries while storage is the single users-row spell (ADR-040 D1); the
         // deferred spells increment changes THIS body (query a spells table), never the
         // list-shaped contract — the "spells = storage + resolver only" promise.
-        return overlaps
-            ? new[] { new EmploymentWindow(start, end) }
+        return window.Overlaps(from, to)
+            ? new[] { window }
             : Array.Empty<EmploymentWindow>();
     }
 

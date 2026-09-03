@@ -139,21 +139,31 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 
 ### Correctness / domain
 - **Employment lifecycle time-control — RUNNING (ADR-040; program plan `SPRINT-135.md` §Program Plan).**
-  **Increment 1 (S136) SHIPPED** (enforcement core, SEC-046 closed). **Increment 2 (S137) — calculation
-  correctness** (typed EMPLOYED/NOT_EMPLOYED segments, accrual end-cap, QUAL-147 closed, dated category
-  read-side). Remaining: **Increment 3** (temporal editing, ADR-040 D8 — plus the S137 deferrals: category
-  EDITABILITY [DTOs / 3-case writer / event payload / NOT-NULL tightening] and the S136 leaver-send dead-end)
-  · **Increment 4** (lifecycle UX) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
+  **Increment 1 (S136) SHIPPED** (enforcement core, SEC-046 closed). **Increment 2 (S137) SHIPPED** (calculation
+  correctness: typed EMPLOYED/NOT_EMPLOYED segments, accrual end-cap, QUAL-147 closed, dated category
+  read-side). **Increment 3 (S138) SHIPPED** (temporal editing, ADR-040 D8: dated profile + agreement-code
+  writes through one pure router, category EDITABLE and NOT NULL, the HR backdate worklist, the S136
+  leaver-send dead-end fixed; future-dating deliberately held for Increment 4 under the "current ≠ live"
+  precondition). Remaining: **Increment 4** (lifecycle UX) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
   until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail) · **OQ-4** (IMMEDIATE-
-  grant pro-rating at mid-year hire → Phase B expert list). **S137-owed items by increment:** Increment 3 —
-  the retroactive-correction seam inherits window typing through the shim but is UNPINNED (one Docker pin:
-  export a windowless month → record a mid-month end date → correct → claw-back deltas cover only post-end
-  days, correction manifest carries the NOT_EMPLOYED suffix); `EmploymentWindow.Overlaps/ClipTo` helpers; the
-  backfill write-once precondition · Increment 4 — the admin CREATE form surfaces the hire date pre-filled
+  grant pro-rating at mid-year hire → Phase B expert list). **S137-owed items by increment:** Increment 3 — **all three DELIVERED in
+  S138**: the retroactive-correction window pin (the Docker pin that exports a windowless month, records a
+  mid-month end date, corrects, and asserts the claw-back deltas cover only post-end days with the manifest
+  carrying the NOT_EMPLOYED suffix); the `EmploymentWindow.Overlaps/ClipTo/FirstNotEmployedDay` helpers,
+  which replaced three hand-rolled window∩range predicates (PAT-027); and the backfill write-once precondition,
+  which the NOT-NULL tightening was built on · Increment 4 — the admin CREATE form surfaces the hire date pre-filled
   with today and editable, and the edit path allows backdating (because the S137 "hired today" default
   makes an undated create unable to back-fill pre-creation registrations until the date is corrected) ·
   TASK-2010 (retire the `[Obsolete]` planless shim): S137's PCS ctor coupling guard + window/profile-date
   hydration block are part of its removal scope (the constructor is becoming a policy site — Reviewer NOTE).
+- **"Current ≠ live" read model — the INCREMENT-4 PRECONDITION for future-dating (owner ruling 2026-09-02, ADR-040
+  §Amendment 2026-09-02).** Four readers treat the open-ended row as "current": `UserAgreementCodeRepository.
+  GetCurrentAsync` (feeds the LOGIN token, `AuthEndpoints:85`, and the settlement's today-agreement), the profile
+  GET/ETag (`GetByEmployeeIdWithVersionAsync`), the profile DELETE pre-read, the profile PUT's lock; plus the two
+  live caches `users.agreement_code` / `users.employment_category` (~200 read sites). Before any future-dated row
+  may exist: those readers become as-of-today readers, and the caches get an explicit strategy (dated reads vs
+  derived-at-write with a refresh on the effective date — a scheduler question D8 had waved away). S138 ships
+  backdating only; Increment 4 = picker + this precondition. [S138 refinement · ADR-040 Amendment 2026-09-02]
 - **AlignedWindow rules at a GENUINE split in the live rule set (QUAL-149; the S64 F4-1(b) gap — re-registered,
   it had fallen out of this file).** A mid-month part-time/position change while employed, or two spells in one
   month, is REFUSED by the planner (ADR-016 D4) in the Payroll host's live wiring → raw 500 at
@@ -164,6 +174,19 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   profile (ADR-020 D1.5), so the moment profile-change splits become plannable, a mid-period POSITION change
   would map the second segment with the old position's lønart; the per-segment dated key must land FIRST
   (Step-5a Codex, S137). [S64 F4-1(b) · S137 TASK-13707 · QUAL-149/150]
+- **Gap-fill corrections record the new history but do not re-record the consumption inside it** —
+  S138 RULED DEFERRAL, surfaced by the Step-5a Reviewer and recorded here so it is not left living only as a
+  code comment (the S125/F4 lesson: a deferral that exists at the point of occurrence is one nobody sweeps
+  for). The profile PUT's revaluation resolves each absence day's committed profile on its own connection;
+  for router cases E (before the first row) and G (inside a gap) there IS no pre-write row covering those
+  dates, so the resolver returns null and every absence in the newly-filled stretch keeps its recorded
+  feriedage — narrower than the increment's own goal ("consumption in exactly that interval is re-recorded").
+  The recorded values are stale, not wrong, and exposure is small (a gap exists only after a
+  delete-then-recreate). Fix shape: build the in-hand profile from the PRECEDING row's unchanged dimensions —
+  the same source the writer's category fallback now uses — and pin it; it changes what a correction WRITES,
+  which is why it wants its own tests rather than a Step-5a bolt-on. Comment at the site:
+  `EmployeeProfileEndpoints.RevalueAbsencesInIntervalAsync` (the `datedProfile is null` branch).
+  [S138 Step-5a Reviewer WARNING 3]
 - **Forskudsferie (§7 advance-vacation) cap for LEAVERS — site 6.** `SkemaEndpoints` caps VACATION forskud at
   earned-to-`ferieaarEnd` regardless of a recorded leave date (manager approval IS the §7 agreement). Capping at
   the leave date would change bookability — a genuine domain fork, deliberately NOT taken in S137's D9 end-cap
@@ -171,11 +194,43 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Demo-seed write-free rerun** — the loader-evidence arm is written but unobserved (no container
   runtime on the dev machine). [S128 FU-C]
 
+### HR operations — the follow-up processes (owner-raised 2026-09-03)
+
+- **★ Inventory + analysis of every process HR must FOLLOW UP on — owner-raised 2026-09-03 from the S138
+  refinement's "to go deeper" question ("the worklist records the debt, but nothing escalates it").** The
+  system increasingly hands HR a list and walks away; nobody has looked at those lists TOGETHER. Deliverable:
+  an analysis dossier (`docs/operations/hr-follow-up-process-register.md`, pointer-index style like the
+  finding registers) that visits each hand-off and answers, per process: WHO is accountable, BY WHEN, HOW an
+  open item surfaces (screen / dashboard tile / digest / nothing), what happens when it AGES, and how its
+  resolution is AUDITED. Known members to visit (not exhaustive — the analysis must sweep for more):
+  1. the S138 backdate diagnostic worklist (recalculate vs dismiss; rows blocked by QUAL-149/150; SETTLED_YEAR
+     rows pointing at reverse-then-re-settle) · 2. ADR-033 settlement review — `PENDING_REVIEW` dispositions,
+  payout reconciliation (`payout_reconciled_at`), claim dispositions, bare reversals · 3. the leaver lifecycle
+  — recording the end date, deactivation, the LAST month's approval + send (S136's dead-end, fixed S138), the
+  §26 termination settlement · 4. window-edit strand refusals (S136 D3 — a 409 with an affected-month list HR
+  must resolve by hand) · 5. ADR-013 retroactive corrections — who requests, who runs `POST /api/payroll/
+  recalculate`, how the correction is confirmed against payroll · 6. agreement-config / position-override
+  DRAFT → ACTIVE promotions awaiting an HR decision · 7. the compliance Advarsel warnings and the EU-WTD
+  compensatory-rest entries (who acts on an open warning) · 8. the S137 admin-create "hired today" default —
+  an undated hire whose true date must be corrected before back-filling · 9. the undated-employee and
+  data-integrity fail-loud paths (a profile row without an agreement row; a NULL that a census would refuse).
+  Method: STRIDE-style sweep of the code for every "HR must…" comment, 409/422 reason string, and
+  `HROrAbove` mutation that leaves state for a human; then a per-process table; then a ruling on the
+  cross-cutting shape (one HR "to-do" surface vs per-process lists; aging/escalation; digest). Feeds the
+  Increment-4 lifecycle-UX design (the worklist UI, the termination screen) and possibly its own increment.
+  Refinement-gated like every sprint. [S138 refinement Step 5 · owner 2026-09-03]
+
 ### Usability / accessibility
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
   production; not enforced today. [CONVENTIONS.md]
 
 ### Tooling / infra / environment
+- **Prune the two closed-sweep git worktrees** — `.claude/worktrees/s131-docdrift` and `s131-scored` are
+  registered worktrees detached at `7e4bb1b`, untouched since 2026-08-19, **164 MB**, holding PRE-S137 copies of
+  live source and test files. The S131 quality sweep they served is CLOSED; their working trees contain only
+  deletions (no unique work), so `git worktree remove` loses nothing — the commit stays in history. Why it
+  matters: repo-wide greps hit the stale copies and can mislead a sweep into "fixing" a file that is not in the
+  solution (S138 TASK-13809 hit exactly this). Owner's call — surfaced, not actioned. [S138 TASK-13809]
 - **Docker on the dev VDI** — impossible without nested virtualization; an IT ticket, may be declined. [S128 FU-E]
 - **SDK/toolchain fragility on the VDI** — SDK 8 vanished once (restored); Python absent (openapi
   gates run CI-only from here). [S128 FU-E]

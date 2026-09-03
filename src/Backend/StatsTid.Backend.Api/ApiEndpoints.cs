@@ -34,6 +34,7 @@ public static class ApiEndpoints
         app.MapEmployeeProfileEndpoints();
         app.MapEntitlementEligibilityEndpoints(); // S59 / TASK-5906 — CHILD_SICK eligibility + DOB (HR-only)
         app.MapEmploymentDateEndpoints(); // S60 / TASK-6006 — employment_start_date set/read (HR-only)
+        app.MapBackdateWorklistEndpoints(); // S138 / TASK-13803 — HR backdate diagnostic worklist (ADR-040 D8, Increment 3; HR-only)
         app.MapBalanceEndpoints();
         app.MapComplianceEndpoints();
         app.MapOvertimeEndpoints();

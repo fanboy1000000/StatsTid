@@ -23,11 +23,12 @@ namespace StatsTid.Tests.Regression.EmployeeProfile;
 ///     EmployeeProfileSeeder, <c>CreateAsync</c>, <c>SupersedeAndCreateAsync</c> Cases A and
 ///     C, and the AdminEndpoints 4-way-atomic user-create INSERT), NO profile row carries a
 ///     NULL category and every row's dated value equals its user's live value.</item>
-///   <item><b>COALESCE read posture</b> — the hydrated read PREFERS the dated cell and
-///     degrades to the live <c>users</c> value on NULL (a missed write can never crash the
-///     read or mislabel — it falls back to the definitionally-correct live value; the ruled
-///     Reviewer-B1 fail-safe). Both directions falsifiable: a NULLed dated cell reads the
-///     live value; a deliberately-diverged dated cell WINS over live.</item>
+///   <item><b>Dated-cell read posture</b> (FLIPPED by S138 / TASK-13804 — see the fact's own
+///     doc): the hydrated read returns the DATED cell, full stop. The S137 leg that NULLed the
+///     dated cell and expected a fall-back to the live <c>users</c> value could not survive the
+///     NOT-NULL tightening — the state it described is no longer representable — so it is
+///     flipped to assert the DB now REFUSES that write (23502). The "diverged dated cell wins"
+///     leg is kept and strengthened: divergence is the normal S138 shape, not a lab trick.</item>
 ///   <item><b><c>GetEffectiveFromDatesAsync</c> fenceposts</b> — the S137 payroll planner's
 ///     EmployeeProfileChange boundary feed (TASK-13702): strictly-after lower bound
 ///     (a row AT <c>afterExclusive</c> is NOT a boundary — the segment already starts
@@ -223,7 +224,10 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
         // Non-empty population sanity (seeder rows + the four writes above).
         Assert.True(await CountAsync("SELECT COUNT(*) FROM employee_profiles") >= 5,
             "Census population unexpectedly small — the write paths above did not all run.");
-        // Zero NULL dated categories anywhere (live + history alike).
+        // Zero NULL dated categories anywhere (live + history alike). Since S138 / TASK-13804
+        // the column is NOT NULL, so this is belt-and-braces over a DB constraint — kept
+        // deliberately: it is the pin that says the write paths POPULATE the value, and it
+        // would fail LOUDLY here rather than only at some future INSERT if one ever stopped.
         Assert.Equal(0, await CountAsync(
             "SELECT COUNT(*) FROM employee_profiles WHERE employment_category IS NULL"));
         // dated == live for every row — the S137 invariant, checked against users itself.
@@ -236,18 +240,33 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // COALESCE read posture — dated preferred, live fallback on NULL
+    // Dated-cell read posture — the dated cell is the authority (S138)
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// The hydrated read's <c>COALESCE(ep.employment_category, u.employment_category)</c>,
-    /// falsified in BOTH directions: (a) a NULLed dated cell degrades to the live users
-    /// value — never a crash or mislabel (the ruled fail-safe posture for a missed write);
-    /// (b) a deliberately-diverged dated cell WINS over live (proves the COALESCE argument
-    /// order — dated is preferred, not merely present).
+    /// <b>FLIPPED by S138 / TASK-13804</b> (was
+    /// <c>Read_NullDatedCategory_FallsBackToLive_DivergedDatedCategory_Wins</c>).
+    ///
+    /// <para>
+    /// Leg (a) — WAS: "NULL the dated cell → the read degrades to the live <c>users</c> value"
+    /// (S137's ruled fail-safe, expressed as <c>COALESCE(dated, live)</c>). It is now the exact
+    /// opposite assertion: the column is NOT NULL, so the UPDATE that manufactured a missed
+    /// write is REFUSED by the database (23502). The leg could not merely be deleted — it was
+    /// the pin for a posture, and the posture reversed, so it must pin the reversal. WHY the
+    /// reversal: with the category editable per date, a dated value may legitimately differ
+    /// from <c>users.employment_category</c> (which is only the cache of the row covering
+    /// TODAY), so falling back to live would MISLABEL a historical read instead of rescuing it.
+    /// </para>
+    ///
+    /// <para>
+    /// Leg (b) — UNCHANGED in expectation, stronger in meaning: a dated cell that differs from
+    /// live WINS. Under S137 divergence was impossible through production writes (the direct
+    /// UPDATE was a falsification instrument only); under S138 it is the ordinary shape a
+    /// backdated category change leaves behind, so this leg now pins real behaviour.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Read_NullDatedCategory_FallsBackToLive_DivergedDatedCategory_Wins()
+    public async Task Read_DatedCategoryCell_IsAuthoritative_NullDatedCellRejectedByNotNull()
     {
         var employeeId = await CreateUserWithoutProfileAsync(NonDefaultCategory);
         await using (var conn = _harness.Factory.Create())
@@ -259,27 +278,33 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
             await tx.CommitAsync();
         }
 
-        // (a) Simulate a missed write: NULL the dated cell → read returns the live value.
-        await ExecAsync(
+        // (a) S138 flip: manufacturing a "missed write" is no longer possible — the NOT NULL
+        // column refuses it (23502 not_null_violation). The read cannot see a NULL dated cell,
+        // so it needs no fail-safe; the failure surfaces at the write, where the bug is.
+        var nullEx = await Assert.ThrowsAsync<PostgresException>(() => ExecAsync(
             """
             UPDATE employee_profiles SET employment_category = NULL
             WHERE employee_id = @p0 AND effective_to IS NULL
-            """, employeeId);
-        var fallbackProfile = await _repo.GetByEmployeeIdAsync(employeeId);
-        Assert.NotNull(fallbackProfile);
-        Assert.Equal(NonDefaultCategory, fallbackProfile!.EmploymentCategory);
+            """, employeeId));
+        Assert.Equal("23502", nullEx.SqlState);
 
-        // (b) Diverge the dated cell → the dated value wins over live (COALESCE order).
-        // Divergence is impossible via production writes this increment (dated == live by
-        // construction); the direct UPDATE is the falsification instrument only.
+        // ...and the row still reads its own dated value, untouched by the refused UPDATE.
+        var intactProfile = await _repo.GetByEmployeeIdAsync(employeeId);
+        Assert.NotNull(intactProfile);
+        Assert.Equal(NonDefaultCategory, intactProfile!.EmploymentCategory);
+
+        // (b) A dated cell that differs from the live users value WINS — the dated cell is the
+        // authority. Under S138 this is the ordinary shape of a backdated category change (the
+        // live column follows only the row covering TODAY); the direct UPDATE just puts the row
+        // in that shape without going through the writer.
         await ExecAsync(
             """
-            UPDATE employee_profiles SET employment_category = 'S137DatedWins'
+            UPDATE employee_profiles SET employment_category = 'S138DatedWins'
             WHERE employee_id = @p0 AND effective_to IS NULL
             """, employeeId);
         var datedProfile = await _repo.GetByEmployeeIdAsync(employeeId);
         Assert.NotNull(datedProfile);
-        Assert.Equal("S137DatedWins", datedProfile!.EmploymentCategory);
+        Assert.Equal("S138DatedWins", datedProfile!.EmploymentCategory);
     }
 
     // ═════════════════════════════════════════════════════════════════════

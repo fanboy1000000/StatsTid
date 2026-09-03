@@ -208,6 +208,14 @@ public static class EventSerializer
         ["UnitLeaderDesignated"] = typeof(UnitLeaderDesignated),
         ["UnitLeaderRemoved"] = typeof(UnitLeaderRemoved),
         ["UserUnitChanged"] = typeof(UserUnitChanged),
+        // Sprint 138 (ADR-040 D8, Increment 3 — TASK-13803): the HR backdate diagnostic worklist.
+        // RowCreated = a backdated profile / agreement-code / employment-category correction landed
+        // (or appended a trigger to) an hr_backdate_worklist row for an already-EXPORTED month or an
+        // already-SETTLED holiday year; RowResolved = HR's recorded RECALCULATED / DISMISSED assertion.
+        // Both ride employee-{id} in the writer's atomic tx (ADR-018 D3). A LIST, not a workflow —
+        // nothing recalculates automatically (ADR-013). Name-keyed; replay-safe.
+        ["BackdateWorklistRowCreated"] = typeof(BackdateWorklistRowCreated),
+        ["BackdateWorklistRowResolved"] = typeof(BackdateWorklistRowResolved),
     };
 
     public static string Serialize(IDomainEvent @event)

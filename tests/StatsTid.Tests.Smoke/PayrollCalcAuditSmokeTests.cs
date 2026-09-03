@@ -176,8 +176,10 @@ public sealed class PayrollCalcAuditSmokeTests
     {
         await ExecAsync(conn,
             """
-            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from, effective_to)
-            SELECT @emp, 1.000, NULL, DATE '0001-01-01', NULL
+            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from, effective_to,
+                                           employment_category)
+            SELECT @emp, 1.000, NULL, DATE '0001-01-01', NULL,
+                   (SELECT u.employment_category FROM users u WHERE u.user_id = @emp)
             WHERE NOT EXISTS (
                 SELECT 1 FROM employee_profiles WHERE employee_id = @emp AND effective_to IS NULL)
             """,

@@ -1,4 +1,6 @@
 using Npgsql;
+using StatsTid.Infrastructure.Temporal;
+using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
@@ -12,11 +14,12 @@ namespace StatsTid.Infrastructure;
 /// the <c>users</c> table per S31 refinement Q3 LEAVE and are joined in at read time so
 /// <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/> returns a fully-hydrated
 /// <see cref="EmploymentProfile"/>. <c>employment_category</c> left that set in S137
-/// (ADR-040 D4): it is now a DATED column on <c>employee_profiles</c>, populated same-tx
-/// from <c>users</c> by every production INSERT path and read via
-/// <c>COALESCE(ep.employment_category, u.employment_category)</c> — a missed write degrades
-/// to the definitionally-correct live value, never a crash or a mislabel (NULLABLE by ruled
-/// design; the NOT-NULL tightening and editability are Increment 3).
+/// (ADR-040 D4): it is a DATED column on <c>employee_profiles</c>, written on every row by
+/// every production write path. S138 / TASK-13804 tightened it to NOT NULL and RETIRED the
+/// S137 <c>COALESCE(ep.employment_category, u.employment_category)</c> read fail-safe — with
+/// the category editable per date, <c>users.employment_category</c> is only the CACHE of the
+/// row covering TODAY, so falling back to it would mislabel a dated read rather than rescue
+/// it. The dated cell is the authority; a missed write now fails its INSERT (23502).
 ///
 /// <para>
 /// <b>S31 scope — data-plane only.</b> The repository is consumed by TASK-3107 admin CRUD,
@@ -60,6 +63,17 @@ namespace StatsTid.Infrastructure;
 /// <c>part_time_fraction &lt; 1.0m</c> when constructing the in-memory profile. This
 /// eliminates the drift-burden between schema and SharedKernel shape that the original
 /// cycle-1 plan carried.
+/// </para>
+///
+/// <para>
+/// <b>S138 / TASK-13801 — temporal editing (ADR-040 D8 as amended 2026-09-02).</b>
+/// <see cref="SupersedeAndCreateAsync"/> now records a change at any PAST-OR-TODAY date, routing
+/// via the pure <see cref="Temporal.TemporalWriteRouter"/> on a lock-held snapshot of the whole
+/// timeline (cases A / B' / C' / E / G / T), with ONE client concurrency token per employee (the
+/// open row's version, bumped on every timeline write), the S23-shape same-values no-op,
+/// <c>employment_category</c> as an editable fourth field, and a <c>users.employment_category</c>
+/// cache refresh sourced from the row covering TODAY. The S31/S33 paragraphs above are kept as
+/// the history of how the shape got here.
 /// </para>
 /// </summary>
 public sealed class EmployeeProfileRepository
@@ -242,11 +256,14 @@ public sealed class EmployeeProfileRepository
         // part_time_fraction and position (weekly_norm_hours removed in S53 TASK-5306). The sibling fields (agreement_code, ok_version,
         // primary_org_id) stay on `users` per refinement Q3 LEAVE and are joined in here so
         // the returned EmploymentProfile is consumable by PCS / rule engine paths unchanged.
-        // employment_category (S137 / ADR-040 D4): the DATED ep column is preferred, with
-        // COALESCE to the live users value — for a live-row read the two are equal by the
-        // S137 dated==live invariant, and a NULL dated cell (a missed write) degrades to the
-        // definitionally-correct live value instead of crashing or mislabeling (the ruled
-        // fail-safe posture; the NOT-NULL tightening is Increment 3). `ep.version` joins in
+        // employment_category (S137 / ADR-040 D4 → S138 / TASK-13804): the DATED ep column is
+        // the sole source. S137's COALESCE-to-users fail-safe is RETIRED — the column is NOT
+        // NULL since S138 (init.sql segment `s138-profile-category-not-null`), so there is
+        // nothing to fall back to, and with the category now editable per date the live users
+        // column is only the CACHE of the row covering TODAY: falling back to it would
+        // mislabel rather than rescue. (This read is live-row-only, so the two still agree
+        // here by the cache rule — the change is about which one is AUTHORITATIVE.)
+        // `ep.version` joins in
         // the row's optimistic-concurrency token for callers that need it on the ETag header
         // (Step 7a P2 fix — same-snapshot read kills the GET race against concurrent admin
         // edits).
@@ -258,7 +275,7 @@ public sealed class EmployeeProfileRepository
                 ep.version,
                 u.agreement_code,
                 u.ok_version,
-                COALESCE(ep.employment_category, u.employment_category) AS employment_category,
+                ep.employment_category,
                 u.primary_org_id
             FROM employee_profiles ep
             INNER JOIN users u ON u.user_id = ep.employee_id
@@ -367,149 +384,254 @@ public sealed class EmployeeProfileRepository
     }
 
     /// <summary>
-    /// S33 / TASK-3302 — ADR-020 D2 3-case routing under <c>SELECT ... FOR UPDATE</c>.
-    /// This is the canonical write path for employee profiles; <see cref="UpsertAsync"/>
-    /// is now a thin shim that delegates here with <c>EffectiveFrom = today (UTC)</c>.
+    /// S33 / TASK-3302, generalized by S138 / TASK-13801 (ADR-040 D8 as amended 2026-09-02) — the
+    /// canonical dated write for employee profiles: records a change AT ANY PAST-OR-TODAY DATE
+    /// against the employee's timeline, splitting the row that covers that date. Routing is the
+    /// pure <see cref="TemporalWriteRouter"/> (see its case table — A / B' / C' / E / G / T — and
+    /// its DB-free matrix tests) applied to the LOCK-HELD snapshot of the whole timeline
+    /// (ADR-020 D2: the decision is made on the locked rows, never on a pre-lock read).
     ///
     /// <para>
-    /// <b>Routing</b> (decided after acquiring a row-level lock on the live row, if any,
-    /// for <c>req.EmployeeId</c> via <c>SELECT ... FOR UPDATE</c>):
-    /// <list type="bullet">
-    ///   <item><description><b>Case A — Created.</b> No live row exists. Allowed only when
-    ///     <paramref name="expectedVersion"/> is <c>null</c> (seeder / admin-POST path).
-    ///     INSERT a fresh row at <c>(effective_from = req.EffectiveFrom, effective_to = NULL,
-    ///     version = 1)</c>. Returns <see cref="SaveEmployeeProfileOutcome.Created"/>.</description></item>
-    ///   <item><description><b>Case B — Updated.</b> Live row exists and its
-    ///     <c>effective_from</c> equals <paramref name="req"/><c>.EffectiveFrom</c>. UPDATE
-    ///     in-place: refresh fields, bump <c>version = version + 1</c>, stamp
-    ///     <c>updated_at = NOW()</c>; <c>profile_id</c> and <c>effective_from</c> are immutable.
-    ///     Returns <see cref="SaveEmployeeProfileOutcome.Updated"/>.</description></item>
-    ///   <item><description><b>Case C — Superseded.</b> Live row exists and its
-    ///     <c>effective_from</c> is strictly earlier than <paramref name="req"/><c>.EffectiveFrom</c>.
-    ///     Close the predecessor by stamping <c>effective_to = req.EffectiveFrom</c>
-    ///     (end-exclusive, ADR-018 D9 — predecessor's history window becomes
-    ///     <c>[predecessor.effective_from, req.EffectiveFrom)</c>; <b>version unchanged</b>),
-    ///     then INSERT a new live row at
-    ///     <c>(effective_from = req.EffectiveFrom, effective_to = NULL, version = 1)</c>.
-    ///     Returns <see cref="SaveEmployeeProfileOutcome.Superseded"/> so the endpoint emits
-    ///     <c>EmployeeProfileSuperseded</c> instead of <c>EmployeeProfileUpdated</c>.</description></item>
-    /// </list>
+    /// <b>Plain-language contract.</b> "This person's fraction actually changed on the 10th" is
+    /// now a legal write: the row covering the 10th is closed on the 10th and a new row runs from
+    /// the 10th to wherever the old row used to end (open, if it was the open row). Editing a row
+    /// on its own start date changes it in place. A date in a gap gets a row filling the gap; a
+    /// date before the first row gets a row ending where the first begins. Later rows are never
+    /// touched. FUTURE dates are refused (owner ruling — see <see cref="TemporalWriteRouter"/>).
     /// </para>
     ///
     /// <para>
-    /// <b>Optimistic concurrency (ADR-019 admin-strict If-Match).</b>
-    /// When <paramref name="expectedVersion"/> is <b>non-null</b>:
-    /// <list type="bullet">
-    ///   <item><description>No live row → throws <see cref="OptimisticConcurrencyException"/>
-    ///     with <c>ActualVersion = null</c> (caller asserted a current state that does not
-    ///     exist; degenerate mismatch).</description></item>
-    ///   <item><description>Live row, version differs → throws
-    ///     <see cref="OptimisticConcurrencyException"/> with the actual stored version.</description></item>
-    /// </list>
-    /// When <paramref name="expectedVersion"/> is <b>null</b> (seeder + admin-POST), no
-    /// version check is performed; Case A is allowed and Cases B/C proceed unguarded.
+    /// <b>One concurrency token per aggregate (S138 Reviewer W1 / Codex B4).</b> The client's
+    /// token is the OPEN row's <c>version</c> — what the profile GET's ETag carries — and
+    /// <paramref name="expectedVersion"/> is validated against it (a history row's version is
+    /// never issued to a client, so an If-Match on it would have no meaning). EVERY timeline
+    /// write, including a history-only split, bumps the open row's version, so the ETag is a
+    /// monotonic per-employee TIMELINE version: two admins backdating against the same ETag
+    /// serialize on the lock and the second gets a 412 — both succeed only as sequential retries
+    /// with refreshed ETags. History rows' own <c>version</c> column is left untouched (bumping it
+    /// would mint tokens nobody holds). <see cref="SaveEmployeeProfileResult.Version"/> is
+    /// therefore the token AFTER the write in every case; the touched row's own version is
+    /// <see cref="SaveEmployeeProfileResult.ProducedRowVersion"/>. Audit
+    /// <c>version_before/after</c> on <c>employee_profile_audit</c> record this token.
     /// </para>
     ///
     /// <para>
-    /// <b>Backdate guard.</b> When <paramref name="req"/><c>.EffectiveFrom &lt; predecessor.EffectiveFrom</c>,
-    /// throws <see cref="InvalidProfileSupersessionException"/>. Mirrors S29 WTM precedent
-    /// at <see cref="WageTypeMappingRepository.SupersedeAndCreateAsync"/>.
+    /// <b>Same-values no-op (the S23 shape).</b> When the request equals the covering row
+    /// field-for-field (fraction, position, category) the write is a no-op decided INSIDE the
+    /// lock AFTER the If-Match check: no row, no version bump,
+    /// <see cref="SaveEmployeeProfileResult.IsNoOp"/> set and the current token returned. A stale
+    /// caller cannot hide a version mismatch behind an apparent no-op. The endpoints skip events,
+    /// revaluation and worklist rows on it. The comparison is against the COVERING row: a
+    /// backdated value equal to TODAY's value still writes (it changes history); only a value
+    /// equal to the row that already covers the date does nothing.
     /// </para>
     ///
     /// <para>
-    /// <b>Atomic-outbox contract (ADR-018 D5).</b> Caller owns the transaction; this method
-    /// only writes to <c>employee_profiles</c>. Endpoint emits the audit row + outbox event
-    /// in the same tx after this returns, sourcing the event type from
-    /// <see cref="SaveEmployeeProfileResult.Outcome"/> (TASK-3308 cutover).
+    /// <b>The fourth field.</b> <c>employment_category</c> is written on every row this method
+    /// produces: the request value when supplied, else the covering row's, else (a legacy NULL
+    /// cell) the live <c>users</c> value — never NULL post-S137.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Cache rule.</b> <c>users.employment_category</c> means "the category as of TODAY".
+    /// After the row write this method re-reads the row covering today and, only when its category
+    /// differs from the cached value, writes <c>UPDATE users SET employment_category, version =
+    /// version + 1</c> — a cache refresh IS a users-row write under ADR-018 D7 (the admin user DTO
+    /// exposes the field, so a stale users ETag must 412 afterwards). The cache is never set from
+    /// the REQUEST: a historical-only correction leaves it untouched by construction, and a
+    /// fraction-only change that leaves the category alone does not touch <c>users</c> at all. The
+    /// write is not gated on <c>is_active</c> — a departed employee's cache must be correctable.
+    /// The repository does not know the actor, so it returns
+    /// <see cref="SaveEmployeeProfileResult.UsersVersionBefore"/> / <c>After</c> plus the old/new
+    /// value for the endpoint's <c>users_audit</c> row.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Locking.</b> One <c>SELECT … FOR UPDATE</c> over the employee's WHOLE timeline, ordered
+    /// open row first then history ascending (<see cref="LockTimelineAsync"/>). Every writer thus
+    /// serializes on the open row first — the pre-S138 lock point, re-entrant with callers that
+    /// pre-lock it — and gap-inserters serialize on the history rows, so two backdates into the
+    /// same gap cannot produce overlapping rows. The unique indexes stay the backstop for the
+    /// zero-row race (two Case-A inserts): a unique-violation is re-thrown as
+    /// <see cref="ConcurrentSeedConflictException"/> (the S35 catch, generalized to every INSERT path).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why T is repository-only.</b> A soft-delete leaves closed rows and no open row; a later
+    /// write dated after the last close re-creates the open row (case T). The profile PUT keeps its
+    /// "no open row → 404" pre-check (the S33 Step-0b BLOCKER-3 ruling: PUT is an EDIT surface and
+    /// never creates a net-new row), so an edit can never resurrect a deliberately retired profile;
+    /// T serves the re-create callers at the repository level.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Atomic-outbox contract (ADR-018 D5).</b> Caller owns the transaction (ReadCommitted or
+    /// stricter); this method writes <c>employee_profiles</c> and, on a cache refresh, <c>users</c>.
+    /// The endpoint emits audit + outbox rows in the same tx from the result
+    /// (<see cref="SaveEmployeeProfileResult.Outcome"/> / <see cref="SaveEmployeeProfileResult.Kind"/>,
+    /// the covering pre-image, the new interval).
     /// </para>
     /// </summary>
-    /// <exception cref="OptimisticConcurrencyException">
-    /// Thrown when <paramref name="expectedVersion"/> is non-null and (a) no live row exists
-    /// or (b) the live row's <c>version</c> column differs from <paramref name="expectedVersion"/>.
-    /// Endpoint maps to 412 per ADR-019.
+    /// <exception cref="TemporalWriteRejectedException">
+    /// <see cref="TemporalWriteRejection.FutureDated"/> when <paramref name="req"/><c>.EffectiveFrom</c>
+    /// is after today (UTC); <see cref="TemporalWriteRejection.PrecedesEmploymentStart"/> when the
+    /// caller supplied <c>req.EmploymentStartDate</c> and the date precedes it. Those two are pure
+    /// predicates raised BEFORE any lock (cheap, nothing to roll back).
+    /// <see cref="TemporalWriteRejection.NoRecordedEmploymentCategory"/> (S138 Step-5a) is different
+    /// and is raised AFTER the timeline lock and the If-Match check, because it can only be decided
+    /// once the routed case is known: router case E puts the write before every recorded row, so no
+    /// row covers or precedes the date and nothing records which category held then — and the only
+    /// remaining source, the live <c>users</c> value, means "as of today" and would mislabel history.
+    /// The caller's transaction is rolled back by the endpoint, so the late throw costs a lock, not
+    /// correctness. All three map to a date-free 422.
     /// </exception>
-    /// <exception cref="InvalidProfileSupersessionException">
-    /// Thrown when <paramref name="req"/><c>.EffectiveFrom</c> is strictly earlier than the
-    /// predecessor's <c>effective_from</c> (backdate rejected per ADR-018 D9 strict-less
-    /// under end-exclusive). Endpoint maps to 400/422.
+    /// <exception cref="OptimisticConcurrencyException">
+    /// <paramref name="expectedVersion"/> non-null and (a) no open row exists
+    /// (<c>ActualVersion = null</c>) or (b) the open row's <c>version</c> differs. Endpoint maps to 412.
+    /// </exception>
+    /// <exception cref="ConcurrentSeedConflictException">
+    /// An INSERT lost a race on <c>idx_employee_profiles_live</c> / <c>idx_employee_profiles_history</c>
+    /// (unique-violation 23505). The transaction is aborted; refresh and retry. Endpoint maps to 409.
     /// </exception>
     public async Task<SaveEmployeeProfileResult> SupersedeAndCreateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         EmployeeProfileSupersedeRequest req, long? expectedVersion,
         CancellationToken ct = default)
     {
-        // 1. SELECT ... FOR UPDATE the live row (if any). The partial-unique-index
-        //    `idx_employee_profiles_live` guarantees at most one matching row; the row-level
-        //    lock serializes concurrent writers attempting to supersede or update the same
-        //    employee's live profile. Mirrors S29 WTM precedent at
-        //    WageTypeMappingRepository.AcquireLockAsync (L611-635).
-        var predecessorNullable = await AcquireLockAsync(conn, tx, req.EmployeeId, ct);
+        // "Today" is UTC — the endpoints' validators and the S33 today-stamp use the same clock.
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        // 2. Case A — no live row.
-        if (predecessorNullable is null)
+        // 0. Pure refusals BEFORE any lock — nothing to roll back, nothing to contend on.
+        if (TemporalWriteRouter.IsFutureDated(req.EffectiveFrom, today))
+            throw new TemporalWriteRejectedException(TemporalWriteRejection.FutureDated, "employee profile");
+        if (TemporalWriteRouter.PrecedesEmploymentStart(req.EffectiveFrom, req.EmploymentStartDate))
+            throw new TemporalWriteRejectedException(TemporalWriteRejection.PrecedesEmploymentStart, "employee profile");
+
+        // 1. Lock the whole timeline (open row first). From here to commit no other writer can
+        //    touch this employee's rows, so every decision below is made on locked state.
+        var timeline = await LockTimelineAsync(conn, tx, req.EmployeeId, ct);
+        var live = timeline.FirstOrDefault(r => r.EffectiveTo is null);
+
+        // 2. Validate the aggregate token (admin-strict If-Match, ADR-019) against the OPEN row.
+        if (expectedVersion is not null)
         {
-            if (expectedVersion is not null)
+            if (live is null)
             {
-                // Caller asserted a current version, but there is no live row → degenerate
-                // mismatch (412). ActualVersion = null distinguishes this branch from the
-                // "live row exists, version differs" branch in Case B/C.
+                // Caller asserted a current version, but there is no open row → degenerate
+                // mismatch (412). ActualVersion = null distinguishes this branch.
                 throw new OptimisticConcurrencyException(
                     $"No live employee profile exists for employee_id='{req.EmployeeId}', " +
                     $"but caller sent If-Match: \"{expectedVersion.Value}\"; refresh and retry.",
                     expectedVersion: expectedVersion,
                     actualVersion: null);
             }
-            // Case A: no predecessor → version=1 baseline.
-            var (newProfileId, newVersion) = await InsertLiveRowAsync(conn, tx, req, nextVersion: 1L, ct);
+            if (live.Version != expectedVersion.Value)
+            {
+                throw new OptimisticConcurrencyException(
+                    $"Employee profile version is {live.Version}, but caller sent " +
+                    $"If-Match: \"{expectedVersion.Value}\"; refresh and retry.",
+                    expectedVersion: expectedVersion,
+                    actualVersion: live.Version);
+            }
+        }
+
+        // 3. Route on the locked snapshot (pure). The anchor is matched back to its locked row
+        //    by start date — a key under idx_employee_profiles_history.
+        var decision = TemporalWriteRouter.Decide(
+            timeline.Select(r => new TemporalInterval(r.EffectiveFrom, r.EffectiveTo)),
+            req.EffectiveFrom, today);
+        if (decision.Case == TemporalWriteCase.RejectedFutureDated)
+        {
+            // Unreachable after step 0; kept so the router remains the single authority.
+            throw new TemporalWriteRejectedException(TemporalWriteRejection.FutureDated, "employee profile");
+        }
+        var anchor = decision.Anchor is { } anchorInterval
+            ? timeline.Single(r => r.EffectiveFrom == anchorInterval.From)
+            : null;
+
+        // The fourth field: request value, else the value that ACTUALLY HELD at this date.
+        //
+        // S138 Step-5a (Reviewer WARNING, absorbed): "the value that held" is the covering row
+        // when there is one — but cases E (before the first row) and G (inside a gap) have NO
+        // covering row, and the INSERT's SQL fallback reads users.employment_category, which
+        // since S138 means "the category as of TODAY". Filling a 2024 gap without naming a
+        // category would therefore stamp today's category onto a 2024 row: exactly the
+        // substitute-live-for-dated MISLABEL that TASK-13804 retired the read-side COALESCE to
+        // prevent ("substituting the live value would MISLABEL history instead of rescuing it").
+        // So fall back to the temporally PRECEDING row — the value in force immediately before
+        // this date — and only then to the SQL's live fallback, which is reachable just for a
+        // genuinely EMPTY timeline, where there is no history to mislabel.
+        var preceding = anchor ?? timeline
+            .Where(r => r.EffectiveFrom <= req.EffectiveFrom)
+            .OrderByDescending(r => r.EffectiveFrom)
+            .FirstOrDefault();
+        var category = req.EmploymentCategory ?? preceding?.EmploymentCategory;
+
+        // Case E has rows but none at or before the date, so nothing records what held then.
+        // Guessing is the failure mode above; refuse (date-free) and let the caller state it.
+        if (category is null && timeline.Count > 0)
+        {
+            throw new TemporalWriteRejectedException(
+                TemporalWriteRejection.NoRecordedEmploymentCategory, "employee profile");
+        }
+
+        // 4. Same-values no-op — inside the lock, after If-Match, against the COVERING row.
+        //
+        // S138 Step-5a (Codex WARNING, absorbed): the no-op MUST NOT swallow a zero-width
+        // reopen. After a same-day create + soft-delete the anchor is a `[from, from)` row
+        // that covers NO dates; recreating at that date with UNCHANGED values still has real
+        // work to do — re-extend the row so the profile exists again (the router's
+        // ReopensZeroWidthAnchor decision, ADR-020 D2 Case C). Short-circuiting on value
+        // equality alone would report "nothing to do" and leave the employee with no visible
+        // profile at all. Equality is about VALUES; this branch is about COVERAGE.
+        if (anchor is not null && !decision.ReopensZeroWidthAnchor && IsSameValues(req, anchor))
+        {
             return new SaveEmployeeProfileResult(
-                newProfileId, newVersion, SaveEmployeeProfileOutcome.Created);
+                anchor.ProfileId, live?.Version ?? anchor.Version, SaveEmployeeProfileOutcome.NoOp)
+            {
+                Kind = TemporalWriteKind.NoOp,
+                IsNoOp = true,
+                NewEffectiveFrom = anchor.EffectiveFrom,
+                NewEffectiveTo = anchor.EffectiveTo,
+                ProducedRowVersion = anchor.Version,
+                Covering = anchor,
+                TimelineVersionBefore = live?.Version,
+            };
         }
 
-        // Hoist out of the nullable tuple now that we've eliminated the null branch — C#
-        // flow-analysis doesn't propagate property access through `?` on value-type tuples.
-        var predecessor = predecessorNullable.Value;
-
-        // 3. Predecessor exists. Validate optimistic concurrency (when If-Match supplied).
-        if (expectedVersion is not null && predecessor.Version != expectedVersion.Value)
+        // 5. Execute the case. Every INSERT path shares the unique-violation backstop.
+        SaveEmployeeProfileResult result;
+        try
         {
-            throw new OptimisticConcurrencyException(
-                $"Employee profile version is {predecessor.Version}, but caller sent " +
-                $"If-Match: \"{expectedVersion.Value}\"; refresh and retry.",
-                expectedVersion: expectedVersion,
-                actualVersion: predecessor.Version);
+            result = decision.Case switch
+            {
+                TemporalWriteCase.Create or TemporalWriteCase.InsertTrailing
+                    => await ExecuteOpenInsertAsync(conn, tx, req, decision, timeline, category, ct),
+                TemporalWriteCase.UpdateInPlace
+                    => await ExecuteUpdateInPlaceAsync(conn, tx, req, decision, anchor!, live, category, ct),
+                TemporalWriteCase.SplitCovering
+                    => await ExecuteSplitAsync(conn, tx, req, decision, anchor!, live, category, ct),
+                TemporalWriteCase.InsertBeforeFirst or TemporalWriteCase.InsertInGap
+                    => await ExecuteGapInsertAsync(conn, tx, req, decision, live, category, ct),
+                _ => throw new InvalidOperationException($"Unhandled TemporalWriteCase '{decision.Case}'."),
+            };
         }
-
-        // 4. Backdate guard (ADR-018 D9 strict-less under end-exclusive). A new row cannot
-        //    start before its predecessor — there is no valid history window for the
-        //    predecessor in that case. Mirrors S29 WTM precedent at
-        //    WageTypeMappingRepository.SupersedeAndCreateInternalAsync (L331-336).
-        if (req.EffectiveFrom < predecessor.EffectiveFrom)
+        catch (PostgresException ex) when (ex.SqlState == "23505")
         {
-            throw new InvalidProfileSupersessionException(
-                $"Cannot supersede employee profile for employee_id='{req.EmployeeId}' " +
-                $"with effective_from {req.EffectiveFrom:yyyy-MM-dd} earlier than " +
-                $"predecessor's effective_from {predecessor.EffectiveFrom:yyyy-MM-dd}.");
+            throw new ConcurrentSeedConflictException("employee_profiles", req.EmployeeId);
         }
 
-        // 5. Case B — same-day edit. UPDATE-in-place with version bump.
-        if (req.EffectiveFrom == predecessor.EffectiveFrom)
-        {
-            var (sameDayProfileId, sameDayVersion) =
-                await UpdateInPlaceAsync(conn, tx, req, predecessor.ProfileId, ct);
-            return new SaveEmployeeProfileResult(
-                sameDayProfileId, sameDayVersion, SaveEmployeeProfileOutcome.Updated);
-        }
-
-        // 6. Case C — cross-day edit. Close the predecessor at end-exclusive
-        //    `effective_to = req.EffectiveFrom` (version UNCHANGED — close is lifecycle, not
-        //    a content edit; mirrors S22 ArchiveProfileAsync semantic), then INSERT new
-        //    live row at predecessor.Version + 1 (Step 7a P1 absorption — ETag monotonicity
-        //    across supersession; see InsertLiveRowAsync xmldoc).
-        await ClosePredecessorAsync(conn, tx, predecessor.ProfileId, req.EffectiveFrom, ct);
-        var (supersedingProfileId, supersedingVersion) =
-            await InsertLiveRowAsync(conn, tx, req, nextVersion: predecessor.Version + 1, ct);
-        return new SaveEmployeeProfileResult(
-            supersedingProfileId, supersedingVersion, SaveEmployeeProfileOutcome.Superseded);
+        // 6. Cache rule — users.employment_category follows the row covering TODAY, never the request.
+        var cache = await RefreshEmploymentCategoryCacheAsync(conn, tx, req.EmployeeId, today, ct);
+        return cache is null
+            ? result
+            : result with
+            {
+                UsersVersionBefore = cache.Value.VersionBefore,
+                UsersVersionAfter = cache.Value.VersionAfter,
+                PreviousEmploymentCategoryCache = cache.Value.PreviousValue,
+                NewEmploymentCategoryCache = cache.Value.NewValue,
+            };
     }
 
     /// <summary>
@@ -740,74 +862,178 @@ public sealed class EmployeeProfileRepository
     }
 
     // ------------------------------------------------------------------
-    // Private helpers — shared by SupersedeAndCreateAsync's three routing branches.
-    // Mirrors S29 WageTypeMappingRepository's AcquireLockAsync / UpdateInPlaceAsync /
-    // CloseRowAsync / InsertSupersedingRowAsync triad.
+    // Private helpers — the S138 timeline lock, the four case executors, the row primitives
+    // (insert / update-in-place / close / bump-token) and the users-cache refresh. The S29 WTM
+    // AcquireLockAsync / UpdateInPlaceAsync / CloseRowAsync / InsertSupersedingRowAsync triad,
+    // generalized from "the open row" to "the whole timeline".
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Locks the live row (effective_to IS NULL) for <paramref name="employeeId"/> via
-    /// <c>SELECT ... FOR UPDATE</c>. Returns the locked row's <c>profile_id</c>, current
-    /// <c>version</c>, and <c>effective_from</c> — the three pieces of state
-    /// <see cref="SupersedeAndCreateAsync"/> needs to route Cases A/B/C and validate
-    /// optimistic concurrency. Returns <c>null</c> when no live row exists (Case A).
-    /// Mirrors S29 WTM precedent at
-    /// <see cref="WageTypeMappingRepository.AcquireLockAsync"/>.
+    /// Locks EVERY row of the employee's timeline via <c>SELECT … FOR UPDATE</c>, returning them
+    /// as pre-images. Order matters and is deliberate: the OPEN row first, then history ascending.
+    /// PostgreSQL locks rows in output order, so every writer's first lock is the open row (the
+    /// pre-S138 serialization point, re-entrant with endpoint pre-locks on it) and the rest follow
+    /// in one shared order — two concurrent writers cannot deadlock on this statement, and two
+    /// gap-inserters serialize on the history rows instead of racing to overlapping inserts.
+    /// Returns an empty list when the employee has no rows at all (case A).
     /// </summary>
-    private static async Task<(Guid ProfileId, long Version, DateOnly EffectiveFrom)?> AcquireLockAsync(
+    private static async Task<IReadOnlyList<EmployeeProfileRowPreImage>> LockTimelineAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, CancellationToken ct)
     {
         await using var lockCmd = new NpgsqlCommand(
             """
-            SELECT profile_id, version, effective_from
+            SELECT profile_id, part_time_fraction, position, employment_category,
+                   effective_from, effective_to, version
             FROM employee_profiles
             WHERE employee_id = @employeeId
-              AND effective_to IS NULL
+            ORDER BY (effective_to IS NULL) DESC, effective_from
             FOR UPDATE
             """, conn, tx);
         lockCmd.Parameters.AddWithValue("employeeId", employeeId);
+        var rows = new List<EmployeeProfileRowPreImage>();
         await using var reader = await lockCmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct)) return null;
-        return (
-            reader.GetGuid(0),
-            reader.GetInt64(1),
-            reader.GetFieldValue<DateOnly>(2));
+        while (await reader.ReadAsync(ct))
+        {
+            rows.Add(new EmployeeProfileRowPreImage(
+                ProfileId: reader.GetGuid(0),
+                PartTimeFraction: reader.GetDecimal(1),
+                Position: reader.IsDBNull(2) ? null : reader.GetString(2),
+                EmploymentCategory: reader.IsDBNull(3) ? null : reader.GetString(3),
+                EffectiveFrom: reader.GetFieldValue<DateOnly>(4),
+                EffectiveTo: reader.IsDBNull(5) ? null : reader.GetFieldValue<DateOnly>(5),
+                Version: reader.GetInt64(6)));
+        }
+        return rows;
     }
 
     /// <summary>
-    /// Case A (Create) + Case C (Supersede) shared path — INSERT a fresh live row with the
-    /// caller-supplied <c>effective_from</c>. <c>profile_id</c> is generated client-side
-    /// (S29 WTM precedent at L137 + S31 CreateAsync at L217) so the endpoint can include it
-    /// in the outbox event body. The partial-unique-index <c>idx_employee_profiles_live</c>
-    /// guarantees at most one open row per employee; in Case C the caller has already closed
-    /// the predecessor under the same tx.
-    ///
-    /// <para>
-    /// <b>Version contract (S33 Step 7a P1 absorption — ETag monotonicity fix).</b>
-    /// Case A passes <paramref name="nextVersion"/> = 1 (no predecessor exists).
-    /// Case C passes <paramref name="nextVersion"/> = <c>predecessor.Version + 1</c> so the
-    /// admin's response ETag strictly increases across the supersession. Without this,
-    /// a legacy/seeder-backfilled profile at version=1 superseded across days would yield
-    /// a new live row also at version=1, and a racing admin holding old <c>If-Match: "1"</c>
-    /// could overwrite the newly superseded row without a 412 — ADR-019 D2 contract
-    /// violation. The bump-on-Case-C diverges from ADR-020 D2's literal "version=1 for new
-    /// row" wording but inherits the SPIRIT of D2 (each successor is a fresh logical row);
-    /// the WTM precedent doesn't suffer this because WTM's natural key includes
-    /// effective_from, making (key, version) globally unique — EmployeeProfile's natural
-    /// key is just <c>employee_id</c>, so the version must carry the monotonic load alone.
-    /// </para>
+    /// The same-values test behind the S23-shape no-op: the request equals the covering row on
+    /// every field it carries. An omitted category (<c>null</c>) means "unchanged" by definition.
     /// </summary>
-    private static async Task<(Guid ProfileId, long Version)> InsertLiveRowAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        EmployeeProfileSupersedeRequest req, long nextVersion, CancellationToken ct)
+    private static bool IsSameValues(EmployeeProfileSupersedeRequest req, EmployeeProfileRowPreImage covering)
+        => covering.PartTimeFraction == req.PartTimeFraction
+           && string.Equals(covering.Position, req.Position, StringComparison.Ordinal)
+           && (req.EmploymentCategory is null
+               || string.Equals(covering.EmploymentCategory, req.EmploymentCategory, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Cases A and T — INSERT the (only) open row. Version = max over the employee's rows + 1:
+    /// that is 1 on an empty timeline (the S33 Case-A baseline) and strictly above every retired
+    /// row's version after a soft-delete, so an ETag captured before the delete can never match
+    /// the re-created row (the S33 Step-7a P1 monotonicity rationale, extended to re-creates).
+    /// </summary>
+    private static async Task<SaveEmployeeProfileResult> ExecuteOpenInsertAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, EmployeeProfileSupersedeRequest req,
+        TemporalWriteDecision decision, IReadOnlyList<EmployeeProfileRowPreImage> timeline,
+        string? category, CancellationToken ct)
     {
-        // S137 / ADR-040 D4 — employment_category is populated same-tx from the users value
-        // via the scalar subselect below; this single site serves BOTH SupersedeAndCreateAsync
-        // Case A (net-new live row) and Case C (successor row after a supersession), so a
-        // superseded profile's successor carries the dated category too. dated==live is the
-        // S137 invariant; users' category is write-once until Increment 3, so
-        // copy-from-users == copy-from-predecessor by construction.
+        var nextVersion = timeline.Count == 0 ? 1L : timeline.Max(r => r.Version) + 1;
+        var (newId, newVersion) = await InsertRowAsync(
+            conn, tx, req, decision.NewEffectiveFrom, decision.NewEffectiveTo, nextVersion, category, ct);
+        return new SaveEmployeeProfileResult(newId, newVersion, SaveEmployeeProfileOutcome.Created)
+        {
+            Kind = TemporalWriteRouter.KindOf(decision),
+            NewEffectiveFrom = decision.NewEffectiveFrom,
+            NewEffectiveTo = decision.NewEffectiveTo,
+            ProducedRowVersion = newVersion,
+        };
+    }
+
+    /// <summary>
+    /// Case B' — UPDATE the row that starts on the requested date. The row's OWN version moves
+    /// only when it is (or, for a reopened zero-width row, becomes) the open row — that version
+    /// IS the client token. A history row keeps its version and the token moves on the open row.
+    /// </summary>
+    private static async Task<SaveEmployeeProfileResult> ExecuteUpdateInPlaceAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, EmployeeProfileSupersedeRequest req,
+        TemporalWriteDecision decision, EmployeeProfileRowPreImage anchor, EmployeeProfileRowPreImage? live,
+        string? category, CancellationToken ct)
+    {
+        var bumpOwnVersion = anchor.EffectiveTo is null || decision.ProducesOpenRow;
+        var (id, ownVersion) = await UpdateRowAsync(
+            conn, tx, req, anchor.ProfileId, decision.NewEffectiveTo, bumpOwnVersion, category, ct);
+        var token = bumpOwnVersion || live is null
+            ? ownVersion
+            : await BumpTokenAsync(conn, tx, live.ProfileId, ct);
+        return new SaveEmployeeProfileResult(id, token, SaveEmployeeProfileOutcome.Updated)
+        {
+            Kind = TemporalWriteKind.Updated,
+            NewEffectiveFrom = decision.NewEffectiveFrom,
+            NewEffectiveTo = decision.NewEffectiveTo,
+            ProducedRowVersion = ownVersion,
+            Covering = anchor,
+            TimelineVersionBefore = live?.Version,
+        };
+    }
+
+    /// <summary>
+    /// Case C' — close the covering row at the requested date (its version untouched: a close is
+    /// lifecycle, not a content edit) and INSERT <c>[from, covering.oldTo)</c>. When the covering
+    /// row is the OPEN row the successor inherits <c>predecessor.Version + 1</c> (S33 Step-7a P1 —
+    /// the token keeps climbing across the supersession); when it is a HISTORY row the inserted row
+    /// is a fresh history row at version 1 and the token moves on the open row.
+    /// </summary>
+    private static async Task<SaveEmployeeProfileResult> ExecuteSplitAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, EmployeeProfileSupersedeRequest req,
+        TemporalWriteDecision decision, EmployeeProfileRowPreImage anchor, EmployeeProfileRowPreImage? live,
+        string? category, CancellationToken ct)
+    {
+        await ClosePredecessorAsync(conn, tx, anchor.ProfileId, decision.NewEffectiveFrom, ct);
+        var coveringIsOpen = anchor.EffectiveTo is null;
+        var newRowVersion = coveringIsOpen ? anchor.Version + 1 : 1L;
+        var (newId, producedVersion) = await InsertRowAsync(
+            conn, tx, req, decision.NewEffectiveFrom, decision.NewEffectiveTo, newRowVersion, category, ct);
+        var token = coveringIsOpen || live is null
+            ? producedVersion
+            : await BumpTokenAsync(conn, tx, live.ProfileId, ct);
+        return new SaveEmployeeProfileResult(newId, token, SaveEmployeeProfileOutcome.Superseded)
+        {
+            Kind = TemporalWriteRouter.KindOf(decision),
+            NewEffectiveFrom = decision.NewEffectiveFrom,
+            NewEffectiveTo = decision.NewEffectiveTo,
+            ProducedRowVersion = producedVersion,
+            Covering = anchor,
+            TimelineVersionBefore = live?.Version,
+        };
+    }
+
+    /// <summary>
+    /// Cases E and G — INSERT a history row into a gap (nothing is closed). Version 1 (no
+    /// predecessor); the token moves on the open row when one exists.
+    /// </summary>
+    private static async Task<SaveEmployeeProfileResult> ExecuteGapInsertAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, EmployeeProfileSupersedeRequest req,
+        TemporalWriteDecision decision, EmployeeProfileRowPreImage? live,
+        string? category, CancellationToken ct)
+    {
+        var (newId, producedVersion) = await InsertRowAsync(
+            conn, tx, req, decision.NewEffectiveFrom, decision.NewEffectiveTo, 1L, category, ct);
+        var token = live is null
+            ? producedVersion
+            : await BumpTokenAsync(conn, tx, live.ProfileId, ct);
+        return new SaveEmployeeProfileResult(newId, token, SaveEmployeeProfileOutcome.Inserted)
+        {
+            Kind = TemporalWriteRouter.KindOf(decision),
+            NewEffectiveFrom = decision.NewEffectiveFrom,
+            NewEffectiveTo = decision.NewEffectiveTo,
+            ProducedRowVersion = producedVersion,
+            TimelineVersionBefore = live?.Version,
+        };
+    }
+
+    /// <summary>
+    /// INSERT one row with the caller-supplied interval and version. <c>profile_id</c> is generated
+    /// client-side (S29 WTM precedent) so the endpoint can put it in the outbox event body.
+    /// <c>employment_category</c> = the resolved value, else (legacy NULL cell) the live users
+    /// value via the scalar subselect (same conn + tx, so an uncommitted users row is visible).
+    /// The two unique indexes (open-row partial + history) are the collision backstop; the caller
+    /// translates 23505.
+    /// </summary>
+    private static async Task<(Guid ProfileId, long Version)> InsertRowAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, EmployeeProfileSupersedeRequest req,
+        DateOnly effectiveFrom, DateOnly? effectiveTo, long version, string? category, CancellationToken ct)
+    {
         var newProfileId = Guid.NewGuid();
         await using var cmd = new NpgsqlCommand(
             """
@@ -816,45 +1042,56 @@ public sealed class EmployeeProfileRepository
                 effective_from, effective_to, version, employment_category)
             VALUES (
                 @profileId, @employeeId, @partTimeFraction, @position,
-                @effectiveFrom, NULL, @version,
-                (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
+                @effectiveFrom, @effectiveTo, @version,
+                COALESCE(@employmentCategory,
+                         (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId)))
             RETURNING profile_id, version
             """, conn, tx);
         cmd.Parameters.AddWithValue("profileId", newProfileId);
         cmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("effectiveFrom", req.EffectiveFrom);
-        cmd.Parameters.AddWithValue("version", nextVersion);
+        cmd.Parameters.AddWithValue("effectiveFrom", effectiveFrom);
+        cmd.Parameters.Add(new NpgsqlParameter("effectiveTo", NpgsqlTypes.NpgsqlDbType.Date)
+        {
+            Value = effectiveTo is { } to ? to : DBNull.Value,
+        });
+        cmd.Parameters.AddWithValue("version", version);
+        cmd.Parameters.Add(new NpgsqlParameter("employmentCategory", NpgsqlTypes.NpgsqlDbType.Text)
+        {
+            Value = (object?)category ?? DBNull.Value,
+        });
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
             // Defense-in-depth — INSERT ... RETURNING always yields one row on success.
             throw new InvalidOperationException(
-                $"InsertLiveRowAsync produced no row for employee_id='{req.EmployeeId}' " +
-                $"at effective_from='{req.EffectiveFrom:yyyy-MM-dd}'.");
+                $"InsertRowAsync produced no row for employee_id='{req.EmployeeId}' " +
+                $"at effective_from='{effectiveFrom:yyyy-MM-dd}'.");
         }
         return (reader.GetGuid(0), reader.GetInt64(1));
     }
 
     /// <summary>
-    /// Case B (Updated) — same-day UPDATE-in-place. Targets the (still-locked) live row by
-    /// its <paramref name="profileId"/>; refreshes the three S31-authoritative fields,
-    /// bumps <c>version = version + 1</c>, stamps <c>updated_at = NOW()</c>;
-    /// <c>profile_id</c> and <c>effective_from</c> are immutable across same-day edits.
-    /// Mirrors S29 WTM precedent at
-    /// <see cref="WageTypeMappingRepository.UpdateInPlaceAsync"/>.
+    /// Case B' — UPDATE the (locked) row that starts on the requested date: refresh the three
+    /// fields, set <c>effective_to</c> to the decided end (unchanged for a normal in-place edit;
+    /// re-extended for a zero-width row — the ADR-020 D2 Case C reopen), bump its version only
+    /// when <paramref name="bumpVersion"/> (the open row — the client token). <c>profile_id</c>
+    /// and <c>effective_from</c> are immutable across in-place edits.
     /// </summary>
-    private static async Task<(Guid ProfileId, long Version)> UpdateInPlaceAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        EmployeeProfileSupersedeRequest req, Guid profileId, CancellationToken ct)
+    private static async Task<(Guid ProfileId, long Version)> UpdateRowAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, EmployeeProfileSupersedeRequest req,
+        Guid profileId, DateOnly? effectiveTo, bool bumpVersion, string? category, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
             UPDATE employee_profiles SET
                 part_time_fraction = @partTimeFraction,
                 position = @position,
-                version = version + 1,
+                employment_category = COALESCE(@employmentCategory, employment_category,
+                    (SELECT u.employment_category FROM users u WHERE u.user_id = employee_profiles.employee_id)),
+                effective_to = @effectiveTo,
+                version = version + @versionBump,
                 updated_at = NOW()
             WHERE profile_id = @profileId
             RETURNING profile_id, version
@@ -862,24 +1099,57 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("profileId", profileId);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
+        cmd.Parameters.Add(new NpgsqlParameter("employmentCategory", NpgsqlTypes.NpgsqlDbType.Text)
+        {
+            Value = (object?)category ?? DBNull.Value,
+        });
+        cmd.Parameters.Add(new NpgsqlParameter("effectiveTo", NpgsqlTypes.NpgsqlDbType.Date)
+        {
+            Value = effectiveTo is { } to ? to : DBNull.Value,
+        });
+        cmd.Parameters.AddWithValue("versionBump", bumpVersion ? 1L : 0L);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
             // Defense-in-depth — unreachable while FOR UPDATE holds the lock.
             throw new InvalidOperationException(
-                $"UpdateInPlaceAsync produced no row for profile_id='{profileId}'; " +
+                $"UpdateRowAsync produced no row for profile_id='{profileId}'; " +
                 "FOR UPDATE invariant violated.");
         }
         return (reader.GetGuid(0), reader.GetInt64(1));
     }
 
     /// <summary>
-    /// Case C (Supersede) — close the predecessor by stamping
-    /// <c>effective_to = closeDate</c> under end-exclusive semantics (ADR-018 D9 —
-    /// predecessor's history window becomes <c>[predecessor.effective_from, closeDate)</c>).
-    /// The version column is NOT bumped: close is a lifecycle event, not a content edit
-    /// (mirrors S22 ArchiveProfileAsync + S29 WTM CloseRowAsync). Caller must already hold
-    /// the row lock acquired via <see cref="AcquireLockAsync"/>.
+    /// Bumps the OPEN row's <c>version</c> without touching its fields — how a history-only write
+    /// moves the client token (see the one-token-per-aggregate rule on
+    /// <see cref="SupersedeAndCreateAsync"/>). Returns the new token.
+    /// </summary>
+    private static async Task<long> BumpTokenAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, Guid liveProfileId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE employee_profiles
+               SET version = version + 1, updated_at = NOW()
+             WHERE profile_id = @profileId
+            RETURNING version
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("profileId", liveProfileId);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        if (result is null || result is DBNull)
+        {
+            throw new InvalidOperationException(
+                $"BumpTokenAsync found no row for profile_id='{liveProfileId}'; FOR UPDATE invariant violated.");
+        }
+        return (long)result;
+    }
+
+    /// <summary>
+    /// Case C' — close the covering row by stamping <c>effective_to = closeDate</c> under
+    /// end-exclusive semantics (ADR-018 D9 — its history window becomes
+    /// <c>[effective_from, closeDate)</c>). The version column is NOT bumped: a close is a
+    /// lifecycle event, not a content edit (mirrors S22 ArchiveProfileAsync + S29 WTM
+    /// CloseRowAsync). Caller must already hold the timeline lock.
     /// </summary>
     private static async Task ClosePredecessorAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -891,6 +1161,79 @@ public sealed class EmployeeProfileRepository
         closeCmd.Parameters.AddWithValue("closeDate", closeDate);
         closeCmd.Parameters.AddWithValue("profileId", profileId);
         await closeCmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// The cache rule (see <see cref="SupersedeAndCreateAsync"/>): re-read the category of the row
+    /// covering TODAY after the write and, only if it differs from <c>users.employment_category</c>,
+    /// write the cache with a <c>users.version</c> bump. Returns <c>null</c> when nothing was
+    /// written — no row covers today (post soft-delete), the covering cell is a legacy NULL (which
+    /// by the S137 COALESCE contract already means "same as users"), or the value is unchanged.
+    /// Not gated on <c>is_active</c>. Locks the users row (<c>FOR UPDATE</c>) before comparing so
+    /// the before-value the endpoint audits is the one actually replaced.
+    /// </summary>
+    private static async Task<(long VersionBefore, long VersionAfter, string PreviousValue, string NewValue)?>
+        RefreshEmploymentCategoryCacheAsync(
+            NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, DateOnly today, CancellationToken ct)
+    {
+        string? todayCategory;
+        await using (var todayCmd = new NpgsqlCommand(
+            """
+            SELECT employment_category
+            FROM employee_profiles
+            WHERE employee_id = @employeeId
+              AND effective_from <= @today
+              AND (effective_to IS NULL OR effective_to > @today)
+            """, conn, tx))
+        {
+            todayCmd.Parameters.AddWithValue("employeeId", employeeId);
+            todayCmd.Parameters.AddWithValue("today", today);
+            var scalar = await todayCmd.ExecuteScalarAsync(ct);
+            todayCategory = scalar is null || scalar is DBNull ? null : (string)scalar;
+        }
+        if (todayCategory is null) return null;
+
+        string cachedCategory;
+        long cachedVersion;
+        await using (var usersCmd = new NpgsqlCommand(
+            """
+            SELECT employment_category, version
+            FROM users
+            WHERE user_id = @employeeId
+            FOR UPDATE
+            """, conn, tx))
+        {
+            usersCmd.Parameters.AddWithValue("employeeId", employeeId);
+            await using var reader = await usersCmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+            {
+                // The employee_id FK guarantees the users row; reaching here is a programming error.
+                throw new InvalidOperationException(
+                    $"users row for user_id='{employeeId}' not found while refreshing the employment_category cache.");
+            }
+            cachedCategory = reader.GetString(0);
+            cachedVersion = reader.GetInt64(1);
+        }
+        if (string.Equals(cachedCategory, todayCategory, StringComparison.Ordinal)) return null;
+
+        await using var updateCmd = new NpgsqlCommand(
+            """
+            UPDATE users
+               SET employment_category = @employmentCategory,
+                   version = version + 1,
+                   updated_at = NOW()
+             WHERE user_id = @employeeId
+            RETURNING version
+            """, conn, tx);
+        updateCmd.Parameters.AddWithValue("employeeId", employeeId);
+        updateCmd.Parameters.AddWithValue("employmentCategory", todayCategory);
+        var newVersion = await updateCmd.ExecuteScalarAsync(ct);
+        if (newVersion is null || newVersion is DBNull)
+        {
+            throw new InvalidOperationException(
+                $"users cache write for user_id='{employeeId}' matched no row; FOR UPDATE invariant violated.");
+        }
+        return (cachedVersion, (long)newVersion, cachedCategory, todayCategory);
     }
 }
 
@@ -924,61 +1267,153 @@ public sealed record EmployeeProfileCreateRequest(
 /// <summary>
 /// S33 / TASK-3302 — payload for <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>.
 /// Extends <see cref="EmployeeProfileUpsertRequest"/>'s field set with the explicit
-/// <see cref="EffectiveFrom"/> date that drives ADR-020 D2 3-case routing (same-day vs
-/// cross-day vs net-new). The endpoint reads the clock per refinement Assumption #14 (no
-/// clock dependency in the repo); seeders + admin-POST + admin-PUT supply the date
-/// directly. Used to be a candidate for inheritance from
-/// <see cref="EmployeeProfileUpsertRequest"/>, but records-with-inheritance complicates the
-/// downstream <c>with</c>-expression ergonomics — flat record is the S29 WTM precedent shape.
+/// <see cref="EffectiveFrom"/> date that drives the routing (the endpoint reads the clock per
+/// refinement Assumption #14 — no clock dependency in the repo for the DATE; seeders + admin-POST
+/// + admin-PUT supply it directly). Flat record (the S29 WTM precedent shape).
+///
+/// <para>
+/// <b>S138 / TASK-13801 additions (trailing, defaulted — every 4-argument construction compiles
+/// unchanged).</b> <see cref="EmploymentCategory"/> is the fourth editable field (ADR-040 D4):
+/// <c>null</c> means "keep the covering row's category" (the pre-S138 behavior).
+/// <see cref="EmploymentStartDate"/> is the caller-supplied employment-start floor: when set, a
+/// date before it is refused with <see cref="Temporal.TemporalWriteRejection.PrecedesEmploymentStart"/>
+/// (date-free). It is caller-supplied, not read from <c>users</c>, because the admin user-create
+/// POST legitimately writes the first row at today for a hire whose start date is in the future.
+/// </para>
 /// </summary>
 public sealed record EmployeeProfileSupersedeRequest(
     string EmployeeId,
     decimal PartTimeFraction,
     string? Position,
-    DateOnly EffectiveFrom);
+    DateOnly EffectiveFrom,
+    string? EmploymentCategory = null,
+    DateOnly? EmploymentStartDate = null);
+
+/// <summary>
+/// S138 / TASK-13801 — the PRE-IMAGE of one <c>employee_profiles</c> row as it stood under the
+/// lock before the write: the fields, the interval and the row's own version. Carried on
+/// <see cref="SaveEmployeeProfileResult.Covering"/> so the endpoint sources audit
+/// <c>previous_data</c>, the mutation predicate and the Superseded event's predecessor fields from
+/// the row that was actually touched — never from the open row (Reviewer discovery 8: for a
+/// backdate the two differ, and reading the open row would silently no-op or corrupt the cache).
+/// <see cref="EffectiveTo"/> null = it was the open row.
+/// </summary>
+public sealed record EmployeeProfileRowPreImage(
+    Guid ProfileId,
+    decimal PartTimeFraction,
+    string? Position,
+    string? EmploymentCategory,
+    DateOnly EffectiveFrom,
+    DateOnly? EffectiveTo,
+    long Version);
 
 /// <summary>
 /// S33 / TASK-3302 — result of <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>.
-/// <see cref="Outcome"/> discriminates which of the ADR-020 D2 3-case branches fired so the
-/// endpoint can emit the correct event type — <c>EmployeeProfileCreated</c>,
-/// <c>EmployeeProfileUpdated</c>, or <c>EmployeeProfileSuperseded</c> — and stamp the right
-/// audit <c>action</c> column (CREATED / UPDATED / SUPERSEDED).
+/// <see cref="Outcome"/> discriminates the coarse, event-oriented branch (Created / Updated /
+/// Superseded, plus S138's Inserted and NoOp) so the endpoint emits the right event type and
+/// audit <c>action</c>; the S138 members below carry everything a temporal write additionally
+/// needs to narrate. All S138 members are init-only with defaults — the 3-argument construction
+/// and every existing reader compile unchanged.
 /// </summary>
-/// <param name="ProfileId">The <c>profile_id</c> of the row this call produced. In Case A
-/// (Created) and Case C (Superseded) this is a freshly-generated UUID for the new live row;
-/// in Case B (Updated) it is the predecessor's unchanged <c>profile_id</c>.</param>
-/// <param name="Version">The post-write <c>version</c> column value on the row identified
-/// by <see cref="ProfileId"/>. Case A → 1; Case B → <c>prior + 1</c>; Case C → 1 (the new
-/// live row starts at version 1; the closed predecessor's version is unchanged but is not
-/// the row this result describes).</param>
-/// <param name="Outcome">Which ADR-020 D2 branch the call routed through.</param>
+/// <param name="ProfileId">The <c>profile_id</c> of the row this call produced or edited: a fresh
+/// UUID for every INSERT case, the anchor's id for an in-place edit or a no-op.</param>
+/// <param name="Version">S138: the per-employee TIMELINE token AFTER the write — the OPEN row's
+/// <c>version</c> — in every case (the value the endpoint stamps as ETag and records as audit
+/// <c>version_after</c>). It coincides with the produced row's version for A / B'-on-open /
+/// C'-on-open (the pre-S138 cases, unchanged) and for T; for history-only writes it is the open
+/// row's bumped version. On a no-op it is the unchanged current token. When no open row exists at
+/// all (a history-only write after a soft-delete) it falls back to the produced row's version.</param>
+/// <param name="Outcome">Which branch the call routed through.</param>
 public sealed record SaveEmployeeProfileResult(
     Guid ProfileId,
     long Version,
-    SaveEmployeeProfileOutcome Outcome);
+    SaveEmployeeProfileOutcome Outcome)
+{
+    /// <summary>S138 — the fine-grained case (A / B' / C'-open / C'-history / E / G / T / no-op).</summary>
+    public TemporalWriteKind Kind { get; init; } = DefaultKind(Outcome);
+
+    /// <summary>S138 — true when the request equalled the covering row and nothing was written
+    /// (no row, no version bump, no cache write); the endpoint skips audit/events/revaluation/worklist.</summary>
+    public bool IsNoOp { get; init; }
+
+    /// <summary>S138 — start of the interval the write produced / edited (the request date; for a
+    /// no-op the covering row's start).</summary>
+    public DateOnly? NewEffectiveFrom { get; init; }
+
+    /// <summary>S138 — end (exclusive) of that interval; <c>null</c> = the row is open. For C' this
+    /// is where the covering row USED to end — the revaluation window and the worklist interval are
+    /// <c>[NewEffectiveFrom, NewEffectiveTo)</c>, not <c>[from, ∞)</c> (recon discovery 1).</summary>
+    public DateOnly? NewEffectiveTo { get; init; }
+
+    /// <summary>S138 — the produced / edited row's OWN <c>version</c> column (differs from
+    /// <see cref="Version"/> only for history-only writes, where the token lives on the open row).</summary>
+    public long ProducedRowVersion { get; init; } = Version;
+
+    /// <summary>S138 — the covering row's pre-image (B' / C' / no-op); <c>null</c> for A / E / G / T
+    /// where no row covered the date.</summary>
+    public EmployeeProfileRowPreImage? Covering { get; init; }
+
+    /// <summary>S138 — the open row's version BEFORE the write (audit <c>version_before</c>);
+    /// <c>null</c> when no open row existed.</summary>
+    public long? TimelineVersionBefore { get; init; }
+
+    /// <summary>S138 — <c>users.version</c> before the cache write; <c>null</c> when the cache was untouched.</summary>
+    public long? UsersVersionBefore { get; init; }
+
+    /// <summary>S138 — <c>users.version</c> after the cache write; <c>null</c> when the cache was untouched.</summary>
+    public long? UsersVersionAfter { get; init; }
+
+    /// <summary>S138 — the <c>users.employment_category</c> value replaced; <c>null</c> when untouched.</summary>
+    public string? PreviousEmploymentCategoryCache { get; init; }
+
+    /// <summary>S138 — the <c>users.employment_category</c> value written (the row covering today's);
+    /// <c>null</c> when untouched.</summary>
+    public string? NewEmploymentCategoryCache { get; init; }
+
+    /// <summary>S138 — true when this write touched the <c>users</c> row (the endpoint then owes a
+    /// <c>users_audit</c> row for the version transition).</summary>
+    public bool UsersCacheWritten => UsersVersionAfter is not null;
+
+    private static TemporalWriteKind DefaultKind(SaveEmployeeProfileOutcome outcome) => outcome switch
+    {
+        SaveEmployeeProfileOutcome.Created => TemporalWriteKind.Created,
+        SaveEmployeeProfileOutcome.Updated => TemporalWriteKind.Updated,
+        SaveEmployeeProfileOutcome.Superseded => TemporalWriteKind.Superseded,
+        SaveEmployeeProfileOutcome.Inserted => TemporalWriteKind.InsertedInGap,
+        SaveEmployeeProfileOutcome.NoOp => TemporalWriteKind.NoOp,
+        _ => TemporalWriteKind.Created,
+    };
+}
 
 /// <summary>
-/// S33 / TASK-3302 — ADR-020 D2 3-case routing discriminator. Read by TASK-3308 endpoint
-/// cutover to map each case to its correct outbox event type:
+/// S33 / TASK-3302 — routing discriminator, read by the endpoints to map each case to its outbox
+/// event type and audit <c>action</c>; extended additively in S138 / TASK-13801:
 /// <list type="bullet">
-///   <item><description><see cref="Created"/> → <c>EmployeeProfileCreated</c> (net-new live row;
-///     no predecessor existed).</description></item>
-///   <item><description><see cref="Updated"/> → <c>EmployeeProfileUpdated</c> (same-day in-place
-///     edit; predecessor's <c>effective_from</c> matched the request's, version bumped).</description></item>
-///   <item><description><see cref="Superseded"/> → <c>EmployeeProfileSuperseded</c> (cross-day
-///     supersession; predecessor closed at end-exclusive <c>effective_to</c>, new live row
-///     at version 1).</description></item>
+///   <item><description><see cref="Created"/> → <c>EmployeeProfileCreated</c> (a new OPEN row with no
+///     predecessor closed: case A, and case T's re-create after a trailing gap).</description></item>
+///   <item><description><see cref="Updated"/> → <c>EmployeeProfileUpdated</c> (case B': the row starting
+///     on the date edited in place — open or history).</description></item>
+///   <item><description><see cref="Superseded"/> → <c>EmployeeProfileSuperseded</c> (case C': the covering
+///     row closed at the date + a new row <c>[from, oldTo)</c>; <c>NewEffectiveTo</c> tells open from
+///     history).</description></item>
+///   <item><description><see cref="Inserted"/> (S138) → <c>EmployeeProfileCreated</c> with a closed
+///     interval (cases E / G: a history row inserted into a gap; nothing closed — CREATED only).</description></item>
+///   <item><description><see cref="NoOp"/> (S138) → nothing emitted (the S23 shape).</description></item>
 /// </list>
 /// </summary>
 public enum SaveEmployeeProfileOutcome
 {
-    /// <summary>Case A — no live row existed; INSERT produced a brand-new live profile row.</summary>
+    /// <summary>Case A (empty timeline) or T (trailing gap): INSERT produced a brand-new open row.</summary>
     Created,
-    /// <summary>Case B — live row existed and its <c>effective_from</c> matched the request's;
-    /// UPDATE-in-place with version bump (mapping_id and effective_from unchanged).</summary>
+    /// <summary>Case B': a row started on the requested date; UPDATE-in-place (profile_id and
+    /// effective_from unchanged).</summary>
     Updated,
-    /// <summary>Case C — live row existed at an earlier <c>effective_from</c>; predecessor
-    /// closed at end-exclusive <c>effective_to = request.EffectiveFrom</c> (version unchanged),
-    /// new live row inserted at version 1.</summary>
+    /// <summary>Case C': the covering row was closed at end-exclusive
+    /// <c>effective_to = request.EffectiveFrom</c> (version unchanged) and a new row inserted for
+    /// the remainder of its old interval.</summary>
     Superseded,
+    /// <summary>S138 — cases E / G: a history row was inserted into a gap; no row was closed.</summary>
+    Inserted,
+    /// <summary>S138 — the request equalled the covering row; nothing was written.</summary>
+    NoOp,
 }

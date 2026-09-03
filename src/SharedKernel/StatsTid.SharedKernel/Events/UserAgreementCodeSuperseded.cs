@@ -50,6 +50,12 @@ public sealed class UserAgreementCodeSuperseded : DomainEventBase
     public required DateOnly PredecessorEffectiveTo { get; init; }
     public required DateOnly NewEffectiveFrom { get; init; }
 
+    // S138 / TASK-13801 (ADR-040 D8) — where the NEW row ends: null = it is the open row (the
+    // pre-S138 Case C shape); a date = D8's insert-between (the covering row was a history row
+    // and the new row runs [NewEffectiveFrom, NewEffectiveTo), later rows untouched). Additive
+    // and optional (not `required`): pre-S138 payloads deserialize with null.
+    public DateOnly? NewEffectiveTo { get; init; }
+
     // Agreement-code transition payload
     public required string OldAgreementCode { get; init; }
     public required string NewAgreementCode { get; init; }

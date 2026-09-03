@@ -576,18 +576,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_profiles_live
 CREATE UNIQUE INDEX IF NOT EXISTS idx_employee_profiles_history
     ON employee_profiles (employee_id, effective_from);
 
--- S137 / ADR-040 D4 (TASK-13704) — employment_category becomes a DATED column on
+-- S137 / ADR-040 D4 (TASK-13704) — employment_category is a DATED column on
 -- employee_profiles so "what category was this employee in March?" is answerable
--- (today the value lives only as a LIVE column on users). NULLABLE BY RULED DESIGN,
--- no CHECK: reads COALESCE to users.employment_category, so a missed write degrades
--- to the definitionally-correct live value — never a crash or a mislabel (the
--- Reviewer-B1 fail-safe posture); the NOT-NULL tightening is Increment 3, together
--- with editability (DTOs / event payloads / 3-case writer fields). ADD COLUMN
+-- (before S137 the value lived only as a LIVE column on users). ADD COLUMN
 -- IF NOT EXISTS at file scope (the S59 birth_date / S74 ALTER-in-segment idiom):
 -- the base CREATE above is untouched, so greenfield and legacy DBs converge on the
 -- same shape here. The HISTORY-covering backfill for legacy rows lives in the
 -- ledger-guarded S137-PROFILE-CATEGORY-SEGMENT near the bottom of this file.
-ALTER TABLE employee_profiles ADD COLUMN IF NOT EXISTS employment_category TEXT NULL;
+--
+-- S138 / TASK-13804 (Increment 3) — NOT NULL, reversing the S137 nullable posture.
+-- S137 landed the column NULLABLE on purpose: only the four INSERT paths had been
+-- taught to fill it, so the ruled fail-safe was "a missed write must never crash a
+-- read" — every read did COALESCE(dated, live) and a NULL cell degraded to the
+-- employee's live users.employment_category. S138 makes the category an EDITABLE
+-- dated field (the temporal writer stores it on EVERY row it writes, in every
+-- router case), and from that moment the dated value may LEGITIMATELY differ from
+-- the live one — a backdated change is a new dated row, and users.employment_category
+-- is only the cache of the row covering TODAY. A fail-safe that substitutes the live
+-- value would therefore MISLABEL history instead of rescuing it, so the posture flips
+-- to the house default: fail at INSERT (23502), loudly, where the bug is.
+--
+-- The greenfield path is what this statement serves: employee_profiles is EMPTY when
+-- init.sql runs (the app-boot EmployeeProfileSeeder populates it, category included),
+-- so ADD COLUMN ... NOT NULL is accepted. On a database that already carries the
+-- column (any post-S137 DB) this is an IF NOT EXISTS no-op and the tightening is done
+-- by the ledger-guarded S138-PROFILE-CATEGORY-NOTNULL-SEGMENT at the bottom of this
+-- file, AFTER the S137 backfill and its fail-loud census. CONSEQUENCE, recorded
+-- deliberately: a PRE-S137 database that still holds employee_profiles rows must be
+-- carried through the S137 release (or reseeded — the pre-launch runbook path) before
+-- this file is applied; PostgreSQL refuses ADD COLUMN ... NOT NULL on a non-empty
+-- table, and that refusal is loud and immediate, never silent.
+ALTER TABLE employee_profiles ADD COLUMN IF NOT EXISTS employment_category TEXT NOT NULL;
 
 -- employee_profile_audit (singular; mirrors wage_type_mapping_audit post-S25
 -- shape). version_before + version_after baked into the base CREATE (NOT a
@@ -603,6 +622,10 @@ CREATE TABLE IF NOT EXISTS employee_profile_audit (
     action          TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
     previous_data   JSONB        NULL,
     new_data        JSONB        NULL,
+    -- S138 / TASK-13801 (ADR-040 D8 amendment): version_before/version_after are the PROFILE
+    -- AGGREGATE token — the OPEN row's version, which every timeline write bumps (a history-only
+    -- backdate included) so the GET's ETag is a monotonic per-employee timeline version. A history
+    -- row's own version column is never issued to a client and is not what these columns record.
     version_before  BIGINT       NULL,
     version_after   BIGINT       NULL,
     actor_id        TEXT         NOT NULL,
@@ -688,6 +711,10 @@ CREATE TABLE IF NOT EXISTS user_agreement_codes_audit (
     action            TEXT         NOT NULL CHECK (action IN ('CREATED','UPDATED','DELETED','SUPERSEDED')),
     previous_data     JSONB        NULL,
     new_data          JSONB        NULL,
+    -- S138 / TASK-13801 (ADR-040 D8 amendment): version_before/version_after record the AGREEMENT
+    -- ROW's own version (this table's existing contract). The CLIENT concurrency token for the
+    -- agreement-code timeline is users.version — bumped atomically by the writer on every timeline
+    -- write and recorded on the paired users_audit row — never the agreement row version.
     version_before    BIGINT       NULL,
     version_after     BIGINT       NULL,
     actor_id          TEXT         NOT NULL,
@@ -4608,3 +4635,214 @@ BEGIN
 END
 $$;
 -- S137-PROFILE-CATEGORY-SEGMENT-END
+
+-- =========================================================================
+-- S138 / TASK-13803 — hr_backdate_worklist (ADR-040 D8 / Increment 3 —
+--   temporal editing): the HR DIAGNOSTIC WORKLIST for backdated corrections.
+--
+-- WHY: a backdated profile / agreement-code / employment-category change is
+-- recorded truthfully in dated history (TASK-13801/13802), but the months it
+-- reaches may ALREADY be exported to payroll (payroll_export_records) and the
+-- holiday years it reaches may ALREADY be settled (vacation_settlements). No
+-- recalculation happens automatically — ADR-013 forbids the cascade — so HR
+-- needs a LIST of exactly which exported months / settled years a correction
+-- has made stale. This table IS that list: a diagnostic worklist, never a
+-- workflow engine. Resolution ('RECALCULATED' | 'DISMISSED') is HR's recorded
+-- assertion; the derived "recalculated since / reversed since" flags are
+-- computed at READ time from the CURRENT export hash / settlement sequence
+-- against the baselines captured per trigger (never the operator's verb).
+--
+-- TWO row KINDS under one CHECK-tied shape (refinement rev 4 NEW-1):
+--   • EXPORTED_MONTH — keys (year, month, export_id). export_id is a REFERENCE
+--     to payroll_export_records.export_id and deliberately carries NO foreign
+--     key: payroll_export_records is Payroll-context-OWNED (ADR-034; the
+--     Backend reads it cross-context, never writes it), and a FK across that
+--     ownership line would couple the two contexts' lifecycles — the same
+--     no-FK precedent the *_audit tables follow (employee_profile_audit ~L598).
+--   • SETTLED_YEAR — keys (entitlement_type, entitlement_year), the ADR-033
+--     settlement tuple. SPECIAL_HOLIDAY's entitlement year is the taking-window
+--     ACCRUAL year (S80/8001), not a calendar year.
+--   The kind_keys CHECK forces each kind to populate exactly ITS key set.
+--
+-- triggers JSONB is an ARRAY of {kind, eventId, effectiveFrom, appendedAt,
+-- actorId, baselineContentHash (EXPORTED_MONTH) | baselineSettlementSequence +
+-- baselineSettlementState (SETTLED_YEAR)} — one element per correction that
+-- touched the row. A later correction on an already-OPEN row APPENDS to the
+-- array (and bumps version) instead of opening a second row: the two partial
+-- UNIQUE indexes below enforce at most ONE OPEN row per key. Each element
+-- captures its baseline AT ITS OWN APPEND TIME (Codex c2) — corrections advance
+-- payroll_export_records.content_hash IN PLACE, so per-trigger "recalculated
+-- since" = current hash <> that trigger's baseline is exact.
+--
+-- 3-path idempotent (the house guard pattern, in the S90 payroll_export_records
+-- SHAPE — a brand-new table, so the CREATE ... IF NOT EXISTS statements ARE the
+-- additive migration on every path and the DO block records only the ledger
+-- key; the CREATE is deliberately NOT inside the DO block, which would make
+-- generate_db_schema.py double-count the table):
+--   • greenfield first apply — table + indexes land, ledger row recorded;
+--   • legacy first apply — same statements land the table on a pre-S138 DB;
+--   • any re-apply — IF NOT EXISTS + ON CONFLICT DO NOTHING short-circuit.
+--
+-- The S138-BACKDATE-WORKLIST-SEGMENT markers are extracted VERBATIM by
+-- BackdateWorklistMigrationTests (the S71/S72/S73/S136/S137 harness pattern:
+-- the test replays this exact segment against a reconstructed pre-S138 schema,
+-- twice) — keep the marker lines intact and keep all S138 DDL between them.
+-- =========================================================================
+-- S138-BACKDATE-WORKLIST-SEGMENT-BEGIN
+CREATE TABLE IF NOT EXISTS hr_backdate_worklist (
+    worklist_id         UUID         PRIMARY KEY,
+    employee_id         TEXT         NOT NULL REFERENCES users(user_id),
+    kind                TEXT         NOT NULL CHECK (kind IN ('EXPORTED_MONTH', 'SETTLED_YEAR')),
+    -- EXPORTED_MONTH keys. export_id: REFERENCE only, NO FK (ADR-034 ownership line).
+    year                INT          NULL,
+    month               INT          NULL,
+    export_id           UUID         NULL,
+    -- SETTLED_YEAR keys (the ADR-033 settlement tuple minus sequence).
+    entitlement_type    TEXT         NULL,
+    entitlement_year    INT          NULL,
+    -- The per-correction trigger array (see the header comment for the element shape).
+    triggers            JSONB        NOT NULL,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    created_by          TEXT         NOT NULL,
+    resolved_at         TIMESTAMPTZ  NULL,
+    resolved_by         TEXT         NULL,
+    resolution          TEXT         NULL CHECK (resolution IN ('RECALCULATED', 'DISMISSED')),
+    resolution_reason   TEXT         NULL,
+    version             BIGINT       NOT NULL DEFAULT 1,
+    CONSTRAINT hr_backdate_worklist_kind_keys CHECK (
+        (kind = 'EXPORTED_MONTH'
+            AND year IS NOT NULL AND month IS NOT NULL AND export_id IS NOT NULL
+            AND entitlement_type IS NULL AND entitlement_year IS NULL)
+        OR (kind = 'SETTLED_YEAR'
+            AND entitlement_type IS NOT NULL AND entitlement_year IS NOT NULL
+            AND year IS NULL AND month IS NULL AND export_id IS NULL)
+    ),
+    CONSTRAINT hr_backdate_worklist_month_range CHECK (month IS NULL OR month BETWEEN 1 AND 12),
+    CONSTRAINT hr_backdate_worklist_triggers_array CHECK (
+        jsonb_typeof(triggers) = 'array' AND jsonb_array_length(triggers) >= 1
+    ),
+    CONSTRAINT hr_backdate_worklist_resolution_paired CHECK (
+        (resolved_at IS NULL AND resolved_by IS NULL AND resolution IS NULL)
+        OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution IS NOT NULL)
+    )
+);
+
+-- At most ONE OPEN row per exported month / per settled year (a later trigger
+-- APPENDS to the open row's triggers array; resolved rows free the key so a
+-- later correction opens a fresh row with its own trigger history).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hr_backdate_worklist_open_month
+    ON hr_backdate_worklist (employee_id, year, month)
+    WHERE resolved_at IS NULL AND kind = 'EXPORTED_MONTH';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hr_backdate_worklist_open_year
+    ON hr_backdate_worklist (employee_id, entitlement_type, entitlement_year)
+    WHERE resolved_at IS NULL AND kind = 'SETTLED_YEAR';
+-- The per-employee open-rows read (GET ?employeeId=...&open=true).
+CREATE INDEX IF NOT EXISTS idx_hr_backdate_worklist_employee_open
+    ON hr_backdate_worklist (employee_id)
+    WHERE resolved_at IS NULL;
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s138-backdate-worklist', 'S138/TASK-13803 (ADR-040 D8, Increment 3): hr_backdate_worklist — the HR diagnostic worklist for backdated profile / agreement-code / employment-category corrections. Two row kinds under one CHECK-tied shape: EXPORTED_MONTH (year, month, export_id — a REFERENCE to the Payroll-owned payroll_export_records, deliberately no FK per ADR-034) and SETTLED_YEAR (entitlement_type, entitlement_year — the ADR-033 tuple). triggers JSONB array appends one element per correction with the baseline export hash / settlement sequence+state captured at append time; two partial UNIQUE indexes enforce one OPEN row per key. A LIST, not a workflow: no automatic recalculation (ADR-013). Greenfield and legacy converge on the same file-scope CREATE IF NOT EXISTS statements; this block records only the ledger key.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+-- S138-BACKDATE-WORKLIST-SEGMENT-END
+
+-- =========================================================================
+-- S138 / TASK-13804 (ADR-040 D4 · Increment 3) — employee_profiles.
+-- employment_category becomes NOT NULL: the S137 fail-safe is retired
+--
+-- WHY (plain language): S137 deliberately left the dated category column
+-- NULLABLE. At that point only the four INSERT paths had been taught to fill
+-- it, so the ruled posture was "a missed write must not crash a read": every
+-- read did COALESCE(dated, live) and a NULL cell quietly degraded to the
+-- employee's live users.employment_category, which in S137 was ALWAYS the
+-- right answer (dated == live held by construction — users' category was
+-- write-once). S138 makes the category an EDITABLE dated field: the temporal
+-- writer stores it on every row it writes, in every router case, and a
+-- BACKDATED change now creates a new dated row whose value legitimately
+-- DIFFERS from the live column (which follows only the row covering TODAY).
+-- The fail-safe therefore stops rescuing and starts LYING: substituting the
+-- live value into a historical read would mislabel history. So the posture
+-- flips to the house default — fail at INSERT (23502) where the bug is,
+-- rather than absorbing it at read time. The two COALESCE reads
+-- (EmployeeProfileRepository.ExecuteGetByEmployeeIdAsync,
+-- EmploymentProfileResolver.GetByEmployeeIdAtAsync) are retired in the same
+-- task; the dated cell is now the sole authority for a dated read.
+--
+-- WHAT IS GIVEN UP (the alternative considered): keeping the nullable column
+-- would preserve "a forgotten write can never break a read". That resilience
+-- is no longer worth its price — it can only be bought by answering a
+-- historical question with today's value, and it hides the very defect it
+-- absorbs. Cost of the flip: a future write path that forgets the column
+-- fails its INSERT instead of degrading. That is the intended trade.
+--
+-- HISTORY IS NEVER REWRITTEN: this segment contains no UPDATE. The S137
+-- segment above already valued every pre-existing row, and those rows are
+-- write-once by Increment 3's precondition (a category CHANGE is a NEW dated
+-- row, never an edit of a migrated one). A row still NULL at this point is a
+-- row no known path can explain, so the census RAISES and NAMES the
+-- profile_ids instead of guessing a value — the S136-EMPLOYMENT-WINDOW-CHECK
+-- fail-loud precedent, deliberately unlike the S137 category segment, which
+-- ran no census precisely because the COALESCE read absorbed a NULL.
+-- The RAISE rolls back this DO block's own ledger INSERT, so after the
+-- operator values the named rows a plain re-run executes the segment in full
+-- (fix-then-rerun, never fix-then-unstick-the-ledger).
+--
+-- 3-path idempotent (the house guard pattern):
+--   • greenfield first apply — the file-scope ADD COLUMN after the base
+--     CREATE (~L590) already landed the column NOT NULL on the empty table;
+--     the census sees zero rows and SET NOT NULL is a no-op on a column that
+--     is already NOT NULL;
+--   • legacy first apply — the column arrived NULLABLE in S137 and was
+--     backfilled by the S137 segment above; the census proves zero NULLs
+--     remain, then SET NOT NULL tightens it (or the RAISE halts the apply and
+--     nothing changes);
+--   • any re-apply — the schema_migrations ledger short-circuits.
+--
+-- Placed AFTER the S137-PROFILE-CATEGORY-SEGMENT and after the
+-- S138-BACKDATE-WORKLIST-SEGMENT BY DESIGN: the census must run on the
+-- POST-backfill population, or it would raise on rows S137 is about to fill.
+--
+-- The S138-PROFILE-CATEGORY-NOTNULL-SEGMENT markers are extracted VERBATIM by
+-- ProfileCategoryNotNullMigrationTests (the S71/S72/S73/S136/S137 harness
+-- pattern: the test replays this exact segment against a reconstructed
+-- pre-S138 schema, twice, plus the NULL-row RAISE path) — keep the marker
+-- lines intact and keep all S138 NOT-NULL DDL between them.
+-- =========================================================================
+-- S138-PROFILE-CATEGORY-NOTNULL-SEGMENT-BEGIN
+DO $$
+DECLARE
+    null_count BIGINT;
+    null_ids   TEXT;
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s138-profile-category-not-null', 'S138/TASK-13804 (ADR-040 D4, Increment 3): employee_profiles.employment_category ALTER COLUMN ... SET NOT NULL, reversing the S137 nullable-by-ruled-design posture. S137''s COALESCE(dated, live) fail-safe was correct while dated == live held by construction; S138 makes the category an editable dated field (the temporal writer stores it on every row, and a backdated change is a NEW dated row that may legitimately differ from the live users cache), so absorbing a missed write against users would MISLABEL history instead of rescuing it. Census FAILS LOUD with the offending profile_ids BEFORE tightening (the S136 employment-window precedent; NO auto-repair and NO UPDATE — the S137 backfill already valued every migrated row and those rows are write-once). The RAISE rolls back the ledger row, so fix-then-rerun re-executes the segment. Greenfield lands NOT NULL at the file-scope ADD COLUMN (~L590) on the empty table; the two COALESCE reads (EmployeeProfileRepository, EmploymentProfileResolver) are retired in the same task.')
+    ON CONFLICT (migration_id) DO NOTHING;
+
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    -- Census BEFORE tightening (fail-loud — see the section comment): the
+    -- predicate is the exact negation of the NOT NULL below.
+    SELECT COUNT(*), string_agg(profile_id::text, ', ' ORDER BY profile_id::text)
+      INTO null_count, null_ids
+      FROM employee_profiles
+     WHERE employment_category IS NULL;
+
+    IF null_count > 0 THEN
+        RAISE EXCEPTION 's138-profile-category-not-null: % employee_profiles row(s) still have employment_category IS NULL (profile_ids: %). The S137 backfill values every migrated row from users, and every production write path stores the category, so a NULL here is a row no known path explains — which category held over that row''s window is business history an operator must decide (ADR-040 D4). Value the named rows manually, then re-run; nothing was changed (this DO block, its ledger row included, rolls back with this exception).',
+            null_count, null_ids;
+    END IF;
+
+    -- Idempotent by construction: SET NOT NULL is a no-op when the column is
+    -- already NOT NULL (the greenfield path, where the file-scope ADD COLUMN
+    -- landed it that way on the empty table).
+    ALTER TABLE employee_profiles
+    ALTER COLUMN employment_category SET NOT NULL;
+END
+$$;
+-- S138-PROFILE-CATEGORY-NOTNULL-SEGMENT-END

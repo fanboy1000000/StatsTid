@@ -124,14 +124,20 @@ internal static class RegressionSeed
         }
 
         // employee_profiles — dated row covering [effectiveFrom, ∞).
+        // S138 / TASK-13809 — employment_category is NOT NULL (TASK-13804 tightened it),
+        // so the seed must supply it exactly as production does: a scalar subselect against
+        // the users row inserted immediately above (same connection, already auto-committed).
+        // Copying from users is the correct value, not a placeholder: users.employment_category
+        // is the live category and the profile row this helper writes is the live row.
         await using (var epCmd = new NpgsqlCommand(
             """
             INSERT INTO employee_profiles (
                 profile_id, employee_id, part_time_fraction, position,
-                effective_from, effective_to, version)
+                effective_from, effective_to, version, employment_category)
             VALUES (
                 gen_random_uuid(), @id, @partTimeFraction, @position,
-                @effectiveFrom, NULL, 1)
+                @effectiveFrom, NULL, 1,
+                (SELECT u.employment_category FROM users u WHERE u.user_id = @id))
             ON CONFLICT DO NOTHING
             """, conn))
         {
