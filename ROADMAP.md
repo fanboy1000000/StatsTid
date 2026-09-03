@@ -231,6 +231,14 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   deletions (no unique work), so `git worktree remove` loses nothing — the commit stays in history. Why it
   matters: repo-wide greps hit the stale copies and can mislead a sweep into "fixing" a file that is not in the
   solution (S138 TASK-13809 hit exactly this). Owner's call — surfaced, not actioned. [S138 TASK-13809]
+- **A fixed clock for the date-sensitive regression suites (`QUAL-153`).** Pins whose dates are offsets from
+  the current date pass or fail depending on which weekday CI runs. S138 lost two CI iterations to this: a
+  seeded absence landed on a weekend, where the working norm is zero, so the revaluation skipped it and the
+  pin proved nothing. The close run happened to be the one weekday where both affected pins failed; on a
+  Monday the sprint would have closed green with two hollow pins and a third latent flake. S138 applied a
+  per-site weekday nudge, which is a guard, not a fix. The durable answer is injecting a FIXED `TimeProvider`
+  into the test host for these suites, plus a sweep for the same pattern elsewhere — a pin's meaning should
+  not depend on the day it runs. Sized as its own task. [S138 CI iteration 3 · QUAL-153]
 - **Docker on the dev VDI** — impossible without nested virtualization; an IT ticket, may be declined. [S128 FU-E]
 - **SDK/toolchain fragility on the VDI** — SDK 8 vanished once (restored); Python absent (openapi
   gates run CI-only from here). [S128 FU-E]

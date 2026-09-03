@@ -8,7 +8,7 @@
 | **End Date** | 2026-09-03 |
 | **Orchestrator Approved** | yes — 2026-09-03 (Step-5a dual-lens terminal, 2 BLOCKER absorbed; Step-7a Codex terminal at cycle 2 clean; Reviewer close verdict `CLOSE-WITH-WARNINGS` in `.claude/reviews/SPRINT-138-step7a-reviewer.md` — all 5 WARNINGs + 6 NOTEs absorbed before this commit) |
 | **Build Verified** | yes — `dotnet build StatsTid.sln -c Release --no-incremental` **0 errors** on the final tree (145 pre-existing warnings; CA2100 distinct sites 115 = CI baseline) |
-| **Test Verified** | local: unit **1235/1235** (+146) · DemoSeed **165/165** · regression non-Docker **102/102** · frontend **735/735** + `tsc` clean — all green on the final tree; Docker-gated pins (~70 new facts) + smoke: **CI-pending** — watched close run, backfilled here when green (Docker unavailable on the owner's machine, standing instruction) |
+| **Test Verified** | **✅ CI GREEN `33807460497`** (all 7 jobs, 2026-09-03, watched to verdict after 2 remediation iterations): unit **1235/1235** (+146) · DemoSeed **165/165** · regression **1799/1799** (+65, Docker-gated) · smoke **7/7** (+1) · frontend **735/735** + `tsc` clean · CA2100 distinct sites **115 = baseline**. Total **3941 (+212 vs S137)**. |
 
 ## Sprint Goal
 
@@ -540,13 +540,15 @@ as CI-verified in run `33622368503`.
 | Unit | 1089 | **1235** | **+146** | green locally. 13801's router matrix 44 (incl. 2 per-day sweeps) · 13803's derivation/mapper/serialization 56 · 13806's `EmploymentWindow` fencepost matrix 26 + the 11 compliance-union tests MOVED here from Regression + the rule-id mirror 1 · 13810's conjunction/boundary facts (net +10 after 13 geometry facts were retired with the old rule and restored with the conjunction) · the Step-5a coupling pins 4 |
 | DemoSeed | 165 | **165** | ±0 | green locally |
 | Regression, non-Docker subset (`Category!=Docker`) | 113 | **102** | **−11** | green locally — the 11 pure compliance-union tests MOVED to Unit (13806); no test was deleted |
-| Regression, Docker-gated (CI) | 1734 | — | **~+70 new facts** (writer matrix A/B'/C'/E/G/T incl. the zero-width reopen ×2 and case E ×2 · the worklist repository + endpoints 17 · migration replays incl. the NOT-NULL census RED path · payroll/compliance/settlement/leaver-send/backdating endpoint pins · the conjunction's old-narrow-correction pin) | **CI-pending — verifies in the watched close run** (Docker unavailable on the owner's machine, standing instruction) |
-| Smoke | 6 | — | ±0 | CI (composed stack) |
+| Regression, Docker-gated (CI) | 1734 | **1799** | **+65** — the ~70 new facts landed as +65 net (writer matrix A/B'/C'/E/G/T incl. the zero-width reopen ×2 and case E ×2 · the worklist repository + endpoints 17 · migration replays incl. the NOT-NULL census RED path · payroll/compliance/settlement/leaver-send/backdating endpoint pins · the conjunction's old-narrow-correction pin) | ✅ CI GREEN `33807460497` |
+| Smoke | 6 | **7** | **+1** | ✅ CI GREEN `33807460497` (composed stack) |
 | Frontend | 735 | **735** | ±0 | green locally (`npm run test`), `tsc --noEmit` clean after the typed-contract regen |
 | Full solution build | — | Release `--no-incremental`, **0 errors / 145 pre-existing warnings**; **CA2100 distinct sites 115 = baseline** | — | ✅ |
 
 **Arithmetic check (locally-run suites):** 1089 + 165 + 113 + 735 = 2102 → 1235 + 165 + 102 + 735 = **2237 (+135)**.
-The Docker-gated and smoke suites are reported by the CI run and backfilled on the header line when green.
+The Docker-gated and smoke suites are reported by the CI run. **Backfilled, CI GREEN `33807460497`:**
+1089 + 165 + 1734 + 6 + 735 = 3729 → 1235 + 165 + 1799 + 7 + 735 = **3941 (+212 vs S137)**. Unit +146,
+Docker-gated regression +65, smoke +1; DemoSeed and frontend unchanged.
 
 **Evidence honesty (the standing posture while Docker is unavailable):** the DB-free half is genuinely proven —
 the temporal router's whole case matrix, the worklist's derived-flag logic, the `EmploymentWindow` fenceposts,
@@ -689,6 +691,19 @@ a FIXED `TimeProvider` injected into the test host for the date-sensitive suites
 stops depending on the day CI runs, plus a sweep for the same pattern elsewhere. Sized as its own task.
 
 **Local re-verification:** Release build 0 errors, non-Docker Regression 102/102, Unit 1235/1235.
+
+## CI GREEN — run `33807460497` (all 7 jobs, 2026-09-03)
+
+Regression **1799/1799** (Docker-gated, 1 h 24 m) · Unit **1235/1235** · DemoSeed **165/165** · Smoke **7/7** ·
+Frontend build · CA2100 distinct sites **115 = baseline** · docs, secret-scan and complexity jobs green.
+Total **3941 (+212 vs S137's 3729)**.
+
+**What the three iterations cost and bought.** Two remediation rounds after the close commit, five test
+defects and one product defect. The product defect (the worklist ordering by random identifier) would have
+shipped a diagnostic list HR could not trust. The five test defects were more instructive: every one lived in
+a pin that cannot run on the owner's machine, and two of them made pins that appeared to pass prove nothing.
+The close run landing on a Thursday is the only reason the calendar-dependent pair failed at all — which is
+the finding worth carrying forward (`QUAL-153`), not the pins themselves.
 ## Sprint Retrospective
 
 **What shipped, in one paragraph a non-engineer can use.** Until this sprint, an employee's profile could only
@@ -746,5 +761,7 @@ no downstream number is silently rewritten (ADR-013's bound, held).
   two known limitations appear where HR works instead of only in a register.
 - **`QUAL-152`** — make the dated-edit DTO members `required` so the contract, not a guard, refuses an omitted
   date. Wire-visible, so it lands with Increment 4's date picker.
-- **Docker-gated pins (~70 new facts) and the smoke suite are CI-pending** — Docker does not run on the owner's
-  machine, so those go green when CI says so, backfilled into this log.
+- **Docker-gated pins and the smoke suite are CI-VERIFIED** — run `33807460497`, all 7 jobs, regression
+  1799/1799 and smoke 7/7. It took three runs: the close run and two remediation rounds. Docker does not
+  run on the owner's machine, so this is the posture working as intended — green when CI says so, and the
+  gap between "locally green" and "actually green" measured honestly at 6 facts, then 2, then 0.
