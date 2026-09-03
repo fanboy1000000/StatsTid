@@ -619,10 +619,20 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     ///
     /// <para>
     /// The pin is kept — rewritten to assert the NEW truth rather than deleted — so the flip is
-    /// visible in the suite rather than silently absent. emp001's seeded live row starts at TODAY
-    /// and emp001 has no recorded employment start, so a write dated yesterday routes case E
-    /// (insert before the first row): a CLOSED row <c>[yesterday, today)</c> is inserted, nothing
-    /// is closed, and the pre-existing live row is untouched.
+    /// visible in the suite rather than silently absent.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Which case this routes, corrected against the seeder (S138 CI).</b> The first rewrite of
+    /// this pin assumed emp001's seeded live row starts TODAY and therefore expected case E (insert
+    /// BEFORE the first row, producing a CLOSED row <c>[yesterday, today)</c>). That premise is
+    /// wrong: <c>EmployeeProfileSeeder</c> deliberately stamps <c>effective_from = 0001-01-01</c>
+    /// on backfilled rows, so that pre-deployment periods resolve instead of failing closed. A
+    /// write dated yesterday therefore lands INSIDE the covering row and routes the SPLIT case:
+    /// the predecessor is closed at yesterday (<c>[0001-01-01, yesterday)</c>, old values intact)
+    /// and a new OPEN row <c>[yesterday, ∞)</c> carries the corrected values. Both halves are
+    /// asserted below, because the split is the whole point — the correction must not overwrite
+    /// what was true before it.
     /// </para>
     /// </summary>
     [Fact]
@@ -638,21 +648,45 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             ifMatch: "\"1\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
-        // A closed row [yesterday, today) now exists carrying the corrected values; the live row
-        // still starts today and keeps its own values.
+        // The whole timeline, oldest first: the predecessor must be CLOSED at yesterday with its
+        // old values intact, and the new row must be OPEN from yesterday with the corrected ones.
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT part_time_fraction, effective_to
+            SELECT effective_from, effective_to, part_time_fraction, position
             FROM employee_profiles
-            WHERE employee_id = 'emp001' AND effective_from = @yesterday
+            WHERE employee_id = 'emp001'
+            ORDER BY effective_from
             """, conn);
-        cmd.Parameters.AddWithValue("yesterday", yesterday);
         await using var reader = await cmd.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync(), "expected the backdated history row to exist.");
-        Assert.Equal(0.500m, reader.GetDecimal(0));
-        Assert.Equal(today, reader.GetFieldValue<DateOnly>(1));
+
+        var rows = new List<(DateOnly From, DateOnly? To, decimal Fraction, string? Position)>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add((
+                reader.GetFieldValue<DateOnly>(0),
+                await reader.IsDBNullAsync(1) ? null : reader.GetFieldValue<DateOnly>(1),
+                reader.GetDecimal(2),
+                await reader.IsDBNullAsync(3) ? null : reader.GetString(3)));
+        }
+
+        Assert.Equal(2, rows.Count);
+
+        // Predecessor: the seeder's 0001-01-01 row, now CLOSED at the correction's date. End-
+        // exclusive (ADR-018 D9), so it covers everything up to but not including yesterday.
+        Assert.Equal(new DateOnly(1, 1, 1), rows[0].From);
+        Assert.Equal(yesterday, rows[0].To);
+        Assert.NotEqual(0.500m, rows[0].Fraction); // untouched — the correction did not overwrite it
+        Assert.NotEqual("Backdated", rows[0].Position);
+
+        // The correction: OPEN from yesterday, carrying the new values. It covers today, which is
+        // why the live cache and the as-of-today read follow it.
+        Assert.Equal(yesterday, rows[1].From);
+        Assert.Null(rows[1].To);
+        Assert.Equal(0.500m, rows[1].Fraction);
+        Assert.Equal("Backdated", rows[1].Position);
+        Assert.True(rows[1].From < today, "the corrected row must start in the past.");
     }
 
     /// <summary>

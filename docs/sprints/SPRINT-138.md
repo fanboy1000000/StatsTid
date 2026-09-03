@@ -556,6 +556,75 @@ the NOT-NULL census, the settled-year skip, and every endpoint pin. Two CI reds 
 they shipped (the create-POST version chain; the leaver profile GET); ≥ 2 CI iterations remain budgeted.
 
 
+
+## CI remediation — iteration 1 (run `33791092341`, 6 of 1799 regression facts red)
+
+Six of the seven CI jobs passed on the close commit, including the CA2100 ratchet, the OpenAPI drift gate,
+the docs gate, E2E and smoke. The Docker-gated regression suite failed 6 of 1799 — every one of them a pin
+that cannot execute on this machine, which is exactly the class the standing "green when CI says so" posture
+exists to catch. **One was a real product defect; the other five were defects in the tests themselves.** Both
+kinds are recorded here, because a sprint that reports only the code defects teaches the wrong lesson about
+where its risk was.
+
+### (1) PRODUCT — the worklist ordered a human's list by random UUID
+
+`WriteForExportedMonths_SelectsMonthsIntersectingInterval_…` and `…_OpenEnded_SelectsThroughCurrentMonth_…`
+both expected February before March, and got March before February.
+
+The read ordered `w.created_at, w.worklist_id`. Every row raised by ONE correction shares a `created_at` by
+construction — that is PAT-024, one clock per transaction, working as designed — so `created_at` leaves them
+tied and the tiebreak decided the order. The tiebreak was `worklist_id`, a UUID. The list HR reads was
+therefore ordered at random whenever a correction touched more than one month, which is the normal case.
+
+**FIXED** in the query: after `created_at`, order by the PERIOD the row concerns
+(`COALESCE(year, entitlement_year)`, then `month`, then `entitlement_type`), keeping `worklist_id` last so the
+sort stays total. The two doc-comments that promised "oldest first" now say what the order actually is. This
+is a small change with a real user consequence: a diagnostic list whose order shuffles between reads is one
+people stop trusting.
+
+### (2) TEST — the fail-loud pin still demanded the behaviour Step-7a W5 removed
+
+`WriteForSkippedSettledYears_TupleWithNoActiveSettlement_FailsLoud` asserted an `InvalidOperationException`.
+The W5 absorption deliberately replaced that throw with graceful degradation, because throwing inside the
+correction's transaction destroys a valid correction to protect a diagnostic note. The pin was encoding the
+failure mode the Reviewer had just had us remove, and it could not run locally to say so.
+
+**FIXED:** rewritten as `…_DegradesToAnUnknownBaseline` — the row IS raised, with a null baseline sequence, so
+`reversedSince` reads "unknown". The doc-comment records the old expectation and why it was wrong, so the
+throw is not reinstated by someone reading the test as a specification.
+
+### (3) TEST — two settled-year pins seeded an absence type that does not exist
+
+`PUT_Backdate_SkipsSettledSpecialHolidayYear_…` expected two triggers and got one;
+`PUT_TodayDatedEdit_WhoseRevaluationSkipsASettledGroup_…` expected a row and got none. Both seeded the absence
+with type `"SPECIAL_HOLIDAY"`. The absence type is `SPECIAL_HOLIDAY_ALLOWANCE`; `SPECIAL_HOLIDAY` is the
+ENTITLEMENT type it maps to (`EntitlementMapping.AbsenceToEntitlementType`). An unmapped absence type resolves
+to `null` and is skipped as non-entitlement, so the revaluation saw nothing, skipped nothing, and reported
+nothing — the SKIP path never fired in either test.
+
+Worth being precise about what this did and did not prove. The failure was in the fixture, not the feature:
+the skip path itself is correct and its repository-level pins passed. But it means the two pins that were
+supposed to prove the second half of the owner's OQ-2 ruling — that a today-dated edit can still withhold a
+correction and must say so — were not proving it. **FIXED:** all three seeds in the file now use
+`SPECIAL_HOLIDAY_ALLOWANCE`, matching every other test in the suite. The third (`Assert.Empty`) was passing
+vacuously for the same reason and is now a real assertion.
+
+### (4) TEST — a pin built on a false premise about the seeder
+
+`PUT_BackdatedEffectiveFrom_NowWritesDatedHistory` read `effective_to` as non-nullable and hit
+`Column 'effective_to' is null`. Its doc-comment claimed "emp001's seeded live row starts at TODAY", so a
+write dated yesterday would route case E and insert a CLOSED row `[yesterday, today)`.
+
+That premise is wrong, and deliberately so: `EmployeeProfileSeeder` stamps `effective_from = 0001-01-01` on
+backfilled rows precisely so pre-deployment periods resolve instead of failing closed (the S33 Step-7a P1
+absorption). A write dated yesterday therefore lands INSIDE the covering row and routes the SPLIT case — the
+predecessor closes at yesterday, and the new row is OPEN. The code did the right thing; the test asserted the
+wrong geometry. **FIXED:** the pin now reads the whole timeline and asserts BOTH halves — the predecessor
+closed at yesterday with its old values intact, and the corrected row open from yesterday. That is a stronger
+pin than the original, because the split not overwriting history is the actual claim of the sprint.
+
+**Local re-verification after all four:** Release build 0 errors, Unit 1235/1235, DemoSeed 165/165, non-Docker
+Regression 102/102.
 ## Sprint Retrospective
 
 **What shipped, in one paragraph a non-engineer can use.** Until this sprint, an employee's profile could only
@@ -597,6 +666,7 @@ no downstream number is silently rewritten (ADR-013's bound, held).
 - **A "registered follow-up" is a claim that must be checkable.** The `required EffectiveFrom` item was written
   as registered with nothing behind it (now `QUAL-152`). Registration means a row exists, not that the sentence
   was typed.
+- **The Docker gap is a test-quality risk, not just a slower feedback loop.** Six pins failed in CI and only ONE was a product defect. The other five were tests that could not run here: one still demanded behaviour a review had removed, two seeded an absence type that does not exist (so they proved nothing while appearing to pass the review), and one asserted a geometry the seeder makes impossible. Pins written against a database nobody can run locally need the same scrutiny as production code, because nothing else checks them until the close run.
 - **My own two errors, recorded.** I wrote a 422 message by passing a sentence into a noun slot, producing text
   no HR user could parse — the internal lens caught it. And I stated the settled-year rule as "the boundary test
   INSTEAD OF the window test" when the correct answer was a CONJUNCTION; I ruled it and had the agent restore

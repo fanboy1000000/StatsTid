@@ -599,7 +599,17 @@ public sealed class HrBackdateWorklistRepository
           AND (@employeeId IS NULL OR w.employee_id = @employeeId)
           AND (@allOrgs OR u.primary_org_id = ANY(@orgIds))
           AND (@worklistId IS NULL OR w.worklist_id = @worklistId)
-        ORDER BY w.created_at, w.worklist_id
+        ORDER BY w.created_at,
+                 -- Rows raised by ONE correction share a created_at by construction (PAT-024: one
+                 -- clock per transaction), so created_at alone leaves them tied and the old
+                 -- worklist_id tiebreak ordered a HUMAN's list by random UUID. Order the tie by the
+                 -- PERIOD the row is about — the only order that means anything to the person
+                 -- working the list — and keep worklist_id last so the sort stays total.
+                 -- (S138 Step-7a CI: two month-ordering pins failed on exactly this.)
+                 COALESCE(w.year, w.entitlement_year) NULLS LAST,
+                 w.month NULLS FIRST,
+                 w.entitlement_type NULLS FIRST,
+                 w.worklist_id
         """;
 
     // Resolve, step 1: lock the row (FOR UPDATE) — the canonical snapshot for the If-Match check.
@@ -916,11 +926,11 @@ public sealed class HrBackdateWorklistRepository
 
     // ── Reads (self-managed connection) ─────────────────────────────────────────────────────
 
-    /// <summary>The employee's OPEN rows (with current state), oldest first.</summary>
+    /// <summary>The employee's OPEN rows (with current state), oldest first, then by the PERIOD the row concerns.</summary>
     public Task<IReadOnlyList<HrBackdateWorklistRow>> GetOpenAsync(string employeeId, CancellationToken ct = default) =>
         QueryAsync(employeeId, openOnly: true, accessibleOrgIds: null, worklistId: null, ct);
 
-    /// <summary>The employee's rows, open AND resolved (with current state), oldest first.</summary>
+    /// <summary>The employee's rows, open AND resolved (with current state), oldest first, then by the PERIOD the row concerns.</summary>
     public Task<IReadOnlyList<HrBackdateWorklistRow>> GetAllAsync(string employeeId, CancellationToken ct = default) =>
         QueryAsync(employeeId, openOnly: false, accessibleOrgIds: null, worklistId: null, ct);
 

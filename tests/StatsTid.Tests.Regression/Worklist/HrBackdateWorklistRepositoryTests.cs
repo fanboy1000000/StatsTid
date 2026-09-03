@@ -547,21 +547,43 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Fail LOUD, not quietly. The caller only reports a skip because it read an ACTIVE settlement
-    /// in this same transaction; if none is visible here the settlement state is inconsistent, and
-    /// dropping the row would hide the very thing this path exists to surface.
+    /// Degrade, do not fail (S138 Step-7a — this pin previously demanded the opposite).
+    ///
+    /// <para>
+    /// The caller reports a skip because IT saw an ACTIVE settlement in this same transaction. This
+    /// path's own lookup is stricter, so the two can in principle disagree — unreachable through
+    /// production writes today (the ADR-033 D5 state machine plus the single-active unique index
+    /// keep them aligned), but the schema permits it. The ORIGINAL pin required an
+    /// <c>InvalidOperationException</c> here, on the reasoning that dropping the row would hide the
+    /// thing the path exists to surface. That reasoning was half right and the remedy was wrong:
+    /// this code runs INSIDE the correction's transaction, so throwing rolls back and answers 500,
+    /// DESTROYING a valid correction because a diagnostic note could not be decorated. The
+    /// correction is the user's work; the row is our comment about it.
+    /// </para>
+    ///
+    /// <para>
+    /// So the row IS raised, with no baseline — <c>reversedSince</c> then reads "unknown", which is
+    /// the honest answer when the settlement state is inconsistent, and a diagnostic list is exactly
+    /// where an inconsistency belongs. Nothing is hidden and nothing is lost.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task WriteForSkippedSettledYears_TupleWithNoActiveSettlement_FailsLoud()
+    public async Task WriteForSkippedSettledYears_TupleWithNoActiveSettlement_DegradesToAnUnknownBaseline()
     {
         const string emp = "wl_emp_skip_ghost";
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, emp, "STY_WL_A");
         await SeedSettlementAsync(emp, "VACATION", 2024, 1, "REVERSED", new DateOnly(2025, 8, 31));
 
         var trigger = Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2025, 3, 1));
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => RunSkippedAsync(emp, trigger, new[] { ("VACATION", 2024) }));
-        Assert.Empty(await _repo.GetOpenAsync(emp));
+        var ids = await RunSkippedAsync(emp, trigger, new[] { ("VACATION", 2024) });
+
+        Assert.Single(ids);
+        var row = Assert.Single(await _repo.GetOpenAsync(emp));
+        var stored = Assert.Single(row.Triggers);
+        Assert.Equal(WorklistTriggerKinds.ProfileChange, stored.Kind);
+        // The whole point: raised, but with NO baseline, so the read side says "unknown"
+        // rather than inventing a sequence it could not observe.
+        Assert.Null(stored.BaselineSettlementSequence);
     }
 
     /// <summary>An empty skip list is a no-op — the caller passes it on every ordinary correction.</summary>

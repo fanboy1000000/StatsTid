@@ -468,7 +468,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-400), null, 1.000m, null));
 
         var absenceDay = t60;
-        await SeedAbsenceAsync(employeeId, absenceDay, "SPECIAL_HOLIDAY", hours: 7.4m, feriedage: 1.0m);
+        await SeedAbsenceAsync(employeeId, absenceDay, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
 
         // SPECIAL_HOLIDAY reset_month is 1 (seeded config); the resolver maps the taking window to
         // its accrual year. Settle THAT year so the revaluation must skip it. The settlement was
@@ -516,7 +516,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
 
         // The settled year's absence is in the PAST — outside the [today, ∞) corrected interval.
         var pastAbsence = Today.AddDays(-60);
-        await SeedAbsenceAsync(employeeId, pastAbsence, "SPECIAL_HOLIDAY", hours: 7.4m, feriedage: 1.0m);
+        await SeedAbsenceAsync(employeeId, pastAbsence, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
         var settledYear = EntitlementPeriodResolver
             .Resolve(EntitlementPeriodResolver.SpecialHolidayType, 1, pastAbsence).EntitlementYear;
         await SeedActiveSettlementAsync(employeeId, "SPECIAL_HOLIDAY", settledYear, Today.AddDays(-30));
@@ -550,7 +550,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
 
         // An absence already booked 30 days AHEAD — inside the corrected interval [today, ∞).
         var futureAbsence = Today.AddDays(30);
-        await SeedAbsenceAsync(employeeId, futureAbsence, "SPECIAL_HOLIDAY", hours: 7.4m, feriedage: 1.0m);
+        await SeedAbsenceAsync(employeeId, futureAbsence, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
         var settledYear = EntitlementPeriodResolver
             .Resolve(EntitlementPeriodResolver.SpecialHolidayType, 1, futureAbsence).EntitlementYear;
         // Frozen YESTERDAY. The date rule's geometry half HOLDS (the corrected interval runs from
