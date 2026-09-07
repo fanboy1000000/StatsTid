@@ -58,7 +58,26 @@ $SweepRoles     = @('sweep')
 $ReadOnlyPass   = @('explore', 'plan', 'claude-code-guide', 'statusline-setup')
 $GenericRoles   = @('', 'general-purpose', 'claude')
 
+# ---- telemetry (owner ruling 2026-09-07: monitor model use, thin version) ----
+# One line per Agent spawn, allowed or blocked, appended to a LOCAL log (gitignored).
+# Read at sprint close into docs/operations/model-routing-register.md. Best-effort:
+# a telemetry failure never changes the routing decision.
+$TelemetryLog = Join-Path (Get-Location) '.claude/telemetry/model-routing.log'
+function Log([string]$decision, [string]$why) {
+    try {
+        $dir = Split-Path $TelemetryLog -Parent
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $m  = if ($model) { $model } else { 'inherit' }
+        $t  = if ($type)  { $type }  else { 'general-purpose' }
+        Add-Content -Path $TelemetryLog -Value "$ts | spawn | $t | $m | $decision | $why" -Encoding utf8
+    } catch { }
+}
+
+function Allow([string]$why) { Log 'ALLOW' $why; exit 0 }
+
 function Block([string]$why, [string]$fix) {
+    Log 'BLOCK' $why
     [Console]::Error.WriteLine('model-routing-guard: BLOCKING this Agent spawn.')
     [Console]::Error.WriteLine('')
     [Console]::Error.WriteLine("  subagent_type = '$type'   model = '$(if ($model) { $model } else { '(none)' })'")
@@ -69,30 +88,30 @@ function Block([string]$why, [string]$fix) {
     exit 2
 }
 
-if ($type -eq 'fork' -or $ReadOnlyPass -contains $type) { exit 0 }
+if ($type -eq 'fork' -or $ReadOnlyPass -contains $type) { Allow 'read-only built-in or fork' }
 
 if ($ReviewRoles -contains $type) {
     if ($model -and $model -ne $ReviewFloor) {
         Block "Review runs on the most capable model; '$model' is below the floor '$ReviewFloor'." `
               "drop the model override (the reviewer definition already fixes it) or pass model: '$ReviewFloor'."
     }
-    exit 0
+    Allow 'review role on the floor model'
 }
 
 if ($OpusRoles -contains $type) {
     if ($model -eq $ReviewFloor) { Block 'Implementation never runs on the planning-and-review model.' "pass model: 'opus' (this role handles legal logic, money or the audit chain) or omit it." }
     if ($model -eq 'haiku')      { Block 'This role handles legal logic, money or the audit chain; haiku is below its floor.' "pass model: 'opus' (or 'sonnet' for a narrowly specified task) or omit it." }
-    exit 0
+    Allow 'opus-tier implementer'
 }
 
 if ($SonnetRoles -contains $type) {
     if ($model -eq $ReviewFloor) { Block 'Implementation, validation and tracing never run on the planning-and-review model.' "omit the model (the definition fixes sonnet) or pass 'opus' for an unusually hard task." }
-    exit 0
+    Allow 'sonnet-tier role'
 }
 
 if ($SweepRoles -contains $type) {
     if ($model -eq $ReviewFloor -or $model -eq 'opus') { Block 'A sweep is pattern-shaped work; it does not need this model.' "omit the model (the definition fixes haiku) or pass 'sonnet'." }
-    exit 0
+    Allow 'sweep'
 }
 
 if ($GenericRoles -contains $type) {
@@ -103,11 +122,11 @@ if ($GenericRoles -contains $type) {
     if ($model -eq $ReviewFloor) {
         Block 'Only review and planning run on this model, and those have their own role.' "use subagent_type 'reviewer' for review work; for anything else pass 'opus' or cheaper."
     }
-    exit 0
+    Allow 'generic agent with an explicit model'
 }
 
 # Unknown custom type: only the one rule that never has an exception.
 if ($model -eq $ReviewFloor) {
     Block "Unrecognised subagent_type on the planning-and-review model." "add the role to this guard's table with its floor, or spawn 'reviewer' if this is review work."
 }
-exit 0
+Allow 'unrecognised role, not on the floor model'

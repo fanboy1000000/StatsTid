@@ -350,3 +350,11 @@ the Small Tasks Exception are delegated (to `backend-infrastructure`, `test-qa`,
 lens before the next close (two remediation commits changed a production query unreviewed; the close guard
 only gates the close commit). And CI is watched with ONE background command and its completion notification,
 never polled.
+
+**Monitoring the routing (owner ruling 2026-09-07, thin version).** Both guards write one telemetry line per
+event to `.claude/telemetry/model-routing.log` (local, gitignored). At close, the retrospective adds the
+sprint's row to [`docs/operations/model-routing-register.md`](operations/model-routing-register.md) — spawns by
+model, guard blocks, review findings by lens, CI runs to green, post-close defects — from artifacts the close
+guard already requires. Read for direction over three sprints; the register names the three signals that put
+the routing back on the entropy-scan agenda. No per-task attribution, no score, no CI gate: at ten tasks a
+sprint the numbers cannot carry more.

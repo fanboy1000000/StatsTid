@@ -231,6 +231,15 @@ foreach ($artifact in @($codex, $reviewer)) {
             [Console]::Error.WriteLine('Re-run the Reviewer Agent without a cheaper model override and replace the artifact.')
             exit 2
         }
+        # Telemetry (thin monitoring, owner ruling 2026-09-07): record which model the close's
+        # internal review ran on, next to the spawn lines the routing guard writes. Best-effort.
+        try {
+            $tlog = Join-Path (Get-Location) '.claude/telemetry/model-routing.log'
+            $tdir = Split-Path $tlog -Parent
+            if (-not (Test-Path $tdir)) { New-Item -ItemType Directory -Path $tdir -Force | Out-Null }
+            $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            Add-Content -Path $tlog -Value "$ts | close | S$sprintNum | $reviewedBy | PASS | step-7a reviewer artifact on the floor model" -Encoding utf8
+        } catch { }
     }
 
     # Staleness check: artifact must declare which commit was reviewed.
