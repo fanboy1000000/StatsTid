@@ -787,5 +787,5 @@ Codex, against the close commit as base: **1 WARNING, 1 NOTE, no BLOCKER.** Both
   to `SettledYearIntersects`; seven leftover "crystallization / freeze" references in the worklist
   test files, missed by the Step-7a rename sweep — renamed.
 
-Local: Release build 0 errors, Unit 1235/1235, non-Docker Regression 102/102. The three Docker-gated
-pins touched verify in CI.
+**✅ CI GREEN `34094447389`** (all 7 jobs, 2026-09-07): the three rewritten Docker-gated pins verified. Local before push: Release build 0 errors, Unit 1235/1235, non-Docker Regression 102/102. The three Docker-gated
+pins touched are now CI-verified.
