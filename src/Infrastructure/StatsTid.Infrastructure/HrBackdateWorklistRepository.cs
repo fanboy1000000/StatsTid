@@ -264,18 +264,32 @@ public static class BackdateWorklistDerivation
         return true;
     }
 
-    /// <summary>Per-trigger: a later settlement sequence exists (re-settle leg) OR the baseline row is now REVERSED (bare-reversal leg).</summary>
-    public static bool ReversedSinceForTrigger(
+    /// <summary>
+    /// Per-trigger: a later settlement sequence exists (re-settle leg) OR the baseline row is now
+    /// REVERSED (bare-reversal leg). <c>null</c> = UNKNOWN: the trigger carries no baseline.
+    ///
+    /// <para>
+    /// Why null and not false (S138 post-close, Codex NOTE absorbed): a trigger has no baseline only
+    /// on the degraded write path — the caller reported a skip but this repository's stricter lookup
+    /// saw no active settlement, so the row was raised as a note that the settlement state is
+    /// inconsistent rather than 500-ing away a valid correction. Answering <c>false</c> there tells
+    /// HR "nothing has been reversed since", which is a claim the system cannot make. A diagnostic
+    /// list that reassures when it does not know is worse than one that says so. The wire field is
+    /// already <c>bool?</c> (null = not applicable on EXPORTED_MONTH rows), so "unknown" rides the
+    /// same nullable without a contract change.
+    /// </para>
+    /// </summary>
+    public static bool? ReversedSinceForTrigger(
         int? highestCurrentSequence, IReadOnlyCollection<int> reversedSequences, int? baselineSequence)
     {
         if (baselineSequence is not int baseline)
-            return false;
+            return null;
         if (highestCurrentSequence is int highest && highest > baseline)
             return true;
         return reversedSequences.Contains(baseline);
     }
 
-    /// <summary>Per-trigger over a row; null when the row is not SETTLED_YEAR.</summary>
+    /// <summary>Per-trigger over a row; null when the row is not SETTLED_YEAR, or when the trigger has no baseline (unknown).</summary>
     public static bool? ReversedSinceForTrigger(HrBackdateWorklistRow row, StoredWorklistTrigger trigger) =>
         string.Equals(row.Kind, WorklistKinds.SettledYear, StringComparison.Ordinal)
             ? ReversedSinceForTrigger(
@@ -284,22 +298,31 @@ public static class BackdateWorklistDerivation
                 trigger.BaselineSettlementSequence)
             : null;
 
-    /// <summary>Row-level: EVERY trigger's baseline settlement has been superseded or reversed; null when not SETTLED_YEAR.</summary>
+    /// <summary>
+    /// Row-level: EVERY trigger's baseline settlement has been superseded or reversed.
+    /// <c>false</c> as soon as one trigger is definitely NOT reversed; <c>null</c> when the row is not
+    /// SETTLED_YEAR, or when no trigger is definitely-not-reversed but at least one is UNKNOWN (no
+    /// baseline) — the row cannot honestly claim "all reversed" from a baseline it never saw.
+    /// </summary>
     public static bool? ReversedSince(HrBackdateWorklistRow row)
     {
         if (!string.Equals(row.Kind, WorklistKinds.SettledYear, StringComparison.Ordinal))
             return null;
         if (row.Triggers.Count == 0)
             return false;
+        var anyUnknown = false;
         foreach (var t in row.Triggers)
         {
-            if (!ReversedSinceForTrigger(
-                    row.Current.HighestSettlementSequence,
-                    row.Current.ReversedSettlementSequences,
-                    t.BaselineSettlementSequence))
+            var reversed = ReversedSinceForTrigger(
+                row.Current.HighestSettlementSequence,
+                row.Current.ReversedSettlementSequences,
+                t.BaselineSettlementSequence);
+            if (reversed is false)
                 return false;
+            if (reversed is null)
+                anyUnknown = true;
         }
-        return true;
+        return anyUnknown ? null : true;
     }
 
     /// <summary>

@@ -305,6 +305,6 @@ alter the correction itself — the write always lands and the truth is always r
 a diagnostic list, never an approval workflow).
 
 Enforced by `BackdateWorklistDerivation.SettledYearThreatened` (the composition),
-`CorrectionReachesSettlementBoundary` (half a) and `CorrectionTouchesEntitlementWindow` (half b);
+`CorrectionReachesSettlementBoundary` (half a) and `SettledYearIntersects` (half b);
 pinned in `tests/StatsTid.Tests.Unit/Worklist/BackdateWorklistDerivationTests.cs`, including the
 boundary-day case.

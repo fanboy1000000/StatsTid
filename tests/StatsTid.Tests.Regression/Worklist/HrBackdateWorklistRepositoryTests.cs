@@ -24,10 +24,10 @@ namespace StatsTid.Tests.Regression.Worklist;
 ///   <item>settled-year selection, S138 / TASK-13810 (owner ruling 2026-09-03) = the ACTIVE
 ///     settlement (highest sequence, state ≠ REVERSED — a REVERSED-only tuple is NOT selected)
 ///     that the correction THREATENS, which takes TWO conjoined tests: it starts before the
-///     settlement's CRYSTALLIZATION date AND overlaps that year's entitlement window, with a
+///     settlement's VALUATION BOUNDARY (the last day it counted; renamed from "crystallization date" at Step-7a) AND overlaps that year's entitlement window, with a
 ///     conservative flag whenever either half cannot be evaluated. Both halves are pinned by the
 ///     case that fails without them — window-only raised a row on an ordinary present-day edit
-///     (taking windows commonly run past today); freeze-only raised a row for every settlement
+///     (taking windows commonly run past today); boundary-only raised a row for every settlement
 ///     frozen after an old, narrow correction;</item>
 ///   <item>the SECOND settled-year entry point (<c>WriteForSkippedSettledYearsAsync</c>): a row for
 ///     every group the caller's revaluation ACTUALLY skipped, whatever the dates say, collapsing
@@ -319,7 +319,7 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     /// 9) is frozen on 31 Aug 2025; its TAKING window runs on to the §21 deadline of 31 Dec 2025. A
     /// correction dated 1 Oct 2025 therefore sits INSIDE that taking window, so the geometry half
     /// holds and the OLD window-only rule raised a SETTLED_YEAR row — but it starts AFTER the
-    /// freeze, so nothing the settlement crystallized can have moved. No row.
+    /// boundary, so nothing the settlement valued can have moved. No row.
     /// </summary>
     [Fact]
     public async Task WriteForSettledYears_CorrectionAfterTheFreeze_RaisesNothing_EvenInsideTheTakingWindow()
@@ -340,7 +340,7 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
 
     /// <summary>
     /// S138 / TASK-13810 — the conservative leg of the FREEZE-MOMENT half, exercised through the
-    /// conjunction. When the settlement's snapshot carries no usable crystallization date, that half
+    /// conjunction. When the settlement's snapshot carries no usable valuation-boundary date, that half
     /// cannot exonerate the year, so a correction whose interval DOES overlap the year's window is
     /// flagged rather than silently skipped: a dismissable row beats a stale settlement nobody was
     /// told about. Both unusable shapes are pinned — the key ABSENT, and the key present holding the
@@ -584,6 +584,10 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         // The whole point: raised, but with NO baseline, so the read side says "unknown"
         // rather than inventing a sequence it could not observe.
         Assert.Null(stored.BaselineSettlementSequence);
+        // …and the HR-visible consequence, not just the stored null: the derivation answers UNKNOWN,
+        // never a reassuring false, at both the trigger and the row level (post-close Codex NOTE).
+        Assert.Null(BackdateWorklistDerivation.ReversedSinceForTrigger(row, stored));
+        Assert.Null(BackdateWorklistDerivation.ReversedSince(row));
     }
 
     /// <summary>An empty skip list is a no-op — the caller passes it on every ordinary correction.</summary>
@@ -798,9 +802,9 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A settlement row whose immutable snapshot carries the CRYSTALLIZATION date the S138 /
+    /// A settlement row whose immutable snapshot carries the VALUATION BOUNDARY (the last day it counted) the S138 /
     /// TASK-13810 date rule keys on. <paramref name="boundaryDate"/> <c>null</c> seeds a bare
-    /// <c>{}</c> snapshot (the key absent — the conservative "unknown freeze moment" leg);
+    /// <c>{}</c> snapshot (the key absent — the conservative "unknown valuation boundary" leg);
     /// <c>default(DateOnly)</c> seeds the <c>0001-01-01</c> that an uninitialized snapshot
     /// serializes, which is the SAME unknown leg through a different door.
     /// </summary>

@@ -765,3 +765,27 @@ no downstream number is silently rewritten (ADR-013's bound, held).
   1799/1799 and smoke 7/7. It took three runs: the close run and two remediation rounds. Docker does not
   run on the owner's machine, so this is the posture working as intended — green when CI says so, and the
   gap between "locally green" and "actually green" measured honestly at 6 facts, then 2, then 0.
+
+## Post-close external review (2026-09-07) — the remediation commits, reviewed after the fact
+
+The two CI-remediation commits and the backfill changed a production query and four tests after the
+Step-7a review, and neither lens saw them. That is a hole in the close gate, not in the sprint, and
+it is named here so the next sprint closes it: **any post-close commit that touches `src/` gets the
+external lens before the next close.**
+
+Codex, against the close commit as base: **1 WARNING, 1 NOTE, no BLOCKER.** Both absorbed.
+
+- **The WARNING** was a weak pin: "old values intact" asserted only "not the new values". It now
+  asserts the seeder's exact values.
+- **The NOTE found a real, small product gap.** The degraded worklist row (raised when the caller
+  reported a skip but no active settlement was visible) answered `reversedSince: false` to HR —
+  "nothing has been reversed since" — on a row whose whole reason to exist is that the settlement
+  state is inconsistent. A diagnostic list must not reassure when it does not know. It now answers
+  `null` (unknown) at both trigger and row level. No wire change: the field was already nullable.
+  This is what the sprint log had CLAIMED W5 did ("reads unknown"); the code now matches the claim.
+- **Orchestrator's own pass:** the ADR-040 sub-amendment cited a method that does not exist — fixed
+  to `SettledYearIntersects`; seven leftover "crystallization / freeze" references in the worklist
+  test files, missed by the Step-7a rename sweep — renamed.
+
+Local: Release build 0 errors, Unit 1235/1235, non-Docker Regression 102/102. The three Docker-gated
+pins touched verify in CI.

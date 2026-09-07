@@ -677,8 +677,8 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         // exclusive (ADR-018 D9), so it covers everything up to but not including yesterday.
         Assert.Equal(new DateOnly(1, 1, 1), rows[0].From);
         Assert.Equal(yesterday, rows[0].To);
-        Assert.NotEqual(0.500m, rows[0].Fraction); // untouched — the correction did not overwrite it
-        Assert.NotEqual("Backdated", rows[0].Position);
+        Assert.Equal(1.000m, rows[0].Fraction); // the seeder's exact value — untouched, not merely "not the new one" (post-close Codex W)
+        Assert.Null(rows[0].Position);          // the seeder's exact value; the same PUT precondition (If-Match "1") already requires the unmodified row
 
         // The correction: OPEN from yesterday, carrying the new values. It covers today, which is
         // why the live cache and the as-of-today read follow it.

@@ -18,7 +18,7 @@ namespace StatsTid.Tests.Unit.Worklist;
 ///   <item><b>reversedSince</b> — both legs: a later sequence (reverse-then-re-settle) OR the
 ///     baseline row now REVERSED (bare reversal).</item>
 ///   <item><b>the settled-year DATE rule</b> (S138 / TASK-13810) — a CONJUNCTION: the correction
-///     reaches back past the settlement's crystallization date AND overlaps that entitlement year's
+///     reaches the settlement's valuation boundary (the last day it counted, inclusive) AND overlaps that entitlement year's
 ///     window. Each half is pinned alone (they fail on different axes), then together, with the
 ///     conservative legs pinned through the conjunction.</item>
 /// </list>
@@ -165,8 +165,8 @@ public sealed class BackdateWorklistDerivationTests
     [InlineData(1, new int[0], 1, false)]     // untouched
     [InlineData(3, new[] { 1, 2 }, 3, false)] // the trigger saw the LIVE seq 3 — nothing since
     [InlineData(null, new int[0], 1, false)]  // tuple vanished / unknown → cannot claim
-    [InlineData(2, new[] { 1 }, null, false)] // no baseline captured → cannot claim
-    public void ReversedSinceForTrigger_BothLegs(int? highest, int[] reversed, int? baseline, bool expected)
+    [InlineData(2, new[] { 1 }, null, null)]  // no baseline captured → UNKNOWN, not "not reversed" (post-close Codex NOTE; the degraded write path is the only producer)
+    public void ReversedSinceForTrigger_BothLegs(int? highest, int[] reversed, int? baseline, bool? expected)
     {
         Assert.Equal(expected, BackdateWorklistDerivation.ReversedSinceForTrigger(highest, reversed, baseline));
     }
@@ -277,7 +277,7 @@ public sealed class BackdateWorklistDerivationTests
     {
         // The snapshot carries no usable settlementBoundaryDate (absent, or the 0001-01-01 that an
         // uninitialized snapshot serializes — the repository maps both to null). We cannot place the
-        // freeze moment, so we FLAG: a dismissable row beats a silently stale settlement.
+        // valuation boundary, so we FLAG: a dismissable row beats a silently stale settlement.
         Assert.True(BackdateWorklistDerivation.CorrectionReachesSettlementBoundary(new DateOnly(2026, 5, 20), null));
         Assert.True(BackdateWorklistDerivation.CorrectionReachesSettlementBoundary(new DateOnly(2019, 1, 1), null));
     }
@@ -352,7 +352,7 @@ public sealed class BackdateWorklistDerivationTests
     }
 
     /// <summary>
-    /// The conservative leg survives the conjunction: an unreadable crystallization date must not
+    /// The conservative leg survives the conjunction: an unreadable valuation boundary must not
     /// exonerate a settlement whose window the correction really does overlap.
     /// </summary>
     [Fact]
