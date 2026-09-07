@@ -484,3 +484,11 @@ If no issues found: "No findings."
 - Codex findings go to the sprint log, not to the knowledge base (KB entries remain Orchestrator-curated — an Orchestrator may author a KB entry based on a Codex finding, but Codex output is not a KB entry)
 - If the `codex` CLI is unavailable at invocation time, the Orchestrator halts and prompts the user rather than silently skipping review
 - Codex does not appear in sprint log "Agent" fields — findings are recorded as validation evidence
+
+## Model routing
+
+Each agent above has a definition under `.claude/agents/<name>.md` whose frontmatter fixes its model
+(`reviewer` = Fable; `rule-engine`, `payroll-integration`, `backend-infrastructure` = Opus; `data-model`,
+`api-integration`, `security`, `test-qa`, `ux`, `constraint-validator`, `trace` = Sonnet; `sweep` = Haiku).
+Spawn by `subagent_type` name. The routing table, the four enforcement layers and the Orchestrator's own
+switch points live in [WORKFLOW.md § Model Routing](WORKFLOW.md#model-routing-owner-ruling-2026-09-07).

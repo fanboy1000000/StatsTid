@@ -299,3 +299,54 @@ To prevent documentation from diverging from code:
 - **Entropy scan step 4**: MEMORY.md deferred items review catches completed-but-not-removed items
 - **Sprint log review**: Each sprint log lists files changed — cross-reference against docs that reference those files
 - **Future enhancement**: CI-step that validates all file paths in `docs/knowledge-base/*.md` resolve to existing files
+
+## Model Routing (owner ruling 2026-09-07)
+
+**Rule:** planning and review run on the most capable model; execution against a reviewed spec runs on
+cheaper ones. The dual-lens review catches implementation defects regardless of who wrote the code, so
+capability is spent where judgment is exercised over someone else's output. Background: S138 measured the
+Orchestrator seat at 704 tool calls, 65 CI polls and 100 direct edits on the most expensive model, and every
+one of its 19 agents inherited that model because no routing existed.
+
+| Role | Model | Enforced by |
+|------|-------|-------------|
+| Refinement (Steps 1–4), Step 0b plan review, Orchestrator rulings and review absorption | Fable (most capable) | the Orchestrator session model — switch points below, recorded in the sprint log |
+| Reviewer Agent (Steps 4, 5a, 7a) | Fable | `.claude/agents/reviewer.md` fixes it · `model-routing-guard.ps1` blocks a cheaper override · the agent's own `reviewed-by-model:` self-check refuses on the wrong model · `sprint-close-guard.ps1` requires that line at close |
+| Rule Engine, Payroll Integration, Backend/Infrastructure implementers | Opus | `.claude/agents/*.md` frontmatter · guard blocks Fable and Haiku |
+| Data Model, API Integration, Security, Test & QA, UX, Constraint Validator, trace | Sonnet | `.claude/agents/*.md` frontmatter · guard blocks Fable |
+| Mechanical sweeps | Haiku | `.claude/agents/sweep.md` · guard blocks Opus and Fable |
+| Generic `general-purpose` spawn | must name a model | guard blocks a bare spawn and a Fable spawn |
+| External lens | Codex | costs no Claude tokens |
+
+**How it is enforced — four layers, each catching what the one before can miss.**
+
+1. *Structural default.* Every role has a definition under `.claude/agents/<name>.md` whose frontmatter fixes
+   its model. Spawn by `subagent_type` name and the right model is used without anyone remembering.
+2. *Gate at spawn.* `.claude/hooks/model-routing-guard.ps1` is a PreToolUse hook on the `Agent` tool. It
+   blocks a reviewer on anything but the floor, blocks implementers/validators/traces/sweeps on Fable, and
+   blocks a bare generic spawn that names no model (the choice must be conscious). Read-only built-ins
+   (Explore, Plan) and forks pass. Fail-open on hook-internal errors, like the close guard.
+3. *Self-check inside the agent.* The reviewer's first output line is `reviewed-by-model: <id>`; if the id is
+   not the floor it writes `verdict: REFUSED — wrong model for review` and stops. A refusal cannot be mistaken
+   for a review.
+4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-1` in the Step-7a
+   reviewer artifact. A sprint cannot close on a review that ran cheap, whatever happened upstream.
+
+**What cannot be hooked: the Orchestrator's own model.** It is the session model, set by the owner with
+`/model`. So it is a checklist with a record, not a gate. Switch points:
+
+| Sprint phase | Orchestrator model | Why |
+|--------------|--------------------|-----|
+| Open → plan approved (Steps 0a, 0b, 1; refinement) | Fable | scope and architecture decisions |
+| Dispatch, monitoring, acceptance bookkeeping, CI watch (Steps 2–4, 6) | Opus | coordination; agents do the work |
+| Step 5a / 7a absorption, every ruling on an agent's declared deviation | Fable | judgment over someone else's output |
+| Close bookkeeping and CI backfill | Opus | mechanical |
+
+The sprint log header gains an `**Orchestrator model**` row listing the model per phase, so the retrospective
+can see whether the switch points were honoured. Direct Orchestrator edits under `src/**` or `tests/**` beyond
+the Small Tasks Exception are delegated (to `backend-infrastructure`, `test-qa`, `sweep`…), not typed.
+
+**Two rules that came out of the same S138 review.** Post-close commits that touch `src/**` get the external
+lens before the next close (two remediation commits changed a production query unreviewed; the close guard
+only gates the close commit). And CI is watched with ONE background command and its completion notification,
+never polled.

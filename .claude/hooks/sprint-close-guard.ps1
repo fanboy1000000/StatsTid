@@ -201,6 +201,38 @@ foreach ($artifact in @($codex, $reviewer)) {
         exit 2
     }
 
+    # Model-routing check (owner ruling 2026-09-07, WORKFLOW.md § Model Routing): the INTERNAL
+    # lens must have run on the review floor model. The reviewer definition fixes it, the
+    # model-routing-guard blocks a cheaper override at spawn, and the reviewer prints
+    # `reviewed-by-model:` as its first line and REFUSES on the wrong model — this is the
+    # fourth layer, at close: a sprint cannot close on a review that ran cheap. Applies to the
+    # reviewer artifact only (the Codex artifact is the external lens; no Claude model).
+    if ($artifact -eq $reviewer) {
+        $reviewFloor = 'claude-fable-5-1'
+        if ($content -notmatch '(?im)^\s*reviewed-by-model\s*:\s*(\S+)') {
+            [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
+            [Console]::Error.WriteLine('')
+            [Console]::Error.WriteLine('Reviewer artifact lacks a "reviewed-by-model:" line:')
+            [Console]::Error.WriteLine("  $artifact")
+            [Console]::Error.WriteLine('')
+            [Console]::Error.WriteLine("The Step 7a internal lens must run on the review floor ($reviewFloor) and say so:")
+            [Console]::Error.WriteLine("  reviewed-by-model: $reviewFloor")
+            [Console]::Error.WriteLine('The reviewer agent (.claude/agents/reviewer.md) prints this as its first line; copy it into the artifact.')
+            exit 2
+        }
+        $reviewedBy = $matches[1]
+        if ($reviewedBy -ne $reviewFloor) {
+            [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
+            [Console]::Error.WriteLine('')
+            [Console]::Error.WriteLine("Step 7a internal review ran on '$reviewedBy'; the review floor is '$reviewFloor'.")
+            [Console]::Error.WriteLine("  $artifact")
+            [Console]::Error.WriteLine('')
+            [Console]::Error.WriteLine('Planning and review run on the most capable model (owner ruling 2026-09-07).')
+            [Console]::Error.WriteLine('Re-run the Reviewer Agent without a cheaper model override and replace the artifact.')
+            exit 2
+        }
+    }
+
     # Staleness check: artifact must declare which commit was reviewed.
     # Skip if HEAD resolution failed above (fail-open per existing convention).
     if (-not $headSha) { continue }
