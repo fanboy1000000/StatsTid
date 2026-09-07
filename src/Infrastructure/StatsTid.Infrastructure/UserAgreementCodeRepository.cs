@@ -46,10 +46,20 @@ namespace StatsTid.Infrastructure;
 public sealed class UserAgreementCodeRepository
 {
     private readonly DbConnectionFactory _dbFactory;
+    private readonly TimeProvider _timeProvider;
 
-    public UserAgreementCodeRepository(DbConnectionFactory dbFactory)
+    /// <summary>
+    /// S139 / TASK-13907 — server-"today" seam. <paramref name="timeProvider"/> is OPTIONAL and
+    /// defaults to <see cref="TimeProvider.System"/>, so PRODUCTION BEHAVIOUR IS UNCHANGED and the
+    /// existing direct test constructions keep compiling. DI fills it from the <c>TimeProvider</c>
+    /// singleton registered in <c>Program.cs</c>; a date-sensitive test host may register a FIXED
+    /// provider instead, so the dated write path below observes the same "today" the suite fixes.
+    /// The DAY DERIVATION is unchanged — still the UTC day, matching the endpoints' validators.
+    /// </summary>
+    public UserAgreementCodeRepository(DbConnectionFactory dbFactory, TimeProvider? timeProvider = null)
     {
         _dbFactory = dbFactory;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ------------------------------------------------------------------
@@ -244,8 +254,10 @@ public sealed class UserAgreementCodeRepository
         UserAgreementCodeSupersedeRequest req, long? expectedVersion,
         CancellationToken ct = default)
     {
-        // "Today" is UTC — the endpoints' validators use the same clock.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // "Today" is UTC, read via the injected TimeProvider — the endpoints' validators use the
+        // same clock (S139 / TASK-13907 moved the SOURCE of that clock onto the DI seam; the day
+        // it yields is unchanged). The router below stays PURE: `today` is passed IN (PAT-025).
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
         // 0. Pure refusals BEFORE any lock — nothing to roll back, nothing to contend on.
         if (TemporalWriteRouter.IsFutureDated(req.EffectiveFrom, today))

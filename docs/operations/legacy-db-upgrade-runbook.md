@@ -158,6 +158,35 @@ SELECT COUNT(*) FROM enheder WHERE deleted_at IS NULL;
 SELECT COUNT(*) FROM user_enheder;
 ```
 
+## S139 — Database session time zone is assumed UTC (QUAL-153 clock seam)
+
+**What changed and why it matters for an upgrade.** S139 moved the clock SOURCE on the profile path, the
+agreement-code path and the approval-period status projection behind the app's injected `TimeProvider`, so that a
+fixed test clock reaches every read on those paths. Two SQL statements that used to take the DATE from the database
+clock now take it from the application as a bound UTC `DateOnly` parameter: the profile soft-delete
+(`EmployeeProfileRepository.SoftDeleteAsync`, formerly `SET effective_to = NOW()::date`, now `= @today`) and the
+period-status projection (`ApprovalPeriodRepository.GetPeriodStatusProjectionForTreeAsync`, formerly
+`ap.period_end < CURRENT_DATE`, now `< @today`). This is behaviour-preserving **only because the Postgres session
+time zone is UTC** — the image default; no `TZ` / `PGTZ` / `timezone =` / `SET TIME ZONE` override exists in
+`docker-compose*.yml`, `docker/postgres/init.sql` or the Testcontainers harness (verified S139). Under UTC,
+`NOW()::date` was already the UTC day the app computes.
+
+**If a non-greenfield server is configured with another time zone** (e.g. `Europe/Copenhagen`), the two converted
+statements now write/compare the UTC day where they previously used the server's local day — a 1–2 hour window
+each night, and in the correct direction (the validator and the stamp finally agree). The remaining DATE reads still
+taken from the database clock follow the SERVER's zone and would disagree with the app for that window:
+`ReportingLineRepository.cs` (`SET effective_to = CURRENT_DATE` when closing an approver line),
+`DelegationExpiryService.cs` (`until_date < CURRENT_DATE`), `LocalAgreementProfileMigrator.cs` (startup compare),
+`init.sql` (the SELF_DELEGATION backfill block), plus two dead sites (`RoleConfigOverrideRepository`,
+`LocalConfigurationRepository.GetActiveByOrgAsync`). They are registered in the QUAL register (S139 rows: "SQL clock
+sites not parameterised") with their reach.
+
+**Runbook step:** before upgrading a pre-existing database, verify the server/session zone — `SHOW timezone;` must
+return `UTC` (or set `ALTER DATABASE statstid SET timezone = 'UTC';`). Do not "fix" the remaining sites by changing
+the zone to Copenhagen: the app's UTC-day rule on the profile/agreement paths is deliberate (owner ruling OQ-3 (a),
+S139 — it matches the frontend's `toISOString().slice(0,10)`), and the UTC-vs-Copenhagen split is its own QUAL row
+awaiting a domain ruling.
+
 ## Known Ordering Gap
 
 **Entitlement_configs seed data** (grep `INSERT INTO entitlement_configs`): The seed INSERT includes `effective_from` in the column list, but the base `CREATE TABLE ... entitlement_configs` does NOT include `effective_from` (it is added by the S30 guarded ALTER — grep `s30-d2-ec-effective-dating`). On a greenfield deployment this works because the full init.sql runs top-to-bottom. On a pre-S30 legacy DB, the ALTER must be applied BEFORE the seed data can be re-inserted. (QUAL-012: line pointers replaced with durable greps.)

@@ -79,10 +79,22 @@ namespace StatsTid.Infrastructure;
 public sealed class EmployeeProfileRepository
 {
     private readonly DbConnectionFactory _dbFactory;
+    private readonly TimeProvider _timeProvider;
 
-    public EmployeeProfileRepository(DbConnectionFactory dbFactory)
+    /// <summary>
+    /// S139 / TASK-13907 — server-"today" seam. <paramref name="timeProvider"/> is OPTIONAL and
+    /// defaults to <see cref="TimeProvider.System"/>, so PRODUCTION BEHAVIOUR IS UNCHANGED and the
+    /// existing direct test constructions keep compiling. DI fills it from the <c>TimeProvider</c>
+    /// singleton registered in <c>Program.cs</c>; a date-sensitive test host may register a FIXED
+    /// provider instead, so this repository's dated write paths observe the same "today" the suite
+    /// fixes. The DAY DERIVATION is unchanged — still the UTC day
+    /// (<c>DateOnly.FromDateTime(GetUtcNow().UtcDateTime)</c>), matching the endpoints' validators
+    /// and the frontend's <c>toISOString().slice(0,10)</c>; only the SOURCE of the clock moved.
+    /// </summary>
+    public EmployeeProfileRepository(DbConnectionFactory dbFactory, TimeProvider? timeProvider = null)
     {
         _dbFactory = dbFactory;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ------------------------------------------------------------------
@@ -372,7 +384,8 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("effectiveFrom", DateOnly.FromDateTime(DateTime.UtcNow));
+        cmd.Parameters.AddWithValue(
+            "effectiveFrom", DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
@@ -498,8 +511,11 @@ public sealed class EmployeeProfileRepository
         EmployeeProfileSupersedeRequest req, long? expectedVersion,
         CancellationToken ct = default)
     {
-        // "Today" is UTC — the endpoints' validators and the S33 today-stamp use the same clock.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // "Today" is UTC, read via the injected TimeProvider — the endpoints' validators and the
+        // S33 today-stamp use the same clock (S139 / TASK-13907 moved the SOURCE of that clock
+        // onto the DI seam; the day it yields is unchanged). The router below stays PURE: `today`
+        // is passed IN as a parameter (PAT-025), never read inside it.
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
         // 0. Pure refusals BEFORE any lock — nothing to roll back, nothing to contend on.
         if (TemporalWriteRouter.IsFutureDated(req.EffectiveFrom, today))
@@ -642,7 +658,7 @@ public sealed class EmployeeProfileRepository
     /// <para>
     /// <b>S33 / TASK-3302 refactor — now a thin shim that delegates to
     /// <see cref="SupersedeAndCreateAsync"/> with
-    /// <c>EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow)</c>.</b> The 2-tuple return
+    /// <c>EffectiveFrom = today</c> (UTC, via the injected <see cref="TimeProvider"/>).</b> The 2-tuple return
     /// shape <c>(ProfileId, Version)</c> is preserved for backwards compatibility with
     /// existing S31 callers (<see cref="EmployeeProfileEndpoints"/> PUT handler); the
     /// underlying method's <see cref="SaveEmployeeProfileResult.Outcome"/> is discarded
@@ -674,8 +690,8 @@ public sealed class EmployeeProfileRepository
     /// </exception>
     /// <exception cref="InvalidProfileSupersessionException">
     /// Not thrown via this shim under normal use — the shim always passes
-    /// <c>EffectiveFrom = today (UTC)</c>, which is never earlier than the predecessor's
-    /// <c>effective_from</c> (unless the system clock is misconfigured).
+    /// <c>EffectiveFrom = today</c> (UTC, via the injected <see cref="TimeProvider"/>), which is
+    /// never earlier than the predecessor's <c>effective_from</c> (unless the clock is misconfigured).
     /// </exception>
     public async Task<(Guid ProfileId, long Version)> UpsertAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -686,7 +702,7 @@ public sealed class EmployeeProfileRepository
             EmployeeId: req.EmployeeId,
             PartTimeFraction: req.PartTimeFraction,
             Position: req.Position,
-            EffectiveFrom: DateOnly.FromDateTime(DateTime.UtcNow));
+            EffectiveFrom: DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime));
         try
         {
             var result = await SupersedeAndCreateAsync(conn, tx, supersedeRequest, expectedVersion, ct);
@@ -704,7 +720,9 @@ public sealed class EmployeeProfileRepository
 
     /// <summary>
     /// S33 / TASK-3303 — soft-delete the live employee profile row by stamping
-    /// <c>effective_to = NOW()::date</c> under end-exclusive <c>[from, to)</c> semantics
+    /// <c>effective_to = @today</c> (the UTC day from the injected <see cref="TimeProvider"/>,
+    /// bound as a parameter — S139 / TASK-13907 replaced the former DB-side <c>NOW()::date</c>)
+    /// under end-exclusive <c>[from, to)</c> semantics
     /// (ADR-018 D9). After this call, the row no longer satisfies the partial-unique-index
     /// <c>idx_employee_profiles_live</c> predicate (<c>WHERE effective_to IS NULL</c>) and is
     /// invisible to <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>, but remains
@@ -738,14 +756,18 @@ public sealed class EmployeeProfileRepository
     /// <b>SQL contract (binding — no <c>version + 1</c> clause).</b>
     /// <code>
     /// UPDATE employee_profiles
-    ///    SET effective_to = NOW()::date, updated_at = NOW()
+    ///    SET effective_to = @today, updated_at = NOW()
     ///  WHERE employee_id = @employeeId
     ///    AND effective_to IS NULL
     ///    AND version = @expectedVersion
     /// RETURNING profile_id, version
     /// </code>
-    /// The <c>NOW()::date</c> cast pins the close-stamp to day-granularity (the
-    /// <c>effective_to</c> column is <c>DATE</c>); the SQL is single-statement because the
+    /// <c>@today</c> is the APP-side UTC day (S139 / TASK-13907), bound as a <c>DateOnly</c> that
+    /// Npgsql maps to <c>date</c> — so it is day-granular by type, where the retired
+    /// <c>NOW()::date</c> was day-granular by cast. Behaviour-preserving: the Postgres session
+    /// time zone is UTC everywhere this runs, so <c>NOW()::date</c> already yielded the UTC day.
+    /// The <c>updated_at = NOW()</c> half deliberately stays a DB timestamp (a row-maintenance
+    /// stamp, not a temporal boundary). The SQL is single-statement because the
     /// version predicate handles the race (no <c>SELECT ... FOR UPDATE</c> needed — unlike
     /// <see cref="SupersedeAndCreateAsync"/> which has 3-case routing to resolve under the lock).
     /// </para>
@@ -777,6 +799,12 @@ public sealed class EmployeeProfileRepository
     /// <param name="expectedVersion">The <c>version</c> column value the caller asserts is
     /// currently stored on the live row. The UPDATE's <c>AND version = @expectedVersion</c>
     /// predicate enforces optimistic concurrency under ADR-019 admin-strict If-Match.</param>
+    /// <param name="closeDate">S139 / TASK-13907 — the date to stamp into <c>effective_to</c>,
+    /// which the caller computes ONCE for the whole request so the row and the
+    /// <c>EmployeeProfileSoftDeleted</c> event it describes carry the same date by construction
+    /// (ADR-023 D8's shape). OPTIONAL and trailing: when omitted, the repository reads its own
+    /// injected <see cref="TimeProvider"/> for the UTC day — correct for any caller that needs
+    /// only one date, and it keeps existing callers and direct test constructions compiling.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>
     /// <c>(profile_id, version)</c> of the soft-deleted row, where <c>version</c> is
@@ -799,8 +827,22 @@ public sealed class EmployeeProfileRepository
     public async Task<(Guid ProfileId, long Version)> SoftDeleteAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, long expectedVersion,
+        DateOnly? closeDate = null,
         CancellationToken ct = default)
     {
+        // S139 / TASK-13907 Step-5a W1 — ONE instant per request. The caller computes the
+        // request's "today" ONCE and hands it in as `closeDate`, so the row's `effective_to` and
+        // the `EmployeeProfileSoftDeleted` event's `EffectiveTo` are THE SAME VALUE by
+        // construction, not by two reads that happen to agree. Two separate reads of the same
+        // provider are not the same instant: at 23:59:59.9 UTC the first can land on the 7th and
+        // the second on the 8th, and the row would then disagree with the event that describes
+        // it — an auditability defect, not a rounding nuisance. This is the same "compute once"
+        // rule S137 wrote for the create POST (AdminEndpoints.cs, the `effectiveFrom` comment).
+        // The parameter is OPTIONAL and trailing so existing direct constructions and callers
+        // keep compiling; when omitted the repository falls back to its own seam read, which is
+        // correct for any caller that needs only one date.
+        var today = closeDate ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+
         // 1. Single-statement UPDATE with row-disappearance semantic — no version bump
         //    (ADR-023 D8: soft-delete is row-state-change, not field-mutation; the partial-
         //    unique-index `idx_employee_profiles_live` makes the row "disappear" from live
@@ -808,17 +850,30 @@ public sealed class EmployeeProfileRepository
         //    predicate enforces optimistic concurrency without needing a separate
         //    `SELECT ... FOR UPDATE` step — unlike SupersedeAndCreateAsync's 3-case routing,
         //    soft-delete has no branching that needs the lock to be held across multiple
-        //    statements. `NOW()::date` pins the close-stamp to day-granularity (effective_to
-        //    is a DATE column per the S31 schema).
+        //    statements.
+        //
+        //    S139 / TASK-13907 — the close-stamp is now the APP-side UTC day, bound as `@today`
+        //    from the `today` local above, where it used to be the DB-side `NOW()::date`. WHY:
+        //    this request reads "today" in the endpoint too (the future-dating validator, and the
+        //    SoftDeleted event's EffectiveTo), so a DB-side read made one HR action depend on two
+        //    clocks — and a fixed test clock could not move the database's. The endpoint now
+        //    computes that date ONCE and passes it in as `closeDate`, so the row and the event it
+        //    describes carry the same date by construction.
+        //    BEHAVIOUR-PRESERVING: the Postgres session time zone is UTC wherever this runs
+        //    (compose, init.sql and the Testcontainers builder set no override), so `NOW()::date`
+        //    already produced the UTC day. `effective_to` stays day-granular because Npgsql maps
+        //    DateOnly to `date`. `updated_at = NOW()` stays a DB timestamp on purpose: it is
+        //    row-maintenance metadata, not a temporal boundary anyone reasons about.
         await using var cmd = new NpgsqlCommand(
             """
             UPDATE employee_profiles
-               SET effective_to = NOW()::date, updated_at = NOW()
+               SET effective_to = @today, updated_at = NOW()
              WHERE employee_id = @employeeId
                AND effective_to IS NULL
                AND version = @expectedVersion
             RETURNING profile_id, version
             """, conn, tx);
+        cmd.Parameters.AddWithValue("today", today);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
         await using var reader = await cmd.ExecuteReaderAsync(ct);

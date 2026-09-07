@@ -2459,24 +2459,3 @@ public sealed class YearOverviewTests : IAsyncLifetime
 // Fixed TimeProvider — overrides TimeProvider.System in the WAF test host.
 // ════════════════════════════════════════════════════════════════════════
 
-/// <summary>
-/// A deterministic <see cref="TimeProvider"/> that returns a fixed <see cref="DateTimeOffset"/>
-/// corresponding to the pinned <see cref="FixedDate"/>. Used by <c>YearOverviewTests</c> to
-/// override the production <c>TimeProvider.System</c> in the WAF test host so that the
-/// year-overview handler's <c>today</c> derivation is wall-clock-independent (TASK-6502
-/// Step-0b Reviewer NOTE; TASK-6504 NOTE).
-/// </summary>
-internal sealed class FixedTimeProvider : TimeProvider
-{
-    private readonly DateTimeOffset _fixedUtcNow;
-
-    /// <summary>
-    /// Constructs a fixed provider returning UTC midnight of <paramref name="date"/>.
-    /// </summary>
-    public FixedTimeProvider(DateOnly date)
-    {
-        _fixedUtcNow = new DateTimeOffset(date.Year, date.Month, date.Day, 0, 0, 0, TimeSpan.Zero);
-    }
-
-    public override DateTimeOffset GetUtcNow() => _fixedUtcNow;
-}

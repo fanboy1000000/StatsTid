@@ -81,8 +81,13 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// <c>users.*</c> caches). The pre-S138 rule was <c>EffectiveFrom == today</c>; it is now
 /// <c>EffectiveFrom &lt;= today</c>. The employment-start floor (a date before the hire) is
 /// refused by the writer, also date-free — the hire date must never reach the wire.
-/// <c>DateTime.UtcNow</c> (not local time) aligns with the frontend's
-/// <c>new Date().toISOString().slice(0,10)</c> UTC extraction.
+/// "Today" is the UTC day (not local time), which aligns with the frontend's
+/// <c>new Date().toISOString().slice(0,10)</c> UTC extraction. Since S139 / TASK-13907 that day
+/// is read from the injected <see cref="TimeProvider"/> (<c>TimeProvider.System</c> in
+/// production) rather than <c>DateTime.UtcNow</c> directly — same day, injectable source, so a
+/// date-sensitive test host can fix it. The Copenhagen business-date convention used by the
+/// settlement / worklist paths is deliberately NOT used here: this validator must agree with the
+/// browser's UTC slice, not with the settlement calendar.
 /// </para>
 ///
 /// <para>
@@ -112,7 +117,10 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///
 /// <para>
 /// <b>ADR-023 D8 soft-delete divergence.</b> DELETE soft-deletes the live row by stamping
-/// <c>effective_to = NOW()::date</c> with the predecessor's <c>version</c> column
+/// <c>effective_to</c> = today (the UTC day from the injected <see cref="TimeProvider"/>, bound
+/// as a SQL parameter since S139 / TASK-13907 — it was the DB-side <c>NOW()::date</c> before,
+/// which under a UTC session time zone produced the same day) with the predecessor's
+/// <c>version</c> column
 /// UNCHANGED — soft-delete is row-state-change, not field-mutation. The audit row
 /// accordingly carries <c>version_before = version_after = predecessor.version</c>
 /// (deliberate divergence from sibling ADR-019 D8 endpoints — agreement_configs,
@@ -238,6 +246,8 @@ public static class EmployeeProfileEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -268,7 +278,10 @@ public static class EmployeeProfileEndpoints
             // (ADR-040 D8 as amended: backdating + today now, future-dating in Increment 4).
             // The refusal body is DATE-FREE — the employment-start floor refusal (raised by the
             // writer) shares this shape, and that one must never echo the hire date.
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // S139 / TASK-13907 — "today" now comes from the injected TimeProvider rather than
+            // the wall clock, so a fixed-clock test host moves this validator with it. The day is
+            // still the UTC day: unchanged behaviour, different clock SOURCE.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
             if (body.EffectiveFrom > today)
                 return Results.UnprocessableEntity(new { error = FutureDatedProfileError });
 
@@ -826,6 +839,11 @@ public static class EmployeeProfileEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
+            // Read ONCE below into `today` and used for BOTH dated outputs of this DELETE: the
+            // row's `effective_to` stamp (passed into SoftDeleteAsync as `closeDate`, where the
+            // database's NOW()::date used to decide it) and the emitted event's `EffectiveTo`.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -846,6 +864,16 @@ public static class EmployeeProfileEndpoints
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
             var streamId = $"employee-profile-{employeeId}";
+
+            // S139 / TASK-13907 (Step-5a W1) — ONE date for the whole DELETE, computed here and
+            // used twice: as the row's close-stamp (passed to SoftDeleteAsync as `closeDate`) and
+            // as the emitted event's `EffectiveTo`. Reading the provider twice would not be the
+            // same instant — a request crossing 23:59:59.9 UTC could stamp the row the 8th and
+            // announce the 7th in the event that describes it, which is an audit-trail
+            // contradiction, not a rounding detail. Same "compute ONCE so they can never disagree"
+            // rule S137 applied to the create POST (AdminEndpoints `effectiveFrom`). UTC day, per
+            // the endpoint convention documented on this class.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);
@@ -874,7 +902,7 @@ public static class EmployeeProfileEndpoints
                     // SoftDeleteAsync returns (profile_id, version) where version is
                     // UNCHANGED from the predecessor's value per ADR-023 D8.
                     var (returnedProfileId, returnedVersion) = await repository.SoftDeleteAsync(
-                        conn, tx, employeeId, expectedVersion, ct);
+                        conn, tx, employeeId, expectedVersion, today, ct);
                     profileId = returnedProfileId;
                     predecessorVersion = returnedVersion;
                 }
@@ -942,7 +970,9 @@ public static class EmployeeProfileEndpoints
                 {
                     ProfileId = profileId,
                     EmployeeId = employeeId,
-                    EffectiveTo = DateOnly.FromDateTime(DateTime.UtcNow),
+                    // The SAME `today` the row was stamped with above — one read, two uses, so
+                    // the event can never describe a different day than the row it announces.
+                    EffectiveTo = today,
                     RowVersion = predecessorVersion,
                     ActorId = actorId,
                     ActorRole = actorRole,

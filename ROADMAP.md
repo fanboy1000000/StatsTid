@@ -144,7 +144,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   read-side). **Increment 3 (S138) SHIPPED** (temporal editing, ADR-040 D8: dated profile + agreement-code
   writes through one pure router, category EDITABLE and NOT NULL, the HR backdate worklist, the S136
   leaver-send dead-end fixed; future-dating deliberately held for Increment 4 under the "current ≠ live"
-  precondition). Remaining: **Increment 4** (lifecycle UX) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
+  precondition). Remaining: **Increment 4** (lifecycle UX — design inputs: the HR follow-up register's Increment-4 checklist, S139: the landing tiles, the worklist UI with its role-mismatch decision, the termination screen, the admin-create hire date, the "efter frist" tile fix, routing the overtime page) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
   until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail) · **OQ-4** (IMMEDIATE-
   grant pro-rating at mid-year hire → Phase B expert list). **S137-owed items by increment:** Increment 3 — **all three DELIVERED in
   S138**: the retroactive-correction window pin (the Docker pin that exports a windowless month, records a
@@ -196,49 +196,28 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 
 ### HR operations — the follow-up processes (owner-raised 2026-09-03)
 
-- **★ Inventory + analysis of every process HR must FOLLOW UP on — owner-raised 2026-09-03 from the S138
-  refinement's "to go deeper" question ("the worklist records the debt, but nothing escalates it").** The
-  system increasingly hands HR a list and walks away; nobody has looked at those lists TOGETHER. Deliverable:
-  an analysis dossier (`docs/operations/hr-follow-up-process-register.md`, pointer-index style like the
-  finding registers) that visits each hand-off and answers, per process: WHO is accountable, BY WHEN, HOW an
-  open item surfaces (screen / dashboard tile / digest / nothing), what happens when it AGES, and how its
-  resolution is AUDITED. Known members to visit (not exhaustive — the analysis must sweep for more):
-  1. the S138 backdate diagnostic worklist (recalculate vs dismiss; rows blocked by QUAL-149/150; SETTLED_YEAR
-     rows pointing at reverse-then-re-settle) · 2. ADR-033 settlement review — `PENDING_REVIEW` dispositions,
-  payout reconciliation (`payout_reconciled_at`), claim dispositions, bare reversals · 3. the leaver lifecycle
-  — recording the end date, deactivation, the LAST month's approval + send (S136's dead-end, fixed S138), the
-  §26 termination settlement · 4. window-edit strand refusals (S136 D3 — a 409 with an affected-month list HR
-  must resolve by hand) · 5. ADR-013 retroactive corrections — who requests, who runs `POST /api/payroll/
-  recalculate`, how the correction is confirmed against payroll · 6. agreement-config / position-override
-  DRAFT → ACTIVE promotions awaiting an HR decision · 7. the compliance Advarsel warnings and the EU-WTD
-  compensatory-rest entries (who acts on an open warning) · 8. the S137 admin-create "hired today" default —
-  an undated hire whose true date must be corrected before back-filling · 9. the undated-employee and
-  data-integrity fail-loud paths (a profile row without an agreement row; a NULL that a census would refuse).
-  Method: STRIDE-style sweep of the code for every "HR must…" comment, 409/422 reason string, and
-  `HROrAbove` mutation that leaves state for a human; then a per-process table; then a ruling on the
-  cross-cutting shape (one HR "to-do" surface vs per-process lists; aging/escalation; digest). Feeds the
-  Increment-4 lifecycle-UX design (the worklist UI, the termination screen) and possibly its own increment.
-  Refinement-gated like every sprint. [S138 refinement Step 5 · owner 2026-09-03]
+- **ANALYSED (S139) → the register.** The owner-raised inventory (2026-09-03, "the worklist records the debt, but nothing
+  escalates it") is now `docs/operations/hr-follow-up-process-register.md`: **15 HR/admin hand-offs**, one row each
+  (trigger · accountable role · deadline + source · surfacing · aging · resolution + audit · decision-readiness), plus
+  gap rows, ops rows and the ruled-out list; both review lenses APPROVED at cycle 3. Headlines: almost nothing is
+  visible (2 embedded tiles, 3 API lists, 1 write-only, 9 with no surface), nothing escalates, and only ONE hand-off
+  has a stated deadline (§21 transfer, 31 Dec) — the other 14 wait for "by when" to be ruled. The biggest gap sat
+  outside every sweep: every approved month reaches payroll only by a manual per-employee export call (HRP-022).
+  **Recommendation: shape 3** (one HR landing page, one tile per process, per-process lists behind them). **Owner
+  ruling at the S139 close** (shape · the one aging proposal · optionally the institutional payroll cutoff that would
+  unlock three rows); the register's Increment-4 checklist is the design input for S140. [S139 TASK-13904]
 
 ### Usability / accessibility
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
   production; not enforced today. [CONVENTIONS.md]
 
 ### Tooling / infra / environment
-- **Prune the two closed-sweep git worktrees** — `.claude/worktrees/s131-docdrift` and `s131-scored` are
-  registered worktrees detached at `7e4bb1b`, untouched since 2026-08-19, **164 MB**, holding PRE-S137 copies of
-  live source and test files. The S131 quality sweep they served is CLOSED; their working trees contain only
-  deletions (no unique work), so `git worktree remove` loses nothing — the commit stays in history. Why it
-  matters: repo-wide greps hit the stale copies and can mislead a sweep into "fixing" a file that is not in the
-  solution (S138 TASK-13809 hit exactly this). Owner's call — surfaced, not actioned. [S138 TASK-13809]
-- **A fixed clock for the date-sensitive regression suites (`QUAL-153`).** Pins whose dates are offsets from
-  the current date pass or fail depending on which weekday CI runs. S138 lost two CI iterations to this: a
-  seeded absence landed on a weekend, where the working norm is zero, so the revaluation skipped it and the
-  pin proved nothing. The close run happened to be the one weekday where both affected pins failed; on a
-  Monday the sprint would have closed green with two hollow pins and a third latent flake. S138 applied a
-  per-site weekday nudge, which is a guard, not a fix. The durable answer is injecting a FIXED `TimeProvider`
-  into the test host for these suites, plus a sweep for the same pattern elsewhere — a pin's meaning should
-  not depend on the day it runs. Sized as its own task. [S138 CI iteration 3 · QUAL-153]
+- **Fixed clock — second tranche (`QUAL-154`).** S139 FIXED `QUAL-153` for the eight suites on the profile,
+  agreement-code and approval-projection paths (shared `FixedTimeProvider`, `WithFixedToday`, the probe, the product
+  clock seam). Six more hazardous suites wait for seams the OQ-1 (a) ruling did not name (`DelegationExpiryService.cs:86`
+  SQL; the designated-approver authorizer's fallbacks; `SkemaEndpoints.cs:218`; the `ApprovalEndpoints` as-of reads) plus
+  a secondary `.Month/.Year/.DayOfWeek` scan over ~65 files the offset proxy classified blind. One bounded task; the
+  owner may pull it forward. [S139 · QUAL-154, QUAL-155, QUAL-156]
 - **Docker on the dev VDI** — impossible without nested virtualization; an IT ticket, may be declined. [S128 FU-E]
 - **SDK/toolchain fragility on the VDI** — SDK 8 vanished once (restored); Python absent (openapi
   gates run CI-only from here). [S128 FU-E]

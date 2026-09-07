@@ -1,7 +1,25 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 138 -->
+<!-- anchor-sprint: 139 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
+
+## S139 re-grade (2026-09-07) — the HR follow-up register + a fixed clock the product shares
+
+Two deliverables of different kinds: an analysis dossier that inventories every hand-off the system leaves for HR
+(15 rows; both lenses APPROVED at cycle 3), and QUAL-153 — the date-sensitive regression suites moved onto a fixed
+clock that the PRODUCT now reads too (`TimeProvider` seam on the profile, agreement-code and approval-projection
+paths, including the two SQL business dates). No rule-engine, payroll or event-contract change. Per-task detail in
+`docs/sprints/SPRINT-139.md`; the new QUAL rows are 154–163.
+
+| Domain | Grade | Evidence / what changed |
+|--------|-------|-------------------------|
+| **Test Suite (cross-cutting)** | B → **B+** ▲ | The S138 flake class is structurally closed for the eight suites on the converted paths: every date is a named constant off one anchor whose weekday and OK-version side are asserted once; the two weekday-nudge helpers (`OnWeekday` / `NextWeekday`) are deleted; a falsifiability probe proves the fixed clock reaches the product (endpoint guards, soft-delete row AND event, DI default) and two repository-guard tests pin what the probe cannot see. Review found one pin that had been silently conditional (`booked >= 13`) and made it unconditional, and ~10 RED comments that overclaimed clock-sensitivity — corrected, not counted as seam coverage. The census also proved the offset-arithmetic proxy INCOMPLETE (it missed a suite that hard-fails every 1 September) → QUAL-154 carries six deferred suites + a ~65-file secondary scan. |
+| **Infrastructure** | B+ → **B+** (held, ▲ posture) | Three repositories take an optional trailing `TimeProvider` (DI-resolved, 33 direct constructions unchanged — verified by a DI probe, not reasoned); `NOW()::date` / `CURRENT_DATE` business dates became bound `@today` parameters. Review caught and fixed the "one operation, two clocks" shape twice in one sprint: the soft-delete's row and event were two provider reads (now one value passed in, ADR-023 D8's shape) and the approval projection's two phases were on different clocks. Remaining raw business-date reads registered (QUAL-155/156). |
+| **Backend API** | A− → **A−** (held, ▲ posture) | A latent pre-S139 defect fixed in passing: the admin create POST computed "today" THREE times beneath S137's "Computed ONCE so the three can never disagree" comment — a midnight straddle would have left a new employee's first day without an agreement code or an approver. Every changed endpoint keeps its `RequireAuthorization`; 422/409 bodies and the OpenAPI contract unchanged. Held at A− because the register found the API-only / silent-state pattern across the whole ADR-033 settlement family and the payroll export trigger (HRP-005/007/010/022) — backend-complete, unreachable by HR. |
+| **Auditability** | A → **A** (held) | The audit chain untouched and verified by both lenses; two event-stream GAPS found by the HR sweep and registered, not introduced: `reconcile-payout` writes an audit row but no outbox event (QUAL-159) and a §21 transfer agreement produces no domain event at all (QUAL-160). |
+| **Domain Correctness** | B → **B** (held) | No calculation changed. The UTC-day vs Copenhagen-day split on the edit paths is now a registered domain question (QUAL-157, owner ruling OQ-3 (a) keeps UTC for now); the hard-coded month-end + 2 / + 5 approval deadlines are exposed as developer defaults nobody ratified (QUAL-163). |
+| **Documentation (canon)** | materially recovered → **materially recovered** (held, ▲) | A new durable register (`docs/operations/hr-follow-up-process-register.md`, 15 rows + gap/ops rows, every cell cited and re-opened by three review cycles); PAT-008 rewritten around the shared fixture and the "the clock must reach the product" rule; the legacy-DB runbook carries the UTC-session assumption; two stale KB file paths annotated at the entropy scan. Weakness kept honest: the register's line-number cites drifted twice during the sprint because product edits ran concurrently with reviews — rev 3 cites the post-seam tree and says so. |
+| **Frontend** | (grade unchanged) | Not touched — but the HR sweep FOUND a finished, unit-tested worklist page that has never been routed (QUAL-162) and a tile label that claims an aging computation the data does not perform (QUAL-163); both are Increment-4 inputs. |
 
 ## S138 re-grade (2026-09-03) — time-control Increment 3: history becomes correctable
 

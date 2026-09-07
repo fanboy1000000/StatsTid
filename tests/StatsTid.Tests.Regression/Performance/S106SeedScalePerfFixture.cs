@@ -45,6 +45,21 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
     public const string Org3Leader2 = "perf_o3_l2";
     public const string PendingPrefix = "perf_o3_p"; // disjoint from bulk "perf_o3_<digit>" + scenario _em/_l1/_l2
 
+    /// <summary>
+    /// S139 / TASK-13908 (PAT-008) — the ONE pinned "today" for this perf suite (both this fixture
+    /// and <see cref="S106SeedScalePerfTests"/>), replacing the former wall-clock reads. 2026-02-11 —
+    /// a WEDNESDAY, and DELIBERATELY chosen AFTER 2026-01-01: every <c>reporting_lines</c> row this
+    /// fixture inserts (<see cref="AddPendingScenarioAsync"/>, <see cref="AddShapeMatrixAsync"/>) is
+    /// hardcoded to <c>effective_from = '2026-01-01'</c> — a literal shared by many seed call sites
+    /// across this file, so rebasing it (the fix used in the sibling approval suites) would be a
+    /// wider, higher-risk change for a suite that does not need it. Choosing F to land AFTER that
+    /// literal instead keeps every reporting line "effective as of F" without touching the literal at
+    /// all. Also safely on the OK24 side of the 2026-04-01 OK24→OK26 cutover
+    /// (<c>OkVersionResolver.cs:18-19</c>), though this suite does not itself stamp or assert an OK
+    /// version. Asserted once, by <see cref="S106SeedScalePerfTests.Anchor_IsWednesday_OnOk24Side"/>.
+    /// </summary>
+    public static readonly DateOnly F = new(2026, 2, 11);
+
     // (orgId, shortLabel, targetUsers) — the DemoSeed `full` per-tree sizing.
     private static readonly (string Org, string Short, int Target)[] OrgPlan =
     {
@@ -247,7 +262,7 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
         await using var conn = new NpgsqlConnection(ConnectionString);
         await conn.OpenAsync();
 
-        var periodEnd = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1);
+        var periodEnd = F.AddDays(-1);
         var periodStart = periodEnd.AddDays(-30);
 
         for (var i = 1; i <= count; i++)
@@ -336,7 +351,7 @@ public sealed class S106SeedScalePerfFixture : IAsyncLifetime
         await using var conn = new NpgsqlConnection(ConnectionString);
         await conn.OpenAsync();
 
-        var periodEnd = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-1);
+        var periodEnd = F.AddDays(-1);
         var periodStart = periodEnd.AddDays(-30);
 
         // The two extra ACTORS: Leader1's vikar (must hold LeaderOrAbove to pass the role floor) and a

@@ -384,9 +384,14 @@ builder.Services.AddSingleton<StatsTid.Backend.Api.Services.ConsumptionCalculato
 // resolver INSTANCE is per-request (its agreement-by-date + live-by-(type,agreement) caches are
 // request-scoped); the FACTORY (holding the two singleton repos) is the singleton.
 builder.Services.AddSingleton<StatsTid.Infrastructure.DatedEntitlementConfigResolverFactory>();
-// S65 / TASK-6502 — server "today" seam for the new year-overview endpoint ONLY (Step-0b
-// Reviewer NOTE). TimeProvider.System is the production default; TASK-6504's test host
-// overrides it with a fixed provider. No other endpoint is refactored onto this seam.
+// S65 / TASK-6502 — THE server "today" seam. Introduced for the year-overview endpoint, it is
+// now the project-wide way to read "today": the Skema row-preferences PUT, the balance
+// year-overview, the HR backdate worklist, the CopenhagenBusinessDate callers, and (S139 /
+// TASK-13907) the employee-profile, agreement-code and approval-period paths all resolve their
+// current date through it. TimeProvider.System is the production default and is what a plain host
+// gets; a date-sensitive test host registers a FIXED provider instead so those paths observe the
+// clock the suite pins. Injectable clock SOURCE only — each caller keeps its own day derivation
+// (UTC day, or the Copenhagen business date where that convention applies).
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ProfileAlignmentValidator>();
 builder.Services.AddSingleton<ProjectionBackfillService>();

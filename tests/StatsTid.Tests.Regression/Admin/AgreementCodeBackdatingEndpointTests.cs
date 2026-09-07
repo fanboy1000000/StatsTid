@@ -2,8 +2,12 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Temporal;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -52,23 +56,51 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
+
+    /// <summary>
+    /// S139 / TASK-13908 (PAT-008) — the ONE pinned "today" for every test in this suite, replacing
+    /// the former wall-clock <c>Today</c> property. 2025-03-12 — a WEDNESDAY, and DELIBERATELY over
+    /// a year clear of the 2026-04-01 OK24→OK26 cutover (<c>OkVersionResolver.cs:18-19</c>) in
+    /// either direction: every offset this suite uses (down to F-120, plus F.AddMonths(-3) for
+    /// exportMonth) stays on the OK24 side, so no test here can silently straddle the cutover the
+    /// way an unpinned "today minus N days" could (H-okversion, S139 spec) — both OK24 and OK26 are
+    /// seeded ACTIVE, so a straddle would not even fail loudly; fixing F removes the ambiguity about
+    /// which version the write path is exercising. Both facts are asserted once, by
+    /// <see cref="Anchor_IsWednesday_OnOk24Side"/>. Every date below is DERIVED from <see cref="F"/>.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
 
     public async Task InitializeAsync()
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
-        _ = _factory.CreateClient();
+        // The general users PUT and the dedicated agreement-code PUT both route through
+        // UserAgreementCodeRepository, whose "today" (the future-dating guard + the one-bump-rule
+        // cache refresh) now reads the injected TimeProvider (UserAgreementCodeRepository.cs:260,
+        // AdminEndpoints.cs:2463) — S139/TASK-13908. Fix the host clock to F so those reads agree
+        // with this suite's dates. Boot the FIXED host FIRST — PAT-008 boot order — so every
+        // fixture a [Fact] seeds afterwards is created AFTER this first CreateClient() call.
+        _fixedHost = _factory.WithFixedToday(F);
+        _ = _fixedHost.CreateClient();
     }
 
     public async Task DisposeAsync()
     {
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
     }
 
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
+    }
 
     // ═════════════════════════════════════════════════════════════════════
     // A. The general users PUT — the one-bump rule + the killed silent no-op
@@ -85,7 +117,7 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task UsersPut_AgreementBackdate_BumpsUsersVersionExactlyOnce()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
-        var t60 = Today.AddDays(-60);
+        var t60 = F.AddDays(-60);
         await ReplaceAgreementTimelineAsync(userId, (t60, null, "AC"));
 
         var client = AdminClient();
@@ -94,6 +126,8 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
         var rsp = await PutUserAsync(client, userId,
             body: new { agreementCode = "HK", effectiveFrom = t60.AddDays(10).ToString("yyyy-MM-dd") },
             ifMatch: $"\"{before}\"");
+        // RED: fails if the endpoint's own UPDATE and the dated writer's cache refresh BOTH bump
+        // users.version (double bump: after would be before+2), or if neither does (after == before).
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         var after = await ReadUsersVersionRawAsync(userId);
@@ -118,8 +152,8 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task UsersPut_BackdatedCodeEqualToTodaysCode_StillWritesTheRow_CacheUnchanged()
     {
         var userId = await SeedUserAsync(agreementCode: "HK");
-        var t60 = Today.AddDays(-60);
-        var t30 = Today.AddDays(-30);
+        var t60 = F.AddDays(-60);
+        var t30 = F.AddDays(-30);
         await ReplaceAgreementTimelineAsync(userId, (t60, t30, "AC"), (t30, null, "HK"));
 
         var client = AdminClient();
@@ -128,6 +162,8 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
         var rsp = await PutUserAsync(client, userId,
             body: new { agreementCode = "HK", effectiveFrom = t60.AddDays(10).ToString("yyyy-MM-dd") },
             ifMatch: $"\"{before}\"");
+        // RED: fails if the endpoint still compares against the LIVE cache (the pre-S138 bug) — the
+        // write would then be silently swallowed as a false no-op (2 rows, not 3).
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         // The AC row was split at T-50 and an HK row inserted for [T-50, T-30).
@@ -151,7 +187,7 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task UsersPut_CodeEqualToTheCoveringRow_IsNoOp_NoRowNoEventNoBump()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
-        var t60 = Today.AddDays(-60);
+        var t60 = F.AddDays(-60);
         await ReplaceAgreementTimelineAsync(userId, (t60, null, "AC"));
 
         var client = AdminClient();
@@ -161,6 +197,8 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
         var rsp = await PutUserAsync(client, userId,
             body: new { agreementCode = "AC", effectiveFrom = t60.AddDays(10).ToString("yyyy-MM-dd") },
             ifMatch: $"\"{before}\"");
+        // RED: fails if a genuine covering-row no-op still inserts a row / emits a
+        // UserAgreementCodeChanged event, or if the token bumps more than once.
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         Assert.Single(await ReadAgreementTimelineAsync(userId));
@@ -178,16 +216,19 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task UsersPut_FutureDatedAgreementCode_Returns422_WithNoDateInTheBody()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
-        await ReplaceAgreementTimelineAsync(userId, (Today.AddDays(-60), null, "AC"));
+        await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
 
         var client = AdminClient();
         var before = await ReadUsersVersionAsync(client, userId);
-        var tomorrow = Today.AddDays(1);
+        var tomorrow = F.AddDays(1);
 
         var rsp = await PutUserAsync(client, userId,
             body: new { agreementCode = "HK", effectiveFrom = tomorrow.ToString("yyyy-MM-dd") },
             ifMatch: $"\"{before}\"");
 
+        // RED: fails if the future-dating guard does not read the fixed clock (F+1 would then
+        // compare against the REAL wall-clock day, not F, and could be wrongly accepted as 200), or
+        // if the 422 body leaks the date.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var raw = await rsp.Content.ReadAsStringAsync();
         Assert.DoesNotContain(tomorrow.ToString("yyyy-MM-dd"), raw, StringComparison.Ordinal);
@@ -206,7 +247,7 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task UsersPut_AgreementCodeWithoutEffectiveFrom_Returns422_AndWritesNothing()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
-        await ReplaceAgreementTimelineAsync(userId, (Today.AddDays(-60), null, "AC"));
+        await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
 
         var client = AdminClient();
         var before = await ReadUsersVersionRawAsync(userId);
@@ -215,6 +256,8 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
             body: new { agreementCode = "HK" },
             ifMatch: $"\"{before}\"");
 
+        // RED: fails if the omitted-field bind (0001-01-01) is treated as a legal correction
+        // covering all history (200 + a rewritten timeline) instead of being refused.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         Assert.Single(await ReadAgreementTimelineAsync(userId));
         Assert.Equal(before, await ReadUsersVersionRawAsync(userId));
@@ -230,7 +273,7 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task UsersPut_DeactivatedSubject_StillUnaddressable_AndCannotReactivate()
     {
         var userId = await SeedUserAsync(agreementCode: "AC", isActive: false);
-        await ReplaceAgreementTimelineAsync(userId, (Today.AddDays(-60), null, "AC"));
+        await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
 
         var client = AdminClient();
         var rsp = await PutUserAsync(client, userId,
@@ -238,10 +281,12 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
             {
                 agreementCode = "HK",
                 isActive = true,
-                effectiveFrom = Today.ToString("yyyy-MM-dd"),
+                effectiveFrom = F.ToString("yyyy-MM-dd"),
             },
             ifMatch: "\"1\"");
 
+        // RED: fails if the general PUT starts admitting a deactivated subject (not 404), or if it
+        // reactivates the leaver / changes the agreement code as a side effect of a 404.
         Assert.Equal(HttpStatusCode.NotFound, rsp.StatusCode);
         Assert.False(await ReadUserIsActiveAsync(userId), "the general users PUT must never reactivate a leaver.");
         Assert.Equal("AC", await ReadUsersAgreementCodeAsync(userId));
@@ -261,15 +306,17 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task AgreementCodeEndpoint_HrCorrectsDepartedEmployee_WritesEventsAuditAndWorklist()
     {
         var userId = await SeedUserAsync(agreementCode: "AC", isActive: false);
-        var t120 = Today.AddDays(-120);
+        var t120 = F.AddDays(-120);
         await ReplaceAgreementTimelineAsync(userId, (t120, null, "AC"));
-        var exportMonth = new DateOnly(Today.AddMonths(-3).Year, Today.AddMonths(-3).Month, 1);
+        var exportMonth = new DateOnly(F.AddMonths(-3).Year, F.AddMonths(-3).Month, 1);
         await SeedExportRecordAsync(userId, exportMonth.Year, exportMonth.Month);
 
         var client = AdminClient();
         var before = await ReadUsersVersionRawAsync(userId);
 
         var rsp = await PutAgreementCodeAsync(client, userId, "HK", exportMonth, $"\"{before}\"");
+        // RED: fails if the dedicated endpoint refuses a departed (isActive=false) subject (would
+        // prove the terminated-inclusive surface regressed to the general PUT's active-only lock).
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         // Two rows: AC [t120, exportMonth) and HK [exportMonth, ∞).
@@ -299,6 +346,8 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
         Assert.Equal($"\"{after}\"", rsp.Headers.ETag?.ToString());
         Assert.False(await ReadUserIsActiveAsync(userId));
 
+        // RED: fails if the write's covering-today row does not refresh the live users cache (would
+        // stay at the seeded "AC" instead of moving to "HK").
         // The row written covers today, so the live cache followed it.
         Assert.Equal("HK", await ReadUsersAgreementCodeAsync(userId));
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
@@ -324,8 +373,8 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task AgreementCodeEndpoint_HistoryOnlyCorrection_LeavesTheLiveCacheUntouched()
     {
         var userId = await SeedUserAsync(agreementCode: "HK");
-        var t90 = Today.AddDays(-90);
-        var t30 = Today.AddDays(-30);
+        var t90 = F.AddDays(-90);
+        var t30 = F.AddDays(-30);
         await ReplaceAgreementTimelineAsync(userId, (t90, t30, "AC"), (t30, null, "HK"));
 
         var client = AdminClient();
@@ -338,6 +387,8 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
         Assert.Equal(3, rows.Count);
         Assert.Equal((t90.AddDays(10), t30, "PROSA"), (rows[1].From, rows[1].To, rows[1].Code));
 
+        // RED: fails if a history-only correction (interval closed before today) still refreshes
+        // the live cache to "PROSA", or if the token fails to move despite the row being rewritten.
         Assert.Equal("HK", await ReadUsersAgreementCodeAsync(userId));
         Assert.Equal(before + 1, await ReadUsersVersionRawAsync(userId));
 
@@ -359,7 +410,7 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task AgreementCodeEndpoint_CodeEqualToTheCoveringRow_IsNoOp()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
-        var t60 = Today.AddDays(-60);
+        var t60 = F.AddDays(-60);
         await ReplaceAgreementTimelineAsync(userId, (t60, null, "AC"));
 
         var client = AdminClient();
@@ -368,6 +419,9 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
         var rsp = await PutAgreementCodeAsync(client, userId, "AC", t60.AddDays(10), $"\"{before}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if a genuine covering-row no-op still inserts a row / emits an event / bumps
+        // the token — this endpoint's no-op must be a true no-write, unlike the general PUT's
+        // "endpoint still owns one bump" shape.
         Assert.Single(await ReadAgreementTimelineAsync(userId));
         Assert.Equal(0, await CountEventsAsync($"user-{userId}", "UserAgreementCodeChanged"));
         Assert.Equal(before, await ReadUsersVersionRawAsync(userId));
@@ -386,13 +440,15 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task AgreementCodeEndpoint_LeaverOwnToken_Returns403()
     {
         var userId = await SeedUserAsync(agreementCode: "AC", isActive: false);
-        await ReplaceAgreementTimelineAsync(userId, (Today.AddDays(-60), null, "AC"));
+        await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
 
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintEmployeeToken(userId));
 
-        var rsp = await PutAgreementCodeAsync(client, userId, "HK", Today.AddDays(-10), "\"1\"");
+        var rsp = await PutAgreementCodeAsync(client, userId, "HK", F.AddDays(-10), "\"1\"");
+        // RED: fails if the departed employee's own Employee-role token is admitted (not 403), or if
+        // the agreement code changes despite the refusal.
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
         Assert.Equal("AC", await ReadUsersAgreementCodeAsync(userId));
     }
@@ -402,7 +458,7 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task AgreementCodeEndpoint_MissingIfMatch_Returns428()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
-        await ReplaceAgreementTimelineAsync(userId, (Today.AddDays(-60), null, "AC"));
+        await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
 
         var client = AdminClient();
         var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}/agreement-code")
@@ -410,10 +466,12 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
             Content = JsonContent.Create(new
             {
                 agreementCode = "HK",
-                effectiveFrom = Today.AddDays(-10).ToString("yyyy-MM-dd"),
+                effectiveFrom = F.AddDays(-10).ToString("yyyy-MM-dd"),
             }),
         };
         var rsp = await client.SendAsync(req);
+        // RED: fails if the admin-strict If-Match gate is bypassed (200 or a different status
+        // instead of 428) when the header is absent.
         Assert.Equal((HttpStatusCode)428, rsp.StatusCode);
     }
 
@@ -423,12 +481,14 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task AgreementCodeEndpoint_StaleIfMatch_Returns412()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
-        await ReplaceAgreementTimelineAsync(userId, (Today.AddDays(-60), null, "AC"));
+        await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
 
         var client = AdminClient();
         var actual = await ReadUsersVersionRawAsync(userId);
 
-        var rsp = await PutAgreementCodeAsync(client, userId, "HK", Today.AddDays(-10), $"\"{actual + 7}\"");
+        var rsp = await PutAgreementCodeAsync(client, userId, "HK", F.AddDays(-10), $"\"{actual + 7}\"");
+        // RED: fails if a stale If-Match is accepted (200) instead of 412, or if the structured
+        // expected/actual body disagrees with what was actually sent/stored.
         Assert.Equal(HttpStatusCode.PreconditionFailed, rsp.StatusCode);
 
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
@@ -442,13 +502,16 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     public async Task AgreementCodeEndpoint_FutureDated_Returns422_WithNoDateInTheBody()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
-        await ReplaceAgreementTimelineAsync(userId, (Today.AddDays(-60), null, "AC"));
+        await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
 
         var client = AdminClient();
         var version = await ReadUsersVersionRawAsync(userId);
-        var tomorrow = Today.AddDays(1);
+        var tomorrow = F.AddDays(1);
 
         var rsp = await PutAgreementCodeAsync(client, userId, "HK", tomorrow, $"\"{version}\"");
+        // RED: fails if the dedicated endpoint's future-dating guard does not read the fixed clock
+        // (F+1 would then compare against the REAL wall-clock day, not F), or if the 422 body leaks
+        // the date.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var raw = await rsp.Content.ReadAsStringAsync();
         Assert.DoesNotContain(tomorrow.ToString("yyyy-MM-dd"), raw, StringComparison.Ordinal);
@@ -461,7 +524,7 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     [Fact]
     public async Task AgreementCodeEndpoint_BeforeEmploymentStart_Returns422_WithNoDateInTheBody()
     {
-        var hireDate = Today.AddDays(-100);
+        var hireDate = F.AddDays(-100);
         var userId = await SeedUserAsync(agreementCode: "AC", employmentStartDate: hireDate);
         await ReplaceAgreementTimelineAsync(userId, (hireDate, null, "AC"));
 
@@ -469,10 +532,74 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
         var version = await ReadUsersVersionRawAsync(userId);
 
         var rsp = await PutAgreementCodeAsync(client, userId, "HK", hireDate.AddDays(-1), $"\"{version}\"");
+        // RED: fails if the endpoint accepts a pre-hire-date correction (200), or if the hire date
+        // leaks into the 422 body.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var raw = await rsp.Content.ReadAsStringAsync();
         Assert.DoesNotContain(hireDate.ToString("yyyy-MM-dd"), raw, StringComparison.Ordinal);
         Assert.Single(await ReadAgreementTimelineAsync(userId));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // C. Repository-level guard (bypasses BOTH HTTP surfaces above)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// S139 / TASK-13908 follow-up (Step-5a Reviewer WARNING 2) — the REPOSITORY-level
+    /// future-dating guard, pinned by calling <see cref="UserAgreementCodeRepository.SupersedeAndCreateAsync"/>
+    /// directly (bypassing both the general users PUT and the dedicated agreement-code PUT
+    /// entirely).
+    ///
+    /// <para>
+    /// <b>Why the endpoint-level probe cannot pin this.</b>
+    /// <c>FixedClockProbeTests.AgreementCodePut_FutureDated_Returns422_ThenSameDatePut_Returns200</c>
+    /// only proves the ENDPOINT'S OWN guard (<c>AdminEndpoints.cs:2463</c>) rejects F+1 FIRST — it
+    /// 422s before the request ever reaches the repository. And for the F leg, the repository's
+    /// "today" (<c>UserAgreementCodeRepository.cs:260</c>) feeds only
+    /// <c>TemporalWriteRouter.IsFutureDated</c> and the "row covering today" cache refresh, both of
+    /// which answer IDENTICALLY for F and for the real wall-clock today. So that probe leg would
+    /// stay GREEN even if the repository's own clock read were never converted — it cannot see
+    /// this line at all. Calling the repository directly, constructed here with its own
+    /// <see cref="FixedTimeProvider"/> and no endpoint in front of it, closes that gap.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task SupersedeAndCreateAsync_RepositoryGuard_FutureDated_ThrowsTemporalWriteRejectedException_ThenSameDateSucceeds()
+    {
+        var userId = await SeedUserAsync(agreementCode: "AC", employmentStartDate: F.AddDays(-100));
+        var repo = new UserAgreementCodeRepository(_harness.Factory, new FixedTimeProvider(F));
+
+        var futureReq = new UserAgreementCodeSupersedeRequest(
+            UserId: userId,
+            AgreementCode: "HK",
+            EffectiveFrom: F.AddDays(1));
+
+        // RED: if UserAgreementCodeRepository still read the real wall clock instead of the
+        // injected FixedTimeProvider(F), F+1 (2025-03-13) would be an ordinary PAST date relative
+        // to the REAL "today" this suite actually runs on, so IsFutureDated(F+1, realToday) would
+        // be false and NOTHING would be thrown here — the exact gap the endpoint-level probe
+        // cannot see.
+        TemporalWriteRejectedException thrown;
+        await using (var conn = _harness.Factory.Create())
+        {
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            thrown = await Assert.ThrowsAsync<TemporalWriteRejectedException>(
+                () => repo.SupersedeAndCreateAsync(conn, tx, futureReq, expectedVersion: null));
+        }
+        Assert.Equal(TemporalWriteRejection.FutureDated, thrown.Reason);
+
+        // The identical request at F (not F+1) must succeed — proves the guard refuses THIS date
+        // because it is after F, not because the repository has become permanently strict.
+        var todayReq = futureReq with { EffectiveFrom = F };
+        await using (var conn = _harness.Factory.Create())
+        {
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            var result = await repo.SupersedeAndCreateAsync(conn, tx, todayReq, expectedVersion: null);
+            await tx.CommitAsync();
+            Assert.Equal(SaveUserAgreementCodeOutcome.Created, result.Outcome);
+        }
     }
 
     // ─── Seeding helpers ─────────────────────────────────────────────────
@@ -697,7 +824,7 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
 
     private HttpClient AdminClient()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
         return client;

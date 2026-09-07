@@ -843,6 +843,12 @@ public static class AdminEndpoints
             IAuditProjectionMapper<UserAgreementCodeSeeded> uacSeededMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
+            // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
+            // Read exactly ONCE below into `effectiveFrom`, which then supplies EVERY dated value
+            // of this create: the profile row's effective_from, the defaulted employment start,
+            // the agreement-code effective_from and the reporting-line effective_from. The AUDIT
+            // timestamps below deliberately keep DateTime.UtcNow.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -924,7 +930,14 @@ public static class AdminEndpoints
             // employment_start_date is already NULL are NOT backfilled — D2 semantics are
             // unchanged for them; this only changes what a NEW admin create stores when the
             // field is omitted.
-            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow);
+            //
+            // S139 / TASK-13907 — the clock SOURCE is the injected TimeProvider
+            // (TimeProvider.System in production), not the wall clock. Same UTC day, injectable.
+            // Step-5a EXTENDED the S137 "ONE date" rule above to the create's other two dated
+            // writes: the agreement-code row and the new PRIMARY reporting line now REUSE this
+            // value instead of each reading the clock again, so "the three can never disagree"
+            // is true of every dated cell this request writes, not just the first three.
+            var effectiveFrom = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
             var employmentStartDateDefaulted = request.EmploymentStartDate is null;
             var employmentStartDate = request.EmploymentStartDate ?? effectiveFrom;
 
@@ -1088,7 +1101,14 @@ public static class AdminEndpoints
                 // in-flight defect fix — keeps same-day-edit semantics aligned).
                 // Diverges from the seeder's '0001-01-01' anchor because admin-POST
                 // is a steady-state path, not a history-covering bootstrap.
-                var agreementToday = DateOnly.FromDateTime(DateTime.UtcNow);
+                //
+                // S139 / TASK-13907 (Step-5a) — this REUSES the once-computed `effectiveFrom`
+                // rather than reading the clock again. It was a second `DateTime.UtcNow` read
+                // before, which quietly contradicted the S137 "computed ONCE so the three can
+                // never disagree" rule above: a create crossing UTC midnight could date the
+                // profile row the 7th and the agreement row the 8th, leaving the agreement
+                // uncovered for the employee's first day. Same date by construction now.
+                var agreementToday = effectiveFrom;
                 var agreementResult = await userAgreementCodeRepo.SupersedeAndCreateAsync(
                     conn, tx,
                     new UserAgreementCodeSupersedeRequest(
@@ -1321,7 +1341,13 @@ public static class AdminEndpoints
                         ManagerId = request.ApproverId!,
                         OrganisationId = rlTreeRoot,
                         Relationship = "PRIMARY",
-                        EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                        // S139 / TASK-13907 (Step-5a) — DATED field: the SAME once-computed
+                        // `effectiveFrom` as the profile row, the employment start and the
+                        // agreement row (it was its own DateTime.UtcNow read before). A manager
+                        // edge dated a day later than the hire would leave the person's first day
+                        // without an approver. `CreatedAt` below stays DateTime.UtcNow BY DESIGN
+                        // — it is an audit/bookkeeping stamp, not a temporal boundary.
+                        EffectiveFrom = effectiveFrom,
                         EffectiveTo = null,
                         Source = "MANUAL",
                         Version = 1,
@@ -1490,6 +1516,10 @@ public static class AdminEndpoints
             IAuditProjectionMapper<UnitLeaderRemoved> leaderRemovedMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
+            // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production),
+            // consumed by the future-dating validator below. The audit `now` stamp keeps
+            // DateTime.UtcNow by design.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 (R3) — bounded drift-retry wrapper. When this PUT is a cross-styrelse TRANSFER (it
@@ -1563,10 +1593,13 @@ public static class AdminEndpoints
             // a not-yet-effective row would be read as "current" by the login token and the
             // ~200 live-cache readers). Still gated on the agreement-code path: when the admin is
             // only updating display_name or email, EffectiveFrom is irrelevant and skipping the
-            // validator preserves the no-mutation path's behaviour verbatim. DateTime.UtcNow (not
+            // validator preserves the no-mutation path's behaviour verbatim. The UTC day (not
             // local time) aligns with the frontend's `new Date().toISOString().slice(0,10)` UTC
-            // extraction (TASK-3409 sync). The refusal body is DATE-FREE — it shares a shape with
-            // the writer's employment-start-floor refusal, which must never echo the hire date.
+            // extraction (TASK-3409 sync); since S139 / TASK-13907 that day is read from the
+            // injected TimeProvider rather than DateTime.UtcNow — same day, injectable source, so
+            // a fixed-clock test host moves the validator with it. The refusal body is DATE-FREE —
+            // it shares a shape with the writer's employment-start-floor refusal, which must never
+            // echo the hire date.
             //
             // The PRESENCE guard comes first: `EffectiveFrom` is a non-nullable DateOnly, so a
             // request that OMITS it binds the .NET default 0001-01-01. Pre-S138 the "== today"
@@ -1575,7 +1608,8 @@ public static class AdminEndpoints
             // backfill seeder's start). A missing date is a malformed request, not a backdate.
             if (agreementCodeSupplied && request.EffectiveFrom == default)
                 return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
-            if (agreementCodeSupplied && request.EffectiveFrom > DateOnly.FromDateTime(DateTime.UtcNow))
+            if (agreementCodeSupplied
+                && request.EffectiveFrom > DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime))
                 return Results.UnprocessableEntity(new { error = FutureDatedAgreementCodeError });
 
             // NOTE (S138, deliberately unchanged): this endpoint stays ACTIVE-ONLY. Its
@@ -2429,6 +2463,9 @@ public static class AdminEndpoints
             IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
             IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
             AuditProjectionRepository auditRepo,
+            // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production),
+            // consumed by the future-dating validator below.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -2460,7 +2497,8 @@ public static class AdminEndpoints
                 return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
 
             // Backdating + today are legal; the future is not (date-free, ADR-040 D8 amendment).
-            if (request.EffectiveFrom > DateOnly.FromDateTime(DateTime.UtcNow))
+            // S139 / TASK-13907 — "today" is the UTC day off the injected TimeProvider seam.
+            if (request.EffectiveFrom > DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime))
                 return Results.UnprocessableEntity(new { error = FutureDatedAgreementCodeError });
 
             // Admin-strict If-Match on `users.version` (ADR-019 D2) — 428 on missing / malformed /
@@ -3593,8 +3631,10 @@ public static class AdminEndpoints
         public string? AgreementCode { get; init; }
         /// <summary>
         /// S34 / TASK-3407 (ADR-023 D2 option (b)) — required.
-        /// Validator narrows to <c>DateOnly.FromDateTime(DateTime.UtcNow)</c> per
-        /// ADR-023 D8 same-day-only-edit narrowing. Always sent by the frontend
+        /// Validator refuses anything LATER than today — backdating and today are both legal
+        /// since S138 / TASK-13802 (ADR-040 D8 as amended); the pre-S138 rule was the ADR-023 D8
+        /// same-day-only narrowing. "Today" is the UTC day, read since S139 / TASK-13907 from the
+        /// injected <see cref="TimeProvider"/> rather than <c>DateTime.UtcNow</c>. Always sent by the frontend
         /// (TASK-3409 — <c>new Date().toISOString().slice(0,10)</c> UTC extraction);
         /// drives ADR-020 D2 3-case routing in
         /// <c>UserAgreementCodeRepository.SupersedeAndCreateAsync</c> when

@@ -10,6 +10,7 @@ public sealed class ApprovalPeriodRepository
     private readonly DbConnectionFactory _connectionFactory;
     private readonly DesignatedApproverAuthorizer _designatedAuthorizer;
     private readonly ReportingLineRepository _reportingLineRepo;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Primary constructor (DI). The <paramref name="designatedAuthorizer"/> is the ONE
@@ -29,16 +30,28 @@ public sealed class ApprovalPeriodRepository
     /// predicate uses, so each tile count is consistent with that manager's my-reports semantics.
     /// Also OPTIONAL/derived from the same factory for test-construction compatibility.
     /// </para>
+    ///
+    /// <para>
+    /// S139 / TASK-13907 — <paramref name="timeProvider"/> is the server-"today" seam, appended
+    /// LAST and OPTIONAL so PRODUCTION BEHAVIOUR IS UNCHANGED (it defaults to
+    /// <see cref="TimeProvider.System"/>) and every existing direct test construction keeps
+    /// compiling. DI fills it from the <c>TimeProvider</c> singleton registered in
+    /// <c>Program.cs</c>; a date-sensitive test host may register a FIXED provider so the
+    /// period-status projection's "already-ended period" cut-off (<c>period_end &lt; @today</c>)
+    /// moves with the suite's clock instead of the database's. The day derivation is the UTC day.
+    /// </para>
     /// </summary>
     public ApprovalPeriodRepository(
         DbConnectionFactory connectionFactory,
         DesignatedApproverAuthorizer? designatedAuthorizer = null,
-        ReportingLineRepository? reportingLineRepo = null)
+        ReportingLineRepository? reportingLineRepo = null,
+        TimeProvider? timeProvider = null)
     {
         _connectionFactory = connectionFactory;
         _reportingLineRepo = reportingLineRepo ?? new ReportingLineRepository(connectionFactory);
         _designatedAuthorizer = designatedAuthorizer
             ?? new DesignatedApproverAuthorizer(connectionFactory, _reportingLineRepo);
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<ApprovalPeriod?> GetByIdAsync(Guid periodId, CancellationToken ct = default)
@@ -271,7 +284,7 @@ public sealed class ApprovalPeriodRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
         var sql = $"""
             {DesignatedCandidateEmployeesCte}
@@ -557,7 +570,9 @@ public sealed class ApprovalPeriodRepository
     /// returns:
     /// <list type="bullet">
     /// <item><description>their <b>last-closed-month</b> approval status — the
-    /// <c>approval_periods</c> row with the greatest <c>period_end &lt; CURRENT_DATE</c>,
+    /// <c>approval_periods</c> row with the greatest <c>period_end &lt; @today</c> (the UTC day
+    /// from the injected <see cref="TimeProvider"/>; S139 / TASK-13907 replaced the former DB-side
+    /// <c>CURRENT_DATE</c>, which under a UTC session time zone produced the same day),
     /// projected to the FE's 3-state badge (OPEN / SUBMITTED / APPROVED) — or OPEN when the
     /// employee has no closed period at all;</description></item>
     /// <item><description>a <b>per-authorized-approver pending count</b> (S106 / TASK-10604 — the
@@ -598,6 +613,15 @@ public sealed class ApprovalPeriodRepository
     public async Task<TreePeriodStatusProjection> GetPeriodStatusProjectionForTreeAsync(
         string treeRootPathPrefix, CancellationToken ct = default)
     {
+        // ONE date for BOTH phases (PAT-028: one operation, one date — compute it once at the top,
+        // pass it everywhere). Phase (1)'s "already ended" SQL cut-off and phase (2)'s vikar-aware
+        // approver resolution are two halves of ONE response, so they must describe the same
+        // effective date. Read separately they would not: a projection spanning UTC midnight could
+        // badge the employees against the 7th and count the manager tiles against the 8th, and no
+        // instant in time would explain the page — the same skew the RepeatableRead snapshot below
+        // exists to close on the DATA side, closed here on the DATE side.
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
 
@@ -655,7 +679,7 @@ public sealed class ApprovalPeriodRepository
                 SELECT ap.status
                 FROM approval_periods ap
                 WHERE ap.employee_id = u.user_id
-                  AND ap.period_end < CURRENT_DATE
+                  AND ap.period_end < @today
                 ORDER BY ap.period_end DESC
                 LIMIT 1
             ) lc ON TRUE
@@ -673,6 +697,15 @@ public sealed class ApprovalPeriodRepository
         // Escape LIKE metacharacters in the (system-derived) path so a literal '%' or '_'
         // in an org id/path cannot widen the prefix into a wildcard (cross-styrelse over-match).
         cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(treeRootPathPrefix) + "%");
+        // S139 / TASK-13907 — "already ended" is decided by the APP clock (the injected
+        // TimeProvider), not the database's CURRENT_DATE. WHY: this projection is one of the
+        // date-sensitive read models the converted regression suites pin, and a DB-side date is
+        // the one thing a fixed test clock cannot move. BEHAVIOUR-PRESERVING: the Postgres session
+        // time zone is UTC wherever this runs, so CURRENT_DATE already yielded the UTC day, which
+        // is exactly what `today` (hoisted to the top of the method) holds. Npgsql maps DateOnly to
+        // `date`, so the comparison against the `period_end` DATE column is unchanged in type and
+        // semantics.
+        cmd.Parameters.AddWithValue("today", today);
 
         var employees = new List<EmployeePeriodStatus>();
         var pendingEmployeeIds = new List<string>();
@@ -722,7 +755,10 @@ public sealed class ApprovalPeriodRepository
         //     the single edge manager through the unit-leader predicate would add NOTHING (he is not a
         //     unit-leader of the employee unless he holds the row). It propagates to the roster read's
         //     reused pendingCountByManager → the medarbejder-page tiles shift accordingly (intended).
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        //
+        //     `today` below is the SAME value phase (1) bound as @today — hoisted to the top of the
+        //     method, never re-read here (PAT-028). It threads into the authority context, the
+        //     prefetches and every `asOf`, so the tiles and the badges describe one effective date.
         var pendingCountByManager = new Dictionary<string, int>(StringComparer.Ordinal);
 
         // S125 / TASK-12501 step 1 — ONE connection for the whole tally pass instead of one per

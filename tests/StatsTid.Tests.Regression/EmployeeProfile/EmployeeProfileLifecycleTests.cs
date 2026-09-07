@@ -3,11 +3,14 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Temporal;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -74,26 +77,53 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
     private EmployeeProfileRepository _repo = null!;
+
+    /// <summary>
+    /// S139 / TASK-13908 (PAT-008) — the ONE pinned "today" for every test in this suite. 2025-03-12
+    /// — a WEDNESDAY, safely on the OK24 side of the 2026-04-01 OK24→OK26 cutover
+    /// (<c>OkVersionResolver.cs:18-19</c>), matching the other converted profile-path suites. Both
+    /// facts are asserted once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>. Every date below is
+    /// DERIVED from <see cref="F"/>, never from the wall clock. This suite has no weekday-sensitive
+    /// bookings (unlike the absence-revaluation suites) — it exercises profile CRUD only — so F was
+    /// not chosen for any weekend hazard here, only for cross-suite consistency.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
 
     public async Task InitializeAsync()
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
-        // CreateClient triggers Program.cs host build → EmployeeProfileSeeder
-        // backfills one live profile row per seed user (admin01/hr01/mgr01/
-        // ladm01/emp001/emp002/emp003). Subsequent direct DB writes via the
-        // repo use the same connection factory the WAF host uses.
-        _ = _factory.CreateClient();
-        _repo = new EmployeeProfileRepository(_harness.Factory);
+        // S139/TASK-13908: the PUT/DELETE endpoints' future-dating guard and soft-delete
+        // close-stamp now read the injected TimeProvider (EmployeeProfileEndpoints.cs:284/964), so
+        // the host clock must be fixed to F for the dated assertions below to mean anything. Boot
+        // the FIXED host FIRST (PAT-008 boot order) — this ALSO triggers Program.cs's
+        // EmployeeProfileSeeder, same as the original plain-host boot did, backfilling one live
+        // profile row per seed user (admin01/hr01/mgr01/ladm01/emp001/emp002/emp003) stamped at F.
+        // Subsequent direct DB writes via the repo use the same connection factory the WAF host uses.
+        _fixedHost = _factory.WithFixedToday(F);
+        _ = _fixedHost.CreateClient();
+        // Pass the SAME FixedTimeProvider to the repo-direct tests' repository so its own "today"
+        // (the defense-in-depth future-dating guard, EmployeeProfileRepository.cs:502) matches F too.
+        _repo = new EmployeeProfileRepository(_harness.Factory, new FixedTimeProvider(F));
     }
 
     public async Task DisposeAsync()
     {
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
+    }
+
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -114,7 +144,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         // raw insert + raw delete to leave a row-less employee.
         var employeeId = await CreateUserWithoutProfileAsync();
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync();
@@ -128,6 +158,10 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         var result = await _repo.SupersedeAndCreateAsync(conn, tx, req, expectedVersion: null);
         await tx.CommitAsync();
 
+        // RED: fails if Case A does not route to a fresh INSERT (e.g. if it wrongly finds a live
+        // row and routes Case B/C instead) — the real subject this pin catches. (F sits in the
+        // real past, so an unconverted repo's "today" would agree with F here too; this pin is
+        // clock-insensitive — it is a genuine, now-deterministic pin of the ROUTING, not the clock.)
         Assert.Equal(SaveEmployeeProfileOutcome.Created, result.Outcome);
         Assert.Equal(1L, result.Version);
 
@@ -166,7 +200,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         // fire on a same-day edit). Use the repo's Case A path to set this
         // up cleanly.
         var employeeId = await CreateUserWithoutProfileAsync();
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
 
         Guid initialProfileId;
         await using (var conn = _harness.Factory.Create())
@@ -199,6 +233,8 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             await tx.CommitAsync();
         }
 
+        // RED: fails if a same-day (EffectiveFrom == predecessor.effective_from == F) edit routes
+        // to Case C (Superseded, new profile_id) instead of an in-place Case B update.
         Assert.Equal(SaveEmployeeProfileOutcome.Updated, editResult.Outcome);
         Assert.Equal(2L, editResult.Version);
         // Case B preserves the predecessor's profile_id.
@@ -230,16 +266,16 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     [Fact]
     public async Task SupersedeAndCreate_CaseC_CrossDayEdit_ClosesPredecessorInsertsSuccessor()
     {
-        // S33 in-flight defect fix: post the S33 seeder change (CreateAsync /
-        // AdminEndpoints POST / EmployeeProfileSeeder all stamp effective_from
-        // = today instead of the schema DEFAULT '0001-01-01'), the backfilled
-        // emp001 row is at effective_from = today. To exercise Case C cross-day
-        // routing this test must explicitly backdate the predecessor's
-        // effective_from to a past date (yesterday) via direct SQL so the
-        // SupersedeAndCreateAsync(EffectiveFrom=today) call sees a strictly-
-        // less-than predecessor and routes to Case C.
+        // CORRECTED (S139 / TASK-13908 W2): this comment previously claimed the backfilled emp001
+        // row sits at effective_from = today. It does not — EmployeeProfileSeeder's INSERT
+        // (EmployeeProfileSeeder.cs:100-104) omits the effective_from column entirely, so the row
+        // takes the schema DEFAULT '0001-01-01' (deliberately, per the seeder's own comment at
+        // :85 — NOT today, so historical periods still resolve). The backfilled row is therefore
+        // ALREADY strictly before F, which would already route Case C on its own; the explicit
+        // backdate below is kept regardless so this test's precondition is self-contained rather
+        // than resting on the seeder's actual default.
         const string employeeId = "emp001";
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
         var yesterday = today.AddDays(-1);
 
         Guid predecessorProfileId;
@@ -290,6 +326,8 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             await tx.CommitAsync();
         }
 
+        // RED: fails if the cross-day write (predecessor at F-1, request at F) routes to Case B
+        // (Updated, same profile_id) instead of Case C (Superseded, new profile_id).
         Assert.Equal(SaveEmployeeProfileOutcome.Superseded, result.Outcome);
         // Step 7a P1 absorption: Case C successor inherits predecessor.Version + 1
         // (ETag monotonicity across supersession; ADR-019 D2 contract holds).
@@ -333,6 +371,74 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             Assert.Equal(predecessorVersion + 1, reader.GetInt64(0));
             Assert.Equal(today, reader.GetFieldValue<DateOnly>(1));
             Assert.True(reader.IsDBNull(2));
+        }
+    }
+
+    /// <summary>
+    /// S139 / TASK-13908 follow-up (Step-5a Reviewer WARNING 2) — the REPOSITORY-level
+    /// future-dating guard, pinned by calling <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>
+    /// directly (bypassing the endpoint entirely).
+    ///
+    /// <para>
+    /// <b>Why the endpoint-level probe cannot pin this.</b>
+    /// <c>FixedClockProbeTests.ProfilePut_FutureDated_Returns422_ThenSameDatePut_Returns200</c>
+    /// only proves the ENDPOINT'S OWN guard (<c>EmployeeProfileEndpoints.cs:284</c>) rejects F+1
+    /// FIRST — it 422s before the request ever reaches the repository. And for the F leg, the
+    /// repository's "today" (<c>EmployeeProfileRepository.cs:518</c>) feeds only
+    /// <c>TemporalWriteRouter.IsFutureDated</c> and the "row covering today" cache refresh, both of
+    /// which answer IDENTICALLY for F and for the real wall-clock today (F is safely in the past
+    /// either way). So that probe leg would stay GREEN even if the repository's own clock read were
+    /// never converted — it cannot see this line at all. Calling the repository directly, with its
+    /// own <see cref="FixedTimeProvider"/> and no endpoint in front of it, closes that gap.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task SupersedeAndCreateAsync_RepositoryGuard_FutureDated_ThrowsTemporalWriteRejectedException_ThenSameDateSucceeds()
+    {
+        var employeeId = await CreateUserWithoutProfileAsync();
+        // Hire date safely on or before F — not read by the repository for this guard (it is
+        // caller-supplied via EmploymentStartDate, not looked up from `users`), but seeded anyway
+        // so this fixture never depends on an unset employment_start_date.
+        await using (var hireConn = _harness.Factory.Create())
+        {
+            await hireConn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "UPDATE users SET employment_start_date = @hire WHERE user_id = @u", hireConn);
+            cmd.Parameters.AddWithValue("hire", F.AddDays(-100));
+            cmd.Parameters.AddWithValue("u", employeeId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        var futureReq = new EmployeeProfileSupersedeRequest(
+            EmployeeId: employeeId,
+            PartTimeFraction: 0.800m,
+            Position: "Specialist",
+            EffectiveFrom: F.AddDays(1));
+
+        // RED: if EmployeeProfileRepository still read the real wall clock instead of the injected
+        // FixedTimeProvider(F), F+1 (2025-03-13) would be an ordinary PAST date relative to the
+        // REAL "today" this suite actually runs on, so IsFutureDated(F+1, realToday) would be
+        // false and NOTHING would be thrown here — the exact gap the endpoint-level probe cannot see.
+        TemporalWriteRejectedException thrown;
+        await using (var conn = _harness.Factory.Create())
+        {
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            thrown = await Assert.ThrowsAsync<TemporalWriteRejectedException>(
+                () => _repo.SupersedeAndCreateAsync(conn, tx, futureReq, expectedVersion: null));
+        }
+        Assert.Equal(TemporalWriteRejection.FutureDated, thrown.Reason);
+
+        // The identical request at F (not F+1) must succeed — proves the guard refuses THIS date
+        // because it is after F, not because the repository has become permanently strict.
+        var todayReq = futureReq with { EffectiveFrom = F };
+        await using (var conn = _harness.Factory.Create())
+        {
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            var result = await _repo.SupersedeAndCreateAsync(conn, tx, todayReq, expectedVersion: null);
+            await tx.CommitAsync();
+            Assert.Equal(SaveEmployeeProfileOutcome.Created, result.Outcome);
         }
     }
 
@@ -396,6 +502,8 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         {
             auditCmd.Parameters.AddWithValue("employeeId", employeeId);
             await using var reader = await auditCmd.ExecuteReaderAsync();
+            // RED: fails if soft-delete bumps the version (version_before != version_after) instead
+            // of leaving it unchanged per ADR-023 D8.
             Assert.True(await reader.ReadAsync(), "Expected a DELETED audit row.");
             Assert.Equal(predecessorVersion, reader.GetInt64(0));
             Assert.Equal(predecessorVersion, reader.GetInt64(1));
@@ -428,6 +536,8 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         delReq2.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
         var delRsp2 = await client.SendAsync(delReq2);
 
+        // RED: fails if the retry returns 412 (the sibling-endpoint bump-then-conflict shape)
+        // instead of 404 (row-disappearance idempotency, ADR-023 D8's deliberate divergence).
         Assert.Equal(HttpStatusCode.NotFound, delRsp2.StatusCode);
         Assert.NotEqual(HttpStatusCode.PreconditionFailed, delRsp2.StatusCode);
     }
@@ -481,6 +591,8 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             """, conn2);
         outboxCmd.Parameters.AddWithValue("streamId", $"employee-profile-{employeeId}");
         await using var reader = await outboxCmd.ExecuteReaderAsync();
+        // RED: fails if the event does not land on the per-employee stream, or if its profile_id /
+        // rowVersion payload fields disagree with the predecessor row soft-deleted above.
         Assert.True(await reader.ReadAsync(), "Expected an EmployeeProfileSoftDeleted outbox event.");
         var rawPayload = reader.GetString(1);
         using var payloadDoc = JsonDocument.Parse(rawPayload);
@@ -541,13 +653,15 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     {
         const string employeeId = "emp001";
         var client = AuthorizedClient();
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
         var yesterday = today.AddDays(-1);
 
-        // S33 in-flight defect fix: post-seeder-stamp-today, the predecessor's
-        // effective_from = today; PUT at today would route to Case B (Updated).
-        // Backdate the predecessor to yesterday so PUT(today) routes to Case C
-        // (Superseded) — the case this test exercises.
+        // CORRECTED (S139 / TASK-13908 W2): this comment previously claimed the predecessor sits
+        // at effective_from = today (post-seeder-stamp). It does not — EmployeeProfileSeeder's
+        // INSERT (EmployeeProfileSeeder.cs:100-104) omits effective_from, taking the schema
+        // DEFAULT '0001-01-01' (see the seeder's own comment at :85). The predecessor is
+        // therefore ALREADY strictly before F; the explicit backdate below is kept so this test's
+        // precondition is self-contained rather than resting on the seeder's actual default.
         await using (var backdateConn = new NpgsqlConnection(_harness.ConnectionString))
         {
             await backdateConn.OpenAsync();
@@ -566,6 +680,10 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             effectiveFrom: today,
             weeklyNormHours: 32.0m, partTimeFraction: 0.750m, position: "Specialist",
             ifMatch: "\"1\"");
+        // RED: fails if the cross-day write emits EmployeeProfileUpdated / an 'UPDATED' audit row
+        // instead of Superseded/'SUPERSEDED' — the real subject this pin catches. (F sits in the
+        // real past, so an unconverted future-dating validator would accept this PUT too; this pin
+        // is clock-insensitive — it is a genuine, now-deterministic pin of the ROUTING, not the clock.)
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         // Outbox: latest event on the per-employee stream is Superseded.
@@ -639,13 +757,15 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     public async Task PUT_BackdatedEffectiveFrom_NowWritesDatedHistory()
     {
         var client = AuthorizedClient();
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
         var yesterday = today.AddDays(-1);
 
         var rsp = await PutEmployeeProfileAsync(client, "emp001",
             effectiveFrom: yesterday,
             weeklyNormHours: 37.0m, partTimeFraction: 0.500m, position: "Backdated",
             ifMatch: "\"1\"");
+        // RED: fails if a backdated (yesterday = F-1) PUT is still refused with 422 (the retired
+        // same-day-ONLY rule) instead of being accepted and split.
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         // The whole timeline, oldest first: the predecessor must be CLOSED at yesterday with its
@@ -700,12 +820,14 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     public async Task PUT_FutureDatedEffectiveFrom_Returns422()
     {
         var client = AuthorizedClient();
-        var tomorrow = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1));
+        var tomorrow = F.AddDays(1);
 
         var rsp = await PutEmployeeProfileAsync(client, "emp001",
             effectiveFrom: tomorrow,
             weeklyNormHours: 37.0m, partTimeFraction: 1.000m, position: null,
             ifMatch: "\"1\"");
+        // RED: fails if the future-dating guard does not read the fixed clock (F+1 would then
+        // compare against the REAL wall-clock day, not F, and could be wrongly accepted as 200).
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
     }
 
@@ -803,7 +925,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         // A far-future query date: the just-closed predecessor row carries effective_to=today, so
         // an asOfDate strictly after today is outside its window and the resolver returns null —
         // the exact precondition the fail-closed guard exists to catch.
-        var farFuture = DateTime.UtcNow.AddYears(5);
+        var farFuture = F.AddYears(5);
         var url = $"/api/compliance/{employeeId}/period?year={farFuture.Year}&month={farFuture.Month}";
 
         HttpResponseMessage? rsp = null;
@@ -817,6 +939,9 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             thrown = ex;
         }
 
+        // RED: fails if the resolver-null fail-closed guard is bypassed (a silent default) — the
+        // response would then be 200 despite the profile being soft-deleted and the query date
+        // (F+5 years) being well past the close-stamp (F, now that the host clock is fixed).
         if (thrown is null)
         {
             // The Development-environment developer-exception-page middleware maps the unhandled
@@ -862,10 +987,12 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
 
         // Balance summary for a far-future month so the resolver returns
         // null (predecessor closed at today, asOfDate beyond effective_to).
-        var farFuture = DateTime.UtcNow.AddYears(5);
+        var farFuture = F.AddYears(5);
         var rsp = await client.GetAsync(
             $"/api/balance/{employeeId}/summary?year={farFuture.Year}&month={farFuture.Month}");
 
+        // RED: fails if the resolver-null case 500s instead of falling through the
+        // datedProfile/dbConfig/CentralAgreementConfigs/37.0m chain to a 200.
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         // The endpoint computes normHoursExpected from weeklyNormHours; we
         // don't bind to a specific normHoursExpected value (depends on the
@@ -905,7 +1032,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
 
     private HttpClient AuthorizedClient()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
         return client;
@@ -938,9 +1065,15 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     /// </summary>
     private HttpClient CreateComplianceRuleStubbedClient()
     {
+        // Combines BOTH customizations this test needs (the rule-engine stub AND the fixed clock)
+        // in ONE ConfigureTestServices call — S139/TASK-13908 — because both registrations must
+        // land in the SAME derived DI container.
         var stubbedFactory = _factory.WithWebHostBuilder(builder =>
             builder.ConfigureTestServices(services =>
-                services.AddSingleton<IHttpClientFactory>(new ComplianceRuleStubFactory())));
+            {
+                services.AddSingleton<IHttpClientFactory>(new ComplianceRuleStubFactory());
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(F));
+            }));
         var client = stubbedFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());

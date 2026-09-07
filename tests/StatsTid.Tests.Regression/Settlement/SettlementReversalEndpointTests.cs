@@ -12,7 +12,6 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Security;
-using StatsTid.Tests.Regression.Balance; // FixedTimeProvider
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using StatsTid.Tests.Regression.TestSupport;

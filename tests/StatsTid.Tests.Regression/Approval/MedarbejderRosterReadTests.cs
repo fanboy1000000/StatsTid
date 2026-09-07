@@ -2,9 +2,11 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -43,7 +45,23 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
     private DbConnectionFactory _dbFactory = null!;
+
+    /// <summary>
+    /// S139 / TASK-13908 (PAT-008) — the ONE pinned "today" for every test in this suite. 2025-03-12
+    /// — a WEDNESDAY, safely on the OK24 side of the 2026-04-01 OK24→OK26 cutover
+    /// (<c>OkVersionResolver.cs:18-19</c>), matching the other converted suites. Both facts are
+    /// asserted once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>. Every date below is DERIVED
+    /// from <see cref="F"/>. NOTE: <see cref="MakeLine"/>'s reporting-line <c>EffectiveFrom</c> was a
+    /// bare literal (2026-01-01) that would have landed AFTER F —
+    /// <c>GetMedarbejderRosterForTreeAsync</c> internally reuses
+    /// <c>GetPeriodStatusProjectionForTreeAsync</c> (ApprovalPeriodRepository.cs:1079), whose
+    /// phase-2 approver resolution now asks "is this line effective as of F", so a line starting
+    /// after F would never resolve and the structural-approver / pending-tally tests would silently
+    /// break. Rebased to <c>F.AddYears(-1)</c>.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
 
     // ── STY02 Organisation (/MIN01/STY02/) ──────────────────────────────────────────────
     // The people hierarchy (all on the STY02 Organisation post-flatten):
@@ -76,6 +94,13 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
         _dbFactory = new DbConnectionFactory(_harness.ConnectionString);
+        // The roster endpoint's embedded pendingCountByManager reuses
+        // GetPeriodStatusProjectionForTreeAsync, whose "today" (period_end < @today, phase-2
+        // approver resolution) now reads the injected TimeProvider (S139/TASK-13908) — fix the HTTP
+        // host's clock to F for consistency with the repo-direct tests below. Boot the FIXED host
+        // FIRST — PAT-008 boot order.
+        _fixedHost = _factory.WithFixedToday(F);
+        _ = _fixedHost.CreateClient();
 
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -90,9 +115,18 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
             await conn.OpenAsync();
             await CleanupAsync(conn);
         }
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
+    }
+
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -160,7 +194,10 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         ManagerId = managerId,
         OrganisationId = TreeRootSty02,
         Relationship = "PRIMARY",
-        EffectiveFrom = new DateOnly(2026, 1, 1),
+        // Rebased from a bare 2026-01-01 literal to F.AddYears(-1) — see the F doc comment: this
+        // MUST stay strictly before F so the phase-2 approver resolution (asOf=F) still finds the
+        // line effective.
+        EffectiveFrom = F.AddYears(-1),
         Source = "MANUAL",
         Version = 0,
         CreatedBy = "TEST",
@@ -188,8 +225,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     /// employee's "last closed month".</summary>
     private async Task InsertClosedPeriodAsync(string employeeId, string orgId, string status)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var periodEnd = today.AddDays(-1);
+        var periodEnd = F.AddDays(-1);
         var periodStart = periodEnd.AddDays(-30);
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -279,6 +315,11 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         Assert.Null(Row(RootMgr).StructuralApproverId);   // no active PRIMARY approver
         Assert.Null(Row(Orphan).StructuralApproverId);
 
+        // RED: fails if the raw-status → FE-3-state mapping is wrong (e.g. DRAFT does not map to
+        // OPEN, or the "no closed period" case does not also map to OPEN) — the real subject this
+        // pin catches. (F-1's period_end is also strictly before the REAL wall-clock today, so an
+        // unconverted "period_end < today" compare would find this SAME closed period and classify
+        // it correctly too; this pin is clock-insensitive.)
         // periodStatus mapping per state.
         Assert.Equal("APPROVED", Row(EmpA).PeriodStatus);
         Assert.Equal("SUBMITTED", Row(EmpB).PeriodStatus);
@@ -409,6 +450,9 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         var statusProjection = await repo.GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
         Assert.Equal(statusProjection.PendingCountByManager, roster.PendingCountByManager);
 
+        // RED: fails if the phase-2 approver resolution can no longer find RootMgr's reporting
+        // lines effective as of F (e.g. if MakeLine's EffectiveFrom moved back to after F) — RootMgr
+        // would then be absent from the tally instead of showing 1.
         Assert.True(roster.PendingCountByManager.TryGetValue(RootMgr, out var n));
         Assert.Equal(1, n);
     }
@@ -425,7 +469,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         await InsertActiveVikarAsync(AwayMgr, Vikar, new DateOnly(2099, 12, 31), "SYGDOM");
 
         // STY02-scoped LocalAdmin → 200 with the full served shape.
-        var sty02Client = _factory.CreateClient();
+        var sty02Client = _fixedHost.CreateClient();
         sty02Client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintAdminToken("admin_sty02", "STY02"));
         var rsp = await sty02Client.GetAsync("/api/admin/reporting-lines/tree/STY02/medarbejdere");
@@ -438,6 +482,11 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         // enhedLabel display field was removed from the roster response.)
         var empA = employees.EnumerateArray().First(e => e.GetProperty("employeeId").GetString() == EmpA);
         Assert.Equal(RootMgr, empA.GetProperty("structuralApproverId").GetString());
+        // RED: fails if the HTTP endpoint's status mapping disagrees with the repo-direct
+        // projection (e.g. serves the wrong periodStatus for EmpA) — the real subject this pin
+        // catches. (F-1's period_end is also strictly before the REAL wall-clock today, so an
+        // unconverted host would find this SAME closed period and classify it as APPROVED too;
+        // this pin is clock-insensitive.)
         Assert.Equal("APPROVED", empA.GetProperty("periodStatus").GetString());
         Assert.False(empA.TryGetProperty("enhedLabel", out _)); // removed — must not reappear.
         Assert.Equal("Sagsbehandler", empA.GetProperty("position").GetString());
@@ -474,7 +523,7 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Object, body.GetProperty("pendingCountByManager").ValueKind);
 
         // A STY05-scoped LocalAdmin cannot read the STY02 tree → 403.
-        var sty05Client = _factory.CreateClient();
+        var sty05Client = _fixedHost.CreateClient();
         sty05Client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintAdminToken("admin_sty05", "STY05"));
         var denied = await sty05Client.GetAsync("/api/admin/reporting-lines/tree/STY02/medarbejdere");
@@ -489,7 +538,9 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     {
         var reportingRepo = new ReportingLineRepository(_dbFactory);
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, reportingRepo);
-        return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo);
+        // S139/TASK-13908: pass the SAME FixedTimeProvider as the HTTP host so the repo-direct
+        // tests' "today" matches F too.
+        return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo, new FixedTimeProvider(F));
     }
 
     private static string MintAdminToken(string userId, string orgId)

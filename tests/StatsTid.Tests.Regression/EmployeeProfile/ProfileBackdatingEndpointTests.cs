@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Calendar;
@@ -82,46 +83,46 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
+
+    /// <summary>
+    /// S139 / TASK-13908 (PAT-008) — the ONE pinned "today" for every test in this suite, replacing
+    /// the former wall-clock <c>Today</c> property and the <c>OnWeekday</c> nudge helper it forced.
+    /// 2025-03-12 — a WEDNESDAY (matches <c>FixedClockProbeTests.F</c>) and safely on the OK24 side
+    /// of the 2026-04-01 OK24→OK26 cutover (<c>OkVersionResolver.cs:18-19</c>), even though this
+    /// suite does not itself stamp an OK version — kept for cross-suite consistency. Both facts are
+    /// asserted once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>. Every date below is DERIVED
+    /// from <see cref="F"/>, never from the wall clock.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
 
     public async Task InitializeAsync()
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
-        _ = _factory.CreateClient();
+        // The profile PUT's future-dating guard (endpoint + repository) now reads the injected
+        // TimeProvider, so the host clock must be fixed to F for the refusal/acceptance pins below
+        // to mean anything. Boot the FIXED host's client here — PAT-008 boot order — so every
+        // fixture a [Fact] seeds afterwards is created AFTER this first CreateClient() call.
+        _fixedHost = _factory.WithFixedToday(F);
+        _ = _fixedHost.CreateClient();
     }
 
     public async Task DisposeAsync()
     {
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
     }
 
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
-
-    /// <summary>
-    /// The first Monday-to-Friday on or after <paramref name="from"/>. Every SEEDED absence this
-    /// file revalues must go through it.
-    ///
-    /// <para>
-    /// Why (S138 CI iteration 3): an entitlement-consuming absence cannot exist on a zero-norm day.
-    /// The Skema save guard rejects one with a 422 (ADR-032 D3 — you cannot consume a feriedag on a
-    /// non-working day), and `DailyNormCalculator` returns a 0 norm for Saturday and Sunday. The
-    /// revaluation therefore divides hours by a zero divisor, gets no meaningful value, and skips
-    /// the absence entirely BEFORE it can notice the year is settled — so no group is skipped, no
-    /// skip is reported, and no worklist row is raised. Seeding a weekend absence tests a state the
-    /// product forbids, and whether that happens depends on which weekday CI runs, since the dates
-    /// here are offsets from <see cref="Today"/>. Two pins failed on exactly this. Mirrors
-    /// <c>Adr032RevaluationTests.NextWeekday</c>, which the sibling suite already carries.
-    /// </para>
-    /// </summary>
-    private static DateOnly OnWeekday(DateOnly from)
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
     {
-        var d = from;
-        while (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-            d = d.AddDays(1);
-        return d;
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -147,10 +148,10 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_BackdateIntoClosedHistoryRow_SplitsCoveringRow_LaterRowsUntouched()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t300 = Today.AddDays(-300);
-        var t200 = Today.AddDays(-200);
-        var t150 = Today.AddDays(-150);
-        var t100 = Today.AddDays(-100);
+        var t300 = F.AddDays(-300);
+        var t200 = F.AddDays(-200);
+        var t150 = F.AddDays(-150);
+        var t100 = F.AddDays(-100);
         await ReplaceProfileTimelineAsync(employeeId,
             (t300, t200, 1.000m, "Base"),
             (t200, t100, 0.800m, "Middle"),
@@ -164,6 +165,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{etagBefore}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the split does not happen (3 rows, not 4), if the wrong row is treated as
+        // covering t150, or if the as-of resolver / event / audit facts below disagree.
         // The four rows, in date order.
         var rows = await ReadProfileTimelineAsync(employeeId);
         Assert.Equal(4, rows.Count);
@@ -223,9 +226,9 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     [Fact]
     public async Task PUT_BackdateBeforeFirstRow_WithoutCategory_Returns422_AndWritesNothing()
     {
-        var hireDate = Today.AddDays(-400);
+        var hireDate = F.AddDays(-400);
         var employeeId = await SeedEmployeeAsync(employmentStartDate: hireDate);
-        var firstRowStart = Today.AddDays(-100);
+        var firstRowStart = F.AddDays(-100);
         await ReplaceProfileTimelineAsync(employeeId, (firstRowStart, null, 1.000m, null));
 
         var client = AdminClient();
@@ -234,6 +237,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             partTimeFraction: 0.500m, position: null, employmentCategory: null,
             ifMatch: $"\"{version}\"");
 
+        // RED: fails if the endpoint accepts the write (200) instead of refusing case E, or if the
+        // 422 body leaks the date or names the wrong (employment-start) reason.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var raw = await rsp.Content.ReadAsStringAsync();
         // Date-free (ADR-040 D7) — and it must name ITS OWN reason, not the employment-start one.
@@ -253,9 +258,9 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     [Fact]
     public async Task PUT_BackdateBeforeFirstRow_WithCategory_Writes_AndStampsTheSuppliedValue()
     {
-        var hireDate = Today.AddDays(-400);
+        var hireDate = F.AddDays(-400);
         var employeeId = await SeedEmployeeAsync(employmentStartDate: hireDate);
-        var firstRowStart = Today.AddDays(-100);
+        var firstRowStart = F.AddDays(-100);
         await ReplaceProfileTimelineAsync(employeeId, (firstRowStart, null, 1.000m, null));
 
         var client = AdminClient();
@@ -265,6 +270,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             partTimeFraction: 0.500m, position: null, employmentCategory: "Chefkonsulent",
             ifMatch: $"\"{version}\"");
 
+        // RED: fails if supplying the category still gets refused (would prove the earlier 422 was
+        // about case E itself, not about missing information), or if the insert lands wrong.
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         var timeline = await ReadProfileTimelineAsync(employeeId);
@@ -285,7 +292,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     [Fact]
     public async Task PUT_BackdateBeforeEmploymentStart_Returns422_WithNoDateInTheBody()
     {
-        var hireDate = Today.AddDays(-100);
+        var hireDate = F.AddDays(-100);
         var employeeId = await SeedEmployeeAsync(employmentStartDate: hireDate);
         await ReplaceProfileTimelineAsync(employeeId, (hireDate, null, 1.000m, null));
 
@@ -295,6 +302,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             partTimeFraction: 0.500m, position: null, employmentCategory: null,
             ifMatch: $"\"{version}\"");
 
+        // RED: fails if the endpoint accepts a pre-hire-date correction (200), or if the hire date
+        // leaks into the 422 body.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var raw = await rsp.Content.ReadAsStringAsync();
         Assert.DoesNotContain(hireDate.ToString("yyyy-MM-dd"), raw, StringComparison.Ordinal);
@@ -314,15 +323,18 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_FutureDatedEffectiveFrom_Returns422_WithNoDateInTheBody()
     {
         var employeeId = await SeedEmployeeAsync();
-        await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-10), null, 1.000m, null));
+        await ReplaceProfileTimelineAsync(employeeId, (F.AddDays(-10), null, 1.000m, null));
 
         var client = AdminClient();
         var version = await ReadProfileVersionAsync(client, employeeId);
-        var tomorrow = Today.AddDays(1);
+        var tomorrow = F.AddDays(1);
         var rsp = await PutProfileAsync(client, employeeId, tomorrow,
             partTimeFraction: 0.500m, position: null, employmentCategory: null,
             ifMatch: $"\"{version}\"");
 
+        // RED: fails if the future-dating guard does not read the fixed clock (would compare F+1
+        // against the REAL wall-clock day instead of F and could accept it as 200), or if the 422
+        // body leaks the date.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var raw = await rsp.Content.ReadAsStringAsync();
         Assert.DoesNotContain(tomorrow.ToString("yyyy-MM-dd"), raw, StringComparison.Ordinal);
@@ -340,7 +352,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_MissingEffectiveFrom_Returns422_AndWritesNothing()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t30 = Today.AddDays(-30);
+        var t30 = F.AddDays(-30);
         await ReplaceProfileTimelineAsync(employeeId, (t30, null, 1.000m, null));
 
         var client = AdminClient();
@@ -353,6 +365,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         req.Headers.TryAddWithoutValidation("If-Match", $"\"{version}\"");
         var rsp = await client.SendAsync(req);
 
+        // RED: fails if the omitted-field bind (0001-01-01) is treated as a legal correction
+        // covering all history (200 + a rewritten timeline) instead of being refused.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         Assert.Single(await ReadProfileTimelineAsync(employeeId));
         Assert.Equal(version, await ReadProfileVersionAsync(client, employeeId));
@@ -371,8 +385,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_ValuesEqualToTheCoveringRow_IsNoOp_NothingWrittenEtagUnchanged()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t60 = Today.AddDays(-60);
-        var t30 = Today.AddDays(-30);
+        var t60 = F.AddDays(-60);
+        var t30 = F.AddDays(-30);
         await ReplaceProfileTimelineAsync(employeeId,
             (t60, t30, 0.800m, "Middle"),
             (t30, null, 0.600m, "Live"));
@@ -388,6 +402,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{versionBefore}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the no-op predicate is wrong and this write inserts a row / emits an
+        // event / writes an audit row / bumps the ETag anyway.
         Assert.Equal(2, (await ReadProfileTimelineAsync(employeeId)).Count);
         Assert.Equal(eventsBefore, await CountEventsAsync($"employee-profile-{employeeId}"));
         Assert.Equal(auditBefore, await CountProfileAuditAsync(employeeId));
@@ -405,8 +421,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_BackdateEqualToTodaysValuesButDifferentFromTheCoveringRow_Writes()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t60 = Today.AddDays(-60);
-        var t30 = Today.AddDays(-30);
+        var t60 = F.AddDays(-60);
+        var t30 = F.AddDays(-30);
         // The OPEN row says 0.600; the covering (middle) row says 0.800.
         await ReplaceProfileTimelineAsync(employeeId,
             (t60, t30, 0.800m, "Middle"),
@@ -421,6 +437,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{versionBefore}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the no-op predicate still compares against the LIVE row (the pre-S138 bug)
+        // — this write would then be silently swallowed (2 rows, not 3).
         var rows = await ReadProfileTimelineAsync(employeeId);
         Assert.Equal(3, rows.Count);
         Assert.Equal((t60, t60.AddDays(10), 0.800m), (rows[0].From, rows[0].To, rows[0].Fraction));
@@ -443,14 +461,16 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_Backdate_RevaluesOnlyInsideTheWrittenInterval()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t60 = Today.AddDays(-60);
-        var t30 = Today.AddDays(-30);
+        var t60 = F.AddDays(-60);
+        var t30 = F.AddDays(-30);
         await ReplaceProfileTimelineAsync(employeeId,
             (t60, t30, 1.000m, null),
             (t30, null, 1.000m, null));
 
-        var inside = OnWeekday(t60.AddDays(10));   // inside [t45, t30) after the split below
-        var outside = OnWeekday(t30.AddDays(5));   // covered by the successor row
+        var inside = F.AddDays(-50);  // Tuesday — inside [F-55, F-30) after the split below
+        var outside = F.AddDays(-20); // Thursday — successor row; narrative offset (-25) would land
+                                       // on a Saturday under F, so shifted to the nearest weekday
+                                       // while staying > t30 (F-30)
         await SeedAbsenceAsync(employeeId, inside, "VACATION", hours: 7.4m, feriedage: 1.0m);
         await SeedAbsenceAsync(employeeId, outside, "VACATION", hours: 7.4m, feriedage: 1.0m);
 
@@ -461,6 +481,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if revaluation rewrites the successor row's absence too (outside would move
+        // off 1.0m) or fails to rewrite the corrected interval's absence (inside would stay 1.0m).
         // Inside the corrected interval: 7.4h at a half-time norm of 3.7 ⇒ 2.0 feriedage.
         Assert.Equal(2.0m, await ReadFeriedageAsync(employeeId, inside));
         // After the successor row's start: untouched.
@@ -488,10 +510,14 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_Backdate_SkipsSettledSpecialHolidayYear_AndRaisesSettledYearWorklistRow()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t60 = Today.AddDays(-60);
-        await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-400), null, 1.000m, null));
+        var t60 = F.AddDays(-60);
+        await ReplaceProfileTimelineAsync(employeeId, (F.AddDays(-400), null, 1.000m, null));
 
-        var absenceDay = OnWeekday(t60);
+        // t60 (F-60) is a Saturday under F; the absence must land on a working day (a zero-norm day
+        // is rejected by the guard and skipped by revaluation before it can even notice the settled
+        // year — S138/QUAL-153), so this is shifted 2 days to the nearest weekday while staying
+        // inside the corrected interval [t60-5, ∞).
+        var absenceDay = F.AddDays(-58); // Monday
         await SeedAbsenceAsync(employeeId, absenceDay, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
 
         // SPECIAL_HOLIDAY reset_month is 1 (seeded config); the resolver maps the taking window to
@@ -500,7 +526,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         var settledYear = EntitlementPeriodResolver
             .Resolve(EntitlementPeriodResolver.SpecialHolidayType, 1, absenceDay).EntitlementYear;
         await SeedBalanceAsync(employeeId, "SPECIAL_HOLIDAY", settledYear, totalQuota: 5m, used: 1.0m);
-        await SeedActiveSettlementAsync(employeeId, "SPECIAL_HOLIDAY", settledYear, Today.AddDays(-30));
+        await SeedActiveSettlementAsync(employeeId, "SPECIAL_HOLIDAY", settledYear, F.AddDays(-30));
 
         var client = AdminClient();
         var version = await ReadProfileVersionAsync(client, employeeId);
@@ -509,6 +535,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the revaluation rewrites the settled year's absence (feriedage would move
+        // off 1.0m / used would move off 1.0m) instead of skipping it.
         // The SKIP: the settled year's consumption is untouched despite the fraction halving.
         Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, absenceDay));
         Assert.Equal(1.0m, await ReadBalanceUsedAsync(employeeId, "SPECIAL_HOLIDAY", settledYear));
@@ -536,22 +564,27 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_TodayDatedEdit_TouchingNoSettledGroup_RaisesNoSettledYearRow()
     {
         var employeeId = await SeedEmployeeAsync();
-        await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-400), null, 1.000m, null));
+        await ReplaceProfileTimelineAsync(employeeId, (F.AddDays(-400), null, 1.000m, null));
 
         // The settled year's absence is in the PAST — outside the [today, ∞) corrected interval.
-        var pastAbsence = OnWeekday(Today.AddDays(-60));
+        // F-60 is a Saturday under F; shifted 2 days to the nearest weekday (a zero-norm day is
+        // rejected by the guard and skipped by revaluation — S138/QUAL-153), same adjustment as
+        // PUT_Backdate_SkipsSettledSpecialHolidayYear's absenceDay.
+        var pastAbsence = F.AddDays(-58); // Monday
         await SeedAbsenceAsync(employeeId, pastAbsence, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
         var settledYear = EntitlementPeriodResolver
             .Resolve(EntitlementPeriodResolver.SpecialHolidayType, 1, pastAbsence).EntitlementYear;
-        await SeedActiveSettlementAsync(employeeId, "SPECIAL_HOLIDAY", settledYear, Today.AddDays(-30));
+        await SeedActiveSettlementAsync(employeeId, "SPECIAL_HOLIDAY", settledYear, F.AddDays(-30));
 
         var client = AdminClient();
         var version = await ReadProfileVersionAsync(client, employeeId);
-        var rsp = await PutProfileAsync(client, employeeId, Today,
+        var rsp = await PutProfileAsync(client, employeeId, F,
             partTimeFraction: 0.500m, position: null, employmentCategory: null,
             ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the false-positive is still present (a SETTLED_YEAR row would appear even
+        // though the correction never reaches this absence).
         Assert.Empty(await ReadWorklistRowsAsync(employeeId, "SETTLED_YEAR"));
         Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, pastAbsence)); // untouched: outside the window
     }
@@ -570,10 +603,11 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_TodayDatedEdit_WhoseRevaluationSkipsASettledGroup_RaisesASettledYearRow()
     {
         var employeeId = await SeedEmployeeAsync();
-        await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-400), null, 1.000m, null));
+        await ReplaceProfileTimelineAsync(employeeId, (F.AddDays(-400), null, 1.000m, null));
 
         // An absence already booked 30 days AHEAD — inside the corrected interval [today, ∞).
-        var futureAbsence = OnWeekday(Today.AddDays(30));
+        // F+30 is already a Friday under F — no weekday adjustment needed.
+        var futureAbsence = F.AddDays(30);
         await SeedAbsenceAsync(employeeId, futureAbsence, "SPECIAL_HOLIDAY_ALLOWANCE", hours: 7.4m, feriedage: 1.0m);
         var settledYear = EntitlementPeriodResolver
             .Resolve(EntitlementPeriodResolver.SpecialHolidayType, 1, futureAbsence).EntitlementYear;
@@ -581,15 +615,17 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         // today forward and the year's taking window contains the future absence), but its
         // freeze-moment half does not — the correction starts after the freeze — so the conjunction
         // raises nothing and only the skip path can produce the row below.
-        await SeedActiveSettlementAsync(employeeId, "SPECIAL_HOLIDAY", settledYear, Today.AddDays(-1));
+        await SeedActiveSettlementAsync(employeeId, "SPECIAL_HOLIDAY", settledYear, F.AddDays(-1));
 
         var client = AdminClient();
         var version = await ReadProfileVersionAsync(client, employeeId);
-        var rsp = await PutProfileAsync(client, employeeId, Today,
+        var rsp = await PutProfileAsync(client, employeeId, F,
             partTimeFraction: 0.500m, position: null, employmentCategory: null,
             ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the revaluation does NOT skip the settled future group (feriedage would
+        // move off 1.0m) or if the skip goes unreported (no SETTLED_YEAR row below).
         // The correction WAS withheld — the future day keeps its recorded feriedage …
         Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, futureAbsence));
         // … and it is not silent: exactly ONE row, ONE trigger (the skip path alone).
@@ -616,8 +652,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_Backdate_ResponseCarriesTodaysValues_NotTheBackdatedOnes()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t60 = Today.AddDays(-60);
-        var t30 = Today.AddDays(-30);
+        var t60 = F.AddDays(-60);
+        var t30 = F.AddDays(-30);
         await ReplaceProfileTimelineAsync(employeeId,
             (t60, t30, 0.800m, "Middle"),
             (t30, null, 0.600m, "Live"));
@@ -629,6 +665,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the response still echoes the request's backdated values (0.500/"Corrected")
+        // instead of today's real state (0.600/"Live") — the pre-ruling behaviour.
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(0.600m, body.GetProperty("partTimeFraction").GetDecimal());
         Assert.Equal("Live", body.GetProperty("position").GetString());
@@ -637,7 +675,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
 
         // The correction really happened — it is simply not today's truth.
         Assert.Equal(0.500m, await ResolveFractionAtAsync(employeeId, t60.AddDays(10)));
-        Assert.Equal(0.600m, await ResolveFractionAtAsync(employeeId, Today));
+        Assert.Equal(0.600m, await ResolveFractionAtAsync(employeeId, F));
     }
 
     /// <summary>
@@ -649,13 +687,15 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_TodayDatedEdit_ResponseEchoesWhatItWrote()
     {
         var employeeId = await SeedEmployeeAsync();
-        await ReplaceProfileTimelineAsync(employeeId, (Today.AddDays(-60), null, 1.000m, "Before"));
+        await ReplaceProfileTimelineAsync(employeeId, (F.AddDays(-60), null, 1.000m, "Before"));
 
         var client = AdminClient();
         var version = await ReadProfileVersionAsync(client, employeeId);
-        var rsp = await PutProfileAsync(client, employeeId, Today,
+        var rsp = await PutProfileAsync(client, employeeId, F,
             partTimeFraction: 0.500m, position: "After", employmentCategory: null,
             ifMatch: $"\"{version}\"");
+        // RED: fails if the response diverges from what was just written (would prove the "state as
+        // of today" rule broke the ordinary today-dated case).
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
@@ -674,8 +714,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_BackdatedNoOp_ResponseCarriesTodaysState_EtagUnchanged()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t60 = Today.AddDays(-60);
-        var t30 = Today.AddDays(-30);
+        var t60 = F.AddDays(-60);
+        var t30 = F.AddDays(-30);
         await ReplaceProfileTimelineAsync(employeeId,
             (t60, t30, 0.800m, "Middle"),
             (t30, null, 0.600m, "Live"));
@@ -687,6 +727,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{versionBefore}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the no-op response echoes the matched (backdated-covering-row) values
+        // instead of today's real state, or if the ETag moved despite nothing being written.
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(0.600m, body.GetProperty("partTimeFraction").GetDecimal());
         Assert.Equal("Live", body.GetProperty("position").GetString());
@@ -708,7 +750,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     {
         var employeeId = await SeedEmployeeAsync();
         // Two whole months safely in the past, plus a later row that bounds the correction.
-        var monthA = new DateOnly(Today.AddMonths(-4).Year, Today.AddMonths(-4).Month, 1);
+        var monthA = new DateOnly(F.AddMonths(-4).Year, F.AddMonths(-4).Month, 1);
         var monthB = monthA.AddMonths(1);
         var boundary = monthB.AddMonths(1);
         await ReplaceProfileTimelineAsync(employeeId,
@@ -725,6 +767,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if either exported month is missed (rows.Count != 2) or any row lacks its
+        // PROFILE_CHANGE trigger — ADR-013's hand-off would then go silent.
         var rows = await ReadWorklistRowsAsync(employeeId, "EXPORTED_MONTH");
         Assert.Equal(2, rows.Count);
         Assert.All(rows, r => Assert.Contains("PROFILE_CHANGE", r.TriggersJson, StringComparison.Ordinal));
@@ -748,8 +792,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_CategoryChangeCoveringToday_RefreshesCache_WritesUsersAudit_StaleUsersIfMatch412s()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t30 = Today.AddDays(-30);
-        var monthNow = new DateOnly(Today.Year, Today.Month, 1);
+        var t30 = F.AddDays(-30);
+        var monthNow = new DateOnly(F.Year, F.Month, 1);
         await ReplaceProfileTimelineAsync(employeeId, (t30, null, 1.000m, null));
         await SeedExportRecordAsync(employeeId, monthNow.Year, monthNow.Month);
 
@@ -757,13 +801,15 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         var staleUsersEtag = await ReadUsersVersionAsync(client, employeeId);
         var profileVersion = await ReadProfileVersionAsync(client, employeeId);
 
-        var rsp = await PutProfileAsync(client, employeeId, Today,
+        var rsp = await PutProfileAsync(client, employeeId, F,
             partTimeFraction: 1.000m, position: null, employmentCategory: NonDefaultCategory,
             ifMatch: $"\"{profileVersion}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the live users cache/audit/ETag do not follow a category change that
+        // covers today, or if the exported-month worklist / stale-ETag 412 below do not fire.
         // The dated row carries it AND the live cache followed (the row covers today).
-        Assert.Equal(NonDefaultCategory, await ReadDatedCategoryAtAsync(employeeId, Today));
+        Assert.Equal(NonDefaultCategory, await ReadDatedCategoryAtAsync(employeeId, F));
         Assert.Equal(NonDefaultCategory, await ReadUsersCategoryAsync(employeeId));
 
         // The users token moved and the transition is audited.
@@ -779,7 +825,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         // A users PUT holding the PRE-change ETag must now 412.
         var putUser = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{employeeId}")
         {
-            Content = JsonContent.Create(new { displayName = "Renamed", effectiveFrom = Today.ToString("yyyy-MM-dd") }),
+            Content = JsonContent.Create(new { displayName = "Renamed", effectiveFrom = F.ToString("yyyy-MM-dd") }),
         };
         putUser.Headers.TryAddWithoutValidation("If-Match", $"\"{staleUsersEtag}\"");
         var userRsp = await client.SendAsync(putUser);
@@ -795,8 +841,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_CategoryChangeInClosedHistory_LeavesTheLiveCacheUntouched()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t60 = Today.AddDays(-60);
-        var t30 = Today.AddDays(-30);
+        var t60 = F.AddDays(-60);
+        var t30 = F.AddDays(-30);
         await ReplaceProfileTimelineAsync(employeeId,
             (t60, t30, 1.000m, null),
             (t30, null, 1.000m, null));
@@ -808,6 +854,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
+        // RED: fails if the live users cache/audit react to a category change confined to closed
+        // history (would prove the cache is not scoped to "as of today").
         Assert.Equal(NonDefaultCategory, await ReadDatedCategoryAtAsync(employeeId, t60.AddDays(5)));
         Assert.Equal("Standard", await ReadUsersCategoryAsync(employeeId));
         Assert.Equal(0, await CountUsersAuditAsync(employeeId, "UPDATED"));
@@ -826,8 +874,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_TwoBackdatesAgainstTheSameEtag_SecondReturns412()
     {
         var employeeId = await SeedEmployeeAsync();
-        var t90 = Today.AddDays(-90);
-        var t30 = Today.AddDays(-30);
+        var t90 = F.AddDays(-90);
+        var t30 = F.AddDays(-30);
         await ReplaceProfileTimelineAsync(employeeId,
             (t90, t30, 0.800m, null),
             (t30, null, 0.600m, null));
@@ -843,6 +891,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
         var second = await PutProfileAsync(client, employeeId, t90.AddDays(20),
             partTimeFraction: 0.400m, position: null, employmentCategory: null,
             ifMatch: $"\"{version}\"");
+        // RED: fails if the second write against the now-stale token is accepted (200) instead of
+        // 412 — would prove two backdates against the same ETag do not serialize.
         Assert.Equal(HttpStatusCode.PreconditionFailed, second.StatusCode);
 
         // The retry with the refreshed token succeeds — "the second 412s" is about the STALE token,
@@ -864,7 +914,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     public async Task PUT_DeactivatedEmployee_HrBackdate_Returns200_AndDoesNotReactivate()
     {
         var employeeId = await SeedEmployeeAsync(isActive: false);
-        var t60 = Today.AddDays(-60);
+        var t60 = F.AddDays(-60);
         await ReplaceProfileTimelineAsync(employeeId, (t60, null, 1.000m, null));
 
         var client = AdminClient();
@@ -873,6 +923,8 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             partTimeFraction: 0.500m, position: null, employmentCategory: null,
             ifMatch: $"\"{version}\"");
 
+        // RED: fails if the deactivated-employee PUT is refused entirely (not 200), or if it flips
+        // is_active back to true as a side effect.
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         Assert.Equal(0.500m, await ResolveFractionAtAsync(employeeId, t60.AddDays(10)));
         Assert.False(await ReadUserIsActiveAsync(employeeId), "the profile PUT must never reactivate a leaver.");
@@ -1259,7 +1311,7 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
 
     private HttpClient AdminClient()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
         return client;

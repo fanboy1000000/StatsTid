@@ -208,6 +208,45 @@ public sealed class StatsTidWebApplicationFactory : WebApplicationFactory<Progra
                         sp.GetRequiredService<PostgresEventStore>()));
             }));
 
+    // ─── S139 / TASK-13906 (PAT-008) fixed-clock harness ─────────────────────────────────
+    // Program.cs:395 registers `TimeProvider.System` as the production default. This derived
+    // host replaces it with a `FixedTimeProvider` so every endpoint that has been converted onto
+    // the seam (rather than reading the wall clock's UtcNow directly) derives "today" from the pinned
+    // date instead of the real wall clock — the fix for S138's two lost CI runs, where a
+    // "today minus N days" pin silently proved nothing on the two-in-seven days that offset
+    // landed on a weekend (a zero-norm day the product rejects and revaluation skips).
+
+    /// <summary>
+    /// A derived host whose <see cref="TimeProvider"/> is pinned to UTC midnight of
+    /// <paramref name="today"/> (via <see cref="FixedTimeProvider"/>), REPLACING the production
+    /// <c>TimeProvider.System</c> singleton Program.cs:395 registers. Opt-in per test, mirroring
+    /// <see cref="WithThrowingOutbox"/> — the seam is per-endpoint (only endpoints explicitly
+    /// converted onto <c>TimeProvider</c> read this; an unconverted endpoint still reading the wall
+    /// clock's UtcNow instant directly will silently ignore the override, per PAT-008's Agent
+    /// Guidance).
+    ///
+    /// <para>
+    /// <b>Boot-order rule — READ BEFORE SEEDING A FIXTURE AGAINST THIS HOST.</b> Like every
+    /// <c>WithWebHostBuilder</c>-derived host, calling
+    /// <see cref="WebApplicationFactory{TEntryPoint}.CreateClient"/> on the factory THIS method
+    /// returns RE-RUNS <c>Program.cs</c>'s startup seeders (see the note above
+    /// <see cref="WithThrowingOutbox"/> at :171-175 — the same lesson applies here) against the
+    /// SAME Postgres container. Any "absent-state" fixture the test needs — a profile-less
+    /// employee, a missing eligibility row, or any direct-INSERT the test seeds by hand — MUST be
+    /// created AFTER that first <c>CreateClient()</c> call on THIS derived host, never before and
+    /// never only on a different host's boot, or the very seeder that (re)populates the "missing"
+    /// row erases the absence the test relies on. A fixture employee's hire date
+    /// (<c>employment_start_date</c>) must also be ON OR BEFORE <paramref name="today"/>:
+    /// <c>EmployeeProfileRepository</c> refuses any <c>EffectiveFrom &lt; employment_start_date</c>,
+    /// and <paramref name="today"/> is exactly what a converted future-dating guard compares
+    /// against once it reads this seam instead of the wall clock.
+    /// </para>
+    /// </summary>
+    public WebApplicationFactory<Program> WithFixedToday(DateOnly today)
+        => WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(today))));
+
     /// <summary>
     /// Applies the canonical <c>docker/postgres/init.sql</c> schema to
     /// <paramref name="connectionString"/>. Walks from

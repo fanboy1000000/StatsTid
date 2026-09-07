@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Text;
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
+using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using Xunit.Abstractions;
 
@@ -64,6 +66,17 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     private const int RosterBudgetMs = 5000;
     private const int SearchBudgetMs = 5000;
     private const int TileBudgetMs = 8000;
+
+    /// <summary>Locks the two facts <see cref="S106SeedScalePerfFixture.F"/> leans on without
+    /// re-deriving them — see that field's doc comment for why this suite's anchor differs from the
+    /// sibling approval suites' (chosen AFTER the fixture's hardcoded 2026-01-01 reporting-line
+    /// literal rather than rebasing it).</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, S106SeedScalePerfFixture.F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(S106SeedScalePerfFixture.F));
+    }
 
     // ════════════════════════════════════════════════════════════════════════
     //  FOREST — constant 4 set-based commands + in-memory roll-up (scale-invariant)
@@ -238,6 +251,12 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             var proj = await repo.GetPeriodStatusProjectionForTreeAsync(S106SeedScalePerfFixture.Org3Path);
             count10 = counter.Count;
             _out.WriteLine($"TILE (Org3, pending=10): {count10} commands; tiles={proj.PendingCountByManager.Count}");
+            // RED: fails if the tile-count mechanism itself is broken (e.g. a prefetch-authorization
+            // regression that returns an empty map for a genuinely pending set) — the real subject
+            // this pin catches. (Both the fixture's F-1 period_end and its reporting-line
+            // effective_from are also safely in the past relative to the REAL wall-clock today, so
+            // an unconverted repo would classify the SAME periods as pending and resolve the SAME
+            // approvers; this pin is clock-insensitive.)
             // The pending employees tally to their edge manager + both unit leaders (the S106 enumeration).
             Assert.True(proj.PendingCountByManager.Count >= 1, "Expected populated tiles for the pending set.");
         }
@@ -359,6 +378,12 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
         {
             var proj = await repo.GetPeriodStatusProjectionForTreeAsync(S106SeedScalePerfFixture.Org3Path);
 
+            // RED: fails if the exact three-tile characterisation below is wrong (e.g. a manager
+            // missing from the map, or a per-manager count differing from 10) — the real subject
+            // this pin catches. (The fixture's F-1 period_end and its reporting-line effective_from
+            // are also safely in the past relative to the REAL wall-clock today, so an unconverted
+            // repo would find the SAME closed periods and resolve the SAME approvers; this pin is
+            // clock-insensitive.)
             // ── The EXACT tile map: 3 tiles, each counting all 10 pending employees. ──
             var map = proj.PendingCountByManager
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
@@ -447,6 +472,9 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
         {
             var proj = await repo.GetPeriodStatusProjectionForTreeAsync(S106SeedScalePerfFixture.Org3Path);
 
+            // RED: fails if F no longer sits between the fixture's hardcoded 2026-01-01 reporting-line
+            // literal and the projection's own clock — any shape's approver would silently stop
+            // resolving and disappear from the map below instead of appearing at its pinned count.
             var map = proj.PendingCountByManager
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .Select(kv => $"{kv.Key}={kv.Value}")
@@ -538,7 +566,7 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
         await _fx.AddShapeMatrixAsync();
         try
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var today = S106SeedScalePerfFixture.F;
             var vikarRepo = new ManagerVikarRepository(_fx.Factory);
             var repo = new ReportingLineRepository(_fx.Factory, vikarRepo);
 
@@ -584,6 +612,9 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
 
             _out.WriteLine($"DIFFERENTIAL: {userIds.Count} users compared, {nonTrivial} resolving to a manager, {divergences.Count} divergences");
 
+            // RED: fails if F no longer sits after the fixture's hardcoded 2026-01-01 reporting-line
+            // literal — every resolution would return null and nonTrivial would collapse to 0,
+            // failing the non-vacuity check below for the wrong reason (clock, not a real defect).
             // Non-vacuity: if nothing resolved, the comparison would be 250 identical (null, null, 0)s
             // and would pass while proving nothing.
             Assert.True(nonTrivial >= 10, $"Only {nonTrivial} users resolved to a manager — the comparison would be near-vacuous.");
@@ -653,7 +684,7 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
         await _fx.AddShapeMatrixAsync();
         try
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var today = S106SeedScalePerfFixture.F;
             var vikarRepo = new ManagerVikarRepository(_fx.Factory);
             var reportingRepo = new ReportingLineRepository(_fx.Factory, vikarRepo);
             var authorizer = new DesignatedApproverAuthorizer(_fx.Factory, reportingRepo);
@@ -731,6 +762,8 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
             var pairs = candidates.Length * employees.Count;
             _out.WriteLine($"DIFFERENTIAL-COMBINED: {pairs} pairs compared, {admitted} admitted by SQL, {divergences.Count} divergences");
 
+            // RED: fails if F no longer sits after the fixture's hardcoded 2026-01-01 reporting-line
+            // literal — every pair would be denied and admitted would collapse to 0.
             // Non-vacuity in BOTH directions: a comparison where everything is denied would pass while
             // proving nothing, and so would one where everything is admitted.
             Assert.True(admitted >= 5, $"Only {admitted} pairs admitted — the comparison is near-vacuous.");
@@ -752,7 +785,11 @@ public sealed class S106SeedScalePerfTests : IClassFixture<S106SeedScalePerfFixt
     {
         var reportingRepo = new ReportingLineRepository(_fx.Factory);
         var authorizer = new DesignatedApproverAuthorizer(_fx.Factory, reportingRepo);
-        return new ApprovalPeriodRepository(_fx.Factory, authorizer, reportingRepo);
+        // S139/TASK-13908: pin this repo's "today" to the SAME F the fixture seeds against, so the
+        // period-status projection's period_end < @today compare and phase-2 approver resolution
+        // agree with the fixture's fixed dates.
+        return new ApprovalPeriodRepository(
+            _fx.Factory, authorizer, reportingRepo, new FixedTimeProvider(S106SeedScalePerfFixture.F));
     }
 }
 

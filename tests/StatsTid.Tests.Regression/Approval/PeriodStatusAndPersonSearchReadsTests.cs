@@ -2,9 +2,11 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -38,7 +40,28 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
     private DbConnectionFactory _dbFactory = null!;
+
+    /// <summary>
+    /// S139 / TASK-13908 (PAT-008) — the ONE pinned "today" for every test in this suite. 2025-03-12
+    /// — a WEDNESDAY, safely on the OK24 side of the 2026-04-01 OK24→OK26 cutover
+    /// (<c>OkVersionResolver.cs:18-19</c>), matching the other converted suites. Both facts are
+    /// asserted once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>. Every date below is DERIVED
+    /// from <see cref="F"/>. NOTE: <see cref="MakeLine"/>'s reporting-line <c>EffectiveFrom</c> was
+    /// a bare literal (2026-01-01) that would have landed AFTER F — since
+    /// <c>GetPeriodStatusProjectionForTreeAsync</c>'s phase-2 approver resolution now asks "is this
+    /// reporting line effective as of F", a line starting after F would never resolve and the
+    /// per-manager pending tally would silently break. Rebased to <c>F.AddYears(-1)</c>.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
+
+    /// <summary>
+    /// S139 / TASK-13908 Step-5a cycle-2 (N3) — a "safely covers F forever" constant for
+    /// <c>manager_vikar.until_date</c> rows, replacing a bare <c>'2099-12-31'</c> literal that was
+    /// not derived from <see cref="F"/>.
+    /// </summary>
+    private static readonly DateOnly FarFutureVikarCoverage = F.AddYears(75);
 
     // ── Test users ────────────────────────────────────────────────────────────────────
     // STY02 Organisation (/MIN01/STY02/):
@@ -86,6 +109,12 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
         _dbFactory = new DbConnectionFactory(_harness.ConnectionString);
+        // GetPeriodStatusProjectionForTreeAsync's period_end < @today compare AND its phase-2
+        // approver resolution now read the injected TimeProvider (S139/TASK-13908) — fix the HTTP
+        // host's clock to F so the endpoint-level test below agrees with the repo-direct tests'
+        // dates. Boot the FIXED host FIRST — PAT-008 boot order.
+        _fixedHost = _factory.WithFixedToday(F);
+        _ = _fixedHost.CreateClient();
 
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -100,9 +129,18 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             await conn.OpenAsync();
             await CleanupAsync(conn);
         }
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
+    }
+
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -196,7 +234,10 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         ManagerId = managerId,
         OrganisationId = TreeRootSty02,
         Relationship = "PRIMARY",
-        EffectiveFrom = new DateOnly(2026, 1, 1),
+        // Rebased from a bare 2026-01-01 literal to F.AddYears(-1) — see the F doc comment: this
+        // MUST stay strictly before F so the phase-2 approver resolution (asOf=F) still finds the
+        // line effective.
+        EffectiveFrom = F.AddYears(-1),
         Source = "MANUAL",
         Version = 0,
         CreatedBy = "TEST",
@@ -226,7 +267,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     /// </summary>
     private async Task InsertClosedPeriodAsync(string employeeId, string orgId, string status)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
         var periodEnd = today.AddDays(-1);
         var periodStart = periodEnd.AddDays(-30);
         await InsertPeriodAsync(employeeId, orgId, status, periodStart, periodEnd);
@@ -272,6 +313,11 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         string StatusOf(string emp) =>
             projection.Employees.Single(e => e.EmployeeId == emp).Status;
 
+        // RED: fails if the raw-status → FE-3-state mapping is wrong (e.g. DRAFT/REJECTED do not
+        // both collapse to OPEN, or SUBMITTED/EMPLOYEE_APPROVED do not both collapse to SUBMITTED)
+        // — the real subject this pin catches. (F-1's period_end is also strictly before the REAL
+        // wall-clock today, so an unconverted "period_end < today" compare would find this SAME
+        // closed period and classify it correctly too; this pin is clock-insensitive.)
         Assert.Equal("OPEN", StatusOf(EmpOpenDraft));       // DRAFT → OPEN
         Assert.Equal("OPEN", StatusOf(EmpOpenRejected));    // REJECTED → OPEN
         Assert.Equal("OPEN", StatusOf(EmpOpenNone));        // no closed period → OPEN
@@ -286,7 +332,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     [Fact]
     public async Task PeriodStatusProjection_UsesGreatestPeriodEndBeforeToday_NotFutureNorEarlier()
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
 
         // An EARLIER closed period (APPROVED) + a LATER (but still closed) period (REJECTED) +
         // a FUTURE period (SUBMITTED, period_end >= today — must be ignored).
@@ -297,6 +343,8 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         var repo = NewApprovalRepo();
         var projection = await repo.GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
 
+        // RED: fails if the projection picks the EARLIER (APPROVED) or the FUTURE (SUBMITTED,
+        // period_end >= F) period instead of the greatest period_end strictly before F.
         // Greatest period_end < today is the REJECTED one (-10) → OPEN; the future SUBMITTED and
         // the earlier APPROVED are both ignored.
         Assert.Equal("OPEN", projection.Employees.Single(e => e.EmployeeId == EmpApproved).Status);
@@ -315,6 +363,9 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         var repo = NewApprovalRepo();
         var projection = await repo.GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
 
+        // RED: fails if the phase-2 approver resolution can no longer find Mgr effective as of F
+        // (e.g. if MakeLine's EffectiveFrom were ever moved back to AFTER F) — Mgr would then be
+        // absent from PendingCountByManager entirely instead of tallying 2.
         Assert.True(projection.PendingCountByManager.TryGetValue(Mgr, out var n));
         Assert.Equal(2, n);
     }
@@ -349,7 +400,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         // (a) Sanity — the BARE resolver DOES return MgrNoRole for EmpRevoked (so the ONLY thing
         //     keeping it off the tile is the predicate gate, not a missing reporting edge).
         var (resolved, _, _) = await new ReportingLineRepository(_dbFactory)
-            .ResolveDesignatedApproverAsync(EmpRevoked, asOf: DateOnly.FromDateTime(DateTime.UtcNow));
+            .ResolveDesignatedApproverAsync(EmpRevoked, asOf: F);
         Assert.Equal(MgrNoRole, resolved);
 
         // (b) …but the canonical predicate DENIES MgrNoRole (active but not LeaderOrAbove), so the
@@ -358,6 +409,9 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             MgrNoRole, Array.Empty<RoleScope>());
         Assert.DoesNotContain(dashboard, p => p.EmployeeId == EmpRevoked);
 
+        // RED: fails if the tile tally counts MgrNoRole anyway (an ungated "tally everyone the
+        // resolver returns" regression), or if the genuine leader Mgr silently drops out because
+        // the fixed clock broke phase-2 resolution for the whole tree.
         // (c) The tile tally agrees with the empty dashboard: MgrNoRole is NOT in the pending map.
         var projection = await repo.GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
         Assert.False(projection.PendingCountByManager.ContainsKey(MgrNoRole));
@@ -377,7 +431,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         await InsertClosedPeriodAsync(EmpApproved, "STY02", "APPROVED");
 
         // STY02-scoped LocalAdmin → 200 with the projection containing EmpApproved=APPROVED.
-        var sty02Client = _factory.CreateClient();
+        var sty02Client = _fixedHost.CreateClient();
         sty02Client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintAdminToken("admin_sty02", "STY02"));
         var rsp = await sty02Client.GetAsync("/api/admin/reporting-lines/tree/STY02/period-status");
@@ -386,10 +440,15 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         var employees = body.GetProperty("employees");
         var found = employees.EnumerateArray()
             .First(e => e.GetProperty("employeeId").GetString() == EmpApproved);
+        // RED: fails if the HTTP endpoint's status mapping disagrees with the repo-direct
+        // projection (e.g. serves the wrong periodStatus for EmpApproved) — the real subject this
+        // pin catches. (F-1's period_end is also strictly before the REAL wall-clock today, so an
+        // unconverted host would find this SAME closed period and classify it as APPROVED too;
+        // this pin is clock-insensitive.)
         Assert.Equal("APPROVED", found.GetProperty("status").GetString());
 
         // A STY05-scoped LocalAdmin cannot read the STY02 tree → 403.
-        var sty05Client = _factory.CreateClient();
+        var sty05Client = _fixedHost.CreateClient();
         sty05Client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintAdminToken("admin_sty05", "STY05"));
         var denied = await sty05Client.GetAsync("/api/admin/reporting-lines/tree/STY02/period-status");
@@ -587,6 +646,10 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         try
         {
             var rlRepo = new ReportingLineRepository(_dbFactory);
+            // S139/TASK-13908 Step-5a cycle-2 (N3): asOf is deliberately OMITTED — this call
+            // exercises the resolver's own default ("real wall-clock today") fallback rather than F.
+            // The assertions below (never-self, depth==10) are independent of which "today"
+            // resolves, so the fallback is not silently replaced with F.
             var (managerId, method, depth) = await rlRepo.ResolveDesignatedApproverAsync(CycA);
 
             // THE invariant: never the subject. Before the fix this was (CycA, DESIGNATED_MANAGER, 1).
@@ -634,6 +697,10 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         try
         {
             var rlRepo = new ReportingLineRepository(_dbFactory);
+            // S139/TASK-13908 Step-5a cycle-2 (N3): asOf is deliberately OMITTED — this call
+            // exercises the resolver's own default ("real wall-clock today") fallback rather than F.
+            // The assertion below (resolves to CycC, not the subject) is independent of which
+            // "today" resolves, so the fallback is not silently replaced with F.
             var (managerId, method, depth) = await rlRepo.ResolveDesignatedApproverAsync(CycA);
 
             // NOT the subject (was (CycA, ACTING_MANAGER, 0)), and NOT the org-scope bail-out that
@@ -701,10 +768,13 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             """
             INSERT INTO manager_vikar
                 (absent_approver_id, vikar_user_id, until_date, reason, organisation_id, version, created_by)
-            VALUES (@absent, @vikar, '2099-12-31', 'FERIE', 'STY02', 1, 'TEST')
+            VALUES (@absent, @vikar, @until, 'FERIE', 'STY02', 1, 'TEST')
             """, conn);
         cmd.Parameters.AddWithValue("absent", absentApproverId);
         cmd.Parameters.AddWithValue("vikar", vikarUserId);
+        // S139/TASK-13908 Step-5a cycle-2 (N3): F-derived rather than a bare '2099-12-31' literal —
+        // see FarFutureVikarCoverage's doc comment.
+        cmd.Parameters.AddWithValue("until", FarFutureVikarCoverage);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -721,11 +791,17 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
             """
             INSERT INTO reporting_lines
                 (employee_id, manager_id, organisation_id, relationship, effective_from, source, version, created_by)
-            VALUES (@emp, @mgr, @root, 'PRIMARY', '2026-01-01', 'MANUAL', 1, 'TEST')
+            VALUES (@emp, @mgr, @root, 'PRIMARY', @from, 'MANUAL', 1, 'TEST')
             """, conn);
         cmd.Parameters.AddWithValue("emp", employeeId);
         cmd.Parameters.AddWithValue("mgr", managerId);
         cmd.Parameters.AddWithValue("root", TreeRootSty02);
+        // S139/TASK-13908 Step-5a cycle-2 (N3): F-derived (same value as MakeLine's rebased
+        // EffectiveFrom) rather than a bare '2026-01-01' literal. The FAIL_004 tests that plant
+        // this cyclic graph resolve with the DEFAULT (omitted) asOf — see ResolveDesignatedApproverAsync
+        // below — so this start date only needs to stay safely before whichever "today" that
+        // default resolves to; F.AddYears(-1) satisfies that under both F and the real wall clock.
+        cmd.Parameters.AddWithValue("from", F.AddYears(-1));
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -861,7 +937,9 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     {
         var reportingRepo = new ReportingLineRepository(_dbFactory);
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, reportingRepo);
-        return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo);
+        // S139/TASK-13908: pass the SAME FixedTimeProvider as the HTTP host so the repo-direct
+        // tests' "today" (period_end < @today, phase-2 approver resolution) matches F too.
+        return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo, new FixedTimeProvider(F));
     }
 
     // S110 / TASK-11001: HasEnhedLabel captures whether the (now-removed) enhedLabel field is present
@@ -877,7 +955,7 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
     private async Task<SearchPage> SearchRawAsync(
         string token, string q, int limit, int offset, string? excludeEmployeeId = null)
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         var url = $"/api/admin/users/search?q={Uri.EscapeDataString(q)}&limit={limit}&offset={offset}";
         if (excludeEmployeeId is not null)

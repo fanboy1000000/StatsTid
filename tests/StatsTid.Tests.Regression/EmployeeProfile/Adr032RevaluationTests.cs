@@ -9,6 +9,7 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -24,14 +25,16 @@ namespace StatsTid.Tests.Regression.EmployeeProfile;
 /// (type, year) lands on the consolidated <c>employee-{id}</c> stream with an ADR-026 audit row.
 /// Past-dated absences are untouched; the ETag / If-Match flow is byte-identical.
 ///
-/// <para><b>today-dependence (FixedTimeProvider does NOT help here).</b> The PUT validator narrows
-/// <c>EffectiveFrom</c> to <c>DateOnly.FromDateTime(DateTime.UtcNow)</c> directly (NOT via
-/// <c>TimeProvider</c>), so the revaluation window is real-today-anchored. The fixtures therefore
-/// book "future" absences on the next few real weekdays (≥ today) so they fall inside the
-/// revaluation window, and a "past" absence the day before today. This mirrors the existing
-/// <see cref="EmployeeProfileLifecycleTests"/> convention (it uses <c>DateOnly.FromDateTime(
-/// DateTime.UtcNow)</c> for the same PUT path) — no wall-clock-dependent EXPECTED VALUES are
-/// asserted, only the revaluation invariants (replacement happened / past untouched / event emitted).</para>
+/// <para><b>today-dependence — S139 / TASK-13908 update.</b> This paragraph originally read
+/// "FixedTimeProvider does NOT help here" because the PUT validator once narrowed
+/// <c>EffectiveFrom</c> from a raw read of the wall clock's UtcNow instant, converted to a bare
+/// date. That changed under S139 / TASK-13907: <c>EmployeeProfileEndpoints.cs:284</c> now derives "today" from the
+/// injected <see cref="TimeProvider"/>, so the host clock CAN be (and now is) fixed via
+/// <c>StatsTidWebApplicationFactory.WithFixedToday</c>, and the revaluation window is anchored to
+/// the pinned <see cref="F"/> instead of the real wall clock. Every date below is DERIVED from
+/// <see cref="F"/>; "future" means "after F" and "past" means "before F" — no wall-clock-dependent
+/// EXPECTED VALUES are asserted, only the revaluation invariants (replacement happened / past
+/// untouched / event emitted).</para>
 ///
 /// <para>The booking path is the rule-stubbed Skema save (so absences carry recorded feriedage);
 /// the PUT is the admin <c>/api/admin/employee-profiles/{id}</c> endpoint (GlobalAdmin token +
@@ -48,18 +51,34 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
     private StatsTidWebApplicationFactory _factory = null!;
     private HttpClient _ruleStubbedClient = null!;
 
+    /// <summary>
+    /// S139 / TASK-13908 (PAT-008) — the ONE pinned "today" for every test in this suite, replacing
+    /// the former wall-clock <c>Today</c> property and the <c>NextWeekday</c> nudge helper it forced.
+    /// 2025-03-12 — a WEDNESDAY, safely on the OK24 side of the 2026-04-01 OK24→OK26 cutover
+    /// (<c>OkVersionResolver.cs:18-19</c>), matching the other converted profile-path suites. Both
+    /// facts are asserted once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>. Every date below is
+    /// DERIVED from <see cref="F"/>, never from the wall clock.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
+
     public async Task InitializeAsync()
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
         _ = _factory.CreateClient();
-        // ONE rule-stubbed host shared across saves + PUT in this suite.
+        // ONE derived host shared across saves + PUT in this suite, combining BOTH customizations
+        // it needs: the rule-engine stub (for the Skema save) AND the fixed clock (S139/TASK-13908
+        // — the profile PUT's "today" now reads TimeProvider, EmployeeProfileEndpoints.cs:284, so
+        // the revaluation window is anchored to F only if this host's TimeProvider is pinned too).
+        // Combined in ONE ConfigureTestServices call — rather than two chained WithXxx() derivations
+        // — because both registrations must land in the SAME derived DI container.
         _ruleStubbedClient = _factory.WithWebHostBuilder(builder =>
         {
             builder.ConfigureTestServices(services =>
             {
                 services.AddSingleton<IHttpClientFactory>(new RuleEngineStubFactory());
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(F));
             });
         }).CreateClient();
     }
@@ -71,16 +90,12 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
             await _harness.DisposeAsync();
     }
 
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
-
-    /// <summary>Next weekday strictly after <paramref name="from"/> (skips Sat/Sun) — keeps bookings
-    /// on positive-norm days so the per-day guard passes.</summary>
-    private static DateOnly NextWeekday(DateOnly from)
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
     {
-        var d = from.AddDays(1);
-        while (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-            d = d.AddDays(1);
-        return d;
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -101,22 +116,28 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
         var employeeId = await SeedFullTimeEmployeeAsync();
 
         // A future-dated VACATION (≥ today) booked under the FULL-TIME profile → recorded 1.0.
-        var futureDay = NextWeekday(Today);
+        var futureDay = F.AddDays(1); // Thursday — already a weekday, no nudge needed
         await BookVacationAsync(employeeId, futureDay, 7.4m);
         Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, futureDay)); // 7.4 / 7.4 = 1.0 at full-time
 
-        // A PAST-dated VACATION (seeded directly into the projection — it predates today and could
-        // not be booked via the future-only window). Recorded feriedage 1.0; must stay 1.0.
-        var pastDay = Today.AddDays(-30);
+        // A PAST-dated VACATION (seeded directly into the projection rather than via the Skema
+        // save POST — the save path itself has no wall-clock date guard and would happily book a
+        // past date; direct seeding is simply the simplest way to plant a KNOWN feriedage on a day
+        // the revaluation below must leave untouched). Recorded feriedage 1.0; must stay 1.0.
+        var pastDay = F.AddDays(-30);
         var pastFeriedageBefore = 1.0m;
         await SeedPastAbsenceProjectionRowAsync(employeeId, pastDay, "VACATION", 7.4m, pastFeriedageBefore);
 
         // PUT: full-time → half-time, effectiveFrom = today (validator-narrowed).
         var adminClient = AdminClient();
         var version = await ReadProfileVersionAsync(adminClient, employeeId);
-        var putRsp = await PutProfileAsync(adminClient, employeeId, Today, 0.500m, position: null, ifMatch: $"\"{version}\"");
+        var putRsp = await PutProfileAsync(adminClient, employeeId, F, 0.500m, position: null, ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, putRsp.StatusCode); // ETag flow unchanged
 
+        // RED: fails if the revaluation does not touch the future absence (feriedage would stay at
+        // 1.0 instead of doubling to 2.0) or DOES touch the past absence (feriedage would move off
+        // its seeded 1.0) — the real subject this pin catches. (F itself sits in the real past, so
+        // an unconverted PUT validator would accept this request too; this pin is clock-insensitive.)
         // Future absence revalued: 7.4 / 3.7 = 2.0 (was 1.0).
         Assert.Equal(2.0m, await ReadFeriedageAsync(employeeId, futureDay));
         // Past absence untouched.
@@ -138,8 +159,13 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
             "Expected an audit_projection row for EntitlementBalanceRevalued (ADR-026 mapper).");
 
         // used adjusted by +1.0 (future absence only: 1.0 → 2.0). VACATION entitlement_year for a
-        // future weekday: reset month 9 ⇒ year = (month ≥ 9 ? year : year−1); the PAST absence is in
-        // its own ferieår and was NOT revalued, so only the future group's delta lands.
+        // future weekday: reset month 9 ⇒ year = (month ≥ 9 ? year : year−1). Under F, the PAST
+        // absence (F-30 = 2025-02-10) and the FUTURE one (F+1 = 2025-03-13) are actually BOTH in
+        // ferieår 2024 (Sept 2024 – Aug 2025) — they share this same balance group, not separate
+        // ones. The used==2.0 pin holds because the seeded past row's feriedage was never touched
+        // by the revaluation (asserted above), not because it lives elsewhere; a defect that wrongly
+        // revalued the past row too would push this SAME group to 3.0, so the pin is MORE
+        // discriminating than a same-group-vs-different-group split would suggest.
         // We assert the future group's used reflects the +1.0 revaluation delta on top of its booked 1.0.
         var futureYear = futureDay.Month >= 9 ? futureDay.Year : futureDay.Year - 1;
         var (_, usedFuture) = await ReadBalanceAsync(employeeId, "VACATION", futureYear);
@@ -177,7 +203,8 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
 
         // A future Feb weekday (Jan–Apr window) of NEXT year — always ≥ today, always in Jan–Apr.
         // Resolver: Jan–Apr T → accrual year T−2. Calendar (pre-fix) helper: the booking's own year.
-        var bookingDate = NextWeekday(new DateOnly(Today.Year + 1, 2, 14));
+        // Feb 14 of F.Year+1 (2026-02-14) is a Saturday; the next weekday is 2026-02-16 (Monday).
+        var bookingDate = new DateOnly(F.Year + 1, 2, 16);
         var resolvedAccrualYear = bookingDate.Year - 2;   // T−2 (the correct, resolver-keyed year)
         var calendarYear = bookingDate.Year;              // the pre-fix split-brain key
 
@@ -188,9 +215,11 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
         var adminClient = AdminClient();
         var version = await ReadProfileVersionAsync(adminClient, employeeId);
         var putRsp = await PutProfileAsync(
-            adminClient, employeeId, Today, 0.500m, position: null, ifMatch: $"\"{version}\"");
+            adminClient, employeeId, F, 0.500m, position: null, ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, putRsp.StatusCode);
 
+        // RED: fails if the revaluation keys the delta to the raw calendar year instead of the
+        // resolver's T−2 accrual year (the pre-fix split-brain this test exists to catch).
         // The recorded feriedage doubled (7.4 / 3.7 = 2.0) — the revaluation ran.
         Assert.Equal(2.0m, await ReadFeriedageAsync(employeeId, bookingDate));
 
@@ -226,9 +255,13 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
         var employeeId = await SeedFullTimeEmployeeAsync();
 
         // Book 24 future VACATION days WITHIN a single ferieår (≤ the 25-day forskud cap for a
-        // full-timer). To keep them all in ONE ferieår regardless of today, only book days that
-        // share the firstAbsenceDate's ferieår (reset month 9): stop at the next Sep-1 boundary.
-        var firstDay = NextWeekday(Today);
+        // full-timer). To keep them all in ONE ferieår, only book days that share the
+        // firstAbsenceDate's ferieår (reset month 9): stop at the next Sep-1 boundary. F is
+        // 2025-03-12 (March), so firstYear = 2024 and the tail runs to 2025-09-01 — comfortably
+        // enough weekdays to book all 24 (S139/TASK-13908: no runtime NextWeekday nudge needed
+        // since F is fixed; the inline stepping below is plain deterministic calendar math, not a
+        // wall-clock nudge).
+        var firstDay = F.AddDays(1); // Thursday — same day as the marquee tests' futureDay
         var firstYear = firstDay.Month >= 9 ? firstDay.Year : firstDay.Year - 1;
         var ferieaarEndExclusive = new DateOnly(firstYear + 1, 9, 1); // next Sep-1
         var day = firstDay;
@@ -237,29 +270,33 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
         {
             await BookVacationAsync(employeeId, day, 7.4m); // 1.0 each at full-time
             booked++;
-            day = NextWeekday(day);
+            do { day = day.AddDays(1); } while (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday);
         }
-        Assert.True(booked >= 1, "Expected to book at least one future VACATION day in the ferieår.");
+        // S139/TASK-13908 Step-5a cycle-2 (W2'): pinned to the EXACT count, not merely >= 1 — under
+        // F the loop deterministically books 24 weekdays (2025-03-13 through 2025-04-15), stopping
+        // on the count cap long before the 2025-09-01 ferieår-tail cap. A future regression that
+        // booked fewer days would fail HERE instead of silently skipping the past-cap check below.
+        Assert.Equal(24, booked);
 
         var (_, usedBefore) = await ReadBalanceAsync(employeeId, "VACATION", firstYear);
         Assert.Equal((decimal)booked, usedBefore); // each booked day consumed 1.0 at full-time
 
         var adminClient = AdminClient();
         var version = await ReadProfileVersionAsync(adminClient, employeeId);
-        var putRsp = await PutProfileAsync(adminClient, employeeId, Today, 0.500m, position: null, ifMatch: $"\"{version}\"");
+        var putRsp = await PutProfileAsync(adminClient, employeeId, F, 0.500m, position: null, ifMatch: $"\"{version}\"");
 
+        // RED: fails if the revaluation clamps used at the 25-day cap instead of succeeding —
+        // ADR-032 D4's revaluation path is UNGATED, unlike the booking guard.
         // The PUT succeeds despite pushing used past the 25 cap (ungated revaluation, ADR-032 D4).
         Assert.Equal(HttpStatusCode.OK, putRsp.StatusCode);
-        Assert.NotEqual(HttpStatusCode.InternalServerError, putRsp.StatusCode);
 
         var (_, usedAfter) = await ReadBalanceAsync(employeeId, "VACATION", firstYear);
         // Every booked day in this ferieår doubled (1.0 → 2.0). used = 2 × usedBefore.
         Assert.Equal(usedBefore * 2m, usedAfter);
-        // For the past-cap intent we need ≥ 13 booked days so 2× exceeds the 25-day cap. If the
-        // ferieår tail was too short to book 13 (today within ~13 weekdays of Sep 1), the doubling
-        // is still pinned above; the strict past-cap assertion only fires when representable.
-        if (booked >= 13)
-            Assert.True(usedAfter > 25m, $"Revaluation must be allowed past the 25-day cap; used={usedAfter}.");
+        // S139/TASK-13908 Step-5a cycle-2 (W2'): now that `booked` is pinned to EXACTLY 24 (not
+        // merely >= 1 or >= 13), 24 × 2 = 48 always exceeds the 25-day cap, so this assertion runs
+        // UNCONDITIONALLY — the `if (booked >= 13)` guard that used to make it conditional is gone.
+        Assert.True(usedAfter > 25m, $"Revaluation must be allowed past the 25-day cap; used={usedAfter}.");
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -276,16 +313,18 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
     public async Task NoFullDayHoursAffectingChange_NoRevaluation_EtagFlowUnchanged()
     {
         var employeeId = await SeedFullTimeEmployeeAsync();
-        var futureDay = NextWeekday(Today);
+        var futureDay = F.AddDays(1); // Thursday — already a weekday, no nudge needed
         await BookVacationAsync(employeeId, futureDay, 7.4m);
         Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, futureDay));
 
         var adminClient = AdminClient();
         var version = await ReadProfileVersionAsync(adminClient, employeeId);
         // Re-state the SAME fraction (1.0) and SAME position (null) — no fullDayHours-affecting change.
-        var putRsp = await PutProfileAsync(adminClient, employeeId, Today, 1.000m, position: null, ifMatch: $"\"{version}\"");
+        var putRsp = await PutProfileAsync(adminClient, employeeId, F, 1.000m, position: null, ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, putRsp.StatusCode);
 
+        // RED: fails if a no-change PUT still triggers a revaluation (feriedage would move, or an
+        // EntitlementBalanceRevalued event would be emitted, when nothing fullDayHours-affecting changed).
         // No revaluation: feriedage unchanged, no event.
         Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, futureDay));
         var (revaluedCount, _) = await ReadRevaluedReplacementAsync(employeeId, futureDay, "VACATION");
@@ -325,7 +364,7 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
             """, conn))
         {
             profileCmd.Parameters.AddWithValue("e", employeeId);
-            profileCmd.Parameters.AddWithValue("today", Today);
+            profileCmd.Parameters.AddWithValue("today", F);
             await profileCmd.ExecuteNonQueryAsync();
         }
 
@@ -362,8 +401,10 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
     }
 
-    /// <summary>Directly seeds a PAST-dated absence projection row with a known feriedage (the past
-    /// window cannot be booked through the future-only save path).</summary>
+    /// <summary>Directly seeds a PAST-dated absence projection row with a known feriedage. The
+    /// Skema save POST itself has no wall-clock date guard and could book a past date fine; direct
+    /// seeding is simply the simplest way to plant a KNOWN feriedage for a "must stay untouched"
+    /// pin without depending on the save/valuation path at all.</summary>
     private async Task SeedPastAbsenceProjectionRowAsync(
         string employeeId, DateOnly date, string absenceType, decimal hours, decimal feriedage)
     {
@@ -454,8 +495,10 @@ public sealed class Adr032RevaluationTests : IAsyncLifetime
         return (count, newFeriedage);
     }
 
-    /// <summary>Books a SPECIAL_HOLIDAY day via the future-only Skema save path (the raw absence
-    /// type is <c>SPECIAL_HOLIDAY_ALLOWANCE</c>, which maps to the <c>SPECIAL_HOLIDAY</c> entitlement).</summary>
+    /// <summary>Books a SPECIAL_HOLIDAY day via the Skema save path (the raw absence type is
+    /// <c>SPECIAL_HOLIDAY_ALLOWANCE</c>, which maps to the <c>SPECIAL_HOLIDAY</c> entitlement). The
+    /// save path itself has no wall-clock date guard — the day booked here is "future" only because
+    /// the test chooses one after F, not because the endpoint enforces it.</summary>
     private async Task BookSpecialHolidayAsync(string employeeId, DateOnly date, decimal hours)
     {
         var client = _ruleStubbedClient;
