@@ -8,7 +8,7 @@
 | **End Date** | 2026-09-07 |
 | **Orchestrator Approved** | yes — 2026-09-07 (plan: the owner agreed the shape and ruled OQ-1 (a) / OQ-2 (b) / OQ-3 (a), refinement rev 3 · close: Step-5a dual-lens terminal — Codex CLEAN ×2, Reviewer 0 B / 2 W + 2 W all absorbed and verified; Step-7a Codex **CLEAN at cycle 3**, Reviewer **APPROVED-WITH-WARNINGS** with every W and N absorbed — the cycle-2 verification is the artifact `.claude/reviews/SPRINT-139-step7a-reviewer.md`; the HR register is review-complete; the owner's four rulings were recorded post-close on 2026-09-08 in a docs-only commit) |
 | **Build Verified** | yes — `dotnet build StatsTid.sln -c Release --no-incremental` **0 errors** on the final tree (145 warnings = baseline; CA2100 distinct sites **115** = baseline, recounted three times) |
-| **Test Verified** | local, final tree: unit **1235/1235** · DemoSeed **165/165** · regression non-Docker **102/102** · frontend **735/735** + `tsc` clean — all green; Docker-gated pins (the probe, two repository-guard tests, eight anchor facts, 65 converted pins) + smoke: **CI-pending** — watched close run, backfilled here when green (Docker unavailable on the owner's machine, standing instruction) |
+| **Test Verified** | **✅ CI GREEN `34148997832`** (all 7 jobs, 2026-09-07 19:14 UTC, **first run** — S138 needed three): unit **1235/1235** · DemoSeed **165/165** · regression **1814/1814** (+15 Docker-gated facts: the probe, two repository-guard tests, eight anchor facts and the converted pins) · smoke **7/7** · frontend **735/735** + `tsc` clean. Total **3956 (+15 vs S138)**. Local before push: build 0 errors, unit 1235, DemoSeed 165, non-Docker regression 102, frontend 735. |
 | **Orchestrator model** | Open — Steps 0a / 0b / 1, this log: **Fable 5.1** ✓ · Dispatch, monitoring, acceptance bookkeeping, CI watch (Steps 2–4, 6): **Fable** — the owner chose NOT to switch at dispatch ("dispatch wave 1" on Fable, 2026-09-07); the switch point was offered and declined, recorded for the retrospective and the model-routing register · Step-5a / 7a absorption and every ruling on an agent's declared deviation: **Fable** · Close bookkeeping + CI backfill: **Opus**. First live run of `docs/WORKFLOW.md` § Model Routing; agents are spawned by role name, no `model` override. |
 | **Sprint-start commit** | `6e8d2a7` (S138 post-close CI-green backfill) — the `codex review --base` fallback anchor for Step 7a |
 
@@ -372,7 +372,7 @@ column (`EmployeeProfileSeeder.cs:100-104`), so the row takes the schema default
 - [x] P7 — Security & access control: token minting and audit stamps stay on the real clock BY DESIGN (nine
       `AdminEndpoints.cs` sites + `OccurredAt` untouched, verified by both lenses); `RequireAuthorization` unchanged on
       every changed endpoint; authorization as-of reads classified business-date and left for QUAL-154.
-- [ ] P8 — CI/CD enforcement: local gates green (build 0 errors / 145 warnings = baseline; CA2100 115 = baseline; Unit
+- [x] P8 — CI/CD enforcement — **CI GREEN `34148997832`, all 7 jobs, first run**; local gates green (build 0 errors / 145 warnings = baseline; CA2100 115 = baseline; Unit
       1235 · DemoSeed 165 · non-Docker Regression 102); the ~30 converted / new Docker-gated pins and `check_docs.py`
       verify in the watched CI run at close — **ticked at CI green**.
 - [x] P9 — Usability & UX: Part A's register names the Increment-4 inputs and recommends the surface shape; no UI
@@ -392,13 +392,13 @@ column (`EmployeeProfileSeeder.cs:100-104`), so the row takes the schema default
 
 | Suite | S138 baseline | S139 local (final tree) | S139 CI | Status |
 |-------|---------------|-------------------------|---------|--------|
-| Unit | 1235 | **1235** | — | green locally |
-| DemoSeed | 165 | **165** | — | green locally |
-| Regression, non-Docker | 102 | **102** | — | green locally |
-| Regression, Docker-gated | 1697 (of 1799) | not runnable here | pending | new: the probe (4 legs) + 2 repository-guard tests + 8 anchor facts; converted: 65 pins across 8 suites |
-| Smoke | 7 | not runnable here | pending | |
-| Frontend | 735 | **735** (59 files) + `tsc --noEmit` clean — no FE change, run for the record | pending | green locally |
-| **Total** | **3941** | | **pending CI** | |
+| Unit | 1235 | **1235** | **1235** | green |
+| DemoSeed | 165 | **165** | **165** | green |
+| Regression, non-Docker | 102 | **102** | (in 1814) | green |
+| Regression, Docker-gated | 1697 (of 1799) | not runnable here | **1814 total regression** (+15) | green in CI — the probe, two repository-guard tests, eight anchor facts, 65 converted pins |
+| Smoke | 7 | not runnable here | **7** | green in CI |
+| Frontend | 735 | **735** (59 files) + `tsc` clean | **735** | green |
+| **Total** | **3941** | | **3956 (+15)** | ✅ CI GREEN `34148997832`, first run |
 
 ## Agent Effectiveness
 
@@ -843,3 +843,13 @@ section matches code and harness; PAT-028 exists, is INDEX-linked, its signature
 - **No finding remains open on either lens.** Every fix made after a review was itself reviewed: the hoist by both
   lenses, the doc re-cites by both, the one-token cite fix by Codex cycle 3, the three probe strings by grep (comment
   and label text only).
+
+## CI GREEN — run `34148997832` (all 7 jobs, 2026-09-07 19:14 UTC, first run)
+
+Build-and-test: Unit 1235 · DemoSeed 165 · **Regression 1814/1814** (1 h 25 m; +15 vs S138's 1799 — every Docker-gated
+pin this sprint wrote or converted executed for the first time here and passed: the probe's four legs, the two
+repository-guard tests, the eight anchor facts, and the 65 converted pins on their constant anchors). Smoke 7/7 ·
+frontend-build 735/735 · E2E (Playwright) · gitleaks · lizard · `check_docs.py` (the new register, PAT-028 INDEX row,
+anchors 139) all green. **One run to green** — S138 needed three, and the reason it needed three (calendar-floating
+dates) is what this sprint removed. The docs-only rulings commit `f76799e` ran green too (`34196927619`). This backfill
+is docs-only; no Step-7a cycle applies.
