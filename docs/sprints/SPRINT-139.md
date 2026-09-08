@@ -6,7 +6,7 @@
 | **Status** | complete |
 | **Start Date** | 2026-09-07 |
 | **End Date** | 2026-09-07 |
-| **Orchestrator Approved** | yes — 2026-09-07 (plan: the owner agreed the shape and ruled OQ-1 (a) / OQ-2 (b) / OQ-3 (a), refinement rev 3 · close: Step-5a dual-lens terminal — Codex CLEAN ×2, Reviewer 0 B / 2 W + 2 W all absorbed and verified; Step-7a Codex **CLEAN at cycle 3**, Reviewer **APPROVED-WITH-WARNINGS** with every W and N absorbed — the cycle-2 verification is the artifact `.claude/reviews/SPRINT-139-step7a-reviewer.md`; the HR register is review-complete, the owner's shape ruling is pending and will be recorded post-close) |
+| **Orchestrator Approved** | yes — 2026-09-07 (plan: the owner agreed the shape and ruled OQ-1 (a) / OQ-2 (b) / OQ-3 (a), refinement rev 3 · close: Step-5a dual-lens terminal — Codex CLEAN ×2, Reviewer 0 B / 2 W + 2 W all absorbed and verified; Step-7a Codex **CLEAN at cycle 3**, Reviewer **APPROVED-WITH-WARNINGS** with every W and N absorbed — the cycle-2 verification is the artifact `.claude/reviews/SPRINT-139-step7a-reviewer.md`; the HR register is review-complete; the owner's four rulings were recorded post-close on 2026-09-08 in a docs-only commit) |
 | **Build Verified** | yes — `dotnet build StatsTid.sln -c Release --no-incremental` **0 errors** on the final tree (145 warnings = baseline; CA2100 distinct sites **115** = baseline, recounted three times) |
 | **Test Verified** | local, final tree: unit **1235/1235** · DemoSeed **165/165** · regression non-Docker **102/102** · frontend **735/735** + `tsc` clean — all green; Docker-gated pins (the probe, two repository-guard tests, eight anchor facts, 65 converted pins) + smoke: **CI-pending** — watched close run, backfilled here when green (Docker unavailable on the owner's machine, standing instruction) |
 | **Orchestrator model** | Open — Steps 0a / 0b / 1, this log: **Fable 5.1** ✓ · Dispatch, monitoring, acceptance bookkeeping, CI watch (Steps 2–4, 6): **Fable** — the owner chose NOT to switch at dispatch ("dispatch wave 1" on Fable, 2026-09-07); the switch point was offered and declined, recorded for the retrospective and the model-routing register · Step-5a / 7a absorption and every ruling on an agent's declared deviation: **Fable** · Close bookkeeping + CI backfill: **Opus**. First live run of `docs/WORKFLOW.md` § Model Routing; agents are spawned by role name, no `model` override. |
@@ -748,6 +748,21 @@ separate clock reads.
 reviews found twice); **PAT-008** rewritten around the shared fixture, the `WithFixedToday` opt-in, the falsifiability
 probe and the rule that the fixed clock must reach the product; the **HRP register** as a new durable operations
 document; ten **QUAL** rows; the runbook's UTC-session section.
+
+## Owner rulings (post-close, 2026-09-08 — asked one question at a time; docs-only commit)
+
+| # | Question | Ruling | Consequence |
+|---|----------|--------|-------------|
+| 1 | Which shape for HR's follow-up surface? | **Shape 3** — one HR landing page, a tile per process (count + oldest item), each process's own list behind it | Increment 4's design input; shapes 1 and 2 declined for the trade-offs the register states |
+| 2 | Accept the §21 transfer-agreement reminder (HRP-010)? | **Accepted as proposed** — from 1 November, projection-based until the close, days to 31 December; a GET for recorded agreements added | the only aging rule ruled from the register's own proposal; no new automation (the post-31-Dec §24 payout already exists) |
+| 3 | Rule the institutional payroll cutoff now? | **Yes, provisionally** — month-end + 2 (submit) / + 5 (approve) ratified as institutional defaults; **export cutoff = the manager deadline**; configurable per institution later | **HRP-011, 012, 022 → DECISION-READY** (four of fifteen); QUAL-163's tile can be computed honestly; their aging proposals are drafted in the register for S140's refinement (not yet lens-reviewed) |
+| 4 | When does QUAL-154 (the six deferred suites) run? | **The first task of S140**, before Increment 4's own work | closes the flake class before new date-sensitive suites are written on the same paths; the 1 September hard failure is defused in time |
+
+Recorded in the register (§ Owner rulings + the three rows flipped to READY, counts recomputed: READY 4 / NOT READY
+11), the QUAL register (QUAL-154 SCHEDULED; QUAL-163 disposition), ROADMAP (the HR item, the QUAL-154 row, the
+Increment-4 inputs) and the sprint INDEX row. A standing preference surfaced with the rulings — the owner wants
+pending decisions asked **one question at a time**, not listed in a recap — and is saved as a memory for future
+sessions.
 
 **Step 7a and the model-routing register row follow below once both lenses report.**
 

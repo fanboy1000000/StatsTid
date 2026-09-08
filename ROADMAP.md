@@ -144,7 +144,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   read-side). **Increment 3 (S138) SHIPPED** (temporal editing, ADR-040 D8: dated profile + agreement-code
   writes through one pure router, category EDITABLE and NOT NULL, the HR backdate worklist, the S136
   leaver-send dead-end fixed; future-dating deliberately held for Increment 4 under the "current ≠ live"
-  precondition). Remaining: **Increment 4** (lifecycle UX — design inputs: the HR follow-up register's Increment-4 checklist, S139: the landing tiles, the worklist UI with its role-mismatch decision, the termination screen, the admin-create hire date, the "efter frist" tile fix, routing the overtime page) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
+  precondition). Remaining: **Increment 4** (lifecycle UX — design inputs: the HR follow-up register's Increment-4 checklist, S139: the landing tiles, the worklist UI with its role-mismatch decision, the termination screen, the admin-create hire date, the "efter frist" tile fix computed from the owner-ratified +2/+5 deadlines, routing the overtime page) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
   until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail) · **OQ-4** (IMMEDIATE-
   grant pro-rating at mid-year hire → Phase B expert list). **S137-owed items by increment:** Increment 3 — **all three DELIVERED in
   S138**: the retroactive-correction window pin (the Docker pin that exports a windowless month, records a
@@ -203,9 +203,10 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   visible (2 embedded tiles, 3 API lists, 1 write-only, 9 with no surface), nothing escalates, and only ONE hand-off
   has a stated deadline (§21 transfer, 31 Dec) — the other 14 wait for "by when" to be ruled. The biggest gap sat
   outside every sweep: every approved month reaches payroll only by a manual per-employee export call (HRP-022).
-  **Recommendation: shape 3** (one HR landing page, one tile per process, per-process lists behind them). **Owner
-  ruling at the S139 close** (shape · the one aging proposal · optionally the institutional payroll cutoff that would
-  unlock three rows); the register's Increment-4 checklist is the design input for S140. [S139 TASK-13904]
+  **Recommendation: shape 3** (one HR landing page, one tile per process, per-process lists behind them). **Owner ruled 2026-09-08 (post-close):** shape 3; the §21 reminder from 1 November (projection-based until the close);
+  the month-end + 2 / + 5 deadlines ratified as provisional institutional defaults with the export cutoff at the manager
+  deadline (HRP-011/012/022 now decision-ready — four of fifteen); the register's Increment-4 checklist is the design
+  input for S140. [S139 TASK-13904]
 
 ### Usability / accessibility
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
@@ -216,8 +217,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   agreement-code and approval-projection paths (shared `FixedTimeProvider`, `WithFixedToday`, the probe, the product
   clock seam). Six more hazardous suites wait for seams the OQ-1 (a) ruling did not name (`DelegationExpiryService.cs:86`
   SQL; the designated-approver authorizer's fallbacks; `SkemaEndpoints.cs:218`; the `ApprovalEndpoints` as-of reads) plus
-  a secondary `.Month/.Year/.DayOfWeek` scan over ~65 files the offset proxy classified blind. One bounded task; the
-  owner may pull it forward. [S139 · QUAL-154, QUAL-155, QUAL-156]
+  a secondary `.Month/.Year/.DayOfWeek` scan over ~65 files the offset proxy classified blind. **Owner ruled 2026-09-08: the FIRST task of S140**, before Increment 4's own work. [S139 · QUAL-154, QUAL-155, QUAL-156]
 - **Docker on the dev VDI** — impossible without nested virtualization; an IT ticket, may be declined. [S128 FU-E]
 - **SDK/toolchain fragility on the VDI** — SDK 8 vanished once (restored); Python absent (openapi
   gates run CI-only from here). [S128 FU-E]
