@@ -2261,9 +2261,14 @@ public static class ApprovalEndpoints
             conn, tx, periodId, actor.ActorId!, orgId, agreementCode, okVersion, ct);
 
         // Deadlines (in-tx). monthEnd IS the month's last day — both adapters guarantee it — so this
-        // is the same +2 / +5 the by-id route has always written.
+        // is the same +2 / +5 the by-id route has always written. S140 / TASK-14004: the offsets now
+        // come from InstitutionalDeadlines (SharedKernel) rather than being written literally here,
+        // so this stamping site, the Skema period-creation read, and the HR follow-up reads' computed
+        // fallback all derive the two dates from ONE named rule. Values unchanged (the owner-ratified
+        // PROVISIONAL institutional defaults; SYSTEM_TARGET §G).
+        var (employeeDeadline, managerDeadline) = InstitutionalDeadlines.ForMonthEnd(monthEnd);
         await svc.ApprovalRepo.UpdateDeadlinesAsync(
-            conn, tx, periodId, monthEnd.AddDays(2), monthEnd.AddDays(5), ct);
+            conn, tx, periodId, employeeDeadline, managerDeadline, ct);
 
         // Audit trail (in-tx). The action stays the LITERAL "SUBMITTED": approval_audit.action's
         // CHECK (init.sql:903) has no EMPLOYEE_APPROVED member, and this route has always written
