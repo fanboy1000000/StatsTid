@@ -43,6 +43,8 @@ const tabGroups: TabGroup[] = [
       // Organisation [/global/organisation] entries, which now redirect here).
       { label: 'Organisation & medarbejdere', to: '/admin/organisation-medarbejdere', minRole: 'LocalHR' },
       { label: 'Audit log', to: '/admin/auditlog', minRole: 'LocalHR' },
+      // S140 / TASK-14006 — the HR follow-up landing page (S139's register).
+      { label: 'Opfølgning', to: '/admin/opfoelgning', minRole: 'LocalHR' },
       { label: 'Projekter', to: '/admin/projekter', minRole: 'LocalAdmin' },
       { label: 'Brugerrettigheder', to: '/admin/brugerrettigheder', minRole: 'LocalAdmin' },
     ],

@@ -48,6 +48,10 @@ const DelegationPage = lazy(() => import('./pages/delegation/DelegationPage').th
 // LeaderOrAbove (`OvertimeEndpoints.cs:355/435/508`), so it joins the
 // "Godkend tid" (LocalLeader+) group below, not Administration.
 const OvertimePreApprovalManagement = lazy(() => import('./pages/admin/OvertimePreApprovalManagement').then(m => ({ default: m.OvertimePreApprovalManagement })))
+// SPRINT-140 / TASK-14006 (refinement B4) — the HR follow-up landing page
+// (S139's register: one tile per process, count + oldest, list on the same
+// page via a route param).
+const OpfoelgningPage = lazy(() => import('./pages/admin/opfoelgning/OpfoelgningPage').then(m => ({ default: m.OpfoelgningPage })))
 
 import './styles/tokens.css'
 
@@ -113,6 +117,11 @@ function AppRoutes() {
               element={<Navigate to="/admin/organisation-medarbejdere" replace />}
             />
             <Route path="admin/auditlog" element={<AuditLogView />} />
+            {/* SPRINT-140 / TASK-14006 — the HR follow-up landing page. Two
+                routes so a tile can open its list "on the same page" via a
+                route param without an optional-segment path syntax. */}
+            <Route path="admin/opfoelgning" element={<OpfoelgningPage />} />
+            <Route path="admin/opfoelgning/:tile" element={<OpfoelgningPage />} />
           </Route>
           {/* LocalAdmin routes within Administration */}
           <Route element={<RequireRole minRole="LocalAdmin" />}>

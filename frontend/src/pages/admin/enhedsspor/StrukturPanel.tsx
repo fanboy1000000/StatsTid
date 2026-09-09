@@ -941,6 +941,15 @@ export function StrukturPanel({
   const settlementPending = roster?.pendingCountByManager ?? {}
   const indsendCount = (roster?.employees ?? []).filter((p) => p.periodStatus === 'OPEN' && !p.isOrphan).length
   const godkendCount = Object.keys(settlementPending).length
+  // SPRINT-140 / TASK-14006 (QUAL-163) — the tile's caption used to claim
+  // "godkendere efter frist" without reading any deadline: nothing computed
+  // it, so it was true of every manager with a pending period regardless of
+  // whether that period was actually past its deadline (`hr-follow-up-
+  // process-register.md` HRP-012 row). B2 (TASK-14004) added the genuine
+  // past-deadline subset as its own roster field; this reads THAT field
+  // rather than restating the (already correct) `godkendCount`.
+  const settlementPastDeadline = roster?.pendingPastDeadlineCountByManager ?? {}
+  const godkendPastDeadlineCount = Object.keys(settlementPastDeadline).length
   const orphanPeople = (roster?.employees ?? []).filter((p) => p.isOrphan)
 
   // The active filter's per-person predicate (narrows the Struktur people in walkUnit).
@@ -1324,7 +1333,9 @@ export function StrukturPanel({
             >
               <span className={styles.settleLabel}>Ikke godkendt</span>
               <span className={styles.settleValue} data-testid="settle-count-godkend">{godkendCount}</span>
-              <span className={styles.settleDetail}>godkendere efter frist</span>
+              <span className={styles.settleDetail} data-testid="settle-count-godkend-past-deadline">
+                heraf {godkendPastDeadlineCount} efter frist
+              </span>
             </button>
           </div>
 
