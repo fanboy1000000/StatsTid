@@ -485,11 +485,20 @@ public sealed class HrFollowUpApprovalEndpointTests : IAsyncLifetime
     /// <para><b>Red conditions.</b> (1) Restore the old
     /// <c>ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)</c> floor (or any UTC-midnight floor) →
     /// the boundary leg falls outside <c>@since</c>, does not appear, and <c>Assert.Single</c>
-    /// matches the 31-day leg instead. (2) Make <c>ev.occurred_at &gt;= @since</c> exclusive → the
-    /// boundary leg still drops. (3) Widen the window to 31 days → the 31-day leg appears and
-    /// <c>Assert.Single</c> fails on two matches. (4) Compute <c>ExpiredAt</c> /
+    /// matches the 31-day leg instead. (2) Widen the window to 31 days → the 31-day leg appears and
+    /// <c>Assert.Single</c> fails on two matches. (3) Compute <c>ExpiredAt</c> /
     /// <c>DaysSinceExpiry</c> from the UTC date instead of the Copenhagen date → the boundary leg
     /// reports 31, not 30.</para>
+    ///
+    /// <para><b>What this fact does NOT pin, stated so nobody trusts it to</b> (Step-7a cycle 2,
+    /// Codex — corrected from an earlier red condition that claimed otherwise). It does not pin the
+    /// INCLUSIVITY of <c>ev.occurred_at &gt;= @since</c>. The boundary instant is deliberately 30
+    /// minutes INSIDE the floor (22:30Z against a 22:00Z floor) because its job is to discriminate
+    /// the ZONE CONVERSION — a UTC-midnight floor excludes it, a Copenhagen-midnight floor includes
+    /// it — and an instant 30 minutes inside the floor survives an exclusive comparison too. A fact
+    /// that pinned inclusivity would seed exactly AT the floor (Copenhagen midnight of F−30, i.e.
+    /// 22:00Z on F−31) and assert it appears. That is a different fact and is not written; claiming
+    /// it here would be the overclaim this sprint has now corrected six times.</para>
     /// </summary>
     [Fact]
     public async Task UncoveredApprovers_ExpiredDelegation_30DaysAppears_31DaysDoesNot()

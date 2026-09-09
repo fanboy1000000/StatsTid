@@ -272,8 +272,26 @@ public static class OrchestratorScopeHelpers
         // GLOBAL scope, NOT merely ScopeType == "GLOBAL". A GLOBAL scope is only ever issued to a
         // GlobalAdmin, so requiring the role closes a theoretical over-grant — a lower-role token
         // that somehow bore a GLOBAL-type scope would otherwise get an unrestricted task-read
-        // bypass — and keeps this consistent with the role-based `GlobalAdminOnly` policy the rest
-        // of the sprint's floors (SEC-032/SEC-023) use.
+        // bypass.
+        //
+        // CORRECTED S140 (QUAL-170; the register's own instruction was "correct the comment now").
+        // This comment previously claimed the scope fallback below "keeps this consistent with the
+        // role-based `GlobalAdminOnly` policy". THAT IS FALSE, and S140 found the identical false
+        // claim above a worklist gate where it had made the gate LOOSER than the endpoint it
+        // mirrored. `GlobalAdminOnly` is `ScopeRequirement(requireOrgScope: false, GlobalAdmin)`
+        // (`AuthorizationPolicies.cs:16-19`); `ScopeAuthorizationHandler` reads the primary role
+        // claim (`:12`), returns without succeeding when it is not allowed (`:16`), and — because
+        // `RequireOrgScope` is false — succeeds and returns at `:22-23` BEFORE the block that
+        // parses `scopes`. So the policy NEVER consults the scopes array for the role decision:
+        // accepting a scope-derived signal is a DIVERGENCE from that policy, not consistency with
+        // it. The fallback is retained deliberately for now because, unlike the worklist gate,
+        // removing it is NOT obviously strictly-tightening — it defends a real design property (a
+        // GlobalAdmin must be able to read a task whose subject employee no longer resolves, the
+        // SEC-021 terminated-subject fix, pinned in
+        // `tests/StatsTid.Tests.Regression/Security/OrchestratorTaskReadAuthorizationTests.cs`).
+        // Whether the "legacy/other role string" actor shape it protects is real needs an owner
+        // ruling: see QUAL-170. Do not "re-align" this with the worklist gate without that ruling,
+        // and do not restore the consistency claim.
         return actor.Scopes is { Length: > 0 }
             && actor.Scopes.Any(s =>
                 string.Equals(s.Role, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal)
