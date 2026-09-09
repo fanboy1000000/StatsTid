@@ -258,29 +258,39 @@ public static class BackdateWorklistEndpoints
     // ── the in-handler Global-Admin test (S140 / TASK-14010, owner ruling OQ-7 (a)) ──
 
     /// <summary>
-    /// Whether the actor is a Global Admin, decided PURELY from its own claims — the same idiom as
-    /// <c>OrchestratorScopeHelpers.IsGlobalAdmin</c> (that project is not referenced here, so the
-    /// two-line predicate is repeated rather than shared).
+    /// Whether the actor is a Global Admin, decided PURELY from its own claims — and decided THE
+    /// SAME WAY the <c>GlobalAdminOnly</c> policy decides it, because the only job of this gate is
+    /// to mirror that policy's verdict on THE REMEDY (<c>POST /api/payroll/recalculate</c>).
     ///
-    /// <para><b>Primary signal = the GlobalAdmin ROLE claim,</b> because that is exactly what the
-    /// <c>GlobalAdminOnly</c> policy tests: it is declared with <c>requireOrgScope: false</c>
-    /// (<c>AuthorizationPolicies.cs</c>), so a GlobalAdmin token commonly carries no scopes at all.
-    /// Requiring a scope here would make this gate STRICTER than the payroll-recalculation endpoint
-    /// it mirrors — it would refuse a Global Admin who really can perform the remedy. The GLOBAL
-    /// <c>RoleScope</c> fallback is a secondary signal only, and it requires the scope's own role to
-    /// be GlobalAdmin (SEC-021 / FAIL-001: <c>ScopeType == "GLOBAL"</c> alone would admit a
-    /// mixed-role token that the policy itself would deny).</para>
+    /// <para><b>The PRIMARY ROLE CLAIM, and nothing else.</b> <c>GlobalAdminOnly</c> is declared
+    /// with <c>requireOrgScope: false</c> (<c>AuthorizationPolicies.cs</c>), so
+    /// <see cref="ScopeAuthorizationHandler"/> decides it from the <c>role</c> claim ALONE: it
+    /// reads that claim, fails the requirement when the claim is not in the allowed set, and —
+    /// because no org scope is required — succeeds and returns WITHOUT ever reading the
+    /// <c>scopes</c> array. The role claim is therefore both necessary and sufficient there, and a
+    /// GlobalAdmin token commonly carries no scopes at all.</para>
+    ///
+    /// <para><b>Why there is deliberately NO scope fallback</b> (S140 sprint-end review; the
+    /// SEC-021 mixed-role over-grant family). An earlier revision of this predicate ALSO accepted
+    /// a GLOBAL <see cref="RoleScope"/> whose own role was GlobalAdmin, reasoning that refusing it
+    /// would make this gate STRICTER than the payroll endpoint. That reasoning was inverted: the
+    /// payroll endpoint is strictly primary-role, so the fallback made this gate LOOSER, not safer
+    /// — an actor whose PRIMARY role was LocalHR or LocalAdmin but who held a GLOBAL scope with
+    /// <c>Role = GlobalAdmin</c> was REFUSED by <c>/api/payroll/recalculate</c> and ADMITTED here.
+    /// It could record "this exported payroll month has been recalculated" as audited fact, then be
+    /// unable to actually perform the recalculation, and the row would silently leave HR's open
+    /// list with nobody chasing it. Deleting the fallback is strictly TIGHTENING: no actor who can
+    /// perform the remedy loses anything, because such an actor's primary role IS GlobalAdmin.</para>
+    ///
+    /// <para><b>Not to be "re-aligned" with <c>OrchestratorScopeHelpers.IsGlobalAdmin</c>.</b> That
+    /// helper keeps a GLOBAL-scope fallback on purpose, but it answers a DIFFERENT question — a
+    /// task-READ bypass that must survive an unresolvable subject — not "may this actor perform the
+    /// Global-Admin-only payroll remedy". A gate that mirrors a policy must evaluate exactly what
+    /// that policy evaluates; consistency with a differently-purposed helper is not a reason to
+    /// widen this one.</para>
     /// </summary>
-    private static bool IsGlobalAdmin(ActorContext actor)
-    {
-        if (string.Equals(actor.ActorRole, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal))
-            return true;
-
-        return actor.Scopes is { Length: > 0 }
-            && actor.Scopes.Any(s =>
-                string.Equals(s.Role, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal)
-                && string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal));
-    }
+    private static bool IsGlobalAdmin(ActorContext actor) =>
+        string.Equals(actor.ActorRole, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal);
 
     // ── projection: storage row → wire DTO (derived fields computed here, DB-free) ──
 
