@@ -806,6 +806,125 @@ right that its own new response field required another regeneration, which the O
 Unit **1236**; DemoSeed **165**; non-Docker regression **102**; both new pins discovered; contracts regenerated (**+4 lines** in the
 specification, **+1** in the frontend types — only the new lag field).
 
+### TASK-14006 — the HR follow-up landing page (refinement B4) — **the sprint's headline deliverable**
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-14006 |
+| **Status** | complete and merged (`d51c9bf`); three declared deviations, all accepted; one correction to the Orchestrator's own ruling summary |
+| **Agent** | `ux` (Sonnet), own worktree |
+| **Components** | `frontend/` — `components/ui/ProcessTile`, `pages/admin/opfoelgning/{OpfoelgningPage,FollowUpLists,followUpFormat}`, `hooks/useHrFollowUp`, the route and nav entry, and the organisation-page relabel |
+| **KB Refs** | PAT-026 (why the worklist's "since" fields mean *moved*), PAT-030 (why the enumeration reads report what they report), QUAL-163 (FIXED here) |
+| **Orchestrator Approved** | yes — 2026-09-09; Step-7a covers it |
+
+**What HR can now do that they could not.** S139 catalogued fifteen processes the system hands a person and then forgets: nine had
+no screen at all, three were reachable only by calling an API directly, and one was write-only — a §21 transfer agreement could be
+*recorded* but never *read back*. This page is the first place in the product where that work is visible. Ten tiles, each with an
+open count and the age of its oldest item; a tile opens its process's list on the same page. The two enumeration reads use
+`?summary=true` for their counts, so rendering a number does not pull a full list.
+
+**Five honesty properties, each pinned rather than left to taste** — this is what makes the page trustworthy rather than merely
+present:
+- **Colour appears on exactly four tiles** — the four with a ruled deadline. The other six stay neutral however large their count,
+  because an aging colour on a process with no agreed "by when" invents urgency the organisation never agreed to (S139 ruling
+  OQ-2). It is **structural, not conventional**: `decisionReady` is a static prop the tile checks and is *never derived from the
+  data*, with the reasoning written into the component — so a later edit cannot leak colour by changing a count. The pin asserts
+  the six stay neutral **with all ten counts non-zero**, which is the case a naive test would miss.
+- **The §21 tile is always rendered, in its window state.** Outside 1 November – 31 December it states when it opens rather than
+  showing "0", because an empty list out of season and an empty list in season mean entirely different things.
+- **Nine lists are read-only** (OQ-4) and say so — and the pin asserts they contain **no form element at all**, which is a stronger
+  and more durable check than asserting the absence of a particular button.
+- **Two tiles state that their counts are not additive**, since a leaver's late final month legitimately appears on both and is
+  handed to different roles.
+- **The three history tiles state their rolling 12-month reach and the two event-backed lists surface their publisher lag**, so
+  neither implies a completeness nor an immediacy it does not have. The §21 list also surfaces its `cannotCompute` count and its
+  projection caveat.
+
+**QUAL-163 FIXED here:** the organisation page's tile now reads "Ikke godkendt N — heraf M efter frist" with M from the genuine
+past-deadline subset, pinned with **divergent** mock values (4 and 1) so a component still reading the old field goes red — equal
+values would have passed either way.
+
+**Declared deviations, all accepted:**
+1. `?summary=true` used on exactly the two reads the plan named, though three others also accept it — followed the spec and flagged
+   the narrower reading rather than quietly widening it.
+2. **A correction to the Orchestrator's own ruling summary.** OQ-4 named **four** write-only actions; there are in fact **five** —
+   the §26 payout request is also write-only today. The agent built no form for it either, and deliberately did **not** promise
+   "S141" for an action the ruling never named, rather than silently building nothing or over-promising a date. My summary of the
+   ruling was incomplete; the ruling's *intent* (read-only lists in S140) is unaffected.
+3. It found that the approved-not-exported tile's real resolution path — triggering a payroll export — **has no frontend caller
+   anywhere in the application** (grep-confirmed), which is exactly what the HR register's HRP-022 row recorded in S139. Its note
+   says so honestly instead of pointing at a screen that does not exist.
+
+**Verified on the merged tree (Orchestrator's own runs, statuses read unpiped):** vitest **773 across 65 files** (+25 from this
+task), `tsc --noEmit` **exit 0**.
+
+### TASK-14005 — Docker-gated pins for the eight HR reads (refinement B3)
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-14005 |
+| **Status** | complete and merged (`the wave-3 merge`); **32 new facts**; two declared deviations, both accepted |
+| **Agent** | `test-qa` (Sonnet), own worktree |
+| **Components** | new `tests/StatsTid.Tests.Regression/HrFollowUp/` — settlement-family pins (13), approval/lifecycle/organisation pins (17), and a non-Docker write-guard (2) |
+| **KB Refs** | PAT-008 (the fixed-clock fixture and its boot-order rule), PAT-030 (why the enumeration reads report what they report), ADR-034 D4 (the read-only cross-context contract the write-guard defends) |
+| **Orchestrator Approved** | yes — 2026-09-09 |
+
+**Why this task mattered more than its size suggests.** All eight reads had gone in on a reasoned argument plus two review lenses.
+**Nothing had executed the SQL.** These pins are the first thing that will.
+
+**The two pins I care most about, because they are the ones a lazy version would get wrong:**
+- **The empty-scope 403** uses an actor who passes the `HROrAbove` policy by role but whose only scope carries
+  `ScopeType = "ORG_AND_DESCENDANTS"` — the legacy type S93 retired, which therefore contributes **nothing** to the accessible-org
+  set. That produces a genuinely empty set while the actor is still authorised to reach the endpoint, which is the only way to test
+  "empty scope ⇒ 403, never an empty 200" honestly. Reaching for that construction requires actually understanding the scope model.
+- **The cross-org divergence** is seeded where it bites: `approval_periods.org_id` differs from the employee's current organisation
+  for the past-deadline read, and `manager_vikar.organisation_id` differs from the absent approver's for the delegation read. **A
+  read filtering the stamped column passes a same-org test and fails this one.** That was the plan review's finding, now a pin.
+
+Other shapes worth noting: the refused-termination flag is produced by calling the **real** settlement service and letting the
+outbox publisher drain, never by inserting into the events table directly; the §26 pin proves the `SETTLED` term matters
+*independently* of the voided request by asserting the row **stays absent after a bare reversal**; the §21 pins assert an exact
+`daysToDeadline = 49` at a November anchor rather than a vague non-empty; and the delegation-expiry window is pinned at the 30-day
+boundary by running the host's own hosted sweep and then backdating the event's `occurred_at`, with the reason declared (that
+timestamp is real-wall-clock by construction and a different code path from the injected business-date seam).
+
+**The agent caught its own test passing vacuously — and this is the sprint's best single illustration of why the discipline
+works.** The write-guard walks up from the test assembly to find the repository root, and it originally anchored on
+`docker/postgres/init.sql`. That file is **copied into the test project's build output**, so the walk-up stopped at the `bin`
+directory, scanned nothing, found no violations and **passed**. It was caught only because the agent had written a paired
+"is this check vacuous?" fact alongside it. Re-anchored on `StatsTid.sln`, which is never copied to any build output. A test that
+passes for the wrong reason is the exact failure mode this sprint has been hunting since the 1-September fact, and here the
+protection was a companion pin rather than a reviewer.
+
+**Declared deviations, both accepted:**
+1. **The non-Docker regression count is 104, not 102.** Two write-guard facts need no database (they scan the source tree), so the
+   agent wrote them as genuinely runnable non-Docker facts rather than hiding them behind a Docker trait to preserve a number.
+   **Correct trade:** a check that is mechanically verifiable today should be verified today. It is also the only part of this task
+   that is **actually green rather than reasoned**.
+2. **One sub-pin is deliberately not covered:** `pendingPastDeadlineCountByManager` on the pre-existing roster endpoint. That field
+   lives on a different repository with its own org-tree fixture conventions, and testing it properly means extending that existing
+   suite rather than ad-hoc seeding here. It flagged the gap instead of writing a fragile pin — the right call, and the field is not
+   unprotected: TASK-14006 pins it from the frontend with divergent mock values. **Recorded as an owed backend pin.**
+
+**No product defects found.** Two bugs were caught in the agent's *own* test code before it was trusted: an unbounded employment
+window made seeded employees spuriously match unrelated months, and the vacuous-scan anchor above.
+
+## Sprint totals
+
+| Suite | S139 close | S140 | Δ |
+|-------|-----------|------|---|
+| Unit | 1235 | **1236** | +1 (the RED-first `InstitutionalDeadlines` fact) |
+| DemoSeed | 165 | **165** | — |
+| Regression (discovered) | 1814 | **1859** | +45 (32 HR-read pins, 2 resolve-gate pins, and wave 1's anchor self-checks, 1-September fact and four probe legs) |
+| Regression (runnable without Docker) | 102 | **104** | +2 (the genuinely-green write-guard) |
+| Smoke | 7 | **7** | — |
+| Frontend | 735 | **773** | +38 (10 worklist/hire-date/route, 3 OQ-7 role pins, 25 landing page) |
+| **Total** | **3956** | **4040** | **+84** |
+
+Build: **0 errors, 145 warnings** = baseline. **CA2100: 230 raw occurrences = 115 distinct sites**, unchanged from baseline, on a
+full non-incremental build (the only build on which that number is comparable — an incremental one emits no analyser lines, which
+is why S140 deferred the measurement to the close).
+
 ## Legal & Payroll Verification
 
 | Check | Status | Notes |
