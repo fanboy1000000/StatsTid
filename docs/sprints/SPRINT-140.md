@@ -8,7 +8,7 @@
 | **End Date** | — |
 | **Orchestrator Approved** | **plan: yes — 2026-09-08** (Step 0b terminal: Codex READY at cycle 3; Reviewer APPROVED-WITH-WARNINGS at cycle 3, all absorbed; one owner ruling raised by the plan review, OQ-4) · refinement `.claude/refinements/REFINEMENT-s140-qual154-increment4-hr-landing.md` **rev 4** READY (Reviewer APPROVED-WITH-WARNINGS at cycle 2, all absorbed; Codex READY at cycle 4 after the cycle cap — owner chose "apply both fixes; run cycle 4"); owner rulings 2026-09-08 **OQ-1 (a)** S140 = QUAL-154 + the HR follow-up surface, Increment 4 whole in S141 · **OQ-2 (a)** keep the `GlobalAdminOnly` recalculate gate, action shown only to Global Admins · **OQ-3 (a)** rolling 12-month floor on HRP-011/012/022 · **OQ-4 (a)** (raised by the Step-0b Reviewer, ruled 2026-09-08) read-only HR lists in S140; the four API-only process actions become S141 items · **OQ-5 (a)** (raised by the Step-5a Reviewer, ruled 2026-09-08) convert the cross-org transfer's business date now, paired with a probe leg → TASK-14009 · **OQ-6 (a)** (raised by the Orchestrator's blind-spot sweep, adjudicated by Step-5a cycle 2, ruled 2026-09-09) the vikar start date: register now (**QUAL-164**), the `effective_from` schema fix is its own task, NOT folded into S140 |
 | **Build Verified** | **wave 1: yes** — `dotnet build StatsTid.sln -c Release --no-incremental` **0 errors, 145 warnings** (baseline), Orchestrator's own run, twice. The 175-warning figure one agent saw is an incremental-build artefact. CA2100 distinct sites to be re-measured on the close's clean full build |
-| **Test Verified** | **wave 1: partial** — Unit **1235** · DemoSeed **165** · non-Docker regression **102** (Orchestrator's own runs; the 144/145 in two agent reports are wrong, a shared-`bin/Release` race between concurrent agents). Docker unavailable locally (standing): the six converted suites, the four probe legs and the new 1-September fact are **CI-verified at close, not claimed green** |
+| **Test Verified** | **CI-pending at close** — Docker is unavailable locally (standing project constraint), so all **1757 Docker-gated facts**, including every one of this sprint's pins and probe legs, execute for the first time in the watched CI run. Verified locally by the Orchestrator's own runs (each exit status read from an unpiped command): build **0 errors / 145 warnings** = baseline; **CA2100 230 raw = 115 distinct sites**, unchanged, on a full non-incremental build; Unit **1238**; DemoSeed **165**; non-Docker regression **104**; regression facts discovered **1861**; frontend **775 across 65 files**; `tsc --noEmit` clean; smoke **7** (unchanged). **Total 4046 (+90 vs S139's 3956).** Nothing Docker-gated is claimed green. Two agent-reported figures were wrong and are corrected here: a 144/145 non-Docker regression count (a shared-`bin/Release` race between concurrent agents) and a `tsc` "exit 0" that was the exit status of a pipe rather than the compiler |
 | **Wave-1 commit** | `bcca33d` (2026-09-09, local only — not pushed; push happens at Step 7 after Step 7a). Committed before wave-2 worktrees per the S24 lesson. **Consequence for Step 7a:** an intermediate commit now exists on master, so the sprint-end review must use the base-anchored form `codex review --base a87f6c1`, which loses the project-specific steering prompt (AGENTS.md § Invocation Modes). The internal Reviewer keeps its full prompt, and the per-task Step-5a passes already ran prompt-steered on the uncommitted diffs |
 | **Orchestrator model** | Open — refinement (4 Codex cycles, 2 Reviewer cycles), Steps 0a / 0b / 1, this log: **Fable 5.1** ✓ · Dispatch, monitoring, acceptance bookkeeping, CI watch (Steps 2–4, 6): **Opus 5 — switch TAKEN at "dispatch wave 1" (2026-09-08)**, the routing rule's first honoured Orchestrator switch (S139 offered and declined it) · Step-5a / 7a absorption and every ruling on a declared deviation: **Fable** · Close bookkeeping + CI backfill: **Opus**. Agents spawned by role name, no `model` override (`docs/WORKFLOW.md` § Model Routing, second live run) |
 | **Sprint-start commit** | `a87f6c1` (S139 CI-green backfill) — the `codex review --base` fallback anchor for Step 7a |
@@ -913,17 +913,113 @@ window made seeded employees spuriously match unrelated months, and the vacuous-
 
 | Suite | S139 close | S140 | Δ |
 |-------|-----------|------|---|
-| Unit | 1235 | **1236** | +1 (the RED-first `InstitutionalDeadlines` fact) |
+| Unit | 1235 | **1238** | +3 (the RED-first `InstitutionalDeadlines` fact + two §21 target-year facts) |
 | DemoSeed | 165 | **165** | — |
-| Regression (discovered) | 1814 | **1859** | +45 (32 HR-read pins, 2 resolve-gate pins, and wave 1's anchor self-checks, 1-September fact and four probe legs) |
-| Regression (runnable without Docker) | 102 | **104** | +2 (the genuinely-green write-guard) |
+| Regression (discovered) | 1814 | **1861** | +47 |
+| Regression (runnable without Docker) | 102 | **104** | +2 (the genuinely-green payroll-ledger write-guard) |
 | Smoke | 7 | **7** | — |
-| Frontend | 735 | **773** | +38 (10 worklist/hire-date/route, 3 OQ-7 role pins, 25 landing page) |
-| **Total** | **3956** | **4040** | **+84** |
+| Frontend | 735 | **775** | +40 |
+| **Total** | **3956** | **4046** | **+90** |
 
 Build: **0 errors, 145 warnings** = baseline. **CA2100: 230 raw occurrences = 115 distinct sites**, unchanged from baseline, on a
 full non-incremental build (the only build on which that number is comparable — an incremental one emits no analyser lines, which
 is why S140 deferred the measurement to the close).
+
+### TASK-14011 / TASK-14012 — the Step-7a fix pass
+
+Both dispatched from the sprint-end review's findings; both merged; both verified by the Orchestrator.
+
+**TASK-14011 — the gate I had just shipped was looser than the endpoint it guards.** Codex found that the OQ-7 gate's
+`IsGlobalAdmin` accepted a **global-admin scope** as sufficient, while the payroll policy it mirrors evaluates the **primary
+role claim only** — so an actor whose primary role is Local HR but who carries a GLOBAL scope stamped GlobalAdmin would be
+refused by `/api/payroll/recalculate` and **admitted by my gate**: able to record "this exported month has been recalculated"
+as audited fact, unable to actually do it, and the row leaves the open worklist unchased.
+
+**What makes this the sprint's sharpest lesson.** The previous implementer reasoned about exactly this question and explained
+its choice at length — it rejected a stricter helper *specifically to avoid being harsher than the payroll endpoint*. The
+reasoning was careful and the conclusion inverted, because that endpoint is strictly primary-role, so the fallback made the
+gate **looser**, not safer. A confident, well-argued comment sat above a predicate doing the opposite of what it claimed. That
+is the **third** time this sprint the most dangerous thing in a file was its own explanation. The fix traced
+`ScopeAuthorizationHandler` line by line to establish that the role claim is both necessary *and* sufficient for that policy
+(it succeeds at `:22-23`, before the block that parses scopes, because `requireOrgScope: false`), then reduced the predicate to
+the claim comparison. The comment now warns against "re-aligning" it with the Orchestrator helper that keeps a fallback for a
+different question. **The missing pin was the whole reason it survived:** the existing facts covered an HR actor, a LocalAdmin
+and a canonical Global Admin, but not the mixed-role shape. The new fact adds it, plus an anti-vacuity leg proving the same
+token *can* still Dismiss the row — so the 403 is demonstrably the verb-specific gate biting, not a scope failure.
+
+**TASK-14011's second item — the fifth false comment of the sprint, and a test that asserted the bug.** The uncovered-approvers
+window took the **Copenhagen** business day, subtracted thirty, and labelled the result **UTC** midnight. Copenhagen midnight
+is 22:00 or 23:00 UTC the previous day, so the floor landed one to two hours late and a delegation that expired exactly thirty
+days ago **silently vanished on its last day in the window** — the day it most needed attention. The comment claimed "an event
+recorded at any time of that day is included"; it was false. Its pin seeded events at exactly UTC midnight, which is the
+repository's own wrong arithmetic, so it passed either way. Now converted through the project's single DST-aware zone facility,
+with the pin's boundary event moved to 22:30Z on the previous date — inside the real Copenhagen day, before the old floor — and
+two guard assertions that fail loudly if the anchor or the zone ever moves. The agent verified the arithmetic against real
+timezone data rather than reasoning about it.
+
+**TASK-14012 — the fifth-week tile's noise (owner ruling OQ-9: fix now, accept another review cycle).** The tile reported every
+recently hired employee as "could not compute" rather than "not applicable", because the valuation reads dated history at the
+*start* of a holiday year the employee was not yet employed for. One condition now excludes anyone hired after that year's
+accrual ended, threading the date the caller already computed rather than deriving a second one.
+
+**And it corrected my task premise.** I had told it the existing fact seeded "hired after the year ended" and authorised an
+assertion change. **Wrong:** the seeding helper never writes `employment_start_date`, so that employee had a NULL hire date —
+unbounded per ADR-040 D2, therefore still included — and its dated anchor sat *inside* the year. The fact passed before and
+after, and **no assertion needed changing.** It changed the *seed* instead, so the fact now states the variable this fix makes
+decisive, and added a companion proving a not-applicable hire appears in neither list. Its RED condition guards the fix from
+going wrong in the other direction: anchor the term at the year's *start* instead of its *end* and a genuine signal disappears.
+
+**Then it found the sprint's most consequential defect, and declined to fix it.** Tracing that one condition, it discovered the
+**automated year-end holiday disposition never runs for anyone hired between January and August**. The close's candidate-year
+lower bound uses the raw calendar year of the hire; the leaver *upper* bound three lines below applies the reset-month mapping
+explicitly. The hire path never got it. So a September–December hire's year is enumerated and throws for ever on every
+five-minute poll, while a January–August hire's actual year is **never enumerated at all** — their fifth week is never
+transferred, never paid out, never forfeited, and nothing reports that it did not happen. In a real institution most new hires
+start mid-year. **The Orchestrator confirmed the asymmetry in the SQL.** Registered as **QUAL-168**, with **QUAL-169** for the
+related finding that the fail-closed anchor asks a question no operator action can ever answer (clearing it would require
+back-dating employment history), and **QUAL-170** for the same mixed-role over-grant surviving in the Orchestrator's own
+global-admin check under the same false comment. All three reported, none fixed: QUAL-169 moves four anchor dates as a set,
+one of which decides **which OK-version governs a mid-period hire's first holiday year** — an OK-version-transition question,
+so a domain-correctness invariant that needs an owner ruling rather than an implementer's judgment.
+
+**A note on why the noise fix mattered more than it looked:** for the silent January–August shape, the tile's `cannotCompute`
+row is currently **the only signal anywhere in the system** that a disposition is owed. That is why the exclusion was kept
+narrow — removing the not-applicable noise without suppressing the real signal.
+
+## External Review (Step 7a) — cycle 1
+
+| Field | Value |
+|-------|-------|
+| **Invoked** | yes, both lenses, 2026-09-09 |
+| **Sprint-start commit** | `a87f6c1` |
+| **Command** | `codex exec` steered at `git diff a87f6c1..HEAD` (the base-anchored `codex review --base` form loses the steering prompt, so the exec form kept the six specific checks), `< /dev/null` per this sprint's invocation rule; internal Reviewer by role name |
+| **Reviewed against** | `a12502e` |
+| **Findings** | Codex **1 B / 1 W**; Reviewer **APPROVED-WITH-WARNINGS, 0 B / 5 W / 4 N** |
+| **Resolution** | Codex's BLOCKER and WARNING → TASK-14011. Reviewer's W-1 and W-3 → the two test fix passes; W-4 → owner ruling OQ-9 → TASK-14012; W-2 and N-4 → QUAL/doc; W-5, N-1, N-3 → corrected. **Both lenses converged on the same class from opposite ends** and neither found an invariant compromised in the code |
+
+**The single most valuable finding of the sprint came from the internal lens: the two headline security pins could not
+execute.** They inserted rows stamped with an organisation that was never created, into columns carrying
+`REFERENCES organizations(org_id)`. Both would have died at seed time on a constraint violation, and the first CI run would
+have gone red for a reason unrelated to what they test — and these are precisely the two pins that exist to prove the plan
+review's central security finding, that a read must scope on the employee's *current* organisation rather than the one stamped
+on the row. **The product was correct all along; the proof was not.** No per-task review could have caught it, because each
+task's own build and local suites pass without ever touching a database. Fixed by seeding a throwaway employee into the stamped
+organisation, leaving the divergence itself intact.
+
+**What the internal lens verified clean, recorded because these are the checks that mattered:** every wave-1 handler reads the
+business date once and threads it; audit stamps, `updated_at` and the `expires_at` compares untouched with BY-DESIGN comments;
+no `CURRENT_DATE`/`NOW()` in any new SQL and every business date bound; the 403 body byte-identical across both endpoint
+families; both event-backed reads carry their lag note; `?summary=true` nulls the lists and keeps the counts on both consumers;
+`InstitutionalDeadlines` in SharedKernel with no Infrastructure→Api reference; no new event type and no outbox change; the
+payroll ledger appears only in SELECT/NOT EXISTS positions, so the write-guard is meaningful and its companion "not vacuous"
+pin is real; the read-only valuation entry point is `+68/−0`, takes no lock and rolls back; the OQ-7 gate sits after the scope
+check and before the 409 and writes nothing. It also re-derived the totals from the files and matched the log.
+
+**Four corrections it found in the Orchestrator's own governance prose** — recorded with the same directness as the agents':
+"eight new read endpoints" throughout, when there are **nine operations on eight paths** (my own validator had said nine); a
+`PAT-031` claim that the read gets a consistent snapshot when the code it describes **disclaims exactly that** in capitals, and
+a `PAT-030` headline that carried the partition claim the sprint had already retracted — both fixed, because a KB pattern is
+what the next implementer copies; and a date typo plus a stale Test Verified line.
 
 ## Legal & Payroll Verification
 

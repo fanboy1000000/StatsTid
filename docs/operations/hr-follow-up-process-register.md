@@ -275,7 +275,7 @@ The rows above describe the system **as analysed in S139**, when almost nothing 
 "Surfacing today" cells are now historical for the rows listed here. The analysis is kept verbatim rather than rewritten in place,
 because the point of the register is to make the *gap* comparable across processes; this section records what closed.
 
-**The surface:** `/admin/opfoelgning` ("Opfølgning"), Local-HR tier, one tile per process (open count + age of the oldest item),
+**The surface:** nine new read operations on eight new paths, behind `/admin/opfoelgning` ("Opfølgning"), Local-HR tier, one tile per process (open count + age of the oldest item),
 each process's list behind its tile — the owner's **shape 3**, ruled 2026-09-08.
 
 | Row | Was | Now (S140) |
@@ -293,7 +293,7 @@ each process's list behind its tile — the owner's **shape 3**, ruled 2026-09-0
 | **HRP-018** overtime page | finished, tested, **routed nowhere** | **Routed** under the leader tier (QUAL-162 FIXED) |
 | **HRP-022** approved, not exported | **nothing** — no read listed it | **A list**, via the read-only cross-context lookup ADR-034 D4 permits, aged from the ratified export cutoff |
 
-**Deliberately NOT built (owner ruling OQ-4, 2026-09-09): the four write forms.** Reconcile payout, resolve a flagged settlement,
+**Deliberately NOT built (owner ruling OQ-4, 2026-09-08 — the date the ruling was given; corrected from an earlier 09-09 typo): the four write forms.** Reconcile payout, resolve a flagged settlement,
 record a §21 agreement, and settlement reversal all remain API-only; their lists say so instead of offering a form. Two of the four
 are domain-heavy (the settlement resolve carries the §34-versus-§22 residual partition; the §21 record feeds a carryover write), and
 they were never in the reviewed refinement — the plan review caught them being smuggled in as "the process's existing action" when

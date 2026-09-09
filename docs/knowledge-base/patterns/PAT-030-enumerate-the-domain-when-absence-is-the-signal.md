@@ -36,9 +36,14 @@ the domain and the table.
 
 Two properties fall out for free, and they are the reason to do it this way:
 
-- **Sibling lists partition by construction, not by agreement.** Two lists drawn from the same enumeration with
-  complementary status predicates cannot both contain the same row, and nothing can fall between them. Two separately
-  written predicates that *happen* to agree are exactly the class of bug this project keeps finding.
+- **Sibling lists drawn over the SAME population partition by construction, not by agreement.** Two lists built from one
+  enumeration with complementary status predicates over the same rows — S140's "employee late" and "approver late" — cannot
+  both contain the same row, and nothing can fall between them. Two separately written predicates that *happen* to agree
+  are exactly the class of bug this project keeps finding. **Read the scope of that claim carefully:** it holds only while
+  the population is shared. S140 also has two lists that are **disjoint but not complementary** (one requires APPROVED, the
+  other requires not-APPROVED, so no month is on both) whose *populations differ* — one is restricted to each leaver's
+  final month by owner ruling, the other spans everyone — and the sprint had to **retract** a contract that claimed they
+  partitioned. See the guard-rail below; do not carry the stronger reading away from this paragraph.
 - **A summary count cannot disagree with its own list.** Implement `?summary=true` by omitting the list from the
   **wire**, not by writing a second `COUNT(*)` query — a second copy of the predicate is a second thing to keep in
   sync. Count ≡ list length, always.

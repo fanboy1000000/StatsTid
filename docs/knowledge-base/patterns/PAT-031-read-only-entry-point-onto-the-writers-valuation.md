@@ -33,9 +33,15 @@ throw per employee. None of that was accidental, and the pattern is about respec
   selects *which* period and *whether the window is open*; it is not an input to the arithmetic. Adding an `asOf`
   parameter to satisfy a caller's intuition would invent a degree of freedom the domain does not have. Say so at the
   entry point, so the next reader does not add one.
-- **Take the caller's read-only transaction, take no lock, write nothing.** The read path opens a transaction purely
-  for a consistent read and rolls it back; it acquires none of the advisory locks the write path needs, because it
-  changes nothing.
+- **Take the caller's read-only transaction, take no lock, write nothing** — and **do not claim more isolation than you
+  have.** The read path opens a transaction because the writer's signature requires one, and rolls it back; it acquires
+  none of the advisory locks the write path needs, because it changes nothing. **It is NOT a consistent snapshot across
+  the whole list**: in S140's implementation several supporting reads open their own connections outside that
+  transaction, so a settlement committed mid-loop can tear one employee's figure relative to another's. The
+  implementation says so in capitals at its own call site, and an earlier draft of *this pattern* claimed the opposite —
+  caught by the Step-7a review. **A knowledge-base pattern is what the next implementer copies, so an over-claim here
+  propagates into code.** State the isolation you actually provide; if a caller needs a coherent snapshot across
+  subjects, that is a different design (one statement, or one transaction owning every read).
 - **Isolate failure per subject.** A write path that fails closed per subject (missing dated history ⇒ throw) will
   throw inside a list. One employee's broken record must neither empty the list nor silently vanish from it: catch
   per subject, and surface a `cannotCompute` count with a **stable reason code** plus enough identification to chase

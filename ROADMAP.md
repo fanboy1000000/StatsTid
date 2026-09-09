@@ -217,7 +217,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   deadline (HRP-011/012/022 now decision-ready — four of fifteen); the register's Increment-4 checklist is the design
   input for S140. [S139 TASK-13904]
 - **✅ BUILT (S140) — the surface exists.** The register's recommendation is now a product: route `/admin/opfoelgning` under the
-  Local-HR tier, one tile per process, each process's list behind it. **Eight new HR-only read endpoints** back it, all org-scoped
+  Local-HR tier, one tile per process, each process's list behind it. **Nine new HR-only read operations on eight new paths** back it (the §21 record read rides the existing `/api/vacation-transfer-agreements/{employeeId}` path), all org-scoped
   through the actor's accessible organisations and filtered on the subject's *current* organisation: settlements flagged for manual
   review (including the refused terminations that write no row at all and were previously unfindable), settled terminations awaiting
   a §26 request, the §21 fifth-week list plus the first-ever read of what was recorded, months past either deadline, a leaver's
