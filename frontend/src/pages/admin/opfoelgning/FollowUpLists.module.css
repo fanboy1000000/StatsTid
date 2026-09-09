@@ -1,0 +1,78 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.heading {
+  font-size: 18px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  margin: 0;
+}
+
+.subheading {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.floorNote,
+.lagNote {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-gray-100);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
+  margin: 0;
+}
+
+.actionNote {
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--color-info-light);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
+}
+
+.actionNote a {
+  color: var(--color-link);
+}
+
+.caveat {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-style: italic;
+  margin: 0;
+}
+
+.empty {
+  padding: var(--space-4);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.spinner {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-6) 0;
+}
+
+.subsection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.subsectionHeading {
+  font-size: 14px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  margin: 0;
+}
+
+.computedBadge {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}

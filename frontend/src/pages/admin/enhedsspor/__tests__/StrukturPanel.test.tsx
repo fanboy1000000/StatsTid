@@ -850,6 +850,32 @@ describe('StrukturPanel — period-settlement overview (TASK-10904)', () => {
     expect(within(overview).getByText('Maj 2026')).toBeDefined()
   })
 
+  // SPRINT-140 / TASK-14006 (QUAL-163) — DIVERGENT mock values (N=4, M=1):
+  // equal values would pass whether or not the component reads the new
+  // `pendingPastDeadlineCountByManager` field (a component still reading only
+  // the old `pendingCountByManager` field for BOTH numbers would print "4"
+  // twice and this test would not catch it). With N != M, a regression back
+  // to the old single-field reading renders "heraf 4 efter frist" here,
+  // which the exact-text assertion below turns RED.
+  it('the "Ikke godkendt" tile relabels to "N — heraf M efter frist", M from the NEW field (QUAL-163)', () => {
+    const roster: RosterResponse = {
+      employees: [
+        row({ employeeId: 'jens', displayName: 'Jens Kofoed', unitId: VEJL, unitName: 'Vejledning', leaderIds: ['jens'], structuralApproverId: 'dir1', periodStatus: 'OPEN' }),
+      ],
+      pendingCountByManager: { jens: 1, trine: 1, bo: 1, anna: 1 },
+      pendingPastDeadlineCountByManager: { jens: 1 },
+      nameResolution: {
+        dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
+      },
+    }
+    renderPanel({ selected: STY02_NODE, rosterByOrg: { STY02: roster } })
+    const overview = screen.getByTestId('settlement-overview')
+    // N = 4 distinct managers carry a pending period (unchanged field/meaning).
+    expect(screen.getByTestId('settle-count-godkend').textContent).toBe('4')
+    // M = 1 distinct manager carries a PAST-DEADLINE pending period — the new field.
+    expect(within(overview).getByTestId('settle-count-godkend-past-deadline').textContent).toBe('heraf 1 efter frist')
+  })
+
   it('does NOT render the settlement overview on a unit node (Organisation-scoped)', () => {
     renderPanel({ selected: VEJL_NODE, rosterByOrg: { STY02: settlementRoster() } })
     expect(screen.queryByTestId('settlement-overview')).toBeNull()

@@ -1,0 +1,89 @@
+.tile {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tile:focus-visible {
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-offset);
+}
+
+.title {
+  font-size: 13px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  margin-bottom: var(--space-2);
+}
+
+.stateMessage {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+.countRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.count {
+  font-size: 26px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.1;
+  color: var(--color-text);
+}
+
+.countReady {
+  color: var(--color-warning);
+}
+
+.countLabel {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.oldest {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.secondary {
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  margin-bottom: var(--space-1);
+}
+
+.secondaryReady {
+  color: var(--color-warning);
+}
+
+.footnote {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: var(--border-width) solid var(--color-border);
+}
+
+/* The accent bar is the SOLE colour cue this component can render, and it is
+   licensed only by `decisionReady` (S139 OQ-2 (b)) — never by the age/count
+   values themselves. A wrapper element (not Card's own border, which stays
+   untouched) so it never fights Card's shorthand `border` for cascade order. */
+.wrapper {
+  border-left: 3px solid transparent;
+}
+
+.wrapperReady {
+  border-left-color: var(--color-warning);
+}
