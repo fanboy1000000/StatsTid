@@ -178,16 +178,24 @@ export function OpfoelgningPage() {
     return candidates.length > 0 ? Math.max(...candidates) : null
   }, [pdOldestEmployee, pdOldestApprover])
 
+  // Leaver-final-month and approved-not-exported are "open = all" (S139
+  // ruling): unlike past-deadline (whose items are only ever listed once
+  // overdue), these two list an item whether or not its deadline has passed
+  // yet, so `oldestAnchor` can be in the FUTURE (a leaver whose final month is
+  // the current one). `daysBetween` is unclamped by design (past-deadline's
+  // tile relies on it never needing a floor), so these two calls clamp to 0
+  // here — never "Ældste: -23 dage" — mirroring the list row's own clamp
+  // (`FollowUpLists.tsx`'s `daysPastAnchor > 0 ? … : '—'`).
   const leaverOldest = useMemo(() => {
     const d = leaverSummary.data
     if (!d?.oldestAnchor) return null
-    return daysBetween(d.oldestAnchor, d.today)
+    return Math.max(0, daysBetween(d.oldestAnchor, d.today))
   }, [leaverSummary.data])
 
   const notExportedOldest = useMemo(() => {
     const d = approvedNotExported.data
     if (!d?.oldestAnchor) return null
-    return daysBetween(d.oldestAnchor, d.today)
+    return Math.max(0, daysBetween(d.oldestAnchor, d.today))
   }, [approvedNotExported.data])
 
   const cannotRegisterOldest = useMemo(() => {

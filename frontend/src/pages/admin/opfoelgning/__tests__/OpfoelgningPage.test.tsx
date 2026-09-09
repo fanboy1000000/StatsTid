@@ -61,16 +61,29 @@ const worklistRows = [
   },
 ]
 
-const pastDeadlineResponse = {
+// past-deadline and leaver-final-month are the two "enumeration" reads the
+// page asks for with `?summary=true` on first paint (counts only) and
+// re-fetches WITHOUT it, once, the first time their tile opens (the real
+// contract the server pins in `Summary_PastDeadline_CountsMatchFullMode_
+// ListsNull`: `employeeLate`/`approverLate`/`items` are null in summary mode,
+// counts are identical either way). The mock below MIRRORS that split rather
+// than being more generous than the API — see `installFetchMock`.
+const pastDeadlineCounts = {
   today: TODAY, lookbackFloor: LOOKBACK_FLOOR,
   employeeLateCount: 3, oldestEmployeeLateAnchor: '2025-09-01',
   approverLateCount: 2, oldestApproverLateAnchor: '2025-09-04',
+}
+const pastDeadlineSummaryResponse = { ...pastDeadlineCounts, employeeLate: null, approverLate: null }
+const pastDeadlineFullResponse = {
+  ...pastDeadlineCounts,
   employeeLate: [{ employeeId: 'e1', displayName: 'Anna And', orgId: 'org1', year: 2025, month: 8, periodStatus: 'DRAFT', periodId: null, ageAnchor: '2025-09-01', daysPastAnchor: 8, deadlineSource: 'stored' }],
   approverLate: [{ employeeId: 'e2', displayName: 'Bo Berg', orgId: 'org1', year: 2025, month: 8, periodStatus: 'SUBMITTED', periodId: 'p1', ageAnchor: '2025-09-04', daysPastAnchor: 5, deadlineSource: 'computed' }],
 }
 
-const leaverResponse = {
-  today: TODAY, lookbackFloor: LOOKBACK_FLOOR, count: 1, oldestAnchor: '2025-08-20',
+const leaverCounts = { today: TODAY, lookbackFloor: LOOKBACK_FLOOR, count: 1, oldestAnchor: '2025-08-20' }
+const leaverSummaryResponse = { ...leaverCounts, items: null }
+const leaverFullResponse = {
+  ...leaverCounts,
   items: [{ employeeId: 'e3', displayName: 'Carl Christ', orgId: 'org1', year: 2025, month: 8, periodStatus: 'DRAFT', periodId: null, ageAnchor: '2025-08-20', daysPastAnchor: 20, deadlineSource: 'stored' }],
 }
 
@@ -119,11 +132,29 @@ const transferAgreementsClosed = {
   cannotCompute: [], cannotComputeCount: 0, today: '2025-10-15', projectionNote: 'Listen er en foreløbig beregning indtil årsafslutningen gør den endelig.',
 }
 
-function installFetchMock(transferAgreements: unknown) {
+function installFetchMock(
+  transferAgreements: unknown = transferAgreementsOpen,
+  overrides: {
+    leaverSummary?: unknown
+    leaverFull?: unknown
+  } = {},
+) {
+  const leaverSummary = overrides.leaverSummary ?? leaverSummaryResponse
+  const leaverFull = overrides.leaverFull ?? leaverFullResponse
   mockFetch.mockImplementation(async (url: string) => {
     if (url.includes('/api/hr/backdate-worklist')) return jsonResponse(worklistRows)
-    if (url.includes('/api/hr/follow-up/past-deadline')) return jsonResponse(pastDeadlineResponse)
-    if (url.includes('/api/hr/follow-up/leaver-final-month')) return jsonResponse(leaverResponse)
+    // W-3 fix (Step-7a review): the mock must MIRROR the summary/full contract,
+    // not be more generous than the API — a mock that returns the full body for
+    // both requests would let a page that reuses the summary response for its
+    // list pass this suite by accident. `summary=true` -> counts-only; anything
+    // else (including an explicit `summary=false`, what the lazy full fetch
+    // sends) -> the full item list.
+    if (url.includes('/api/hr/follow-up/past-deadline')) {
+      return jsonResponse(url.includes('summary=true') ? pastDeadlineSummaryResponse : pastDeadlineFullResponse)
+    }
+    if (url.includes('/api/hr/follow-up/leaver-final-month')) {
+      return jsonResponse(url.includes('summary=true') ? leaverSummary : leaverFull)
+    }
     if (url.includes('/api/hr/follow-up/approved-not-exported')) return jsonResponse(notExportedResponse)
     if (url.includes('/api/hr/follow-up/uncovered-approvers')) return jsonResponse(uncoveredResponse)
     if (url.includes('/api/hr/follow-up/cannot-register')) return jsonResponse(cannotRegisterResponse)
@@ -200,6 +231,40 @@ describe('OpfoelgningPage — the ten tiles', () => {
   })
 })
 
+describe('OpfoelgningPage — the "oldest" number never goes negative (N-2, Step-7a review)', () => {
+  it('clamps the leaver-final-month tile at 0 when its oldest anchor is still in the future', async () => {
+    // Leaver-final-month is "open = all" (S139 ruling): unlike past-deadline
+    // (only ever listed once overdue), it lists a leaver's final month whether
+    // or not its deadline has passed — so `oldestAnchor` can be AFTER `today`
+    // (a leaver whose final month is the current one). Unclamped, this would
+    // render "Ældste: -11 dage".
+    const futureAnchorLeaver = { today: TODAY, lookbackFloor: LOOKBACK_FLOOR, count: 1, oldestAnchor: '2025-09-20' }
+    installFetchMock(transferAgreementsOpen, {
+      leaverSummary: { ...futureAnchorLeaver, items: null },
+      leaverFull: { ...futureAnchorLeaver, items: [] },
+    })
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('tile-leaver-final-month-oldest')).toBeInTheDocument())
+    expect(screen.getByTestId('tile-leaver-final-month-oldest').textContent).toBe('Ældste: 0 dage')
+  })
+
+  it('clamps the approved-not-exported tile the same way', async () => {
+    installFetchMock(transferAgreementsOpen)
+    // approved-not-exported is likewise "open = all" — reuse the standard
+    // fixture's endpoint but override just this one response inline.
+    const baseImpl = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes('/api/hr/follow-up/approved-not-exported')) {
+        return jsonResponse({ today: TODAY, lookbackFloor: LOOKBACK_FLOOR, count: 1, oldestAnchor: '2025-09-15', items: [] })
+      }
+      return baseImpl(url)
+    })
+    renderPage()
+    await waitFor(() => expect(screen.getByTestId('tile-approved-not-exported-oldest')).toBeInTheDocument())
+    expect(screen.getByTestId('tile-approved-not-exported-oldest').textContent).toBe('Ældste: 0 dage')
+  })
+})
+
 describe('OpfoelgningPage — the §21 tile window states', () => {
   it('shows the CLOSED state at an "October" anchor — never a "0" count', async () => {
     installFetchMock(transferAgreementsClosed)
@@ -228,14 +293,29 @@ describe('OpfoelgningPage — each tile opens its list', () => {
     await waitFor(() => expect(screen.getByText('Bagudrettede rettelser', { selector: 'h2' })).toBeInTheDocument())
   })
 
-  it('opens the past-deadline list (lazily fetching the full, non-summary response)', async () => {
+  it('opens the past-deadline list (first paint asks for `summary=true`; the list only renders once the lazy FULL fetch lands)', async () => {
     installFetchMock(transferAgreementsOpen)
     const user = userEvent.setup()
     renderPage()
     await waitFor(() => expect(screen.getByTestId('tile-past-deadline')).toBeInTheDocument())
+
+    // The first-paint request(s) for this endpoint must carry `summary=true` —
+    // the mechanism that stops the landing page pulling ten full lists just to
+    // render ten tile counts.
+    const pastDeadlineCalls = () => mockFetch.mock.calls.map(([url]) => String(url)).filter((u) => u.includes('/api/hr/follow-up/past-deadline'))
+    expect(pastDeadlineCalls().length).toBeGreaterThan(0)
+    expect(pastDeadlineCalls().every((u) => u.includes('summary=true'))).toBe(true)
+
     await user.click(screen.getByTestId('tile-past-deadline'))
+    // This assertion is only meaningful because the mock's summary response
+    // carries `employeeLate: null` (mirroring the real API): if the page wrongly
+    // reused the already-loaded summary data instead of fetching the full
+    // response, this row would be ABSENT, not merely stale.
     await waitFor(() => expect(screen.getByTestId('list-past-deadline')).toBeInTheDocument())
     expect(within(screen.getByTestId('list-past-deadline')).getByText('Anna And')).toBeInTheDocument()
+
+    // And the fetch that made it possible was a NON-summary (full) request.
+    expect(pastDeadlineCalls().some((u) => !u.includes('summary=true'))).toBe(true)
   })
 
   it('opens the §21 list directly via the route param', async () => {
