@@ -48,6 +48,12 @@ export interface CreatePlacementArgs {
     agreementCode: string
     okVersion: string
     approverId?: string
+    // SPRINT-140 / TASK-14007 (HRP-016) — the hire date (`AdminEndpoints.cs:3616`
+    // `CreateUserRequest.EmploymentStartDate`, optional). The drawer pre-fills
+    // today and lets HR edit it; omitted, the backend itself defaults to today
+    // and records an audited "defaulted" flag (S137 ruling) — this field lets a
+    // backdated hire be recorded at create time instead of only via a later edit.
+    employmentStartDate?: string
   }
   /** The chosen Placering unit (null = home directly at the Organisation). When a
       unit is chosen, the create POST is followed by PUT /users/{id}/unit (v=1). */

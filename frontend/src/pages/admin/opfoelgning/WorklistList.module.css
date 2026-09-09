@@ -1,0 +1,143 @@
+.root {
+  font-family: var(--font-family);
+}
+
+.heading {
+  font-size: 20px;
+  font-weight: var(--font-weight-semibold);
+  margin: 0 0 var(--space-2) 0;
+}
+
+.subheading {
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--space-6) 0;
+  max-width: 70ch;
+}
+
+.spinner {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-8) 0;
+}
+
+.empty {
+  color: var(--color-text-secondary);
+  padding: var(--space-4) 0;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.row {
+  display: block;
+}
+
+.rowHeader {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.kind {
+  font-weight: var(--font-weight-semibold);
+}
+
+.period {
+  color: var(--color-text);
+}
+
+.muted {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.meta {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  margin-bottom: var(--space-3);
+}
+
+.sectionLabel {
+  font-weight: var(--font-weight-medium);
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.triggers {
+  margin-bottom: var(--space-3);
+}
+
+.triggerList {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: 14px;
+}
+
+.movedSince {
+  margin-bottom: var(--space-3);
+  font-size: 14px;
+}
+
+.caveat {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  margin-top: var(--space-1);
+}
+
+.resolved {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.recalcCard {
+  border: 1px solid var(--color-info);
+  background: var(--color-info-light);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.recalcTitle {
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--space-2);
+}
+
+.recalcFacts {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: 14px;
+}
+
+.recalcFacts li {
+  margin-bottom: var(--space-1);
+}
+
+.hint {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  margin-bottom: var(--space-3);
+}
+
+.reversalPointer {
+  font-size: 14px;
+  margin-bottom: var(--space-2);
+}
+
+.resolveForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.resolveActions {
+  display: flex;
+  gap: var(--space-2);
+}

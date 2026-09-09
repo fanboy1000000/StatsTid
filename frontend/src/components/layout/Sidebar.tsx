@@ -29,6 +29,9 @@ const tabGroups: TabGroup[] = [
       // "Godkendelser" item is removed; "Oversigt" leads the group.
       { label: 'Oversigt', to: '/godkend/oversigt', minRole: 'LocalLeader' },
       { label: 'Vikariering', to: '/godkend/vikariering', minRole: 'LocalLeader' },
+      // S140 / TASK-14007 (QUAL-162) — previously finished but unrouted (no nav
+      // entry existed anywhere); its APIs are LeaderOrAbove.
+      { label: 'Overtid forhåndsgodkendelse', to: '/godkend/overtid', minRole: 'LocalLeader' },
     ],
   },
   {
