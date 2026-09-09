@@ -382,6 +382,20 @@ External Review:
 
 ### Invocation Modes
 
+> **Invocation constraint — ALWAYS pass `< /dev/null` (S140).** Every `codex exec` / `codex review` call made through the Bash
+> tool must close standard input explicitly. Codex reads piped stdin as *additional prompt text* and waits for end-of-input; when
+> the tool leaves an open pipe attached, that end-of-input never arrives and the process hangs on the line
+> `Reading additional input from stdin...` indefinitely. In S140 this burned **68 minutes** on a single review before it was
+> diagnosed and the process killed — and it is a trap that hides, because an earlier identical call in the same session happened to
+> receive an immediate end-of-input and worked. Redirecting from `/dev/null` costs nothing and makes the behaviour deterministic.
+> Also useful: `--output-last-message <file>` writes just the verdict, so a 400 KB transcript containing the reviewed diff stays in
+> the sibling `.log` instead of being read into the Orchestrator's context.
+>
+> **Reading exit statuses (S140, same class of trap).** When a review or test command is piped into `tee`/`tail`/`grep`, `$?`
+> reports the **pipe's** status, not the command's. In S140 a frontend type check with ten real errors printed "exit 0" because the
+> compiler was piped into `tail` before its status was read, and the failure was reported to the owner as a pass. Read the status
+> from the unpiped command (redirect to a file, then grep the file).
+>
 > **CLI constraint (verified on `codex-cli` 0.120.x)**: `codex review` does NOT accept a custom prompt and a diff-target flag (`--uncommitted` / `--base` / `--branch` / `--commit`) in the same invocation — the two forms are mutually exclusive. When a prompt is passed alone, Codex auto-detects the working copy's current uncommitted diff. When a diff-target flag is passed alone, Codex runs its default review prompt against that diff. See PR openai/codex#6538 for the documented contract.
 
 | Mode | When | Command Pattern |

@@ -90,6 +90,22 @@ rails (409 span guard, reverse-then-re-settle) are untouched, pinned.
 position/agreement changes with an effective-date picker, **HR-gated** employee history timeline.
 *ACs:* E2E flows for terminate / schedule a future change / view history.
 
+> **Status after S140 (2026-09-09): UNCHANGED and NEXT. None of the three ACs above is met.** S140 was ruled (owner OQ-1, at
+> refinement) to be the second-tranche fixed-clock conversion plus **the HR follow-up surface** — the separate, owner-raised item
+> that S139 analysed — and explicitly *not* any part of this increment. An early draft of the S140 refinement called that work
+> "Increment 4a"; the plan review rejected the label as misrepresenting this ledger, since the HR surface delivers none of
+> terminate / schedule / history. Two items owed by earlier increments were pulled forward into S140 only because they needed no
+> design: the admin CREATE form's hire date (the S137 consequence noted above) and routing the orphaned
+> `OvertimePreApprovalManagement` page. Everything else here is owed.
+>
+> **What S141 inherits that this plan did not anticipate:** a live HR follow-up surface at `/admin/opfoelgning` with eight backing
+> reads, so the termination screen's "last month sent?" and §26-request items have a place to live rather than needing their own
+> page; and four **named** write forms deferred from S140 under owner ruling OQ-4 (reconcile payout, resolve a flagged settlement,
+> record a §21 transfer agreement, settlement reversal) which belong with this increment's own write flows. The **"current ≠ live"
+> read-model precondition** (ADR-040 § Amendment 2026-09-02) still gates future-dating and is the stated reason this increment was
+> not folded into S140: four "current" readers must become as-of-today readers and two live caches need an explicit strategy, a
+> change with roughly 200 read sites in its blast radius, which warrants its own refinement and plan review rather than a wave.
+
 **Named follow-up program (not an increment):** org/unit membership history (ADR-040 D4 tail,
 OQ-3 ruling ii) — model decided in the ADR, implementation scheduled separately; until then
 historical org questions remain unanswerable (recorded consequence).

@@ -740,6 +740,72 @@ satisfy a test is what this sprint keeps rejecting — so it went to a `sweep` a
 property with an empty value beside its existing sibling, change nothing else. The measurement lesson is now written into the two
 follow-on prompts: never read `$?` through a pipe.
 
+### TASK-14010 — close the UI-only resolve gate (security) + two contract corrections
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-14010 (added mid-wave by the Step-5a external lens's BLOCKER) |
+| **Status** | complete and merged (`12739c9`); one declared deviation accepted, one new finding → owner ruling OQ-8 |
+| **Agent** | `backend-infrastructure` (Opus), own worktree |
+| **Components** | `BackdateWorklistEndpoints.cs` (the gate) · `HrFollowUpApprovalResponses.cs` + `…ReadRepository.cs` + `…Endpoints.cs` (the two corrections) · `BackdateWorklistEndpointTests.cs` (two pins) |
+| **KB Refs** | ADR-034 D5 (why recalculation is Global-Admin-only), ADR-019 (If-Match), ADR-040 D8, FAIL-001 / SEC-021 (the mixed-role over-grant it avoided), SECURITY.md |
+| **Orchestrator Approved** | yes — 2026-09-09; Step-5a verification of this fix folds into the Step-7a pass over the whole sprint diff |
+
+**What an HR user could do before, and cannot now.** The rule reserving "mark this exported payroll month as Recalculated" to a
+Global Admin lived only in the browser. The screen hid the button, but the endpoint carried one blanket `HROrAbove` policy and
+checked only that the verb was a known word — so any HR user with scope over the employee could send the request by hand and the
+server would record *"this exported payroll month has been recalculated"* as fact in the audit trail, after which the row left the
+open worklist and nobody would chase it. The refusal now lives in the handler, so it binds every caller. HR keeps Dismissed on both
+row kinds and Recalculated on a settled-holiday-year row, whose remedy HR may genuinely perform. HR loses only the combination it
+was never entitled to.
+
+**Three details that make this a real fix rather than a plausible one:**
+- **Placement was argued, not incidental.** The refusal sits *after* the org-scope check, so it can never double as an
+  existence-or-kind oracle for a row the caller may not see — both refusals share the same error text, and an out-of-scope caller
+  gets the *scope* reason. And it sits *before* the already-resolved 409, so the authorization decision never depends on mutable
+  row state, and the 409 body is not handed to someone who may not take the action at all.
+- **No time-of-check/time-of-use hole:** `kind` is written once at INSERT and never updated, and any concurrent write bumps
+  `version`, which the in-transaction If-Match guard rejects with 412.
+- **It declined a stricter helper on purpose.** An available `IsGlobalAdmin` variant requires a GLOBAL-typed scope, but
+  `GlobalAdminOnly` is declared `requireOrgScope: false`, so that helper would have been *stricter than the payroll endpoint this
+  gate mirrors* and would have refused a Global Admin who genuinely may perform the remedy. Its own predicate takes the role claim
+  as primary and requires any scope fallback to carry the GlobalAdmin role — closing the FAIL-001 / SEC-021 mixed-role over-grant.
+  **This is the kind of reasoning a "make the test pass" implementation does not produce.**
+
+**The two pins earn their keep through their discriminating legs**, not the happy path: a **LocalAdmin** — above HR but not Global
+Admin — is also refused, which separates the ruled gate from the weaker "HR is refused"; a **foreign HR** gets the *scope* reason
+with no mention of GlobalAdmin, which is the no-oracle pin; after every refusal the row is unchanged with **zero** outbox and
+**zero** audit rows, so a 403 can never accompany a write; and the *identical request differing only in the actor's role* succeeds
+for a Global Admin, so the gate cannot be over-blocking. Docker-gated — CI-verified at close, both discovered by `--list-tests`.
+
+**Declared deviation D1, accepted — it edited an existing test's asserted behaviour, in the one test whose assertion *was* the
+defect.** A pre-existing pin had an in-scope HR actor resolve the exported-month row as Recalculated and asserted **200** — exactly
+what the fix must now refuse. It changed that test's verb to Dismissed and left everything else intact: same actor, the same
+428 → 412 → 200 → 409 concurrency ladder, the ETag, the attribution, the outbox and audit counts, the `open` filter. The verb was
+incidental to what that test pins (the ADR-019 contract), and both Recalculated paths are now covered by the new pins. **Correct
+call, and correctly flagged** — it sits closest to the "never adjust an assertion to get green" rule, and the distinction is that
+the old assertion *encoded the hole*. Nothing was relaxed or deleted. D2 (a discoverability marker moved from the policy line to
+the class doc, because the policy line was not allowed to change) also accepted.
+
+**New finding F1 → owner ruling OQ-8: the same class, one layer over.** The "this row cannot be recalculated" marker is *also*
+UI-only — the screen refuses the verb on blocked rows for every role, the API does not, and the task's own new pin demonstrates it
+(a Global Admin resolves a `recalcBlockedBy` row → 200). The implementer **declined to fix it unilaterally**, on the honest ground
+that unlike the gap it had just closed, this one is arguably **not an authorization rule at all**: the verb records what an
+operator did *outside* the tool, and an operator may legitimately have re-planned the month by hand. **Owner ruled 2026-09-09:
+register now, decide in S141** alongside the four deferred write forms, when the operator's real workflow gets settled →
+**QUAL-165**, which records all three readings including the one the domain probably wants (split the verb, so "recalculated here"
+and "handled elsewhere" are different recorded facts). F2 (no dedicated 403 branch on the screen, so the new refusal renders as a
+generic save failure) folded into the same row.
+
+**One stale observation in its report, worth recording so the next reader is not misled:** it noted the committed API
+specification lacked the whole `hr/follow-up` family. True *for its base commit*, which predated the Orchestrator's regeneration —
+it was working from `83d3b85` while the spec had been regenerated in `6f0eeb3`. It was right to flag it rather than assume, and
+right that its own new response field required another regeneration, which the Orchestrator then did.
+
+**Verified after merge (Orchestrator's own runs, exit statuses read from unpiped commands):** build **0 errors / 145 warnings**;
+Unit **1236**; DemoSeed **165**; non-Docker regression **102**; both new pins discovered; contracts regenerated (**+4 lines** in the
+specification, **+1** in the frontend types — only the new lag field).
+
 ## Legal & Payroll Verification
 
 | Check | Status | Notes |

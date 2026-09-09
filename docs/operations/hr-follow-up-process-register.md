@@ -269,6 +269,44 @@ in a later cycle._
 | HRP-015 | whether, and by when, a registration-blocking data gap must be fixed | a data-integrity census tile |
 | HRP-019 / 021 / 023 | see the gap rows — Phase B / owner |  |
 
+## What S140 BUILT — read this before treating any "Surfacing today" cell above as current
+
+The rows above describe the system **as analysed in S139**, when almost nothing was visible. **S140 built the surface**, so those
+"Surfacing today" cells are now historical for the rows listed here. The analysis is kept verbatim rather than rewritten in place,
+because the point of the register is to make the *gap* comparable across processes; this section records what closed.
+
+**The surface:** `/admin/opfoelgning` ("Opfølgning"), Local-HR tier, one tile per process (open count + age of the oldest item),
+each process's list behind its tile — the owner's **shape 3**, ruled 2026-09-08.
+
+| Row | Was | Now (S140) |
+|-----|-----|------------|
+| **HRP-001 / 002** backdate worklist | API only — no route, page or hook; just a generated type | **A screen.** Row kind, period, triggers, provenance; Resolve with reason under an admin-strict `If-Match`. The two "since" fields are worded as *has this moved*, never as an age (PAT-026), because the row genuinely carries none. The SETTLED_YEAR row shows the reversal route as text |
+| **HRP-003** manual recalculation | nothing beyond the worklist row | **A Global-Admin-only instruction card** naming the process, the row identity and the Payroll-host endpoint with its gate, pointing at the request contract the operator assembles. It renders **no payload** and makes **no network call** — the browser cannot reach the Payroll host, and a fabricated request would mislead the only role permitted to act. Replaced by a blocked notice when the row carries `recalcBlockedBy` |
+| **HRP-005** flagged settlement reviews | **nothing** — no org-wide list existed at all | **A list**, `PENDING_REVIEW` rows plus (HRP-005b) the refused-termination flags that write **no row at all** and were previously unfindable, read from the event stream with the publisher lag disclosed in the response |
+| **HRP-007** §26 requests outstanding | **nothing** — the file had exactly one route, the POST | **A list**, excluding what HR cannot act on: reversed settlements, waived claims, zero-day terminations |
+| **HRP-010** §21 fifth week | **write-only** — POST and PUT with no reader anywhere | **A read of what was recorded**, plus the "still needs an agreement" list for the ferieår whose deadline is *this* 31 December, with days remaining, gated to open 1 November, and a `cannotCompute` count so one employee's missing dated history cannot empty the tile |
+| **HRP-011** leaver's final month | nothing proactive | **A list** — the month containing a passed end date, missing or not approved, aged from that month's manager deadline |
+| **HRP-012** past deadline | an **embedded tile whose label overclaimed**: "efter frist" counted every pending month | **Employee-late and approver-late counted separately** from the stored deadlines, with NULL deadlines computed from the ratified defaults and flagged `computed` rather than read as on-time; the roster read gains the past-deadline subset so the tile's label becomes true (QUAL-163 FIXED) |
+| **HRP-013 / 014a** uncovered approvers | per-organisation card only; expired stand-ins told nobody | **A cross-organisation roll-up** plus delegations the expiry sweep closed in the last 30 days, distinguished from manual closes by the event's `endReason` (the table has no end-reason column), with `approverHasActiveCover` so a re-covered approver is not miscounted |
+| **HRP-015** cannot register | **nothing** — the employee got a 422 and HR was never told | **A list** of employees employed today whose profile has no covering agreement-code row |
+| **HRP-016** hire date | server-side silent default | **Pre-filled and editable at create**, so a backdated hire is a seen choice |
+| **HRP-018** overtime page | finished, tested, **routed nowhere** | **Routed** under the leader tier (QUAL-162 FIXED) |
+| **HRP-022** approved, not exported | **nothing** — no read listed it | **A list**, via the read-only cross-context lookup ADR-034 D4 permits, aged from the ratified export cutoff |
+
+**Deliberately NOT built (owner ruling OQ-4, 2026-09-09): the four write forms.** Reconcile payout, resolve a flagged settlement,
+record a §21 agreement, and settlement reversal all remain API-only; their lists say so instead of offering a form. Two of the four
+are domain-heavy (the settlement resolve carries the §34-versus-§22 residual partition; the §21 record feeds a carryover write), and
+they were never in the reviewed refinement — the plan review caught them being smuggled in as "the process's existing action" when
+no such frontend existed. They are named S141 items.
+
+**Still NOT READY, unchanged:** the eleven rows whose missing fact is a *deadline nobody has ruled* are still missing it. Building a
+list does not make a process decision-ready — HRP-005, 007, 013, 014, 015 now have a surface and still have no stated "by when".
+Four rows are decision-ready (010, 011, 012, 022), exactly as after the owner's 2026-09-08 cutoff ruling.
+
+**New findings from building it:** QUAL-164 (a stand-in's start date reported from two clocks), QUAL-165 (the blocked-row rule
+exists only in the screen — owner ruled to S141), QUAL-166 (generated contracts under-describe two required inputs), QUAL-167 (an
+employee deactivated without an end date accrues overdue months for ever — a policy gap the implementer declined to paper over).
+
 ### Increment-4 design inputs (citable checklist)
 
 - [ ] The HR landing page (shape 3): one tile per process — worklist (HRP-001/002), pending settlement reviews

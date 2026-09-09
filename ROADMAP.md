@@ -144,7 +144,16 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   read-side). **Increment 3 (S138) SHIPPED** (temporal editing, ADR-040 D8: dated profile + agreement-code
   writes through one pure router, category EDITABLE and NOT NULL, the HR backdate worklist, the S136
   leaver-send dead-end fixed; future-dating deliberately held for Increment 4 under the "current ≠ live"
-  precondition). Remaining: **Increment 4** (lifecycle UX — design inputs: the HR follow-up register's Increment-4 checklist, S139: the landing tiles, the worklist UI with its role-mismatch decision, the termination screen, the admin-create hire date, the "efter frist" tile fix computed from the owner-ratified +2/+5 deadlines, routing the overtime page) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
+  precondition). **Increment 4 is UNCHANGED and NEXT (S141).** S140 deliberately did *not* claim any part of it: the owner ruled
+  (OQ-1) that S140 = the fixed-clock conversion + the HR follow-up surface, so the increment's three defining deliverables —
+  the termination screen, a dated change with an effective-date picker, and the HR-gated history timeline — all remain owed, and
+  none of its acceptance criteria was met. Two items that needed no design were pulled forward into S140 because they were
+  one-screen changes: the admin create form's hire date (the S137-owed item) and routing the orphaned overtime page. What S141
+  inherits that it did not have before: a working HR follow-up surface to hang the termination screen's "last month sent?" and §26
+  items on, and four named write forms (reconcile payout, resolve a flagged settlement, record a §21 agreement, settlement
+  reversal) deferred from S140 under owner ruling OQ-4. The **"current ≠ live" precondition still gates future-dating** and is the
+  reason the increment was not simply bundled into S140 — it is a read-model change with roughly 200 read sites in its blast
+  radius and deserves its own refinement and plan review. Remaining scope (unchanged design inputs: the HR follow-up register's Increment-4 checklist, S139: the landing tiles, the worklist UI with its role-mismatch decision, the termination screen, the admin-create hire date, the "efter frist" tile fix computed from the owner-ratified +2/+5 deadlines, routing the overtime page) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
   until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail) · **OQ-4** (IMMEDIATE-
   grant pro-rating at mid-year hire → Phase B expert list). **S137-owed items by increment:** Increment 3 — **all three DELIVERED in
   S138**: the retroactive-correction window pin (the Docker pin that exports a windowless month, records a
@@ -207,13 +216,33 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   the month-end + 2 / + 5 deadlines ratified as provisional institutional defaults with the export cutoff at the manager
   deadline (HRP-011/012/022 now decision-ready — four of fifteen); the register's Increment-4 checklist is the design
   input for S140. [S139 TASK-13904]
+- **✅ BUILT (S140) — the surface exists.** The register's recommendation is now a product: route `/admin/opfoelgning` under the
+  Local-HR tier, one tile per process, each process's list behind it. **Eight new HR-only read endpoints** back it, all org-scoped
+  through the actor's accessible organisations and filtered on the subject's *current* organisation: settlements flagged for manual
+  review (including the refused terminations that write no row at all and were previously unfindable), settled terminations awaiting
+  a §26 request, the §21 fifth-week list plus the first-ever read of what was recorded, months past either deadline, a leaver's
+  final month, approved months never exported, uncovered approvers, and employees who cannot register time. The backdate worklist
+  got its first screen. The two ratified deadlines are now derived in one place and actually read, so the organisation page's
+  "efter frist" tile stops claiming an aging computation that did not exist (QUAL-163). **Deliberately not built:** the four write
+  forms those lists point at (owner ruling OQ-4 — they are S141 items), so the lists say "handled via API today" rather than
+  offering a form. Four findings registered from the work: QUAL-164 (a start date reported from two clocks), QUAL-165 (a blocked-row
+  rule that lives only in the screen), QUAL-166 (generated contracts under-describing required inputs), QUAL-167 (deactivation
+  without an end date accruing overdue months for ever). [S140 TASK-14003/14004/14007/14010]
 
 ### Usability / accessibility
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
   production; not enforced today. [CONVENTIONS.md]
 
 ### Tooling / infra / environment
-- **Fixed clock — second tranche (`QUAL-154`).** S139 FIXED `QUAL-153` for the eight suites on the profile,
+- **Fixed clock — ✅ DONE (S140).** Both tranches are now converted. S140 finished `QUAL-154`: the six remaining suites onto one
+  constant anchor, three product seams widened plus a fourth found in passing (the cross-org transfer date), four probe legs, and
+  the annual 1-September hard failure defused by a fact that calls the real resolver. The lasting lesson is a **method** correction,
+  not a count: the project's pinned clock-census regex cannot see `DateOnly.FromDateTime(<local>)`, because the clock read is one
+  assignment away — that blind spot hid a business date through two conversion sprints, and the widened pattern (now in QUAL-155's
+  reproduce step) immediately found `QUAL-164`. Converting also surfaced **five latent "one operation, two clocks" defects**, one of
+  them an auditability defect where a database row and the event meant to reconstruct it took their dates from different clocks.
+  [S140 · QUAL-154 FIXED; QUAL-155/156 updated; QUAL-164 new]
+- **Fixed clock — the original second-tranche entry, kept for provenance.** S139 FIXED `QUAL-153` for the eight suites on the profile,
   agreement-code and approval-projection paths (shared `FixedTimeProvider`, `WithFixedToday`, the probe, the product
   clock seam). Six more hazardous suites wait for seams the OQ-1 (a) ruling did not name (`DelegationExpiryService.cs:86`
   SQL; the designated-approver authorizer's fallbacks; `SkemaEndpoints.cs:218`; the `ApprovalEndpoints` as-of reads) plus
