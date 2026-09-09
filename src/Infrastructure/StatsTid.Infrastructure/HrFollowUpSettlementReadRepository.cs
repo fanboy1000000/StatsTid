@@ -456,7 +456,7 @@ public sealed class HrFollowUpSettlementReadRepository
         return rows;
     }
 
-    // The candidate POPULATION for the §21 list. Four terms, all exclusions with a reason:
+    // The candidate POPULATION for the §21 list. Five terms, all exclusions with a reason:
     //
     //  (a) org scope on the subject's CURRENT primary_org_id (see the class banner).
     //  (b) the employment window covers @today. The end date is the LAST employed day, so
@@ -467,13 +467,45 @@ public sealed class HrFollowUpSettlementReadRepository
     //      agreement for days already disposed of. NO is_active predicate — is_active is a LOGIN
     //      fact, not a data-visibility fact (ADR-040 D3, the SEC-047 adjudication), and a manually
     //      suspended employee still accrues holiday.
-    //  (c) no ACTIVE (non-REVERSED) vacation_settlements row for the EXACT tuple
+    //  (c) S140 / TASK-14012 — the employee was employed at some point DURING the ferieår being
+    //      agreed: `employment_start_date <= @accrualEnd`, where @accrualEnd is the LAST day E's
+    //      days ACCRUE (the ferieår end — 31 Aug E+1 under the pinned reset_month 9). It is
+    //      threaded in from the caller's ONE EntitlementPeriodResolver read (PAT-028) and is never
+    //      re-derived here.
+    //
+    //      WHY THIS TERM EXISTS, precisely. This list values a ferieår that has already ENDED, and
+    //      the valuation reads the employee's DATED agreement-code history at that ferieår's START,
+    //      failing closed when no row covers it (VacationSettlementService ~:1495-1498). A real
+    //      employee's agreement-code row is dated from their HIRE — so anyone hired AFTER the
+    //      ferieår ended has no covering row, AND cannot hold a single day of that ferieår either.
+    //      Without this term they landed in `cannotCompute` with reason VALUATION_FAILED: the tile
+    //      reported "could not compute" over a population that is simply NOT APPLICABLE. On a young
+    //      dataset that is most of the workforce, which turns the headline number on the one
+    //      legally-deadlined process (the 31 December §21 stk.2 deadline) into noise.
+    //
+    //      What this term deliberately does NOT suppress: an employee hired DURING the ferieår.
+    //      They can legitimately hold part of it (accrual runs from their hire), the valuation
+    //      still fails closed for them, and THAT is a real signal about missing dated history which
+    //      must stay visible in `cannotCompute`. Hence @accrualEnd (the ferieår END) and NOT the
+    //      ferieår START: bounding at the start would silence exactly the case worth reporting.
+    //
+    //      A NULL employment_start_date passes through — ADR-040 D2: NULL means "employed since the
+    //      beginning of time", i.e. unbounded on that side — matching (b)'s NULL handling exactly.
+    //
+    //      On the overlap with (b): for every date the caller's window gate admits (1 Nov – 31 Dec
+    //      of the ferieår-END year) @accrualEnd is EARLIER than @today, so (c) currently subsumes
+    //      (b)'s start-side test. They are kept as separate terms ON PURPOSE — (b) encodes
+    //      "employed now" (a property of the population) and (c) encodes "could hold any of THIS
+    //      ferieår" (a property of the target year). Collapsing them would make the "employed now"
+    //      bound depend on a caller-supplied date, and it would silently disappear if the reminder
+    //      window ever opened before the ferieår closed.
+    //  (d) no ACTIVE (non-REVERSED) vacation_settlements row for the EXACT tuple
     //      (employee, VACATION, entitlement_year = E) — that ferieår is already settled, so its
     //      days are disposed of and there is nothing left to agree. Other years are irrelevant.
-    //  (d) no recorded §21 agreement for the EXACT tuple (employee, VACATION, E) — HR has already
+    //  (e) no recorded §21 agreement for the EXACT tuple (employee, VACATION, E) — HR has already
     //      done the job for THIS ferieår. An agreement for a different year does not exclude.
     //
-    // NOTE (product observation, deliberately NOT "fixed" here): (d) is a BINARY test, per the
+    // NOTE (product observation, deliberately NOT "fixed" here): (e) is a BINARY test, per the
     // spec — an employee who has an agreement for FEWER days than their under-cap tranche drops
     // off the list. Recording a partial agreement is legal, so a "partially agreed" state may
     // deserve its own surface; that is a product decision, not this read's to invent.
@@ -483,6 +515,7 @@ public sealed class HrFollowUpSettlementReadRepository
         FROM users u
         WHERE (@allOrgs OR u.primary_org_id = ANY(@orgIds))
           AND (u.employment_start_date IS NULL OR u.employment_start_date <= @today)
+          AND (u.employment_start_date IS NULL OR u.employment_start_date <= @accrualEnd)
           AND (u.employment_end_date   IS NULL OR u.employment_end_date   >= @today)
           AND NOT EXISTS (
                 SELECT 1
@@ -530,6 +563,18 @@ public sealed class HrFollowUpSettlementReadRepository
     /// </para>
     ///
     /// <para>
+    /// <b>"Not applicable" is not "could not compute" (S140 / TASK-14012).</b>
+    /// <paramref name="accrualEnd"/> is the LAST day ferieår <paramref name="entitlementYear"/>
+    /// accrues, and an employee whose employment began after it cannot hold a single day of that
+    /// ferieår — so they are excluded from the population outright (candidates SQL term (c)) rather
+    /// than valued and reported as <c>cannotCompute</c>. Before that term existed, every
+    /// recently-hired employee failed the dated-history read and inflated the cannot-compute bucket,
+    /// which on a young dataset is most of the workforce. An employee hired DURING the ferieår is
+    /// deliberately still valued and still reported as <c>cannotCompute</c> when the valuation fails
+    /// — for them the missing dated history is a genuine gap, not an inapplicable question.
+    /// </para>
+    ///
+    /// <para>
     /// <b>Cost, declared.</b> This iterates candidates and values them one at a time (the
     /// refinement's "correct first, fast later"). The valuation is not expressible as one SQL
     /// statement without re-implementing it, which is the one thing forbidden here.
@@ -538,6 +583,7 @@ public sealed class HrFollowUpSettlementReadRepository
     public async Task<HrFollowUpTransferAgreementNeededResult> GetTransferAgreementsNeededAsync(
         IReadOnlyCollection<string>? accessibleOrgIds,
         DateOnly today,
+        DateOnly accrualEnd,
         int entitlementYear,
         CancellationToken ct = default)
     {
@@ -552,6 +598,7 @@ public sealed class HrFollowUpSettlementReadRepository
         {
             AddOrgScopeParameters(cmd, accessibleOrgIds);
             cmd.Parameters.Add(new NpgsqlParameter("today", NpgsqlDbType.Date) { Value = today });
+            cmd.Parameters.Add(new NpgsqlParameter("accrualEnd", NpgsqlDbType.Date) { Value = accrualEnd });
             cmd.Parameters.Add(new NpgsqlParameter("entitlementYear", NpgsqlDbType.Integer) { Value = entitlementYear });
             cmd.Parameters.Add(new NpgsqlParameter("vacationType", NpgsqlDbType.Text) { Value = VacationType });
 

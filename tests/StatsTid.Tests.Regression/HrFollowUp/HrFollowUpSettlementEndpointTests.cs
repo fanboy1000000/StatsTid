@@ -66,6 +66,16 @@ public sealed class HrFollowUpSettlementEndpointTests : IAsyncLifetime
     private static readonly DateOnly Section21Deadline = new(2025, 12, 31);
     private static readonly DateOnly Section21AccrualEnd = new(2025, 8, 31); // ferieår 2024's END
 
+    /// <summary>A hire date INSIDE ferieår 2024 (1 Sep 2024 – 31 Aug 2025): the §21 question APPLIES
+    /// — the employee can hold part of that ferieår — but dated history anchored here does not cover
+    /// the ferieår START, so the valuation fails closed and that IS a real signal (TASK-14012).</summary>
+    private static readonly DateOnly HiredDuringTargetFerieaar = new(2025, 1, 1);
+
+    /// <summary>A hire date AFTER ferieår 2024 finished accruing (<see cref="Section21AccrualEnd"/>)
+    /// but before the anchor F: the employee cannot hold a single day of that ferieår, so the §21
+    /// question is NOT APPLICABLE and they belong in neither list (TASK-14012).</summary>
+    private static readonly DateOnly HiredAfterTargetFerieaar = new(2025, 9, 15);
+
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
 
@@ -493,26 +503,54 @@ public sealed class HrFollowUpSettlementEndpointTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// HRP-010 pin (6): an employee whose valuation FAILS CLOSED (no dated
-    /// <c>user_agreement_codes</c> / <c>employee_profiles</c> row covering the ferieår-2024 START,
-    /// 1 Sep 2024 — seeded with history starting only 1 Jan 2025) lands in <c>cannotCompute</c>, NOT
-    /// in the needed list. RED if the per-employee try/catch in
-    /// <c>HrFollowUpSettlementReadRepository.GetTransferAgreementsNeededAsync</c> were removed (one
-    /// bad history would 500 the whole list instead of degrading one row), or if a caught failure
-    /// were silently dropped instead of reported.
+    /// HRP-010 pin (6), RE-SEEDED in S140 / TASK-14012: an employee hired DURING the target ferieår
+    /// whose valuation FAILS CLOSED lands in <c>cannotCompute</c>, NOT in the needed list.
+    ///
+    /// <para><b>The shape, and why it is this shape.</b> The hire date
+    /// (<see cref="HiredDuringTargetFerieaar"/>, 1 Jan 2025) sits INSIDE ferieår 2024
+    /// (1 Sep 2024 – 31 Aug 2025), so this employee can legitimately hold part of that ferieår —
+    /// the §21 question genuinely applies to them. Their dated <c>user_agreement_codes</c> /
+    /// <c>employee_profiles</c> history is dated from that same hire, so it does NOT cover the
+    /// ferieår START (1 Sep 2024); the settlement service's dated read at the ferieår start
+    /// therefore finds no covering row and throws (<c>VacationSettlementService.cs</c> ~:1495-1498, no
+    /// fallback on that read). That throw is a REAL signal — missing dated history for someone the
+    /// rule applies to — and must stay visible on the tile.
+    /// </para>
+    ///
+    /// <para><b>What TASK-14012 changed here, stated plainly.</b> Before this task the fact left
+    /// <c>users.employment_start_date</c> NULL (the <c>RegressionSeed</c> default, ADR-040 D2
+    /// "unbounded") and so pinned only "broken dated history ⇒ cannotCompute", saying nothing about
+    /// the hire date. TASK-14012 makes the hire date decide whether the §21 question APPLIES at all,
+    /// so the fact now states its hire date explicitly and names which side of the boundary it is
+    /// on. The cannotCompute assertion itself is UNCHANGED — this fact asserts exactly what it
+    /// asserted before, now for an employee whose applicability is explicit rather than incidental.
+    /// The complementary NOT-APPLICABLE case is its own fact,
+    /// <see cref="TransferAgreementsNeeded_HiredAfterFerieaarAccrualEnd_InNeitherList"/>.
+    /// </para>
+    ///
+    /// <para><b>RED conditions.</b> (i) RED if the per-employee try/catch in
+    /// <c>HrFollowUpSettlementReadRepository.GetTransferAgreementsNeededAsync</c> were removed — one
+    /// bad history would 500 the whole list instead of degrading one row. (ii) RED if a caught
+    /// failure were silently dropped instead of reported. (iii) RED if TASK-14012's population term
+    /// were mis-bounded at the ferieår START (<c>EntitlementPeriod.AccrualStart</c>) instead of its
+    /// END (<c>AccrualEnd</c>), or written with the comparison reversed: this employee would then be
+    /// excluded from the population and VANISH from <c>cannotCompute</c> — suppressing a real signal
+    /// in the name of removing noise, which is the one way this fix could go wrong.</para>
     /// </summary>
     [Fact]
-    public async Task TransferAgreementsNeeded_ValuationFailsClosed_ReportedAsCannotCompute_NotInNeededList()
+    public async Task TransferAgreementsNeeded_HiredDuringFerieaar_ValuationFailsClosed_ReportedAsCannotCompute()
     {
         using var host = _factory.WithFixedToday(F);
         using var client = host.CreateClient();
 
         var employeeId = NextId("s21_failclosed");
-        // History starts 1 Jan 2025 — AFTER the ferieår-2024 start (1 Sep 2024), so the dated
+        // Hired 1 Jan 2025 — INSIDE ferieår 2024, so the §21 question applies — but the dated
+        // history starts at that same hire, AFTER the ferieår-2024 start (1 Sep 2024), so the dated
         // agreement-code read at the ferieår start finds no covering row and CaptureSnapshotAsync
-        // throws (VacationSettlementService.cs ~:1497, no fallback on this specific read).
+        // throws (VacationSettlementService.cs ~:1495-1498, no fallback on this specific read).
         await RegressionSeed.SeedEmployeeAsync(
-            _harness.ConnectionString, employeeId, OrgA, effectiveFrom: new DateOnly(2025, 1, 1));
+            _harness.ConnectionString, employeeId, OrgA, effectiveFrom: HiredDuringTargetFerieaar);
+        await SetEmploymentStartAsync(employeeId, HiredDuringTargetFerieaar);
 
         var hr = Client(host, HrToken(OrgA));
         using var doc = JsonDocument.Parse(await hr.GetStringAsync("/api/hr/follow-up/transfer-agreements-needed"));
@@ -522,6 +560,62 @@ public sealed class HrFollowUpSettlementEndpointTests : IAsyncLifetime
             i => i.GetProperty("employeeId").GetString() == employeeId);
         Assert.Equal("VALUATION_FAILED", cc.GetProperty("reason").GetString());
         Assert.True(doc.RootElement.GetProperty("cannotComputeCount").GetInt32() >= 1);
+    }
+
+    /// <summary>
+    /// HRP-010 pin (9), NEW in S140 / TASK-14012 — the NOT-APPLICABLE case: an employee whose
+    /// employment began AFTER the target ferieår finished accruing appears in NEITHER list. They are
+    /// out of scope for the §21 question, which is a different thing from a computation failure.
+    ///
+    /// <para><b>The shape.</b> The hire date (<see cref="HiredAfterTargetFerieaar"/>, 15 Sep 2025)
+    /// is after ferieår 2024's accrual end (<see cref="Section21AccrualEnd"/>, 31 Aug 2025) and
+    /// before the anchor F (12 Nov 2025) — so every PRE-EXISTING population term admits them
+    /// (they are employed today, no leaver end date, no settlement row, no recorded agreement);
+    /// only TASK-14012's accrual-end term excludes them. They cannot hold a single day of ferieår
+    /// 2024, so there is nothing for HR to agree and nothing that failed to compute.</para>
+    ///
+    /// <para><b>RED condition (reasoned from the source — Docker is unavailable locally, so this
+    /// first executes in CI).</b> Delete the candidates SQL's
+    /// <c>employment_start_date &lt;= @accrualEnd</c> term (or stop threading
+    /// <c>period.AccrualEnd</c> into it) and this fact goes RED: the employee re-enters the
+    /// population, the valuation's dated agreement-code read at the ferieår START (1 Sep 2024) finds
+    /// no covering row — their history is dated from the 15 Sep 2025 hire — it throws, and they
+    /// REAPPEAR in <c>cannotCompute</c> with reason <c>VALUATION_FAILED</c>, taking
+    /// <c>cannotComputeCount</c> from 0 to 1. That is exactly the defect TASK-14012 fixed: the tile
+    /// reporting "could not compute" over employees the process does not apply to, which on a young
+    /// dataset is most of the workforce.</para>
+    /// </summary>
+    [Fact]
+    public async Task TransferAgreementsNeeded_HiredAfterFerieaarAccrualEnd_InNeitherList()
+    {
+        using var host = _factory.WithFixedToday(F);
+        using var client = host.CreateClient();
+
+        var employeeId = NextId("s21_hired_after");
+        // Dated history anchored at the hire date, exactly as a real employee's is — that is what
+        // makes the RED condition above bite: without the accrual-end term this employee is valued,
+        // the dated read at 1 Sep 2024 finds nothing, and they surface as cannotCompute.
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, OrgA, effectiveFrom: HiredAfterTargetFerieaar);
+        await SetEmploymentStartAsync(employeeId, HiredAfterTargetFerieaar);
+
+        var hr = Client(host, HrToken(OrgA));
+        using var doc = JsonDocument.Parse(await hr.GetStringAsync("/api/hr/follow-up/transfer-agreements-needed"));
+
+        // The window IS open at F, so the response is a real read of the population — not the
+        // out-of-season early return, which would empty both lists for the wrong reason.
+        Assert.True(doc.RootElement.GetProperty("windowOpen").GetBoolean());
+        Assert.Equal(TargetYear, doc.RootElement.GetProperty("entitlementYear").GetInt32());
+
+        Assert.DoesNotContain(doc.RootElement.GetProperty("items").EnumerateArray(),
+            i => i.GetProperty("employeeId").GetString() == employeeId);
+        Assert.DoesNotContain(doc.RootElement.GetProperty("cannotCompute").EnumerateArray(),
+            i => i.GetProperty("employeeId").GetString() == employeeId);
+
+        // This employee is the ONLY member of OrgA in this fact's own container (a fresh Postgres
+        // per fact), so both counts are exactly zero — the sharpest form of "in neither list".
+        Assert.Equal(0, doc.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("cannotComputeCount").GetInt32());
     }
 
     /// <summary>HRP-010 pin (7): at an October anchor (before the 1 Nov reminder window opens) the
@@ -650,6 +744,18 @@ public sealed class HrFollowUpSettlementEndpointTests : IAsyncLifetime
     /// <summary>Parses a wire <c>DateOnly</c> (an ISO <c>"yyyy-MM-dd"</c> string) from a
     /// <see cref="JsonElement"/> — used instead of a version-sensitive <c>GetDateOnly()</c> call.</summary>
     private static DateOnly ReadDate(JsonElement e) => DateOnly.Parse(e.GetString()!);
+
+    /// <summary>
+    /// Sets the HR-managed hire date (<c>users.employment_start_date</c>) — the column TASK-14012's
+    /// §21 population term reads. <see cref="RegressionSeed"/> deliberately leaves it NULL (ADR-040
+    /// D2: NULL means employed since the beginning of time, so no fixture backfill was ever needed),
+    /// which means a fact whose meaning depends on a real hire date must state one EXPLICITLY —
+    /// leaving it NULL would pin the unbounded case while appearing to pin a dated one.
+    /// </summary>
+    private async Task SetEmploymentStartAsync(string employeeId, DateOnly startDate) =>
+        await ExecAsync(
+            "UPDATE users SET employment_start_date = @p1, updated_at = NOW() WHERE user_id = @p0",
+            employeeId, startDate);
 
     private async Task MarkLeaverAsync(string employeeId, DateOnly endDate) =>
         await ExecAsync(
