@@ -6018,6 +6018,7 @@ export interface components {
             expiredDelegations: components["schemas"]["StatsTid.Backend.Api.Contracts.HrExpiredDelegation"][] | null;
             /** Format: int32 */
             windowDays: number;
+            eventSourceLagNote: string;
         };
         "StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse": {
             /** Format: uuid */

@@ -7774,6 +7774,7 @@
       },
       "StatsTid.Backend.Api.Contracts.HrUncoveredApproversResponse": {
         "required": [
+          "eventSourceLagNote",
           "expiredDelegationCount",
           "expiredDelegations",
           "expiredWithoutActiveCoverCount",
@@ -7823,6 +7824,9 @@
           "windowDays": {
             "type": "integer",
             "format": "int32"
+          },
+          "eventSourceLagNote": {
+            "type": "string"
           }
         },
         "additionalProperties": false
