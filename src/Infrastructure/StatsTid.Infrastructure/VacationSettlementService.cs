@@ -1234,6 +1234,74 @@ public sealed class VacationSettlementService
     }
 
     // ------------------------------------------------------------------
+    // S140 / TASK-14003 (refinement B1, HRP-010) — the READ-ONLY valuation entry point.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Captures the ADR-033 D3 valuation snapshot for a <c>(employee, type, ferieår)</c> tuple
+    /// WITHOUT settling anything — the read-only entry point onto <see cref="CaptureSnapshotAsync"/>
+    /// that the S140 HR follow-up §21 list (HRP-010) uses to obtain
+    /// <c>Partition(snapshot).UnderCap</c> (the §21/§24 tranche) for an as-yet-unsettled year.
+    ///
+    /// <para>
+    /// <b>Why this exists rather than a second implementation.</b> "The untaken fifth week" is a
+    /// legal day-count. It is already computed, once, by the settlement valuation + the pure
+    /// <see cref="Partition"/>. A list that re-derived it would create a SECOND implementation of
+    /// a legal quantity, and two implementations of a legal quantity diverge. So the read reuses
+    /// the writers' code instead of copying it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why it is behaviour-preserving.</b> Nothing inside <see cref="CaptureSnapshotAsync"/>
+    /// changed — this is an ADDED sibling entry point, not a code move, so the settlement writers
+    /// (<c>SettleActiveYearEndAsync</c>, <c>SettleTerminationAsync</c>,
+    /// <c>SettleLeaverDeferredDispositionAsync</c>) call byte-identical code on a byte-identical
+    /// path. The existing settlement suites are the pin.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What it deliberately does NOT do.</b> No write of any kind: no settlement row, no
+    /// carryover, no outbox event, no audit row. No advisory lock either — a diagnostic read must
+    /// not be able to block a settlement, and it needs no mutual exclusion because it persists
+    /// nothing. The caller supplies a READ-ONLY transaction and rolls it back.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>No <c>asOf</c> parameter, by design.</b> The D9 operands are defined by the FERIEÅR, not
+    /// by today: <c>Earned</c> is valued at the ferieår end and <c>Planned</c> comes from the
+    /// balance row. "Today" only decides WHICH ferieår is in the §21 window, which is the caller's
+    /// decision — so passing a date in here would imply a re-valuation the model does not have.
+    /// Called with <c>terminationCutoff: null</c> and <c>deferredDisposition: false</c>, i.e. the
+    /// unchanged YEAR_END boundary valuation.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Fails closed, per employee.</b> The capture throws when the dated agreement-code,
+    /// entitlement-config or employee-profile history at the ferieår start is missing (ADR-033
+    /// D10 — never value against today's live data). That contract is preserved here: the caller
+    /// is expected to catch per employee and report a cannot-compute marker rather than swallow
+    /// the failure or fail the whole list.
+    /// </para>
+    ///
+    /// <para>The employee is read TERMINATED-INCLUSIVE (SPRINT-70 R9d), the same read the
+    /// settlement pass performs: a leaver's ferieår is exactly the case that must still resolve.</para>
+    /// </summary>
+    internal async Task<VacationSettlementSnapshot> ValuateForReadAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear,
+        CancellationToken ct = default)
+    {
+        var user = await _userRepo.GetByIdIncludingTerminatedAsync(conn, tx, employeeId, ct)
+            ?? throw new InvalidOperationException(
+                $"Vacation settlement read-valuation: employee {employeeId} not found.");
+
+        var (snapshot, _) = await CaptureSnapshotAsync(
+            conn, tx, employeeId, entitlementType, entitlementYear, user,
+            terminationCutoff: null, terminationDate: null, deferredDisposition: false, ct);
+        return snapshot;
+    }
+
+    // ------------------------------------------------------------------
     // Snapshot capture (ADR-033 D3). Reuses the EXACT D9 operands (BalanceEndpoints): the dated
     // config + earned-at-boundary via AccrualMath.EarnedToDate; the closed-year balance; the
     // recorded per-absence feriedage (ADR-032 D2). No re-valuation (ADR-033 D2).

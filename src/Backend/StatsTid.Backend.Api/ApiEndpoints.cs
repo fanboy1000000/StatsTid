@@ -40,6 +40,7 @@ public static class ApiEndpoints
         app.MapOvertimeEndpoints();
         app.MapAuditEndpoints();
         app.MapReportingLineEndpoints();
+        app.MapHrFollowUpSettlementEndpoints(); // S140 / TASK-14003 — HR follow-up settlement-family reads (HRP-005/005b/007/010; read-only)
         app.MapVacationSettlementEndpoints(); // S68 ADR-033 slice 1a — §21 agreement + D10 resolve + §24 payout-pending
         app.MapTerminationPayoutRequestEndpoints(); // S71 / TASK-7102 — the §26 anmodning record + event (ADR-033 slice 3b, SPRINT-71 R6)
         app.MapSettlementReversalEndpoints();       // S71 / TASK-7102 — operator-authorized settlement reversal (ADR-033 D4/D5, SPRINT-71 R4)

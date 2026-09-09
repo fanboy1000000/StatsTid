@@ -145,6 +145,7 @@ builder.Services.AddSingleton<VacationSettlementRepository>(); // S68 ADR-033 sl
 // S138 / TASK-13803 (ADR-040 D8, Increment 3) — the HR backdate diagnostic worklist. Stateless over the
 // DI'd outbox + audit-projection mapper/repo (the EmploymentEndDateLifecycleWriter shape) ⇒ singleton-safe.
 builder.Services.AddSingleton<HrBackdateWorklistRepository>();
+builder.Services.AddSingleton<HrFollowUpSettlementReadRepository>(); // S140 / TASK-14003 — HR follow-up settlement-family READS (HRP-005/005b/007/010); stateless over the connection factory + the settlement service's read-only valuation entry point ⇒ singleton-safe
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 // S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
 // Mapper + marker registered together so the registry's RegisteredEventTypeNames filter
