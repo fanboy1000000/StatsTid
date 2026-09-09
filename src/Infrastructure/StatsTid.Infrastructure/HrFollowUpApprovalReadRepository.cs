@@ -584,8 +584,24 @@ public sealed class HrFollowUpApprovalReadRepository
     /// <summary>
     /// HRP-014a — delegations the expiry sweep closed within
     /// <see cref="ExpiredDelegationWindowDays"/> days of <paramref name="today"/>, oldest first.
-    /// The lower bound is UTC midnight of <c>today − 30</c>, so an event recorded at any time of
-    /// that day is included and one from the day before is not.
+    ///
+    /// <para><b>The lower bound is the UTC INSTANT of COPENHAGEN midnight on <c>today − 30</c></b>
+    /// — i.e. <c>today − 31</c> at 23:00Z in winter (CET, UTC+1) or at 22:00Z in summer (CEST,
+    /// UTC+2). <paramref name="today"/> is the COPENHAGEN business day (every caller in this family
+    /// computes <see cref="CopenhagenBusinessDate.Today"/>), so an event is inside the window
+    /// exactly when its Copenhagen calendar day is <c>today − 30</c> or later — which is the same
+    /// day this method reports as <c>ExpiredAt</c> and the same day <c>DaysSinceExpiry</c> counts
+    /// from. One boundary, one zone, no drift.</para>
+    ///
+    /// <para><b>The bug this replaces (S140 sprint-end review).</b> The floor used to be built as
+    /// <c>ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)</c> — it LABELLED a Copenhagen calendar
+    /// date as a UTC instant instead of CONVERTING it. Because Copenhagen midnight is 22:00 or
+    /// 23:00Z on the PREVIOUS day, that floor landed one to two hours LATE, so for the first one
+    /// to two hours of every Copenhagen day a delegation that expired exactly 30 days ago dropped
+    /// off the list and HR briefly could not see an uncovered approver. The old doc comment claimed
+    /// "an event recorded at any time of that day is included"; that was false for exactly that
+    /// window. Copenhagen local midnight is never inside a DST spring-forward gap (the EU
+    /// transition is at 02:00 local), so the conversion is always well defined.</para>
     /// </summary>
     public async Task<IReadOnlyList<HrExpiredDelegationItem>> GetExpiredDelegationsAsync(
         IReadOnlyCollection<string>? accessibleOrgIds, DateOnly today, CancellationToken ct = default)
@@ -593,8 +609,15 @@ public sealed class HrFollowUpApprovalReadRepository
         if (accessibleOrgIds is { Count: 0 })
             return Array.Empty<HrExpiredDelegationItem>();
 
+        // Copenhagen midnight of `today − 30`, expressed as its UTC instant. Kind = Unspecified is
+        // required by ConvertTimeToUtc when the source zone is not UTC, and it is the honest kind:
+        // the value IS a wall-clock reading in CopenhagenBusinessDate.Zone, not an instant yet.
+        var windowStartLocal = today
+            .AddDays(-ExpiredDelegationWindowDays)
+            .ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
         var since = new DateTimeOffset(
-            today.AddDays(-ExpiredDelegationWindowDays).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+            TimeZoneInfo.ConvertTimeToUtc(windowStartLocal, CopenhagenBusinessDate.Zone),
+            TimeSpan.Zero);
 
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);

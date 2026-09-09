@@ -330,6 +330,73 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// S140 sprint-end review — the MIXED-ROLE CLAIM SHAPE, which is the shape the three pins above
+    /// do not cover and the shape the defect survived behind (the SEC-021 over-grant family).
+    ///
+    /// <para><b>Plain language.</b> A token can carry one role in its <c>role</c> claim and a
+    /// DIFFERENT role inside its <c>scopes</c> array. This actor's primary role is LocalHR, but it
+    /// holds a GLOBAL scope stamped <c>Role = GlobalAdmin</c>. The <c>GlobalAdminOnly</c> policy —
+    /// and therefore the remedy, <c>POST /api/payroll/recalculate</c> — decides on the PRIMARY ROLE
+    /// CLAIM ALONE (<c>requireOrgScope: false</c> makes <see cref="ScopeAuthorizationHandler"/>
+    /// succeed or fail on that claim and return without reading <c>scopes</c>), so this actor is
+    /// REFUSED the recalculation. An earlier revision of the in-handler gate accepted the GLOBAL
+    /// GlobalAdmin scope as a fallback signal, so this actor was ADMITTED here: it could record
+    /// "this exported payroll month has been recalculated" as audited fact, be unable to perform
+    /// the recalculation, and take the row off HR's open list with nobody chasing it. The gate must
+    /// be no looser than the endpoint it mirrors.</para>
+    ///
+    /// <para><b>Why the token still reaches the gate</b> (this is what makes the pin sharp rather
+    /// than vacuous): <c>HROrAbove</c> passes on the LocalHR role claim, and
+    /// <c>OrgScopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync</c> admits via its
+    /// <c>ScopeType == "GLOBAL"</c> branch (the GlobalAdmin scope clears the LocalHR role floor).
+    /// So the ONLY thing that can refuse this request is the OQ-7 (a) gate — and leg (b) proves the
+    /// token is genuinely able to resolve this very row, by DISMISSING it successfully.</para>
+    ///
+    /// <para><b>Red condition (the one that matters).</b> Restore the scope fallback in
+    /// <c>BackdateWorklistEndpoints.IsGlobalAdmin</c> — i.e. also return true when any scope has
+    /// <c>Role == GlobalAdmin &amp;&amp; ScopeType == "GLOBAL"</c> — and leg (a) returns 200, so
+    /// this fact goes RED. That is precisely the point: it is the fact the earlier pins could not
+    /// express. Secondary: make the gate decide on the SCOPE role instead of the primary role and
+    /// leg (a) goes 200 as well.</para>
+    /// </summary>
+    [Fact]
+    public async Task Resolve_ExportedMonth_AsRecalculated_MixedRoleHrWithGlobalAdminScope_Is403_ButMayStillDismiss()
+    {
+        var url = $"/api/hr/backdate-worklist/{_openRowId}/resolve";
+        var mixed = Client(MixedRoleHrWithGlobalAdminScopeToken(EmployeeOrg, "wl_ep_hr_globalscope"));
+
+        // (a) RECALCULATED — refused, because the PRIMARY role claim is LocalHR.
+        var recalc = await SendResolveAsync(mixed, url, "\"1\"",
+            new { resolution = "RECALCULATED", reason = "Claiming a recalculation I cannot actually run" });
+        Assert.Equal(HttpStatusCode.Forbidden, recalc.StatusCode);
+        using (var doc = JsonDocument.Parse(await recalc.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal("Access denied", doc.RootElement.GetProperty("error").GetString());
+            var reason = doc.RootElement.GetProperty("reason").GetString() ?? string.Empty;
+            // The refusal is the OQ-7 GATE, not the org-scope check — the GLOBAL scope cleared that.
+            Assert.NotEqual("Actor scope does not cover target organization", reason);
+            Assert.Contains("GlobalAdmin", reason, StringComparison.Ordinal);
+            Assert.Contains("RECALCULATED", reason, StringComparison.Ordinal);
+        }
+
+        // The refusal was a refusal: no state change, no event, no audit row.
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolved_at IS NULL AND version = 1", _openRowId));
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved'", $"employee-{Employee}"));
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0", Employee));
+
+        // (b) The SAME token DISMISSES the SAME row successfully — so leg (a)'s 403 is the gate
+        // biting on the VERB, not a token that could never touch this row at all.
+        var dismiss = await SendResolveAsync(mixed, url, "\"1\"",
+            new { resolution = "DISMISSED", reason = "Handed to a Global Admin to re-plan" });
+        Assert.Equal(HttpStatusCode.OK, dismiss.StatusCode);
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'DISMISSED' AND resolved_by = 'wl_ep_hr_globalscope' AND version = 2", _openRowId));
+    }
+
+    /// <summary>
     /// The two paths OQ-7 (a) deliberately leaves OPEN to HR, so the fix is a targeted refusal and
     /// not a blanket one: (a) DISMISSED on an EXPORTED_MONTH row — dismissing records a judgement,
     /// not a payroll act; (b) RECALCULATED on a SETTLED_YEAR row — its remedy is the settlement
@@ -415,6 +482,16 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     private static string HrToken(string orgId, string actorId) => NewTokenService().GenerateToken(
         employeeId: actorId, name: actorId, role: StatsTidRoles.LocalHR, agreementCode: "AC", orgId: orgId,
         scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_ONLY") });
+
+    /// <summary>S140 sprint-end review — the MIXED-ROLE claim shape: primary <c>role</c> claim
+    /// LocalHR, but a GLOBAL scope stamped <c>Role = GlobalAdmin</c>. <c>GlobalAdminOnly</c> (and
+    /// so <c>/api/payroll/recalculate</c>) decides on the PRIMARY role claim alone and refuses this
+    /// token, so the in-handler gate must refuse it too. A gate that consulted the scopes array for
+    /// its role decision would wrongly admit it — the over-grant this shape pins.</summary>
+    private static string MixedRoleHrWithGlobalAdminScopeToken(string orgId, string actorId) =>
+        NewTokenService().GenerateToken(
+            employeeId: actorId, name: actorId, role: StatsTidRoles.LocalHR, agreementCode: "AC", orgId: orgId,
+            scopes: new[] { new RoleScope(StatsTidRoles.GlobalAdmin, null, "GLOBAL") });
 
     /// <summary>S140 / TASK-14010 — ABOVE HR but NOT a Global Admin, which is what the OQ-7 (a)
     /// gate must still refuse (a role-floor implementation would wrongly admit this token).</summary>

@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -452,19 +453,52 @@ public sealed class HrFollowUpApprovalEndpointTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// HRP-014 pin: the exact 30-vs-31-day expiry-window boundary. Both delegations are closed by
-    /// the SAME real sweep pass; the events' <c>occurred_at</c> (real wall clock at emission — a
-    /// separate code path from the injected business-date seam) is backdated afterward to the exact
-    /// F-relative anchor each leg needs — a declared calibration, not a fabricated event. RED if the
-    /// repository's <c>ev.occurred_at &gt;= @since</c> bound (<c>@since = today − 30</c>) were an
-    /// exclusive comparison (the 30-day leg would wrongly drop) or a wider one (the 31-day leg would
-    /// wrongly appear).
+    /// HRP-014 pin: the exact 30-vs-31-day expiry-window boundary, AND the ZONE of that boundary.
+    /// Both delegations are closed by the SAME real sweep pass; the events' <c>occurred_at</c> (real
+    /// wall clock at emission — a separate code path from the injected business-date seam) is
+    /// backdated afterward to the exact F-relative anchor each leg needs — a declared calibration,
+    /// not a fabricated event.
+    ///
+    /// <para><b>What the ORIGINAL version of this pin could not catch</b> (S140 sprint-end review).
+    /// It backdated the boundary leg to exactly <em>UTC</em> midnight of <c>F − 30</c>, which is
+    /// precisely the (wrong) arithmetic the repository itself was using — it labelled the Copenhagen
+    /// date <c>today − 30</c> as a UTC instant instead of converting it. Test and code shared the
+    /// same mistake, so the pin passed either way and proved nothing about the zone. Meanwhile the
+    /// real floor sat one to two hours late, and for the first one to two hours of every Copenhagen
+    /// day a delegation that expired exactly 30 days ago silently dropped off HR's list.</para>
+    ///
+    /// <para><b>What THIS version catches.</b> The boundary leg is now seeded at an instant that
+    /// DISCRIMINATES the two floors: 22:30Z on <c>F − 31</c>, which is 00:30 on the Copenhagen
+    /// morning of <c>F − 30</c> (CEST, UTC+2 — see the guards below) and therefore INSIDE the
+    /// window, yet ~1.5 h BEFORE the UTC midnight the old code used. Two guard assertions make the
+    /// pin non-vacuous: the seeded instant must really fall on Copenhagen day <c>F − 30</c>, and it
+    /// must really precede UTC midnight of <c>F − 30</c>.</para>
+    ///
+    /// <para><b>Red conditions.</b> (1) Restore the old
+    /// <c>ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)</c> floor (or any UTC-midnight floor) →
+    /// the boundary leg falls outside <c>@since</c>, does not appear, and <c>Assert.Single</c>
+    /// matches the 31-day leg instead. (2) Make <c>ev.occurred_at &gt;= @since</c> exclusive → the
+    /// boundary leg still drops. (3) Widen the window to 31 days → the 31-day leg appears and
+    /// <c>Assert.Single</c> fails on two matches. (4) Compute <c>ExpiredAt</c> /
+    /// <c>DaysSinceExpiry</c> from the UTC date instead of the Copenhagen date → the boundary leg
+    /// reports 31, not 30.</para>
     /// </summary>
     [Fact]
     public async Task UncoveredApprovers_ExpiredDelegation_30DaysAppears_31DaysDoesNot()
     {
         using var host = _factory.WithFixedToday(F);
         using var client = host.CreateClient();
+
+        // ── the DISCRIMINATING boundary instant ──────────────────────────────────────────────
+        // F = 2025-11-12, so F−30 = 2025-10-13 and F−31 = 2025-10-12. Both are BEFORE the EU DST
+        // end (26 Oct 2025), i.e. CEST = UTC+2, so Copenhagen midnight of F−30 is 2025-10-12
+        // 22:00Z. 22:30Z on F−31 is thus 00:30 on the Copenhagen day F−30: inside the real window,
+        // outside a UTC-midnight window. The two Asserts below prove both halves of that claim
+        // from the zone facility itself, so this pin cannot pass vacuously if F or the zone moves.
+        var boundary = new DateTimeOffset(F.AddDays(-31).ToDateTime(new TimeOnly(22, 30)), TimeSpan.Zero);
+        Assert.Equal(F.AddDays(-30), DateOnly.FromDateTime(
+            TimeZoneInfo.ConvertTime(boundary, CopenhagenBusinessDate.Zone).DateTime));
+        Assert.True(boundary < AtUtcMidnight(F.AddDays(-30)));
 
         var approver30 = NextId("exp30_absent");
         var vikar30 = NextId("exp30_vikar");
@@ -482,13 +516,17 @@ public sealed class HrFollowUpApprovalEndpointTests : IAsyncLifetime
         await WaitForEventAsync("vikarId", vikarId30.ToString(), timeout: TimeSpan.FromSeconds(15));
         await WaitForEventAsync("vikarId", vikarId31.ToString(), timeout: TimeSpan.FromSeconds(15));
 
-        await BackdateVikarEventAsync(vikarId30, AtUtcMidnight(F.AddDays(-30))); // exactly the window floor
-        await BackdateVikarEventAsync(vikarId31, AtUtcMidnight(F.AddDays(-31))); // one day OUTSIDE it
+        // INSIDE: early on the Copenhagen day F−30, but before UTC midnight of F−30.
+        await BackdateVikarEventAsync(vikarId30, boundary);
+        // OUTSIDE under EITHER arithmetic: UTC midnight of F−31 is 02:00 Copenhagen on F−31, a
+        // full Copenhagen day before the floor — so this leg stays genuinely out of the window.
+        await BackdateVikarEventAsync(vikarId31, AtUtcMidnight(F.AddDays(-31)));
 
         using var doc = JsonDocument.Parse(await Client(host, HrToken(OrgA)).GetStringAsync("/api/hr/follow-up/uncovered-approvers"));
         var included = Assert.Single(doc.RootElement.GetProperty("expiredDelegations").EnumerateArray(),
             i => i.GetProperty("vikarId").GetGuid() == vikarId30 || i.GetProperty("vikarId").GetGuid() == vikarId31);
         Assert.Equal(vikarId30, included.GetProperty("vikarId").GetGuid());
+        // The Copenhagen day of the boundary instant is F−30, so the age is 30, not 31.
         Assert.Equal(30, included.GetProperty("daysSinceExpiry").GetInt32());
     }
 
