@@ -383,6 +383,9 @@ export function useEditPerson() {
       // org's `okVersion` (Organization carries it).
       okVersion: string
       approverId?: string
+      // SPRINT-140 / TASK-14007 (HRP-016) — optional hire date, forwarded
+      // verbatim to the spec `CreateUserRequest.employmentStartDate`.
+      employmentStartDate?: string
     }): Promise<WithEtag<User>> => {
       setSaving(true)
       try {

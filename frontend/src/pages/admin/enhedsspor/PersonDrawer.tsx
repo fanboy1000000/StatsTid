@@ -157,7 +157,12 @@ export function PersonDrawer({
         agreementCode: organizations.find((o) => o.orgId === orgId)?.agreementCode ?? 'AC',
       })
       setProfile(EMPTY_PROFILE)
-      setEntitlement(EMPTY_ENTITLEMENT)
+      // SPRINT-140 / TASK-14007 (HRP-016) — pre-fill today, editable. An undated
+      // create silently means "hired today" server-side (S137 ruling) and blocks
+      // back-filling any registration from before the record existed; pre-filling
+      // (rather than leaving it blank) makes that default visible and correctable
+      // in the one place a backdated hire can be recorded at create time.
+      setEntitlement({ ...EMPTY_ENTITLEMENT, employmentStartDate: new Date().toISOString().slice(0, 10) })
       setCreds(EMPTY_CREDS)
       setPlacementUnitId(defaultUnitId ?? null)
       setApex(false)
@@ -298,6 +303,9 @@ export function PersonDrawer({
             // apex → no approver; else the draft approver plants the PRIMARY edge
             // in the same create tx (S74 R9 atomic create+assign).
             approverId: apex ? undefined : draftApproverId ?? undefined,
+            // SPRINT-140 / TASK-14007 (HRP-016) — sent as EmploymentStartDate;
+            // omitted (blank) falls through to the backend's own today-default.
+            employmentStartDate: entitlement.employmentStartDate || undefined,
           },
           targetUnitId: placementUnitId,
           designateUnitId: promote && placementUnitId ? placementUnitId : null,
@@ -480,6 +488,40 @@ export function PersonDrawer({
               </div>
             </div>
           </section>
+
+          {/* SPRINT-140 / TASK-14007 (HRP-016) — the create-only hire date. HR-gated
+              like the edit-mode Entitlement section it mirrors (isHrCapable — in
+              practice every actor who can reach this drawer already satisfies it,
+              the page itself is LocalHR-floored, but the same gate is kept for
+              consistency and defense-in-depth). Pre-filled with today (set at
+              open, above) and editable — never leave it blank by construction, so
+              a backdated hire is a deliberate choice rather than a silent default
+              the admin never saw. */}
+          {isNew && isHr && (
+            <section className={styles.section} aria-labelledby="pd-employment-heading">
+              <h3 id="pd-employment-heading" className={styles.sectionLabel}>
+                Ansættelse
+              </h3>
+              <div className={styles.formField}>
+                <label className={styles.formLabel} htmlFor="pd-employment-start">
+                  Ansættelsesdato
+                </label>
+                <input
+                  className={styles.input}
+                  id="pd-employment-start"
+                  type="date"
+                  value={entitlement.employmentStartDate}
+                  onChange={(e) => patchEntitlement({ employmentStartDate: e.target.value })}
+                  disabled={busy}
+                  data-testid="pd-employment-start"
+                />
+                <div className={styles.helperText}>
+                  Forudfyldt med dagens dato. En udatert oprettelse betyder “ansat i dag” og forhindrer registrering af
+                  noget, der ligger før — ret datoen her, hvis medarbejderen reelt er ansat tidligere.
+                </div>
+              </div>
+            </section>
+          )}
 
           {/* HR-gated sections — hidden for a non-HR actor + at create. */}
           {isHr && !isNew && (

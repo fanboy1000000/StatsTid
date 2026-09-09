@@ -1,0 +1,39 @@
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90mC:/Users/b200895/source/repos/StatsTid/.claude/worktrees/agent-a833ecc8c72def6dc/frontend[39m
+
+[90mstderr[2m | src/pages/__tests__/SkemaPage.test.tsx[2m > [22m[2mSkemaPage — page chrome (handoff §1)[2m > [22m[2mrenders month nav, Administrer projekter, EXACTLY 4 balance cards, the kept ComplianceWarnings, the grid and the footer — with the legacy surfaces gone (R9)
+[22m[39m⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+
+ [32m✓[39m src/pages/__tests__/SkemaPage.test.tsx [2m([22m[2m38 tests[22m[2m)[22m[33m 34703[2mms[22m[39m
+     [33m[2m✓[22m[39m renders month nav, Administrer projekter, EXACTLY 4 balance cards, the kept ComplianceWarnings, the grid and the footer — with the legacy surfaces gone (R9) [33m 1792[2mms[22m[39m
+     [33m[2m✓[22m[39m navigates months and refetches (Næste → April 2026) [33m 2772[2mms[22m[39m
+     [33m[2m✓[22m[39m R2/W1: the Flex card "Denne måned" equals the grid Diff trailing total, and BOTH render the ONE useSkema computation (no copy to drift) [33m 606[2mms[22m[39m
+     [33m[2m✓[22m[39m R10: hours-first headlines = served days × fullDayNormAtMonthEnd; the Afholdt sub-line skips null-feriedage rows [33m 547[2mms[22m[39m
+     [33m[2m✓[22m[39m R10 fail-soft: a null fullDayNormAtMonthEnd em-dashes the hours headline while the days value still shows [33m 315[2mms[22m[39m
+     [33m[2m✓[22m[39m R11: the modal opens from the page header button [33m 1222[2mms[22m[39m
+     [33m[2m✓[22m[39m R11: the modal opens from the day panel step-2 link [33m 1153[2mms[22m[39m
+     [33m[2m✓[22m[39m R11/R16: a modal action FLUSHES the pending debounced save, PUTs, then refetches — in that order — and the grid updates live [33m 1646[2mms[22m[39m
+     [33m[2m✓[22m[39m R16/B2 in-flight: a FIRED debounce save whose POST is unresolved blocks the PUT until it resolves [33m 1766[2mms[22m[39m
+     [33m[2m✓[22m[39m R16/B2 flush-failure: a FAILED flush save ABORTS the preference write — NO PUT, NO refetch, the error surfaces, local edits intact [33m 1267[2mms[22m[39m
+     [33m[2m✓[22m[39m R16/B2 settled-failure (Step-7a c2): a save that FAILED and SETTLED before any flush is RETRIED by the flush — still-failing means NO PUT; recovered means the PUT proceeds [33m 1833[2mms[22m[39m
+     [33m[2m✓[22m[39m R16/B2 overlapping-saves (Step-7a c3): an OLDER save failing AFTER a newer one succeeded retries from LIVE state — the stale value never resurrects [33m 2933[2mms[22m[39m
+     [33m[2m✓[22m[39m R3: hiding a populated project leaves Diff / I alt / the ✓ state unchanged, shows the affordance, and the approval-gate 422 surface still renders [33m 4649[2mms[22m[39m
+     [33m[2m✓[22m[39m R7: a panel period edit round-trips through the hook buildWorkTimePayload, preserving the day's existing manualHours [33m 736[2mms[22m[39m
+     [33m[2m✓[22m[39m a panel allocation edit rides the existing debounced cell-save path [33m 571[2mms[22m[39m
+     [33m[2m✓[22m[39m the panel's allocations span ALL SERVED projects — a hidden populated row still counts toward Resterende (the recorded 7203 pin) [33m 442[2mms[22m[39m
+     [33m[2m✓[22m[39m W2/R6: editing day N's periods locally (no save round-trip) and opening day N+1 warns from N's LOCAL state [33m 1065[2mms[22m[39m
+     [33m[2m✓[22m[39m R5: EMPLOYEE_APPROVED = readOnly grid, unreachable panel, disabled saves — but the manager modal STAYS reachable [33m 324[2mms[22m[39m
+     [33m[2m✓[22m[39m R4 flush contract: a 422-reverted delta counts RESOLVED — a following preference PUT PROCEEDS [33m 1113[2mms[22m[39m
+     [33m[2m✓[22m[39m R4 contrast: a 500 (non-422) flush failure still ABORTS the preference PUT (the S72 B2 posture is unchanged) [33m 1036[2mms[22m[39m
+     [33m[2m✓[22m[39m B2: a work-time 422 REVERTS the day's intervals to server truth + surfaces the alert [33m 995[2mms[22m[39m
+     [33m[2m✓[22m[39m B2: a work-time 422 counts RESOLVED — a following preference PUT is NOT silently aborted [33m 1270[2mms[22m[39m
+     [33m[2m✓[22m[39m B2 (c2): a work-time 422 AFTER a successful save reverts to the SAVED value, not the original [33m 892[2mms[22m[39m
+     [33m[2m✓[22m[39m the COVERAGE shape ({missingDays}) renders Danish guidance, not raw JSON [33m 476[2mms[22m[39m
+     [33m[2m✓[22m[39m the ALLOCATION shape ({kind, unbalancedDays}) renders directional Danish guidance [33m 463[2mms[22m[39m
+     [33m[2m✓[22m[39m sends EXACTLY ONE POST, to /api/approval/send, with {employeeId, year, month} [33m 730[2mms[22m[39m
+[90mstderr[2m | src/pages/approval/__tests__/TeamRowDetail.test.tsx[2m > [22m[2mTeamRowDetail — accordion expand/collapse[2m > [22m[2mthe toggle is a real button with aria-expanded that flips on click
+[22m[39m⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition.
+⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath.
+

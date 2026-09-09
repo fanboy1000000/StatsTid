@@ -42,6 +42,12 @@ const WageTypeMappingManagement = lazy(() => import('./pages/admin/WageTypeMappi
 const AuditLogView = lazy(() => import('./pages/admin/AuditLogView').then(m => ({ default: m.AuditLogView })))
 const OrganisationOgMedarbejdere = lazy(() => import('./pages/admin/OrganisationOgMedarbejdere').then(m => ({ default: m.OrganisationOgMedarbejdere })))
 const DelegationPage = lazy(() => import('./pages/delegation/DelegationPage').then(m => ({ default: m.DelegationPage })))
+// SPRINT-140 / TASK-14007 (QUAL-162) — routed for the first time. The page was
+// finished and unit-tested but never wired into App.tsx, so no role could
+// reach it (`docs/FRONTEND.md:185`'s "not routed" list). Its APIs are
+// LeaderOrAbove (`OvertimeEndpoints.cs:355/435/508`), so it joins the
+// "Godkend tid" (LocalLeader+) group below, not Administration.
+const OvertimePreApprovalManagement = lazy(() => import('./pages/admin/OvertimePreApprovalManagement').then(m => ({ default: m.OvertimePreApprovalManagement })))
 
 import './styles/tokens.css'
 
@@ -87,6 +93,9 @@ function AppRoutes() {
                 standalone dashboard route redirects (the component was deleted in S88). */}
             <Route path="godkend/godkendelser" element={<Navigate to="/godkend/oversigt" replace />} />
             <Route path="godkend/vikariering" element={<DelegationPage />} />
+            {/* SPRINT-140 / TASK-14007 (QUAL-162) — the previously-unrouted overtime
+                pre-approval page, now reachable by a leader. */}
+            <Route path="godkend/overtid" element={<OvertimePreApprovalManagement />} />
           </Route>
 
           {/* === Administration (mixed: LocalHR and LocalAdmin) === */}
