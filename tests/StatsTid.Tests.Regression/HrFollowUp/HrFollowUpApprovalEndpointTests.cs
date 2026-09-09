@@ -140,6 +140,10 @@ public sealed class HrFollowUpApprovalEndpointTests : IAsyncLifetime
 
         var employeeId = NextId("pd_divergent");
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, OrgCurrent);
+        // approval_periods.org_id REFERENCES organizations(org_id) (init.sql:918) — OrgStamped must
+        // exist as a real organisation before a row can be stamped with it. A throwaway employee is
+        // RegressionSeed's only organisation-creating path; its own row is otherwise irrelevant here.
+        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, NextId("pd_divergent_orgseed"), OrgStamped);
         await SeedApprovalPeriodAsync(employeeId, OrgStamped, 2025, 11, "DRAFT", employeeDeadline: F.AddDays(-1));
 
         using var currentDoc = JsonDocument.Parse(await Client(host, HrToken(OrgCurrent)).GetStringAsync("/api/hr/follow-up/past-deadline"));
@@ -436,6 +440,10 @@ public sealed class HrFollowUpApprovalEndpointTests : IAsyncLifetime
         var vikarUser = NextId("div_vikar");
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, absentApprover, OrgCurrent);
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, vikarUser, OrgCurrent);
+        // manager_vikar.organisation_id REFERENCES organizations(org_id) (init.sql:4241) — OrgStamped
+        // must exist before a row can be stamped with it. A throwaway employee is RegressionSeed's
+        // only organisation-creating path; its own row plays no other part in this fact.
+        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, NextId("div_orgseed"), OrgStamped);
         var vikarId = await SeedManagerVikarAsync(absentApprover, vikarUser, OrgStamped, untilDate: F.AddDays(-40));
 
         await RunDelegationExpirySweepAsync(host);
