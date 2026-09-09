@@ -38,7 +38,9 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///   <item><description>
 ///     <b>POST /api/hr/backdate-worklist/{worklistId}/resolve</b> — body
 ///     <see cref="ResolveBackdateWorklistRequest"/>; admin-strict If-Match (ADR-019 D2: 428 when
-///     missing / malformed, 412 when stale); 404 unknown id; 403 out of scope; 409 already
+///     missing / malformed, 412 when stale); 404 unknown id; 403 out of scope; 403 when a
+///     NON-GlobalAdmin resolves an <c>EXPORTED_MONTH</c> row as <c>RECALCULATED</c> (S140 /
+///     TASK-14010, owner ruling OQ-7 (a) — see the in-handler gate); 409 already
 ///     resolved; 422 bad verb / blank reason. The resolve writes the row, emits
 ///     <c>BackdateWorklistRowResolved</c> + its ADR-026 row in ONE tx (that pair IS the audit record
 ///     — no <c>*_audit</c> table by design) and returns 200 with the new ETag.
@@ -146,6 +148,43 @@ public static class BackdateWorklistEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
+            // ── S140 / TASK-14010, owner ruling OQ-7 (a): RECALCULATED on an EXPORTED_MONTH row
+            // is GLOBAL-ADMIN ONLY, enforced HERE and not only on the screen ──────────────────
+            //
+            // The gate tracks THE REMEDY, not the surface. An EXPORTED_MONTH row is fixed by
+            // POST /api/payroll/recalculate on the Payroll host, which is GlobalAdminOnly
+            // (Payroll Program.cs — `RequireAuthorization("GlobalAdminOnly")`, ADR-034 D5), so
+            // recording "Recalculated" on such a row ASSERTS an act only a Global Admin may
+            // perform; an HR user must not be able to close the row by claiming it. A
+            // SETTLED_YEAR row is fixed by the settlement REVERSAL, which is HROrAbove
+            // (SettlementReversalEndpoints), so any HR-capable actor may mark THAT kind
+            // Recalculated. DISMISSED stays open to HR for BOTH kinds — dismissing records a
+            // judgement, not a payroll act. The frontend hides the button for the same
+            // combination (WorklistList.tsx); that is a courtesy, this is the gate.
+            //
+            // WHY THIS POSITION. AFTER the row read and the org-scope validation, so a caller who
+            // may not see the row still gets the scope 403 first — this refusal can never double
+            // as an existence (or kind) oracle for a row outside the caller's scope. BEFORE the
+            // already-resolved 409 and before the transaction, so the authorization decision
+            // never depends on mutable row state (no state can "unlock" it) and the 409 body's
+            // resolution details are not handed to a caller who may not take the action at all.
+            // Reading Kind from the pre-read row is safe: `kind` is written once at INSERT and
+            // never updated, and any concurrent write to the row bumps `version`, which the in-tx
+            // If-Match guard then rejects with a 412.
+            if (string.Equals(body.Resolution, WorklistResolutions.Recalculated, StringComparison.Ordinal)
+                && string.Equals(existing.Kind, WorklistKinds.ExportedMonth, StringComparison.Ordinal)
+                && !IsGlobalAdmin(actor))
+            {
+                return Results.Json(new
+                {
+                    error = "Access denied",
+                    reason = $"Only GlobalAdmin can resolve a {WorklistKinds.ExportedMonth} row as "
+                           + $"{WorklistResolutions.Recalculated} — its remedy is the Global-Admin-only "
+                           + "payroll recalculation. HR may resolve it as "
+                           + $"{WorklistResolutions.Dismissed}.",
+                }, statusCode: 403);
+            }
+
             if (existing.ResolvedAt is not null)
             {
                 return Results.Json(new
@@ -214,6 +253,33 @@ public static class BackdateWorklistEndpoints
         .Produces<BackdateWorklistResolveResponse>(StatusCodes.Status200OK);
 
         return app;
+    }
+
+    // ── the in-handler Global-Admin test (S140 / TASK-14010, owner ruling OQ-7 (a)) ──
+
+    /// <summary>
+    /// Whether the actor is a Global Admin, decided PURELY from its own claims — the same idiom as
+    /// <c>OrchestratorScopeHelpers.IsGlobalAdmin</c> (that project is not referenced here, so the
+    /// two-line predicate is repeated rather than shared).
+    ///
+    /// <para><b>Primary signal = the GlobalAdmin ROLE claim,</b> because that is exactly what the
+    /// <c>GlobalAdminOnly</c> policy tests: it is declared with <c>requireOrgScope: false</c>
+    /// (<c>AuthorizationPolicies.cs</c>), so a GlobalAdmin token commonly carries no scopes at all.
+    /// Requiring a scope here would make this gate STRICTER than the payroll-recalculation endpoint
+    /// it mirrors — it would refuse a Global Admin who really can perform the remedy. The GLOBAL
+    /// <c>RoleScope</c> fallback is a secondary signal only, and it requires the scope's own role to
+    /// be GlobalAdmin (SEC-021 / FAIL-001: <c>ScopeType == "GLOBAL"</c> alone would admit a
+    /// mixed-role token that the policy itself would deny).</para>
+    /// </summary>
+    private static bool IsGlobalAdmin(ActorContext actor)
+    {
+        if (string.Equals(actor.ActorRole, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal))
+            return true;
+
+        return actor.Scopes is { Length: > 0 }
+            && actor.Scopes.Any(s =>
+                string.Equals(s.Role, StatsTidRoles.GlobalAdmin, StringComparison.Ordinal)
+                && string.Equals(s.ScopeType, "GLOBAL", StringComparison.Ordinal));
     }
 
     // ── projection: storage row → wire DTO (derived fields computed here, DB-free) ──
