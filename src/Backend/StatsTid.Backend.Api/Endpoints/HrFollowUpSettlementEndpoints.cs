@@ -258,7 +258,12 @@ public static class HrFollowUpSettlementEndpoints
 
             var period = EntitlementPeriodResolver.ResolveForYear(VacationType, VacationResetMonth, entitlementYear);
             var deadline = period.Boundary;                      // 31 December of the ferieår-END year
-            var ageAnchorDate = period.AccrualEnd;               // the ferieår end — when the days became candidates
+            // The ferieår END — the LAST day this ferieår's days accrue (31 Aug E+1 under
+            // reset_month 9). ONE derivation, TWO consumers (PAT-028): it is the age anchor on every
+            // listed item, AND the population bound the read repository needs to tell "not
+            // applicable" apart from "could not compute" (see the call below).
+            var accrualEnd = period.AccrualEnd;
+            var ageAnchorDate = accrualEnd;                      // when the days became candidates
             var windowOpensOn = new DateOnly(today.Year, Section21WindowOpenMonth, Section21WindowOpenDay);
             var windowOpen = today >= windowOpensOn && today <= deadline;
             var daysToDeadline = deadline.DayNumber - today.DayNumber;
@@ -282,8 +287,13 @@ public static class HrFollowUpSettlementEndpoints
                     ProjectionNote: Section21ProjectionNote));
             }
 
+            // accrualEnd bounds the candidate POPULATION (S140 / TASK-14012): an employee whose
+            // employment began after this ferieår finished accruing cannot hold a single day of it,
+            // so they are NOT APPLICABLE and are excluded — rather than valued, failing the
+            // dated-history read, and reported as "could not compute". An employee hired DURING the
+            // ferieår is still valued, and still reported as cannotCompute if that read fails.
             var result = await readRepo.GetTransferAgreementsNeededAsync(
-                accessibleOrgIds, today, entitlementYear, ct);
+                accessibleOrgIds, today, accrualEnd, entitlementYear, ct);
 
             var items = result.Needed
                 .Select(r => new VacationTransferAgreementNeededItem(
