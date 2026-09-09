@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -32,6 +34,21 @@ namespace StatsTid.Tests.Regression.Settlement;
 /// (same WAF harness, token minting, direct <c>vacation_settlements</c> seeding). NOTE: the full
 /// cross-party races (clear-vs-Step-A-flip, clear-vs-settle) land in TASK-7005 where Step A
 /// exists — here the single-process R12 pin proves lock acquisition + in-lock guard ordering.</para>
+///
+/// <para>
+/// <b>S140 / TASK-14002 (QUAL-153/154) — anchored onto <see cref="F"/>, no new seam needed.</b>
+/// Same already-seamed path as <see cref="EmploymentDateGuardTests"/> — this suite needed only a
+/// constant anchor + the fixed host. <see cref="TodayUtc"/> (formerly a raw wall-clock read) now
+/// returns <see cref="F"/>, so <see cref="PastDate"/>/<see cref="FutureDate"/> and every
+/// <see cref="FerieaarOf"/> result the R7a/R12 fixtures seed against are DERIVED from the anchor
+/// and can no longer drift across a 1-September ferieår rollover. (The distinct file
+/// <c>EmploymentEndDateCorrectionGuardTests.cs</c> is NOT one of the six suites this task converts
+/// — it is out of scope here; its own <c>FerieaarOf(TodayUtc)</c> seed is registered separately in
+/// the sprint's QUAL-154 evidence trail.) Same Copenhagen-vs-UTC-day non-issue as
+/// <see cref="EmploymentDateGuardTests"/>: <see cref="FixedTimeProvider"/> pins UTC midnight and
+/// Denmark's UTC offset is never negative, so the two derivations agree on <see cref="F"/> by
+/// construction.
+/// </para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
@@ -44,10 +61,19 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
 
-    // Real-clock anchored dates (the endpoint compares against the Copenhagen business date;
-    // ±2-year margins make the past/future classification immune to the UTC/CET offset).
-    private static readonly DateOnly TodayUtc = DateOnly.FromDateTime(DateTime.UtcNow);
+    /// <summary>
+    /// S140 / TASK-14002 (PAT-008) — the ONE pinned "today" for every test in this suite.
+    /// 2025-03-12 — a WEDNESDAY, safely on the OK24 side of the 2026-04-01 OK24→OK26 cutover
+    /// (<c>OkVersionResolver.cs:18-19</c>), even though this suite's R1/R7a rules are
+    /// OK-version-agnostic — kept for cross-suite consistency. Both facts are asserted once, by
+    /// <see cref="Anchor_IsWednesday_OnOk24Side"/>.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
+
+    // ±2-year margins make the past/future classification immune to the UTC/CET offset.
+    private static readonly DateOnly TodayUtc = F; // S140/TASK-14002: was a raw wall-clock read.
     private static readonly DateOnly PastDate = TodayUtc.AddYears(-2);
     private static readonly DateOnly FutureDate = TodayUtc.AddYears(2);
 
@@ -59,14 +85,27 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
-        _ = _factory.CreateClient(); // boot seeders (org tree MIN01/STY01/STY05 + configs)
+        // PAT-008 — the ONE fixed host for this test instance (one per fact: xunit gives each
+        // [Fact] its own instance under IAsyncLifetime). ClientWith() below reuses THIS host —
+        // never the base _factory — so no second, real-clock host ever races it on this container.
+        _fixedHost = _factory.WithFixedToday(F);
+        _ = _fixedHost.CreateClient(); // boot seeders (org tree MIN01/STY01/STY05 + configs)
     }
 
     public async Task DisposeAsync()
     {
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
+    }
+
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -558,7 +597,7 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
 
     private HttpClient ClientWith(string bearer)
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient(); // PAT-008: the ONE fixed host for this fact.
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         return client;
     }

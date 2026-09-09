@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
@@ -33,14 +35,38 @@ namespace StatsTid.Tests.Regression.ReportingLine;
 /// Endpoint-level via <see cref="StatsTidWebApplicationFactory"/> (the real Backend.Api over a fresh
 /// testcontainer). Direct DB reads for the manager_vikar + audit_projection assertions.
 /// </para>
+///
+/// <para>
+/// <b>S140 / TASK-14002 (QUAL-153/154) — anchored onto <see cref="F"/>, ONE fixed host per fact.</b>
+/// The <see cref="Today"/> helper (formerly a raw wall-clock read) now returns <see cref="F"/>, so
+/// every one of its 27 call sites is anchor-derived without further edits. All THREE client
+/// factories below (<see cref="AdminClient"/>, <see cref="LeaderClient"/>, <see cref="MixedRoleClient"/>)
+/// now route through <see cref="FixedHost"/>, a single lazily-booted <c>WithFixedToday(F)</c> host
+/// per test-class instance — and since xunit gives every <c>[Fact]</c> its own instance under
+/// <see cref="IAsyncLifetime"/>, that is exactly one fixed host per fact, satisfying PAT-008's
+/// one-host-per-fact rule without touching each of the 19 call sites individually. No client in
+/// this file is ever taken from the un-fixed <c>_factory.CreateClient()</c> path any more. The
+/// seeded reporting lines' <c>EffectiveFrom</c> moved from a bare 2026-01-01 literal to
+/// <c>F.AddYears(-1)</c> so they are already in force as of <see cref="F"/>.
+/// </para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 {
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
 
+    /// <summary>
+    /// S140 / TASK-14002 (PAT-008) — the ONE pinned "today" for every test in this suite.
+    /// 2025-03-12 — a WEDNESDAY (matches <c>FixedClockProbeTests.F</c>), safely on the OK24 side
+    /// of the 2026-04-01 OK24→OK26 cutover (<c>OkVersionResolver.cs:18-19</c>), even though this
+    /// suite does not itself stamp an OK version on a date-sensitive path — kept for cross-suite
+    /// consistency. Both facts are asserted once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
+
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program>? _fixedHost;
     private DbConnectionFactory _dbFactory = null!;
     private ReportingLineRepository _rlRepo = null!;
     private ManagerVikarRepository _vikarRepo = null!;
@@ -70,7 +96,10 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
         _dbFactory = new DbConnectionFactory(_harness.ConnectionString);
         _vikarRepo = new ManagerVikarRepository(_dbFactory);
-        _rlRepo = new ReportingLineRepository(_dbFactory, _vikarRepo);
+        // timeProvider: fixes the AssignAsync/asOf-fallback path to F (3rd optional ctor param,
+        // TASK-14001) — every AssignAsync call below supplies an explicit EffectiveFrom so this is
+        // belt-and-braces, not load-bearing, per PAT-008's "pass it by name to be safe".
+        _rlRepo = new ReportingLineRepository(_dbFactory, _vikarRepo, timeProvider: new FixedTimeProvider(F));
 
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -85,10 +114,30 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
             await conn.OpenAsync();
             await CleanupAsync(conn);
         }
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
     }
+
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
+    }
+
+    /// <summary>
+    /// S140 / TASK-14002 (PAT-008) — the ONE fixed host for this test instance (xunit gives each
+    /// <c>[Fact]</c> its own instance under <see cref="IAsyncLifetime"/>, so this is one host per
+    /// fact). Lazily booted on first use so facts that never call an HTTP client (the lock-only
+    /// helpers) never pay for a host. <see cref="AdminClient"/>, <see cref="LeaderClient"/> and
+    /// <see cref="MixedRoleClient"/> all route through this ONE instance — never the base
+    /// <c>_factory.CreateClient()</c> — so a fact that mints several actors' clients never risks a
+    /// second, real-clock host racing this one (PAT-008 one-host-per-fact rule).
+    /// </summary>
+    private WebApplicationFactory<Program> FixedHost => _fixedHost ??= _factory.WithFixedToday(F);
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  Seed / cleanup
@@ -163,6 +212,9 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("vikx", VikX);
     }
 
+    // S140 / TASK-14002 — EffectiveFrom moved from a bare 2026-01-01 literal (which only worked
+    // because the real wall clock was already past it) to F.AddYears(-1), so both lines seeded
+    // through this helper are already in force as of F under the fixed clock.
     private static ReportingLineModel MakeLine(string employeeId, string managerId) => new()
     {
         ReportingLineId = Guid.Empty,
@@ -170,7 +222,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         ManagerId = managerId,
         OrganisationId = TreeRootSty02,
         Relationship = "PRIMARY",
-        EffectiveFrom = new DateOnly(2026, 1, 1),
+        EffectiveFrom = F.AddYears(-1),
         Source = "MANUAL",
         Version = 0,
         CreatedBy = "TEST",
@@ -233,7 +285,15 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         Assert.Equal(Mgr, body!.managerId);
         Assert.Equal(Vik, body.vikarUserId);
         Assert.Equal("FERIE", body.reason);
-        Assert.Equal(Today().ToString("yyyy-MM-dd"), body.effectiveFrom);   // effectiveFrom = today
+        // S140 / TASK-14002 (QUAL-153/154) — THE assertion that proves the fixed clock reached the
+        // admin-vikar POST handler (ReportingLineEndpoints.cs:2232-2234): compared directly against
+        // the literal anchor F, not through the Today() helper, so this pin cannot pass merely
+        // because Today() and the handler happen to agree on their OWN definitions of "today". RED
+        // condition: if the handler's effectiveFrom stamp still read the real wall clock instead of
+        // the fixed host's TimeProvider, this would compare F (2025-03-12) against whatever the real
+        // wall-clock date is when the suite runs — never equal outside one specific calendar day —
+        // and fail.
+        Assert.Equal(F.ToString("yyyy-MM-dd"), body.effectiveFrom);
         Assert.Equal(effectiveTo.ToString("yyyy-MM-dd"), body.effectiveTo);
         Assert.False(string.IsNullOrWhiteSpace(body.vikarId));
 
@@ -564,7 +624,9 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         Assert.Equal(Vik, body!.actingManagerId);
         Assert.Equal(1, body.delegatedCount);   // covers Mgr's one report (Emp), no admin ACTING
         Assert.Equal(0, body.skippedCount);
-        Assert.Equal(Today().ToString("yyyy-MM-dd"), body.effectiveFrom);
+        // Same seam-reaching proof as AdminPost_HappyPath_CreatesVikar_AndAuditRow, on the self-
+        // delegate create path this time — compared against the literal F, not through Today().
+        Assert.Equal(F.ToString("yyyy-MM-dd"), body.effectiveFrom);
         Assert.Equal(effectiveTo.ToString("yyyy-MM-dd"), body.effectiveTo);
 
         // The manager_vikar row was created keyed on Mgr (= absent approver).
@@ -942,7 +1004,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 
     private sealed record ErrorBody(string error, string[]? uncoveredEmployeeIds, int? uncoveredCount);
 
-    private static DateOnly Today() => DateOnly.FromDateTime(DateTime.UtcNow);
+    private static DateOnly Today() => F; // S140/TASK-14002: was a raw wall-clock read; anchor-derived now.
 
     // S93 flat role-scope: a token's PRIMARY org (the JWT orgId — the cross-org audit
     // discriminator) is decoupled from its access-granting SCOPE org (exact ORG_ONLY membership).
@@ -950,7 +1012,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     // primary=MIN01 + scopeOrg=STY02 so it covers STY02 yet attributes audit to MIN01.
     private HttpClient AdminClient(string userId, string orgId, string? scopeOrg = null)
     {
-        var client = _factory.CreateClient();
+        var client = FixedHost.CreateClient(); // PAT-008: the ONE fixed host for this fact.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintToken(userId, orgId, StatsTidRoles.LocalAdmin, "LOCAL_ADMIN", scopeOrg));
         return client;
@@ -958,7 +1020,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
 
     private HttpClient LeaderClient(string userId, string orgId)
     {
-        var client = _factory.CreateClient();
+        var client = FixedHost.CreateClient(); // PAT-008: the ONE fixed host for this fact.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintToken(userId, orgId, StatsTidRoles.LocalLeader, "LOCAL_LEADER"));
         return client;
@@ -987,7 +1049,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         var bearer = tokenService.GenerateToken(
             employeeId: userId, name: userId, role: adminRole,
             agreementCode: "HK", orgId: adminOrg, scopes: scopes);
-        var client = _factory.CreateClient();
+        var client = FixedHost.CreateClient(); // PAT-008: the ONE fixed host for this fact.
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         return client;
     }
@@ -1122,6 +1184,10 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     /// </summary>
     private async Task<bool> WaitForAdvisoryLockWaiterAsync(string treeRoot, int timeoutMs = 5000)
     {
+        // HARD RULE #3 exception (S140 / TASK-14002): this measures ELAPSED REAL TIME for a polling
+        // timeout, never a business date — it must keep reading the real wall clock regardless of
+        // the fixed-clock anchor, or a 5-second poll budget would run forever (or never) under a
+        // clock pinned to 2025-03-12.
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();

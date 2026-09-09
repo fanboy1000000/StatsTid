@@ -179,6 +179,10 @@ public static class SkemaEndpoints
             StatsTid.Backend.Api.Services.ConsumptionCalculator consumptionCalculator,
             OrgScopeValidator scopeValidator,
             DesignatedApproverAuthorizer designatedAuthorizer,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production); it
+            // backs the leader-tier authority `asOf` below. Every other date this handler serves is
+            // derived from the requested (year, month), not from "today".
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -215,7 +219,9 @@ public static class SkemaEndpoints
                 var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
                 if (!allowed)
                 {
-                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    // S140 / TASK-14001 — "who may act NOW" reads the injected TimeProvider's UTC
+                    // day (PAT-008 seam); the only business-date read on this handler's path.
+                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
                     var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                         actor.ActorId!, employeeId, asOf: today, ct: ct);
                     if (!hasEdgeOrUnit)

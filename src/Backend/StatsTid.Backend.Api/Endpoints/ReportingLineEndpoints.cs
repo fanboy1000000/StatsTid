@@ -124,6 +124,9 @@ public static class ReportingLineEndpoints
                         Source = "MANUAL",
                         Version = 1,
                         CreatedBy = actor.ActorId ?? "system",
+                        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
+                        // TASK-14001) — never routed through the injected seam. The line's BUSINESS
+                        // date is request.EffectiveFrom, which the caller supplies.
                         CreatedAt = DateTime.UtcNow,
                     };
 
@@ -290,7 +293,12 @@ public static class ReportingLineEndpoints
                     //    cross-tree-edge race does not apply).
                     var deletedTreeRoot = await repo.AcquireTreeLockForEmployeeAsync(conn, tx, employeeId, ct);
 
-                    closed = await repo.RemoveAsync(conn, tx, expectedVersion, employeeId, "PRIMARY", ct);
+                    // S140 / TASK-14001 — `closeDate` omitted DELIBERATELY: this operation has no
+                    // other business date of its own, so the repository's injected-TimeProvider
+                    // fallback IS the seam (PAT-028's "the fallback exists for callers that
+                    // genuinely have no operation-level date"). The row's effective_to and the
+                    // event's EffectiveTo both come from the returned row, so they cannot disagree.
+                    closed = await repo.RemoveAsync(conn, tx, expectedVersion, employeeId, "PRIMARY", ct: ct);
 
                     // Root invariant: reject if this creates a second root (Codex S48 W2, scoped to tree per cycle 2 W1).
                     var treeRoot = closed.OrganisationId;
@@ -611,6 +619,8 @@ public static class ReportingLineEndpoints
                         Source = "MANUAL",
                         Version = 1,
                         CreatedBy = actor.ActorId ?? "system",
+                        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
+                        // TASK-14001). The line's BUSINESS date is request.EffectiveFrom.
                         CreatedAt = DateTime.UtcNow,
                     };
 
@@ -753,7 +763,10 @@ public static class ReportingLineEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
-                    closed = await repo.RemoveAsync(conn, tx, expectedVersion, employeeId, "ACTING", ct);
+                    // S140 / TASK-14001 — `closeDate` omitted DELIBERATELY (see the PRIMARY DELETE
+                    // above): no other business date exists in this operation, so the repository's
+                    // injected-TimeProvider fallback is the seam.
+                    closed = await repo.RemoveAsync(conn, tx, expectedVersion, employeeId, "ACTING", ct: ct);
 
                     // Audit row.
                     await using var auditCmd = new NpgsqlCommand(
@@ -1059,6 +1072,9 @@ public static class ReportingLineEndpoints
                             Source = "HR_IMPORT",
                             Version = 1,
                             CreatedBy = actor.ActorId ?? "system",
+                            // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
+                            // TASK-14001). The import's BUSINESS date is `effectiveFrom` from the
+                            // request payload, not "today".
                             CreatedAt = DateTime.UtcNow,
                         };
 
@@ -1200,6 +1216,8 @@ public static class ReportingLineEndpoints
             AuditProjectionRepository auditRepo,
             IAuditProjectionMapper<ManagerVikarEnded> vikarEndedAuditMapper,
             IAuditProjectionMapper<UserUpdated> userUpdatedAuditMapper,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 — bounded drift-retry wrapper (see Endpoint 1). The 5-step closure derives the removed
@@ -1269,7 +1287,13 @@ public static class ReportingLineEndpoints
                 await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
                 try
                 {
-                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    // S140 / TASK-14001 (PAT-028: one operation, one date) — THE single business
+                    // date for this 5-step closure, off the injected TimeProvider seam. It is the
+                    // `EffectiveFrom` of every replacement PRIMARY line AND (now) the `closeDate`
+                    // handed to every RemoveAsync below, whose UPDATE previously read the DATABASE
+                    // clock (CURRENT_DATE). One request therefore cannot mix two clocks: the day a
+                    // predecessor line closes is the day its successor opens, by construction.
+                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
                     // ── S74-7403 B4 / S78 R9: acquire the removed person's tree lock FIRST via the
                     //    DRIFT-GUARDED acquire, then RE-READ the incoming edge census IN-TX (the
@@ -1381,6 +1405,8 @@ public static class ReportingLineEndpoints
                             Source = "MANUAL",
                             Version = 1,
                             CreatedBy = actor.ActorId ?? "system",
+                            // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
+                            // TASK-14001). The BUSINESS date is `today` on EffectiveFrom above.
                             CreatedAt = DateTime.UtcNow,
                         };
                         // AssignAsync supersedes the report's current active PRIMARY (held by the
@@ -1430,7 +1456,9 @@ public static class ReportingLineEndpoints
                     //    captured too, since the lock was taken before the in-tx census).
                     foreach (var act in incomingActingInTx)
                     {
-                        var closed = await repo.RemoveAsync(conn, tx, act.Version, act.EmployeeId, "ACTING", ct);
+                        // S140 / TASK-14001 — closed at the closure's ONE date (PAT-028).
+                        var closed = await repo.RemoveAsync(
+                            conn, tx, act.Version, act.EmployeeId, "ACTING", closeDate: today, ct: ct);
                         await InsertReportingLineAuditAsync(conn, tx, closed.ReportingLineId, "ACTING_ENDED",
                             actor, versionBefore: act.Version, versionAfter: closed.Version, ct);
                         await outbox.EnqueueAsync(conn, tx, $"reporting-line-{act.EmployeeId}", new ReportingLineSuperseded
@@ -1455,7 +1483,9 @@ public static class ReportingLineEndpoints
                     var ownEdges = await repo.GetActiveByEmployeeInTxAsync(conn, tx, employeeId, ct);
                     foreach (var own in ownEdges)
                     {
-                        var closed = await repo.RemoveAsync(conn, tx, own.Version, employeeId, own.Relationship, ct);
+                        // S140 / TASK-14001 — closed at the closure's ONE date (PAT-028).
+                        var closed = await repo.RemoveAsync(
+                            conn, tx, own.Version, employeeId, own.Relationship, closeDate: today, ct: ct);
                         await InsertReportingLineAuditAsync(conn, tx, closed.ReportingLineId,
                             own.Relationship == "ACTING" ? "ACTING_ENDED" : "SUPERSEDED",
                             actor, versionBefore: own.Version, versionAfter: closed.Version, ct);
@@ -1648,6 +1678,8 @@ public static class ReportingLineEndpoints
             ReportingLineRepository repo,
             ManagerVikarRepository vikarRepo,
             DbConnectionFactory connectionFactory,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -1676,7 +1708,9 @@ public static class ReportingLineEndpoints
             // EXCLUDING any report already superseded by an admin (non-self) ACTING line —
             // matching the POST's existing skip. Done in ONE query: actor's active PRIMARY
             // reports LEFT-anti-joined against any active admin ACTING for the same employee.
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // S140 / TASK-14001 — the request's one business date, off the injected TimeProvider
+            // seam (PAT-008 / PAT-028). Same UTC day as before under TimeProvider.System.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
             var isEffectiveNow = vikar.UntilDate >= today;
 
             var delegatedEmployeeIds = new List<string>();
@@ -1735,6 +1769,8 @@ public static class ReportingLineEndpoints
             IOutboxEnqueue outbox,
             AuditProjectionRepository auditRepo,
             IAuditProjectionMapper<ManagerVikarCreated> vikarCreatedAuditMapper,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 (BLOCKER 1) — the self-service /delegate CREATE is an employee-current-root mutator
@@ -1755,7 +1791,11 @@ public static class ReportingLineEndpoints
             if (!DateOnly.TryParse(request.EffectiveTo, out var effectiveTo))
                 return Results.BadRequest(new { error = $"Invalid effectiveTo date: '{request.EffectiveTo}'" });
 
-            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow);
+            // S140 / TASK-14001 (PAT-028) — the delegation's start date IS "today", read ONCE off
+            // the injected TimeProvider seam and reused for both the `effectiveTo > today`
+            // validation and the echoed `effectiveFrom` in the response. Same UTC day as before
+            // under TimeProvider.System; a date-sensitive suite can now pin the echoed value.
+            var effectiveFrom = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
             if (effectiveTo <= effectiveFrom)
                 return Results.BadRequest(new { error = "effectiveTo must be after today" });
 
@@ -1925,6 +1965,9 @@ public static class ReportingLineEndpoints
                         OrganisationId = organisationId,
                         Version = 1,
                         CreatedBy = actorId,
+                        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
+                        // TASK-14001). The delegation's BUSINESS dates are `effectiveFrom` (today,
+                        // read once above) and `effectiveTo` (from the request).
                         CreatedAt = DateTime.UtcNow,
                     };
 
@@ -2029,6 +2072,8 @@ public static class ReportingLineEndpoints
             IOutboxEnqueue outbox,
             AuditProjectionRepository auditRepo,
             IAuditProjectionMapper<ManagerVikarEnded> vikarEndedAuditMapper,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -2089,7 +2134,10 @@ public static class ReportingLineEndpoints
                         coveredCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct) ?? 0);
                     }
 
-                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    // S140 / TASK-14001 (PAT-028) — the ONE date this revoke closes the row at, off
+                    // the injected TimeProvider seam; the same value reaches the row's effective_to
+                    // and (via `closed`) the ManagerVikarEnded event's EffectiveTo.
+                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
                     var closed = await vikarRepo.CloseByApproverAsync(conn, tx, actorId, today, ct);
                     if (closed is null)
                     {
@@ -2212,6 +2260,8 @@ public static class ReportingLineEndpoints
             IOutboxEnqueue outbox,
             AuditProjectionRepository auditRepo,
             IAuditProjectionMapper<ManagerVikarCreated> vikarCreatedAuditMapper,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 — bounded drift-retry wrapper (see Endpoint 1). The vikar-CREATE keys on the absent
@@ -2229,7 +2279,12 @@ public static class ReportingLineEndpoints
                 return Results.BadRequest(new { error = "vikarUserId is required" });
             if (!DateOnly.TryParse(request.EffectiveTo, out var effectiveTo))
                 return Results.BadRequest(new { error = $"Invalid effectiveTo date: '{request.EffectiveTo}'" });
-            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow);
+            // S140 / TASK-14001 (PAT-028) — the admin-created vikar's start date IS "today", read
+            // ONCE off the injected TimeProvider seam and reused for both the `effectiveTo > today`
+            // validation and the echoed `effectiveFrom` in the response. Same UTC day as before
+            // under TimeProvider.System; this is the read the admin-vikar suite's echoed-date
+            // assertion depends on, which is why the seam must reach here.
+            var effectiveFrom = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
             if (effectiveTo <= effectiveFrom)
                 return Results.BadRequest(new { error = "effectiveTo must be after today" });
             // A manager cannot stand in for themselves; the vikar must differ from the manager.
@@ -2353,6 +2408,9 @@ public static class ReportingLineEndpoints
                         OrganisationId = organisationId,
                         Version = 1,
                         CreatedBy = actor.ActorId,                 // the ADMIN created it (audit trail)
+                        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
+                        // TASK-14001). The vikar's BUSINESS dates are `effectiveFrom` (today, read
+                        // once above) and `effectiveTo` / UntilDate (from the request).
                         CreatedAt = DateTime.UtcNow,
                     };
 
@@ -2450,6 +2508,8 @@ public static class ReportingLineEndpoints
             IOutboxEnqueue outbox,
             AuditProjectionRepository auditRepo,
             IAuditProjectionMapper<ManagerVikarEnded> vikarEndedAuditMapper,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -2520,7 +2580,10 @@ public static class ReportingLineEndpoints
 
                     // (4) Close the SAME pinned row (keyed by vikar_id, idempotent under effective_to
                     //     IS NULL). The FOR UPDATE above guarantees this is the row we authorized.
-                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    // S140 / TASK-14001 (PAT-028) — the ONE date this revoke closes the row at, off
+                    // the injected TimeProvider seam; the same value reaches the row's effective_to
+                    // and (via `closed`) the ManagerVikarEnded event's EffectiveTo.
+                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
                     var maybeClosed = await vikarRepo.CloseAsync(conn, tx, activeVikar.VikarId, today, ct);
                     if (maybeClosed is null)
                     {
@@ -2674,6 +2737,10 @@ public static class ReportingLineEndpoints
         var qualifyingRoleIds = new HashSet<string>(StringComparer.Ordinal)
             { "GLOBAL_ADMIN", "LOCAL_ADMIN", "LOCAL_HR", "LOCAL_LEADER" };
         var qualifyingAssignments = new List<(string? OrgId, string ScopeType)>();
+        // BY DESIGN: `ra.expires_at > NOW()` stays on the DATABASE clock (S140 / TASK-14001) — a
+        // role-assignment AUTHORIZATION-EXPIRY compare against a stored TIMESTAMP, not a business
+        // date, and self-consistent with the SQL-seeded expiries the suites plant. PAT-028 keeps
+        // expiry/maintenance INSTANTS on the database clock; only business DATES move to the seam.
         await using (var roleCmd = new NpgsqlCommand(
             """
             SELECT ra.org_id, ra.scope_type, ra.role_id FROM role_assignments ra

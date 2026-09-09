@@ -32,17 +32,34 @@ public sealed class ReportingLineRepository
 {
     private readonly DbConnectionFactory _connectionFactory;
     private readonly ManagerVikarRepository _vikarRepo;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Primary constructor (DI). The <paramref name="vikarRepo"/> is consumed by
     /// <see cref="ResolveDesignatedApproverAsync"/> for the S74 vikar-consult (ADR-027 D5);
     /// it is OPTIONAL so existing tests that construct the repository with the factory
     /// alone keep compiling — when omitted, a vikar repo is derived from the same factory.
+    ///
+    /// <para>
+    /// S140 / TASK-14001 — <paramref name="timeProvider"/> is the server-"today" seam, appended
+    /// LAST and OPTIONAL so PRODUCTION BEHAVIOUR IS UNCHANGED (it defaults to
+    /// <see cref="TimeProvider.System"/>) and every existing direct test construction keeps
+    /// compiling. It backs two things: the <c>asOf</c> fallback in
+    /// <see cref="ResolveDesignatedApproverAsync(NpgsqlConnection, NpgsqlTransaction?, string, DateOnly?, CancellationToken)"/>,
+    /// and the <c>closeDate</c> fallback in <see cref="RemoveAsync(long, string, string, DateOnly?, CancellationToken)"/> —
+    /// whose UPDATE previously read the DATABASE clock (<c>SET effective_to = CURRENT_DATE</c>).
+    /// The day derivation is the UTC day both before and after (QUAL-157 owns the
+    /// UTC-vs-Copenhagen question; it is NOT decided here).
+    /// </para>
     /// </summary>
-    public ReportingLineRepository(DbConnectionFactory connectionFactory, ManagerVikarRepository? vikarRepo = null)
+    public ReportingLineRepository(
+        DbConnectionFactory connectionFactory,
+        ManagerVikarRepository? vikarRepo = null,
+        TimeProvider? timeProvider = null)
     {
         _connectionFactory = connectionFactory;
         _vikarRepo = vikarRepo ?? new ManagerVikarRepository(connectionFactory);
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -273,6 +290,9 @@ public sealed class ReportingLineRepository
 
         // 5. Insert the new line at the next monotonic version.
         var newId = newLine.ReportingLineId == Guid.Empty ? Guid.NewGuid() : newLine.ReportingLineId;
+        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 / TASK-14001).
+        // `created_at` records when the row was actually written; it is not a business date and
+        // must never be routed through a fixed test provider (PAT-028: instants stay real).
         var createdAt = newLine.CreatedAt == default ? DateTime.UtcNow : newLine.CreatedAt;
 
         try
@@ -316,10 +336,19 @@ public sealed class ReportingLineRepository
     /// Removes (closes) the active reporting line for the employee+relationship.
     /// Self-contained overload: opens its own connection and transaction.
     /// </summary>
+    /// <param name="closeDate">
+    /// S140 / TASK-14001 (PAT-028) — the business date the line is closed at. OPTIONAL: when the
+    /// caller owns an operation-level "today" it MUST pass it, so the row's <c>effective_to</c> and
+    /// whatever the caller writes alongside it (an event's <c>EffectiveTo</c>, a successor line's
+    /// <c>EffectiveFrom</c>) are provably the SAME value rather than two clock reads. When omitted
+    /// the repository falls back to the UTC day off its injected <see cref="TimeProvider"/> — the
+    /// same day the statement's former <c>CURRENT_DATE</c> produced under a UTC database session.
+    /// </param>
     /// <returns>The closed <see cref="ReportingLine"/>.</returns>
     /// <exception cref="OptimisticConcurrencyException">If the precondition check fails.</exception>
     public async Task<ReportingLine> RemoveAsync(
-        long expectedCurrentVersion, string employeeId, string relationship, CancellationToken ct = default)
+        long expectedCurrentVersion, string employeeId, string relationship,
+        DateOnly? closeDate = null, CancellationToken ct = default)
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
@@ -328,7 +357,8 @@ public sealed class ReportingLineRepository
         await using var tx = await conn.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         try
         {
-            var result = await RemoveAsync(conn, tx, expectedCurrentVersion, employeeId, relationship, ct);
+            var result = await RemoveAsync(
+                conn, tx, expectedCurrentVersion, employeeId, relationship, closeDate, ct);
             await tx.CommitAsync(ct);
             return result;
         }
@@ -340,8 +370,10 @@ public sealed class ReportingLineRepository
     }
 
     /// <summary>
-    /// In-transaction sibling overload of <see cref="RemoveAsync(long, string, string, CancellationToken)"/>.
+    /// In-transaction sibling overload of
+    /// <see cref="RemoveAsync(long, string, string, DateOnly?, CancellationToken)"/>.
     /// Reuses the caller-supplied <paramref name="conn"/> and <paramref name="tx"/>.
+    /// <paramref name="closeDate"/> carries the same contract as on the self-contained overload.
     /// </summary>
     public async Task<ReportingLine> RemoveAsync(
         NpgsqlConnection conn,
@@ -349,6 +381,7 @@ public sealed class ReportingLineRepository
         long expectedCurrentVersion,
         string employeeId,
         string relationship,
+        DateOnly? closeDate = null,
         CancellationToken ct = default)
     {
         // 1. Lock the currently-active row.
@@ -365,8 +398,12 @@ public sealed class ReportingLineRepository
                 $"No active reporting line for employee_id={employeeId}, relationship={relationship}.");
         }
 
-        // 3. Close it at CURRENT_DATE with version bump.
-        return await CloseAndReturnLineAsync(conn, tx, current.ReportingLineId, ct);
+        // 3. Close it at the operation's date with a version bump. S140 / TASK-14001: the date is
+        //    the caller's `closeDate` when supplied (one operation, one date — PAT-028), else the
+        //    UTC day off this repository's injected TimeProvider. It was `CURRENT_DATE` inside the
+        //    UPDATE, i.e. a second clock read on a clock no test host can fix.
+        var effectiveTo = closeDate ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        return await CloseAndReturnLineAsync(conn, tx, current.ReportingLineId, effectiveTo, ct);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -1040,7 +1077,10 @@ public sealed class ReportingLineRepository
         => ResolveDesignatedApproverAsync(
             new SqlReportingLineDataSource(conn, tx, _vikarRepo),
             employeeId,
-            asOf ?? DateOnly.FromDateTime(DateTime.UtcNow),
+            // S140 / TASK-14001 — the `asOf` fallback is the UTC day off the INJECTED TimeProvider
+            // (PAT-008 seam), not the wall clock. Same day under TimeProvider.System; a caller that
+            // owns an operation-level "today" should pass it explicitly (PAT-028).
+            asOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime),
             ct);
 
     /// <summary>
@@ -1274,20 +1314,28 @@ public sealed class ReportingLineRepository
     }
 
     /// <summary>
-    /// Closes the given reporting line at CURRENT_DATE with version bump,
+    /// Closes the given reporting line at <paramref name="effectiveTo"/> with a version bump,
     /// returning the full closed row. Used by <see cref="RemoveAsync"/>.
+    ///
+    /// <para>
+    /// S140 / TASK-14001 — the date arrives as a BOUND PARAMETER from the caller (PAT-028 /
+    /// QUAL-156); the statement previously read <c>CURRENT_DATE</c>. Same day in production
+    /// (<see cref="TimeProvider.System"/> + a UTC database session), but now one honest value per
+    /// operation and reachable by a fixed test clock.
+    /// </para>
     /// </summary>
     private static async Task<ReportingLine> CloseAndReturnLineAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        Guid reportingLineId, CancellationToken ct)
+        Guid reportingLineId, DateOnly effectiveTo, CancellationToken ct)
     {
         await using var closeCmd = new NpgsqlCommand(
             """
             UPDATE reporting_lines
-            SET effective_to = CURRENT_DATE, version = version + 1
+            SET effective_to = @effectiveTo, version = version + 1
             WHERE reporting_line_id = @reportingLineId
             RETURNING *
             """, conn, tx);
+        closeCmd.Parameters.AddWithValue("effectiveTo", effectiveTo);
         closeCmd.Parameters.AddWithValue("reportingLineId", reportingLineId);
         await using var reader = await closeCmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))

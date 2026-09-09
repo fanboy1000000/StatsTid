@@ -4,8 +4,10 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.AuditMappers;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
+using StatsTid.Tests.Regression.Hosting;
 using ReportingLineModel = StatsTid.SharedKernel.Models.ReportingLine;
 
 namespace StatsTid.Tests.Regression.ReportingLine;
@@ -21,12 +23,42 @@ namespace StatsTid.Tests.Regression.ReportingLine;
 /// <c>manager_vikar</c> + its partial-unique index exist). Uses dedicated test users
 /// (<c>tv_*</c>) and cleans up reporting_lines + manager_vikar + users in DisposeAsync.
 /// </para>
+///
+/// <para>
+/// <b>S140 / TASK-14002 (QUAL-153/154) — anchored onto <see cref="F"/>.</b> This suite talks to
+/// Postgres DIRECTLY: it constructs <see cref="ManagerVikarRepository"/>, <see
+/// cref="ReportingLineRepository"/> and <see cref="DelegationExpiryService"/> against
+/// <see cref="_factory"/> with no HTTP host in front of them, so there is no
+/// <c>WithFixedToday</c> WAF host to boot here — the seam for THIS suite is the repositories' and
+/// service's own optional trailing <c>TimeProvider</c> constructor parameter (TASK-14001), which
+/// this suite passes <see cref="FixedTimeProvider"/> into directly. Because no host is booted, no
+/// second <see cref="DelegationExpiryService"/> instance is running against this container in CI —
+/// <c>ci.yml</c> runs this suite with no live Backend.Api host alongside it. A locally-running
+/// backend WOULD compete: its own hosted <see cref="DelegationExpiryService"/> (real-clock,
+/// polling every 5 minutes, `DelegationExpiryService.cs:50-64`) shares this same Postgres
+/// container by connection string and could sweep-close a fixture row between this suite's seed
+/// and its assertion. Docker is unavailable on the authoring machine (standing project
+/// constraint), so this comment cannot be verified against a concurrently-running local backend —
+/// it is a documented hazard for whoever runs this suite with `dotnet run` open in another
+/// terminal, not a claim that CI has this problem today.
+/// </para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class ManagerVikarEngineTests : IAsyncLifetime
 {
     private const string ConnStr =
         "Host=localhost;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev";
+
+    /// <summary>
+    /// S140 / TASK-14002 (PAT-008) — the ONE pinned "today" for every test in this suite,
+    /// replacing raw wall-clock <c>FromDateTime</c>-of-<c>UtcNow</c> reads. 2025-03-12 — a
+    /// WEDNESDAY (matches <c>FixedClockProbeTests.F</c> / the worked-example suites), safely on
+    /// the OK24 side of the 2026-04-01 OK24→OK26 cutover (<c>OkVersionResolver.cs:18-19</c>), even
+    /// though this suite does not itself stamp an OK version — kept for cross-suite consistency.
+    /// Both facts are asserted once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>. Every date
+    /// below is DERIVED from <see cref="F"/>, never from the wall clock.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
 
     private readonly DbConnectionFactory _factory = new(ConnStr);
     private readonly ManagerVikarRepository _vikarRepo;
@@ -48,7 +80,11 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     public ManagerVikarEngineTests()
     {
         _vikarRepo = new ManagerVikarRepository(_factory);
-        _rlRepo = new ReportingLineRepository(_factory, _vikarRepo);
+        // timeProvider: fixes ResolveDesignatedApproverAsync's `asOf ?? …` fallback to F (the
+        // repository's 3rd optional ctor parameter, TASK-14001) — every resolve call below that
+        // omits `asOf` must reason about the vikar's until_date relative to F, not the real
+        // wall-clock day the suite happens to run on.
+        _rlRepo = new ReportingLineRepository(_factory, _vikarRepo, timeProvider: new FixedTimeProvider(F));
         _realOutbox = new PostgresEventStore(_factory, new OutboxServiceContext("backend-api"));
         _auditRepo = new AuditProjectionRepository(_factory);
     }
@@ -75,7 +111,10 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("admin", AdminActing);
         await cmd.ExecuteNonQueryAsync();
 
-        // tv_emp → tv_mgr PRIMARY.
+        // tv_emp → tv_mgr PRIMARY. EffectiveFrom is well BEFORE F (a year earlier) so the line is
+        // already in force as of F — every resolver call below that omits `asOf` falls back to
+        // the fixed provider's F, not the wall clock (S140 conversion; the line used to be dated
+        // 2026-01-01 and relied on the real "today" already being past it).
         await _rlRepo.AssignAsync(null, new ReportingLineModel
         {
             ReportingLineId = Guid.Empty,
@@ -83,7 +122,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             ManagerId = Mgr,
             OrganisationId = TreeRoot,
             Relationship = "PRIMARY",
-            EffectiveFrom = new DateOnly(2026, 1, 1),
+            EffectiveFrom = F.AddYears(-1),
             Source = "MANUAL",
             Version = 0,
             CreatedBy = "TEST",
@@ -182,6 +221,8 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     private static async Task AssignAdminActingAsync(
         ReportingLineRepository repo, string employeeId, string managerId)
     {
+        // Same reasoning as the InitializeAsync PRIMARY line above: EffectiveFrom is a year
+        // before F so the ACTING line is already in force as of F under the fixed clock.
         await repo.AssignAsync(null, new ReportingLineModel
         {
             ReportingLineId = Guid.Empty,
@@ -189,11 +230,19 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
             ManagerId = managerId,
             OrganisationId = TreeRoot,
             Relationship = "ACTING",
-            EffectiveFrom = new DateOnly(2026, 1, 1),
+            EffectiveFrom = F.AddYears(-1),
             Source = "MANUAL",
             Version = 0,
             CreatedBy = "TEST",
         });
+    }
+
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -203,12 +252,12 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task Create_Then_GetActiveByApprover_CoversAsOf_Inclusive()
     {
-        var until = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
+        var until = F.AddDays(5);
         var created = await CreateVikarAsync(Mgr, Vik, until);
         Assert.NotEqual(Guid.Empty, created.VikarId);
 
         // Covered today and on the inclusive until_date; NOT covered the day after.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
         Assert.NotNull(await _vikarRepo.GetActiveByApproverAsync(Mgr, today));
         Assert.NotNull(await _vikarRepo.GetActiveByApproverAsync(Mgr, until));        // inclusive
         Assert.Null(await _vikarRepo.GetActiveByApproverAsync(Mgr, until.AddDays(1))); // day after = uncovered
@@ -217,7 +266,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task Create_SecondActive_ForSameApprover_Throws_PartialUnique()
     {
-        var until = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
+        var until = F.AddDays(5);
         await CreateVikarAsync(Mgr, Vik, until);
 
         await Assert.ThrowsAsync<OptimisticConcurrencyException>(
@@ -227,13 +276,13 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task CloseByApprover_ThenNoActiveRow()
     {
-        var until = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
+        var until = F.AddDays(5);
         await CreateVikarAsync(Mgr, Vik, until);
 
         await using var conn = _factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync();
-        var closed = await _vikarRepo.CloseByApproverAsync(conn, tx, Mgr, DateOnly.FromDateTime(DateTime.UtcNow));
+        var closed = await _vikarRepo.CloseByApproverAsync(conn, tx, Mgr, F);
         await tx.CommitAsync();
 
         Assert.NotNull(closed);
@@ -244,7 +293,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task GetActiveByVikarUser_ReverseLookup_FindsRow()
     {
-        var until = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
+        var until = F.AddDays(5);
         await CreateVikarAsync(Mgr, Vik, until);
 
         var rows = await _vikarRepo.GetActiveByVikarUserAsync(Vik);
@@ -269,7 +318,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task Resolve_ActiveManager_WithActiveVikar_ReturnsVikarAsActing()
     {
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(5));
 
         var (managerId, method, _) = await _rlRepo.ResolveDesignatedApproverAsync(Emp);
         Assert.Equal(Vik, managerId);
@@ -281,7 +330,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     public async Task Resolve_AdminActing_BeatsVikar()
     {
         await AssignAdminActingAsync(_rlRepo, Emp, AdminActing);
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(5));
 
         var (managerId, method, _) = await _rlRepo.ResolveDesignatedApproverAsync(Emp);
         Assert.Equal(AdminActing, managerId);
@@ -292,7 +341,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task Resolve_VikarUserInactive_SkipsVikar_FallsThroughToManager()
     {
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(5));
         await SetUserActiveAsync(Vik, false);
 
         var (managerId, method, _) = await _rlRepo.ResolveDesignatedApproverAsync(Emp);
@@ -304,7 +353,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task Resolve_ManagerInactive_WithActiveVikar_VikarWinsOverEscalation()
     {
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(5));
         await SetUserActiveAsync(Mgr, false);          // manager away/inactive
 
         var (managerId, method, depth) = await _rlRepo.ResolveDesignatedApproverAsync(Emp);
@@ -318,7 +367,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task Resolve_ManagerInactive_VikarUserInactive_Escalates()
     {
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(5));
         await SetUserActiveAsync(Mgr, false);
         await SetUserActiveAsync(Vik, false);
 
@@ -332,7 +381,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     [Fact]
     public async Task Resolve_VikarExpiredRelativeToAsOf_NotConsulted()
     {
-        var until = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
+        var until = F.AddDays(5);
         await CreateVikarAsync(Mgr, Vik, until);
 
         // Resolve as-of a date AFTER the vikar's inclusive until_date.
@@ -348,10 +397,29 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
 
     // A vikar whose until_date IS today is STILL active today (inclusive) — NOT expired.
     // A vikar whose until_date is yesterday IS expired and closes (the day after).
+    //
+    // S140 / TASK-14002 (QUAL-153/154) — THE fact this whole conversion exists for. Before
+    // TASK-14001, `DelegationExpiryService`'s sweep SQL read `until_date < CURRENT_DATE` (the
+    // DATABASE clock), which no test host could fix — a "today" and "yesterday" pin here would
+    // have been re-evaluated against whatever day Postgres's session clock said at run time, not
+    // against F. Now the sweep binds `@today` from the service's injected TimeProvider
+    // (TASK-14001), so passing a FixedTimeProvider(F) below pins the boundary to F for real.
+    //
+    // RED condition: revert the `timeProvider: new FixedTimeProvider(F)` argument below (or run
+    // this fact against a `DelegationExpiryService` built with no provider, which falls back to
+    // `TimeProvider.System`) and the sweep instead reads the REAL wall-clock day. F=2025-03-12 is
+    // roughly a year and a half before the date this task was authored — under the real clock the
+    // sweep would see `until_date` (F and F-1, both circa 2025-03) as long expired and close
+    // BOTH rows, so `stillActive`'s row would ALSO be closed and
+    // `GetActiveByApproverAnyDateAsync(Mgr)` would return null, failing the first Assert.NotNull
+    // below. This RED condition is REASONED from the service's SQL and constructor (cited above),
+    // NOT executed on the authoring machine — Docker is unavailable there (standing project
+    // constraint), so this suite has not been run at all locally. It first runs, RED or GREEN, in
+    // the S140 close's watched CI job.
     [Fact]
     public async Task Expiry_InclusiveUntilDate_ClosesYesterdayKeepsToday()
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = F;
         var yesterday = today.AddDays(-1);
 
         // until_date = today → must SURVIVE the sweep (still covered "til og med" today).
@@ -364,7 +432,8 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
         // could never surface the missing audit row this test now also guards.
         var service = new DelegationExpiryService(
             _factory, _realOutbox, _vikarRepo, _auditRepo, _endedMapper,
-            NullLogger<DelegationExpiryService>.Instance);
+            NullLogger<DelegationExpiryService>.Instance,
+            timeProvider: new FixedTimeProvider(F));
         await service.CloseExpiredDelegationsAsync(CancellationToken.None);
 
         // today's vikar is still open; yesterday's is closed the day after (= today).
@@ -398,7 +467,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     public async Task Create_WritesAuditProjectionRow_InTx()
     {
         var created = await CreateVikarWithAuditAsync(Mgr, Vik,
-            DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5));
+            F.AddDays(5));
 
         var row = await GetVikarAuditRowAsync(created.VikarId);
         Assert.NotNull(row);
@@ -415,13 +484,13 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
     public async Task End_Revoke_WritesAuditProjectionRow_InTx()
     {
         var created = await CreateVikarWithAuditAsync(Mgr, Vik,
-            DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5));
+            F.AddDays(5));
 
         await using (var conn = _factory.Create())
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var today = F;
             var closed = await _vikarRepo.CloseByApproverAsync(conn, tx, Mgr, today);
             Assert.NotNull(closed);
 
@@ -474,7 +543,7 @@ public sealed class ManagerVikarEngineTests : IAsyncLifetime
                 VikarId = vikarId,
                 AbsentApproverId = Mgr,
                 VikarUserId = Vik,
-                UntilDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5),
+                UntilDate = F.AddDays(5),
                 Reason = "ANDET",
                 OrganisationId = TreeRoot,
                 Version = 1,

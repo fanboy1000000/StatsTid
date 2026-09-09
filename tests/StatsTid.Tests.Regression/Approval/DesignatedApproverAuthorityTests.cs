@@ -2,9 +2,11 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
@@ -44,11 +46,37 @@ namespace StatsTid.Tests.Regression.Approval;
 /// <see cref="DesignatedApproverAuthorizer"/> + repository assertions for the discriminating
 /// single-winner edges (vikar-supersedes-PRIMARY, inactive-vikar-skip, cross-tree-block).
 /// </para>
+///
+/// <para>
+/// <b>S140 / TASK-14002 (QUAL-153/154) — anchored onto <see cref="F"/>, ONE host per fact.</b>
+/// Every HTTP client below now comes from <c>_factory.WithFixedToday(F).CreateClient()</c>,
+/// never from the bare <c>_factory.CreateClient()</c> — the fixed host is booted ONCE per
+/// <c>[Fact]</c> (reused for a second client within the same fact where one exists) and no
+/// client in this file is ever taken from an un-fixed host, per PAT-008's one-host-per-fact
+/// rule: a second, real-clock host sharing this container could race the fixed one. Every direct
+/// construction of <see cref="ReportingLineRepository"/> and <see cref="DesignatedApproverAuthorizer"/>
+/// passes <c>timeProvider: new FixedTimeProvider(F)</c> so their own <c>asOf ?? … ?? today</c>
+/// fallbacks agree with the fixed host even on the (currently none) call site that omits an
+/// explicit <c>asOf</c>. The two seeded reporting lines' <c>EffectiveFrom</c> (formerly a bare
+/// 2026-01-01 literal that only worked because the real wall clock was already past it) is now
+/// <c>F.AddYears(-1)</c> so every line is in force as of <see cref="F"/> under the fixed clock.
+/// </para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 {
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
+
+    /// <summary>
+    /// S140 / TASK-14002 (PAT-008) — the ONE pinned "today" for every test in this suite.
+    /// 2025-03-12 — a WEDNESDAY (matches <c>FixedClockProbeTests.F</c> / the worked-example
+    /// suites), safely on the OK24 side of the 2026-04-01 OK24→OK26 cutover
+    /// (<c>OkVersionResolver.cs:18-19</c>), even though this suite does not itself stamp an OK
+    /// version on a period whose validity depends on it — kept for cross-suite consistency. Both
+    /// facts are asserted once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>. Every "today" used
+    /// anywhere below is DERIVED from <see cref="F"/>, never from a raw read of the wall clock.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
@@ -100,6 +128,14 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
             await _harness.DisposeAsync();
     }
 
+    /// <summary>Locks the two facts every test below leans on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
+    }
+
     // ════════════════════════════════════════════════════════════════════════════════
     //  Seed / cleanup
     // ════════════════════════════════════════════════════════════════════════════════
@@ -149,7 +185,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        var rlRepo = new ReportingLineRepository(_dbFactory);
+        var rlRepo = new ReportingLineRepository(_dbFactory, timeProvider: new FixedTimeProvider(F));
 
         // Emp (STY02) reports PRIMARY to Mgr (STY02) — the same-Organisation, same-tree edge.
         await rlRepo.AssignAsync(null, MakeLine(Emp, Mgr, TreeRootSty02));
@@ -173,6 +209,9 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("mgrx", MgrX);
     }
 
+    // S140 / TASK-14002 — EffectiveFrom moved from a bare 2026-01-01 literal (which only worked
+    // because the real wall clock was already past it) to F.AddYears(-1), a year before the fixed
+    // anchor, so every line seeded through this helper is already in force as of F.
     private static ReportingLineModel MakeLine(string employeeId, string managerId, string treeRoot) => new()
     {
         ReportingLineId = Guid.Empty,
@@ -180,7 +219,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         ManagerId = managerId,
         OrganisationId = treeRoot,
         Relationship = "PRIMARY",
-        EffectiveFrom = new DateOnly(2026, 1, 1),
+        EffectiveFrom = F.AddYears(-1),
         Source = "MANUAL",
         Version = 0,
         CreatedBy = "TEST",
@@ -200,7 +239,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         ManagerId = managerId,
         OrganisationId = treeRoot,
         Relationship = "ACTING",
-        EffectiveFrom = new DateOnly(2026, 1, 1),
+        EffectiveFrom = F.AddYears(-1),
         Source = "MANUAL",
         Version = 0,
         CreatedBy = "TEST",
@@ -314,7 +353,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     public async Task Edge_CrossAfdeling_Manager_Sees_Approves_AndReopens_OnMyReports()
     {
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
-        var client = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
@@ -342,10 +382,11 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     [Fact]
     public async Task Vikar_HoldsAuthority_Sees_AndApproves_WhileMgrIsSuperseded()
     {
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(30));
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
-        var vikClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var vikClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         vikClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "STY02"));
 
@@ -386,9 +427,10 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     {
         // Vik is Mgr's active vikar covering today → Vik (NOT Mgr) is Emp's single effective
         // approver. Vik's token is LocalLeader (NOT LocalHR) — only the edge grants authority.
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(30));
 
-        var vikClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var vikClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         vikClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "STY02"));
 
@@ -424,7 +466,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     public async Task Edge_CrossAfdeling_Manager_CanReject()
     {
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
-        var client = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
@@ -457,8 +500,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     [Fact]
     public async Task AuthorityContext_WithoutTransaction_Throws_BecauseTheMemoNeedsASnapshot()
     {
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var ctx = new ApprovalAuthorityContext(DateOnly.FromDateTime(DateTime.UtcNow));
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var ctx = new ApprovalAuthorityContext(F);
 
         await using var conn = _dbFactory.Create();
         await conn.OpenAsync();
@@ -467,15 +510,15 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // trade rather than an equivalence.
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             authorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                conn, tx: null, ctx, Mgr, Emp, asOf: DateOnly.FromDateTime(DateTime.UtcNow)));
+                conn, tx: null, ctx, Mgr, Emp, asOf: F));
         Assert.Contains("without a transaction", ex.Message);
     }
 
     [Fact]
     public async Task AuthorityContext_UnderReadCommitted_Throws_BecauseRowsCanChangeMidProjection()
     {
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var ctx = new ApprovalAuthorityContext(DateOnly.FromDateTime(DateTime.UtcNow));
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var ctx = new ApprovalAuthorityContext(F);
 
         await using var conn = _dbFactory.Create();
         await conn.OpenAsync();
@@ -485,7 +528,7 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             authorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                conn, tx, ctx, Mgr, Emp, asOf: DateOnly.FromDateTime(DateTime.UtcNow)));
+                conn, tx, ctx, Mgr, Emp, asOf: F));
         Assert.Contains("REPEATABLE READ", ex.Message);
     }
 
@@ -505,9 +548,9 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     [Fact]
     public async Task AuthorityContext_ReusedAcrossConnections_Throws_AndIsFineWithinOneSnapshot()
     {
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var ctx = new ApprovalAuthorityContext(DateOnly.FromDateTime(DateTime.UtcNow));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var ctx = new ApprovalAuthorityContext(F);
+        var today = F;
 
         await using var conn = _dbFactory.Create();
         await conn.OpenAsync();
@@ -553,8 +596,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     [Fact]
     public async Task AuthorityContext_ReusedInASecondSnapshotOnTheSameConnection_Throws()
     {
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var today = F;
         var ctx = new ApprovalAuthorityContext(today);
 
         await using var conn = _dbFactory.Create();
@@ -595,12 +638,13 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
         // Mgr (STY02) is NOT EmpX's (STY05) effective approver — the resolver returns
         // EmpX's own manager, never a cross-Organisation actor (ValidateSameOrganisationAsync invariant).
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
         var isEdge = await authorizer.IsEffectiveDesignatedApproverAsync(
-            Mgr, EmpX, asOf: DateOnly.FromDateTime(DateTime.UtcNow));
+            Mgr, EmpX, asOf: F);
         Assert.False(isEdge);
 
-        var client = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
@@ -638,7 +682,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED"); // May 2026
 
         // Mgr (the same-Organisation designated approver) SEES Emp's period on the by-month read.
-        var mgrClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var mgrClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         mgrClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
         var mgrByMonth = await GetByMonthMyReportsAsync(mgrClient, 2026, 5);
@@ -646,7 +691,11 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
 
         // MgrX (cross-MAO, STY05 tree) does NOT see Emp's STY02 period — the candidate set
         // is tree-root bounded and the R5 predicate denies the cross-tree actor. D2 holds.
-        var mgrxClient = _factory.CreateClient();
+        // Reuses the SAME fixedHost as mgrClient above (one host per fact, PAT-008) — a second
+        // host booted here would run its own copy of every hosted background service against the
+        // same container, which this suite does not need and which the sprint's one-host rule
+        // forbids regardless.
+        var mgrxClient = fixedHost.CreateClient();
         mgrxClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(MgrX, "STY05"));
         var mgrxByMonth = await GetByMonthMyReportsAsync(mgrxClient, 2026, 5);
@@ -681,13 +730,14 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
             .AssignAsync(null, MakeActingLine(Emp, Vik, TreeRootSty02));
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var today = F;
 
         // The admin-ACTING holder is the single effective approver (precedence over PRIMARY).
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Vik, Emp, asOf: today));
 
-        var vikClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var vikClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         vikClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "STY02"));
 
@@ -725,11 +775,11 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // MgrX lives in STY05; plant him as Mgr's (STY02) vikar — a cross-MAO (cross-tree) vikar row
         // (the row the Layer-1 POST guard now refuses; here we plant it directly to prove the
         // predicate Layer-2 denies it independently of edge creation).
-        await CreateVikarRawAsync(Mgr, MgrX, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30), TreeRootSty05);
+        await CreateVikarRawAsync(Mgr, MgrX, F.AddDays(30), TreeRootSty05);
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var today = F;
 
         // Sanity: the resolver DOES return MgrX as the single winner for Emp (cross-tree vikar
         // wins the consult) — so the ONLY thing standing between MgrX and cross-tree
@@ -741,7 +791,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // Layer 2 denies: MgrX (STY05) and Emp (STY02) are different tree roots.
         Assert.False(await authorizer.IsEffectiveDesignatedApproverAsync(MgrX, Emp, asOf: today));
 
-        var mgrxClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var mgrxClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         mgrxClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(MgrX, "STY05"));
 
@@ -769,14 +820,15 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // STY02) PASS — the realistic attack vector, and it isolates the Layer-1 same-tree guard.
         await GrantGlobalLeaderScopeAsync(MgrX);
 
-        var mgrClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var mgrClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         mgrClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
         var rsp = await mgrClient.PostAsJsonAsync("/api/reporting-lines/delegate", new
         {
             actingManagerId = MgrX,
-            effectiveTo = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30).ToString("yyyy-MM-dd"),
+            effectiveTo = F.AddDays(30).ToString("yyyy-MM-dd"),
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, rsp.StatusCode);
@@ -797,16 +849,17 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     [Fact]
     public async Task SameStyrelse_CrossAfdelingVikar_StillHoldsAuthority_AndIsVisible()
     {
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30)); // STY02 root
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(30)); // STY02 root
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var today = F;
 
         // Layer 2 PASSES: Vik (STY02) and Emp (STY02) share the STY02 tree root.
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Vik, Emp, asOf: today));
 
-        var vikClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var vikClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         vikClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Vik, "STY02"));
 
@@ -824,13 +877,14 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     {
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
         // Other is a Leader on STY01 (a DIFFERENT Organisation) holding NO reporting edge over Emp —
         // neither an edge nor org-scope (STY01 ⊉ STY02) reaches Emp.
         Assert.False(await authorizer.IsEffectiveDesignatedApproverAsync(
-            Other, Emp, asOf: DateOnly.FromDateTime(DateTime.UtcNow)));
+            Other, Emp, asOf: F));
 
-        var client = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Other, "STY01"));
 
@@ -843,11 +897,11 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     public async Task PrimaryManager_SupersededByActiveVikar_IsNotTheSingleWinner_AndCannotApprove()
     {
         // Vik is the active vikar for Mgr → the single effective approver of Emp is Vik, NOT Mgr.
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(30));
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var today = F;
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Vik, Emp, asOf: today));
         Assert.False(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today));
 
@@ -857,7 +911,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // Mgr (STY02) org-scope-covers Emp (STY02), a non-designated LEADER is NO LONGER admitted via
         // org-scope → the approve is DENIED (403). (Pre-S94 the org-scope arm was unfloored, so this
         // case was an ORG_SCOPE_FALLBACK 428; the leader-org-scope branch is now retired.)
-        var mgrClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var mgrClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         mgrClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
         var approveRsp = await mgrClient.PostAsync($"/api/approval/{periodId}/approve", null);
@@ -879,11 +934,12 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // EmpInactiveMgr escalates UP past the inactive manager to Mgr.
         var periodId = await InsertPeriodAsync(EmpInactiveMgr, "STY02", "SUBMITTED");
 
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(
-            Mgr, EmpInactiveMgr, asOf: DateOnly.FromDateTime(DateTime.UtcNow)));
+            Mgr, EmpInactiveMgr, asOf: F));
 
-        var client = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
@@ -913,7 +969,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // over Vik → DENIED. There is no 428 gate any more.
         var periodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED");
 
-        var client = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
@@ -934,7 +991,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         var inScopePeriodId = await InsertPeriodAsync(Vik, "STY02", "SUBMITTED");
         var outOfScopePeriodId = await InsertPeriodAsync(Other, "STY01", "SUBMITTED");
 
-        var client = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
 
@@ -958,7 +1016,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // the edge nor the (deliberately disjoint) token scope grants the employee gate → 403.
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
 
-        var mgrClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var mgrClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         mgrClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY01"));
 
@@ -981,7 +1040,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // the employee-own-data gate, never relaxed by an edge.
         var periodId = await InsertPeriodAsync(EmpInactiveMgr, "STY02", "EMPLOYEE_APPROVED");
 
-        var empClient = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var empClient = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         empClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintEmployeeToken(Emp, "STY02"));
 
@@ -1003,10 +1063,10 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
             deact.Parameters.AddWithValue("vik", Vik);
             await deact.ExecuteNonQueryAsync();
         }
-        await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
+        await CreateVikarAsync(Mgr, Vik, F.AddDays(30));
 
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var today = F;
         // Inactive vikar skipped → Mgr is again the single effective approver.
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today));
         // The inactive vikar holds no usable authority.
@@ -1032,8 +1092,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     {
         // Mgr is Emp's PRIMARY designated approver on the same STY02 Organisation — the edge grants
         // authority. Sanity: the edge grants it WHILE Mgr is active.
-        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory), timeProvider: new FixedTimeProvider(F));
+        var today = F;
         Assert.True(await authorizer.IsEffectiveDesignatedApproverAsync(Mgr, Emp, asOf: today),
             "Precondition: an ACTIVE Mgr must hold the designated edge over Emp.");
 
@@ -1055,7 +1115,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
         // scope (STY01) does not cover Emp's STY02 period → org-scope also denies → 403.
         var approvePeriod = await InsertPeriodWithRangeAsync(
             Emp, "STY02", "SUBMITTED", new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31));
-        var client = _factory.CreateClient();
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // PAT-008 boot order: the FIXED host boots before any HTTP call below.
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY01"));
         var approveRsp = await client.PostAsync($"/api/approval/{approvePeriod}/approve", null);

@@ -1,5 +1,6 @@
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -50,10 +51,51 @@ namespace StatsTid.Tests.Regression.Config;
 /// admin edit, so any read would return 27. The PASS criterion proves the
 /// effective-dating + dated-read contract closes ADR-016 D10 for entitlements.
 /// </para>
+///
+/// <para>
+/// <b>S140 / TASK-14002 (QUAL-153/154) — a DETERMINISM conversion, NOT a seam pin.</b>
+/// <see cref="EntitlementConfigRepository"/> reads NO clock anywhere — no <c>TimeProvider</c>,
+/// no raw wall-clock read, no <c>CURRENT_DATE</c>/<c>NOW()</c> in any of its SQL (verified by
+/// grep over the repository file). The defect this task fixes was entirely inside the TEST: a
+/// raw wall-clock read of today's date made the marquee's own "which
+/// entitlement year contains today" branch — and its precondition assertion — a function of the
+/// REAL calendar day the suite happened to run on. Once a year, on 1 September itself, "today"
+/// EQUALS the entitlement year-start, the precondition <c>today &gt; entitlementYearStart</c> goes
+/// from true to false, and the whole suite hard-fails — not because anything in the product broke,
+/// but because the test's own wall-clock read landed on its one degenerate day. Converting this
+/// suite to a constant anchor does NOT reach any product seam: a reviewer must NOT read these pins
+/// as proving TASK-14001's <c>TimeProvider</c> plumbing reaches this path, because it never did and
+/// still does not — there is nothing here for a seam to reach. What the conversion buys is exactly
+/// what determinism buys anywhere: the fact and its precondition are true on every calendar day the
+/// suite runs, not 364 of 365.
+/// </para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class EntitlementQuotaCheckUsesYearStartTests : IAsyncLifetime
 {
+    private const string EntitlementType = "VACATION";
+    private const string AgreementCode = "AC";
+    private const string OkVersion = "OK24";
+
+    /// <summary>
+    /// S140 / TASK-14002 (PAT-008 naming convention, reused here for cross-suite consistency —
+    /// this suite has no OK-version or weekday dependency of its own). A NON-BOUNDARY anchor: March
+    /// is nowhere near the VACATION reset month (September), so the existing marquee fact's
+    /// "today is strictly after entitlement year-start" precondition holds for a documented,
+    /// checkable reason rather than by the luck of which day the suite happened to run on. Self-
+    /// checked once, by <see cref="Anchor_IsWednesday_OnOk24Side"/>.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
+
+    /// <summary>
+    /// The SEPARATE anchor <see cref="EntitlementQuotaCheck_OnResetDayItself_YearBranchSelectsCurrentYear"/>
+    /// needs: EXACTLY 1 September, the one calendar day <see cref="F"/> is deliberately chosen to
+    /// avoid. 2025-09-01 is a MONDAY — irrelevant to this suite's arithmetic (there is no working-day
+    /// norm here, unlike the absence-seeding suites PAT-008 otherwise guards), so only the OK-version
+    /// side is self-checked for this anchor, by the same fact.
+    /// </summary>
+    private static readonly DateOnly SeptFirst = new(2025, 9, 1);
+
     private TestFixtures.DockerHarness _harness = null!;
     private EntitlementConfigRepository _repo = null!;
 
@@ -71,14 +113,23 @@ public sealed class EntitlementQuotaCheckUsesYearStartTests : IAsyncLifetime
 
     public async Task DisposeAsync() => await _harness.DisposeAsync();
 
+    /// <summary>Locks the facts the two marquee facts below lean on without re-deriving them.</summary>
+    [Fact]
+    public void Anchor_IsWednesday_OnOk24Side()
+    {
+        Assert.Equal(DayOfWeek.Wednesday, F.DayOfWeek);
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(F));
+        // SeptFirst's weekday is immaterial here (see the field doc); only the OK-version side
+        // is asserted, so a future OK-version cutover move cannot silently drag this anchor
+        // across it without a visible failure.
+        Assert.Equal("OK24", OkVersionResolver.ResolveVersion(SeptFirst));
+    }
+
     [Fact]
     public async Task EntitlementQuotaCheck_UsesYearStartConfig_NotCurrentConfig()
     {
-        // ─── Step 1: anchor "today" + verify seed shape ──────────────────────
-        const string EntitlementType = "VACATION";
-        const string AgreementCode = "AC";
-        const string OkVersion = "OK24";
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        // ─── Step 1: anchor "today" (F — see the class/field docs) + verify seed shape ───
+        var today = F; // S140/TASK-14002: was a raw wall-clock read of today's date.
 
         // The init.sql seed sets AC VACATION OK24 to annual_quota=25, reset_month=9,
         // effective_from='0001-01-01'. If any of these drift, the test breaks here
@@ -97,11 +148,30 @@ public sealed class EntitlementQuotaCheckUsesYearStartTests : IAsyncLifetime
         int entitlementYear = today.Month >= seedLive.ResetMonth ? today.Year : today.Year - 1;
         var entitlementYearStart = new DateOnly(entitlementYear, seedLive.ResetMonth, 1);
 
-        // Skip the marquee on the pathological boundary where today == year-start
-        // (in which case year-start IS the supersession date and the assertion
-        // degenerates — not the invariant we're testing). The window of validity
-        // is "today > year-start" — give us at least one day of straddle. In a
-        // calendar year this is true on 364 out of 365 days, so the skip is rare.
+        // Step-5a Reviewer W-2: tie this fact's OWN reproduction of the branch to the REAL
+        // product resolver (EntitlementPeriodResolver.Resolve, EntitlementPeriodResolver.cs:120)
+        // instead of asserting only against the locally-recomputed expression above — otherwise a
+        // regression inside the resolver itself could leave this fact green while the product
+        // disagreed with the test's private arithmetic. RED condition: this assertion fails if the
+        // resolver's per-type dispatch, its AccrualStart geometry, or its entitlement-year
+        // arithmetic ever diverges from this fact's manual derivation for ANY reason (e.g. a
+        // VACATION/SPECIAL_HOLIDAY mixup, an off-by-one in BuildResetMonth). At this NON-boundary
+        // anchor (F=2025-03-12, month 3) it does NOT discriminate a `>=`-vs-`>` operator flip —
+        // month 3 is neither >= nor > 9, so both operators pick the SAME previous year; that
+        // specific boundary edge is what
+        // EntitlementQuotaCheck_OnResetDayItself_YearBranchSelectsCurrentYear pins, at the one
+        // anchor (SeptFirst) where the two operators actually disagree.
+        var resolvedAtF = EntitlementPeriodResolver.Resolve(EntitlementType, seedLive.ResetMonth, today);
+        Assert.Equal(new DateOnly(2024, 9, 1), resolvedAtF.AccrualStart);
+        Assert.Equal(entitlementYearStart, resolvedAtF.AccrualStart);
+
+        // With F fixed in March, "today" is never the pathological boundary where
+        // today == year-start (that edge is pinned SEPARATELY and on purpose, by
+        // EntitlementQuotaCheck_OnResetDayItself_YearBranchSelectsCurrentYear below — the two
+        // are deliberately NOT folded into one fact). This assertion is therefore a checkable
+        // fact about the constant F, not a 364-of-365-days gamble against the wall clock: RED
+        // condition — if F were ever moved onto or past 1 September, this would need
+        // recomputing, and CI would say so immediately rather than once a year.
         Assert.True(today > entitlementYearStart,
             "Marquee precondition: today must be strictly after the entitlement year-start; " +
             $"today={today:yyyy-MM-dd}, year-start={entitlementYearStart:yyyy-MM-dd}");
@@ -213,6 +283,100 @@ public sealed class EntitlementQuotaCheckUsesYearStartTests : IAsyncLifetime
             Assert.Equal(27m, configAtNextYearStart!.AnnualQuota);
             Assert.Equal(postEditLive.ConfigId, configAtNextYearStart.ConfigId);
         }
+    }
+
+    /// <summary>
+    /// S140 / TASK-14002 (QUAL-153/154) — the SEPARATE fact for the reset day itself. Deliberately
+    /// NOT folded into <see cref="EntitlementQuotaCheck_UsesYearStartConfig_NotCurrentConfig"/>:
+    /// that marquee's own precondition (<c>today &gt; entitlementYearStart</c>) is written to
+    /// EXCLUDE this exact day, because a same-day admin edit at the boundary would make the
+    /// dated-read assertion degenerate for reasons unrelated to what THIS fact pins.
+    ///
+    /// <para>
+    /// <b>What this pins — CORRECTED (Step-5a Reviewer W-2).</b> The first cut of this fact
+    /// reproduced the year-branch expression (<c>today.Month &gt;= seedLive.ResetMonth ? … : …</c>)
+    /// INSIDE the test and asserted the result of its own copy — a flip of the product's operator
+    /// in <see cref="EntitlementPeriodResolver.Resolve"/> (<c>EntitlementPeriodResolver.cs:120</c>)
+    /// would have left this fact green, because the fact never called the product code at all. It
+    /// now calls <see cref="EntitlementPeriodResolver.Resolve"/> directly: on 1 September itself
+    /// (<see cref="SeptFirst"/>) the resolver's <c>asOf.Month &gt;= resetMonth</c> comparison must
+    /// select THIS year (2025), so <c>AccrualStart</c> (the VACATION entitlement-year start) must
+    /// equal <see cref="SeptFirst"/> exactly — the day the reset happens IS day one of the new
+    /// year, not the last day of the old one. This suite used to inherit exactly this calendar
+    /// date from the real wall clock once a year; QUAL-154 PREDICTED (never itself observed — no
+    /// CI run is on record failing this way) that it would eventually hard-fail on its own
+    /// precondition assert rather than on a meaningful product check. Pinning it on a CONSTANT
+    /// makes the edge run in CI on every commit, not once a year by accident.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>RED condition.</b> If <see cref="EntitlementPeriodResolver"/>'s VACATION/calendar branch
+    /// (<c>EntitlementPeriodResolver.cs:120</c>, <c>asOf.Month &gt;= resetMonth ? asOf.Year :
+    /// asOf.Year - 1</c>) were ever changed from <c>&gt;=</c> to <c>&gt;</c>, then at
+    /// <see cref="SeptFirst"/> (month 9, ResetMonth 9) <c>9 &gt; 9</c> is false, so the resolver
+    /// would compute the entitlement year as <c>SeptFirst.Year - 1</c> (2024) instead of 2025, and
+    /// <c>AccrualStart</c> would land a full year early (2024-09-01) — both assertions on the
+    /// resolver's result below would fail. This is a GENUINE product pin (it calls real product
+    /// code and can fail from a real product regression), unlike the marquee fact's parallel
+    /// resolver-tie assertion, which at the NON-boundary anchor F cannot discriminate this specific
+    /// operator flip (see that assertion's own comment).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The dated CONFIG read below is a SANITY check, not a second RED condition (Step-5a
+    /// Reviewer W-2 correction).</b> An earlier revision of this comment claimed the seed row's
+    /// <c>effective_from = '0001-01-01'</c> being treated as covering <see cref="SeptFirst"/> under
+    /// an INCLUSIVE lower bound (<c>effective_from &lt;= asOfDate</c>) was a second, independent RED
+    /// condition — that claim was false: <c>0001-01-01</c> is so far below <c>2025-09-01</c> that
+    /// the comparison holds under an inclusive OR an exclusive bound alike
+    /// (<c>EntitlementConfigRepository.cs:139</c>), so a bound-direction regression could not be
+    /// caught here. The read is kept anyway as a sanity check — it confirms the ordinary
+    /// dated-config lookup still resolves to the always-open seed row on the one calendar day this
+    /// suite otherwise treats specially — but its own failure would point at something unrelated
+    /// (a broken query, a wrong natural key), not at the boundary this fact exists to pin.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Still Docker-gated, and why.</b> <see cref="EntitlementPeriodResolver.Resolve"/> itself is
+    /// a pure function (no I/O, no wall-clock — see its own class doc) and needs no database at
+    /// all; the resolver-call assertions above WOULD run fine as a Unit test. This fact stays under
+    /// <c>[Trait("Category","Docker")]</c> regardless because (a) it shares this Docker-gated class
+    /// with the marquee fact and the harness/schema setup in <c>InitializeAsync</c>, and (b) it
+    /// still performs a real Postgres read (<c>seedLive</c>'s <c>ResetMonth</c>, and the sanity
+    /// dated-config read) that needs the DockerHarness regardless of the resolver call. A follow-up
+    /// could lift a resolver-only duplicate of the RED-condition assertion into
+    /// <c>StatsTid.Tests.Unit</c> so the boundary pin also runs where Docker is unavailable — not
+    /// done here (out of this task's `tests/StatsTid.Tests.Regression` scope for this file).
+    /// </para>
+    ///
+    /// <para>
+    /// This fact makes NO product edit (no supersession) — it is a pure read at the boundary, kept
+    /// deliberately simple so its RED condition stays attributable to the resolver branch it names,
+    /// not entangled with the same-day-edit degenerate case the marquee fact excludes.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task EntitlementQuotaCheck_OnResetDayItself_YearBranchSelectsCurrentYear()
+    {
+        var today = SeptFirst; // exactly 1 September — the reset day itself.
+
+        var seedLive = await _repo.GetCurrentOpenAsync(EntitlementType, AgreementCode, OkVersion);
+        Assert.NotNull(seedLive);
+        Assert.Equal(9, seedLive!.ResetMonth);
+
+        // THE genuine product pin (Step-5a Reviewer W-2 fix): call the REAL resolver rather than
+        // reproducing its branch inside the test. See the RED condition in the doc comment above.
+        var resolved = EntitlementPeriodResolver.Resolve(EntitlementType, seedLive.ResetMonth, today);
+        Assert.Equal(today, resolved.AccrualStart);
+        Assert.Equal(today.Year, resolved.EntitlementYear);
+
+        // Sanity check, NOT a boundary-discriminating pin (see the doc comment) — the dated
+        // CONFIG read still resolves to the always-open seed row on the reset day itself.
+        var configAtYearStart = await _repo.GetByTypeAtAsync(
+            EntitlementType, AgreementCode, OkVersion, resolved.AccrualStart);
+        Assert.NotNull(configAtYearStart);
+        Assert.Equal(25m, configAtYearStart!.AnnualQuota);
+        Assert.Equal(seedLive.ConfigId, configAtYearStart.ConfigId);
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────

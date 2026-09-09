@@ -209,6 +209,8 @@ public static class ApprovalEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             ILoggerFactory loggerFactory,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R1 — wrap the whole body in the bounded drift-retry loop: if AcquireTreeLockForEmployeeAsync
@@ -219,6 +221,15 @@ public static class ApprovalEndpoints
         {
             var actor = context.GetActorContext();
             var logger = loggerFactory.CreateLogger(SelfGuardLogCategory);
+
+            // S140 / TASK-14001 (PAT-028: one operation, one date) — THE single business-date read
+            // for this approve. Everything that asks "who may act NOW" and everything that resolves
+            // the designated approver for the persisted audit metadata uses THIS value, so the
+            // pre-tx admission gate, the in-lock re-evaluation and the recorded approver can never
+            // describe two different days (the handler previously read the clock twice, plus a third
+            // time inside the resolver's own fallback). Source = the injected TimeProvider's UTC day
+            // (TimeProvider.System in production, so the day is exactly what it was before).
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)
@@ -260,8 +271,8 @@ public static class ApprovalEndpoints
             if (!orgScopeAllowed)
             {
                 // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path (incl. a unit
-                // leader's vikar), via the centralized predicate. asOf = today = "who may act NOW".
-                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                // leader's vikar), via the centralized predicate. asOf = today = "who may act NOW"
+                // (the handler's single date, read above — PAT-028).
                 var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                     actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
                 if (!hasEdgeOrUnit)
@@ -269,9 +280,11 @@ public static class ApprovalEndpoints
             }
 
             // Resolve designated approver for audit trail (ADR-027 D5). PRE-tx FAST PATH (the in-tx
-            // re-derivation under the advisory is the AUTHORITATIVE one — S78 BLOCKER 2).
+            // re-derivation under the advisory is the AUTHORITATIVE one — S78 BLOCKER 2). S140 /
+            // TASK-14001: `asOf` is now passed EXPLICITLY — omitting it made the resolver read the
+            // clock itself, a third date for one operation (PAT-028).
             var (preDesignatedManagerId, preResolvedMethod, _) =
-                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
+                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: today);
 
             // The treeRoot is request-stable and is still needed for the
             // FallbackTraversalWarning.OrganisationId (depth>3) payload below. S95 / ADR-035 slice 4:
@@ -316,16 +329,18 @@ public static class ApprovalEndpoints
             // blocks until we release.
             await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
 
-            var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
-
-            // Compute asOf at action-time. Only re-check the edge / unit-leader path for AUTHORITY when the
-            // pre-tx ORG-scope gate did NOT already admit the actor (orgScopeAllowed): an org-scope-admitted
-            // approval does not depend on the edge, so a revoked edge must not flip it to 403 (not the
-            // authorizing surface).
+            // The in-lock re-evaluation reuses the REQUEST's date (`today`, read once at the top —
+            // PAT-028). S140 / TASK-14001 corrected the previous comment here, which claimed a fresh
+            // "asOf at action-time": there is no second clock read, and a request that straddled UTC
+            // midnight would otherwise have admitted the actor against one day and recorded the
+            // approver against the next. Only re-check the edge / unit-leader path for AUTHORITY when
+            // the pre-tx ORG-scope gate did NOT already admit the actor (orgScopeAllowed): an
+            // org-scope-admitted approval does not depend on the edge, so a revoked edge must not
+            // flip it to 403 (not the authorizing surface).
             if (!orgScopeAllowed)
             {
                 var stillAuthorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                    actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
+                    actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
                 if (!stillAuthorized)
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
@@ -339,9 +354,9 @@ public static class ApprovalEndpoints
             // a secondary-unit-leader approval now records UNIT_LEADER / UNIT_LEADER_VIKAR (not the
             // misleading ORG_SCOPE_FALLBACK).
             var (designatedManagerId, resolvedMethod, depth) =
-                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: asOf);
+                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: today);
             var approvalMethod = await DeriveApprovalMethodAsync(
-                designatedAuthorizer, actor.ActorId, period.EmployeeId, designatedManagerId, resolvedMethod, asOf, ct);
+                designatedAuthorizer, actor.ActorId, period.EmployeeId, designatedManagerId, resolvedMethod, today, ct);
 
             // S78 R2 — the CONDITIONAL status transition is the FIRST mutation in the tx (BEFORE the
             // FallbackTraversalWarning enqueue, audit insert, and action outbox), so a concurrent
@@ -432,6 +447,8 @@ public static class ApprovalEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             ILoggerFactory loggerFactory,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R1 — bounded drift-retry wrapper (same shape as approve).
@@ -439,6 +456,11 @@ public static class ApprovalEndpoints
         {
             var actor = context.GetActorContext();
             var logger = loggerFactory.CreateLogger(SelfGuardLogCategory);
+
+            // S140 / TASK-14001 (PAT-028) — THE single business-date read for this reject; the same
+            // shape as approve. The pre-tx admission gate, the in-lock re-evaluation and the recorded
+            // designated approver all use THIS value.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)
@@ -471,8 +493,8 @@ public static class ApprovalEndpoints
                 await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
-                // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path, centralized predicate.
-                var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path, centralized
+                // predicate, at the handler's single date (read above — PAT-028).
                 var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                     actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
                 if (!hasEdgeOrUnit)
@@ -480,9 +502,10 @@ public static class ApprovalEndpoints
             }
 
             // Resolve designated approver for audit trail (ADR-027 D5). PRE-tx FAST PATH; the in-tx
-            // re-derivation under the advisory is the AUTHORITATIVE one (S78 BLOCKER 2).
+            // re-derivation under the advisory is the AUTHORITATIVE one (S78 BLOCKER 2). S140 /
+            // TASK-14001: `asOf` passed EXPLICITLY (it was the resolver's own clock read before).
             var (preDesignatedManagerId, preResolvedMethod, _) =
-                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct);
+                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: today);
 
             // treeRoot is request-stable and still needed for the FallbackTraversalWarning (depth>3)
             // below. S95 / ADR-035 slice 4: the tree-WALK is RETIRED — the period's "tree root" IS
@@ -502,11 +525,12 @@ public static class ApprovalEndpoints
             // `UnitLeaderRemoved`/member-move serializes against this reject.
             var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
             await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
-            var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+            // The in-lock re-evaluation reuses the request's single date (`today`, read at the top —
+            // PAT-028); it was a second clock read before (S140 / TASK-14001).
             if (!orgScopeAllowed)
             {
                 var stillAuthorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                    actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
+                    actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
                 if (!stillAuthorized)
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
@@ -517,9 +541,9 @@ public static class ApprovalEndpoints
             // S94 / TASK-9402: the REQUIRED-mode 428 re-eval is GONE. S105 / ADR-038 D4: a
             // secondary-unit-leader reject records UNIT_LEADER / UNIT_LEADER_VIKAR.
             var (designatedManagerId, resolvedMethod, depth) =
-                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: asOf);
+                await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: today);
             var approvalMethod = await DeriveApprovalMethodAsync(
-                designatedAuthorizer, actor.ActorId, period.EmployeeId, designatedManagerId, resolvedMethod, asOf, ct);
+                designatedAuthorizer, actor.ActorId, period.EmployeeId, designatedManagerId, resolvedMethod, today, ct);
 
             // S78 R2 — the CONDITIONAL status transition is the FIRST mutation (BEFORE the warning, audit,
             // and outbox), so a null (0-row) double-transition loser short-circuits to a clean 409, no side
@@ -789,6 +813,8 @@ public static class ApprovalEndpoints
             ApprovalPeriodRepository approvalRepo,
             AgreementConfigRepository agreementConfigRepo,
             DbConnectionFactory connectionFactory,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -820,7 +846,9 @@ public static class ApprovalEndpoints
             // requested month is the SAME keying the /summary EntitlementPeriodResolver path uses for
             // VACATION — derived here without re-implementing the dated-config resolution.
             var vacationYear = month >= 9 ? year : year - 1;
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // S140 / TASK-14001 — the request's one business date, off the injected TimeProvider
+            // seam (PAT-008 / PAT-028). Same UTC day as before under TimeProvider.System.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
             // (2) ONE bounded query per field, set-based over the team's employee-ids (≤ ~40 rows) —
             //     NOT a per-employee /summary loop, NOT a per-employee event replay.
@@ -1198,6 +1226,8 @@ public static class ApprovalEndpoints
             // tier classification (ApprovalReadTier) and the period resolution for this month.
             OrgScopeValidator scopeValidator,
             ApprovalPeriodRepository approvalRepo,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -1213,7 +1243,8 @@ public static class ApprovalEndpoints
             // AUTH (B1): the designated-approver edge OR the S105 / ADR-038 D4 secondary-unit-leader path
             // — exactly the centralized predicate the team-overview roster filters through, so a row the
             // leader can see (incl. a unit-led member) is always breakdown-authorized (no org-scope leak).
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // S140 / TASK-14001: the request's one business date, off the injected TimeProvider seam.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
             var authorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                 actor.ActorId!, employeeId, asOf: today, ct: ct);
             if (!authorized)
@@ -1488,6 +1519,8 @@ public static class ApprovalEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             ILoggerFactory loggerFactory,
+            // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R1 — bounded drift-retry wrapper. The LEADER arm takes the advisory + in-tx edge re-eval;
@@ -1498,6 +1531,12 @@ public static class ApprovalEndpoints
         {
             var actor = context.GetActorContext();
             var logger = loggerFactory.CreateLogger(SelfGuardLogCategory);
+
+            // S140 / TASK-14001 (PAT-028) — THE single business-date read for this reopen. Declared
+            // at handler scope because BOTH of the Leader arm's authority checks need it (the pre-tx
+            // admission gate and the in-lock re-evaluation, which sit in different blocks); the
+            // Employee arm never consults a date. It was two separate clock reads before.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)
@@ -1557,8 +1596,8 @@ public static class ApprovalEndpoints
                 orgScopeReason = reason2;
                 if (!allowed2)
                 {
-                    // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path (Leader arm only).
-                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path (Leader arm
+                    // only), at the handler's single date (read above — PAT-028).
                     var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                         actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
                     if (!hasEdgeOrUnit)
@@ -1589,9 +1628,10 @@ public static class ApprovalEndpoints
                 await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
                 if (!orgScopeAdmittedLeaderArm)
                 {
-                    var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+                    // Reuses the request's single date (`today`, read at the top — PAT-028); it was a
+                    // second clock read before (S140 / TASK-14001).
                     var stillAuthorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                        actor.ActorId!, period.EmployeeId, asOf: asOf, ct: ct);
+                        actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
                     if (!stillAuthorized)
                         return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
                 }

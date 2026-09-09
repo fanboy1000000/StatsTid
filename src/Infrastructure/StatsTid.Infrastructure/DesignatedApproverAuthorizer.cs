@@ -54,13 +54,31 @@ public sealed class DesignatedApproverAuthorizer
 {
     private readonly DbConnectionFactory _connectionFactory;
     private readonly ReportingLineRepository _reportingLineRepo;
+    private readonly TimeProvider _timeProvider;
 
+    /// <summary>
+    /// Primary constructor (DI). S140 / TASK-14001 — <paramref name="timeProvider"/> is the
+    /// server-"today" seam behind the two <c>asOf</c> FALLBACKS below (the
+    /// <c>asOf ?? ctx?.AsOf ?? today</c> tails). Appended LAST and OPTIONAL so PRODUCTION
+    /// BEHAVIOUR IS UNCHANGED (it defaults to <see cref="TimeProvider.System"/>) and every
+    /// existing direct test construction keeps compiling.
+    ///
+    /// <para>
+    /// Note for the reader: those fallbacks are production-DEAD — every endpoint caller passes an
+    /// explicit <c>asOf</c> (the approve / reject / reopen / team-overview / allocation-breakdown
+    /// sites in <c>ApprovalEndpoints</c>, plus <c>ComplianceEndpoints</c> and the Skema month GET),
+    /// so this is a TEST SEAM for direct constructions rather than a change to any live decision.
+    /// The day derivation is the UTC day, unchanged (QUAL-157 owns the UTC-vs-Copenhagen question).
+    /// </para>
+    /// </summary>
     public DesignatedApproverAuthorizer(
         DbConnectionFactory connectionFactory,
-        ReportingLineRepository reportingLineRepo)
+        ReportingLineRepository reportingLineRepo,
+        TimeProvider? timeProvider = null)
     {
         _connectionFactory = connectionFactory;
         _reportingLineRepo = reportingLineRepo;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ════════════════════════════════════════════════════════════════════════════════════════
@@ -144,7 +162,10 @@ public sealed class DesignatedApproverAuthorizer
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
             return false;
 
-        var effectiveAsOf = asOf ?? ctx?.AsOf ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        // S140 / TASK-14001 — the tail of the fallback chain is the INJECTED clock's UTC day
+        // (PAT-008 seam), not the wall clock. Same day under TimeProvider.System, and every
+        // endpoint caller passes an explicit asOf, so no live decision changes.
+        var effectiveAsOf = asOf ?? ctx?.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
         // (1) The actor must be an active LeaderOrAbove. The resolver only returns ACTIVE
         //     approvers, so "active" is implied when the resolved id == actor; but the role
@@ -270,9 +291,19 @@ public sealed class DesignatedApproverAuthorizer
         if (string.Equals(actorId, employeeId, StringComparison.Ordinal))
             return false;
 
-        if (await IsEffectiveDesignatedApproverAsync(conn, tx, ctx, source, facts, actorId, employeeId, asOf, ct))
+        // S140 / TASK-14001 (PAT-028: one operation, one date) — resolve the authority date ONCE
+        // here and hand the SAME value to both legs. Previously each leg ran its own
+        // `asOf ?? ctx?.AsOf ?? clock` tail, so a caller that supplied neither asked ONE authority
+        // question against TWO clock reads. Passing the resolved value is inert for every other
+        // input (a non-null asOf, or a ctx-bound date, reaches each leg unchanged), and every
+        // production caller of this predicate already passes an explicit asOf.
+        var effectiveAsOf = asOf ?? ctx?.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+
+        if (await IsEffectiveDesignatedApproverAsync(
+                conn, tx, ctx, source, facts, actorId, employeeId, effectiveAsOf, ct))
             return true;
-        return await ResolveUnitLeaderApprovalKindAsync(conn, tx, ctx, facts, actorId, employeeId, asOf, ct)
+        return await ResolveUnitLeaderApprovalKindAsync(
+                conn, tx, ctx, facts, actorId, employeeId, effectiveAsOf, ct)
             != UnitLeaderApprovalKind.None;
     }
 
@@ -319,7 +350,8 @@ public sealed class DesignatedApproverAuthorizer
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
             return UnitLeaderApprovalKind.None;
 
-        var effectiveAsOf = asOf ?? ctx?.AsOf ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        // S140 / TASK-14001 — same injected-clock fallback tail as the edge predicate above.
+        var effectiveAsOf = asOf ?? ctx?.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
         // (1) The actor must be an active LeaderOrAbove — the SAME role floor the edge path applies
         //     (a unit_leaders row for an Employee-role / inactive user grants nothing; D3 role-coupling).
@@ -545,6 +577,12 @@ public sealed class DesignatedApproverAuthorizer
     private static async Task<bool> IsActiveLeaderOrAboveAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
     {
+        // BY DESIGN: `ra.expires_at > NOW()` stays on the DATABASE clock (S140 / TASK-14001). This
+        // is a role-assignment AUTHORIZATION-EXPIRY compare against a stored TIMESTAMP, not a
+        // business date — and the expiries it is compared against are seeded as real timestamps
+        // (SQL/`NOW()`-relative) by the suites, so a fixed provider here would judge live rows
+        // against a frozen instant and invent grants or denials. PAT-028 keeps maintenance/expiry
+        // INSTANTS on the database clock; only business DATES move to the injected seam.
         await using var cmd = new NpgsqlCommand(
             """
             SELECT 1

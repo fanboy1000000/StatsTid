@@ -16,9 +16,21 @@ namespace StatsTid.Infrastructure;
 ///
 /// <para>
 /// R4a inclusive "til og med" fix: <c>until_date</c> is the LAST covered day, so a row
-/// expires (closes) the day AFTER — the poll selects <c>until_date &lt; CURRENT_DATE</c>
+/// expires (closes) the day AFTER — the poll selects <c>until_date &lt; @today</c>
 /// (STRICTLY less-than), NOT <c>&lt;=</c>. A vikar whose <c>until_date</c> is today is
 /// STILL active today and is NOT closed until tomorrow.
+/// </para>
+///
+/// <para>
+/// S140 / TASK-14001 (QUAL-154 / QUAL-156) — <c>@today</c> is the UTC day off the INJECTED
+/// <see cref="TimeProvider"/>, computed ONCE per sweep pass and bound as a parameter (PAT-028).
+/// The statement previously read the DATABASE clock (<c>CURRENT_DATE</c>). Production behaviour
+/// is UNCHANGED: the provider is <see cref="TimeProvider.System"/> and the Postgres session time
+/// zone is UTC (<c>docs/operations/legacy-db-upgrade-runbook.md</c> § "S139 — Database session
+/// time zone is assumed UTC"), under which <c>CURRENT_DATE</c> already WAS the UTC day. What
+/// changes is that a date-sensitive test host can now FIX the sweep's date — a database clock
+/// read is unreachable from an injected provider (PAT-008). The UTC-vs-Copenhagen business-day
+/// question is QUAL-157 and is deliberately NOT decided here.
 /// </para>
 /// </summary>
 public sealed class DelegationExpiryService : BackgroundService
@@ -29,15 +41,26 @@ public sealed class DelegationExpiryService : BackgroundService
     private readonly AuditProjectionRepository _auditRepo;
     private readonly IAuditProjectionMapper<ManagerVikarEnded> _endedAuditMapper;
     private readonly ILogger<DelegationExpiryService> _logger;
+    private readonly TimeProvider _timeProvider;
     private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Primary constructor (DI — registered as a hosted service in
+    /// <c>Backend.Api/Program.cs</c>). S140 / TASK-14001: <paramref name="timeProvider"/> is the
+    /// server-"today" seam, appended LAST and OPTIONAL so PRODUCTION BEHAVIOUR IS UNCHANGED (it
+    /// defaults to <see cref="TimeProvider.System"/>) and the existing direct test construction
+    /// keeps compiling. DI fills it from the <c>TimeProvider</c> singleton registered in
+    /// <c>Program.cs</c>; a date-sensitive test host may register a FIXED provider so the R4a
+    /// expiry boundary moves with the suite's clock instead of the database's.
+    /// </summary>
     public DelegationExpiryService(
         DbConnectionFactory connectionFactory,
         IOutboxEnqueue outbox,
         ManagerVikarRepository vikarRepo,
         AuditProjectionRepository auditRepo,
         IAuditProjectionMapper<ManagerVikarEnded> endedAuditMapper,
-        ILogger<DelegationExpiryService> logger)
+        ILogger<DelegationExpiryService> logger,
+        TimeProvider? timeProvider = null)
     {
         _connectionFactory = connectionFactory;
         _outbox = outbox;
@@ -45,6 +68,7 @@ public sealed class DelegationExpiryService : BackgroundService
         _auditRepo = auditRepo;
         _endedAuditMapper = endedAuditMapper;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -71,11 +95,20 @@ public sealed class DelegationExpiryService : BackgroundService
     /// </summary>
     public async Task CloseExpiredDelegationsAsync(CancellationToken ct)
     {
+        // PAT-028 — ONE date for the whole sweep pass, read BEFORE the connection is opened and
+        // bound as @today below. The UTC day off the injected provider; under
+        // TimeProvider.System + a UTC database session this is exactly the value CURRENT_DATE
+        // produced, so the R4a boundary is unmoved.
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
 
-        // Find expired vikar rows. R4a: until_date < CURRENT_DATE (strictly), so the named
-        // until_date is the LAST covered day and the row closes the day AFTER.
+        // Find expired vikar rows. R4a: until_date < @today (STRICTLY), so the named
+        // until_date is the LAST covered day and the row closes the day AFTER: a row whose
+        // until_date IS today is still active; one dated yesterday expires. The comparison date
+        // is a BOUND PARAMETER, never a SQL clock read (PAT-028 / QUAL-156) — a statement clock
+        // is a second read, on a clock no test host can fix.
         var expired = new List<ManagerVikar>();
         await using (var findCmd = new NpgsqlCommand(
             """
@@ -83,9 +116,10 @@ public sealed class DelegationExpiryService : BackgroundService
                    organisation_id, version, created_by, created_at, effective_to
             FROM manager_vikar
             WHERE effective_to IS NULL
-              AND until_date < CURRENT_DATE
+              AND until_date < @today
             """, conn))
         {
+            findCmd.Parameters.AddWithValue("today", today);
             await using var reader = await findCmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {

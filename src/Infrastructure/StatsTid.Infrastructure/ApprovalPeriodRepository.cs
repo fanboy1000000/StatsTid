@@ -48,10 +48,16 @@ public sealed class ApprovalPeriodRepository
         TimeProvider? timeProvider = null)
     {
         _connectionFactory = connectionFactory;
-        _reportingLineRepo = reportingLineRepo ?? new ReportingLineRepository(connectionFactory);
-        _designatedAuthorizer = designatedAuthorizer
-            ?? new DesignatedApproverAuthorizer(connectionFactory, _reportingLineRepo);
+        // S140 / TASK-14001 — resolve the clock FIRST, then hand it to the collaborators we DERIVE,
+        // so a composition built from this constructor runs on ONE clock end to end (the derived
+        // repository/authorizer now have their own optional seam). Production is unaffected: in the
+        // Backend host all three collaborators come from DI and share the registered singleton, and
+        // in the Payroll host (which registers no TimeProvider) every branch is TimeProvider.System.
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _reportingLineRepo = reportingLineRepo
+            ?? new ReportingLineRepository(connectionFactory, timeProvider: _timeProvider);
+        _designatedAuthorizer = designatedAuthorizer
+            ?? new DesignatedApproverAuthorizer(connectionFactory, _reportingLineRepo, _timeProvider);
     }
 
     public async Task<ApprovalPeriod?> GetByIdAsync(Guid periodId, CancellationToken ct = default)
@@ -235,7 +241,10 @@ public sealed class ApprovalPeriodRepository
 
         var monthStart = new DateOnly(year, month, 1);
         var nextMonthStart = monthStart.AddMonths(1);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // S140 / TASK-14001 — ONE date for this read, off the injected TimeProvider seam (PAT-028 /
+        // PAT-008). It is bound as @today into the candidate CTE AND passed to the R5 filter below,
+        // so the candidate superset and the authority filter describe the same day by construction.
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
         var sql = $"""
             {DesignatedCandidateEmployeesCte}
@@ -485,7 +494,9 @@ public sealed class ApprovalPeriodRepository
     {
         var monthStart = new DateOnly(year, month, 1);
         var nextMonthStart = monthStart.AddMonths(1);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // S140 / TASK-14001 — ONE date for this roster read, off the injected TimeProvider seam
+        // (PAT-028 / PAT-008). Bound as @today into the candidate CTE and reused by the R5 filter.
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
         // (1) Candidate EMPLOYEES (tree-root-bounded superset) + their users name/agreement, LEFT
         //     JOINed to the (year,month) period. One styrelse-tree-bounded query. The LEFT JOIN to

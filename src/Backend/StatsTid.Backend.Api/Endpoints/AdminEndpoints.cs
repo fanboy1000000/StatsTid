@@ -1516,9 +1516,13 @@ public static class AdminEndpoints
             IAuditProjectionMapper<UnitLeaderRemoved> leaderRemovedMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
-            // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production),
-            // consumed by the future-dating validator below. The audit `now` stamp keeps
-            // DateTime.UtcNow by design.
+            // S139 / TASK-13907, widened S140 / TASK-14009 — the server-"today" seam
+            // (TimeProvider.System in production). It serves EVERY business date this handler
+            // decides, and there are TWO: the future-dating validator's "is EffectiveFrom after
+            // today" comparison, and the cross-Organisation transfer fan-out's `today` (the date it
+            // closes reporting lines and vikar rows at). The handler's ONE real-clock value is the
+            // `now` audit stamp at the top of the transaction — see the BY DESIGN note there for
+            // the exact scope of that exemption and why nothing may derive a DATE from it.
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -1628,6 +1632,14 @@ public static class AdminEndpoints
             // in the SAME atomic tx (ADR-018 D3 atomic-outbox contract). The
             // users.agreement_code denormalized cache UPDATE is part of the same tx
             // per the canonical-write contract on UserAgreementCodeRepository.
+            //
+            // BY DESIGN: an AUDIT/maintenance TIMESTAMP stays on the real clock (S140 / TASK-14009).
+            // `now` is bound as @now into `updated_at` on the users UPDATE and is used for NOTHING
+            // else — it records when the row was actually written. It is NOT a business date and
+            // nothing may derive one from it: this handler's business dates read `timeProvider`
+            // (the future-dating validator above, and the transfer fan-out's `today` below, which
+            // WAS `DateOnly.FromDateTime(now)` until TASK-14009 corrected it). PAT-028: instants
+            // stay real, dates move to the seam.
             var now = DateTime.UtcNow;
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
@@ -2220,7 +2232,21 @@ public static class AdminEndpoints
                 // reporting-org + unit-org advisories for both Organisations (acquired at the top).
                 if (isTransfer)
                 {
-                    var today = DateOnly.FromDateTime(now);
+                    // S140 / TASK-14009 (PAT-028: one operation, one date) — THE transfer's single
+                    // BUSINESS date, read off the INJECTED TimeProvider seam, NOT from the audit
+                    // stamp `now` above. It is the only date this fan-out writes, and it writes it
+                    // four times: the closed reporting line's `effective_to` (the `closeDate:`
+                    // argument below), the ReportingLineSuperseded event's `EffectiveTo`, the closed
+                    // `manager_vikar` rows' date, and each ManagerVikarEnded's `EffectiveTo`. One
+                    // value reaches all four, so the rows and the events that must reconstruct them
+                    // cannot disagree (ADR-018 D3 / auditability).
+                    //
+                    // Behaviour is unchanged: `now` was `DateTime.UtcNow` and the provider is
+                    // TimeProvider.System in production, so this is the SAME UTC day, from a source
+                    // a date-sensitive test host can fix (PAT-008). S139 converted only this
+                    // handler's future-dating validator; deriving a business DATE from the audit
+                    // stamp is what hid this site from that pass.
+                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
                     // (a) Clear the moved user's OLD-unit `unit_leaders` rows + emit UnitLeaderRemoved per
                     // row (a transferred leader must lose the old-unit designation — the D3 member-invariant
@@ -2256,7 +2282,14 @@ public static class AdminEndpoints
                     var ownEdges = await reportingLineRepo.GetActiveByEmployeeInTxAsync(conn, tx, userId, ct);
                     foreach (var edge in ownEdges)
                     {
-                        var closed = await reportingLineRepo.RemoveAsync(conn, tx, edge.Version, userId, edge.Relationship, ct);
+                        // S140 / TASK-14001 (PAT-028) — close at the transfer's OWN date (`today`,
+                        // read once off the TimeProvider seam above), so the row's effective_to and
+                        // the event's `EffectiveTo ?? today` below are provably the SAME value. The
+                        // repository previously stamped the row from the DATABASE clock while the
+                        // event fell back to `today` — one operation, two clocks. TASK-14009 then
+                        // moved `today` itself onto the seam, so all three now agree BY SOURCE.
+                        var closed = await reportingLineRepo.RemoveAsync(
+                            conn, tx, edge.Version, userId, edge.Relationship, closeDate: today, ct: ct);
                         var superseded = new ReportingLineSuperseded
                         {
                             ReportingLineId = closed.ReportingLineId,
