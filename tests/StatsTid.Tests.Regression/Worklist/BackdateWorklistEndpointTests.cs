@@ -22,6 +22,11 @@ namespace StatsTid.Tests.Regression.Worklist;
 /// fields and <c>version</c> as ETag; resolve = If-Match REQUIRED (428 missing / 412 stale),
 /// 404 unknown, 403 foreign HR, 409 already resolved, 422 bad verb / blank reason; 200 + new ETag.
 ///
+/// <para>S140 / TASK-14010 adds the owner ruling OQ-7 (a) pins: RECALCULATED on an EXPORTED_MONTH
+/// row is GLOBAL-ADMIN ONLY in the BACKEND (wave 2 found it enforced only by a hidden button), while
+/// DISMISSED stays open to HR for both kinds and RECALCULATED stays open to HR for a SETTLED_YEAR
+/// row.</para>
+///
 /// <para>HTTP-level via <see cref="StatsTidWebApplicationFactory"/> + <c>CreateClient()</c>; JWT
 /// minting via the dev-fallback signing key (the AdminUserVersioningTests helper shape).</para>
 /// </summary>
@@ -162,7 +167,12 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     {
         var client = Client(HrToken(EmployeeOrg, ScopedHrActor));
         var url = $"/api/hr/backdate-worklist/{_openRowId}/resolve";
-        var body = new { resolution = "RECALCULATED", reason = "Re-planned March 2026 via /api/payroll/recalculate" };
+        // S140 / TASK-14010 — this ladder pins the CONCURRENCY contract, so it uses the verb an HR
+        // actor is permitted on an EXPORTED_MONTH row: DISMISSED. It previously used RECALCULATED,
+        // which the OQ-7 (a) gate now (correctly) refuses to an HR actor with a 403 — the verb was
+        // incidental to what this test pins, and both RECALCULATED paths are covered by the two
+        // OQ-7 pins further down.
+        var body = new { resolution = "DISMISSED", reason = "Not payroll-relevant after review" };
 
         // (1) No If-Match → 428 Precondition Required.
         var noHeader = await client.PostAsJsonAsync(url, body);
@@ -186,12 +196,12 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         {
             Assert.Equal(_openRowId, okDoc.RootElement.GetProperty("worklistId").GetGuid());
             Assert.Equal(Employee, okDoc.RootElement.GetProperty("employeeId").GetString());
-            Assert.Equal("RECALCULATED", okDoc.RootElement.GetProperty("resolution").GetString());
+            Assert.Equal("DISMISSED", okDoc.RootElement.GetProperty("resolution").GetString());
             Assert.Equal(2L, okDoc.RootElement.GetProperty("version").GetInt64());
             Assert.NotEqual(JsonValueKind.Null, okDoc.RootElement.GetProperty("resolvedAt").ValueKind);
         }
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolved_by = @p1 AND resolution = 'RECALCULATED' AND version = 2", _openRowId, ScopedHrActor));
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolved_by = @p1 AND resolution = 'DISMISSED' AND version = 2", _openRowId, ScopedHrActor));
         Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved'", $"employee-{Employee}"));
         Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0", Employee));
 
@@ -201,7 +211,7 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         using (var allDoc = JsonDocument.Parse(await client.GetStringAsync($"/api/hr/backdate-worklist?employeeId={Employee}&open=false")))
         {
             var row = Assert.Single(allDoc.RootElement.EnumerateArray());
-            Assert.Equal("RECALCULATED", row.GetProperty("resolution").GetString());
+            Assert.Equal("DISMISSED", row.GetProperty("resolution").GetString());
             Assert.Equal(ScopedHrActor, row.GetProperty("resolvedBy").GetString());
             Assert.Equal(2L, row.GetProperty("version").GetInt64());
         }
@@ -238,6 +248,142 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolved_at IS NULL AND version = 1", _openRowId));
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // POST resolve — S140 / TASK-14010, owner ruling OQ-7 (a): the RECALCULATED
+    // verb on an EXPORTED_MONTH row is GLOBAL-ADMIN ONLY, in the BACKEND
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// The gate tracks the REMEDY. An EXPORTED_MONTH row is fixed by <c>POST /api/payroll/recalculate</c>,
+    /// which is <c>GlobalAdminOnly</c>, so recording "Recalculated" on such a row asserts an act only
+    /// a Global Admin may perform. Wave 2 found the rule implemented ONLY in the screen (the button
+    /// is hidden), which is not a gate at all: an HR user could POST it directly. This pins the
+    /// SERVER-side refusal, and pins that it is the ROLE that decides — the identical request
+    /// succeeds for a Global Admin.
+    ///
+    /// <para><b>Red conditions.</b> (1) Delete the in-handler gate in
+    /// <c>BackdateWorklistEndpoints</c> → the HR and LocalAdmin calls return 200 and the
+    /// row-untouched assertions fail. (2) Loosen it to a role FLOOR (e.g.
+    /// <c>IsAtLeast(role, LocalAdmin)</c>) → the LocalAdmin leg returns 200 and fails. (3) Make it
+    /// unconditional (refuse every actor, or ignore the actor's role) → the Global-Admin leg 403s
+    /// and fails. (4) Move the gate BEFORE the org-scope validation → the foreign-HR leg's 403
+    /// reason changes from the scope reason to the rule reason and fails, which is the pin that the
+    /// refusal is not an existence/kind oracle for a row the caller may not see.</para>
+    /// </summary>
+    [Fact]
+    public async Task Resolve_ExportedMonth_AsRecalculated_Hr403_LocalAdmin403_GlobalAdmin200_ForeignHrStillScope403()
+    {
+        var url = $"/api/hr/backdate-worklist/{_openRowId}/resolve";
+        var recalculated = new { resolution = "RECALCULATED", reason = "Re-planned March 2026 via /api/payroll/recalculate" };
+
+        // (1) An in-scope HR actor — passes HROrAbove, passes the org-scope check, and is REFUSED
+        // by the OQ-7 (a) rule. This is the request the hidden button used to be the only guard on.
+        var hr = await SendResolveAsync(Client(HrToken(EmployeeOrg, ScopedHrActor)), url, "\"1\"", recalculated);
+        Assert.Equal(HttpStatusCode.Forbidden, hr.StatusCode);
+        using (var hrDoc = JsonDocument.Parse(await hr.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal("Access denied", hrDoc.RootElement.GetProperty("error").GetString());
+            var reason = hrDoc.RootElement.GetProperty("reason").GetString() ?? string.Empty;
+            // The reason names the RULE (and the verb HR may use instead), not the row.
+            Assert.Contains("GlobalAdmin", reason, StringComparison.Ordinal);
+            Assert.Contains("RECALCULATED", reason, StringComparison.Ordinal);
+            Assert.DoesNotContain(Employee, reason, StringComparison.Ordinal);
+        }
+
+        // (2) A LocalAdmin is ABOVE HR and still not a Global Admin → also refused. This is what
+        // discriminates the ruled gate from a mere "HR is refused" or a role-floor implementation.
+        var localAdmin = await SendResolveAsync(Client(LocalAdminToken(EmployeeOrg, "wl_ep_ladmin")), url, "\"1\"", recalculated);
+        Assert.Equal(HttpStatusCode.Forbidden, localAdmin.StatusCode);
+
+        // (3) A FOREIGN HR gets the SCOPE 403, not the rule 403 — so the new refusal can never
+        // double as an existence (or kind) oracle for a row outside the caller's scope.
+        var foreign = await SendResolveAsync(Client(HrToken(ForeignOrg, "wl_ep_hr_foreign")), url, "\"1\"", recalculated);
+        Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
+        using (var foreignDoc = JsonDocument.Parse(await foreign.Content.ReadAsStringAsync()))
+        {
+            var reason = foreignDoc.RootElement.GetProperty("reason").GetString() ?? string.Empty;
+            // The property that matters: an out-of-scope caller learns NOTHING about the row's kind
+            // or about the OQ-7 rule — they get the same scope refusal they would get for any verb.
+            Assert.DoesNotContain("GlobalAdmin", reason, StringComparison.Ordinal);
+            Assert.Equal("Actor scope does not cover target organization", reason);
+        }
+
+        // None of the three refusals touched the row, emitted an event, or wrote an audit row —
+        // a 403 must be a refusal, not a write with a bad status code.
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolved_at IS NULL AND version = 1", _openRowId));
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved'", $"employee-{Employee}"));
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0", Employee));
+
+        // (4) The SAME request, differing ONLY in the actor's role, succeeds for a Global Admin —
+        // so the 403s above are the rule biting, not the request being malformed, and the gate does
+        // not over-block the one role that CAN perform the remedy.
+        var admin = await SendResolveAsync(Client(GlobalAdminToken()), url, "\"1\"", recalculated);
+        Assert.Equal(HttpStatusCode.OK, admin.StatusCode);
+        Assert.Equal("\"2\"", admin.Headers.ETag!.Tag);
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'RECALCULATED' AND resolved_by = 'wl_ep_admin' AND version = 2", _openRowId));
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved'", $"employee-{Employee}"));
+    }
+
+    /// <summary>
+    /// The two paths OQ-7 (a) deliberately leaves OPEN to HR, so the fix is a targeted refusal and
+    /// not a blanket one: (a) DISMISSED on an EXPORTED_MONTH row — dismissing records a judgement,
+    /// not a payroll act; (b) RECALCULATED on a SETTLED_YEAR row — its remedy is the settlement
+    /// REVERSAL, which is <c>HROrAbove</c> (<c>SettlementReversalEndpoints</c>), so an HR user who
+    /// performed that reversal may record it.
+    ///
+    /// <para><b>Red conditions.</b> (1) Make the gate ignore the resolution verb (refuse HR on any
+    /// EXPORTED_MONTH resolve) → leg (a) 403s and fails. (2) Make it ignore <c>row.Kind</c> (refuse
+    /// HR on any RECALCULATED) → leg (b) 403s and fails.</para>
+    /// </summary>
+    [Fact]
+    public async Task Resolve_Hr_MayDismissExportedMonth_AndMayRecalculateSettledYear()
+    {
+        var hr = Client(HrToken(EmployeeOrg, ScopedHrActor));
+
+        // (a) DISMISSED on the EXPORTED_MONTH row — permitted for HR.
+        var dismissed = await SendResolveAsync(hr, $"/api/hr/backdate-worklist/{_openRowId}/resolve", "\"1\"",
+            new { resolution = "DISMISSED", reason = "March already re-planned outside the tool" });
+        Assert.Equal(HttpStatusCode.OK, dismissed.StatusCode);
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'DISMISSED' AND resolved_by = @p1", _openRowId, ScopedHrActor));
+
+        // (b) RECALCULATED on a SETTLED_YEAR row — permitted for HR (the reversal is HROrAbove).
+        var settledRowId = await SeedSettledYearRowAsync();
+        var recalculated = await SendResolveAsync(hr, $"/api/hr/backdate-worklist/{settledRowId}/resolve", "\"1\"",
+            new { resolution = "RECALCULATED", reason = "Reversed and re-settled ferieår 2025" });
+        Assert.Equal(HttpStatusCode.OK, recalculated.StatusCode);
+        using (var doc = JsonDocument.Parse(await recalculated.Content.ReadAsStringAsync()))
+            Assert.Equal("RECALCULATED", doc.RootElement.GetProperty("resolution").GetString());
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND kind = 'SETTLED_YEAR' AND resolution = 'RECALCULATED' AND resolved_by = @p1", settledRowId, ScopedHrActor));
+    }
+
+    /// <summary>
+    /// Seeds ONE open SETTLED_YEAR row for <see cref="Employee"/> via the skip entry point, which
+    /// raises a row even with no active settlement (a degraded, honest baseline — see
+    /// <c>HrBackdateWorklistRepositoryTests.WriteForSkippedSettledYears_TupleWithNoActiveSettlement_DegradesToAnUnknownBaseline</c>).
+    /// Seeded inside the test rather than in <c>InitializeAsync</c> so the GET pins keep asserting a
+    /// single row.
+    /// </summary>
+    private async Task<Guid> SeedSettledYearRowAsync()
+    {
+        var repo = _factory.Services.GetRequiredService<HrBackdateWorklistRepository>();
+        var dbFactory = _factory.Services.GetRequiredService<DbConnectionFactory>();
+        await using var conn = dbFactory.Create();
+        await conn.OpenAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        var ids = await repo.WriteForSkippedSettledYearsAsync(conn, tx, Employee,
+            new WorklistTrigger(WorklistTriggerKinds.ProfileChange, Guid.NewGuid(), new DateOnly(2025, 3, 15), "hr_seed"),
+            new[] { ("VACATION", 2025) }, CancellationToken.None);
+        await tx.CommitAsync();
+        return Assert.Single(ids);
+    }
+
     // ─── HTTP helpers ────────────────────────────────────────────────────────
 
     private static async Task<HttpResponseMessage> SendResolveAsync(HttpClient client, string url, string ifMatch, object body)
@@ -269,6 +415,12 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     private static string HrToken(string orgId, string actorId) => NewTokenService().GenerateToken(
         employeeId: actorId, name: actorId, role: StatsTidRoles.LocalHR, agreementCode: "AC", orgId: orgId,
         scopes: new[] { new RoleScope(StatsTidRoles.LocalHR, orgId, "ORG_ONLY") });
+
+    /// <summary>S140 / TASK-14010 — ABOVE HR but NOT a Global Admin, which is what the OQ-7 (a)
+    /// gate must still refuse (a role-floor implementation would wrongly admit this token).</summary>
+    private static string LocalAdminToken(string orgId, string actorId) => NewTokenService().GenerateToken(
+        employeeId: actorId, name: actorId, role: StatsTidRoles.LocalAdmin, agreementCode: "AC", orgId: orgId,
+        scopes: new[] { new RoleScope(StatsTidRoles.LocalAdmin, orgId, "ORG_ONLY") });
 
     private static string EmployeeToken(string employeeId, string orgId) => NewTokenService().GenerateToken(
         employeeId: employeeId, name: employeeId, role: StatsTidRoles.Employee, agreementCode: "AC", orgId: orgId,

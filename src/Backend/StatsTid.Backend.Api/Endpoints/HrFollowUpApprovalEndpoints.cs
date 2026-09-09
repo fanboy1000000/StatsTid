@@ -63,6 +63,21 @@ public static class HrFollowUpApprovalEndpoints
     private static IResult NoHrScopeForbidden() =>
         Results.Json(new { error = "Access denied", reason = "No HR-level organisation scope" }, statusCode: 403);
 
+    /// <summary>
+    /// S140 / TASK-14010 — the declared eventual-consistency statement carried on the HRP-014a half
+    /// of the uncovered-approvers response. The expired-delegation items read the canonical
+    /// <c>events</c> table, which the outbox publisher fills one poll cycle AFTER the domain
+    /// transaction commits. The lag was documented in the contract but not SURFACED, so no client
+    /// could tell the list was eventually consistent; this is the same field and the same shape the
+    /// settlement-reviews response already uses
+    /// (<c>HrFollowUpSettlementEndpoints.EventSourceLagNote</c>), deliberately not a second
+    /// convention.
+    /// </summary>
+    private const string EventSourceLagNote =
+        "Expired stand-in delegations are read from the event stream, which the outbox publisher " +
+        "fills one poll cycle after the delegation transaction commits — a delegation that expired " +
+        "just now appears here within a few seconds, not instantly.";
+
     public static WebApplication MapHrFollowUpApprovalEndpoints(this WebApplication app)
     {
         // ═══════════════════════════════════════════
@@ -213,7 +228,11 @@ public static class HrFollowUpApprovalEndpoints
                         ExpiredAt: e.ExpiredAt,
                         DaysSinceExpiry: e.DaysSinceExpiry,
                         ApproverHasActiveCover: e.ApproverHasActiveCover)).ToList(),
-                WindowDays: HrFollowUpApprovalReadRepository.ExpiredDelegationWindowDays));
+                WindowDays: HrFollowUpApprovalReadRepository.ExpiredDelegationWindowDays,
+                // The expired-delegation half is event-sourced, so it lags the domain transaction
+                // by one outbox poll cycle. Carried in the response (not only in the XML docs) so
+                // the tile can actually say so.
+                EventSourceLagNote: EventSourceLagNote));
         }).RequireAuthorization("HROrAbove")
         .Produces<HrUncoveredApproversResponse>(StatusCodes.Status200OK);
 

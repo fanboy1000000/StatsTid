@@ -109,9 +109,15 @@ public sealed record HrPastDeadlineResponse(
 /// past-deadline items, not leaver items. Every qualifying month is listed whether or not its
 /// manager deadline has passed ("open = all"); <c>daysPastAnchor</c> says which are overdue.</para>
 ///
-/// <para>Its partition with the approved-not-exported list is EXACT and comes from one enumeration:
-/// this list is "not APPROVED", that one is "APPROVED but not exported". And see the note on
-/// non-additive counts in <see cref="HrPastDeadlineResponse"/>.</para>
+/// <para><b>This list and the approved-not-exported list are DISJOINT but NOT complementary, and
+/// their counts sum to nothing.</b> No month can appear on both: this list requires a status other
+/// than APPROVED, that one requires APPROVED (S140 / TASK-14010 correction — an earlier version of
+/// this comment called the two an EXACT partition, which they are not). They are not two halves of
+/// one population, because they are drawn over DIFFERENT base populations: this list is restricted
+/// to each leaver's FINAL month only, by the owner's ruling, while the approved-not-exported list
+/// covers every approved-but-unexported month of active employees and leavers alike. Treat the two
+/// counts as two independent facts. And see the note on non-additive counts in
+/// <see cref="HrPastDeadlineResponse"/>.</para>
 /// </summary>
 /// <param name="Items">Oldest first. NULL when <c>?summary=true</c>.</param>
 public sealed record HrLeaverFinalMonthResponse(
@@ -187,9 +193,19 @@ public sealed record HrExpiredDelegation(
 /// <paramref name="WindowDays"/> days. Read from the canonical event stream, not from the
 /// delegation table: the table has no end-reason column, so a table-only predicate cannot tell an
 /// EXPIRY from a late MANUAL close — only the event carries <c>EXPIRED</c>, and only the sweep
-/// writes it. <b>Eventual consistency, stated rather than hidden:</b> the event store is filled by
-/// the outbox publisher one cycle after the domain transaction commits, so a just-expired
-/// delegation appears here within about a minute.</para>
+/// writes it.</para>
+///
+/// <para>
+/// <b><paramref name="EventSourceLagNote"/> — declared eventual consistency.</b> Those
+/// event-sourced items are read from the canonical <c>events</c> table, which the outbox publisher
+/// fills ONE POLL CYCLE AFTER the domain transaction commits — not in the same transaction (ADR-018
+/// D3 is about the outbox row, not the projected event). So a delegation that expired seconds ago
+/// may not be listed yet. Until S140 / TASK-14010 that window was documented HERE but not carried
+/// in the response, so no client could tell the list was eventually consistent; this field carries
+/// the sentence so the tile can display it — the same shape and field name as
+/// <c>PendingSettlementReviewListResponse.EventSourceLagNote</c>, deliberately not a second
+/// convention.
+/// </para>
 ///
 /// <para><b>No aging colour on this surface.</b> The underlying process is NOT decision-ready: no
 /// rule states whether an orphan is tolerable at all, or by when an uncovered approver must be
@@ -208,7 +224,8 @@ public sealed record HrUncoveredApproversResponse(
     int ExpiredWithoutActiveCoverCount,
     DateOnly? OldestExpiry,
     IReadOnlyList<HrExpiredDelegation>? ExpiredDelegations,
-    int WindowDays);
+    int WindowDays,
+    string EventSourceLagNote);
 
 /// <summary>
 /// One employee who cannot register (HRP-015).

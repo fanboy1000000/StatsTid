@@ -52,8 +52,15 @@ namespace StatsTid.Infrastructure;
 /// <summary>
 /// The four classifications the shared (employee × month) enumeration can be asked for. One SQL
 /// statement serves all four (parameter-driven predicates, the <c>HrBackdateWorklistRepository</c>
-/// idiom), which is what makes the HRP-011 / HRP-022 partition EXACT by construction rather than by
-/// two predicates that happen to agree: 011 is "not APPROVED", 022 is "APPROVED but not exported".
+/// idiom), so the four classifications are computed from ONE set of facts and a month can never
+/// carry different facts depending on which list you opened.
+///
+/// <para><b>HRP-011 and HRP-022 are DISJOINT but NOT complementary</b> (S140 / TASK-14010
+/// correction — this comment previously claimed an EXACT partition). No month can satisfy both:
+/// 011 requires a status other than APPROVED, 022 requires APPROVED. But they are not two halves of
+/// one population: 011 additionally requires the month to CONTAIN a passed employment end date (the
+/// leaver's FINAL month only, by owner ruling), while 022 ranges over active employees and leavers
+/// alike. Their counts therefore sum to nothing meaningful.</para>
 /// </summary>
 public static class HrApprovalMonthKinds
 {
@@ -306,8 +313,12 @@ public sealed class HrFollowUpApprovalReadRepository
                    AND r.period_status <> 'APPROVED')
               -- HRP-022, approved but never exported. A READ-ONLY cross-context lookup of the
               -- Payroll-owned lock table (ADR-034 D4 permits it; the Payroll service is its SOLE
-              -- writer and this file writes nothing anywhere). The partition with HRP-011 above is
-              -- exact BY CONSTRUCTION: same rows, complementary status predicates.
+              -- writer and this file writes nothing anywhere). DISJOINT from HRP-011 above but NOT
+              -- its complement (S140 / TASK-14010 correction): the status predicates exclude each
+              -- other, so no month lands on both lists, but HRP-011 also requires the month to
+              -- contain a passed employment end date (the leaver's FINAL month only) while this
+              -- branch ranges over active employees and leavers alike. Different base populations,
+              -- so the two counts are independent facts and do not sum to anything.
            OR (@kind = 'NOT_EXPORTED'
                    AND r.period_status = 'APPROVED'
                    AND NOT EXISTS (
