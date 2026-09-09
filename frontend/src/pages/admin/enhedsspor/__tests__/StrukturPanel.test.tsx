@@ -198,6 +198,7 @@ function makeRoster(): RosterResponse {
       }),
     ],
     pendingCountByManager: {},
+    pendingPastDeadlineCountByManager: {},
     nameResolution: {
       dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
       extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor' },
@@ -656,6 +657,7 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
         row({ employeeId: 'omni', displayName: 'Omni Org', position: 'Konsulent', unitId: null, unitName: null, leaderIds: [], structuralApproverId: null }),
       ],
       pendingCountByManager: {},
+      pendingPastDeadlineCountByManager: {},
       nameResolution: {},
     }
     function Harness() {
@@ -715,6 +717,7 @@ function singleLeaderRoster(carlVersion: number | null): RosterResponse {
       }),
     ],
     pendingCountByManager: {},
+    pendingPastDeadlineCountByManager: {},
     nameResolution: {
       dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
       extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor' },
@@ -826,6 +829,7 @@ function settlementRoster(): RosterResponse {
       }),
     ],
     pendingCountByManager: { jens: 2 },
+    pendingPastDeadlineCountByManager: {},
     nameResolution: {
       dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
     },

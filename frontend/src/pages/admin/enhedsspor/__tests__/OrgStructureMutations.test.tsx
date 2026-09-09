@@ -93,7 +93,7 @@ function makeForest(): ForestMaoNode[] {
   ]
 }
 
-const emptyRoster = (): RosterResponse => ({ employees: [], pendingCountByManager: {}, nameResolution: {} })
+const emptyRoster = (): RosterResponse => ({ employees: [], pendingCountByManager: {}, pendingPastDeadlineCountByManager: {}, nameResolution: {} })
 
 const MAO: SelectedNode = { id: 'MIN01', kind: 'mao', name: 'Finansministeriet', type: 'ministeromrade' }
 const ORG: SelectedNode = { id: 'STY02', kind: 'organisation', name: 'Statens IT', type: 'organisation' }

@@ -56,6 +56,7 @@ const { mockGet, ROSTER } = vi.hoisted(() => {
       },
     ],
     pendingCountByManager: { roster_leader: 0 },
+    pendingPastDeadlineCountByManager: {},
     nameResolution: {
       roster_leader: {
         userId: 'roster_leader',

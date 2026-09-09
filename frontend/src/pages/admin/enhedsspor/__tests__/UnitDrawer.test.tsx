@@ -102,6 +102,7 @@ function makeRoster(): RosterResponse {
       rrow({ employeeId: 'carl', displayName: 'Carl Storm', position: 'Specialkonsulent', structuralApproverId: 'jens' }),
     ],
     pendingCountByManager: {},
+    pendingPastDeadlineCountByManager: {},
     nameResolution: { dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' } },
   }
 }

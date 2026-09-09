@@ -159,6 +159,29 @@ the refinement rev 4's, quoted per task at dispatch; the refinement file path is
   dual-lens on the whole uncommitted sprint diff (prompt-alone form if no intermediate commits, else `--base a87f6c1`); commit + push;
   ONE background `gh run watch` and its notification — never polled; CI-green backfill on the `**Test Verified**` line.
 
+### Wave-2 dispatch (2026-09-09, Orchestrator on Opus 5)
+
+TASK-14003 ‖ TASK-14004 ‖ TASK-14007 dispatched together, each by role name with no `model` override, each in its **own git
+worktree** (`isolation: "worktree"`).
+
+**The worktree decision is a change from the plan's letter, and it is deliberate.** The plan called for worktrees when multiple
+agents write simultaneously; wave 1 ran two agents in the *shared* tree and produced two spurious red test runs from a
+`bin/Release` write race (an aborted test host, then 151 assembly-load failures), which is also where the conflicting regression
+totals came from. The Step-5a lens agreed the fix is to serialise builds or give each agent its own output directory. Worktrees do
+the latter, so the retrospective item is closed by construction rather than by a note asking future sprints to remember.
+
+**Wave-1 commit `bcca33d` is the base**, per the S24 lesson (commit before forking worktrees). Expected merge points, both
+one-liners in files two agents touch: the endpoint-group registration in `ApiEndpoints.cs` and the repository DI registration in
+`Program.cs`. TASK-14007 has no backend dependency — every API it consumes shipped in S138 or earlier — which is why it runs now
+rather than in wave 3, so its `WorklistList.tsx` is merged before TASK-14006 imports it.
+
+Each prompt carried `docs/CONVENTIONS.md` verbatim, the refinement path as the spec, the plan cell as the tie-breaker, the routed
+documents per CLAUDE.md (`SECURITY.md` + `db-schema.md` for the two backend tasks, `FRONTEND.md` for the UX task), the relevant
+ADR/PAT entries, and the specific `SYSTEM_TARGET.md` sections that define what the dates and roles mean. Three findings from the
+reviews were written into the prompts as hard rules, so they cannot recur: the org-scope **column** (the subject's current
+`primary_org_id`, never a stamped org column), the §21 **target year** and the ban on a second "remaining days" implementation,
+and the Recalculate card's **no-payload / blocked-row** shape.
+
 ### Risks carried from the refinement (short form — the full list is rev 4 § Risks & Conflicts)
 
 The §21 list is the one domain-heavy read (target year, VACATION type, population and the reuse target are named; a second
@@ -285,6 +308,85 @@ runs (one aborted test host on a missing `testhost.runtimeconfig.json`, one with
 regression-total drift the two reports disagreed on.
 
 **Files Changed**: `AdminEndpoints.cs`
+
+---
+
+### TASK-14007 — the backdate worklist screen + the two pulled-forward items (refinement B5 + B6)
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-14007 |
+| **Status** | complete and Orchestrator-verified; **three contract defects reported, one phantom field in the Orchestrator's own spec, one owner fork open (OQ-7)**; Constraint Validator + Step 5a pending |
+| **Agent** | `ux` (Sonnet), own git worktree `worktree-agent-a833ecc…` |
+| **Components** | `frontend/` — the new `admin/opfoelgning/WorklistList.tsx`, the create-person drawer, the router and sidebar, two hooks |
+| **KB Refs** | PAT-026 (why the worklist's "since" fields mean *moved*, not *waited*), ADR-013 (the fix is a manual audited recalculation, never a cascade), QUAL-162, HRP-001/002/003/016/018 |
+| **Orchestrator Approved** | pending Step 5a |
+
+**Description**: the backdate worklist has had a working API since S138 and **no screen at all** — its only trace in the frontend
+was a generated type and a type-contract test. It now has one, at `/admin/opfoelgning` behind the existing Local-HR guard. Rows
+show the kind, month, triggers and provenance; Resolve (Recalculated / Dismissed with a reason) is **the one new write**, sent with
+`If-Match` from the row version and handling 412 (stale — refetch and tell the user), 428 (a client bug, surfaced loudly) and 409
+(already resolved). The settled-holiday-year row shows its reversal endpoint **as text** — read-only per owner ruling OQ-4, with
+the four write forms deferred to S141.
+
+**The Recalculate card, which is the most-reviewed detail in this task.** The fix for a worklist row is a manual payroll
+recalculation, and that endpoint lives on the **Payroll service**, is `GlobalAdminOnly`, and **cannot be reached from the
+browser**: the frontend proxies only to the Backend, the Payroll host has no CORS, and the typed client is generated from the
+Backend's specification alone. So a Global Admin sees a labelled, **non-calling** instruction card naming the process, the row's
+identity and the endpoint with its role requirement, pointing at the request contract the operator assembles — and **rendering no
+payload**, because a worklist row cannot know one and inventing one would mislead the only role permitted to act. When the row's
+`recalcBlockedBy` is non-empty the card is replaced by "Genberegning blokeret — ⟨ids⟩" and only Dismiss remains, because a
+recalculation there would produce wrong wage codes. An HR user sees the row, its triggers, Dismiss, and a one-line note that
+recalculation needs a Global Admin.
+
+**Also delivered:** the admin create form gains "Ansættelsesdato" pre-filled with today and editable (HRP-016 — an undated create
+means "hired today", which silently blocks back-filling anything earlier), and the finished, unit-tested overtime pre-approval
+page is **routed at last** under the leader tier with a sidebar entry (QUAL-162 — it had never been reachable by any user in any
+role).
+
+**Validation (Orchestrator's own runs, in the agent's worktree — not agent-reported):**
+- [x] `npx vitest run` → **62 files, 745 tests passed, 0 failed** (frontend baseline 735, so **+10**)
+- [x] `npx tsc --noEmit` → **clean**, exit 0
+- [x] Default export taking `{ onResolved }` — the contract TASK-14006 imports — verified in the file
+- [x] The blocked-row path renders from `recalcBlockedBy`; the five pins cover the Global-Admin card with **no network call**, the HR-user hint, the blocked-row suppression, 412 and 428
+- [x] The QUAL-163 tile relabel correctly **absent** (moved to TASK-14006 because it reads a field TASK-14004 creates in this same wave; touching it here could not have compiled)
+
+**Deviation, adjudicated as an Orchestrator spec gap rather than an agent lapse:** the agent modified `hooks/useEditPerson.ts` and
+`hooks/usePlacement.ts`, outside the file list I gave it. The diff is **nine additive lines** threading an optional
+`employmentStartDate` through to the create request, each commented with its attribution and reasoning. It is necessary — the
+hire-date field cannot reach the backend without the type carrying it — and my prompt scoped its "any hook file the conventions
+require" clause to the worklist calls only. **My spec was under-specified; the agent's scope discipline was sound.** Recorded here
+with the same directness as the agent-side deviations, and as the third Orchestrator-side error this sprint's review layer has
+surfaced.
+
+**A phantom field in the Orchestrator's own spec — the fourth Orchestrator-side error this sprint's review layer has surfaced.**
+Both the refinement's B5 and the plan's TASK-14007 cell said the settled-holiday-year row "carries a `reversalEndpoint` pointer"
+and instructed the agent to display it. **It does not exist.** The agent checked both the generated type
+(`api-types.ts:5195-5223`) and the C# record (`BackdateWorklistResponses.cs`), found nothing, and — instead of inventing a field or
+silently dropping the requirement — reconstructed the real, already-shipped static route from the row's own `employeeId` and
+declared the deviation. The Orchestrator verified this independently: `reversalEndpoint` appears in `src/` **only** in
+`EmploymentDateEndpoints.cs`, as part of the **409 conflict body of the employment-end-date PUT**. That is exactly where the HR
+register's HRP-009 row says it lives ("the end-date PUT returns 409 naming `reversalEndpoint`") — so the register was right, and
+the refinement mis-transplanted a field from one endpoint's error body onto a different endpoint's row model. Corrected in the
+plan and refinement; the agent's reconstruction stands as the right call.
+
+**Three contract defects found and reported, not fixed** (the agent had no backend scope, and reported rather than reached):
+1. The phantom `reversalEndpoint` above — either the backend should add it to `BackdateWorklistRow`, or the governing docs should
+   stop describing a field nobody built. (Docs fixed now; whether the field is worth adding is a separate question.)
+2. `ResolveBackdateWorklistRequest`'s generated wire type marks **both `resolution` and `reason` as optional** while the C# record
+   requires both positionally and the handler returns 422 on a missing/unknown resolution or a blank reason. A caller reading only
+   the generated types gets no signal that they are effectively required.
+3. **The OpenAPI document declares no header parameter at all** for the resolve endpoint (`header?: never`), so nothing in the
+   generated contract records that `If-Match` is mandatory. The agent built its 428 handling from the task text, not from the
+   type — meaning any future caller working from the contract alone would omit the header and get a 428 with no hint why.
+   Findings 2 and 3 are the same class: **the typed-contract program's generated artefacts under-describe a required input**, which
+   is precisely what that program exists to prevent. → QUAL rows at close.
+
+**Harness observation for the retrospective:** this agent's turn ended three times while it waited on its own background test run,
+because its Monitor watch does not survive the turn boundary. It was right each time to refuse to report a count it had not
+observed — the discipline asked for after three wrong counts earlier in this sprint — but the loop cost roughly four agent turns.
+The Orchestrator broke it by running the suite itself and handing back the observed numbers. **Lesson: when a dispatched agent
+must wait on a long local run, the Orchestrator should own the run and pass the result in, rather than leaving the agent to poll.**
 
 ---
 
@@ -552,6 +654,91 @@ was itself the blind spot; **widened in `QUAL-155`** so the reproduce step can s
 
 **Retrospective item agreed by the lens:** two agents building the same test project concurrently is not evidence of anything —
 serialise the builds or give each agent its own output directory.
+
+### Wave 2 — Constraint Validation (Step 5α, 2026-09-09): **PASS, no hard violations**
+
+`constraint-validator` (Sonnet) over `bcca33d..HEAD`, the three merged task branches. All eight checks clear. The ones that
+carried weight:
+
+- **Read-only, the wave's defining constraint** — all four new endpoint/repository files read in full: every SQL constant is a
+  `SELECT`; the only `INSERT`/`UPDATE`/`DELETE` tokens anywhere in them appear inside doc comments *asserting* read-only-ness. And
+  the cross-context check: `payroll_export_records` is mentioned only in `SELECT` / `NOT EXISTS` positions across the whole
+  Backend and Infrastructure trees. The Payroll service remains its sole writer (ADR-034 D4).
+- **The settlement extraction is provably additive** — `+68 / −0` on `VacationSettlementService.cs`, exactly as the agent claimed.
+  One new internal method appended; **no existing line touched**, so the settlement write path cannot have changed behaviour.
+- **Authorization** — all nine new routes carry `HROrAbove`; a diff-wide grep found only nine added `RequireAuthorization` lines
+  and **no existing route's policy line modified**.
+- **Deadline centralisation** — `AddDays(2|5)` now appears in `src/` only inside `InstitutionalDeadlines`'s own doc comment; no
+  executable copy survives, and both former hard-coded sites consume the constants.
+- **Frontend discipline** — `package.json` and `package-lock.json` untouched (no new dependency), and all three frontend test files
+  are **new**, so no existing assertion could have been weakened.
+
+Advisory, passed to the Reviewer: the §21 read opens a per-candidate transaction purely to read and explicitly rolls it back, at
+one database round trip per candidate employee — the file's own comment declares this as "correct first, fast later".
+
+### Wave 2 — Step 5a, external lens (2026-09-09): Codex **1 BLOCKER / 2 W / 6 N**
+
+`codex exec` steered at `git diff bcca33d..HEAD` (the base-anchored `codex review --base` form loses the steering prompt, so the
+exec form was used to keep the seven specific checks; `< /dev/null` per this sprint's invocation rule).
+
+**BLOCKER — an authorization rule that only the screen enforces. This one is the Orchestrator's to own.** Owner ruling OQ-7 made
+"mark resolved as Recalculated" global-admin-only for an exported-payroll-month row, because its remedy is the global-admin-only
+payroll recalculation, while leaving it open to HR for a settled-holiday-year row whose remedy HR may already perform. The screen
+implements exactly that. The **backend does not**: `POST …/backdate-worklist/{id}/resolve` carries one blanket
+`.RequireAuthorization("HROrAbove")` (`BackdateWorklistEndpoints.cs:212`) and validates only that the resolution verb is *known*
+(`:120`) — nothing inspects the row's kind or the actor's role. So an HR user can bypass the hidden button with a direct API call
+and record a payroll recalculation as done on a month they may not recalculate. The Orchestrator confirmed this independently: the
+only `WorklistKinds.ExportedMonth` comparison in that file (`:223`) is in the **GET** projection, not the resolve path.
+
+Two things worth saying plainly. First, **the ruling I asked for created the visible inconsistency**: the endpoint was always
+permissive, but until OQ-7 the screen gated both kinds identically, so the product did not yet *claim* a rule it failed to enforce.
+Asking for a kind-aware rule without specifying where it is enforced is a plan-level omission, and it is precisely the
+"gate / downstream-consumer alignment" question this project's own plan-review template exists to ask. Second, **a gate in the user
+interface is not a gate** — security and access control is an inviolable invariant, so this is correctly a blocker and not a
+warning. → **TASK-14010**, with regression pins that prove the *backend* refuses, since a pin against the screen would prove
+nothing about the hole.
+
+**WARNING — a contract claiming an exact partition it does not have.** `HrFollowUpApprovalResponses.cs:112` (and matching prose in
+the repository) says the approved-but-not-exported list is an exact partition counterpart to the leaver's-final-month list. It is
+not: the leaver list is final-month-only by owner ruling, while the not-exported list spans every approved-unexported month for
+active employees and leavers alike. The two lists still cannot share a month (one requires APPROVED, the other requires
+not-APPROVED), but they are not complements over one population and their counts sum to nothing meaningful. **This wording came
+from the Orchestrator's plan and refinement, not from the implementer** — my claim, and wrong. → TASK-14010 item 2, wording only.
+
+**WARNING — a disclosed lag that is not actually disclosed.** The uncovered-approvers list reads expired delegations from the
+events table, which the outbox publisher fills a cycle later, so a just-expired delegation may be missing. The settlement-reviews
+response carries a lag note a client can read; this one documents the lag only in XML comments, so a caller cannot tell the list is
+eventually consistent. → TASK-14010 item 3, matching the sibling's existing shape rather than inventing a second convention.
+
+**Six NOTES confirming the things most likely to have gone wrong went right** — and these are the checks that matter most, so they
+are recorded rather than summarised away: all eight lists pass the org-scope checks (LocalHR-floored accessible organisations,
+empty scope → 403, filtered through the subject's **current** `users.primary_org_id`); no data-changing SQL and no write to the
+payroll ledger; the §21 read selects the ferieår whose resolver boundary falls in this year, uses VACATION explicitly, and takes
+its quantity from the settlement valuation rather than a second implementation, with the extraction adding no lock and no write and
+leaving existing callers unchanged; the three aging predicates and the computed-null-deadline behaviour are correct; the event
+payload keys and predicates match both emitters; and the screen's instruction card is global-admin-only, makes no payroll request,
+and yields to the blocked notice, with the settled-year action correctly available to HR.
+
+### Wave 2 — the Orchestrator's own verification, and one measurement error
+
+| Gate | Result |
+|------|--------|
+| `dotnet build StatsTid.sln -c Release --no-incremental` | **0 errors, 145 warnings** (baseline) |
+| Unit | **1236** (1235 + the new deadline fact) |
+| DemoSeed | **165** |
+| Non-Docker regression | **102** |
+| Frontend vitest | **748 across 62 files** (735 baseline + 10 from TASK-14007 + 3 OQ-7 pins) |
+| `npx tsc --noEmit` | **FAILED — 10 errors** → fixed, see below |
+| API specification + frontend types | regenerated; **eight new paths, purely additive, no removals** |
+
+**The type check failed and I first read it as passing.** My command piped the type checker into `tail` and then echoed `$?`, which
+reports the **pipe's** exit status, not the compiler's — so a real failure printed "exit 0". Re-run without the pipe: exit 2, ten
+`TS2741` errors across six test files. Every one is the same class: a test fixture that hand-builds a roster response and predates
+the new **required** `pendingPastDeadlineCountByManager` field. **TASK-14004's agent predicted exactly this class** in its report,
+naming one of the six files. The honest fix is to complete the fixtures, not to make the field optional — loosening a contract to
+satisfy a test is what this sprint keeps rejecting — so it went to a `sweep` agent (Haiku) with an exact specification: add the
+property with an empty value beside its existing sibling, change nothing else. The measurement lesson is now written into the two
+follow-on prompts: never read `$?` through a pipe.
 
 ## Legal & Payroll Verification
 

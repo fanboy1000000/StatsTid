@@ -3428,6 +3428,146 @@
         }
       }
     },
+    "/api/hr/follow-up/past-deadline": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "summary",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrPastDeadlineResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hr/follow-up/leaver-final-month": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "summary",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrLeaverFinalMonthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hr/follow-up/approved-not-exported": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "summary",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrApprovedNotExportedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hr/follow-up/uncovered-approvers": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "summary",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrUncoveredApproversResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hr/follow-up/cannot-register": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "summary",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrCannotRegisterResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/balance/{employeeId}/summary": {
       "get": {
         "tags": [
@@ -4556,7 +4696,91 @@
         }
       }
     },
+    "/api/hr/follow-up/settlement-reviews": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PendingSettlementReviewListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hr/follow-up/termination-payouts-unrequested": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TerminationPayoutUnrequestedListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hr/follow-up/transfer-agreements-needed": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.VacationTransferAgreementNeededListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/vacation-transfer-agreements/{employeeId}": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.VacationTransferAgreementRecordResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "StatsTid.Backend.Api"
@@ -7181,6 +7405,428 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.HrApprovedNotExportedResponse": {
+        "required": [
+          "count",
+          "items",
+          "lookbackFloor",
+          "oldestAnchor",
+          "today"
+        ],
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "lookbackFloor": {
+            "type": "string",
+            "format": "date"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "oldestAnchor": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.HrCannotRegisterEmployee": {
+        "required": [
+          "daysSinceGapStart",
+          "displayName",
+          "employeeId",
+          "gapSince",
+          "orgId",
+          "unitName"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "unitName": {
+            "type": "string",
+            "nullable": true
+          },
+          "gapSince": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "daysSinceGapStart": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.HrCannotRegisterResponse": {
+        "required": [
+          "count",
+          "items",
+          "oldestGapSince",
+          "today"
+        ],
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "oldestGapSince": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrCannotRegisterEmployee"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.HrExpiredDelegation": {
+        "required": [
+          "absentApproverId",
+          "absentApproverName",
+          "approverHasActiveCover",
+          "daysSinceExpiry",
+          "expiredAt",
+          "expiredOn",
+          "orgId",
+          "reason",
+          "unitName",
+          "untilDate",
+          "vikarId",
+          "vikarUserId",
+          "vikarUserName"
+        ],
+        "type": "object",
+        "properties": {
+          "vikarId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "absentApproverId": {
+            "type": "string"
+          },
+          "absentApproverName": {
+            "type": "string"
+          },
+          "vikarUserId": {
+            "type": "string"
+          },
+          "vikarUserName": {
+            "type": "string",
+            "nullable": true
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "unitName": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
+            "enum": [
+              "FERIE",
+              "SYGDOM",
+              "ORLOV",
+              "TJENESTEREJSE",
+              "ANDET"
+            ],
+            "type": "string",
+            "nullable": true
+          },
+          "untilDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "expiredOn": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "expiredAt": {
+            "type": "string",
+            "format": "date"
+          },
+          "daysSinceExpiry": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "approverHasActiveCover": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem": {
+        "required": [
+          "ageAnchor",
+          "daysPastAnchor",
+          "deadlineSource",
+          "displayName",
+          "employeeId",
+          "month",
+          "orgId",
+          "periodId",
+          "periodStatus",
+          "year"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "year": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "month": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "periodStatus": {
+            "enum": [
+              "NONE",
+              "DRAFT",
+              "EMPLOYEE_APPROVED",
+              "SUBMITTED",
+              "APPROVED",
+              "REJECTED"
+            ],
+            "type": "string"
+          },
+          "periodId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "ageAnchor": {
+            "type": "string",
+            "format": "date"
+          },
+          "daysPastAnchor": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "deadlineSource": {
+            "enum": [
+              "stored",
+              "computed"
+            ],
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.HrLeaverFinalMonthResponse": {
+        "required": [
+          "count",
+          "items",
+          "lookbackFloor",
+          "oldestAnchor",
+          "today"
+        ],
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "lookbackFloor": {
+            "type": "string",
+            "format": "date"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "oldestAnchor": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.HrOrphanEmployee": {
+        "required": [
+          "displayName",
+          "employeeId",
+          "orgId",
+          "unitName"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "orgId": {
+            "type": "string"
+          },
+          "unitName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.HrPastDeadlineResponse": {
+        "required": [
+          "approverLate",
+          "approverLateCount",
+          "employeeLate",
+          "employeeLateCount",
+          "lookbackFloor",
+          "oldestApproverLateAnchor",
+          "oldestEmployeeLateAnchor",
+          "today"
+        ],
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "lookbackFloor": {
+            "type": "string",
+            "format": "date"
+          },
+          "employeeLateCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "oldestEmployeeLateAnchor": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "approverLateCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "oldestApproverLateAnchor": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "employeeLate": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem"
+            },
+            "nullable": true
+          },
+          "approverLate": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.HrUncoveredApproversResponse": {
+        "required": [
+          "expiredDelegationCount",
+          "expiredDelegations",
+          "expiredWithoutActiveCoverCount",
+          "oldestExpiry",
+          "orphanCount",
+          "orphans",
+          "today",
+          "windowDays"
+        ],
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "orphanCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "orphans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrOrphanEmployee"
+            },
+            "nullable": true
+          },
+          "expiredDelegationCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "expiredWithoutActiveCoverCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "oldestExpiry": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "expiredDelegations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.HrExpiredDelegation"
+            },
+            "nullable": true
+          },
+          "windowDays": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse": {
         "required": [
           "agreementCode",
@@ -7931,6 +8577,115 @@
           "count": {
             "type": "integer",
             "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PendingSettlementReviewItem": {
+        "required": [
+          "ageAnchor",
+          "ageDays",
+          "employeeId",
+          "entitlementType",
+          "entitlementYear",
+          "flaggedDays",
+          "primaryOrgId",
+          "reviewDisposition",
+          "settlementSequence",
+          "settlementState",
+          "source",
+          "trigger",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "settlementSequence": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "enum": [
+              "row",
+              "event"
+            ],
+            "type": "string"
+          },
+          "settlementState": {
+            "enum": [
+              "PENDING_REVIEW",
+              "SETTLED",
+              "REVERSED"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "enum": [
+              "YEAR_END",
+              "TERMINATION"
+            ],
+            "type": "string"
+          },
+          "reviewDisposition": {
+            "type": "string",
+            "nullable": true
+          },
+          "flaggedDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ageAnchor": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ageDays": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "primaryOrgId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.PendingSettlementReviewListResponse": {
+        "required": [
+          "count",
+          "eventSourceLagNote",
+          "items",
+          "today"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.PendingSettlementReviewItem"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "eventSourceLagNote": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -8705,7 +9460,8 @@
         "required": [
           "employees",
           "nameResolution",
-          "pendingCountByManager"
+          "pendingCountByManager",
+          "pendingPastDeadlineCountByManager"
         ],
         "type": "object",
         "properties": {
@@ -8716,6 +9472,13 @@
             }
           },
           "pendingCountByManager": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          "pendingPastDeadlineCountByManager": {
             "type": "object",
             "additionalProperties": {
               "type": "integer",
@@ -9488,6 +10251,81 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.TerminationPayoutUnrequestedItem": {
+        "required": [
+          "ageAnchor",
+          "ageDays",
+          "crystallizedDays",
+          "employeeId",
+          "entitlementType",
+          "entitlementYear",
+          "primaryOrgId",
+          "settlementSequence",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "entitlementType": {
+            "type": "string"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "settlementSequence": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "crystallizedDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ageAnchor": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ageDays": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "primaryOrgId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.TerminationPayoutUnrequestedListResponse": {
+        "required": [
+          "count",
+          "items",
+          "today"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TerminationPayoutUnrequestedItem"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "today": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse": {
         "required": [
           "eventId",
@@ -10041,6 +10879,208 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.VacationTransferAgreementCannotComputeItem": {
+        "required": [
+          "employeeId",
+          "primaryOrgId",
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "primaryOrgId": {
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "VALUATION_FAILED"
+            ],
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.VacationTransferAgreementNeededItem": {
+        "required": [
+          "ageAnchorDate",
+          "carryoverMax",
+          "daysToDeadline",
+          "deadline",
+          "employeeId",
+          "entitlementYear",
+          "primaryOrgId",
+          "underCapDays"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "primaryOrgId": {
+            "type": "string"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "underCapDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "carryoverMax": {
+            "type": "number",
+            "format": "double"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date"
+          },
+          "daysToDeadline": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "ageAnchorDate": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.VacationTransferAgreementNeededListResponse": {
+        "required": [
+          "cannotCompute",
+          "cannotComputeCount",
+          "count",
+          "daysToDeadline",
+          "deadline",
+          "entitlementYear",
+          "items",
+          "projectionNote",
+          "today",
+          "windowOpen",
+          "windowOpensOn"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.VacationTransferAgreementNeededItem"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "windowOpen": {
+            "type": "boolean"
+          },
+          "windowOpensOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date"
+          },
+          "daysToDeadline": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "cannotCompute": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.VacationTransferAgreementCannotComputeItem"
+            }
+          },
+          "cannotComputeCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "projectionNote": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.VacationTransferAgreementRecordItem": {
+        "required": [
+          "agreementDate",
+          "deadline",
+          "entitlementType",
+          "entitlementYear",
+          "recordedBy",
+          "transferDays",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "entitlementYear": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "entitlementType": {
+            "enum": [
+              "VACATION"
+            ],
+            "type": "string"
+          },
+          "transferDays": {
+            "type": "number",
+            "format": "double"
+          },
+          "agreementDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "recordedBy": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.VacationTransferAgreementRecordResponse": {
+        "required": [
+          "agreements",
+          "count",
+          "employeeId"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "agreements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.VacationTransferAgreementRecordItem"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false

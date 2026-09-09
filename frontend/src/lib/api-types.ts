@@ -3499,6 +3499,191 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/hr/follow-up/past-deadline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    summary?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.HrPastDeadlineResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hr/follow-up/leaver-final-month": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    summary?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.HrLeaverFinalMonthResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hr/follow-up/approved-not-exported": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    summary?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.HrApprovedNotExportedResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hr/follow-up/uncovered-approvers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    summary?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.HrUncoveredApproversResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hr/follow-up/cannot-register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    summary?: boolean;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.HrCannotRegisterResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/balance/{employeeId}/summary": {
         parameters: {
             query?: never;
@@ -4621,6 +4806,111 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/hr/follow-up/settlement-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.PendingSettlementReviewListResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hr/follow-up/termination-payouts-unrequested": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TerminationPayoutUnrequestedListResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hr/follow-up/transfer-agreements-needed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.VacationTransferAgreementNeededListResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vacation-transfer-agreements/{employeeId}": {
         parameters: {
             query?: never;
@@ -4628,7 +4918,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    employeeId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.VacationTransferAgreementRecordResponse"];
+                    };
+                };
+            };
+        };
         put: {
             parameters: {
                 query?: never;
@@ -5589,6 +5900,125 @@ export interface components {
             memberCount: number;
             children: components["schemas"]["StatsTid.Backend.Api.Contracts.ForestUnitNode"][];
         };
+        "StatsTid.Backend.Api.Contracts.HrApprovedNotExportedResponse": {
+            /** Format: date */
+            today: string;
+            /** Format: date */
+            lookbackFloor: string;
+            /** Format: int32 */
+            count: number;
+            /** Format: date */
+            oldestAnchor: string | null;
+            items: components["schemas"]["StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem"][] | null;
+        };
+        "StatsTid.Backend.Api.Contracts.HrCannotRegisterEmployee": {
+            employeeId: string;
+            displayName: string;
+            orgId: string;
+            unitName: string | null;
+            /** Format: date */
+            gapSince: string | null;
+            /** Format: int32 */
+            daysSinceGapStart: number | null;
+        };
+        "StatsTid.Backend.Api.Contracts.HrCannotRegisterResponse": {
+            /** Format: date */
+            today: string;
+            /** Format: int32 */
+            count: number;
+            /** Format: date */
+            oldestGapSince: string | null;
+            items: components["schemas"]["StatsTid.Backend.Api.Contracts.HrCannotRegisterEmployee"][] | null;
+        };
+        "StatsTid.Backend.Api.Contracts.HrExpiredDelegation": {
+            /** Format: uuid */
+            vikarId: string;
+            absentApproverId: string;
+            absentApproverName: string;
+            vikarUserId: string;
+            vikarUserName: string | null;
+            orgId: string;
+            unitName: string | null;
+            /** @enum {string|null} */
+            reason: "FERIE" | "SYGDOM" | "ORLOV" | "TJENESTEREJSE" | "ANDET" | null;
+            /** Format: date */
+            untilDate: string | null;
+            /** Format: date */
+            expiredOn: string | null;
+            /** Format: date */
+            expiredAt: string;
+            /** Format: int32 */
+            daysSinceExpiry: number;
+            approverHasActiveCover: boolean;
+        };
+        "StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem": {
+            employeeId: string;
+            displayName: string;
+            orgId: string;
+            /** Format: int32 */
+            year: number;
+            /** Format: int32 */
+            month: number;
+            /** @enum {string} */
+            periodStatus: "NONE" | "DRAFT" | "EMPLOYEE_APPROVED" | "SUBMITTED" | "APPROVED" | "REJECTED";
+            /** Format: uuid */
+            periodId: string | null;
+            /** Format: date */
+            ageAnchor: string;
+            /** Format: int32 */
+            daysPastAnchor: number;
+            /** @enum {string} */
+            deadlineSource: "stored" | "computed";
+        };
+        "StatsTid.Backend.Api.Contracts.HrLeaverFinalMonthResponse": {
+            /** Format: date */
+            today: string;
+            /** Format: date */
+            lookbackFloor: string;
+            /** Format: int32 */
+            count: number;
+            /** Format: date */
+            oldestAnchor: string | null;
+            items: components["schemas"]["StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem"][] | null;
+        };
+        "StatsTid.Backend.Api.Contracts.HrOrphanEmployee": {
+            employeeId: string;
+            displayName: string;
+            orgId: string;
+            unitName: string | null;
+        };
+        "StatsTid.Backend.Api.Contracts.HrPastDeadlineResponse": {
+            /** Format: date */
+            today: string;
+            /** Format: date */
+            lookbackFloor: string;
+            /** Format: int32 */
+            employeeLateCount: number;
+            /** Format: date */
+            oldestEmployeeLateAnchor: string | null;
+            /** Format: int32 */
+            approverLateCount: number;
+            /** Format: date */
+            oldestApproverLateAnchor: string | null;
+            employeeLate: components["schemas"]["StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem"][] | null;
+            approverLate: components["schemas"]["StatsTid.Backend.Api.Contracts.HrFollowUpMonthItem"][] | null;
+        };
+        "StatsTid.Backend.Api.Contracts.HrUncoveredApproversResponse": {
+            /** Format: date */
+            today: string;
+            /** Format: int32 */
+            orphanCount: number;
+            orphans: components["schemas"]["StatsTid.Backend.Api.Contracts.HrOrphanEmployee"][] | null;
+            /** Format: int32 */
+            expiredDelegationCount: number;
+            /** Format: int32 */
+            expiredWithoutActiveCoverCount: number;
+            /** Format: date */
+            oldestExpiry: string | null;
+            expiredDelegations: components["schemas"]["StatsTid.Backend.Api.Contracts.HrExpiredDelegation"][] | null;
+            /** Format: int32 */
+            windowDays: number;
+        };
         "StatsTid.Backend.Api.Contracts.LocalAgreementProfileResponse": {
             /** Format: uuid */
             profileId: string;
@@ -5802,6 +6232,38 @@ export interface components {
             items: components["schemas"]["StatsTid.Backend.Api.Contracts.PayoutPendingItem"][];
             /** Format: int32 */
             count: number;
+        };
+        "StatsTid.Backend.Api.Contracts.PendingSettlementReviewItem": {
+            employeeId: string;
+            entitlementType: string;
+            /** Format: int32 */
+            entitlementYear: number;
+            /** Format: int32 */
+            settlementSequence: number;
+            /** @enum {string} */
+            source: "row" | "event";
+            /** @enum {string} */
+            settlementState: "PENDING_REVIEW" | "SETTLED" | "REVERSED";
+            /** @enum {string} */
+            trigger: "YEAR_END" | "TERMINATION";
+            reviewDisposition: string | null;
+            /** Format: double */
+            flaggedDays: number;
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            ageAnchor: string;
+            /** Format: int32 */
+            ageDays: number;
+            primaryOrgId: string;
+        };
+        "StatsTid.Backend.Api.Contracts.PendingSettlementReviewListResponse": {
+            items: components["schemas"]["StatsTid.Backend.Api.Contracts.PendingSettlementReviewItem"][];
+            /** Format: int32 */
+            count: number;
+            /** Format: date */
+            today: string;
+            eventSourceLagNote: string;
         };
         "StatsTid.Backend.Api.Contracts.PeriodActionResponse": {
             /** Format: uuid */
@@ -6025,6 +6487,9 @@ export interface components {
             pendingCountByManager: {
                 [key: string]: number;
             };
+            pendingPastDeadlineCountByManager: {
+                [key: string]: number;
+            };
             nameResolution: {
                 [key: string]: components["schemas"]["StatsTid.Backend.Api.Contracts.RosterNameRef"];
             };
@@ -6231,6 +6696,30 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
+        "StatsTid.Backend.Api.Contracts.TerminationPayoutUnrequestedItem": {
+            employeeId: string;
+            entitlementType: string;
+            /** Format: int32 */
+            entitlementYear: number;
+            /** Format: int32 */
+            settlementSequence: number;
+            /** Format: double */
+            crystallizedDays: number;
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            ageAnchor: string;
+            /** Format: int32 */
+            ageDays: number;
+            primaryOrgId: string;
+        };
+        "StatsTid.Backend.Api.Contracts.TerminationPayoutUnrequestedListResponse": {
+            items: components["schemas"]["StatsTid.Backend.Api.Contracts.TerminationPayoutUnrequestedItem"][];
+            /** Format: int32 */
+            count: number;
+            /** Format: date */
+            today: string;
+        };
         "StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse": {
             /** Format: uuid */
             eventId: string;
@@ -6385,6 +6874,69 @@ export interface components {
             agreementCode: string;
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.VacationTransferAgreementCannotComputeItem": {
+            employeeId: string;
+            primaryOrgId: string;
+            /** @enum {string} */
+            reason: "VALUATION_FAILED";
+        };
+        "StatsTid.Backend.Api.Contracts.VacationTransferAgreementNeededItem": {
+            employeeId: string;
+            primaryOrgId: string;
+            /** Format: int32 */
+            entitlementYear: number;
+            /** Format: double */
+            underCapDays: number;
+            /** Format: double */
+            carryoverMax: number;
+            /** Format: date */
+            deadline: string;
+            /** Format: int32 */
+            daysToDeadline: number;
+            /** Format: date */
+            ageAnchorDate: string;
+        };
+        "StatsTid.Backend.Api.Contracts.VacationTransferAgreementNeededListResponse": {
+            items: components["schemas"]["StatsTid.Backend.Api.Contracts.VacationTransferAgreementNeededItem"][];
+            /** Format: int32 */
+            count: number;
+            /** Format: int32 */
+            entitlementYear: number;
+            windowOpen: boolean;
+            /** Format: date */
+            windowOpensOn: string;
+            /** Format: date */
+            deadline: string;
+            /** Format: int32 */
+            daysToDeadline: number;
+            cannotCompute: components["schemas"]["StatsTid.Backend.Api.Contracts.VacationTransferAgreementCannotComputeItem"][];
+            /** Format: int32 */
+            cannotComputeCount: number;
+            /** Format: date */
+            today: string;
+            projectionNote: string;
+        };
+        "StatsTid.Backend.Api.Contracts.VacationTransferAgreementRecordItem": {
+            /** Format: int32 */
+            entitlementYear: number;
+            /** @enum {string} */
+            entitlementType: "VACATION";
+            /** Format: double */
+            transferDays: number;
+            /** Format: date */
+            agreementDate: string;
+            recordedBy: string;
+            /** Format: int64 */
+            version: number;
+            /** Format: date */
+            deadline: string;
+        };
+        "StatsTid.Backend.Api.Contracts.VacationTransferAgreementRecordResponse": {
+            employeeId: string;
+            agreements: components["schemas"]["StatsTid.Backend.Api.Contracts.VacationTransferAgreementRecordItem"][];
+            /** Format: int32 */
+            count: number;
         };
         "StatsTid.Backend.Api.Contracts.WageTypeMappingResponse": {
             timeType: string;

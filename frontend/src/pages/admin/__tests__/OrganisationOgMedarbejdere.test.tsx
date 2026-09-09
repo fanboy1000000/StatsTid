@@ -110,6 +110,7 @@ function rosterWithP1(): Record<string, RosterResponse> {
         },
       ],
       pendingCountByManager: {},
+      pendingPastDeadlineCountByManager: {},
       nameResolution: {},
     },
   }
@@ -253,7 +254,7 @@ describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', 
   // former "navigate, no drawer" test now that a found person DOES open the drawer.)
   it('a person NOT in the loaded roster lands on the org with NO drawer (not-found, no throw)', () => {
     // STY02's roster IS loaded but does not contain p1 → terminal not-found.
-    h.roster = { STY02: { employees: [], pendingCountByManager: {}, nameResolution: {} } }
+    h.roster = { STY02: { employees: [], pendingCountByManager: {}, pendingPastDeadlineCountByManager: {}, nameResolution: {} } }
     h.search = {
       query: 'jens',
       loading: false,

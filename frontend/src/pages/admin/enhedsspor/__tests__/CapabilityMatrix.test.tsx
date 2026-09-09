@@ -133,6 +133,7 @@ function makeRoster(): RosterResponse {
       row({ employeeId: 'carl', displayName: 'Carl Storm', position: 'Specialkonsulent', structuralApproverId: 'extLeader' }),
     ],
     pendingCountByManager: {},
+    pendingPastDeadlineCountByManager: {},
     nameResolution: {
       dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
       extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor' },
