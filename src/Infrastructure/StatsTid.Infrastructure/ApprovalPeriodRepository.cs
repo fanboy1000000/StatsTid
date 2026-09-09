@@ -1,5 +1,6 @@
 using Npgsql;
 using NpgsqlTypes;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -683,7 +684,8 @@ public sealed class ApprovalPeriodRepository
                 u.user_id            AS employee_id,
                 u.display_name       AS display_name,
                 lc.status            AS last_closed_status,
-                pend.has_pending     AS has_pending
+                pend.has_pending     AS has_pending,
+                pendlate.has_pending_past_deadline AS has_pending_past_deadline
             FROM users u
             JOIN organizations o ON o.org_id = u.primary_org_id
             LEFT JOIN LATERAL (
@@ -701,6 +703,23 @@ public sealed class ApprovalPeriodRepository
                   AND ap2.status IN ('SUBMITTED', 'EMPLOYEE_APPROVED')
                 LIMIT 1
             ) pend ON TRUE
+            -- S140 / TASK-14004 (QUAL-163) — the same pending predicate NARROWED to months whose
+            -- MANAGER DEADLINE has actually passed. This is what makes the organisation page's
+            -- "efter frist" ("past deadline") tile truthful: it has always counted every manager
+            -- with ANY pending month while captioning it "past deadline", because nothing read the
+            -- deadlines the send flow stores. A row created before the deadline columns existed
+            -- holds NULL, so the ratified provisional institutional default (month-end + the bound
+            -- @approveDays) is COMPUTED as the fallback — never silently treated as on time, which
+            -- is the exact overclaim being fixed. period_end IS the month end for the MONTHLY rows
+            -- the send flow writes; the fallback is only reached when the column is NULL.
+            LEFT JOIN LATERAL (
+                SELECT TRUE AS has_pending_past_deadline
+                FROM approval_periods ap3
+                WHERE ap3.employee_id = u.user_id
+                  AND ap3.status IN ('SUBMITTED', 'EMPLOYEE_APPROVED')
+                  AND COALESCE(ap3.manager_deadline, ap3.period_end + @approveDays) < @today
+                LIMIT 1
+            ) pendlate ON TRUE
             WHERE u.is_active = TRUE
               AND o.materialized_path LIKE @pathPrefix ESCAPE '\'
             ORDER BY u.display_name, u.user_id
@@ -717,9 +736,19 @@ public sealed class ApprovalPeriodRepository
         // `date`, so the comparison against the `period_end` DATE column is unchanged in type and
         // semantics.
         cmd.Parameters.AddWithValue("today", today);
+        // S140 / TASK-14004 (QUAL-163) — the ratified provisional institutional approval offset,
+        // bound as a PARAMETER from InstitutionalDeadlines (SharedKernel) so the computed fallback
+        // above provably uses the same rule the send flow stamps the column with, and no deadline
+        // arithmetic is written literally into SQL text.
+        cmd.Parameters.AddWithValue("approveDays", InstitutionalDeadlines.ApproveDays);
 
         var employees = new List<EmployeePeriodStatus>();
         var pendingEmployeeIds = new List<string>();
+        // The subset of pendingEmployeeIds whose pending month is ALSO past its manager deadline.
+        // A subset by construction: both predicates require SUBMITTED / EMPLOYEE_APPROVED, so the
+        // past-deadline tally can ride the SAME tally loop below and can never exceed the pending
+        // tally for any manager.
+        var pendingPastDeadlineEmployeeIds = new HashSet<string>(StringComparer.Ordinal);
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
             // S126 / N6a — NO NextResultAsync here, deliberately, and the reason is worth recording
@@ -732,6 +761,7 @@ public sealed class ApprovalPeriodRepository
             // "No resultset is currently being traversed" on all four tests in this class.
             var statusOrd = reader.GetOrdinal("last_closed_status");
             var pendingOrd = reader.GetOrdinal("has_pending");
+            var pendingLateOrd = reader.GetOrdinal("has_pending_past_deadline");
             while (await reader.ReadAsync(ct))
             {
                 var employeeId = reader.GetString(reader.GetOrdinal("employee_id"));
@@ -740,6 +770,8 @@ public sealed class ApprovalPeriodRepository
                 employees.Add(new EmployeePeriodStatus(employeeId, displayName, ProjectStatus(rawStatus)));
                 if (!reader.IsDBNull(pendingOrd) && reader.GetBoolean(pendingOrd))
                     pendingEmployeeIds.Add(employeeId);
+                if (!reader.IsDBNull(pendingLateOrd) && reader.GetBoolean(pendingLateOrd))
+                    pendingPastDeadlineEmployeeIds.Add(employeeId);
             }
         }
 
@@ -771,6 +803,12 @@ public sealed class ApprovalPeriodRepository
         //     method, never re-read here (PAT-028). It threads into the authority context, the
         //     prefetches and every `asOf`, so the tiles and the badges describe one effective date.
         var pendingCountByManager = new Dictionary<string, int>(StringComparer.Ordinal);
+        // S140 / TASK-14004 (QUAL-163) — the SECOND tally, over the same authorized-approver set:
+        // how many of that manager's pending reports are PAST the manager deadline. Kept as its own
+        // map rather than replacing pendingCountByManager, whose meaning ("awaiting me") is correct
+        // and is what the tree's other surfaces consume; the tile then reads "Ikke godkendt N — heraf
+        // M efter frist" with both numbers true.
+        var pendingPastDeadlineCountByManager = new Dictionary<string, int>(StringComparer.Ordinal);
 
         // S125 / TASK-12501 step 1 — ONE connection for the whole tally pass instead of one per
         // primitive per candidate. Before this, each of the resolver, the candidate enumeration, the
@@ -853,6 +891,16 @@ public sealed class ApprovalPeriodRepository
 
                     pendingCountByManager.TryGetValue(candidate, out var n);
                     pendingCountByManager[candidate] = n + 1;
+
+                    // The past-deadline tally rides the SAME authorization decision, so the two
+                    // numbers on the tile are guaranteed to describe the same set of approvers and
+                    // the same set of employees — the narrow one can never exceed the wide one, and
+                    // no second gate can drift from this one.
+                    if (pendingPastDeadlineEmployeeIds.Contains(employeeId))
+                    {
+                        pendingPastDeadlineCountByManager.TryGetValue(candidate, out var late);
+                        pendingPastDeadlineCountByManager[candidate] = late + 1;
+                    }
                 }
             }
         }
@@ -860,7 +908,7 @@ public sealed class ApprovalPeriodRepository
         // Read-only: commit simply releases the snapshot (and its xmin) as early as possible.
         await snapshot.CommitAsync(ct);
 
-        return new TreePeriodStatusProjection(employees, pendingCountByManager);
+        return new TreePeriodStatusProjection(employees, pendingCountByManager, pendingPastDeadlineCountByManager);
     }
 
     /// <summary>
@@ -1154,7 +1202,14 @@ public sealed class ApprovalPeriodRepository
         }
         var nameResolution = await ResolvePersonRefsByIdAsync(referencedIds, ct);
 
-        return new MedarbejderRosterProjection(employees, statusProjection.PendingCountByManager, nameResolution);
+        return new MedarbejderRosterProjection(
+            employees,
+            statusProjection.PendingCountByManager,
+            // S140 / TASK-14004 (QUAL-163) — carried through UNCHANGED from the same projection, so
+            // the roster tile and the period-status read can never disagree about which months are
+            // late (one computation, two consumers).
+            statusProjection.PendingPastDeadlineCountByManager,
+            nameResolution);
     }
 
     /// <summary>
@@ -1889,9 +1944,17 @@ public sealed class ApprovalPeriodRepository
 /// projected last-closed-month status.</param>
 /// <param name="PendingCountByManager">manager user_id → number of that manager's effective
 /// reports currently holding a SUBMITTED/EMPLOYEE_APPROVED period awaiting them.</param>
+/// <param name="PendingPastDeadlineCountByManager">S140 / TASK-14004 (QUAL-163) — the SUBSET of
+/// <paramref name="PendingCountByManager"/> whose pending period is PAST its manager deadline
+/// (<c>manager_deadline</c>, with the ratified provisional institutional default computed as the
+/// fallback for rows created before that column existed). A manager with no late month is simply
+/// absent from the map (read it as zero). This is the number the organisation page's "efter frist"
+/// tile needed: before S140 the tile captioned the PENDING count as "past deadline" because nothing
+/// read the stored deadlines.</param>
 public sealed record TreePeriodStatusProjection(
     IReadOnlyList<EmployeePeriodStatus> Employees,
-    IReadOnlyDictionary<string, int> PendingCountByManager);
+    IReadOnlyDictionary<string, int> PendingCountByManager,
+    IReadOnlyDictionary<string, int> PendingPastDeadlineCountByManager);
 
 /// <summary>
 /// One employee's last-closed-month period status badge (S74-7404 R11a). <paramref name="Status"/>
@@ -1916,6 +1979,9 @@ public sealed record EmployeePeriodStatus(
 /// <param name="PendingCountByManager">manager user_id → number of that manager's effective reports
 /// currently holding a pending period — the EXISTING S74 tally, now (S106 / TASK-10604) expanded
 /// to the per-authorized-approver cardinality (edge manager + each unit-leader / their vikar).</param>
+/// <param name="PendingPastDeadlineCountByManager">S140 / TASK-14004 (QUAL-163) — the SUBSET of
+/// <paramref name="PendingCountByManager"/> that is past the manager deadline, REUSED from
+/// <see cref="TreePeriodStatusProjection"/> unchanged. See that record for the semantics.</param>
 /// <param name="NameResolution">S106 / TASK-10602 — a DISPLAY-ONLY by-id name lookup over the ids
 /// the roster REFERENCES (every row's <c>structuralApproverId</c> ∪ all <c>leaderIds</c>), so the FE
 /// can render the "Refererer opad til" upward-reference + the cross-unit-leader chips even when the
@@ -1925,6 +1991,7 @@ public sealed record EmployeePeriodStatus(
 public sealed record MedarbejderRosterProjection(
     IReadOnlyList<MedarbejderRosterRow> Employees,
     IReadOnlyDictionary<string, int> PendingCountByManager,
+    IReadOnlyDictionary<string, int> PendingPastDeadlineCountByManager,
     IReadOnlyDictionary<string, ResolvedPersonRef> NameResolution);
 
 /// <summary>

@@ -20,12 +20,26 @@ namespace StatsTid.Backend.Api.Contracts;
 // .Produces<RosterResponse>(200) carry a real schema (the spec source) without changing a single byte
 // of the serialized response (the RosterEndpointContractTests pin that wire shape unchanged).
 
-/// <summary>The GET …/medarbejdere envelope — <c>{ employees, pendingCountByManager, nameResolution }</c>
-/// (NOT a bare array). <paramref name="PendingCountByManager"/> + <paramref name="NameResolution"/> are
-/// by-id maps (serialize as JSON objects).</summary>
+/// <summary>The GET …/medarbejdere envelope — <c>{ employees, pendingCountByManager,
+/// pendingPastDeadlineCountByManager, nameResolution }</c> (NOT a bare array). The three maps are
+/// by-id (they serialize as JSON objects).</summary>
+/// <param name="PendingCountByManager">manager user_id → how many of that manager's reports hold a
+/// period awaiting them. UNCHANGED meaning.</param>
+/// <param name="PendingPastDeadlineCountByManager">S140 / TASK-14004 (QUAL-163) — the SUBSET of
+/// <paramref name="PendingCountByManager"/> that is PAST the manager deadline (month-end + 5, the
+/// ratified provisional institutional default; computed as a fallback for period rows created
+/// before the deadline columns existed, never assumed on time). A manager with no late month is
+/// absent from the map — read a missing key as zero.
+///
+/// <para>WHY THIS FIELD EXISTS: the organisation page's "efter frist" ("past deadline") tile has
+/// always been driven by <paramref name="PendingCountByManager"/>, i.e. it captioned "past
+/// deadline" over a number that meant "pending" — because nothing in the system read the deadlines
+/// the send flow stores. This field is the number the caption claims; the tile can now read
+/// "Ikke godkendt N — heraf M efter frist" with both halves true.</para></param>
 public sealed record RosterResponse(
     IReadOnlyList<RosterEmployeeRow> Employees,
     IReadOnlyDictionary<string, int> PendingCountByManager,
+    IReadOnlyDictionary<string, int> PendingPastDeadlineCountByManager,
     IReadOnlyDictionary<string, RosterNameRef> NameResolution);
 
 /// <summary>One enriched roster row. <paramref name="OutgoingVikar"/> is null-emitting (the key stays

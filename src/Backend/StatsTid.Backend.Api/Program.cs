@@ -145,7 +145,12 @@ builder.Services.AddSingleton<VacationSettlementRepository>(); // S68 ADR-033 sl
 // S138 / TASK-13803 (ADR-040 D8, Increment 3) — the HR backdate diagnostic worklist. Stateless over the
 // DI'd outbox + audit-projection mapper/repo (the EmploymentEndDateLifecycleWriter shape) ⇒ singleton-safe.
 builder.Services.AddSingleton<HrBackdateWorklistRepository>();
-builder.Services.AddSingleton<HrFollowUpSettlementReadRepository>(); // S140 / TASK-14003 — HR follow-up settlement-family READS (HRP-005/005b/007/010); stateless over the connection factory + the settlement service's read-only valuation entry point ⇒ singleton-safe
+// S140 — the two HR follow-up READ repositories (both wave-2 tasks register here; the Orchestrator
+// resolved this as the expected merge point). Neither writes anything, anywhere: they are diagnostic
+// reads over facts other contexts own. Neither holds a clock — "today" is computed once per request
+// in the endpoint and threaded in (PAT-028) — so both are singleton-safe.
+builder.Services.AddSingleton<HrFollowUpSettlementReadRepository>(); // TASK-14003 — HRP-005/005b/007/010; stateless over the connection factory + the settlement service's read-only valuation entry point ⇒ singleton-safe
+builder.Services.AddSingleton<HrFollowUpApprovalReadRepository>();  // TASK-14004 — HRP-011/012/013/014/015/022
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 // S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
 // Mapper + marker registered together so the registry's RegisteredEventTypeNames filter

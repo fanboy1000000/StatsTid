@@ -3334,6 +3334,10 @@ public static class AdminEndpoints
                     LeaderIds: e.LeaderIds,
                     PrimaryReportingLineVersion: e.PrimaryReportingLineVersion)).ToList(),
                 PendingCountByManager: roster.PendingCountByManager,
+                // S140 / TASK-14004 (QUAL-163) — the past-deadline SUBSET of the tally above, so the
+                // "efter frist" tile can state a number that actually means past deadline. The
+                // existing pendingCountByManager keeps its meaning; this is additive.
+                PendingPastDeadlineCountByManager: roster.PendingPastDeadlineCountByManager,
                 // S106 / TASK-10602 — the DISPLAY-ONLY by-id name resolution (upward-ref +
                 // cross-unit-leader chips), keyed by user_id.
                 NameResolution: roster.NameResolution.ToDictionary(

@@ -526,9 +526,13 @@ public static class SkemaEndpoints
                     RejectionReason: period.RejectionReason)
                 : null;
 
-            // Compute deadlines
-            var employeeDeadline = monthEnd.AddDays(2);
-            var managerDeadline = monthEnd.AddDays(5);
+            // Compute deadlines. S140 / TASK-14004: the +2 / +5 offsets are no longer written
+            // literally here — they come from InstitutionalDeadlines (SharedKernel), the ONE named
+            // source of truth the send flow's stamping site and the new HR follow-up reads' computed
+            // fallback also consume. The values are the owner-ratified PROVISIONAL institutional
+            // defaults (SYSTEM_TARGET §G names cutoff dates as per-institution configuration that
+            // does not exist yet); nothing about this read's behaviour changes.
+            var (employeeDeadline, managerDeadline) = InstitutionalDeadlines.ForMonthEnd(monthEnd);
 
             // S120 / TASK-12000 — named record (BYTE-IDENTICAL wire JSON; the skema family
             // carries NO ruled delta).
