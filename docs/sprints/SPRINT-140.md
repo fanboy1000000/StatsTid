@@ -8,7 +8,7 @@
 | **End Date** | 2026-09-09 |
 | **Orchestrator Approved** | **plan: yes — 2026-09-08** (Step 0b terminal: Codex READY at cycle 3; Reviewer APPROVED-WITH-WARNINGS at cycle 3, all absorbed; one owner ruling raised by the plan review, OQ-4) · refinement `.claude/refinements/REFINEMENT-s140-qual154-increment4-hr-landing.md` **rev 4** READY (Reviewer APPROVED-WITH-WARNINGS at cycle 2, all absorbed; Codex READY at cycle 4 after the cycle cap — owner chose "apply both fixes; run cycle 4"); owner rulings 2026-09-08 **OQ-1 (a)** S140 = QUAL-154 + the HR follow-up surface, Increment 4 whole in S141 · **OQ-2 (a)** keep the `GlobalAdminOnly` recalculate gate, action shown only to Global Admins · **OQ-3 (a)** rolling 12-month floor on HRP-011/012/022 · **OQ-4 (a)** (raised by the Step-0b Reviewer, ruled 2026-09-08) read-only HR lists in S140; the four API-only process actions become S141 items · **OQ-5 (a)** (raised by the Step-5a Reviewer, ruled 2026-09-08) convert the cross-org transfer's business date now, paired with a probe leg → TASK-14009 · **OQ-6 (a)** (raised by the Orchestrator's blind-spot sweep, adjudicated by Step-5a cycle 2, ruled 2026-09-09) the vikar start date: register now (**QUAL-164**), the `effective_from` schema fix is its own task, NOT folded into S140 |
 | **Build Verified** | **wave 1: yes** — `dotnet build StatsTid.sln -c Release --no-incremental` **0 errors, 145 warnings** (baseline), Orchestrator's own run, twice. The 175-warning figure one agent saw is an incremental-build artefact. CA2100 distinct sites to be re-measured on the close's clean full build |
-| **Test Verified** | **CI-pending at close** — Docker is unavailable locally (standing project constraint), so all **1757 Docker-gated facts**, including every one of this sprint's pins and probe legs, execute for the first time in the watched CI run. Verified locally by the Orchestrator's own runs (each exit status read from an unpiped command): build **0 errors / 145 warnings** = baseline; **CA2100 230 raw = 115 distinct sites**, unchanged, on a full non-incremental build; Unit **1238**; DemoSeed **165**; non-Docker regression **104**; regression facts discovered **1861**; frontend **775 across 65 files**; `tsc --noEmit` clean; smoke **7** (unchanged). **Total 4046 (+90 vs S139's 3956).** Nothing Docker-gated is claimed green. Two agent-reported figures were wrong and are corrected here: a 144/145 non-Docker regression count (a shared-`bin/Release` race between concurrent agents) and a `tsc` "exit 0" that was the exit status of a pipe rather than the compiler |
+| **Test Verified** | **✅ CI GREEN — run `34462479995` (all 7 jobs, sha `bac30b3`, 2026-09-09)**, after a first run (`34366179123`) that went red on two guards, both real planning gaps, both fixed. **The job that mattered was green on the FIRST run:** `build-and-test` passed with all **1757 Docker-gated facts** — every probe leg, all 32 new HR pins and every converted suite — executing for the first time, having only ever been reasoned from source. Docker is unavailable locally (standing project constraint). Verified locally by the Orchestrator's own runs (each exit status read from an unpiped command): build **0 errors / 145 warnings** = baseline; **CA2100 230 raw = 115 distinct sites**, unchanged, on a full non-incremental build; Unit **1238**; DemoSeed **165**; non-Docker regression **104**; regression facts discovered **1861**; frontend **775 across 65 files**; `tsc --noEmit` clean; smoke **7** (unchanged). **Total 4046 (+90 vs S139's 3956).** Nothing Docker-gated is claimed green. Two agent-reported figures were wrong and are corrected here: a 144/145 non-Docker regression count (a shared-`bin/Release` race between concurrent agents) and a `tsc` "exit 0" that was the exit status of a pipe rather than the compiler |
 | **Wave-1 commit** | `bcca33d` (2026-09-09, local only — not pushed; push happens at Step 7 after Step 7a). Committed before wave-2 worktrees per the S24 lesson. **Consequence for Step 7a:** an intermediate commit now exists on master, so the sprint-end review must use the base-anchored form `codex review --base a87f6c1`, which loses the project-specific steering prompt (AGENTS.md § Invocation Modes). The internal Reviewer keeps its full prompt, and the per-task Step-5a passes already ran prompt-steered on the uncommitted diffs |
 | **Orchestrator model** | Open — refinement (4 Codex cycles, 2 Reviewer cycles), Steps 0a / 0b / 1, this log: **Fable 5.1** ✓ · Dispatch, monitoring, acceptance bookkeeping, CI watch (Steps 2–4, 6): **Opus 5 — switch TAKEN at "dispatch wave 1" (2026-09-08)**, the routing rule's first honoured Orchestrator switch (S139 offered and declined it) · Step-5a / 7a absorption and every ruling on a declared deviation: **Fable** · Close bookkeeping + CI backfill: **Opus**. Agents spawned by role name, no `model` override (`docs/WORKFLOW.md` § Model Routing, second live run) |
 | **Sprint-start commit** | `a87f6c1` (S139 CI-green backfill) — the `codex review --base` fallback anchor for Step 7a |
@@ -1050,8 +1050,42 @@ causes, and so is something not yet considered. **Logs are unreadable until the 
 unknown rather than assumed. It is also the one failure this sprint could not have caught locally by any means available: no
 Docker means no stack, and no stack means no browser test.
 
-**Standing constraint acknowledged in the header's `**Test Verified**` line as CI-pending**, which is the phrasing the
-consecutive-CI-pending close gate is line-anchored to read.
+## Post-close outcome — ✅ GREEN on the second run (`34462479995`, sha `bac30b3`)
+
+All seven jobs pass. Both first-run failures were **real gaps in the Orchestrator's plan**, not flaky infrastructure, and both
+were caught by guards that exist *because an earlier close review found the same class of hole*:
+
+1. **E2E route coverage.** `lazy-routes.spec.ts` reads `App.tsx`, extracts every lazily-loaded page, and fails when one has no
+   entry in its own route list. S140 added two pages — the HR follow-up landing page and the overtime page routed at last under
+   QUAL-162 — and **the sprint plan never listed E2E coverage as a deliverable for a new page.** The guard's own comment records
+   its origin: the S125 close review found *six* lazy pages absent from that list, so the test written to prove the route mappings
+   work was silently exercising two thirds of them. It caught mine. Both routes added; verified by running the guard's own logic
+   by hand (18 lazy pages, 18 covered, 0 uncovered) before pushing.
+2. **Design-system drift.** `ProcessTile` went into `frontend/src/components/ui/`, making a 21st component in a curated kit of
+   20 whose contents are fingerprinted against what was last uploaded to the external StatsTid UI Kit design project.
+   **Owner ruling: the tile moves out of the kit, into the page that uses it** — component, styles and its nine tests together;
+   the kit's index export reverted; the tile now imports `Card` from the kit as any other page does.
+
+**Two Orchestrator errors in the handling of that second failure, recorded because this sprint has recorded every other one:**
+- **I offered a fix I had not checked I could perform.** I proposed running the design sync, then had to withdraw it: the
+  project's own `.design-sync/NOTES.md` shows the re-sync copies build scripts from the design-sync skill's directory (**not
+  available in this session**), runs a browser-based render check, and finishes with `python tools/check_design_sync.py --update`
+  (**Python is absent from this machine** — a standing environment gap ROADMAP already records, which is why the openapi and docs
+  gates run CI-only from here). Each component also needs a hand-written type stub the notes call "the #1 watch item". Uploading
+  raw source with the tool that *was* available and then refreshing the fingerprint would have **claimed a full sync that had not
+  happened** — the dishonest green this sprint rejected six times — so the option was withdrawn and the owner re-asked with the
+  real constraint stated.
+- **I guessed the docs failure before reading the log.** I assumed freshness and bumped five `anchor-sprint` markers. The log
+  shows freshness **passed** ("checked 6 anchored doc(s) against S140"), as did db-schema sync, KB INDEX completeness (86 entries,
+  0 orphans, 0 dangling) and the sprint inventory (140 sprints, all with logs). **The sole failure was design-sync.** The bumps are
+  kept because they are accurate on their own terms — those five documents were substantively maintained this sprint — but they
+  fixed nothing, and the guess cost a diagnosis cycle that reading the log first would have avoided.
+
+**What the green run actually proves, and what it does not.** It proves the 1757 Docker-gated facts pass — including the pins
+whose red conditions were only ever *reasoned*, and the two organisation-scope pins the internal lens predicted would fail (they
+were repaired before the push and passed). It does **not** retroactively validate reasoning as a substitute for execution: the
+sprint still shipped its entire Docker-gated surface unexecuted until this point, and that remains the standing consequence of
+Docker being unavailable locally.
 
 ## Legal & Payroll Verification
 
