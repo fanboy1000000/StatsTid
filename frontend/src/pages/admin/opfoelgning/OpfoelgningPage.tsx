@@ -27,7 +27,7 @@
 // count source and the list content.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ProcessTile } from '../../../components/ui'
+import { ProcessTile } from './ProcessTile'
 import { useHrBackdateWorklist, type BackdateWorklistRow } from '../../../hooks/useHrBackdateWorklist'
 import { useHrFollowUp, type HrPastDeadlineResponse, type HrLeaverFinalMonthResponse } from '../../../hooks/useHrFollowUp'
 import type { ApiResult } from '../../../lib/api'

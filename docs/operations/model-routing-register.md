@@ -1,6 +1,6 @@
 # Model-routing register — is the delegation framework holding?
 
-<!-- anchor-sprint: 139 -->
+<!-- anchor-sprint: 140 -->
 
 **Purpose.** Since 2026-09-07 planning and review run on the most capable model and implementation on
 cheaper ones (`docs/WORKFLOW.md`, section "Model Routing"). This register is the thin monitor the owner

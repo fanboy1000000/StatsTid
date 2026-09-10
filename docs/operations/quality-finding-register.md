@@ -1,4 +1,4 @@
-<!-- anchor-sprint: 139 -->
+<!-- anchor-sprint: 140 -->
 # QUAL — Code-Quality Finding Register
 
 **Status**: LIVE — **S131 sweep COMPLETE (TASK-C/D/E 2026-08-19)**; now the durable cross-session quality

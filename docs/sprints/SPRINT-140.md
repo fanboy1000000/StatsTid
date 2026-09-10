@@ -1021,6 +1021,38 @@ check and before the 409 and writes nothing. It also re-derived the totals from 
 a `PAT-030` headline that carried the partition claim the sprint had already retracted — both fixed, because a KB pattern is
 what the next implementer copies; and a date typo plus a stale Test Verified line.
 
+## Post-close — the first CI run (`34366179123`, sha `4cef65b`)
+
+**This run is the sprint's real verification**, and it is worth stating why plainly: Docker does not run on this machine, so
+**all 1757 Docker-gated facts — including every one of the four probe legs and all 32 new HR pins this sprint wrote — execute
+here for the first time.** Every red condition in them was *reasoned from source*, never observed. Both review lenses were told
+to treat that as the sprint's primary evidentiary weakness, and the internal lens explicitly predicted this run would go red on
+the two organisation-scope pins, which is why those were fixed before the push.
+
+**Status at first report:** `Secret scan` ✅ · `Smoke tests` ✅ · `Cyclomatic complexity` ✅ · `frontend-build` ✅ ·
+**`Documentation consistency` ❌** · **`E2E tests (Playwright)` ❌** · `build-and-test` still running (the job carrying every
+Docker-gated fact). Note the CI design decision this exercises: `smoke-tests` deliberately has **no** `needs:` dependency on
+`build-and-test` (S63 post-close — "one red must not blind another"), which is why a green smoke signal is available while the
+main job is still in flight.
+
+**The documentation gate — diagnosed and fixed locally.** Five governance documents that this sprint *substantively maintained*
+still declared `<!-- anchor-sprint: 139 -->`: the HR follow-up register, the model-routing register, the quality register,
+`QUALITY.md` and `docs/sprints/INDEX.md`. The freshness check exists to catch a document drifting out of date; mine were current
+in **content** and stale in their own **metadata**, which is exactly the signal it watches. Bumped to 140. **This is a close-step
+I missed, not a gate misfiring** — and it is the kind of thing that is invisible locally because `check_docs.py` is Python and
+Python is absent from this machine (a standing environment gap: the openapi and docs gates run **CI-only** from here, recorded in
+ROADMAP § Tooling). The other three checks that gate covers (db-schema sync, KB INDEX completeness, sprint-log inventory) should
+all hold: no schema changed, PAT-029/030/031 were added to the INDEX with their files, and the S140 log and INDEX row exist.
+
+**The E2E failure — not yet diagnosed, and deliberately not guessed at.** Playwright drives the real application through a
+browser against the full compose stack. A new route, a new sidebar entry and ten tiles issuing live calls are all plausible
+causes, and so is something not yet considered. **Logs are unreadable until the run completes**, so the cause is recorded as
+unknown rather than assumed. It is also the one failure this sprint could not have caught locally by any means available: no
+Docker means no stack, and no stack means no browser test.
+
+**Standing constraint acknowledged in the header's `**Test Verified**` line as CI-pending**, which is the phrasing the
+consecutive-CI-pending close gate is line-anchored to read.
+
 ## Legal & Payroll Verification
 
 | Check | Status | Notes |

@@ -1,6 +1,6 @@
 # HR follow-up process register — every hand-off the system leaves for a human
 
-<!-- anchor-sprint: 139 -->
+<!-- anchor-sprint: 140 -->
 
 **Status:** DRAFT rev 3.1 (S139 TASK-13904) — **cycle 3: both lenses APPROVED** (Codex APPROVED; Reviewer APPROVED with one phrasing NOTE, applied). Consolidated from three read-only sweeps; **two dual-lens cycles
 absorbed** (cycle 1: Codex BLOCKED 2B/4W/2N, Reviewer APPROVED-WITH-WARNINGS 0B/5W/5N; cycle 2: Codex BLOCKED on

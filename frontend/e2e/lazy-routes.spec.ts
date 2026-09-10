@@ -39,6 +39,15 @@ const ROUTES: Array<{ path: string; page: string }> = [
   { path: '/godkend/oversigt', page: 'TeamOversigt' },
   { path: '/godkend/vikariering', page: 'DelegationPage' },
   { path: '/admin/organisation-medarbejdere', page: 'OrganisationOgMedarbejdere' },
+  // S140 — the two pages this sprint added. The coverage guard below caught both as uncovered on
+  // the close CI run, which is exactly what it was written for after the S125 gap; the sprint plan
+  // had not listed E2E coverage as a deliverable for a new page, and that omission is now recorded.
+  // `/admin/opfoelgning` is the HR follow-up landing page (ten tiles, each fetching its own read);
+  // its `:tile` child route renders the same page component, so one entry covers the lazy import.
+  { path: '/admin/opfoelgning', page: 'OpfoelgningPage' },
+  // Routed for the first time in S140 (QUAL-162) — finished and unit-tested since S116, reachable
+  // by nobody until now, so this is also its first browser exercise.
+  { path: '/godkend/overtid', page: 'OvertimePreApprovalManagement' },
   { path: '/admin/ledelseslinjer', page: 'RoleManagement' },
   { path: '/admin/auditlog', page: 'AuditLogView' },
   { path: '/admin/projekter', page: 'ProjectManagement' },

@@ -22,7 +22,7 @@
 // so the window-closed state REPLACES the count row with prose ("Åbner 1.
 // november …") rather than rendering a misleading "0".
 import { type ReactNode } from 'react'
-import { Card } from './Card'
+import { Card } from '../../../components/ui'
 import styles from './ProcessTile.module.css'
 
 export interface ProcessTileProps {
