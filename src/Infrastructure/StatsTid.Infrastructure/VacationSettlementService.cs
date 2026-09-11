@@ -818,22 +818,77 @@ public sealed class VacationSettlementService
         // irrelevant to SPECIAL_HOLIDAY's geometry (fixed by law) — the resolver ignores it for the type.
         var period = EntitlementPeriodResolver.ResolveForYear(entitlementType, resetMonth: 1, entitlementYear);
 
-        // The dated SPECIAL_HOLIDAY config in force at the accrual start (the strictly-dated agreement +
-        // the OK version anchored at the accrual start), fail-closed. The quota basis comes from THIS
-        // config; the godtgørelse is a day-count, not a value, so no §24 wage-mapping key is needed here
-        // (the SLS_TBD_* line is 8003's concern — this method emits the event only).
+        // ══ S141 / TASK-14101 — THE SAME ANCHOR AND THE SAME FAIL-CLOSED POSTURE AS VACATION ══
+        // (owner ruling OQ-2 (a), 2026-09-11 — the ruling covers særlige feriedage explicitly, not as
+        // a footnote.)
+        //
+        // THE DEFECT, and why it was harder to see here than on the VACATION path. The shape was
+        // identical: agreement, OK version and position were all read AS-OF the accrual start —
+        // 1 January of the accrual year — which for a January-to-August hire is a date before they
+        // were employed. The difference was only in HOW IT FAILED. VACATION threw, loudly, so the
+        // defect announced itself. This path DEGRADED SILENTLY: `?? user.AgreementCode` quietly
+        // substituted TODAY's live agreement, and a three-deep config fallback chain quietly
+        // substituted TODAY's live config. A mid-year hire's first accrual year therefore settled
+        // under whatever agreement the employee happens to be on now — with nothing in the logs,
+        // nothing in the audit trail, and a plausible-looking settlement row.
+        //
+        // WHY THAT SILENT SUBSTITUTION IS NOT COSMETIC — and why the comment that used to stand here
+        // was FALSE IN EFFECT. It read: "the godtgørelse is a day-count, not a value, so no §24
+        // wage-mapping key is needed here". The §15 stk.2/§17 export emitter contradicts it
+        // flatly: it validates `snapshot.AgreementCode`, `snapshot.OkVersion` and
+        // `snapshot.SettlementBoundaryDate` fail-closed and then resolves the godtgørelse lønart
+        // from exactly those three plus `snapshot.Position`
+        // (Integrations.Payroll/Services/SettlementExportEmitter.cs:716-737). So this snapshot IS a
+        // wage-mapping key carrier, and a silently-substituted agreement code on it keys a REAL
+        // payout line under the wrong agreement — the same ADR-033 D7 breach the VACATION path was
+        // made fail-closed to prevent. (The harm is payroll-key CORRECTNESS, not replay determinism:
+        // the snapshot is frozen, so a replay reproduces the wrong key faithfully.)
+        //
+        // THE FIX: anchor at max(accrual start, hire) exactly as VACATION does, and make the key
+        // FAIL-CLOSED — the `?? user.AgreementCode` fallback is gone, and so is the live-config
+        // chain. A SPECIAL_HOLIDAY year whose dated history cannot be pinned now fails loudly on
+        // every poll (per-tuple isolation; it is retried) until an operator repairs the history,
+        // rather than staging a wrong-keyed godtgørelse line.
         var accrualStart = period.AccrualStart;
-        var okVersion = OkVersionResolver.ResolveVersion(accrualStart);
-        var datedAgreement = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, accrualStart, ct)
-            ?? user.AgreementCode;
-        var datedConfig =
-            await _configRepo.GetByTypeAtAsync(entitlementType, datedAgreement, okVersion, accrualStart, ct)
-            ?? await _configRepo.GetCurrentOpenAsync(entitlementType, datedAgreement, okVersion, ct)
-            ?? await _configRepo.GetCurrentOpenAsync(entitlementType, user.AgreementCode, user.OkVersion, ct)
+        var anchorDate = AnchorAtOrAfterHire(accrualStart, user.EmploymentStartDate);
+
+        // FAIL-CLOSED, same ruling and same reasoning as the VACATION twin (Orchestrator ruling,
+        // S141 wave 1): a hire after the END of the accrual year puts the anchor outside the year
+        // being settled, every dated read then succeeds against a period the employee was not
+        // employed for, and the result is an audited zero-godtgørelse row for a year they did not
+        // work here. Restoring the throw keeps OQ-2 (a) inside the case it was ruled about — the
+        // PARTIAL year — rather than extending it to a year with no employment in it at all.
+        //
+        // The comparand is the ACCRUAL end (31 Dec Y), not `period.Boundary` (30 Apr Y+2): the
+        // boundary is when the godtgørelse settles, whereas the accrual window is the period the
+        // employee must have overlapped for anything to have accrued at all.
+        if (anchorDate > period.AccrualEnd)
+        {
+            throw new InvalidOperationException(
+                $"SPECIAL_HOLIDAY settlement: employee {employeeId} was not employed during accrual year " +
+                $"{entitlementYear} — the accrual window runs {accrualStart:yyyy-MM-dd}..{period.AccrualEnd:yyyy-MM-dd} " +
+                $"and the employment start date is {user.EmploymentStartDate:yyyy-MM-dd}, which is after it " +
+                $"ends. The settlement anchor (the later of the two, {anchorDate:yyyy-MM-dd}) would fall " +
+                "outside the year being settled, so the captured agreement/OK-version/config/position key " +
+                "would describe a period this settlement does not cover. Capture fails closed rather than " +
+                "recording an audited zero-godtgørelse settlement for a year the employee did not work.");
+        }
+
+        var okVersion = OkVersionResolver.ResolveVersion(anchorDate);
+        var datedAgreement = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, anchorDate, ct)
             ?? throw new InvalidOperationException(
-                $"SPECIAL_HOLIDAY settlement: no entitlement config resolvable for {entitlementType} under " +
-                $"agreement '{datedAgreement}' (ok_version {okVersion}) at accrual start {accrualStart:yyyy-MM-dd} " +
-                $"for employee {employeeId}; settlement capture fails closed (§15 godtgørelse needs the quota basis).");
+                $"SPECIAL_HOLIDAY settlement: no dated user_agreement_codes row covers {anchorDate:yyyy-MM-dd} " +
+                $"(the settlement anchor — the later of the accrual start and the employment start date) " +
+                $"for employee {employeeId}; cannot capture the §15 stk.2/§17 wage-type-mapping agreement_code " +
+                "(ADR-033 D7) — settlement capture fails closed rather than keying the godtgørelse payout off " +
+                "the employee's current live agreement.");
+        var datedConfig =
+            await _configRepo.GetByTypeAtAsync(entitlementType, datedAgreement, okVersion, anchorDate, ct)
+            ?? throw new InvalidOperationException(
+                $"SPECIAL_HOLIDAY settlement: no dated entitlement_configs row covers {anchorDate:yyyy-MM-dd} " +
+                $"(the settlement anchor) for {entitlementType} under agreement '{datedAgreement}' " +
+                $"(ok_version {okVersion}) for employee {employeeId}; settlement capture fails closed rather " +
+                "than valuing the §15 godtgørelse against the employee's current live entitlement config.");
 
         // Earned at the ACCRUAL END (31 Dec Y) — the resolver's AccrualEnd, NOT the later 30-Apr-(Y+2)
         // settlement boundary (the S80 / TASK-8001 BLOCKER-1 distinction: AccrualMath clamps elapsed
@@ -883,7 +938,22 @@ public sealed class VacationSettlementService
             ResetMonth = datedConfig.ResetMonth,
             OkVersion = okVersion,
             AgreementCode = datedAgreement,
-            Position = (await _profileResolver.GetByEmployeeIdAtAsync(employeeId, accrualStart, ct))?.Position,
+            // Dated position at the S141 anchor — the fourth component of the §15 stk.2/§17 lønart
+            // key the emitter resolves off this snapshot, read at the SAME instant as AgreementCode
+            // and OkVersion above so the key is internally consistent.
+            //
+            // ★ KNOWN AND REGISTERED ASYMMETRY — DO NOT "TIDY" THIS INTO CONSISTENCY. This read is
+            // deliberately NULL-TOLERANT while its three sibling key components immediately above are
+            // now fail-closed. That is not an oversight and not an incomplete edit: it was found
+            // during S141 / TASK-14101, reported, and the Orchestrator ruled it a REGISTERED QUALITY
+            // FINDING rather than a fix, because widening the fail-closed change to `position` goes
+            // beyond what owner ruling OQ-2 (a) actually decided. Closing it needs its own ruling.
+            //
+            // What the hole is, so the finding is legible here and not only in the register: the
+            // emitter coalesces a null position to "" and the seeded wage_type_mappings carry a ''
+            // default row, so an absent profile RESOLVES a mapping instead of failing — the one
+            // remaining silent-degradation path in this capture.
+            Position = (await _profileResolver.GetByEmployeeIdAtAsync(employeeId, anchorDate, ct))?.Position,
             // The godtgørelse settlement boundary — 30 Apr (Y+2), the §12 stk.2 afholdelsesperiode end.
             SettlementBoundaryDate = period.Boundary,
             TransferAgreementDays = 0m,                    // no §21 for SPECIAL_HOLIDAY.
@@ -1356,16 +1426,37 @@ public sealed class VacationSettlementService
         // The VALUATION config-resolution above is unaffected (it only runs when the dated read is
         // non-null, so the fallback was already unreachable on that path).
         //
-        // DECLARED `today` substitution: this service has no TimeProvider (the D9 reader takes one;
-        // the not-yet-built TASK-6805 BackgroundService does not pass a settlement clock to this
-        // pass). `todayAgreementCode` is a FALLBACK-branch / liveConfig operand ONLY — the dated
-        // PRIMARY path (the legal core that fixes the closed year's quota/cap) is reproduced exactly
-        // via GetByUserIdAt(closedFerieaarStart) + GetByTypeAt(…closedFerieaarStart). We substitute
-        // todayAgreementCode := GetCurrentAsync (the live `effective_to IS NULL` user_agreement_codes
-        // code), which EQUALS D9's GetByUserIdAt(today) for any non-future-dated live agreement —
-        // always true when settling a CLOSED past year (no future-dated agreement can be live-as-of a
-        // boundary already in the past). DECLARED in the report.
-        var todayAgreementCode = await _agreementCodeRepo.GetCurrentAsync(employeeId, ct)
+        // S141 / TASK-14101 (B1) — `todayAgreementCode` is now a genuinely DATED read at today,
+        // exactly as the D9 reader does it. What this is in plain terms: "which collective agreement
+        // governs this employee TODAY". It is a FALLBACK-branch / liveConfig operand only — the dated
+        // PRIMARY path (the legal core that fixes the closed year's quota/cap) is the anchored read
+        // further down — but it must still answer the question it claims to answer.
+        //
+        // Why the old code changed. It called GetCurrentAsync — "the row with effective_to IS NULL",
+        // i.e. the OPEN row — and justified that with two claims, BOTH of which are now dead:
+        //   (1) "this service has no TimeProvider". It does, and it did when that comment was
+        //       written: the field, the constructor parameter and the CopenhagenToday() helper are
+        //       all in this class.
+        //   (2) "the open row EQUALS GetByUserIdAt(today) for any non-future-dated live agreement".
+        //       S141 exists precisely to make future-dated agreement rows possible (ADR-040
+        //       Increment 4 lets HR schedule a change ahead). The moment one exists, the OPEN row is
+        //       the row starting in the FUTURE, which covers no day today — so the open row and the
+        //       row covering today stop being the same row, and the old read would have keyed the
+        //       liveConfig probe off an agreement that has not taken effect yet.
+        //
+        // WHICH CLOCK, and why it is the UTC day rather than this service's CopenhagenToday(). This
+        // read is EXACT-PARITY plumbing for the S66 D9 year-overview reader, and that reader derives
+        // its `today` as DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime)
+        // (BalanceEndpoints.cs:735) before calling GetByUserIdAtAsync(employeeId, today). The whole
+        // contract of this block is "reproduce D9's chain byte-for-byte", so it must use D9's day.
+        // Using the Copenhagen business date instead would diverge from D9 for ~2 hours each night
+        // — the window where Copenhagen has ticked over but UTC has not — and the divergence would
+        // be invisible until an agreement row happened to start on exactly that date. Note this is
+        // deliberately NOT the same clock as the leaver/no-partition decision below, which uses
+        // CopenhagenToday() because it is a Danish EMPLOYMENT-law boundary; this one is a
+        // reader-parity operand, not a legal boundary.
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var todayAgreementCode = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, today, ct)
             ?? user.AgreementCode;
 
         // reset_month bootstrap (Codex cycle-2 BLOCKER fix) — discover ResetMonth so the boundary
@@ -1404,12 +1495,30 @@ public sealed class VacationSettlementService
         // can intersect calendar year Y under the two seeded reset geometries (1 and 9). This service is
         // handed the exact entitlementYear E; the ONLY ferieår-start that can BE E (and whose agreement
         // the dated PRIMARY read below uses) is Jan-1 E (reset-1 geometry) or Sep-1 E (reset-9 geometry)
-        // — a strict SUBSET of D9's anchors for the year being settled (Jan-1 E is D9's first anchor when
-        // viewing Y=E; Sep-1 E is D9's third when viewing Y=E and its second when viewing Y=E+1). So this
-        // probe can never resolve a config D9 wouldn't. PRECEDENCE matches D9: calendar geometry (Jan-1)
-        // first, then the Sep geometry (Sep-1), first hit wins (D9's documented best-effort tie-break).
-        // ResetMonth is IMMUTABLE per (entitlement_type, ok_version) natural key (ADR-021 Q1), so its
-        // VALUE is identical whichever agreement's config supplies it.
+        // — a SUBSET of D9's anchors for the year being settled (Jan-1 E is D9's first anchor when
+        // viewing Y=E; Sep-1 E is D9's third when viewing Y=E and its second when viewing Y=E+1).
+        // PRECEDENCE matches D9: calendar geometry (Jan-1) first, then the Sep geometry (Sep-1), first
+        // hit wins (D9's documented best-effort tie-break). ResetMonth is IMMUTABLE per
+        // (entitlement_type, ok_version) natural key (ADR-021 Q1), so its VALUE is identical whichever
+        // agreement's config supplies it.
+        //
+        // S141 / TASK-14101 (A1, owner ruling OQ-2 (a)) — EACH PROBE IS MOVED TO max(anchor, hire),
+        // INDIVIDUALLY, and NOT to the shared `anchorDate` computed further down. In plain terms: for
+        // someone hired part-way through the holiday year, "1 September" is a date before they worked
+        // here, so asking which agreement governed them then has no answer. We ask on their first day
+        // instead. The reason the SHARED anchor cannot be used here is ordering, not principle: these
+        // probes run BEFORE `resetMonth` is known and therefore before `closedFerieaarStart` exists —
+        // they are INPUTS to discovering the period, not consumers of it.
+        //
+        // DECLARED DIVERGENCE from the "strict subset of D9's anchors" claim above, which this change
+        // makes no longer literally true. A hire date is not one of D9's anchors, so for a mid-ferieår
+        // hire this probe can now resolve a config under an agreement D9's reader would not have
+        // probed (D9 would have read at the year start, missed, and fallen back to user.AgreementCode).
+        // The divergence is deliberate and one-directional: it only ever makes MORE closed years
+        // settleable, never fewer, and it never changes a settled QUANTITY — liveConfig is used here
+        // solely for ResetMonth discovery (an immutable per-(type, ok_version) value) and as the
+        // ResolveDatedConfigAsync fallback terminal, which the anchored PRIMARY dated read below now
+        // reaches far less often precisely because it, too, asks at the hire.
         if (liveConfig is null)
         {
             var probeAnchors = new[]
@@ -1419,8 +1528,12 @@ public sealed class VacationSettlementService
             };
             foreach (var anchor in probeAnchors)
             {
-                // ResolveAgreementAtAsync parity: GetByUserIdAtAsync(anchor) ?? user.AgreementCode.
-                var anchorAgreement = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, anchor, ct)
+                // OQ-2 (a), per-probe: ask on the employee's first accruing day at or after this
+                // candidate year-start. For a pre-hire anchor both probes can collapse onto the same
+                // hire date; the second is then a harmless repeat that resolves identically.
+                var probeAnchor = AnchorAtOrAfterHire(anchor, user.EmploymentStartDate);
+                // ResolveAgreementAtAsync parity: GetByUserIdAtAsync(probeAnchor) ?? user.AgreementCode.
+                var anchorAgreement = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, probeAnchor, ct)
                     ?? user.AgreementCode;
                 // D9's `continue`: skip today's code — already known configless (step (a) missed on it).
                 if (string.Equals(anchorAgreement, todayAgreementCode, StringComparison.Ordinal))
@@ -1435,19 +1548,21 @@ public sealed class VacationSettlementService
             }
         }
 
-        // (c) No config resolvable for the type under ANY agreement at ANY anchor (today's, OR the
-        // year-start agreements at Jan-1/Sep-1 of entitlementYear) — a genuinely unconfigured type;
-        // a real error, throw. This is EXACTLY D9's terminal: it renders an empty row here (liveConfig
-        // still null after the anchor probe). The service settles a real disposition, so it fails loud
-        // rather than rendering empty — but the THROW CONDITION matches D9's empty-row condition
-        // precisely (so the service settles every closed year D9 renders non-empty, and only this
-        // genuinely-unconfigured case throws).
+        // (c) No config resolvable for the type under ANY agreement at ANY probe anchor (today's, OR
+        // the agreements in force at Jan-1/Sep-1 of entitlementYear — each moved forward to the hire
+        // date when the employee was not yet employed on it, S141 OQ-2 (a)) — a genuinely unconfigured
+        // type; a real error, throw. This is EXACTLY D9's terminal: it renders an empty row here
+        // (liveConfig still null after the anchor probe). The service settles a real disposition, so it
+        // fails loud rather than rendering empty — and the throw condition now covers a SUPERSET of
+        // D9's empty-row condition (the hire-anchored probes can resolve where D9's year-start probes
+        // would have missed), so the service still settles every closed year D9 renders non-empty.
         if (liveConfig is null)
         {
             throw new InvalidOperationException(
                 $"Vacation settlement: no entitlement config resolvable for {entitlementType} under " +
-                $"today's agreement '{todayAgreementCode}' or the year-start agreements at Jan-1/Sep-1 " +
-                $"{entitlementYear} (employee {employeeId}); the type appears unconfigured " +
+                $"today's agreement '{todayAgreementCode}' or the agreements in force at the Jan-1/Sep-1 " +
+                $"{entitlementYear} probe anchors (each taken at the later of that date and the " +
+                $"employment start date) for employee {employeeId}; the type appears unconfigured " +
                 $"(ok_version {user.OkVersion}) — D9 would render an empty row here.");
         }
         var resetMonth = liveConfig.ResetMonth;
@@ -1473,29 +1588,117 @@ public sealed class VacationSettlementService
         // S70 / TASK-7004 (SPRINT-70 R5) — the VALUATION boundary. YEAR_END values at the ferieår
         // end (unchanged); a TERMINATION values at the employment END DATE (whole-month §26 basis,
         // owner D-B): earned crystallizes asOf the end date, and the recorded-absence window is
-        // capped at it. The ANCHOR dates (agreement/position/quota/okVersion below) stay the
-        // strictly-dated ferieår START in BOTH cases — only the valuation cutoff moves.
+        // capped at it. The ANCHOR date (agreement/position/quota/okVersion below) is the same in
+        // BOTH cases — only the valuation cutoff moves. S141 correction: that shared anchor is no
+        // longer the bare ferieår start; see `anchorDate` immediately below.
         var valuationBoundary = terminationCutoff ?? boundaryDate;
 
-        var okVersion = OkVersionResolver.ResolveVersion(closedFerieaarStart);
+        // ══ S141 / TASK-14101 — THE SETTLEMENT ANCHOR (owner ruling OQ-2 (a), 2026-09-11) ══
+        //
+        // THE PROBLEM, plainly. To settle a holiday year the system has to record which collective
+        // agreement, which agreement VERSION (OK24 / OK26) and which position governed the employee
+        // — that four-part key is what payroll later maps a payout line onto. It used to ask those
+        // questions about the FIRST DAY OF THE HOLIDAY YEAR. For someone hired in May, 1 September
+        // of the previous year is a date before they were employed: no dated agreement row and no
+        // dated profile row covers it, both reads return nothing, and the fail-closed capture THREW.
+        // The consequence for a person using the product was that a mid-year hire's first holiday
+        // year could never be settled at all — the compliance tile said "cannot compute" forever.
+        //
+        // THE RULING. Anchor every one of those reads at the LATER of the holiday-year start and the
+        // employment start date, so the whole capture answers one coherent question: WHAT WAS TRUE
+        // ON THIS PERSON'S FIRST ACCRUING DAY OF THIS YEAR.
+        //
+        // WHY THE OK VERSION MOVES TOO, which is the part that is easy to get wrong. It is tempting
+        // to date the data at the hire but leave the version at the year start, because the version
+        // feels like a property of the year. It is not: the version is one of the three keys of the
+        // dated entitlement-config read below, `(agreement, okVersion, asOf)`. Anchoring the data at
+        // the hire while leaving the version at the year start asks the database for a
+        // (version, date) pair that NEVER COEXISTED — e.g. (OK24, May 2026) when OK24 ended in March
+        // 2026. Today that still resolves, but only by luck: the seeded config rows are open-ended,
+        // so nothing closes OK24. Give the configs a realistic history and the mismatched pair MISSES
+        // and re-introduces exactly the throw this change exists to remove.
+        //
+        // WHAT DOES *NOT* MOVE, and must not:
+        //   • `boundaryDate` / `valuationBoundary` above — the STORED SettlementBoundaryDate. That is
+        //     a boundary of the YEAR (or of the employment, on a TERMINATION), not of this person's
+        //     participation in it, and moving it would silently restate settled quantities.
+        //   • `AccrualMath.EarnedToDate` below still receives `closedFerieaarStart` plus the hire
+        //     date as separate arguments and maxes them internally, so the earned figure is
+        //     unaffected by this change — deliberately, so the anchor moves the KEY without moving
+        //     the QUANTITY. (Where the quantity does change it is because the config the version
+        //     resolves to changed, which is the settled-quantity effect the ruling knowingly accepts.)
+        //   • `user.OkVersion` at the liveConfig / probe / fallback sites — a THIRD, separate
+        //     OK-version input that is the D9-parity fallback terminal, not an anchor.
+        //
+        // The recorded-absence window below also keeps the bare ferieår start: it is a range over
+        // days that were BOOKED, and an employee has no bookings before they were hired, so clamping
+        // it would change nothing while making the window mean something different from the year.
+        var anchorDate = AnchorAtOrAfterHire(closedFerieaarStart, user.EmploymentStartDate);
 
-        // The STRICTLY-DATED historical agreement in force at the closed ferieår start. This serves TWO
-        // distinct roles with DIFFERENT null semantics:
+        // ── FAIL-CLOSED: the anchor must land INSIDE the year being settled (Orchestrator ruling,
+        // S141 wave 1, on the TASK-14101 report's finding 1) ──
+        //
+        // The case: the hire date falls after the END of the ferieår being settled, so max() lands
+        // the anchor outside that year entirely. Every dated read then SUCCEEDS — against a period
+        // the employee was not employed for — and `Earned` comes out 0 because AccrualMath finds no
+        // accrual months. The output is a recorded, AUDITED settlement row for a year the person did
+        // not work here, carrying a payout event of zero. That is not a harmless zero: junk data that
+        // LOOKS deliberate is worse than a loud failure, and both domain correctness and auditability
+        // are invariants that outrank the convenience of never throwing.
+        //
+        // Why this is NOT a departure from owner ruling OQ-2 (a). The ruling chose the anchor to fix
+        // the employee who WAS employed for part of the year and whose year-start reads therefore
+        // missed. It never contemplated a year the employee was not employed for at ALL. The prior
+        // behaviour in that case was a throw, and the throw was correct; restoring it keeps the
+        // ruling inside the case it was made about. Note this is a RESTORED throw, not a clamp — a
+        // clamp would invent a settlement the ruling never authorised.
+        //
+        // `boundaryDate` (not `valuationBoundary`) is the right comparand: it is the ferieår END in
+        // both reset geometries, whereas `valuationBoundary` is pulled EARLIER by a TERMINATION
+        // cutoff and would then reject a legitimate leaver whose hire preceded their leave date.
+        // Reachability, checked rather than assumed: neither poller branch can generate this tuple —
+        // after the QUAL-168 fix the VACATION lower bound is the ferieår OF the hire, and the
+        // SPECIAL_HOLIDAY lower bound is the hire's calendar year, which is its accrual year. This
+        // guard therefore covers the direct-call shapes (supersession, reversal, test drives).
+        if (anchorDate > boundaryDate)
+        {
+            throw new InvalidOperationException(
+                $"Vacation settlement: employee {employeeId} was not employed during entitlement year " +
+                $"{entitlementYear} — the ferieår runs {closedFerieaarStart:yyyy-MM-dd}..{boundaryDate:yyyy-MM-dd} " +
+                $"and the employment start date is {user.EmploymentStartDate:yyyy-MM-dd}, which is after it " +
+                $"ends. The settlement anchor (the later of the two, {anchorDate:yyyy-MM-dd}) would fall " +
+                "outside the year being settled, so the captured agreement/OK-version/config/position key " +
+                "would describe a period this settlement does not cover. Capture fails closed rather than " +
+                "recording an audited zero-earned settlement for a year the employee did not work.");
+        }
+
+        var okVersion = OkVersionResolver.ResolveVersion(anchorDate);
+
+        // The STRICTLY-DATED historical agreement in force at the ANCHOR date (S141: the later of the
+        // closed ferieår start and the hire — see `anchorDate` above). This serves TWO distinct roles
+        // with DIFFERENT null semantics:
         //
         //  (a) the snapshot's §24 wage-mapping KEY (ADR-033 D7) — must be the strict dated value, NEVER a
         //      live fallback. A WARNING (Step-5a P1/P4) — the prior code put `?? user.AgreementCode` into
         //      the snapshot, so a missing dated row silently keyed the §24 payout off the employee's
-        //      CURRENT live code, breaking replay determinism and risking a wrong-agreement lønart. Fail
-        //      CLOSED here (symmetric with the Position fail-closed throw below): a settlement that cannot
-        //      pin the dated agreement at the ferieår start must NOT stage a live/empty-keyed payout.
+        //      CURRENT live code. The harm, stated correctly (S141 correction — the earlier wording here
+        //      said "breaking replay determinism", and the refinement inherited that error from this
+        //      comment): the snapshot is FROZEN either way, so a replay faithfully reproduces whatever
+        //      key was captured. Determinism is not what breaks. What breaks is PAYROLL-KEY CORRECTNESS
+        //      — a wrong-agreement lønart on a real payout line — and a deterministically wrong payout
+        //      is worse than a flaky one, so the old wording overstated the mechanism while
+        //      understating the harm. Fail CLOSED here (symmetric with the Position fail-closed throw
+        //      below): a settlement that cannot pin the dated agreement must NOT stage a live/empty-keyed
+        //      payout.
         //  (b) the D9-parity VALUATION's config-resolution agreement — which DELIBERATELY falls back to
         //      user.AgreementCode (the verbatim ResolveDatedConfigAsync chain). Computed below from the
         //      same strict value with the fallback re-applied, so the valuation path is byte-for-byte
         //      identical to today.
-        var datedAgreementForSnapshot = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, closedFerieaarStart, ct)
+        var datedAgreementForSnapshot = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, anchorDate, ct)
             ?? throw new InvalidOperationException(
-                $"Vacation settlement: no dated user_agreement_codes row covers {closedFerieaarStart:yyyy-MM-dd} " +
-                $"(ferieår start) for employee {employeeId}; cannot capture the §24 wage-type-mapping " +
+                $"Vacation settlement: no dated user_agreement_codes row covers {anchorDate:yyyy-MM-dd} " +
+                $"(the settlement anchor — the later of the ferieår start and the employment start date) " +
+                $"for employee {employeeId}; cannot capture the §24 wage-type-mapping " +
                 "agreement_code (ADR-033 D7) — settlement capture fails closed rather than keying the payout " +
                 "off the employee's current live agreement.");
 
@@ -1505,7 +1708,7 @@ public sealed class VacationSettlementService
         // fallback was already an unreachable branch — `agreementCode` takes the same value it took before.
         var agreementCode = datedAgreementForSnapshot;
         var dated = await _configRepo.GetByTypeAtAsync(
-            entitlementType, agreementCode, okVersion, closedFerieaarStart, ct);
+            entitlementType, agreementCode, okVersion, anchorDate, ct);
         EntitlementConfig datedConfig;
         if (dated is not null)
         {
@@ -1524,8 +1727,9 @@ public sealed class VacationSettlementService
         else if (terminationCutoff is not null || deferredDisposition)
         {
             throw new InvalidOperationException(
-                $"Vacation settlement: no dated entitlement_configs row covers {closedFerieaarStart:yyyy-MM-dd} " +
-                $"(ferieår start) for {entitlementType} under agreement '{agreementCode}' (ok_version {okVersion}) " +
+                $"Vacation settlement: no dated entitlement_configs row covers {anchorDate:yyyy-MM-dd} " +
+                $"(the settlement anchor — the later of the ferieår start and the employment start date) " +
+                $"for {entitlementType} under agreement '{agreementCode}' (ok_version {okVersion}) " +
                 $"for employee {employeeId}; cannot resolve the dated quota for a TERMINATION/leaver-deferred " +
                 "settlement capture — settlement capture fails closed rather than valuing against the " +
                 "employee's current live entitlement config.");
@@ -1589,18 +1793,20 @@ public sealed class VacationSettlementService
         // §24 wage-type-mapping natural key (ADR-033 D7 / ADR-020 (time_type, ok_version, agreement_code,
         // position)) captured into the immutable snapshot so the S69 §24 Payroll emitter resolves the
         // lønart off THIS snapshot (replay-deterministic, no live lookup). The `position` component is
-        // read from the dated employee_profiles row (ADR-023) AS-OF closedFerieaarStart — the SAME
-        // instant as agreementCode (line ~436) and okVersion (line ~433), so the four key components are
-        // snapshot-internally consistent.
+        // read from the dated employee_profiles row (ADR-023) AS-OF the S141 `anchorDate` — the SAME
+        // instant as agreementCode and okVersion above, so the four key components are
+        // snapshot-internally consistent. That internal consistency is the reason the OK version had to
+        // move with the data (OQ-2 (a)): a key assembled from two different instants is not a key.
         //
-        // FAIL-CLOSED (B3/B5): if no dated profile covers closedFerieaarStart, THROW — capture must fail
+        // FAIL-CLOSED (B3/B5): if no dated profile covers the anchor, THROW — capture must fail
         // loudly rather than silently fall back to live/empty profile data and stage a wrong-keyed payout.
         // (A resolved profile whose Position is itself null/empty IS fine — pass it through; the emitter
         // canonicalizes null→"" for the wage_type_mappings.position '' default.)
-        var settlementProfile = await _profileResolver.GetByEmployeeIdAtAsync(employeeId, closedFerieaarStart, ct)
+        var settlementProfile = await _profileResolver.GetByEmployeeIdAtAsync(employeeId, anchorDate, ct)
             ?? throw new InvalidOperationException(
-                $"Vacation settlement: no dated employee_profiles row covers {closedFerieaarStart:yyyy-MM-dd} " +
-                $"(ferieår start) for employee {employeeId}; cannot capture the §24 wage-type-mapping " +
+                $"Vacation settlement: no dated employee_profiles row covers {anchorDate:yyyy-MM-dd} " +
+                $"(the settlement anchor — the later of the ferieår start and the employment start date) " +
+                $"for employee {employeeId}; cannot capture the §24 wage-type-mapping " +
                 "position (ADR-033 D7) — settlement capture fails closed rather than using live/empty data.");
         var settlementPosition = settlementProfile.Position;
 
@@ -1617,8 +1823,8 @@ public sealed class VacationSettlementService
             CarryoverMax = datedConfig.CarryoverMax,
             ResetMonth = resetMonth,
             OkVersion = okVersion,
-            // §24 wage-type natural key (ADR-033 D7 / ADR-020) — all pinned at closedFerieaarStart.
-            AgreementCode = datedAgreementForSnapshot, // STRICTLY-dated ferieår-start agreement (fail-closed, no live fallback — Step-5a P1/P4)
+            // §24 wage-type natural key (ADR-033 D7 / ADR-020) — all pinned at the S141 `anchorDate`.
+            AgreementCode = datedAgreementForSnapshot, // STRICTLY-dated agreement at the anchor (fail-closed, no live fallback — Step-5a P1/P4)
             Position = settlementPosition,             // dated employee_profiles position (ADR-023)
             // The VALUATION boundary. YEAR_END: the FERIEÅR-END accrual boundary (Aug 31 for VACATION
             // reset_month 9; Dec 31 only when reset_month==1) — the inherited S68 valuation boundary,
@@ -1735,6 +1941,36 @@ public sealed class VacationSettlementService
     // AwayFromZero here would diverge `over_cap` from D9 `expiring` on a .xx5 midpoint. ToEven so
     // ForfeitDays == D9 expiring byte-for-byte (priority 2 / ADR-033 D3 quantity-determinism).
     private static decimal Round2(decimal value) => Math.Round(value, 2, MidpointRounding.ToEven);
+
+    // ------------------------------------------------------------------
+    // S141 / TASK-14101 — THE SETTLEMENT ANCHOR (owner ruling OQ-2 (a), 2026-09-11).
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The settlement anchor: the later of a period start and the employee's hire date — in plain
+    /// terms, <b>this employee's first accruing day of that period</b>.
+    ///
+    /// <para>
+    /// Every dated read that assembles a settlement's §24 / §15-stk.2 wage-mapping key (agreement
+    /// code, OK version, entitlement config, position) is taken at this instant, so the four key
+    /// components describe ONE coherent moment. Asking about the bare period start instead is what
+    /// used to break a mid-period hire: it is a date before the employment existed, so the dated
+    /// reads miss — the VACATION capture threw and the SPECIAL_HOLIDAY capture silently substituted
+    /// today's live values.
+    /// </para>
+    ///
+    /// <para>
+    /// A null <paramref name="employmentStart"/> means "no hire date recorded" and is treated as
+    /// full-period employment — the anchor is then the period start unchanged, which is the
+    /// pre-S141 behaviour and the same convention <c>AccrualMath.EarnedToDate</c> uses. PURE; the
+    /// clock is never read here.
+    /// </para>
+    /// </summary>
+    /// <param name="periodStart">The period start being anchored (ferieår start, or the
+    /// SPECIAL_HOLIDAY accrual start, or one of the D9 bootstrap probe anchors).</param>
+    /// <param name="employmentStart">The HR-managed hire date; null ⇒ unchanged period start.</param>
+    private static DateOnly AnchorAtOrAfterHire(DateOnly periodStart, DateOnly? employmentStart) =>
+        employmentStart is { } hire && hire > periodStart ? hire : periodStart;
 
     // ------------------------------------------------------------------
     // S70 / TASK-7004 — Europe/Copenhagen business-date helper (SPRINT-70 R4 leak-proofing pin (b)).
