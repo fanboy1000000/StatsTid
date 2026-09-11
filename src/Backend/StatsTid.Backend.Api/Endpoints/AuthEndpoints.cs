@@ -82,15 +82,38 @@ public static class AuthEndpoints
                 // should never depend on cache freshness). Adds 1 SELECT per login; login
                 // is rare relative to general traffic, so the pre-launch perf budget is
                 // unaffected per Step 0b cycle 1 Codex WARNING 2 absorption.
+                //
+                // S141 / TASK-14102 (refinement B1) — THE CALL IS UNCHANGED; WHAT IT MEANS IS NOT,
+                // and that is the point of recording it here. `GetCurrentAsync` used to select the
+                // row with no end date. Increment 4 lets HR schedule an agreement change ahead
+                // ("she moves to AC on 1 November"), and from the moment such a row exists the row
+                // with no end date is the one that has NOT started yet — so the retired version of
+                // this read would have minted a login token carrying a not-yet-effective agreement
+                // code for everyone who logged in during the weeks before the change. The
+                // repository's read is now explicitly "the row covering today", which is what this
+                // call site always meant; see UserAgreementCodeRepository.GetCurrentAsync.
+                //
+                // Not fixed here, and named so it is not mistaken for an oversight: a token stays
+                // valid for 480 minutes with no revocation, so one minted the evening before an
+                // effective date carries the old code for up to eight hours past midnight. That
+                // window is a property of future-dating EXISTING, not of this line, and the owner
+                // deferred the decision to the roadmap pending a trace of which code paths read the
+                // agreement code from the TOKEN rather than from the records.
                 var canonicalAgreementCode = await userAgreementCodeRepo.GetCurrentAsync(dbUser.UserId, ct);
                 if (canonicalAgreementCode is null)
                 {
                     // Defensive fallback. Post-backfill (TASK-3403) every user MUST have a
-                    // live row in user_agreement_codes; a missing row indicates an
+                    // row covering today in user_agreement_codes; a missing row indicates an
                     // inconsistency between the canonical store and the denormalized cache
                     // (or a user created outside the canonical-write path — bug). Fall back
                     // to the cache to keep login working and warn loudly so ops can
                     // reconcile.
+                    // S141 — this branch gains a SECOND way to be reached, and it is a real state
+                    // rather than a bug: an employee whose only agreement row starts in the future
+                    // has no code in force today (the "no row covers today" hole, refinement B8).
+                    // The behaviour is deliberately unchanged — fall back loudly rather than refuse
+                    // the login — but the log line now under-describes the cause, and the detector
+                    // that should surface such an employee to HR is a separate task's work.
                     // Values are CR/LF-sanitized (SEC-040 Step-5a P2) to keep this file's
                     // username/identifier log calls uniformly forge-safe alongside LogFailedLogin.
                     logger.LogWarning(

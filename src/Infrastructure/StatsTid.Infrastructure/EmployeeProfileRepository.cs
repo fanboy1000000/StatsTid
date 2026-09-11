@@ -69,11 +69,35 @@ namespace StatsTid.Infrastructure;
 /// <b>S138 / TASK-13801 — temporal editing (ADR-040 D8 as amended 2026-09-02).</b>
 /// <see cref="SupersedeAndCreateAsync"/> now records a change at any PAST-OR-TODAY date, routing
 /// via the pure <see cref="Temporal.TemporalWriteRouter"/> on a lock-held snapshot of the whole
-/// timeline (cases A / B' / C' / E / G / T), with ONE client concurrency token per employee (the
-/// open row's version, bumped on every timeline write), the S23-shape same-values no-op,
+/// timeline (cases A / B' / C' / E / G / T), with ONE client concurrency token per employee, the
+/// S23-shape same-values no-op,
 /// <c>employment_category</c> as an editable fourth field, and a <c>users.employment_category</c>
 /// cache refresh sourced from the row covering TODAY. The S31/S33 paragraphs above are kept as
 /// the history of how the shape got here.
+/// </para>
+///
+/// <para>
+/// <b>S141 / TASK-14102 — scheduling a change AHEAD (ADR-040 Increment 4), and the three things
+/// that had been quietly relying on it being impossible.</b>
+/// <list type="number">
+///   <item><description><b>Reads answer "today", not "the open row".</b> Every current-state read in
+///     this class now uses the end-exclusive as-of-today predicate. While future-dating was refused,
+///     "the row with no end date" and "the row describing today" were necessarily the same row;
+///     lifting the refusal separates them, and a read left on the old predicate would have started
+///     reporting a not-yet-effective value as current.</description></item>
+///   <item><description><b>The client concurrency token is <c>users.version</c></b>, not the open
+///     row's own <c>version</c> (owner ruling OQ-3 (a)). One token per aggregate, ADR-019: a per-row
+///     token cannot name a timeline that has more than one live-ish row, and the mismatch would have
+///     412'd every profile edit forever after a single scheduled change.</description></item>
+///   <item><description><b>The delete retires the row covering today AND anything scheduled</b>
+///     (owner ruling OQ-5 (a)), by the zero-width-close idiom rather than a hard delete — see
+///     <see cref="SoftDeleteTimelineAsync"/>. Left alone it would have stamped an end date on the
+///     future row and produced an inverted, empty interval that the database does not forbid, while
+///     the employee stayed un-deleted and the audit trail said otherwise.</description></item>
+/// </list>
+/// A fourth, additive piece: every as-of-today read also returns the NEXT scheduled change
+/// (<see cref="GetByEmployeeIdWithScheduledAsync"/>), so no screen has to discover it with a second
+/// query and none can show a value without saying another is coming.
 /// </para>
 /// </summary>
 public sealed class EmployeeProfileRepository
@@ -104,11 +128,11 @@ public sealed class EmployeeProfileRepository
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// S31 / TASK-3102 — convenience read: returns the live (open) employee profile for
+    /// S31 / TASK-3102 — convenience read: returns the employee profile that holds TODAY for
     /// <paramref name="employeeId"/>, fully hydrated with sibling fields from the <c>users</c>
     /// table (<see cref="EmploymentProfile.AgreementCode"/>, <see cref="EmploymentProfile.OkVersion"/>,
     /// <see cref="EmploymentProfile.EmploymentCategory"/>, <see cref="EmploymentProfile.OrgId"/>),
-    /// or <c>null</c> if no live row exists for the employee.
+    /// or <c>null</c> if no row covers today for the employee.
     ///
     /// <para>
     /// <see cref="EmploymentProfile.IsPartTime"/> is computed as
@@ -117,11 +141,13 @@ public sealed class EmployeeProfileRepository
     /// </para>
     ///
     /// <para>
-    /// <b>LIVE-only single-purpose read (S34 / TASK-3413 audit lock).</b> Returns the CURRENT
-    /// <see cref="EmploymentProfile"/> for the given employee, sourced via the partial-unique-
-    /// index predicate <c>WHERE ep.effective_to IS NULL</c>; the <c>u.agreement_code</c> JOIN
-    /// is a LIVE read off the <c>users</c> tail. <b>MUST NOT be used for replay-sensitive
-    /// (past-period / as-of-date) reads</b> — use
+    /// <b>AS-OF-TODAY single-purpose read (S34 / TASK-3413 audit lock; re-based S141 / TASK-14102).</b>
+    /// Until S141 this selected the OPEN row (<c>effective_to IS NULL</c>) and called it "current";
+    /// with future-dating that row can be a change that has not started yet, so the predicate is now
+    /// the end-exclusive <c>effective_from &lt;= today AND (effective_to IS NULL OR effective_to &gt;
+    /// today)</c>. See <see cref="ExecuteGetByEmployeeIdAsync"/> for the full reasoning and the clock
+    /// choice. <b>Still MUST NOT be used for replay-sensitive (past-period / as-of-date) reads</b> —
+    /// "today" is a live read, not a dated one; use
     /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>
     /// (implemented by <c>EmploymentProfileResolver</c>) for dated lookups per ADR-023 D2 +
     /// the S34 PCS-replay cutover (TASK-3406). Sanctioned consumers are admin endpoints
@@ -135,7 +161,7 @@ public sealed class EmployeeProfileRepository
     {
         await using var conn = _dbFactory.Create();
         await conn.OpenAsync(ct);
-        var hit = await ExecuteGetByEmployeeIdAsync(conn, null, employeeId, ct);
+        var hit = await ExecuteGetByEmployeeIdAsync(conn, null, employeeId, Today(), ct);
         return hit?.Profile;
     }
 
@@ -148,50 +174,85 @@ public sealed class EmployeeProfileRepository
     /// <see cref="UpsertAsync"/>'s internal preflight when constructing audit payloads.
     ///
     /// <para>
-    /// <b>LIVE-only single-purpose read (S34 / TASK-3413 audit lock).</b> Inherits the
-    /// LIVE-only contract of the self-managed overload — the underlying SQL filters
-    /// <c>WHERE ep.effective_to IS NULL</c> and JOINs <c>u.agreement_code</c> off the LIVE
-    /// <c>users</c> tail. <b>MUST NOT be used for replay-sensitive (past-period) reads</b>;
-    /// route those through
+    /// <b>AS-OF-TODAY single-purpose read (S34 / TASK-3413 audit lock; re-based S141 / TASK-14102).</b>
+    /// Inherits the contract of the self-managed overload. <b>MUST NOT be used for replay-sensitive
+    /// (past-period) reads</b>; route those through
     /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>
     /// per ADR-023 D2 + S34 cutover. The only production consumer of this overload is the
-    /// admin DELETE handler's pre-delete audit-payload snapshot (live row about to be
-    /// soft-deleted) — that is a LIVE-state need by construction.
+    /// admin DELETE handler's pre-delete audit-payload snapshot — and S141 makes that consumer
+    /// CORRECT rather than merely dated: it is the snapshot recorded as <c>previous_data</c> on the
+    /// soft-delete audit row, so under future-dating the open-row version would have recorded the
+    /// values of the row that had not started yet as "the state that was deleted", while the values
+    /// actually in force went unrecorded. Answering as-of-today fixes that audit defect (S141 B4)
+    /// without the endpoint changing a line.
     /// </para>
     /// </summary>
     public async Task<EmploymentProfile?> GetByEmployeeIdAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
         string employeeId, CancellationToken ct = default)
     {
-        var hit = await ExecuteGetByEmployeeIdAsync(conn, tx, employeeId, ct);
+        var hit = await ExecuteGetByEmployeeIdAsync(conn, tx, employeeId, Today(), ct);
         return hit?.Profile;
     }
 
     /// <summary>
     /// Step 7a P2 fix — atomic row + version read. The GET endpoint must hand back the row
-    /// data and its <c>version</c> from the SAME live snapshot so the ETag it stamps
+    /// data and its concurrency token from the SAME snapshot so the ETag it stamps
     /// matches the data it serializes; reading the two in separate statements opens a
     /// concurrency window where the response can carry stale fields with a newer ETag and
     /// the next admin edit would silently overwrite the racing change. Single SELECT;
     /// nullable tuple shape mirrors <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>.
     ///
     /// <para>
-    /// <b>LIVE-only single-purpose read (S34 / TASK-3413 audit lock).</b> The <c>version</c>
-    /// returned here is the LIVE row's optimistic-concurrency token used to stamp the
-    /// response ETag for admin If-Match round-trips. The read uses the partial-unique-index
-    /// predicate <c>WHERE ep.effective_to IS NULL</c> and JOINs <c>u.agreement_code</c> off
-    /// the LIVE <c>users</c> tail. <b>MUST NOT be used for replay-sensitive (past-period)
-    /// reads</b> — past-period payroll / PCS-replay paths must use
+    /// <b>S141 / TASK-14102 — the ROW is now as-of-today and the TOKEN is now <c>users.version</c>
+    /// (owner ruling OQ-3 (a)).</b> S140's Step-7a fix coupled body and ETag to one SELECT precisely
+    /// so they could never disagree; S141 breaks the coupling's old premise (body and token no longer
+    /// live in the same ROW) and re-honours the promise a different way — one SELECT across both
+    /// tables. <b>MUST NOT be used for replay-sensitive (past-period) reads</b> — past-period payroll
+    /// / PCS-replay paths must use
     /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>
-    /// per ADR-023 D2 + S34 cutover. Sole production consumer is the admin GET handler.
+    /// per ADR-023 D2 + S34 cutover. Sole production consumer is the admin GET handler; prefer
+    /// <see cref="GetByEmployeeIdWithScheduledAsync"/>, which returns the same pair plus B0's
+    /// scheduled change, and which this method is a thin projection of.
     /// </para>
     /// </summary>
     public async Task<(EmploymentProfile Profile, long Version)?> GetByEmployeeIdWithVersionAsync(
         string employeeId, CancellationToken ct = default)
     {
+        var hit = await GetByEmployeeIdWithScheduledAsync(employeeId, ct);
+        return hit is null ? null : (hit.Profile, hit.Version);
+    }
+
+    /// <summary>
+    /// S141 / TASK-14102 (refinement B0, owner requirement 2026-09-11) — the same as-of-today read as
+    /// <see cref="GetByEmployeeIdWithVersionAsync"/>, PLUS the next change already scheduled after
+    /// today.
+    ///
+    /// <para>
+    /// <b>Why this exists (plain language).</b> The owner asked: "should it not be visible to an HR
+    /// employee looking at a page, that another has scheduled a change?" Once a change can be dated
+    /// ahead, a screen that shows only today's value is not merely incomplete — it is misleading, and
+    /// the two worst defects the S141 review found are both instances of it: an edit drawer that
+    /// pre-fills a value without saying it is not yet in force, and a today-dated edit that silently
+    /// expires on the day the scheduled one begins. Both dissolve once the scheduled change is on the
+    /// screen. Carrying it in the READ PAYLOAD rather than leaving each screen to fetch it is the
+    /// difference between a requirement and a bolt-on: every present and future consumer gets it, and
+    /// nobody re-solves it badly.
+    /// </para>
+    ///
+    /// <para>
+    /// <see cref="ProfileAsOfTodayHit.Scheduled"/> is <c>null</c> when nothing is scheduled — which,
+    /// until Increment 4's date picker ships, is every employee. A zero-width row is not a scheduled
+    /// change (see the shared SQL's comment). One SELECT, so the value, the token and the scheduled
+    /// change can never describe three different moments.
+    /// </para>
+    /// </summary>
+    public async Task<ProfileAsOfTodayHit?> GetByEmployeeIdWithScheduledAsync(
+        string employeeId, CancellationToken ct = default)
+    {
         await using var conn = _dbFactory.Create();
         await conn.OpenAsync(ct);
-        return await ExecuteGetByEmployeeIdAsync(conn, null, employeeId, ct);
+        return await ExecuteGetByEmployeeIdAsync(conn, null, employeeId, Today(), ct);
     }
 
     /// <summary>
@@ -247,22 +308,56 @@ public sealed class EmployeeProfileRepository
     }
 
     /// <summary>
-    /// <b>LIVE-only single-purpose shared codepath (S34 / TASK-3413 audit lock).</b> The
-    /// SQL below filters <c>WHERE ep.effective_to IS NULL</c> (the partial-unique-index
-    /// predicate) and JOINs <c>u.agreement_code</c> off the LIVE <c>users</c> tail; the
-    /// result is the CURRENT employee profile only. <b>This helper MUST NOT be reused
-    /// for replay-sensitive (past-period / as-of-date) reads</b> — the
-    /// <c>effective_to IS NULL</c> predicate is non-negotiable here. Past-period lookups
-    /// go through
-    /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>,
-    /// which uses the end-exclusive predicate
-    /// <c>effective_from &lt;= asOfDate AND (effective_to IS NULL OR effective_to &gt; asOfDate)</c>
-    /// and sources <c>agreement_code</c> from the dated <c>user_agreement_codes</c> table
-    /// per ADR-023 D2 + S34 cutover.
+    /// <b>AS-OF-TODAY single-purpose shared codepath (S34 / TASK-3413 audit lock, re-based by
+    /// S141 / TASK-14102 B1).</b> Returns the profile that holds TODAY, its aggregate concurrency
+    /// token, and — B0 — the next change SCHEDULED after today, if one exists.
+    ///
+    /// <para>
+    /// <b>What changed in S141 and why (plain language first).</b> Until S141 this read selected
+    /// <c>ep.effective_to IS NULL</c> — "the row with no end date" — and called the answer "current".
+    /// That worked only because every write dated after today was refused, which made "the row with
+    /// no end date" and "the row describing today" the same row by accident. Increment 4 lets HR
+    /// schedule a change ahead ("part-time from 1 November"), and the moment such a row exists the
+    /// open row is the FUTURE one. Left alone, this read would have started reporting a
+    /// not-yet-effective fraction and position as the employee's current state — the value would
+    /// then have been echoed straight back by the edit drawer and written into force six weeks
+    /// early, silently revaluing already-approved holiday. So the predicate now states the question
+    /// it always meant: <c>effective_from &lt;= today AND (effective_to IS NULL OR effective_to &gt;
+    /// today)</c> — the same end-exclusive shape ADR-018 D9 uses everywhere and the one already
+    /// in-tree at <c>HrFollowUpApprovalReadRepository</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The token moved with it (S141 B5 / owner ruling OQ-3 (a)).</b> The version returned here is
+    /// <c>users.version</c>, NOT <c>ep.version</c>. One concurrency token per aggregate (ADR-019):
+    /// once a timeline can hold more than one live-ish row, a per-ROW token cannot identify the
+    /// aggregate — the GET would hand out the row-covering-today's version while the writer checked
+    /// the open row's, and every profile edit would 412 forever after a single scheduled change,
+    /// with a refresh returning the very token the writer rejects. <c>users.version</c> belongs to no
+    /// single row, so it survives a timeline with several. This is not a new design: the sibling
+    /// <c>user_agreement_codes</c> timeline already made exactly this choice, with its reasoning
+    /// written out (<see cref="UserAgreementCodeRepository.SupersedeAndCreateAsync"/>). Profiles kept
+    /// a per-row token only because, before future-dating, the open row WAS the whole aggregate.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Still not for replay.</b> "Today" is a live read. Past-period / as-of-date lookups still go
+    /// through
+    /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentProfileResolver.GetByEmployeeIdAtAsync"/>
+    /// per ADR-023 D2 + the S34 cutover; nothing here is replay-safe just because it is now dated.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>"today" is the writers' UTC day</b> (<c>DateOnly.FromDateTime(GetUtcNow().UtcDateTime)</c>,
+    /// via the injected <see cref="TimeProvider"/>) — the SAME day the writers and the caches use
+    /// (QUAL-157), deliberately NOT the Copenhagen business day some HR reads use. If the read
+    /// flipped at a different midnight from the write, a change scheduled for the 1st would be
+    /// visible before, or after, the row that produced it took effect.
+    /// </para>
     /// </summary>
-    private static async Task<(EmploymentProfile Profile, long Version)?> ExecuteGetByEmployeeIdAsync(
+    private static async Task<ProfileAsOfTodayHit?> ExecuteGetByEmployeeIdAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx,
-        string employeeId, CancellationToken ct)
+        string employeeId, DateOnly today, CancellationToken ct)
     {
         // S31 employee_profiles columns are the source of truth for
         // part_time_fraction and position (weekly_norm_hours removed in S53 TASK-5306). The sibling fields (agreement_code, ok_version,
@@ -273,31 +368,65 @@ public sealed class EmployeeProfileRepository
         // NULL since S138 (init.sql segment `s138-profile-category-not-null`), so there is
         // nothing to fall back to, and with the category now editable per date the live users
         // column is only the CACHE of the row covering TODAY: falling back to it would
-        // mislabel rather than rescue. (This read is live-row-only, so the two still agree
-        // here by the cache rule — the change is about which one is AUTHORITATIVE.)
-        // `ep.version` joins in
-        // the row's optimistic-concurrency token for callers that need it on the ETag header
-        // (Step 7a P2 fix — same-snapshot read kills the GET race against concurrent admin
-        // edits).
+        // mislabel rather than rescue.
+        //
+        // S140 Step-7a P2 required the body and the ETag to come from ONE SELECT so they can never
+        // describe different states. S141 keeps that promise even though the two now come from
+        // different TABLES: `u.version` is read in the same statement as the row, and the B0
+        // scheduled-change lookup rides along in the same statement too, so a screen can never show
+        // today's value stamped with a token taken a moment later.
+        //
+        // ORDER BY + LIMIT 1 on the covering row is DEFENSIVE, and it is new. The retired
+        // `effective_to IS NULL` predicate could not match twice — the partial-unique index
+        // idx_employee_profiles_live guaranteed at most one open row. The as-of-today predicate has
+        // no such index behind it: non-overlap is a router invariant (TimelineSnapshot.Build throws
+        // on an overlap) and the history unique index only forbids two rows with the SAME start, so
+        // the DATABASE does not forbid two rows covering today. One row is still the only shape the
+        // writers can produce; the LIMIT makes the read deterministic rather than trusting that.
+        //
+        // B0 (owner requirement): the NEXT row starting after today rides along, so every caller can
+        // say "a different value is scheduled, from this date" without a second query. A ZERO-WIDTH
+        // row [f, f) is excluded: it covers no day at all and is the retirement trace a soft-delete
+        // leaves behind (S141 B4), so reporting it as a scheduled change would show HR a change that
+        // was deliberately cancelled.
         const string sql =
             """
             SELECT
                 ep.part_time_fraction,
                 ep.position,
-                ep.version,
+                u.version AS aggregate_version,
                 u.agreement_code,
                 u.ok_version,
                 ep.employment_category,
-                u.primary_org_id
+                u.primary_org_id,
+                nxt.effective_from      AS scheduled_from,
+                nxt.effective_to        AS scheduled_to,
+                nxt.part_time_fraction  AS scheduled_fraction,
+                nxt.position            AS scheduled_position,
+                nxt.employment_category AS scheduled_category
             FROM employee_profiles ep
             INNER JOIN users u ON u.user_id = ep.employee_id
+            LEFT JOIN LATERAL (
+                SELECT s.effective_from, s.effective_to, s.part_time_fraction,
+                       s.position, s.employment_category
+                FROM employee_profiles s
+                WHERE s.employee_id = ep.employee_id
+                  AND s.effective_from > @today
+                  AND (s.effective_to IS NULL OR s.effective_to > s.effective_from)
+                ORDER BY s.effective_from
+                LIMIT 1
+            ) nxt ON TRUE
             WHERE ep.employee_id = @employeeId
-              AND ep.effective_to IS NULL
+              AND ep.effective_from <= @today
+              AND (ep.effective_to IS NULL OR ep.effective_to > @today)
+            ORDER BY ep.effective_from DESC
+            LIMIT 1
             """;
         await using var cmd = tx is null
             ? new NpgsqlCommand(sql, conn)
             : new NpgsqlCommand(sql, conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("today", today);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) return null;
 
@@ -317,9 +446,34 @@ public sealed class EmployeeProfileRepository
                 : reader.GetString(reader.GetOrdinal("position")),
             OrgId = reader.GetString(reader.GetOrdinal("primary_org_id")),
         };
-        var version = reader.GetInt64(reader.GetOrdinal("version"));
-        return (profile, version);
+        var version = reader.GetInt64(reader.GetOrdinal("aggregate_version"));
+
+        var scheduledFromOrd = reader.GetOrdinal("scheduled_from");
+        ScheduledEmployeeProfileChange? scheduled = null;
+        if (!reader.IsDBNull(scheduledFromOrd))
+        {
+            var scheduledToOrd = reader.GetOrdinal("scheduled_to");
+            var scheduledPositionOrd = reader.GetOrdinal("scheduled_position");
+            var scheduledCategoryOrd = reader.GetOrdinal("scheduled_category");
+            scheduled = new ScheduledEmployeeProfileChange(
+                EffectiveFrom: reader.GetFieldValue<DateOnly>(scheduledFromOrd),
+                EffectiveTo: reader.IsDBNull(scheduledToOrd)
+                    ? null
+                    : reader.GetFieldValue<DateOnly>(scheduledToOrd),
+                PartTimeFraction: reader.GetDecimal(reader.GetOrdinal("scheduled_fraction")),
+                Position: reader.IsDBNull(scheduledPositionOrd)
+                    ? null
+                    : reader.GetString(scheduledPositionOrd),
+                EmploymentCategory: reader.IsDBNull(scheduledCategoryOrd)
+                    ? null
+                    : reader.GetString(scheduledCategoryOrd));
+        }
+
+        return new ProfileAsOfTodayHit(profile, version, scheduled);
     }
+
+    /// <summary>The writers' "today": the UTC day off the injected clock (QUAL-157 / S139 seam).</summary>
+    private DateOnly Today() => DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
     // ------------------------------------------------------------------
     // Writes — atomic-outbox (conn, tx) overloads only (ADR-018 D5).
@@ -410,22 +564,46 @@ public sealed class EmployeeProfileRepository
     /// the 10th to wherever the old row used to end (open, if it was the open row). Editing a row
     /// on its own start date changes it in place. A date in a gap gets a row filling the gap; a
     /// date before the first row gets a row ending where the first begins. Later rows are never
-    /// touched. FUTURE dates are refused (owner ruling — see <see cref="TemporalWriteRouter"/>).
+    /// touched.
     /// </para>
     ///
     /// <para>
-    /// <b>One concurrency token per aggregate (S138 Reviewer W1 / Codex B4).</b> The client's
-    /// token is the OPEN row's <c>version</c> — what the profile GET's ETag carries — and
-    /// <paramref name="expectedVersion"/> is validated against it (a history row's version is
-    /// never issued to a client, so an If-Match on it would have no meaning). EVERY timeline
-    /// write, including a history-only split, bumps the open row's version, so the ETag is a
-    /// monotonic per-employee TIMELINE version: two admins backdating against the same ETag
-    /// serialize on the lock and the second gets a 412 — both succeed only as sequential retries
-    /// with refreshed ETags. History rows' own <c>version</c> column is left untouched (bumping it
-    /// would mint tokens nobody holds). <see cref="SaveEmployeeProfileResult.Version"/> is
-    /// therefore the token AFTER the write in every case; the touched row's own version is
-    /// <see cref="SaveEmployeeProfileResult.ProducedRowVersion"/>. Audit
-    /// <c>version_before/after</c> on <c>employee_profile_audit</c> record this token.
+    /// <b>S141 / TASK-14102 — FUTURE dates are now allowed (ADR-040 Increment 4).</b> "She goes
+    /// part-time on 1 November" is a legal write: it routes through the same C' split as any other
+    /// date, because the row that covers a future day is the row that is open today. Two consequences
+    /// a caller must know, both of which follow from the split rule rather than from anything new:
+    /// <list type="bullet">
+    ///   <item><description>A TODAY-dated write made while a change is already scheduled produces a
+    ///     row <c>[today, scheduledFrom)</c> — a CLOSED row, kind <c>Inserted</c>, not
+    ///     <c>Superseded</c> — and the edit therefore EXPIRES on the scheduled date. Every pre-S141
+    ///     today-dated caller assumed "from now on" and got it; that assumption now holds only while
+    ///     nothing is scheduled.</description></item>
+    ///   <item><description>The write revalues absences inside the interval it produced, which is
+    ///     bounded by the next row's start. That is correct and must not be suppressed: recorded days
+    ///     of holiday are fraction-dependent (ADR-032 D1), so booking made for a period the new
+    ///     fraction covers has to follow it.</description></item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One concurrency token per aggregate (S138 Reviewer W1 / Codex B4; RE-BASED by S141 /
+    /// TASK-14102 B5 under owner ruling OQ-3 (a)).</b> The client's token is <c>users.version</c> —
+    /// what the profile GET's ETag now carries — and <paramref name="expectedVersion"/> is validated
+    /// against it. Until S141 the token was the OPEN row's own <c>version</c>, which worked only
+    /// because the open row was the whole aggregate; with a scheduled row present, the GET describes
+    /// the row covering TODAY while a per-row check would guard the FUTURE row, so every edit would
+    /// 412 forever and refreshing would return the very token the check rejects. <c>users.version</c>
+    /// belongs to no row and so survives a timeline of any shape — the choice the sibling
+    /// <c>user_agreement_codes</c> writer already made and documented.
+    /// EVERY timeline write bumps it, including a history-only split, so the ETag stays a monotonic
+    /// per-employee marker: two admins backdating against the same ETag serialize on the lock and the
+    /// second gets a 412. The rows' own <c>version</c> columns keep their pre-S141 per-row semantics
+    /// (the open row is still bumped on every write; history rows are left alone) because
+    /// <c>employee_profile_audit</c> and the events narrate those — they are simply no longer what a
+    /// client holds. <see cref="SaveEmployeeProfileResult.Version"/> is the aggregate token AFTER the
+    /// write in every case and <see cref="SaveEmployeeProfileResult.TimelineVersionBefore"/> the one
+    /// before it; the touched row's own version is
+    /// <see cref="SaveEmployeeProfileResult.ProducedRowVersion"/>.
     /// </para>
     ///
     /// <para>
@@ -446,17 +624,19 @@ public sealed class EmployeeProfileRepository
     /// </para>
     ///
     /// <para>
-    /// <b>Cache rule.</b> <c>users.employment_category</c> means "the category as of TODAY".
-    /// After the row write this method re-reads the row covering today and, only when its category
-    /// differs from the cached value, writes <c>UPDATE users SET employment_category, version =
-    /// version + 1</c> — a cache refresh IS a users-row write under ADR-018 D7 (the admin user DTO
-    /// exposes the field, so a stale users ETag must 412 afterwards). The cache is never set from
-    /// the REQUEST: a historical-only correction leaves it untouched by construction, and a
-    /// fraction-only change that leaves the category alone does not touch <c>users</c> at all. The
-    /// write is not gated on <c>is_active</c> — a departed employee's cache must be correctable.
-    /// The repository does not know the actor, so it returns
+    /// <b>Cache rule + token bump (the latter widened in S141).</b> <c>users.employment_category</c>
+    /// means "the category as of TODAY". After the row write this method re-reads the row covering
+    /// today and writes <c>UPDATE users SET employment_category = &lt;that value, when there is
+    /// one&gt;, version = version + 1</c>. <b>The VALUE moves only when today's category moved; the
+    /// VERSION moves on every write</b> (S141 B5 — a token that sits still after a fraction edit
+    /// cannot detect the concurrent edit it exists to detect). A cache refresh IS a users-row write
+    /// under ADR-018 D7 (the admin user DTO exposes the field, so a stale users ETag must 412
+    /// afterwards). The cache is never set from the REQUEST: a historical-only correction leaves the
+    /// cached value untouched by construction. Not gated on <c>is_active</c> — a departed employee's
+    /// cache must be correctable. The repository does not know the actor, so it returns
     /// <see cref="SaveEmployeeProfileResult.UsersVersionBefore"/> / <c>After</c> plus the old/new
-    /// value for the endpoint's <c>users_audit</c> row.
+    /// value for the endpoint's <c>users_audit</c> row — which, post-S141, is owed on every real
+    /// write rather than only on a category change.
     /// </para>
     ///
     /// <para>
@@ -486,21 +666,25 @@ public sealed class EmployeeProfileRepository
     /// </para>
     /// </summary>
     /// <exception cref="TemporalWriteRejectedException">
-    /// <see cref="TemporalWriteRejection.FutureDated"/> when <paramref name="req"/><c>.EffectiveFrom</c>
-    /// is after today (UTC); <see cref="TemporalWriteRejection.PrecedesEmploymentStart"/> when the
-    /// caller supplied <c>req.EmploymentStartDate</c> and the date precedes it. Those two are pure
-    /// predicates raised BEFORE any lock (cheap, nothing to roll back).
+    /// <see cref="TemporalWriteRejection.PrecedesEmploymentStart"/> when the
+    /// caller supplied <c>req.EmploymentStartDate</c> and the date precedes it — a pure
+    /// predicate raised BEFORE any lock (cheap, nothing to roll back). There is deliberately no
+    /// upper bound (see <see cref="TemporalWriteRouter.PrecedesEmploymentStart"/>), and
+    /// <see cref="TemporalWriteRejection.FutureDated"/> is no longer raised at all (S141 / B3).
     /// <see cref="TemporalWriteRejection.NoRecordedEmploymentCategory"/> (S138 Step-5a) is different
     /// and is raised AFTER the timeline lock and the If-Match check, because it can only be decided
     /// once the routed case is known: router case E puts the write before every recorded row, so no
     /// row covers or precedes the date and nothing records which category held then — and the only
     /// remaining source, the live <c>users</c> value, means "as of today" and would mislabel history.
     /// The caller's transaction is rolled back by the endpoint, so the late throw costs a lock, not
-    /// correctness. All three map to a date-free 422.
+    /// correctness. Both map to a date-free 422 — "date-free" is load-bearing, not stylistic: the
+    /// employment-start floor's message must never echo the hire date (ADR-040 D7 keeps employment
+    /// dates out of every DTO, response and error body).
     /// </exception>
     /// <exception cref="OptimisticConcurrencyException">
-    /// <paramref name="expectedVersion"/> non-null and (a) no open row exists
-    /// (<c>ActualVersion = null</c>) or (b) the open row's <c>version</c> differs. Endpoint maps to 412.
+    /// <paramref name="expectedVersion"/> non-null and (a) no row covers TODAY
+    /// (<c>ActualVersion = null</c> — pre-S141 this read "no open row", the same statement while a
+    /// future row could not exist) or (b) <c>users.version</c> differs. Endpoint maps to 412.
     /// </exception>
     /// <exception cref="ConcurrentSeedConflictException">
     /// An INSERT lost a race on <c>idx_employee_profiles_live</c> / <c>idx_employee_profiles_history</c>
@@ -515,11 +699,19 @@ public sealed class EmployeeProfileRepository
         // S33 today-stamp use the same clock (S139 / TASK-13907 moved the SOURCE of that clock
         // onto the DI seam; the day it yields is unchanged). The router below stays PURE: `today`
         // is passed IN as a parameter (PAT-025), never read inside it.
-        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var today = Today();
 
         // 0. Pure refusals BEFORE any lock — nothing to roll back, nothing to contend on.
-        if (TemporalWriteRouter.IsFutureDated(req.EffectiveFrom, today))
-            throw new TemporalWriteRejectedException(TemporalWriteRejection.FutureDated, "employee profile");
+        //
+        //    S141 / TASK-14102 (B3) — the FUTURE-DATING refusal that stood here is GONE (ADR-040
+        //    Increment 4). HR can now record "she goes part-time on 1 November". No new routing case
+        //    was needed: a future date's covering row is the row that is open today, so it routes
+        //    through the router's C' exactly like any other split — close the covering row at the
+        //    requested date and insert [from, covering.oldTo), which is open when the covering row
+        //    was. What DID need work is everything that had been quietly relying on the refusal to
+        //    make "the open row" and "the row covering today" the same row: the reads above, the
+        //    token below, and the delete. The employment-start FLOOR stays; there is deliberately no
+        //    ceiling (see TemporalWriteRouter.PrecedesEmploymentStart).
         if (TemporalWriteRouter.PrecedesEmploymentStart(req.EffectiveFrom, req.EmploymentStartDate))
             throw new TemporalWriteRejectedException(TemporalWriteRejection.PrecedesEmploymentStart, "employee profile");
 
@@ -527,40 +719,75 @@ public sealed class EmployeeProfileRepository
         //    touch this employee's rows, so every decision below is made on locked state.
         var timeline = await LockTimelineAsync(conn, tx, req.EmployeeId, ct);
         var live = timeline.FirstOrDefault(r => r.EffectiveTo is null);
+        var coveringToday = timeline.FirstOrDefault(
+            r => r.EffectiveFrom <= today && (r.EffectiveTo is null || r.EffectiveTo.Value > today));
 
-        // 2. Validate the aggregate token (admin-strict If-Match, ADR-019) against the OPEN row.
+        // 1b. Lock the `users` row and read the AGGREGATE TOKEN. Taken AFTER the timeline lock, which
+        //     keeps the lock order this method has always had (employee_profiles → users; the cache
+        //     refresh at step 6 already locked users last), so no NEW deadlock edge appears — the
+        //     same lock is acquired earlier in the same order. Two honest side effects of moving it:
+        //     the users row is now held for the whole write rather than just its tail, and a same-
+        //     values NO-OP now takes it too (it cannot not: the token must be checked BEFORE the
+        //     no-op is decided, or a stale caller could hide a version mismatch behind an apparent
+        //     no-op — the S138 rule this preserves).
+        var (usersVersionBefore, usersCategoryBefore) =
+            await LockUsersRowAsync(conn, tx, req.EmployeeId, ct);
+
+        // 2. Validate the client's token (admin-strict If-Match, ADR-019).
+        //
+        //    S141 / TASK-14102 (B5, owner ruling OQ-3 (a)) — THE TOKEN IS NOW `users.version`.
+        //
+        //    Why it had to move, in plain terms: a concurrency token answers "has anyone changed
+        //    this since you read it?", and "this" is the employee's profile TIMELINE, not one row of
+        //    it. While future-dating was refused, the open row WAS the whole timeline, so the open
+        //    row's own version was an accidentally-correct token. Once a scheduled row can exist,
+        //    the GET answers about the row covering TODAY while this check asked about the OPEN row
+        //    — two different rows — so every profile edit would have returned 412 forever after a
+        //    single scheduled change, and refreshing would have handed back exactly the token this
+        //    check rejects. `users.version` belongs to no row, so it survives a timeline of any
+        //    shape. The sibling agreement-code timeline already made this call, for the same reason
+        //    (UserAgreementCodeRepository.SupersedeAndCreateAsync).
+        //
+        //    The cost, stated rather than hidden: `users.version` is now the ONE token for the whole
+        //    employee record — the users row, the agreement timeline and the profile timeline. So a
+        //    profile edit invalidates a pending admin users PUT and vice versa, where before they
+        //    were independent. That is the meaning of "one token per aggregate" when the aggregate
+        //    is the employee, and it is the trade the owner accepted: more honest 412s in exchange
+        //    for no read/write token that can ever disagree. A client holding a pre-S141 profile
+        //    ETag sees one stale 412 at rollout.
         if (expectedVersion is not null)
         {
-            if (live is null)
+            // (a) Degenerate — nothing covers today, so there is no profile to edit. Pre-S141 this
+            //     read "no OPEN row", which was the same statement while a future row could not
+            //     exist; restated against the day the client is looking at, because under scheduling
+            //     an open row can be one that has not started. ActualVersion = null distinguishes
+            //     this branch, which UpsertAsync translates back to a 404.
+            if (coveringToday is null)
             {
-                // Caller asserted a current version, but there is no open row → degenerate
-                // mismatch (412). ActualVersion = null distinguishes this branch.
                 throw new OptimisticConcurrencyException(
-                    $"No live employee profile exists for employee_id='{req.EmployeeId}', " +
+                    $"No employee profile covers today for employee_id='{req.EmployeeId}', " +
                     $"but caller sent If-Match: \"{expectedVersion.Value}\"; refresh and retry.",
                     expectedVersion: expectedVersion,
                     actualVersion: null);
             }
-            if (live.Version != expectedVersion.Value)
+            // (b) The client token.
+            if (usersVersionBefore != expectedVersion.Value)
             {
                 throw new OptimisticConcurrencyException(
-                    $"Employee profile version is {live.Version}, but caller sent " +
+                    $"Employee record version is {usersVersionBefore}, but caller sent " +
                     $"If-Match: \"{expectedVersion.Value}\"; refresh and retry.",
                     expectedVersion: expectedVersion,
-                    actualVersion: live.Version);
+                    actualVersion: usersVersionBefore);
             }
         }
 
         // 3. Route on the locked snapshot (pure). The anchor is matched back to its locked row
         //    by start date — a key under idx_employee_profiles_history.
+        //    S141: the router no longer has a future-dating branch, so there is no post-route
+        //    re-check here either — the second of B3's two sites in this file.
         var decision = TemporalWriteRouter.Decide(
             timeline.Select(r => new TemporalInterval(r.EffectiveFrom, r.EffectiveTo)),
             req.EffectiveFrom, today);
-        if (decision.Case == TemporalWriteCase.RejectedFutureDated)
-        {
-            // Unreachable after step 0; kept so the router remains the single authority.
-            throw new TemporalWriteRejectedException(TemporalWriteRejection.FutureDated, "employee profile");
-        }
         var anchor = decision.Anchor is { } anchorInterval
             ? timeline.Single(r => r.EffectiveFrom == anchorInterval.From)
             : null;
@@ -602,8 +829,11 @@ public sealed class EmployeeProfileRepository
         // profile at all. Equality is about VALUES; this branch is about COVERAGE.
         if (anchor is not null && !decision.ReopensZeroWidthAnchor && IsSameValues(req, anchor))
         {
+            // S141 — the token reported on a no-op is the UNCHANGED `users.version`, so the caller's
+            // ETag stays valid. `UsersVersionBefore`/`After` stay null: nothing was written, so the
+            // endpoint owes no users_audit row (UsersCacheWritten is false).
             return new SaveEmployeeProfileResult(
-                anchor.ProfileId, live?.Version ?? anchor.Version, SaveEmployeeProfileOutcome.NoOp)
+                anchor.ProfileId, usersVersionBefore, SaveEmployeeProfileOutcome.NoOp)
             {
                 Kind = TemporalWriteKind.NoOp,
                 IsNoOp = true,
@@ -611,7 +841,7 @@ public sealed class EmployeeProfileRepository
                 NewEffectiveTo = anchor.EffectiveTo,
                 ProducedRowVersion = anchor.Version,
                 Covering = anchor,
-                TimelineVersionBefore = live?.Version,
+                TimelineVersionBefore = usersVersionBefore,
             };
         }
 
@@ -637,17 +867,37 @@ public sealed class EmployeeProfileRepository
             throw new ConcurrentSeedConflictException("employee_profiles", req.EmployeeId);
         }
 
-        // 6. Cache rule — users.employment_category follows the row covering TODAY, never the request.
-        var cache = await RefreshEmploymentCategoryCacheAsync(conn, tx, req.EmployeeId, today, ct);
-        return cache is null
-            ? result
-            : result with
-            {
-                UsersVersionBefore = cache.Value.VersionBefore,
-                UsersVersionAfter = cache.Value.VersionAfter,
-                PreviousEmploymentCategoryCache = cache.Value.PreviousValue,
-                NewEmploymentCategoryCache = cache.Value.NewValue,
-            };
+        // 6. Cache + TOKEN.
+        //    • users.employment_category follows the row covering TODAY, never the request — so a
+        //      purely historical correction leaves the cached category untouched by construction.
+        //    • users.version is bumped UNCONDITIONALLY (S141 / B5). This is the half that had to
+        //      change: a token only detects "someone else changed this" if it MOVES on every change.
+        //      Pre-S141 the users row was written only when the category moved, which was fine while
+        //      the client's token was the profile row's own version (that one did move on every
+        //      write). Now that the client holds users.version, leaving it still after a fraction or
+        //      position edit would let a second admin overwrite the first with a token they read
+        //      BEFORE that edit — a silent lost update, which is precisely the failure the token
+        //      exists to prevent. The sibling agreement-code writer already bumps unconditionally
+        //      for the same reason.
+        //    • CONSEQUENCE, stated because it changes an endpoint's behaviour without changing its
+        //      code: `UsersCacheWritten` is now true on EVERY real write, so the profile PUT emits a
+        //      users_audit row every time — with previous_data == new_data whenever the category did
+        //      not move. That is correct under ADR-019 D8 / ADR-018 D7 (the users row WAS written;
+        //      its version transition owes an audit row) and it matches the agreement side, but it
+        //      is a real increase in users_audit volume and a reviewer should see it named here.
+        var cache = await RefreshEmploymentCategoryCacheAndBumpTokenAsync(
+            conn, tx, req.EmployeeId, today, usersVersionBefore, usersCategoryBefore, ct);
+        return result with
+        {
+            // The aggregate token AFTER the write — what the endpoint stamps as the ETag and records
+            // as audit version_after (S141 B5: that token is users.version).
+            Version = cache.VersionAfter,
+            TimelineVersionBefore = usersVersionBefore,
+            UsersVersionBefore = cache.VersionBefore,
+            UsersVersionAfter = cache.VersionAfter,
+            PreviousEmploymentCategoryCache = cache.PreviousValue,
+            NewEmploymentCategoryCache = cache.NewValue,
+        };
     }
 
     /// <summary>
@@ -710,23 +960,36 @@ public sealed class EmployeeProfileRepository
         }
         catch (OptimisticConcurrencyException ex) when (ex.ActualVersion is null && expectedVersion is not null)
         {
-            // S31 endpoint contract: "no live row + If-Match supplied" → 404, not 412.
+            // S31 endpoint contract: "no profile in force + If-Match supplied" → 404, not 412.
             // SupersedeAndCreateAsync raises this as OCE-with-null-actual; translate back
             // to KeyNotFoundException so the existing PUT handler's catch block is preserved.
+            // S141: the writer's condition behind that null is now "no row covers TODAY" where it
+            // used to be "no OPEN row" — the same statement before future-dating existed, and the
+            // one that still means "there is no profile to edit" now that it does.
             throw new KeyNotFoundException(
                 $"Employee profile not found for employee_id='{req.EmployeeId}'.", ex);
         }
     }
 
     /// <summary>
-    /// S33 / TASK-3303 — soft-delete the live employee profile row by stamping
+    /// S33 / TASK-3303 — soft-delete the employee's profile by stamping
     /// <c>effective_to = @today</c> (the UTC day from the injected <see cref="TimeProvider"/>,
     /// bound as a parameter — S139 / TASK-13907 replaced the former DB-side <c>NOW()::date</c>)
     /// under end-exclusive <c>[from, to)</c> semantics
-    /// (ADR-018 D9). After this call, the row no longer satisfies the partial-unique-index
-    /// <c>idx_employee_profiles_live</c> predicate (<c>WHERE effective_to IS NULL</c>) and is
-    /// invisible to <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>, but remains
-    /// in the history table for replay determinism (ADR-016 D10).
+    /// (ADR-018 D9). After this call no row covers today, so the profile is
+    /// invisible to <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>, but every row
+    /// remains in the history table for replay determinism (ADR-016 D10).
+    ///
+    /// <para>
+    /// <b>S141 / TASK-14102 — this is now a two-line shim over
+    /// <see cref="SoftDeleteTimelineAsync"/>, which is where the contract lives.</b> The 2-tuple
+    /// return is preserved so the existing DELETE endpoint compiles and behaves unchanged; callers
+    /// that need to AUDIT what the delete retired (owner ruling OQ-5 (a) makes that mandatory) must
+    /// call <see cref="SoftDeleteTimelineAsync"/> and read
+    /// <see cref="EmployeeProfileSoftDeleteResult.RetiredScheduledRows"/>. Read that method's doc for
+    /// what changed and why — in one sentence: the row it closes is the row covering TODAY, not "the
+    /// row with no end date", and any change already scheduled is retired with it.
+    /// </para>
     ///
     /// <para>
     /// <b>Predecessor <c>version</c> column is UNCHANGED (ADR-023 D8).</b> Soft-delete is a
@@ -740,65 +1003,35 @@ public sealed class EmployeeProfileRepository
     /// </para>
     ///
     /// <para>
-    /// <b>404-vs-412 retry semantic divergence.</b> Because the predecessor row's version is
-    /// unchanged, an admin retry with stale <c>If-Match: "@expectedVersion"</c> after a
-    /// successful soft-delete will hit <b>404 Not Found</b> (the partial-unique-index
-    /// <c>WHERE effective_to IS NULL</c> matches no live row), <b>NOT 412 Precondition Failed</b>.
+    /// <b>404-vs-412 retry semantic divergence.</b> Because no version moves, an admin retry with
+    /// stale <c>If-Match: "@expectedVersion"</c> after a
+    /// successful soft-delete will hit <b>404 Not Found</b> (no row covers today any more),
+    /// <b>NOT 412 Precondition Failed</b>.
     /// This is intentional — soft-delete is idempotent-by-row-disappearance rather than
     /// idempotent-by-version-bump. Sibling ADR-019 D8 endpoints map stale-after-delete to 412
     /// because they bump version + leave the row visible to history-comparing queries;
     /// employee_profiles DELETE chooses row-disappearance per ADR-023 D8. The D-test
     /// <c>SoftDelete_StaleIfMatchAfterSoftDelete_Returns404NotConflict412</c> in TASK-3312 locks
-    /// this contract.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>SQL contract (binding — no <c>version + 1</c> clause).</b>
-    /// <code>
-    /// UPDATE employee_profiles
-    ///    SET effective_to = @today, updated_at = NOW()
-    ///  WHERE employee_id = @employeeId
-    ///    AND effective_to IS NULL
-    ///    AND version = @expectedVersion
-    /// RETURNING profile_id, version
-    /// </code>
-    /// <c>@today</c> is the APP-side UTC day (S139 / TASK-13907), bound as a <c>DateOnly</c> that
-    /// Npgsql maps to <c>date</c> — so it is day-granular by type, where the retired
-    /// <c>NOW()::date</c> was day-granular by cast. Behaviour-preserving: the Postgres session
-    /// time zone is UTC everywhere this runs, so <c>NOW()::date</c> already yielded the UTC day.
-    /// The <c>updated_at = NOW()</c> half deliberately stays a DB timestamp (a row-maintenance
-    /// stamp, not a temporal boundary). The SQL is single-statement because the
-    /// version predicate handles the race (no <c>SELECT ... FOR UPDATE</c> needed — unlike
-    /// <see cref="SupersedeAndCreateAsync"/> which has 3-case routing to resolve under the lock).
+    /// this contract. S141 preserves it by ORDERING the two checks — coverage of today first, the
+    /// token second — rather than by the SQL shape that used to imply it.
     /// </para>
     ///
     /// <para>
     /// <b>Atomic-outbox contract (ADR-018 D5).</b> Caller (TASK-3308 endpoint) owns the
     /// transaction; this method only writes to <c>employee_profiles</c>. The endpoint emits
     /// the audit row (with <c>version_before = version_after = predecessor.version</c>) +
-    /// <c>EmployeeProfileSoftDeleted</c> outbox event in the same tx after this returns.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Exception distinguishing pattern (S31 precedent at UpsertAsync L446-453).</b> After
-    /// the UPDATE fails to match a row, this method probes the live row's <c>version</c>
-    /// column to distinguish 404 (no live row) from 412 (live row, version mismatch):
-    /// <list type="bullet">
-    ///   <item><description>Probe returns <c>null</c> → no live row exists → throws
-    ///     <see cref="KeyNotFoundException"/>. Endpoint maps to 404.</description></item>
-    ///   <item><description>Probe returns a value (the live row's actual version, different
-    ///     from <paramref name="expectedVersion"/>) → throws
-    ///     <see cref="OptimisticConcurrencyException"/> with the actual version. Endpoint
-    ///     maps to 412 per ADR-019 D2.</description></item>
-    /// </list>
+    /// <c>EmployeeProfileSoftDeleted</c> outbox event in the same tx after this returns. S141 adds a
+    /// second obligation the endpoint owes: a scheduled row that is retired by this call must be
+    /// audited too (owner ruling OQ-5 (a)) — a row that was audited into existence must not vanish
+    /// unrecorded. This shim cannot report it; <see cref="SoftDeleteTimelineAsync"/> can.
     /// </para>
     /// </summary>
     /// <param name="conn">Caller-owned connection (ADR-018 D5 atomic-outbox contract).</param>
     /// <param name="tx">Caller-owned transaction; this method does not commit or roll back.</param>
-    /// <param name="employeeId">Natural key — the <c>employee_id</c> of the live profile row to soft-delete.</param>
-    /// <param name="expectedVersion">The <c>version</c> column value the caller asserts is
-    /// currently stored on the live row. The UPDATE's <c>AND version = @expectedVersion</c>
-    /// predicate enforces optimistic concurrency under ADR-019 admin-strict If-Match.</param>
+    /// <param name="employeeId">Natural key — the <c>employee_id</c> of the profile to soft-delete.</param>
+    /// <param name="expectedVersion">S141: the AGGREGATE token (<c>users.version</c>) the caller
+    /// asserts — the value the profile GET handed out as its ETag. Pre-S141 this was the live profile
+    /// row's own <c>version</c>; see <see cref="SoftDeleteTimelineAsync"/> for why it moved.</param>
     /// <param name="closeDate">S139 / TASK-13907 — the date to stamp into <c>effective_to</c>,
     /// which the caller computes ONCE for the whole request so the row and the
     /// <c>EmployeeProfileSoftDeleted</c> event it describes carry the same date by construction
@@ -807,24 +1040,95 @@ public sealed class EmployeeProfileRepository
     /// only one date, and it keeps existing callers and direct test constructions compiling.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>
-    /// <c>(profile_id, version)</c> of the soft-deleted row, where <c>version</c> is
-    /// <b>unchanged</b> from the predecessor's value (per ADR-023 D8). The endpoint records
-    /// this on the audit row as <c>version_before = version_after = version</c>.
+    /// <c>(profile_id, version)</c> of the row that covered today and was closed, where
+    /// <c>version</c> is <b>unchanged</b> from that row's value (per ADR-023 D8). The endpoint
+    /// records this on the audit row as <c>version_before = version_after = version</c>.
     /// </returns>
     /// <exception cref="OptimisticConcurrencyException">
-    /// Thrown when a live row exists for <paramref name="employeeId"/> but its <c>version</c>
-    /// column differs from <paramref name="expectedVersion"/>. <c>ExpectedVersion</c> is set
-    /// to <paramref name="expectedVersion"/>; <c>ActualVersion</c> is set to the live row's
-    /// actual version. Endpoint maps to 412 Precondition Failed per ADR-019 D2.
+    /// Thrown when a row covers today for <paramref name="employeeId"/> but <c>users.version</c>
+    /// differs from <paramref name="expectedVersion"/>. Endpoint maps to 412 per ADR-019 D2.
     /// </exception>
     /// <exception cref="KeyNotFoundException">
-    /// Thrown when no live row (<c>effective_to IS NULL</c>) exists for
+    /// Thrown when no row covers today for
     /// <paramref name="employeeId"/>. Endpoint maps to 404 Not Found. This is also the branch
-    /// hit by an admin retry with stale <c>If-Match</c> after a successful soft-delete (the
-    /// row "disappeared" from live reads per the partial-unique-index predicate — see
-    /// 404-vs-412 retry semantic divergence above).
+    /// hit by an admin retry with stale <c>If-Match</c> after a successful soft-delete — see
+    /// 404-vs-412 retry semantic divergence above.
     /// </exception>
     public async Task<(Guid ProfileId, long Version)> SoftDeleteAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, long expectedVersion,
+        DateOnly? closeDate = null,
+        CancellationToken ct = default)
+    {
+        var result = await SoftDeleteTimelineAsync(
+            conn, tx, employeeId, expectedVersion, closeDate, ct);
+        return (result.ProfileId, result.Version);
+    }
+
+    /// <summary>
+    /// S141 / TASK-14102 (refinement B4, owner ruling OQ-5 (a)) — the full soft-delete: retire the
+    /// row covering TODAY **and** every row already SCHEDULED after it, in one transaction, and
+    /// report what was retired so the caller can audit it.
+    ///
+    /// <para>
+    /// <b>The defect this fixes, in plain language.</b> Deleting a profile used to mean "stamp an end
+    /// date on the row with no end date". Once HR can schedule a change ahead, the row with no end
+    /// date is the FUTURE one — so the delete stamped today's date onto a row that starts in
+    /// November, producing the interval <c>[November, today)</c>: backwards, covering nothing. The
+    /// database does not stop it (<c>employee_profiles</c> has no CHECK relating the two dates), the
+    /// endpoint reported success, and the audit trail recorded a deletion — while the row that
+    /// actually described the employee survived untouched. The person was not deleted, and the
+    /// system said they were. Two of its own read families then disagreed with each other: as-of-today
+    /// reads still returned the profile, open-row reads returned nothing.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>What it does now (owner ruling OQ-5 (a) — "delete both").</b> Both halves go in one
+    /// transaction: the row covering today is closed at <paramref name="closeDate"/> as before, and
+    /// every row starting after today is retired by the existing <b>zero-width close</b>
+    /// (<c>effective_to := effective_from</c>) rather than a hard <c>DELETE</c>. That idiom is
+    /// deliberate: no timeline table in this system has ever hard-deleted a row, a zero-width row is
+    /// a shape the router already understands and can re-extend (its B' reopen branch), and the row
+    /// stays on the timeline to be explained rather than vanishing from it. The owner ruled this
+    /// knowing its cost — a colleague's scheduled decision disappears as a side effect of someone
+    /// else's delete — and the accepted mitigations are that the disappearance is AUDITED (the
+    /// caller's job, from <see cref="EmployeeProfileSoftDeleteResult.RetiredScheduledRows"/>) and
+    /// VISIBLE before HR confirms (B0's job, from
+    /// <see cref="GetByEmployeeIdWithScheduledAsync"/>).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>"Every row after today", not "the scheduled row".</b> The ruling was written for one
+    /// scheduled change, which is what the product will usually produce. Nothing prevents two, and
+    /// retiring only the first would leave the second standing with nothing covering today — exactly
+    /// the coverage hole this method exists to close. So the plural is the implementation and the
+    /// singular is the common case.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Concurrency (S141 B5).</b> <paramref name="expectedVersion"/> is matched against
+    /// <c>users.version</c>, the aggregate token — the same one the GET hands out and the PUT checks.
+    /// Listing only the GET and the PUT as the sites that had to move would have shipped a fix that
+    /// left DELETE broken: it was matching the OPEN row's version, so after one scheduled change the
+    /// DELETE would have 412'd forever for the same reason the PUT would have. The token is NOT
+    /// bumped here: ADR-023 D8 keeps soft-delete a row-state change rather than a field mutation, and
+    /// the 404-not-412 retry contract below is preserved by the rows disappearing, not by a version
+    /// moving.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why this now takes the timeline lock</b> where the S33 version was deliberately a single
+    /// statement: it has to identify several rows and write several rows, so the version predicate in
+    /// a WHERE clause can no longer be the whole concurrency story. Lock order is the same as the
+    /// writer's (<c>employee_profiles</c> then <c>users</c>), so no new deadlock edge appears.
+    /// </para>
+    /// </summary>
+    /// <exception cref="KeyNotFoundException">No row covers today (pre-S141: no live row) — 404.
+    /// Also the branch an admin retry hits after a successful delete, per the 404-vs-412 divergence
+    /// documented on <see cref="SoftDeleteAsync"/>.</exception>
+    /// <exception cref="OptimisticConcurrencyException">A row covers today but
+    /// <c>users.version</c> differs from <paramref name="expectedVersion"/> — 412.</exception>
+    public async Task<EmployeeProfileSoftDeleteResult> SoftDeleteTimelineAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, long expectedVersion,
         DateOnly? closeDate = null,
@@ -841,79 +1145,86 @@ public sealed class EmployeeProfileRepository
         // The parameter is OPTIONAL and trailing so existing direct constructions and callers
         // keep compiling; when omitted the repository falls back to its own seam read, which is
         // correct for any caller that needs only one date.
-        var today = closeDate ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var today = closeDate ?? Today();
 
-        // 1. Single-statement UPDATE with row-disappearance semantic — no version bump
-        //    (ADR-023 D8: soft-delete is row-state-change, not field-mutation; the partial-
-        //    unique-index `idx_employee_profiles_live` makes the row "disappear" from live
-        //    reads, so bumping version would be redundant). The `AND version = @expectedVersion`
-        //    predicate enforces optimistic concurrency without needing a separate
-        //    `SELECT ... FOR UPDATE` step — unlike SupersedeAndCreateAsync's 3-case routing,
-        //    soft-delete has no branching that needs the lock to be held across multiple
-        //    statements.
-        //
-        //    S139 / TASK-13907 — the close-stamp is now the APP-side UTC day, bound as `@today`
-        //    from the `today` local above, where it used to be the DB-side `NOW()::date`. WHY:
-        //    this request reads "today" in the endpoint too (the future-dating validator, and the
-        //    SoftDeleted event's EffectiveTo), so a DB-side read made one HR action depend on two
-        //    clocks — and a fixed test clock could not move the database's. The endpoint now
-        //    computes that date ONCE and passes it in as `closeDate`, so the row and the event it
-        //    describes carry the same date by construction.
-        //    BEHAVIOUR-PRESERVING: the Postgres session time zone is UTC wherever this runs
-        //    (compose, init.sql and the Testcontainers builder set no override), so `NOW()::date`
-        //    already produced the UTC day. `effective_to` stays day-granular because Npgsql maps
-        //    DateOnly to `date`. `updated_at = NOW()` stays a DB timestamp on purpose: it is
-        //    row-maintenance metadata, not a temporal boundary anyone reasons about.
-        await using var cmd = new NpgsqlCommand(
-            """
-            UPDATE employee_profiles
-               SET effective_to = @today, updated_at = NOW()
-             WHERE employee_id = @employeeId
-               AND effective_to IS NULL
-               AND version = @expectedVersion
-            RETURNING profile_id, version
-            """, conn, tx);
-        cmd.Parameters.AddWithValue("today", today);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (await reader.ReadAsync(ct))
-        {
-            // Happy path: UPDATE matched exactly one row (partial-unique-index guarantees ≤1).
-            // Returned version is UNCHANGED from predecessor per ADR-023 D8.
-            return (reader.GetGuid(0), reader.GetInt64(1));
-        }
-        // The reader must be disposed before we can issue the probe SELECT on the same
-        // connection (Npgsql forbids overlapping commands on a single connection).
-        await reader.DisposeAsync();
+        // 1. Lock the whole timeline, then the users row — the writer's order, unchanged.
+        var timeline = await LockTimelineAsync(conn, tx, employeeId, ct);
+        var covering = timeline.FirstOrDefault(
+            r => r.EffectiveFrom <= today && (r.EffectiveTo is null || r.EffectiveTo.Value > today));
 
-        // 2. UPDATE matched no row. Probe to distinguish 404 (no live row) from 412 (live
-        //    row exists, version differs) per S31 UpsertAsync precedent. This second read
-        //    sits inside the same tx so it sees the same snapshot as the failed UPDATE — no
-        //    chance of a TOCTOU window mis-classifying a concurrent insert as a 404.
-        await using var probeCmd = new NpgsqlCommand(
-            """
-            SELECT version FROM employee_profiles
-            WHERE employee_id = @employeeId
-              AND effective_to IS NULL
-            """, conn, tx);
-        probeCmd.Parameters.AddWithValue("employeeId", employeeId);
-        var probeResult = await probeCmd.ExecuteScalarAsync(ct);
-        if (probeResult is null || probeResult is DBNull)
+        // 2. Nothing covers today → 404, BEFORE any version comparison. Order matters and is the
+        //    pre-S141 order: a stale If-Match presented after a successful delete must read as "gone"
+        //    (404), not "changed" (412), because soft-delete is idempotent by row-disappearance
+        //    rather than by version bump (ADR-023 D8). Pre-S141 the same sentence said "no LIVE row";
+        //    under scheduling an open row can be one that has not started, so the test is coverage of
+        //    today, which is what "is this profile in force?" always meant.
+        if (covering is null)
         {
-            // No live row → 404. This branch is also hit by an admin retry with stale
-            // If-Match after a successful soft-delete (row disappeared per partial-unique-
-            // index predicate; ADR-023 D8 row-disappearance idempotency — see XML doc above).
             throw new KeyNotFoundException(
                 $"Employee profile not found for employee_id='{employeeId}'.");
         }
-        var actualVersion = (long)probeResult;
-        // Live row exists but version differs → 412 per ADR-019 D2 admin-strict If-Match.
-        throw new OptimisticConcurrencyException(
-            $"Employee profile version is {actualVersion}, but caller sent " +
-            $"If-Match: \"{expectedVersion}\"; refresh and retry.",
-            expectedVersion: expectedVersion,
-            actualVersion: actualVersion);
+
+        var (usersVersion, _) = await LockUsersRowAsync(conn, tx, employeeId, ct);
+        if (usersVersion != expectedVersion)
+        {
+            throw new OptimisticConcurrencyException(
+                $"Employee record version is {usersVersion}, but caller sent " +
+                $"If-Match: \"{expectedVersion}\"; refresh and retry.",
+                expectedVersion: expectedVersion,
+                actualVersion: usersVersion);
+        }
+
+        // 3. Close the row covering today at `today` (end-exclusive, ADR-018 D9 — it no longer covers
+        //    today). Its `version` is NOT bumped: ADR-023 D8 treats soft-delete as a row-state change,
+        //    and the audit row the endpoint writes records version_before == version_after.
+        //    `updated_at = NOW()` stays a DB timestamp on purpose — row-maintenance metadata, not a
+        //    temporal boundary anyone reasons about. (The close-stamp itself has been the APP-side
+        //    UTC day since S139 / TASK-13907, so one HR action depends on one clock.)
+        await using (var closeCmd = new NpgsqlCommand(
+            """
+            UPDATE employee_profiles
+               SET effective_to = @today, updated_at = NOW()
+             WHERE profile_id = @profileId
+            """, conn, tx))
+        {
+            closeCmd.Parameters.AddWithValue("today", today);
+            closeCmd.Parameters.AddWithValue("profileId", covering.ProfileId);
+            await closeCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        // 4. Retire every SCHEDULED row by the zero-width close. A row already zero-width was retired
+        //    before and is skipped, so a repeated delete cannot manufacture phantom "retirements" for
+        //    the audit trail to explain.
+        var retired = new List<RetiredScheduledProfileRow>();
+        foreach (var scheduled in timeline
+                     .Where(r => r.EffectiveFrom > today && r.EffectiveTo != r.EffectiveFrom)
+                     .OrderBy(r => r.EffectiveFrom))
+        {
+            await using var retireCmd = new NpgsqlCommand(
+                """
+                UPDATE employee_profiles
+                   SET effective_to = effective_from, updated_at = NOW()
+                 WHERE profile_id = @profileId
+                """, conn, tx);
+            retireCmd.Parameters.AddWithValue("profileId", scheduled.ProfileId);
+            await retireCmd.ExecuteNonQueryAsync(ct);
+            retired.Add(new RetiredScheduledProfileRow(
+                ProfileId: scheduled.ProfileId,
+                EffectiveFrom: scheduled.EffectiveFrom,
+                PreviousEffectiveTo: scheduled.EffectiveTo,
+                PartTimeFraction: scheduled.PartTimeFraction,
+                Position: scheduled.Position,
+                EmploymentCategory: scheduled.EmploymentCategory,
+                Version: scheduled.Version));
+        }
+
+        return new EmployeeProfileSoftDeleteResult(
+            ProfileId: covering.ProfileId,
+            Version: covering.Version,
+            UsersVersion: usersVersion,
+            EffectiveTo: today,
+            Covering: covering,
+            RetiredScheduledRows: retired);
     }
 
     // ------------------------------------------------------------------
@@ -1219,17 +1530,69 @@ public sealed class EmployeeProfileRepository
     }
 
     /// <summary>
-    /// The cache rule (see <see cref="SupersedeAndCreateAsync"/>): re-read the category of the row
-    /// covering TODAY after the write and, only if it differs from <c>users.employment_category</c>,
-    /// write the cache with a <c>users.version</c> bump. Returns <c>null</c> when nothing was
-    /// written — no row covers today (post soft-delete), the covering cell is a legacy NULL (which
-    /// by the S137 COALESCE contract already means "same as users"), or the value is unchanged.
-    /// Not gated on <c>is_active</c>. Locks the users row (<c>FOR UPDATE</c>) before comparing so
-    /// the before-value the endpoint audits is the one actually replaced.
+    /// S141 / TASK-14102 (B5) — lock the employee's <c>users</c> row and read the AGGREGATE
+    /// CONCURRENCY TOKEN (<c>users.version</c>), which is what an admin client holds as the profile
+    /// ETag under owner ruling OQ-3 (a).
+    ///
+    /// <para>
+    /// <b>Lock ORDER is deliberate and unchanged.</b> Callers take this AFTER the
+    /// <c>employee_profiles</c> timeline lock, which is where the users lock already sat (the cache
+    /// refresh at the end of the write held it). Acquiring it earlier in the SAME order adds no new
+    /// deadlock edge. Note that the admin users PUT locks in the opposite conventional order
+    /// (users → child timeline, the S78 rule) — that is safe only because that handler never takes
+    /// the profile timeline lock while holding users; if a future caller ever does both, THIS is the
+    /// comment that has to be revisited.
+    /// </para>
     /// </summary>
-    private static async Task<(long VersionBefore, long VersionAfter, string PreviousValue, string NewValue)?>
-        RefreshEmploymentCategoryCacheAsync(
-            NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, DateOnly today, CancellationToken ct)
+    private static async Task<(long Version, string EmploymentCategory)> LockUsersRowAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT version, employment_category
+            FROM users
+            WHERE user_id = @employeeId
+            FOR UPDATE
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            // The employee_id FK guarantees the users row; reaching here is a programming error.
+            throw new InvalidOperationException(
+                $"users row for user_id='{employeeId}' not found while reading the aggregate concurrency token.");
+        }
+        return (reader.GetInt64(0), reader.GetString(1));
+    }
+
+    /// <summary>
+    /// The cache rule AND the token bump (see <see cref="SupersedeAndCreateAsync"/> step 6): re-read
+    /// the category of the row covering TODAY after the write, then write
+    /// <c>UPDATE users SET employment_category = &lt;that category, when there is one&gt;,
+    /// version = version + 1</c>.
+    ///
+    /// <para>
+    /// <b>The version bump is UNCONDITIONAL; the cached VALUE only moves when today's row moved.</b>
+    /// Two different rules, deliberately: the token must change on every timeline write or it cannot
+    /// detect a concurrent one (S141 B5), while the cache must never be set from the REQUEST or a
+    /// historical-only correction would overwrite today's truth with a 2024 value. When no row covers
+    /// today at all — reachable after a soft-delete, and newly reachable when a scheduled row exists
+    /// with nothing before it (refinement B8) — the COALESCE keeps the existing cached value rather
+    /// than nulling a NOT NULL column. Not gated on <c>is_active</c>: a departed employee's cache
+    /// must stay correctable.
+    /// </para>
+    ///
+    /// <para>
+    /// Shape mirrors <c>UserAgreementCodeRepository.RefreshAgreementCodeCacheAsync</c>, which made
+    /// the same two-rules split first. The caller already holds the users row lock
+    /// (<see cref="LockUsersRowAsync"/>) and passes the version AND category it observed under it,
+    /// so the before-values this returns are the ones actually replaced — no second read, no window.
+    /// </para>
+    /// </summary>
+    private static async Task<(long VersionBefore, long VersionAfter, string PreviousValue, string NewValue)>
+        RefreshEmploymentCategoryCacheAndBumpTokenAsync(
+            NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, DateOnly today,
+            long usersVersionBefore, string usersCategoryBefore, CancellationToken ct)
     {
         string? todayCategory;
         await using (var todayCmd = new NpgsqlCommand(
@@ -1239,6 +1602,8 @@ public sealed class EmployeeProfileRepository
             WHERE employee_id = @employeeId
               AND effective_from <= @today
               AND (effective_to IS NULL OR effective_to > @today)
+            ORDER BY effective_from DESC
+            LIMIT 1
             """, conn, tx))
         {
             todayCmd.Parameters.AddWithValue("employeeId", employeeId);
@@ -1246,49 +1611,28 @@ public sealed class EmployeeProfileRepository
             var scalar = await todayCmd.ExecuteScalarAsync(ct);
             todayCategory = scalar is null || scalar is DBNull ? null : (string)scalar;
         }
-        if (todayCategory is null) return null;
-
-        string cachedCategory;
-        long cachedVersion;
-        await using (var usersCmd = new NpgsqlCommand(
-            """
-            SELECT employment_category, version
-            FROM users
-            WHERE user_id = @employeeId
-            FOR UPDATE
-            """, conn, tx))
-        {
-            usersCmd.Parameters.AddWithValue("employeeId", employeeId);
-            await using var reader = await usersCmd.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
-            {
-                // The employee_id FK guarantees the users row; reaching here is a programming error.
-                throw new InvalidOperationException(
-                    $"users row for user_id='{employeeId}' not found while refreshing the employment_category cache.");
-            }
-            cachedCategory = reader.GetString(0);
-            cachedVersion = reader.GetInt64(1);
-        }
-        if (string.Equals(cachedCategory, todayCategory, StringComparison.Ordinal)) return null;
 
         await using var updateCmd = new NpgsqlCommand(
             """
             UPDATE users
-               SET employment_category = @employmentCategory,
+               SET employment_category = COALESCE(@employmentCategory, employment_category),
                    version = version + 1,
                    updated_at = NOW()
              WHERE user_id = @employeeId
-            RETURNING version
+            RETURNING employment_category, version
             """, conn, tx);
         updateCmd.Parameters.AddWithValue("employeeId", employeeId);
-        updateCmd.Parameters.AddWithValue("employmentCategory", todayCategory);
-        var newVersion = await updateCmd.ExecuteScalarAsync(ct);
-        if (newVersion is null || newVersion is DBNull)
+        updateCmd.Parameters.Add(new NpgsqlParameter("employmentCategory", NpgsqlTypes.NpgsqlDbType.Text)
+        {
+            Value = (object?)todayCategory ?? DBNull.Value,
+        });
+        await using var updated = await updateCmd.ExecuteReaderAsync(ct);
+        if (!await updated.ReadAsync(ct))
         {
             throw new InvalidOperationException(
                 $"users cache write for user_id='{employeeId}' matched no row; FOR UPDATE invariant violated.");
         }
-        return (cachedVersion, (long)newVersion, cachedCategory, todayCategory);
+        return (usersVersionBefore, updated.GetInt64(1), usersCategoryBefore, updated.GetString(0));
     }
 }
 
@@ -1345,6 +1689,100 @@ public sealed record EmployeeProfileSupersedeRequest(
     DateOnly? EmploymentStartDate = null);
 
 /// <summary>
+/// S141 / TASK-14102 (refinement B4, owner ruling OQ-5 (a)) — one scheduled profile row that a
+/// soft-delete retired, captured as it stood BEFORE the retirement.
+///
+/// <para>
+/// <b>Why this is returned rather than silently discarded.</b> The scheduled change may have been
+/// entered by a different HR person, days earlier, as a deliberate saved decision; deleting the
+/// profile now destroys it as a side effect of an unrelated action. The owner accepted that cost on
+/// condition that the destruction is recorded as deliberately as the creation was — so the caller
+/// owes an audit row (and an event) per retired row, and this record carries everything such a row
+/// needs: which row, the interval it was going to occupy, and the values it was going to bring.
+/// </para>
+///
+/// <para>
+/// <see cref="PreviousEffectiveTo"/> is the end the row had before retirement (<c>null</c> = it was
+/// the open row). After retirement every such row is zero-width <c>[EffectiveFrom, EffectiveFrom)</c>.
+/// </para>
+/// </summary>
+public sealed record RetiredScheduledProfileRow(
+    Guid ProfileId,
+    DateOnly EffectiveFrom,
+    DateOnly? PreviousEffectiveTo,
+    decimal PartTimeFraction,
+    string? Position,
+    string? EmploymentCategory,
+    long Version);
+
+/// <summary>
+/// S141 / TASK-14102 (refinement B4) — what a soft-delete actually did.
+/// </summary>
+/// <param name="ProfileId">The row that covered TODAY and was closed — the row the endpoint's audit
+/// row and <c>EmployeeProfileSoftDeleted</c> event describe.</param>
+/// <param name="Version">That row's own <c>version</c>, UNCHANGED (ADR-023 D8: soft-delete is a
+/// row-state change, so the audit records <c>version_before == version_after</c>).</param>
+/// <param name="UsersVersion">The aggregate token, also unchanged — the delete validates against it
+/// but does not move it, so a stale retry reads as "gone" (404) rather than "changed" (412).</param>
+/// <param name="EffectiveTo">The date stamped into the closed row: the ONE "today" of this request,
+/// so the row and the event describing it carry the same date by construction, not by two clock
+/// reads that happen to agree.</param>
+/// <param name="Covering">The closed row's full pre-image — the values that were ACTUALLY in force
+/// when HR deleted, which is what the audit's <c>previous_data</c> must record. Under future-dating
+/// the open row's values are the wrong answer to that question.</param>
+/// <param name="RetiredScheduledRows">Every scheduled row retired alongside it, earliest first.
+/// EMPTY in the ordinary case (nothing scheduled), which is why a caller must handle the empty list
+/// as the norm rather than as an edge case.</param>
+public sealed record EmployeeProfileSoftDeleteResult(
+    Guid ProfileId,
+    long Version,
+    long UsersVersion,
+    DateOnly EffectiveTo,
+    EmployeeProfileRowPreImage Covering,
+    IReadOnlyList<RetiredScheduledProfileRow> RetiredScheduledRows);
+
+/// <summary>
+/// S141 / TASK-14102 (refinement B0) — a change that is already SCHEDULED to take effect after today:
+/// the next profile row starting strictly after today, with the interval it will occupy and the
+/// values it will bring.
+///
+/// <para>
+/// <b>Plain language.</b> "From 1 November this person is 0.6 and their title is Department Head."
+/// Carried alongside today's values on every read so a screen can say so, rather than showing one
+/// number with no indication that another is coming — which is what made the S141 edit-drawer defect
+/// possible in the first place.
+/// </para>
+///
+/// <para>
+/// <see cref="EffectiveTo"/> is <c>null</c> when the scheduled row is the open one (the ordinary
+/// case: a change scheduled to run indefinitely). A non-null value means a FURTHER row follows it, so
+/// a caller that wants the whole future must read the timeline, not just this one hop. Zero-width
+/// rows are excluded upstream — they are the trace a retired scheduled row leaves, not a change.
+/// </para>
+/// </summary>
+public sealed record ScheduledEmployeeProfileChange(
+    DateOnly EffectiveFrom,
+    DateOnly? EffectiveTo,
+    decimal PartTimeFraction,
+    string? Position,
+    string? EmploymentCategory);
+
+/// <summary>
+/// S141 / TASK-14102 — what an as-of-today profile read returns: the profile that holds TODAY, the
+/// aggregate concurrency token (<c>users.version</c> — ADR-019 one token per aggregate, owner ruling
+/// OQ-3 (a)), and B0's next scheduled change (<c>null</c> when nothing is scheduled).
+/// </summary>
+/// <param name="Profile">The values in force today.</param>
+/// <param name="Version"><c>users.version</c> — what a client holds as an ETag and sends back as
+/// <c>If-Match</c>. Deliberately NOT the row's own <c>version</c>: see
+/// <see cref="EmployeeProfileRepository.GetByEmployeeIdWithVersionAsync"/>.</param>
+/// <param name="Scheduled">The next change dated after today, if any.</param>
+public sealed record ProfileAsOfTodayHit(
+    EmploymentProfile Profile,
+    long Version,
+    ScheduledEmployeeProfileChange? Scheduled);
+
+/// <summary>
 /// S138 / TASK-13801 — the PRE-IMAGE of one <c>employee_profiles</c> row as it stood under the
 /// lock before the write: the fields, the interval and the row's own version. Carried on
 /// <see cref="SaveEmployeeProfileResult.Covering"/> so the endpoint sources audit
@@ -1372,12 +1810,14 @@ public sealed record EmployeeProfileRowPreImage(
 /// </summary>
 /// <param name="ProfileId">The <c>profile_id</c> of the row this call produced or edited: a fresh
 /// UUID for every INSERT case, the anchor's id for an in-place edit or a no-op.</param>
-/// <param name="Version">S138: the per-employee TIMELINE token AFTER the write — the OPEN row's
-/// <c>version</c> — in every case (the value the endpoint stamps as ETag and records as audit
-/// <c>version_after</c>). It coincides with the produced row's version for A / B'-on-open /
-/// C'-on-open (the pre-S138 cases, unchanged) and for T; for history-only writes it is the open
-/// row's bumped version. On a no-op it is the unchanged current token. When no open row exists at
-/// all (a history-only write after a soft-delete) it falls back to the produced row's version.</param>
+/// <param name="Version">The per-employee AGGREGATE token AFTER the write — the value the endpoint
+/// stamps as ETag and records as audit <c>version_after</c>.
+/// <b>S141 / TASK-14102 (B5, owner ruling OQ-3 (a)): that token is now <c>users.version</c></b>, not
+/// the open row's <c>version</c> as it was in S138. The change is invisible to the endpoint, which
+/// already treated this member as "the token" rather than "a row version" — but it is the reason the
+/// GET's ETag and this value still describe the same thing once a scheduled row exists, which a
+/// per-row token could not. On a no-op it is the unchanged current <c>users.version</c>. The touched
+/// row's own version is <see cref="SaveEmployeeProfileResult.ProducedRowVersion"/>.</param>
 /// <param name="Outcome">Which branch the call routed through.</param>
 public sealed record SaveEmployeeProfileResult(
     Guid ProfileId,
@@ -1408,8 +1848,10 @@ public sealed record SaveEmployeeProfileResult(
     /// where no row covered the date.</summary>
     public EmployeeProfileRowPreImage? Covering { get; init; }
 
-    /// <summary>S138 — the open row's version BEFORE the write (audit <c>version_before</c>);
-    /// <c>null</c> when no open row existed.</summary>
+    /// <summary>The aggregate token BEFORE the write (audit <c>version_before</c>) — S141: the
+    /// <c>users.version</c> observed under the lock, so it is always set on a real write and on a
+    /// no-op. (S138 defined it as the open row's version and left it <c>null</c> when no open row
+    /// existed; the aggregate token has no such hole.)</summary>
     public long? TimelineVersionBefore { get; init; }
 
     /// <summary>S138 — <c>users.version</c> before the cache write; <c>null</c> when the cache was untouched.</summary>
