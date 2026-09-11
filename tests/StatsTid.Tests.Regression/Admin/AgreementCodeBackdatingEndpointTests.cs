@@ -209,11 +209,35 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Future-dating is still refused, and the body is DATE-FREE (it shares its shape with the
-    /// employment-start-floor refusal, which must never echo the hire date).
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) — RED
+    /// until the S141 wave-2 gate.</b> <b>OLD expectation</b> (pre-S141): future-dating was
+    /// refused, DATE-FREE body. <b>NEW (owner ruling — HR can schedule an employment change ahead
+    /// of time):</b> this is the users-PUT twin of
+    /// <see cref="UsersPut_BackdatedCodeEqualToTodaysCode_StillWritesTheRow_CacheUnchanged"/> above
+    /// — router Shape 1 (<c>REFINEMENT-s141-increment4-and-the-settlement-anchor.md</c> section B3
+    /// / <c>TemporalWriteRouterTests.S141_FutureWrite_OnOpenRow_SplitsAndSupersedes</c>): the single
+    /// open row is split at tomorrow, closed there at the OLD code, and a new open row from
+    /// tomorrow carries the NEW one.
+    /// <para>
+    /// <b>Why this is a real assertion, not a bare status-code check.</b> The scheduled code must
+    /// NOT take effect early. The live cache means "as of today" (B1), and this write never
+    /// touches the row covering today, so the cache stands at the OLD code — exactly the same
+    /// "cache unchanged" shape the backdated sibling test above already proves, just on the other
+    /// side of today. The TOKEN still moves once, by the endpoint's own rewrite (the one-bump
+    /// rule: the writer itself only bumps when it changes the row covering today, which it does
+    /// not here).
+    /// </para>
+    /// <para>
+    /// <b>Docker-gated; completes at the wave-2 gate, not wave 1.</b> This endpoint's own
+    /// future-date validator (the users-PUT guard in <c>AdminEndpoints.cs</c>) is lifted by
+    /// TASK-14104 in wave 2. TASK-14112 (this file's owning task, wave 1) writes this replacement
+    /// and reports it RED against the still-refusing endpoint — Docker is unavailable on the
+    /// authoring machine (standing project constraint), so neither state is verified locally.
+    /// Expected GREEN once TASK-14104 merges.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task UsersPut_FutureDatedAgreementCode_Returns422_WithNoDateInTheBody()
+    public async Task UsersPut_FutureDatedAgreementCode_SplitsTheDatedTimeline_CacheUnchanged()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
         await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
@@ -226,13 +250,22 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
             body: new { agreementCode = "HK", effectiveFrom = tomorrow.ToString("yyyy-MM-dd") },
             ifMatch: $"\"{before}\"");
 
-        // RED: fails if the future-dating guard does not read the fixed clock (F+1 would then
-        // compare against the REAL wall-clock day, not F, and could be wrongly accepted as 200), or
-        // if the 422 body leaks the date.
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
-        var raw = await rsp.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(tomorrow.ToString("yyyy-MM-dd"), raw, StringComparison.Ordinal);
-        Assert.Equal(before, await ReadUsersVersionRawAsync(userId));
+        // OLD: UnprocessableEntity. NEW: the scheduled change is recorded, not refused.
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        // The open row is split at tomorrow: the old code stands until then, the new one from there.
+        var rows = await ReadAgreementTimelineAsync(userId);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal((F.AddDays(-60), tomorrow, "AC"), (rows[0].From, rows[0].To, rows[0].Code));
+        Assert.Equal((tomorrow, (DateOnly?)null, "HK"), (rows[1].From, rows[1].To, rows[1].Code));
+
+        // The scheduled code has NOT taken effect yet — the live cache still means "as of today",
+        // so it stands at the OLD value.
+        Assert.Equal("AC", await ReadUsersAgreementCodeAsync(userId));
+        // ...but the TOKEN still moves, exactly once — the endpoint's own rewrite, per the
+        // one-bump rule (the writer does not bump here, because it never touches the row covering
+        // today).
+        Assert.Equal(before + 1, await ReadUsersVersionRawAsync(userId));
     }
 
     /// <summary>
@@ -497,24 +530,61 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
         Assert.Single(await ReadAgreementTimelineAsync(userId));
     }
 
-    /// <summary>Future-dating is refused on the dedicated endpoint too, DATE-FREE.</summary>
+    /// <summary>
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) — RED
+    /// until the S141 wave-2 gate.</b> <b>OLD expectation</b> (pre-S141): future-dating was
+    /// refused on this dedicated endpoint too, DATE-FREE body. <b>NEW (owner ruling — HR can
+    /// schedule an employment change ahead of time):</b> router Shape 1 on the single open row —
+    /// closed at tomorrow keeping the OLD code, a new open row from tomorrow carrying the NEW one
+    /// — the same shape
+    /// <see cref="AgreementCodeEndpoint_HistoryOnlyCorrection_LeavesTheLiveCacheUntouched"/> above
+    /// already proves for a write that never touches today's row, just on the other side of today.
+    /// <para>
+    /// <b>Why this is a real assertion, not a bare status-code check.</b> The scheduled code must
+    /// NOT take effect early: the live cache stands at the OLD value, and — per this endpoint's
+    /// documented SHARED RESPONSE RULE (S138 / TASK-13810) — the response body echoes TODAY's
+    /// code, not the one the caller just scheduled. The token still moves exactly once, the same
+    /// as every other real write on this endpoint.
+    /// </para>
+    /// <para>
+    /// <b>Docker-gated; completes at the wave-2 gate, not wave 1.</b> This endpoint's own
+    /// future-date validator (<c>AdminEndpoints.cs</c>'s agreement-code PUT guard) is lifted by
+    /// TASK-14104 in wave 2. TASK-14112 (this file's owning task, wave 1) writes this replacement
+    /// and reports it RED against the still-refusing endpoint — Docker is unavailable on the
+    /// authoring machine (standing project constraint), so neither state is verified locally.
+    /// Expected GREEN once TASK-14104 merges.
+    /// </para>
+    /// </summary>
     [Fact]
-    public async Task AgreementCodeEndpoint_FutureDated_Returns422_WithNoDateInTheBody()
+    public async Task AgreementCodeEndpoint_FutureDated_SplitsTheDatedTimeline_CacheUnchanged()
     {
         var userId = await SeedUserAsync(agreementCode: "AC");
         await ReplaceAgreementTimelineAsync(userId, (F.AddDays(-60), null, "AC"));
 
         var client = AdminClient();
-        var version = await ReadUsersVersionRawAsync(userId);
+        var before = await ReadUsersVersionRawAsync(userId);
         var tomorrow = F.AddDays(1);
 
-        var rsp = await PutAgreementCodeAsync(client, userId, "HK", tomorrow, $"\"{version}\"");
-        // RED: fails if the dedicated endpoint's future-dating guard does not read the fixed clock
-        // (F+1 would then compare against the REAL wall-clock day, not F), or if the 422 body leaks
-        // the date.
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
-        var raw = await rsp.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(tomorrow.ToString("yyyy-MM-dd"), raw, StringComparison.Ordinal);
+        var rsp = await PutAgreementCodeAsync(client, userId, "HK", tomorrow, $"\"{before}\"");
+
+        // OLD: UnprocessableEntity. NEW: the scheduled change is recorded, not refused.
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        var rows = await ReadAgreementTimelineAsync(userId);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal((F.AddDays(-60), tomorrow, "AC"), (rows[0].From, rows[0].To, rows[0].Code));
+        Assert.Equal((tomorrow, (DateOnly?)null, "HK"), (rows[1].From, rows[1].To, rows[1].Code));
+
+        // The scheduled code has NOT taken effect yet — the live cache still stands at the OLD
+        // value...
+        Assert.Equal("AC", await ReadUsersAgreementCodeAsync(userId));
+        // ...and the SHARED RESPONSE RULE means the body echoes today's code too, never the
+        // scheduled one.
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("AC", body.GetProperty("agreementCode").GetString());
+
+        // The token still moves, exactly once, the same as every other real write on this endpoint.
+        Assert.Equal(before + 1, await ReadUsersVersionRawAsync(userId));
     }
 
     /// <summary>
@@ -545,26 +615,32 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// S139 / TASK-13908 follow-up (Step-5a Reviewer WARNING 2) — the REPOSITORY-level
-    /// future-dating guard, pinned by calling <see cref="UserAgreementCodeRepository.SupersedeAndCreateAsync"/>
-    /// directly (bypassing both the general users PUT and the dedicated agreement-code PUT
-    /// entirely).
-    ///
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) — RED, and
+    /// its dependency is narrower than the wave-2 label on this file's HTTP-level siblings.</b>
+    /// <b>OLD test</b> (S139 / TASK-13908 follow-up): called
+    /// <see cref="UserAgreementCodeRepository.SupersedeAndCreateAsync"/> directly (bypassing both
+    /// HTTP surfaces) and asserted the REPOSITORY-level guard threw
+    /// <see cref="TemporalWriteRejectedException"/> for F+1, then that the identical request at F
+    /// succeeded.
     /// <para>
-    /// <b>Why the endpoint-level probe cannot pin this.</b>
-    /// <c>FixedClockProbeTests.AgreementCodePut_FutureDated_Returns422_ThenSameDatePut_Returns200</c>
-    /// only proves the ENDPOINT'S OWN guard (<c>AdminEndpoints.cs:2463</c>) rejects F+1 FIRST — it
-    /// 422s before the request ever reaches the repository. And for the F leg, the repository's
-    /// "today" (<c>UserAgreementCodeRepository.cs:260</c>) feeds only
-    /// <c>TemporalWriteRouter.IsFutureDated</c> and the "row covering today" cache refresh, both of
-    /// which answer IDENTICALLY for F and for the real wall-clock today. So that probe leg would
-    /// stay GREEN even if the repository's own clock read were never converted — it cannot see
-    /// this line at all. Calling the repository directly, constructed here with its own
-    /// <see cref="FixedTimeProvider"/> and no endpoint in front of it, closes that gap.
+    /// <b>NEW:</b> the repository-level guard is one of B3's "four repository sites" — owned by
+    /// TASK-14102 (backend-infrastructure), a WAVE-1 sibling task, NOT wave 2's TASK-14104 (which
+    /// lifts the endpoint-level validators this test never reaches, since it calls the repository
+    /// directly). So — unlike the HTTP-routed replacements elsewhere in this sprint — THIS test's
+    /// dependency is technically wave 1. It still cannot be verified locally either way (Docker is
+    /// unavailable on the authoring machine), so it is written RED and reported RED regardless of
+    /// which wave's merge would satisfy it.
+    /// </para>
+    /// <para>
+    /// <see cref="SeedUserAsync"/> never inserts a <c>user_agreement_codes</c> row, so this user's
+    /// timeline is EMPTY — a future date on an empty timeline is router Case A (no anchor to
+    /// split; see <c>TemporalWriteRouterTests.FutureDate_OnEmptyTimeline_CreatesTheOpenRow_S141</c>),
+    /// so the future write must succeed with the SAME <see cref="SaveUserAgreementCodeOutcome.Created"/>
+    /// outcome the old test already proved for the same-date (F) request below.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task SupersedeAndCreateAsync_RepositoryGuard_FutureDated_ThrowsTemporalWriteRejectedException_ThenSameDateSucceeds()
+    public async Task SupersedeAndCreateAsync_RepositoryGuard_FutureDated_SucceedsAsCaseA_Created()
     {
         var userId = await SeedUserAsync(agreementCode: "AC", employmentStartDate: F.AddDays(-100));
         var repo = new UserAgreementCodeRepository(_harness.Factory, new FixedTimeProvider(F));
@@ -574,32 +650,31 @@ public sealed class AgreementCodeBackdatingEndpointTests : IAsyncLifetime
             AgreementCode: "HK",
             EffectiveFrom: F.AddDays(1));
 
-        // RED: if UserAgreementCodeRepository still read the real wall clock instead of the
-        // injected FixedTimeProvider(F), F+1 (2025-03-13) would be an ordinary PAST date relative
-        // to the REAL "today" this suite actually runs on, so IsFutureDated(F+1, realToday) would
-        // be false and NOTHING would be thrown here — the exact gap the endpoint-level probe
-        // cannot see.
-        TemporalWriteRejectedException thrown;
+        // OLD: threw TemporalWriteRejectedException(FutureDated). NEW: succeeds and creates the
+        // user's first (open, future-dated) agreement-code row. RED today — the repository still
+        // throws for F+1; GREEN once TASK-14102 removes this guard.
+        SaveUserAgreementCodeOutcome outcome;
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            thrown = await Assert.ThrowsAsync<TemporalWriteRejectedException>(
-                () => repo.SupersedeAndCreateAsync(conn, tx, futureReq, expectedVersion: null));
-        }
-        Assert.Equal(TemporalWriteRejection.FutureDated, thrown.Reason);
-
-        // The identical request at F (not F+1) must succeed — proves the guard refuses THIS date
-        // because it is after F, not because the repository has become permanently strict.
-        var todayReq = futureReq with { EffectiveFrom = F };
-        await using (var conn = _harness.Factory.Create())
-        {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-            var result = await repo.SupersedeAndCreateAsync(conn, tx, todayReq, expectedVersion: null);
+            var saved = await repo.SupersedeAndCreateAsync(conn, tx, futureReq, expectedVersion: null);
             await tx.CommitAsync();
-            Assert.Equal(SaveUserAgreementCodeOutcome.Created, result.Outcome);
+            outcome = saved.Outcome;
         }
+        Assert.Equal(SaveUserAgreementCodeOutcome.Created, outcome);
+
+        // The row really is dated F+1, open-ended, carrying the request's own code — not silently
+        // coerced to today.
+        var rows = await ReadAgreementTimelineAsync(userId);
+        Assert.Single(rows);
+        Assert.Equal(futureReq.EffectiveFrom, rows[0].From);
+        Assert.Null(rows[0].To);
+        Assert.Equal("HK", rows[0].Code);
+
+        // The live cache means "as of today" and this write never touches today, so it must stay
+        // at the seeded value, never the scheduled one.
+        Assert.Equal("AC", await ReadUsersAgreementCodeAsync(userId));
     }
 
     // ─── Seeding helpers ─────────────────────────────────────────────────
