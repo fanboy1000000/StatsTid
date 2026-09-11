@@ -593,3 +593,73 @@ commissioned.
 **And one more caveat of mine resolved rather than assumed.** I had said a partial-year hire "may legitimately land in neither
 list". The agent computed it: this one lands in `items`, with the numbers worked rather than guessed. The caveat was an
 instruction not to assume, not a prediction.
+
+### TASK-14102 (timeline data layer) — complete. 14 findings, 4 declared deviations, 5 more falsified claims.
+
+The sprint's largest task, and the richest report. The headline is that **the removed `if` was load-bearing in a way nobody had
+written down**: it was the only reason "the row with no end date" and "the row describing today" were the same row, so every
+read asking "what is this person's current X" was relying on a coincidence without knowing it.
+
+**Findings that change other tasks — carried forward as handoffs:**
+
+- **★ H — the delete's return shape made the owner's mandatory audit structurally impossible.** OQ-5 (a) *requires* the
+  retirement of a scheduled row to be audited, and the existing two-value return cannot carry it. A new method was added that
+  returns the closed row, its pre-image, the token and **the retired scheduled rows**. **TASK-14104 must adopt it or the owner's
+  condition on OQ-5 (a) goes unmet.** This is the single most important handoff out of wave 1.
+- **★ D — OQ-5 (a) was written for one scheduled row; two are representable.** Retiring only the first would leave the second
+  standing with nothing covering today — the exact hole the delete fix exists to close. Implemented as **every row starting
+  after today**, earliest first. A faithful extension of the ruling rather than a departure from it.
+- **★ K — wave 1 alone opens a NEW cache-divergence window.** Before, the canonical read was wrong between the write and the
+  effective date. Now it is right throughout, but the cache is wrong from the effective date until the next write, and many
+  consumers read the cache. The window shrinks and moves, but a disagreement exists that did not before. **B2 in wave 2 closes
+  it. Wave 1 must not ship alone.**
+- **A — the boot seeders are in nobody's scope, and more usefully, a seeder CANNOT be the fix.** The refinement's phrasing
+  implied a fixable guard. The live partial-unique index means an employee whose only row is future *already has* an open row,
+  so a seeder converted to "has no row covering today" would try to insert a second and collide. The hole is unfillable that
+  way and needs the detector. **Correction carried to TASK-14105.**
+- **L — the update's existence pre-check now yields the wrong refusal code** for an employee whose only row is future.
+  TASK-14104 may want it to ask "covers today".
+- **M — two stale comments in files this task does not own**, one of them TASK-14104's.
+- **N — a same-values write is a no-op**, so scheduling a change to a value someone already has correctly reports nothing
+  scheduled. **Relevant to TASK-14107**: a drawer that optimistically renders "scheduled" after such a save would be lying.
+- **I — a second zero-caller trap** of the same shape as the one this task deleted. Left in place because deleting an unnamed
+  public surface is an Orchestrator call. Recommend removal in wave 2.
+
+**Findings resolved inside the task, well:**
+
+- **G — the new predicate loses a database-enforced uniqueness guarantee**, precisely in the three queries whose own comments
+  warn about fan-out, and one of them joins *after* its count, so a fan-out would corrupt the page and disagree with the total.
+  Solved with lateral single-row joins rather than a plain conversion. **This is the kind of second-order effect that no lens
+  found in four review cycles.**
+- **B — the token bump had to become unconditional**, because a token that does not move on every edit does not detect
+  anything. Consequence, named rather than discovered later: an audit row is now written on **every** profile edit, with an
+  unchanged pre-image where the category did not move. Correct, and a volume increase nobody had costed.
+- **C — one token now covers three things.** A profile edit and an admin user edit now conflict where they were independent.
+  That is what "one token per record" means once the record is the employee, and it is a real consequence of OQ-3 (a) that the
+  plan never stated.
+- **E — the retirement idiom and the scheduled-change read collide.** A retired row would have shown to HR as a pending
+  scheduled change. Both reads now exclude it.
+- **F — a clock divergence, pre-existing but newly visible.** The predicate cited as the in-tree reference uses the Copenhagen
+  business day; this task used the writers' UTC day per the sprint's own clock rule. For an hour or two each night the two
+  disagree about what day it is. **Needs a ruling; not created by this task.**
+
+**Five more falsified claims** (running total: sixteen, seven of them mine), including that the cited reference predicate was
+right in *shape* but carried a different clock, and that one instruction was "not literally implementable" — the agent
+preserved its intent and flagged the departure rather than silently approximating.
+
+## Wave-1 gate — PASSED
+
+Merged all four branches into master, **no conflicts**. Then, each exit status read from the unpiped command:
+
+| Check | Result |
+|---|---|
+| `dotnet build StatsTid.sln -c Release --no-incremental` | **0 errors, 145 warnings** — baseline held exactly |
+| Unit | **1244 passed, 0 failed** |
+| Demo-seed | **165 passed, 0 failed** |
+| Regression, non-Docker | **104 passed, 0 failed** |
+
+**The failing-first discipline worked end to end.** TASK-14112's four router pins were written before the fix and failed;
+after merging TASK-14102 they pass. That is a real RED-to-GREEN transition rather than a test written against finished code,
+and it is the thing the wave-1 split was created to make possible.
+
+Docker-gated facts remain unverified and are **not** claimed green.
