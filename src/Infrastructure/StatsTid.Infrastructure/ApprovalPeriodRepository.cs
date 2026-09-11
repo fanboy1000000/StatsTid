@@ -1005,7 +1005,7 @@ public sealed class ApprovalPeriodRepository
     /// <para>
     /// <b>Composition (one styrelse-bounded, set-based query for the roster + joins):</b>
     /// <list type="bullet">
-    /// <item><description><c>position</c> = the live <c>employee_profiles.position</c> (for FE
+    /// <item><description><c>position</c> = the AS-OF-TODAY <c>employee_profiles.position</c> (S141 B1; for FE
     /// search; null when no live profile / unset);</description></item>
     /// <item><description><c>structuralApproverId</c> = the active PRIMARY edge's
     /// <c>manager_id</c> (null when the person has no active PRIMARY approver);</description></item>
@@ -1043,9 +1043,18 @@ public sealed class ApprovalPeriodRepository
     {
         // (1) The structural roster + all joins in ONE styrelse-bounded, set-based query:
         //     every active styrelse user LEFT-JOINed to their active PRIMARY edge (the raw
-        //     structuralApproverId — NO resolver), their live employee_profiles (position), and
-        //     their OWN active manager_vikar row (outgoingVikar) with the vikar's display name.
+        //     structuralApproverId — NO resolver), their employee_profiles row COVERING TODAY
+        //     (position), and their OWN active manager_vikar row (outgoingVikar) with the vikar's
+        //     display name.
         //     (S110 / TASK-11001: the vestigial enhedLabel/primary-org-name display field is gone.)
+        //
+        //     S141 / TASK-14102 (refinement B1) — the profile join was
+        //     `AND ep.effective_to IS NULL`. With Increment 4's future-dating that selects the row
+        //     that has NOT started yet, so the roster would have shown a job title the person does
+        //     not hold until November. Display-only severity, but the roster is exactly where a
+        //     colleague forms a belief about someone's job — and a wrong belief here is how a wrong
+        //     approval route or a wrong wage-type conversation starts.
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
         var rosterRows = new List<RosterRow>();
         await using (var conn = _connectionFactory.Create())
         {
@@ -1071,9 +1080,23 @@ public sealed class ApprovalPeriodRepository
                     ON rl.employee_id = u.user_id
                     AND rl.relationship = 'PRIMARY'
                     AND rl.effective_to IS NULL
-                LEFT JOIN employee_profiles ep
-                    ON ep.employee_id = u.user_id
-                    AND ep.effective_to IS NULL
+                -- S141 / TASK-14102 (B1): the profile row COVERING TODAY, end-exclusive per
+                -- ADR-018 D9. A LATERAL … LIMIT 1 rather than a plain LEFT JOIN, and that is not
+                -- style: the retired `effective_to IS NULL` predicate could not match twice because
+                -- idx_employee_profiles_live enforced at most one open row, whereas non-overlap of
+                -- dated rows is a WRITER invariant the database does not enforce. Without the LIMIT
+                -- this query would trade an index-guaranteed single match for a predicate-based one
+                -- — in the one query whose own comment below explains how quietly a fan-out here
+                -- multiplies the roster.
+                LEFT JOIN LATERAL (
+                    SELECT p.position
+                    FROM employee_profiles p
+                    WHERE p.employee_id = u.user_id
+                      AND p.effective_from <= @today
+                      AND (p.effective_to IS NULL OR p.effective_to > @today)
+                    ORDER BY p.effective_from DESC
+                    LIMIT 1
+                ) ep ON TRUE
                 LEFT JOIN units un ON un.unit_id = u.unit_id
                 -- S106 / TASK-10602 (Reviewer WARNING — avoid the multi-peer-leader fan-out): a unit
                 -- has MULTIPLE "sideordnede" leaders, so a naive LEFT JOIN unit_leaders would yield one
@@ -1096,6 +1119,7 @@ public sealed class ApprovalPeriodRepository
             // Escape LIKE metacharacters in the (system-derived) path so a literal '%' or '_'
             // in an org id/path cannot widen the prefix into a wildcard (cross-styrelse over-match).
             cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(treeRootPathPrefix) + "%");
+            cmd.Parameters.AddWithValue("today", today);
 
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             var empOrd = reader.GetOrdinal("employee_id");
@@ -1215,10 +1239,16 @@ public sealed class ApprovalPeriodRepository
     /// <summary>
     /// S106 / TASK-10602 — the DISPLAY-ONLY by-id name resolver behind
     /// <see cref="MedarbejderRosterProjection.NameResolution"/>. Given the set of ids the roster
-    /// REFERENCES (managers + unit leaders), returns each one's display name + live position + unit
-    /// name. A pure <c>user_id = ANY(@ids)</c> lookup — NO org-scope predicate and NO
+    /// REFERENCES (managers + unit leaders), returns each one's display name + position as of today
+    /// + unit name. A pure <c>user_id = ANY(@ids)</c> lookup — NO org-scope predicate and NO
     /// <c>is_active</c> filter (so it resolves an inactive / out-of-subtree referenced person too).
     /// This admits NObody into scope: it only labels ids the in-scope roster already references.
+    ///
+    /// <para>
+    /// S141 / TASK-14102 (B1): the position join reads the row COVERING TODAY, not the open row —
+    /// with future-dating the two differ, and "Afdelingschef" next to a manager's name is a label a
+    /// reader will act on. Same LATERAL … LIMIT 1 shape and same reasoning as the roster query.
+    /// </para>
     /// </summary>
     private async Task<IReadOnlyDictionary<string, ResolvedPersonRef>> ResolvePersonRefsByIdAsync(
         IReadOnlyCollection<string> ids, CancellationToken ct)
@@ -1237,13 +1267,21 @@ public sealed class ApprovalPeriodRepository
                 ep.position     AS position,
                 un.name         AS unit_name
             FROM users u
-            LEFT JOIN employee_profiles ep
-                ON ep.employee_id = u.user_id
-                AND ep.effective_to IS NULL
+            LEFT JOIN LATERAL (
+                SELECT p.position
+                FROM employee_profiles p
+                WHERE p.employee_id = u.user_id
+                  AND p.effective_from <= @today
+                  AND (p.effective_to IS NULL OR p.effective_to > @today)
+                ORDER BY p.effective_from DESC
+                LIMIT 1
+            ) ep ON TRUE
             LEFT JOIN units un ON un.unit_id = u.unit_id
             WHERE u.user_id = ANY(@ids)
             """, conn);
         cmd.Parameters.AddWithValue("ids", ids.ToArray());
+        cmd.Parameters.AddWithValue(
+            "today", DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime));
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         var idOrd = reader.GetOrdinal("user_id");
@@ -1444,8 +1482,10 @@ public sealed class ApprovalPeriodRepository
     /// <summary>
     /// S106 / TASK-10603 — the scope-bounded people SEARCH for the merged-admin overlay's MEDARBEJDERE
     /// section. A SIBLING of <see cref="SearchPeopleAsync"/> (NEW method — the existing roster/picker
-    /// reads are untouched) that ADDS (a) an <c>email</c> match arm and (b) the live
-    /// <c>employee_profiles.position</c> + the person's <c>unit_id</c> + <c>primary_org_id</c> so the
+    /// reads are untouched) that ADDS (a) an <c>email</c> match arm and (b) the as-of-today
+    /// <c>employee_profiles.position</c> (S141 / TASK-14102 B1 — it read the open row until
+    /// Increment 4 made that a possibly-not-yet-effective row)
+    /// + the person's <c>unit_id</c> + <c>primary_org_id</c> so the
     /// endpoint can build the overlay's unit/Organisation PATH + the home-unit name. Case-insensitive
     /// substring (ILIKE <c>%q%</c>) on <c>display_name</c> OR <c>username</c> OR <c>email</c>; an
     /// empty/whitespace <paramref name="q"/> matches ALL in-scope people (mirrors
@@ -1501,9 +1541,21 @@ public sealed class ApprovalPeriodRepository
                     m.primary_org_id,
                     ep.position AS position
                 FROM matched m
-                LEFT JOIN employee_profiles ep
-                    ON ep.employee_id = m.user_id
-                    AND ep.effective_to IS NULL
+                -- S141 / TASK-14102 (B1): the profile row COVERING TODAY, not the open row. Under
+                -- future-dating the open row can be a change that has not started, so search would
+                -- have labelled people with a job title they do not yet hold. LATERAL … LIMIT 1
+                -- because the as-of-today predicate has no unique index behind it and this join sits
+                -- inside a PAGED query — a fan-out here would corrupt the page AND disagree with the
+                -- `total` CTE, which is computed before the join.
+                LEFT JOIN LATERAL (
+                    SELECT p.position
+                    FROM employee_profiles p
+                    WHERE p.employee_id = m.user_id
+                      AND p.effective_from <= @today
+                      AND (p.effective_to IS NULL OR p.effective_to > @today)
+                    ORDER BY p.effective_from DESC
+                    LIMIT 1
+                ) ep ON TRUE
                 ORDER BY m.display_name, m.user_id
                 LIMIT @limit OFFSET @offset
             )
@@ -1524,6 +1576,8 @@ public sealed class ApprovalPeriodRepository
         cmd.Parameters.AddWithValue("orgIds", (object?)accessibleOrgIds?.ToArray() ?? Array.Empty<string>());
         cmd.Parameters.AddWithValue("limit", limit);
         cmd.Parameters.AddWithValue("offset", offset);
+        cmd.Parameters.AddWithValue(
+            "today", DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime));
 
         var items = new List<OverlayPersonRow>();
         var total = 0;
@@ -2033,7 +2087,7 @@ public sealed record MedarbejderRosterRow(
 /// <summary>
 /// S106 / TASK-10602 — one DISPLAY-ONLY resolved person reference for the roster's
 /// <see cref="MedarbejderRosterProjection.NameResolution"/> map. Carries the <paramref name="DisplayName"/>
-/// + <paramref name="Position"/> (live <c>employee_profiles.position</c>) + <paramref name="UnitName"/>
+/// + <paramref name="Position"/> (the as-of-today <c>employee_profiles.position</c>, S141 B1) + <paramref name="UnitName"/>
 /// of an id the roster references (a manager / unit-leader) so the FE can label the upward-reference +
 /// cross-unit-leader chips without a blank. A pure by-id projection — NO scope is admitted by it.
 /// </summary>

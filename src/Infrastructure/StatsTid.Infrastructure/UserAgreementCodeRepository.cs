@@ -15,9 +15,22 @@ namespace StatsTid.Infrastructure;
 /// <c>idx_user_agreement_codes_live</c> enforces "at most one live (open) row per user".
 ///
 /// <para>
+/// <b>S141 / TASK-14102 — future-dating (ADR-040 Increment 4).</b> A change can now be dated ahead
+/// on this timeline too. Two things in this file moved with it, both for the same underlying reason
+/// — the open row stops being the row covering today: <see cref="GetCurrentAsync"/> is now an
+/// as-of-today read (it feeds the LOGIN TOKEN, so leaving it would have minted JWTs carrying a
+/// not-yet-effective agreement), and the future-dating refusal in the writer is gone.
+/// <see cref="GetAsOfTodayWithScheduledAsync"/> is new: it returns today's code alongside the next
+/// scheduled one, so a screen can say a change is coming (refinement B0). The dead
+/// <c>GetCurrentWithVersionAsync</c> was DELETED rather than converted — it handed out
+/// <c>user_agreement_codes.version</c>, which is not this aggregate's client token, so keeping a
+/// dated version of it would have preserved a trap rather than a capability.
+/// </para>
+///
+/// <para>
 /// <b>Canonical-write contract.</b> All writes to <c>user_agreement_codes</c> MUST flow
 /// through this repository. <c>users.agreement_code</c> is a denormalized cache for
-/// live-only consumers (JWT mint via <see cref="GetCurrentAsync"/>, current-row reads by
+/// today-only consumers (JWT mint via <see cref="GetCurrentAsync"/>, current-row reads by
 /// Skema/Overtime/Compliance endpoints) meaning "the agreement as of TODAY". <b>Since S138 /
 /// TASK-13801 the cache write happens INSIDE <see cref="SupersedeAndCreateAsync"/></b>, sourced
 /// from the row covering today (never from the request) and bumping <c>users.version</c> — the
@@ -107,62 +120,114 @@ public sealed class UserAgreementCodeRepository
     }
 
     /// <summary>
-    /// S34 / TASK-3402 — convenience read of the live row's <c>agreement_code</c> for
-    /// <paramref name="userId"/>. Returns <c>null</c> when no live row exists.
+    /// S34 / TASK-3402 — convenience read of the agreement code in force for
+    /// <paramref name="userId"/> TODAY. Returns <c>null</c> when no row covers today.
+    ///
+    /// <para>
+    /// <b>S141 / TASK-14102 (B1) — this used to read "the row with no end date" and call it
+    /// current.</b> That was correct only because every write dated after today was refused, which
+    /// made the open row and today's row the same row by accident. With Increment 4 a scheduled
+    /// change can exist, and the open row is then the one that has NOT started — so this read, whose
+    /// single most important consumer is the login token, would have minted JWTs carrying an
+    /// agreement code that is not yet in force. That is a domain-correctness AND a security defect
+    /// (the token's <c>agreement_code</c> is an authorization-adjacent claim), and it is the precise
+    /// reason the retired future-dating guard existed. The predicate is now the end-exclusive
+    /// as-of-today one, so the question is asked rather than inferred.
+    /// </para>
+    ///
+    /// <para>
+    /// Equivalent to <see cref="GetByUserIdAtAsync"/> with <c>asOfDate = today</c>, and now
+    /// literally so — it uses the same predicate and therefore the same
+    /// <c>(user_id, effective_from)</c> index rather than the live partial index the old form hit.
+    /// The plan is marginally wider; login is rare relative to general traffic, which is the same
+    /// budget argument that justified adding this SELECT to the login path in the first place.
+    /// "Today" is the writers' UTC day off the injected <see cref="TimeProvider"/> — the same day the
+    /// cache and the writers use, so a change scheduled for the 1st becomes visible to login at the
+    /// same midnight the row itself takes effect at.
+    /// </para>
     ///
     /// <para>
     /// Consumed by JWT mint (TASK-3406 sign-in path) and by live-only endpoint reads
-    /// (Skema/Overtime/Compliance "today's" agreement). Equivalent to
-    /// <see cref="GetByUserIdAtAsync"/> with <c>asOfDate = today</c> but reads the
-    /// partial-unique-index <c>idx_user_agreement_codes_live</c> directly for a tighter
-    /// query plan.
+    /// (Skema/Overtime/Compliance "today's" agreement). NOT for replay-sensitive paths — "today" is
+    /// a live read; those go through <see cref="GetByUserIdAtAsync"/> with their own date.
     /// </para>
     /// </summary>
     public async Task<string?> GetCurrentAsync(
         string userId, CancellationToken ct = default)
-    {
-        await using var conn = _dbFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            """
-            SELECT agreement_code
-            FROM user_agreement_codes
-            WHERE user_id = @userId AND effective_to IS NULL
-            """, conn);
-        cmd.Parameters.AddWithValue("userId", userId);
-        var result = await cmd.ExecuteScalarAsync(ct);
-        return result is null or DBNull ? null : (string)result;
-    }
+        => await GetByUserIdAtAsync(userId, Today(), ct);
 
     /// <summary>
-    /// S34 / TASK-3402 — atomic row + version read of the live row for
-    /// <paramref name="userId"/>, used by admin GET handlers (TASK-3407) to stamp the
-    /// ETag from the same snapshot whose data they serialize. Returns <c>null</c> when
-    /// no live row exists.
+    /// S141 / TASK-14102 (refinement B0, owner requirement 2026-09-11) — today's agreement code PLUS
+    /// the next code change already SCHEDULED after today, in one statement.
     ///
     /// <para>
-    /// Mirrors S33 <c>EmployeeProfileRepository.GetByEmployeeIdWithVersionAsync</c>
-    /// (Step 7a P2 fix): reading agreement_code and version in separate statements
-    /// opens a concurrency window where the response can carry stale data with a newer
-    /// ETag and the next admin edit would silently overwrite the racing change.
+    /// <b>Why the agreement side needs this too.</b> The edit drawer writes the agreement code on
+    /// every save, dated, exactly like the profile fields — so a scheduled agreement change is a
+    /// second dated field on the same screen, and a visibility requirement that covered only the
+    /// profile fields would leave the same defect one field over: HR sees a code, does not know
+    /// another is coming, re-sends what they see, and pulls a not-yet-effective agreement into force
+    /// early. Returning it in the payload means no screen has to discover it, and no screen can
+    /// forget to.
+    /// </para>
+    ///
+    /// <para>
+    /// Returns <c>null</c> when no row covers today (the HRP-015 "cannot register" hole — an employee
+    /// with no agreement in force today); <see cref="ScheduledAgreementCodeChange"/> is <c>null</c>
+    /// when nothing is scheduled, which is every employee until the date picker ships. The token a
+    /// client holds for this aggregate is <c>users.version</c> and is stamped by the users GET, so
+    /// this read deliberately returns no version of its own.
     /// </para>
     /// </summary>
-    public async Task<(string AgreementCode, long Version)?> GetCurrentWithVersionAsync(
+    public async Task<AgreementCodeAsOfTodayHit?> GetAsOfTodayWithScheduledAsync(
         string userId, CancellationToken ct = default)
     {
+        var today = Today();
         await using var conn = _dbFactory.Create();
         await conn.OpenAsync(ct);
+        // The scheduled row rides in a LATERAL on the same statement so the pair can never describe
+        // two different moments. A ZERO-WIDTH row [f, f) is excluded: it covers no day and is a
+        // retirement trace, not a scheduled change (the same rule the profile side applies).
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT agreement_code, version
-            FROM user_agreement_codes
-            WHERE user_id = @userId AND effective_to IS NULL
+            SELECT
+                uac.agreement_code,
+                nxt.effective_from   AS scheduled_from,
+                nxt.effective_to     AS scheduled_to,
+                nxt.agreement_code   AS scheduled_code
+            FROM user_agreement_codes uac
+            LEFT JOIN LATERAL (
+                SELECT s.effective_from, s.effective_to, s.agreement_code
+                FROM user_agreement_codes s
+                WHERE s.user_id = uac.user_id
+                  AND s.effective_from > @today
+                  AND (s.effective_to IS NULL OR s.effective_to > s.effective_from)
+                ORDER BY s.effective_from
+                LIMIT 1
+            ) nxt ON TRUE
+            WHERE uac.user_id = @userId
+              AND uac.effective_from <= @today
+              AND (uac.effective_to IS NULL OR uac.effective_to > @today)
+            ORDER BY uac.effective_from DESC
+            LIMIT 1
             """, conn);
         cmd.Parameters.AddWithValue("userId", userId);
+        cmd.Parameters.AddWithValue("today", today);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) return null;
-        return (reader.GetString(0), reader.GetInt64(1));
+
+        ScheduledAgreementCodeChange? scheduled = null;
+        if (!reader.IsDBNull(1))
+        {
+            scheduled = new ScheduledAgreementCodeChange(
+                EffectiveFrom: reader.GetFieldValue<DateOnly>(1),
+                EffectiveTo: reader.IsDBNull(2) ? null : reader.GetFieldValue<DateOnly>(2),
+                AgreementCode: reader.GetString(3));
+        }
+        return new AgreementCodeAsOfTodayHit(reader.GetString(0), scheduled);
     }
+
+    /// <summary>The writers' "today": the UTC day off the injected clock (QUAL-157 / S139 seam).</summary>
+    private DateOnly Today() => DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
 
     // ------------------------------------------------------------------
     // Writes — atomic-outbox (conn, tx) overload only (ADR-018 D5).
@@ -220,11 +285,18 @@ public sealed class UserAgreementCodeRepository
     /// <b>Locking, futures, the employment floor, T.</b> As for the profile writer: one
     /// <c>SELECT … FOR UPDATE</c> over the whole timeline, open row first
     /// (<see cref="LockTimelineAsync"/>), so writers serialize on the open row and gap-inserters on
-    /// the history rows; <c>from &gt; today</c> is refused before any lock (owner ruling: future-
-    /// dating is Increment 4); the caller-supplied <c>req.EmploymentStartDate</c> floors the date
+    /// the history rows; the caller-supplied <c>req.EmploymentStartDate</c> floors the date
     /// (date-free refusal); case T re-creates an open row at the repository level. The unique
     /// indexes stay the collision backstop — every INSERT path re-throws 23505 as
     /// <see cref="ConcurrentSeedConflictException"/> (the S35 catch, generalized from Case A).
+    /// <b>S141 / TASK-14102: <c>from &gt; today</c> is no longer refused</b> (ADR-040 Increment 4) —
+    /// it routes through C' like any other split. Two consequences follow from the split rule and are
+    /// worth stating here rather than leaving a caller to discover: a TODAY-dated write made while a
+    /// change is already scheduled produces a CLOSED row <c>[today, scheduledFrom)</c>, so the edit
+    /// expires on that date; and <c>users.agreement_code</c> (the cache below) keeps following the
+    /// row covering TODAY, so a future-dated write leaves the cache and the login token alone until
+    /// the date arrives — which is correct, and is also why something must eventually refresh the
+    /// cache when that date passes (refinement B2, a different task).
     /// </para>
     ///
     /// <para>
@@ -236,10 +308,10 @@ public sealed class UserAgreementCodeRepository
     /// </para>
     /// </summary>
     /// <exception cref="TemporalWriteRejectedException">
-    /// <see cref="TemporalWriteRejection.FutureDated"/> when <paramref name="req"/><c>.EffectiveFrom</c>
-    /// is after today (UTC); <see cref="TemporalWriteRejection.PrecedesEmploymentStart"/> when the
+    /// <see cref="TemporalWriteRejection.PrecedesEmploymentStart"/> when the
     /// caller supplied <c>req.EmploymentStartDate</c> and the date precedes it. Raised before any
     /// lock; the endpoint maps to a date-free 422.
+    /// <see cref="TemporalWriteRejection.FutureDated"/> is no longer raised (S141 / B3).
     /// </exception>
     /// <exception cref="OptimisticConcurrencyException">
     /// <paramref name="expectedVersion"/> non-null and (a) no open row exists
@@ -257,11 +329,15 @@ public sealed class UserAgreementCodeRepository
         // "Today" is UTC, read via the injected TimeProvider — the endpoints' validators use the
         // same clock (S139 / TASK-13907 moved the SOURCE of that clock onto the DI seam; the day
         // it yields is unchanged). The router below stays PURE: `today` is passed IN (PAT-025).
-        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var today = Today();
 
         // 0. Pure refusals BEFORE any lock — nothing to roll back, nothing to contend on.
-        if (TemporalWriteRouter.IsFutureDated(req.EffectiveFrom, today))
-            throw new TemporalWriteRejectedException(TemporalWriteRejection.FutureDated, "agreement-code");
+        //
+        //    S141 / TASK-14102 (B3) — the FUTURE-DATING refusal that stood here is GONE (ADR-040
+        //    Increment 4): "she moves to the AC agreement on 1 November" is now a legal write, and it
+        //    routes through the router's existing C' split with no new case. The employment-start
+        //    FLOOR stays; there is deliberately no ceiling (see
+        //    TemporalWriteRouter.PrecedesEmploymentStart).
         if (TemporalWriteRouter.PrecedesEmploymentStart(req.EffectiveFrom, req.EmploymentStartDate))
             throw new TemporalWriteRejectedException(TemporalWriteRejection.PrecedesEmploymentStart, "agreement-code");
 
@@ -292,14 +368,11 @@ public sealed class UserAgreementCodeRepository
         }
 
         // 3. Route on the locked snapshot (pure); match the anchor back by start date.
+        //    S141: the router no longer has a future-dating branch, so there is no post-route
+        //    re-check here either — the second of B3's two sites in this file.
         var decision = TemporalWriteRouter.Decide(
             timeline.Select(r => new TemporalInterval(r.EffectiveFrom, r.EffectiveTo)),
             req.EffectiveFrom, today);
-        if (decision.Case == TemporalWriteCase.RejectedFutureDated)
-        {
-            // Unreachable after step 0; kept so the router remains the single authority.
-            throw new TemporalWriteRejectedException(TemporalWriteRejection.FutureDated, "agreement-code");
-        }
         var anchor = decision.Anchor is { } anchorInterval
             ? timeline.Single(r => r.EffectiveFrom == anchorInterval.From)
             : null;
@@ -654,6 +727,27 @@ public sealed class UserAgreementCodeRepository
 // Request + result records — colocated with the repository per S33 EmployeeProfile +
 // S29 WTM precedent.
 // ------------------------------------------------------------------
+
+/// <summary>
+/// S141 / TASK-14102 (refinement B0) — an agreement-code change already SCHEDULED to take effect
+/// after today: the next row starting strictly after today, with the interval it will occupy and the
+/// code it will bring. <see cref="EffectiveTo"/> is <c>null</c> when that row is the open one.
+/// Zero-width rows are excluded upstream — they cover no day and are a retirement trace, not a
+/// change.
+/// </summary>
+public sealed record ScheduledAgreementCodeChange(
+    DateOnly EffectiveFrom,
+    DateOnly? EffectiveTo,
+    string AgreementCode);
+
+/// <summary>
+/// S141 / TASK-14102 — what an as-of-today agreement-code read returns: the code in force TODAY and
+/// B0's next scheduled change (<c>null</c> when nothing is scheduled). No version: the client token
+/// for this aggregate is <c>users.version</c>, which the users GET stamps.
+/// </summary>
+public sealed record AgreementCodeAsOfTodayHit(
+    string AgreementCode,
+    ScheduledAgreementCodeChange? Scheduled);
 
 /// <summary>
 /// S34 / TASK-3402 — payload for
