@@ -315,30 +315,63 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A FUTURE-dated correction is still 422 (future-dating is Increment 4 by owner ruling — the
-    /// open-ended-row readers, including the login token's agreement code, would treat a
-    /// not-yet-effective row as current). Same DATE-FREE body as the employment-start floor.
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) — RED
+    /// until the S141 wave-2 gate.</b> <b>OLD expectation</b> (pre-S141): a FUTURE-dated correction
+    /// was 422 — future-dating was Increment 4, deferred because the open-ended-row readers
+    /// (including the login token's agreement code) treated a not-yet-effective row as current.
+    /// <b>NEW (owner ruling — HR can schedule an employment change ahead of time):</b> this is
+    /// router Shape 1 (<c>REFINEMENT-s141-increment4-and-the-settlement-anchor.md</c> section B3 /
+    /// <c>TemporalWriteRouterTests.S141_FutureWrite_OnOpenRow_SplitsAndSupersedes</c>), the SAME
+    /// split <see cref="PUT_BackdateIntoClosedHistoryRow_SplitsCoveringRow_LaterRowsUntouched"/>
+    /// above proves for a PAST date: the single open row is closed at TOMORROW and a new open row
+    /// from tomorrow carries the requested fraction.
+    /// <para>
+    /// <b>Why this is a real assertion, not a bare status-code check.</b> The scheduled fraction
+    /// must NOT take effect early — resolving F (today) must still answer the OLD fraction, since
+    /// the split closes the predecessor row AT tomorrow and it still covers every day up to and
+    /// including today — while resolving TOMORROW must answer the NEW one. A write that silently
+    /// no-opped, or one that (wrongly) applied the new fraction starting today, would both still
+    /// return 200 and would both be caught by these two resolutions disagreeing with the split.
+    /// </para>
+    /// <para>
+    /// <b>Docker-gated; completes at the wave-2 gate, not wave 1.</b> This endpoint's own
+    /// future-date validator (the profile-PUT guard in <c>EmployeeProfileEndpoints.cs</c>) is
+    /// lifted by TASK-14104 in wave 2. TASK-14112 (this file's owning task, wave 1) writes this
+    /// replacement and reports it RED against the still-refusing endpoint — Docker is unavailable
+    /// on the authoring machine (standing project constraint), so neither state is verified
+    /// locally. Expected GREEN once TASK-14104 merges.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task PUT_FutureDatedEffectiveFrom_Returns422_WithNoDateInTheBody()
+    public async Task PUT_FutureDatedEffectiveFrom_SplitsTheDatedTimeline()
     {
         var employeeId = await SeedEmployeeAsync();
         await ReplaceProfileTimelineAsync(employeeId, (F.AddDays(-10), null, 1.000m, null));
 
         var client = AdminClient();
-        var version = await ReadProfileVersionAsync(client, employeeId);
+        var etagBefore = await ReadProfileVersionAsync(client, employeeId);
         var tomorrow = F.AddDays(1);
         var rsp = await PutProfileAsync(client, employeeId, tomorrow,
-            partTimeFraction: 0.500m, position: null, employmentCategory: null,
-            ifMatch: $"\"{version}\"");
+            partTimeFraction: 0.500m, position: "Corrected", employmentCategory: null,
+            ifMatch: $"\"{etagBefore}\"");
 
-        // RED: fails if the future-dating guard does not read the fixed clock (would compare F+1
-        // against the REAL wall-clock day instead of F and could accept it as 200), or if the 422
-        // body leaks the date.
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
-        var raw = await rsp.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(tomorrow.ToString("yyyy-MM-dd"), raw, StringComparison.Ordinal);
-        Assert.Single(await ReadProfileTimelineAsync(employeeId));
+        // OLD: UnprocessableEntity. NEW: the scheduled change is recorded, not refused.
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        var rows = await ReadProfileTimelineAsync(employeeId);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal((F.AddDays(-10), tomorrow, 1.000m), (rows[0].From, rows[0].To, rows[0].Fraction));
+        Assert.Equal((tomorrow, (DateOnly?)null, 0.500m), (rows[1].From, rows[1].To, rows[1].Fraction));
+
+        // The scheduled fraction has NOT taken effect yet — today still resolves to the old value.
+        Assert.Equal(1.000m, await ResolveFractionAtAsync(employeeId, F));
+        // ...but the scheduled date itself resolves to the new one.
+        Assert.Equal(0.500m, await ResolveFractionAtAsync(employeeId, tomorrow));
+
+        // The aggregate token moved, same as every other timeline write.
+        var etagAfter = await ReadProfileVersionAsync(client, employeeId);
+        Assert.True(etagAfter > etagBefore,
+            $"the profile ETag must move on every timeline write (was {etagBefore}, now {etagAfter}).");
     }
 
     /// <summary>

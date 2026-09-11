@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -169,30 +170,27 @@ public sealed class FixedClockProbeTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>CORRECTED (S139 / TASK-13908 W2, Step-5a Reviewer WARNING 2).</b> This leg pins the
-    /// ENDPOINT-LEVEL guard (<c>EmployeeProfileEndpoints.cs:271-273</c>) only, not the repository's
-    /// own guard as the previous revision of this comment claimed.
-    ///
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) — RED
+    /// until the S141 wave-2 gate. CLOCK-SENSITIVE BY CONSTRUCTION, not a bare success check.</b>
+    /// <b>OLD test</b> (S139/TASK-13908): pinned the ENDPOINT-LEVEL guard
+    /// (<c>EmployeeProfileEndpoints.cs:271-273</c>) by asserting F+1 was refused (422) and F was
+    /// accepted (200). Once S141 lifts the refusal, "F+1 is accepted" is true whether or not the
+    /// fixed clock reaches the endpoint at all, so a bare 200 check would no longer prove anything
+    /// about the clock — exactly the trap this replacement is written to avoid.
     /// <para>
-    /// <b>RED condition:</b> if the endpoint's guard still read the real wall clock instead of the
-    /// injected <see cref="TimeProvider"/>, then relative to the REAL host today, F+1 (2025-03-13)
-    /// is deep in the calendar PAST — an unconverted guard sees a past date, accepts it, and the
-    /// first PUT below returns 200 instead of 422, failing the first assertion.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Why this leg cannot also pin the repository's guard (line 502).</b> For the F+1 request
-    /// the ENDPOINT'S guard 422s FIRST — the request never reaches the repository at all. And for
-    /// the F request, the repository's own "today" feeds only <c>TemporalWriteRouter.IsFutureDated</c>
-    /// and the "row covering today" cache refresh, both of which answer IDENTICALLY for F and for
-    /// the real wall-clock today (F is safely in the past either way) — so this leg would stay
-    /// GREEN even with an unconverted repository. The repository-level guard is pinned separately,
-    /// by <c>EmployeeProfileLifecycleTests.SupersedeAndCreateAsync_RepositoryGuard_FutureDated_ThrowsTemporalWriteRejectedException_ThenSameDateSucceeds</c>,
-    /// which calls <c>SupersedeAndCreateAsync</c> directly with no endpoint in front of it.
+    /// <b>What makes this replacement clock-sensitive.</b> The scheduled write splits the open row
+    /// at F+1; per the profile PUT's SHARED RESPONSE RULE (S138 / TASK-13810), the response body
+    /// answers "the profile as it stands NOW", and this write does not touch the row covering F —
+    /// so the body must still carry <see cref="SeedEmployeeAsync"/>'s seeded fraction (1.000), NOT
+    /// the scheduled 0.500. <b>If the fixed clock did NOT reach this endpoint</b> (a real-clock
+    /// regression), "today" would resolve to the REAL host day — more than a year after F+1
+    /// (2025-03-13) — so the row covering "today" would be the NEW one, and this assertion would
+    /// see 0.500 instead of 1.000. A bare 200-only check cannot tell a correctly-seamed write from
+    /// a real-clock one; this one can, because it depends on WHICH row the clock says covers today.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task ProfilePut_FutureDated_Returns422_ThenSameDatePut_Returns200()
+    public async Task ProfilePut_FutureDated_SplitsTheDatedTimeline_ResponseCarriesTodaysValue()
     {
         using var fixedHost = _factory.WithFixedToday(F);
         var client = fixedHost.CreateClient(); // boot the FIXED host first — PAT-008 boot order.
@@ -206,14 +204,22 @@ public sealed class FixedClockProbeTests : IAsyncLifetime
             client, employeeId, F.AddDays(1),
             partTimeFraction: 0.500m, position: null, employmentCategory: null,
             ifMatch: $"\"{version}\"");
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, futureRsp.StatusCode);
 
-        // Nothing was written by the refused future-dated request, so the same version still
-        // applies for the same-date write below.
+        // OLD: UnprocessableEntity. NEW: the scheduled change is recorded, not refused.
+        Assert.Equal(HttpStatusCode.OK, futureRsp.StatusCode);
+
+        // The clock-sensitive assertion — see the class doc above for why this, specifically,
+        // can only pass under a correctly-seamed clock.
+        var futureBody = await futureRsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1.000m, futureBody.GetProperty("partTimeFraction").GetDecimal());
+
+        // A same-date write still succeeds — using the FRESH version, since the scheduled write
+        // above bumped the token (every timeline write does; nothing was refused this time).
+        var versionAfterSchedule = await ReadProfileVersionAsync(client, employeeId);
         var todayRsp = await PutProfileAsync(
             client, employeeId, F,
-            partTimeFraction: 0.500m, position: null, employmentCategory: null,
-            ifMatch: $"\"{version}\"");
+            partTimeFraction: 0.700m, position: null, employmentCategory: null,
+            ifMatch: $"\"{versionAfterSchedule}\"");
         Assert.Equal(HttpStatusCode.OK, todayRsp.StatusCode);
     }
 
@@ -225,31 +231,28 @@ public sealed class FixedClockProbeTests : IAsyncLifetime
     /// <summary>
     /// The agreement-code twin of Leg 1, on <c>PUT /api/admin/users/{userId}/agreement-code</c>.
     ///
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) — RED
+    /// until the S141 wave-2 gate. CLOCK-SENSITIVE BY CONSTRUCTION, not a bare success check.</b>
+    /// <b>OLD test</b> (S139/TASK-13908): pinned the ENDPOINT-LEVEL guard
+    /// (<c>AdminEndpoints.cs:2463</c>) by asserting F+1 was refused (422) and F was accepted (200).
+    /// Once S141 lifts the refusal, "F+1 is accepted" is true whether or not the fixed clock
+    /// reaches the endpoint at all, so a bare 200 check would no longer prove anything about the
+    /// clock — exactly the trap this replacement is written to avoid.
     /// <para>
-    /// <b>CORRECTED (S139 / TASK-13908 W2, Step-5a Reviewer WARNING 2).</b> This leg pins the
-    /// ENDPOINT-LEVEL guard (<c>AdminEndpoints.cs:2463</c>) only, not the repository's own guard as
-    /// the previous revision of this comment claimed.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>RED condition:</b> if the endpoint's guard still reads the real wall clock, F+1 reads as
-    /// a past date relative to the real host today, the first PUT returns 200 instead of 422, and
-    /// the first assertion fails.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Why this leg cannot also pin the repository's guard (<c>UserAgreementCodeRepository.cs:248</c>).</b>
-    /// For the F+1 request the ENDPOINT'S guard 422s FIRST — the request never reaches the
-    /// repository. For the F request, the repository's own "today" feeds only
-    /// <c>TemporalWriteRouter.IsFutureDated</c> and the "row covering today" cache refresh, which
-    /// answer identically for F and for the real today — so this leg would stay GREEN even with an
-    /// unconverted repository. The repository-level guard is pinned separately, by
-    /// <c>AgreementCodeBackdatingEndpointTests.SupersedeAndCreateAsync_RepositoryGuard_FutureDated_ThrowsTemporalWriteRejectedException_ThenSameDateSucceeds</c>,
-    /// which calls <c>SupersedeAndCreateAsync</c> directly with no endpoint in front of it.
+    /// <b>What makes this replacement clock-sensitive</b> — the exact mechanism as Leg 1's
+    /// replacement, on the agreement-code twin. The scheduled write splits the open row at F+1;
+    /// per this endpoint's SHARED RESPONSE RULE (S138 / TASK-13810, see
+    /// <c>AgreementCodeBackdatingEndpointTests.AgreementCodeEndpoint_HistoryOnlyCorrection_LeavesTheLiveCacheUntouched</c>),
+    /// the response body answers "the code as it stands NOW", and this write does not touch the
+    /// row covering F — so the body must still carry <see cref="SeedEmployeeAsync"/>'s seeded code
+    /// ("AC"), NOT the scheduled "HK". <b>If the fixed clock did NOT reach this endpoint</b> (a
+    /// real-clock regression), "today" would resolve to the REAL host day — more than a year after
+    /// F+1 (2025-03-13) — so the row covering "today" would be the NEW one, and this assertion
+    /// would see "HK" instead of "AC". A bare 200-only check cannot tell these apart; this one can.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task AgreementCodePut_FutureDated_Returns422_ThenSameDatePut_Returns200()
+    public async Task AgreementCodePut_FutureDated_SplitsTheDatedTimeline_ResponseCarriesTodaysValue()
     {
         using var fixedHost = _factory.WithFixedToday(F);
         var client = fixedHost.CreateClient(); // boot the FIXED host first — PAT-008 boot order.
@@ -261,12 +264,20 @@ public sealed class FixedClockProbeTests : IAsyncLifetime
 
         var futureRsp = await PutAgreementCodeAsync(
             client, employeeId, "HK", F.AddDays(1), $"\"{version}\"");
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, futureRsp.StatusCode);
 
-        // Nothing was written by the refused future-dated request, so the same version still
-        // applies for the same-date write below.
+        // OLD: UnprocessableEntity. NEW: the scheduled change is recorded, not refused.
+        Assert.Equal(HttpStatusCode.OK, futureRsp.StatusCode);
+
+        // The clock-sensitive assertion — see the class doc above for why this, specifically,
+        // can only pass under a correctly-seamed clock.
+        var futureBody = await futureRsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("AC", futureBody.GetProperty("agreementCode").GetString());
+
+        // A same-date write still succeeds — using the FRESH version, since the scheduled write
+        // above bumped the token (every timeline write does; nothing was refused this time).
+        var versionAfterSchedule = await ReadUsersVersionAsync(client, employeeId);
         var todayRsp = await PutAgreementCodeAsync(
-            client, employeeId, "HK", F, $"\"{version}\"");
+            client, employeeId, "PROSA", F, $"\"{versionAfterSchedule}\"");
         Assert.Equal(HttpStatusCode.OK, todayRsp.StatusCode);
     }
 
@@ -655,6 +666,123 @@ public sealed class FixedClockProbeTests : IAsyncLifetime
             Assert.Equal(F.ToString("yyyy-MM-dd"),
                 vikarEndedDoc.RootElement.GetProperty("effectiveTo").GetString());
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // Leg 9 — S141 / TASK-14112: the login token must carry the code effective TODAY, never a
+    // scheduled one (AuthEndpoints.cs:85, the `useDbAuth` branch's `GetCurrentAsync` read).
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>NEW pin, S141 / TASK-14112 (ADR-040 D8 amendment).</b> Once a scheduled (future-dated)
+    /// agreement-code row can exist, <c>GetCurrentAsync</c> — which returns the OPEN row — stops
+    /// meaning "the code effective today" the moment a schedule exists, because the open row is
+    /// now the SCHEDULED one. AuthEndpoints.cs:85 must therefore read the code effective AS OF
+    /// TODAY, not "the open row", or a token minted between now and the scheduled date would carry
+    /// an agreement code that is not actually in force yet — a Security AND Domain-correctness
+    /// breach (a not-yet-effective agreement reaching an authorization-bearing token).
+    /// <para>
+    /// <b>Scope, per the task: the `useDbAuth` branch ONLY.</b> The dev-login branch
+    /// (<c>AuthEndpoints.cs:142</c>) mints from a hard-coded in-memory dictionary of seven demo
+    /// users with literal agreement codes — it reads no table at all, so there is nothing to
+    /// convert and nothing to pin here. <see cref="StatsTidWebApplicationFactory"/> (used
+    /// throughout this class) boots with NO <c>Auth:UseDatabase</c> override, and
+    /// <c>Program.cs:410</c>'s fail-closed default is <c>true</c>, so every login against this
+    /// factory already exercises the DB branch without any extra configuration.
+    /// </para>
+    /// <para>
+    /// <b>Why the future row is seeded by DIRECT SQL, not through the agreement-code PUT.</b> This
+    /// pin is about the LOGIN READ, not the WRITE guard — mirroring this class's own documented
+    /// seeding convention (see the class doc's "Fixture-employee seeding route"), a direct INSERT
+    /// keeps the RED condition attributable to exactly the one conversion point this leg names,
+    /// instead of also depending on TASK-14104's endpoint-level refusal lift in wave 2. So —
+    /// UNLIKE this sprint's endpoint-routed replacements elsewhere in this file — this leg's true
+    /// dependency is TASK-14102 (backend-infrastructure, a WAVE-1 sibling), which owns
+    /// <c>AuthEndpoints.cs</c>. It still cannot be verified locally either way (Docker is
+    /// unavailable on the authoring machine), so it is written RED and reported RED regardless of
+    /// which wave's merge would satisfy it.
+    /// </para>
+    /// <para>
+    /// <b>RED condition, reasoned from the source rather than executed.</b> Today
+    /// <c>GetCurrentAsync</c> (<c>UserAgreementCodeRepository.cs:121-135</c>) returns the row with
+    /// <c>effective_to IS NULL</c> — the row this fixture deliberately makes the FUTURE one ("AC",
+    /// opening at F+60). So the token minted at F would carry "AC" (the not-yet-effective code)
+    /// instead of "HK" (the seeded row actually covering F), and the assertion below fails. It
+    /// turns GREEN once the mint reads a dated ("as of F") lookup instead.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Login_JwtCarriesTheAgreementCodeEffectiveToday_NotAScheduledOne()
+    {
+        using var fixedHost = _factory.WithFixedToday(F);
+        var client = fixedHost.CreateClient(); // boot the FIXED host first — PAT-008 boot order.
+
+        var userId = "usr_s14112_login_" + Guid.NewGuid().ToString("N")[..8];
+        const string password = "S141!LoginProbe1";
+        var passwordHash = BCrypt.Net.BCrypt.HashPassword(password);
+        var scheduledStart = F.AddDays(60);
+
+        await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using (var userCmd = new NpgsqlCommand(
+                """
+                INSERT INTO users (user_id, username, password_hash, display_name, email,
+                                   primary_org_id, agreement_code, ok_version, employment_category,
+                                   employment_start_date, is_active)
+                VALUES (@u, @u, @hash, 'S141/TASK-14112 Login Probe User', NULL,
+                        @org, 'HK', 'OK24', 'Standard', @hire, TRUE)
+                """, conn))
+            {
+                userCmd.Parameters.AddWithValue("u", userId);
+                userCmd.Parameters.AddWithValue("hash", passwordHash);
+                userCmd.Parameters.AddWithValue("org", OrgId);
+                userCmd.Parameters.AddWithValue("hire", F.AddDays(-200));
+                await userCmd.ExecuteNonQueryAsync();
+            }
+
+            // TODAY's row: HK, covering F. Closed at the scheduled start.
+            await using (var todayCmd = new NpgsqlCommand(
+                """
+                INSERT INTO user_agreement_codes
+                    (assignment_id, user_id, agreement_code, effective_from, effective_to, version)
+                VALUES (gen_random_uuid(), @u, 'HK', @from, @to, 1)
+                """, conn))
+            {
+                todayCmd.Parameters.AddWithValue("u", userId);
+                todayCmd.Parameters.AddWithValue("from", F.AddDays(-200));
+                todayCmd.Parameters.AddWithValue("to", scheduledStart);
+                await todayCmd.ExecuteNonQueryAsync();
+            }
+
+            // The SCHEDULED row: AC, open-ended from F+60 — this is the OPEN row GetCurrentAsync
+            // returns today, and the whole point of this pin is that the login mint must NOT use it.
+            await using (var scheduledCmd = new NpgsqlCommand(
+                """
+                INSERT INTO user_agreement_codes
+                    (assignment_id, user_id, agreement_code, effective_from, effective_to, version)
+                VALUES (gen_random_uuid(), @u, 'AC', @from, NULL, 2)
+                """, conn))
+            {
+                scheduledCmd.Parameters.AddWithValue("u", userId);
+                scheduledCmd.Parameters.AddWithValue("from", scheduledStart);
+                await scheduledCmd.ExecuteNonQueryAsync();
+            }
+        }
+
+        var loginRsp = await client.PostAsJsonAsync("/api/auth/login", new { username = userId, password });
+        Assert.Equal(HttpStatusCode.OK, loginRsp.StatusCode);
+
+        var loginBody = await loginRsp.Content.ReadFromJsonAsync<JsonElement>();
+        var token = loginBody.GetProperty("token").GetString();
+        Assert.False(string.IsNullOrEmpty(token));
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token);
+        var agreementCodeClaim = jwt.Claims.First(c => c.Type == StatsTidClaims.AgreementCode).Value;
+
+        // RED today: GetCurrentAsync returns the OPEN (scheduled) row, so this currently reads
+        // "AC". GREEN once the mint reads the row effective AS OF F instead.
+        Assert.Equal("HK", agreementCodeClaim);
     }
 
     // ─── Seeding helpers (Legs 5-7) ────────────────────────────────────────

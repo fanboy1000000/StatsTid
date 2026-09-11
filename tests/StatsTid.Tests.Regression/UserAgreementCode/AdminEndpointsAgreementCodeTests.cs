@@ -267,16 +267,41 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// PUT with <c>EffectiveFrom = tomorrow</c> AND a mutating <c>agreementCode</c>
-    /// returns 422 (same validator branch as backdated). Pins the symmetric
-    /// rejection per ADR-023 D8 same-day-only-edit narrowing — two-sided,
-    /// not one-sided.
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) —
+    /// RED until the S141 wave-2 gate.</b> <b>OLD expectation</b> (pre-S141, ADR-023 D8
+    /// same-day-only narrowing): PUT with <c>EffectiveFrom = tomorrow</c> AND a mutating
+    /// <c>agreementCode</c> returned 422 — future-dating was refused symmetrically with
+    /// backdating. <b>NEW (owner ruling — HR can schedule an employment change ahead of
+    /// time):</b> this is the users-PUT twin of
+    /// <see cref="PUT_BackdatedEffectiveFrom_SplitsTheDatedTimeline"/> above, just on the far
+    /// side of today instead of the near side — router Shape 1
+    /// (<c>REFINEMENT-s141-increment4-and-the-settlement-anchor.md</c> section B3 /
+    /// <c>TemporalWriteRouterTests.S141_FutureWrite_OnOpenRow_SplitsAndSupersedes</c>): emp001's
+    /// single open row (<c>'AC'</c> from '0001-01-01') is split at TOMORROW — closed there, and a
+    /// new open row from tomorrow carries <c>'HK'</c>.
+    /// <para>
+    /// <b>Why this is a real assertion, not a bare status-code check.</b> The scheduled code must
+    /// NOT take effect early: resolving TODAY must still answer <c>'AC'</c> (the split closes the
+    /// predecessor row AT tomorrow, so it still covers every day up to and including today), while
+    /// resolving TOMORROW must answer the newly scheduled <c>'HK'</c>. A write that silently
+    /// no-opped, or one that (wrongly) changed today's value early, would both still return 200 and
+    /// would both be caught by these two resolutions disagreeing with what the split must produce.
+    /// </para>
+    /// <para>
+    /// <b>Docker-gated; completes at the wave-2 gate, not wave 1.</b> This endpoint's own
+    /// future-date validator (the users-PUT guard in <c>AdminEndpoints.cs</c>) is lifted by
+    /// TASK-14104 in wave 2. TASK-14112 (this file's owning task, wave 1) writes this replacement
+    /// and reports it RED against the still-refusing endpoint — Docker is unavailable on the
+    /// authoring machine (standing project constraint), so neither state is verified locally.
+    /// Expected GREEN once TASK-14104 merges.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task PUT_FutureDatedEffectiveFrom_Returns422()
+    public async Task PUT_FutureDatedEffectiveFrom_SplitsTheDatedTimeline()
     {
         var client = AuthorizedClient();
-        var tomorrow = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1));
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var tomorrow = today.AddDays(1);
 
         // S35 / TASK-3506 — admin-strict If-Match required (see backdated test
         // above for rationale).
@@ -295,7 +320,22 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
         };
         req.Headers.IfMatch.Add(etag!);
         var rsp = await client.SendAsync(req);
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+
+        // OLD: UnprocessableEntity. NEW: the scheduled change is recorded, not refused.
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        var repo = new UserAgreementCodeRepository(_harness.Factory);
+        var resolver = new EmploymentProfileResolver(_harness.Factory, repo);
+
+        // The scheduled code has NOT taken effect yet — today still resolves to the old value.
+        var stillToday = await resolver.GetByEmployeeIdAtAsync("emp001", today);
+        Assert.NotNull(stillToday);
+        Assert.Equal("AC", stillToday!.AgreementCode);
+
+        // ...but the scheduled date itself resolves to the new one.
+        var scheduled = await resolver.GetByEmployeeIdAtAsync("emp001", tomorrow);
+        Assert.NotNull(scheduled);
+        Assert.Equal("HK", scheduled!.AgreementCode);
     }
 
     // ═════════════════════════════════════════════════════════════════════

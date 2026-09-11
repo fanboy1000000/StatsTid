@@ -6,9 +6,9 @@ namespace StatsTid.Tests.Unit.Infrastructure;
 /// S138 / TASK-13801 — the DB-free matrix for <see cref="TemporalWriteRouter"/>, the pure routing
 /// core behind both dated-history writers (<c>EmployeeProfileRepository</c> /
 /// <c>UserAgreementCodeRepository</c>). Every case letter of the refinement (A / B' / C' / E / G /
-/// T, plus the future refusal) is pinned against live, history, gap and empty timelines, with the
-/// fenceposts at every row boundary under end-exclusive <c>[from, to)</c> semantics — a row closed
-/// on day <c>d</c> does NOT cover <c>d</c>; the successor does.
+/// T) is pinned against live, history, gap and empty timelines, with the fenceposts at every row
+/// boundary under end-exclusive <c>[from, to)</c> semantics — a row closed on day <c>d</c> does NOT
+/// cover <c>d</c>; the successor does.
 ///
 /// <para>
 /// <b>Why this matters (plain language).</b> The router decides what the SQL does: which row is
@@ -17,6 +17,18 @@ namespace StatsTid.Tests.Unit.Infrastructure;
 /// uncovered. The sweep test at the bottom is the safety net: for every calendar day in a mixed
 /// fixture (history, a zero-width row, gaps, an open row) the post-write timeline must still have
 /// no overlaps, at most one open row, and the requested day covered by the row that was written.
+/// </para>
+///
+/// <para>
+/// <b>S141 / TASK-14112 (ADR-040 D8 amendment) — HR can now schedule a change ahead of time.</b>
+/// Sprint 141 lifts the future-dating refusal this class used to pin. Because this router is PURE
+/// (no I/O, no database), the tests below are the only S141 pins that can run — and genuinely fail
+/// — TODAY, before the fix lands: they need no Docker. <see cref="TemporalWriteRouter"/> itself is
+/// being edited in a SIBLING worktree this wave (TASK-14102), so most of the tests below are
+/// RED-first: they assert the POST-fix behaviour and currently fail against the guard still in
+/// place, and are expected to turn GREEN once that sibling task merges. One shape (labelled below)
+/// is the exception and is already green — its comment says so explicitly, because a green result
+/// there must never be mistaken for evidence the fix landed.
 /// </para>
 /// </summary>
 public sealed class TemporalWriteRouterTests
@@ -31,25 +43,49 @@ public sealed class TemporalWriteRouterTests
         => TemporalWriteRouter.Decide(rows, from, Today);
 
     // ------------------------------------------------------------------
-    // Future refusal — the owner ruling (ADR-040 D8 amendment).
+    // Future refusal — the owner ruling as it stood BEFORE S141 (ADR-040 D8 amendment).
     // ------------------------------------------------------------------
 
     [Fact]
-    public void FutureDate_IsRejected_OnEmptyAndPopulatedTimelines()
+    public void KindOf_StillThrows_ForARejectedDecision_HandBuilt()
     {
-        var tomorrow = Today.AddDays(1);
+        // TemporalWriteCase.RejectedFutureDated and KindOf's defensive throw for it are kept as
+        // live symbols this sprint — the router agent (TASK-14102, a sibling worktree) was told to
+        // leave them in place, unreferenced, so this file keeps compiling while it edits the SAME
+        // production file this test class pins. Once TASK-14102 removes the guard inside Decide()
+        // (see the S141 shapes below), Decide() never PRODUCES this case again for any caller, so
+        // this test builds the decision BY HAND instead of routing one through Decide() — it keeps
+        // proving KindOf's defensive branch without depending on a code path S141 is deliberately
+        // retiring.
+        var rejected = new TemporalWriteDecision(
+            TemporalWriteCase.RejectedFutureDated, Today, NewEffectiveTo: null,
+            Anchor: null, AnchorIsOpen: false, ReopensZeroWidthAnchor: false);
 
-        var onEmpty = Decide(tomorrow);
-        Assert.Equal(TemporalWriteCase.RejectedFutureDated, onEmpty.Case);
-        Assert.Null(onEmpty.Anchor);
-        Assert.False(onEmpty.ProducesOpenRow);
-        Assert.False(onEmpty.InsertsRow);
+        Assert.Throws<InvalidOperationException>(() => TemporalWriteRouter.KindOf(rejected));
+    }
 
-        var onPopulated = Decide(tomorrow, Row(D(1, 1), null));
-        Assert.Equal(TemporalWriteCase.RejectedFutureDated, onPopulated.Case);
+    [Fact]
+    public void FutureDate_OnEmptyTimeline_CreatesTheOpenRow_S141()
+    {
+        // REPLACES the "on empty timeline" half of the old (pre-S141) FutureDate_IsRejected test
+        // — that assertion is no longer true once HR can schedule ahead, so it is replaced with a
+        // real assertion about the new behaviour rather than deleted outright (no test in this
+        // sprint may be deleted without a replacement). A future date on an EMPTY timeline (a new
+        // hire whose very first row is dated ahead) is plain Case A — the same "insert the open
+        // row" the router already does for a past- or today-dated first write. No new case: the
+        // existing one, reached from a date it used to refuse.
+        //
+        // RED today: the guard inside Decide() (TemporalWriteRouter.cs:107) intercepts ANY
+        // from > today before the case table runs at all, so this currently comes back
+        // RejectedFutureDated rather than Create. GREEN once TASK-14102 removes that guard.
+        var future = Today.AddDays(30);
+        var decision = Decide(future);
 
-        // A rejected decision has no write kind — the repository throws before mapping.
-        Assert.Throws<InvalidOperationException>(() => TemporalWriteRouter.KindOf(onPopulated));
+        Assert.Equal(TemporalWriteCase.Create, decision.Case);
+        Assert.Equal(future, decision.NewEffectiveFrom);
+        Assert.Null(decision.NewEffectiveTo);
+        Assert.True(decision.ProducesOpenRow);
+        Assert.Equal(TemporalWriteKind.Created, TemporalWriteRouter.KindOf(decision));
     }
 
     [Fact]
@@ -61,6 +97,135 @@ public sealed class TemporalWriteRouterTests
 
         var decision = Decide(Today);
         Assert.Equal(TemporalWriteCase.Create, decision.Case);
+    }
+
+    // ------------------------------------------------------------------
+    // S141 / TASK-14112 — the five scheduling-matrix shapes named in
+    // REFINEMENT-s141-increment4-and-the-settlement-anchor.md section B3. Every shape below
+    // reaches an EXISTING case letter (SplitCovering or UpdateInPlace) — no new router case is
+    // added anywhere here; B3's whole point is that the case table already covers a scheduled
+    // write, and only the guard at the top of Decide() was stopping it from being reached. Read
+    // in order, these are HR's actual workflow: schedule a change (1), schedule a LATER correction
+    // on top of it (2) or an EARLIER one (3), come back the day the first one takes effect and
+    // edit something else (4 — already green; see its own comment), or fix a typo in the date HR
+    // picked (5).
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void S141_FutureWrite_OnOpenRow_SplitsAndSupersedes()
+    {
+        // Shape 1 — "HR schedules a change." A write dated after today, against a timeline whose
+        // open row started in the past, is exactly the pre-S141 Case C' with the guard out of the
+        // way: close the open row at the future date, open a new row from there. Kind stays
+        // Superseded — the SAME kind a same-day supersession already produces; only the DATE moved.
+        //
+        // RED today: from > Today trips the Decide() guard before the anchor is even looked at, so
+        // this currently comes back RejectedFutureDated. GREEN once TASK-14102 removes the guard.
+        var scheduledStart = D(11, 1); // Nov 1 — safely after Today (Sep 3).
+        var decision = Decide(scheduledStart, Row(D(1, 1), null));
+
+        Assert.Equal(TemporalWriteCase.SplitCovering, decision.Case);
+        Assert.True(decision.AnchorIsOpen);
+        Assert.Equal(scheduledStart, decision.NewEffectiveFrom);
+        Assert.Null(decision.NewEffectiveTo);
+        Assert.Equal(TemporalWriteKind.Superseded, TemporalWriteRouter.KindOf(decision));
+    }
+
+    [Fact]
+    public void S141_SecondFutureWrite_AfterTheFirst_SplitsTheScheduledOpenRow_StillSuperseded()
+    {
+        // Shape 2 — "HR schedules a SECOND, LATER change on top of the first." The timeline
+        // already holds a scheduled-but-not-yet-effective open row (Nov 1); a write dated even
+        // later (Dec 1) finds that future row as its anchor, and the anchor IS open, so this is
+        // C' on an open row again: Superseded. The router never asks "is the anchor's own start
+        // date in the future" — only "does the anchor cover or start on the requested date" — so
+        // this shape needs no separate reasoning from shape 1's.
+        //
+        // RED today: Dec 1 > Today trips the guard regardless of what the fixture contains.
+        var firstScheduledStart = D(11, 1);
+        var secondScheduledStart = D(12, 1);
+        var decision = Decide(secondScheduledStart, Row(firstScheduledStart, null));
+
+        Assert.Equal(TemporalWriteCase.SplitCovering, decision.Case);
+        Assert.True(decision.AnchorIsOpen);
+        Assert.Equal(secondScheduledStart, decision.NewEffectiveFrom);
+        Assert.Null(decision.NewEffectiveTo);
+        Assert.Equal(TemporalWriteKind.Superseded, TemporalWriteRouter.KindOf(decision));
+    }
+
+    [Fact]
+    public void S141_FutureWrite_BeforeAnAlreadyScheduledOne_SplitsTheHistoryRow_IsInserted()
+    {
+        // Shape 3 — "HR schedules an EARLIER change than one already on the books." The timeline
+        // holds today's row [Jan 1, Nov 1) plus the Nov-1 scheduled row; a write dated Oct 1 (still
+        // future, but before Nov 1) lands inside [Jan 1, Nov 1) — a HISTORY row once Nov 1 exists,
+        // because that row now has an end date. So the anchor is NOT open, and C' on a non-open
+        // anchor is D8's Kind.Inserted, not Superseded: the Nov-1 row is left completely alone —
+        // this is the mechanism (B3's revaluation rule) that protects a LATER scheduled change's
+        // already-booked absences: the upper bound is the next row's start, never this write's date.
+        //
+        // RED today: Oct 1 > Today (Sep 3) trips the guard before the anchor lookup ever runs.
+        var alreadyScheduledStart = D(11, 1);
+        var earlierScheduledStart = D(10, 1);
+        var decision = Decide(
+            earlierScheduledStart, Row(D(1, 1), alreadyScheduledStart), Row(alreadyScheduledStart, null));
+
+        Assert.Equal(TemporalWriteCase.SplitCovering, decision.Case);
+        Assert.False(decision.AnchorIsOpen);
+        Assert.Equal(earlierScheduledStart, decision.NewEffectiveFrom);
+        Assert.Equal(alreadyScheduledStart, decision.NewEffectiveTo);
+        Assert.Equal(TemporalWriteKind.Inserted, TemporalWriteRouter.KindOf(decision));
+    }
+
+    [Fact]
+    public void S141_TodayDatedWrite_WhileAFutureRowExists_IsInserted_NotSuperseded_AlreadyGreen()
+    {
+        // Shape 4 — "HR comes back TODAY and edits something else, while a change is scheduled for
+        // later." This is the shape the refinement calls out as the one every PRE-S141 test gets
+        // wrong by assuming: with a future row present, TODAY is no longer inside the open row —
+        // it falls inside the HISTORY row that now ends where the scheduled row begins. So a
+        // today-dated write routes C' on a NON-open anchor: Kind.Inserted, exactly like shape 3,
+        // just with `from == Today` instead of a future date.
+        //
+        // HONESTY NOTE (stated per the task, not left implicit): this assertion is ALREADY GREEN
+        // today, because Today is not > Today, so the Decide() guard never fires for it — the
+        // router has always treated "the row covering today, when it happens to be a history row"
+        // as an ordinary history row. A green result here is NOT evidence the S141 fix has landed;
+        // it is a regression pin against a case the router already got right by construction. This
+        // test would pass identically before and after TASK-14102/TASK-14104's changes — do not
+        // read it as proof of either. It earns its place because it is, per the refinement, "the
+        // second-most-likely write in the whole feature" (the day-after correction), and no
+        // pre-S141 test names it: every pre-S141 today-dated test asserts Superseded, which
+        // silently assumed no future row could ever exist.
+        var scheduledStart = D(11, 1);
+        var decision = Decide(Today, Row(D(1, 1), scheduledStart), Row(scheduledStart, null));
+
+        Assert.Equal(TemporalWriteCase.SplitCovering, decision.Case);
+        Assert.False(decision.AnchorIsOpen);
+        Assert.Equal(Today, decision.NewEffectiveFrom);
+        Assert.Equal(scheduledStart, decision.NewEffectiveTo);
+        Assert.Equal(TemporalWriteKind.Inserted, TemporalWriteRouter.KindOf(decision));
+    }
+
+    [Fact]
+    public void S141_SecondWrite_AtTheSameScheduledDate_IsAbsorbed_AsAnUpdate()
+    {
+        // Shape 5 — "HR corrects a typo in a change that is not in force yet." A second write
+        // dated EXACTLY the same as the already-scheduled row's start hits B' (the anchor STARTS
+        // on the requested date), not C' — an in-place edit of the scheduled row itself,
+        // Kind.Updated. This is the "correct a scheduled change" path the picker UX will produce
+        // whenever HR reopens a not-yet-effective row and saves again at the same date.
+        //
+        // RED today: the scheduled date itself is still > Today, so the guard fires before B' is
+        // ever reached.
+        var scheduledStart = D(11, 1);
+        var decision = Decide(scheduledStart, Row(scheduledStart, null));
+
+        Assert.Equal(TemporalWriteCase.UpdateInPlace, decision.Case);
+        Assert.True(decision.AnchorIsOpen);
+        Assert.Equal(scheduledStart, decision.NewEffectiveFrom);
+        Assert.Null(decision.NewEffectiveTo);
+        Assert.Equal(TemporalWriteKind.Updated, TemporalWriteRouter.KindOf(decision));
     }
 
     // ------------------------------------------------------------------

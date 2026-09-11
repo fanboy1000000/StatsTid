@@ -375,25 +375,31 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// S139 / TASK-13908 follow-up (Step-5a Reviewer WARNING 2) — the REPOSITORY-level
-    /// future-dating guard, pinned by calling <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>
-    /// directly (bypassing the endpoint entirely).
-    ///
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) —
+    /// RED, and its dependency is narrower than the wave-2 label on its siblings.</b>
+    /// <b>OLD test</b> (S139 / TASK-13908 follow-up): called
+    /// <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/> directly (bypassing the
+    /// endpoint) and asserted the REPOSITORY-level guard threw <see cref="TemporalWriteRejectedException"/>
+    /// for F+1, then that the identical request at F succeeded.
     /// <para>
-    /// <b>Why the endpoint-level probe cannot pin this.</b>
-    /// <c>FixedClockProbeTests.ProfilePut_FutureDated_Returns422_ThenSameDatePut_Returns200</c>
-    /// only proves the ENDPOINT'S OWN guard (<c>EmployeeProfileEndpoints.cs:284</c>) rejects F+1
-    /// FIRST — it 422s before the request ever reaches the repository. And for the F leg, the
-    /// repository's "today" (<c>EmployeeProfileRepository.cs:518</c>) feeds only
-    /// <c>TemporalWriteRouter.IsFutureDated</c> and the "row covering today" cache refresh, both of
-    /// which answer IDENTICALLY for F and for the real wall-clock today (F is safely in the past
-    /// either way). So that probe leg would stay GREEN even if the repository's own clock read were
-    /// never converted — it cannot see this line at all. Calling the repository directly, with its
-    /// own <see cref="FixedTimeProvider"/> and no endpoint in front of it, closes that gap.
+    /// <b>NEW:</b> the repository-level guard is one of B3's "four repository sites" — owned by
+    /// TASK-14102 (backend-infrastructure), which is a WAVE-1 sibling task, NOT wave 2's
+    /// TASK-14104 (that task lifts the three ENDPOINT-level validators this test never reaches,
+    /// since it calls the repository directly). So — unlike the endpoint-routed replacements in
+    /// this sprint's other test files — THIS test's dependency is technically wave 1. It still
+    /// cannot be verified locally either way (Docker is unavailable on the authoring machine), so
+    /// it is written RED and reported RED regardless of which wave's merge would satisfy it.
+    /// </para>
+    /// <para>
+    /// On an EMPTY profile timeline a future date is router Case A (no anchor to split — see
+    /// <c>TemporalWriteRouterTests.FutureDate_OnEmptyTimeline_CreatesTheOpenRow_S141</c>), so the
+    /// future write must succeed with the SAME <see cref="SaveEmployeeProfileOutcome.Created"/>
+    /// outcome the old test already proved for the same-date (F) request below — proving the
+    /// guard is gone, not merely that SOME exception stopped being thrown for the wrong reason.
     /// </para>
     /// </summary>
     [Fact]
-    public async Task SupersedeAndCreateAsync_RepositoryGuard_FutureDated_ThrowsTemporalWriteRejectedException_ThenSameDateSucceeds()
+    public async Task SupersedeAndCreateAsync_RepositoryGuard_FutureDated_SucceedsAsCaseA_Created()
     {
         var employeeId = await CreateUserWithoutProfileAsync();
         // Hire date safely on or before F — not read by the repository for this guard (it is
@@ -415,30 +421,37 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             Position: "Specialist",
             EffectiveFrom: F.AddDays(1));
 
-        // RED: if EmployeeProfileRepository still read the real wall clock instead of the injected
-        // FixedTimeProvider(F), F+1 (2025-03-13) would be an ordinary PAST date relative to the
-        // REAL "today" this suite actually runs on, so IsFutureDated(F+1, realToday) would be
-        // false and NOTHING would be thrown here — the exact gap the endpoint-level probe cannot see.
-        TemporalWriteRejectedException thrown;
+        // OLD: threw TemporalWriteRejectedException(FutureDated). NEW: succeeds and creates the
+        // employee's first (open, future-dated) profile row. RED today — the repository still
+        // throws for F+1; GREEN once TASK-14102 removes this guard.
+        SaveEmployeeProfileOutcome outcome;
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
-            thrown = await Assert.ThrowsAsync<TemporalWriteRejectedException>(
-                () => _repo.SupersedeAndCreateAsync(conn, tx, futureReq, expectedVersion: null));
-        }
-        Assert.Equal(TemporalWriteRejection.FutureDated, thrown.Reason);
-
-        // The identical request at F (not F+1) must succeed — proves the guard refuses THIS date
-        // because it is after F, not because the repository has become permanently strict.
-        var todayReq = futureReq with { EffectiveFrom = F };
-        await using (var conn = _harness.Factory.Create())
-        {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-            var result = await _repo.SupersedeAndCreateAsync(conn, tx, todayReq, expectedVersion: null);
+            var saved = await _repo.SupersedeAndCreateAsync(conn, tx, futureReq, expectedVersion: null);
             await tx.CommitAsync();
-            Assert.Equal(SaveEmployeeProfileOutcome.Created, result.Outcome);
+            outcome = saved.Outcome;
+        }
+        Assert.Equal(SaveEmployeeProfileOutcome.Created, outcome);
+
+        // The row really is dated F+1, open-ended, and carries the request's own values — not
+        // silently coerced to today, and not a no-op that happened to return "Created" anyway.
+        await using (var conn = _harness.Factory.Create())
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                """
+                SELECT effective_from, effective_to, part_time_fraction, position
+                FROM employee_profiles WHERE employee_id = @e
+                """, conn);
+            cmd.Parameters.AddWithValue("e", employeeId);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync(), "the future-dated write must have created a row.");
+            Assert.Equal(futureReq.EffectiveFrom, reader.GetFieldValue<DateOnly>(0));
+            Assert.True(reader.IsDBNull(1), "the newly created row must be OPEN (no effective_to).");
+            Assert.Equal(0.800m, reader.GetDecimal(2));
+            Assert.Equal("Specialist", reader.GetString(3));
         }
     }
 
@@ -810,25 +823,78 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// PUT with EffectiveFrom = tomorrow → 422. S138 / TASK-13802 narrows what this pins: the
-    /// rejection is no longer "two-sided same-day-only" (backdating is now legal — see the flipped
-    /// pin above) but the standing FUTURE-dating refusal (ADR-040 D8 amendment: future-dating
-    /// needs the "current ≠ live" read model and moves to Increment 4). Status only is asserted —
-    /// the body is deliberately DATE-FREE now.
+    /// <b>REPLACED by S141 / TASK-14112 (ADR-040 D8 amendment, owner ruling 2026-09-11) — RED
+    /// until the S141 wave-2 gate.</b> <b>OLD expectation</b> (S138 / TASK-13802): PUT with
+    /// EffectiveFrom = tomorrow → 422 — the standing FUTURE-dating refusal, deferred to
+    /// Increment 4 because it needed the "current ≠ live" read model this sprint builds.
+    /// <b>NEW (owner ruling — HR can schedule an employment change ahead of time):</b> the mirror
+    /// image of <see cref="PUT_BackdatedEffectiveFrom_NowWritesDatedHistory"/> just above — router
+    /// Shape 1 on emp001's single open row (<c>[0001-01-01, ∞)</c> @ 1.000, seeded by
+    /// <c>EmployeeProfileSeeder</c>): the predecessor is closed AT tomorrow, keeping its OLD values,
+    /// and a new OPEN row from tomorrow carries the CORRECTED ones. Asserted the same way that
+    /// test asserts the backdate split, so a reader can see the two are the same mechanism on
+    /// opposite sides of today.
+    /// <para>
+    /// <b>Docker-gated; completes at the wave-2 gate, not wave 1.</b> This endpoint's own
+    /// future-date validator (the profile-PUT guard in <c>EmployeeProfileEndpoints.cs</c>) is
+    /// lifted by TASK-14104 in wave 2. TASK-14112 (this file's owning task, wave 1) writes this
+    /// replacement and reports it RED against the still-refusing endpoint — Docker is unavailable
+    /// on the authoring machine (standing project constraint), so neither state is verified
+    /// locally. Expected GREEN once TASK-14104 merges.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task PUT_FutureDatedEffectiveFrom_Returns422()
+    public async Task PUT_FutureDatedEffectiveFrom_SplitsTheDatedTimeline()
     {
         var client = AuthorizedClient();
-        var tomorrow = F.AddDays(1);
+        var today = F;
+        var tomorrow = today.AddDays(1);
 
         var rsp = await PutEmployeeProfileAsync(client, "emp001",
             effectiveFrom: tomorrow,
-            weeklyNormHours: 37.0m, partTimeFraction: 1.000m, position: null,
+            weeklyNormHours: 37.0m, partTimeFraction: 0.500m, position: "Scheduled",
             ifMatch: "\"1\"");
-        // RED: fails if the future-dating guard does not read the fixed clock (F+1 would then
-        // compare against the REAL wall-clock day, not F, and could be wrongly accepted as 200).
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+
+        // OLD: UnprocessableEntity. NEW: the scheduled change is recorded, not refused.
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT effective_from, effective_to, part_time_fraction, position
+            FROM employee_profiles
+            WHERE employee_id = 'emp001'
+            ORDER BY effective_from
+            """, conn);
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var rows = new List<(DateOnly From, DateOnly? To, decimal Fraction, string? Position)>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add((
+                reader.GetFieldValue<DateOnly>(0),
+                await reader.IsDBNullAsync(1) ? null : reader.GetFieldValue<DateOnly>(1),
+                reader.GetDecimal(2),
+                await reader.IsDBNullAsync(3) ? null : reader.GetString(3)));
+        }
+
+        Assert.Equal(2, rows.Count);
+
+        // Predecessor: the seeder's 0001-01-01 row, now CLOSED at tomorrow — but its OLD values
+        // are untouched, because the scheduled change has not taken effect yet.
+        Assert.Equal(new DateOnly(1, 1, 1), rows[0].From);
+        Assert.Equal(tomorrow, rows[0].To);
+        Assert.Equal(1.000m, rows[0].Fraction);
+        Assert.Null(rows[0].Position);
+
+        // The scheduled row: OPEN from tomorrow, carrying the new values. It does NOT cover
+        // today, so today's read (and the live cache) must still follow the predecessor.
+        Assert.Equal(tomorrow, rows[1].From);
+        Assert.Null(rows[1].To);
+        Assert.Equal(0.500m, rows[1].Fraction);
+        Assert.Equal("Scheduled", rows[1].Position);
+        Assert.True(rows[1].From > today, "the scheduled row must start in the future.");
     }
 
     // ═════════════════════════════════════════════════════════════════════
