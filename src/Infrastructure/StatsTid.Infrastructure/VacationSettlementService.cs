@@ -1660,6 +1660,16 @@ public sealed class VacationSettlementService
         // after the QUAL-168 fix the VACATION lower bound is the ferieår OF the hire, and the
         // SPECIAL_HOLIDAY lower bound is the hire's calendar year, which is its accrual year. This
         // guard therefore covers the direct-call shapes (supersession, reversal, test drives).
+        //
+        // S141 Step-5a — WHY THERE IS NO TEST FOR THE COMPARAND CHOICE, recorded as an argument
+        // rather than left as an absence. TASK-14103 was asked for a pin that distinguishes this
+        // comparand from `valuationBoundary` and reported it could not construct one honestly. It is
+        // right, and the reason is worth keeping: firing the WRONG comparand would require
+        // `anchorDate` — the later of the ferieår start and the hire — to fall AFTER the leave date,
+        // i.e. an employee hired after they left. That is not a real person, so the wrong branch is
+        // unreachable and no fixture can exercise it. This is a REACHABILITY ARGUMENT, NOT A TESTED
+        // FACT. If the derivation of `valuationBoundary` or of the termination cutoff ever changes,
+        // this argument is what needs re-checking — there is no red test waiting to catch it for you.
         if (anchorDate > boundaryDate)
         {
             throw new InvalidOperationException(
