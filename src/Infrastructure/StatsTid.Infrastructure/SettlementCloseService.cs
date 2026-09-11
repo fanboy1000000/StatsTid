@@ -653,9 +653,11 @@ public sealed class SettlementCloseService : BackgroundService
     ///   <item><description><b>ACTIVE branch:</b> every active employee EXCLUDING passed-end-date
     ///   leavers (R4 pin (a) — a leaver whose Step-A flip FAILED, still <c>is_active=TRUE</c>, must
     ///   NEVER traverse the normal §21/§24 auto-partition; those rows belong exclusively to the
-    ///   Step-A retry + the leaver branch). Candidate years from <c>employment_start_date</c> (floor
-    ///   <see cref="CandidateYearFloor"/>) up to today's year; trigger <c>YEAR_END</c>; due per the
-    ///   unchanged <see cref="IsBoundaryPassed"/> geometry.</description></item>
+    ///   Step-A retry + the leaver branch). Candidate years from the <b>ferieår CONTAINING</b>
+    ///   <c>employment_start_date</c> (S141 / QUAL-168 — <c>month &gt;= 9 ? year : year - 1</c>, the
+    ///   <see cref="ResolveLeaverFerieaar"/> rule; floor <see cref="CandidateYearFloor"/>) up to
+    ///   today's year; trigger <c>YEAR_END</c>; due per the unchanged
+    ///   <see cref="IsBoundaryPassed"/> geometry.</description></item>
     ///   <item><description><b>LEAVER branch (R3):</b> keyed on <c>employment_end_date</c> — never
     ///   bare <c>is_active=FALSE</c>: <c>is_active = FALSE AND employment_end_date IS NOT NULL AND
     ///   employment_end_date &lt; today</c> (a manually-deactivated user with no end date is NEVER
@@ -707,7 +709,27 @@ public sealed class SettlementCloseService : BackgroundService
                        u.is_active
                 FROM users u
                 CROSS JOIN LATERAL generate_series(
-                    GREATEST(@floor, COALESCE(EXTRACT(YEAR FROM u.employment_start_date)::int, @floor)),
+                    -- S141 / TASK-14101 (QUAL-168) — the LOWER bound now maps the HIRE DATE to its
+                    -- ferieår, exactly as the UPPER bound below already maps the END date.
+                    --
+                    -- The defect, in plain terms: a ferieår is not a calendar year. Under VACATION's
+                    -- reset_month = 9 (uniform by the S68 B1 DB CHECK) ferieår E runs 1 Sep E to
+                    -- 31 Aug E+1, so somebody hired on 15 May 2025 spent that day inside ferieår
+                    -- 2024. The old expression took the raw calendar year of the hire — 2025 — as
+                    -- the first candidate, so ferieår 2024 was never generated and the employee's
+                    -- FIRST holiday year could never be settled by the poller at all. A January-to-
+                    -- August hire lost a year silently; a September-to-December hire was unaffected,
+                    -- which is why this survived: half the test population never showed it.
+                    --
+                    -- Same rule, same expression as ResolveLeaverFerieaar(endDate) and as the upper
+                    -- bound: month >= 9 gives that year, else the previous year. A NULL hire date
+                    -- keeps the @floor behaviour unchanged (the CASE yields NULL, COALESCE takes
+                    -- the floor) — byte-identical to before for a profile-less user.
+                    GREATEST(@floor, COALESCE(
+                        CASE WHEN EXTRACT(MONTH FROM u.employment_start_date)::int >= 9
+                             THEN EXTRACT(YEAR FROM u.employment_start_date)::int
+                             ELSE EXTRACT(YEAR FROM u.employment_start_date)::int - 1
+                        END, @floor)),
                     CASE
                         WHEN u.is_active = FALSE AND u.employment_end_date IS NOT NULL
                         THEN LEAST(@upper,
@@ -816,8 +838,12 @@ public sealed class SettlementCloseService : BackgroundService
     /// <list type="bullet">
     ///   <item><description><b>Active employees only</b> — særlige feriedage have no leaver/termination
     ///   settlement flow in this slice (the §26-termination interaction is a recorded non-goal, R12).
-    ///   Candidate years run from <c>employment_start_date</c> (floor <see cref="CandidateYearFloor"/>)
-    ///   up to today's year.</description></item>
+    ///   Candidate years run from the CALENDAR year of <c>employment_start_date</c> (floor
+    ///   <see cref="CandidateYearFloor"/>) up to today's year. <b>DELIBERATELY NOT the S141 /
+    ///   QUAL-168 ferieår mapping the VACATION pass uses</b> — særlige feriedage accrue over the
+    ///   CALENDAR year 1 Jan..31 Dec by law (the R10 resolver ignores <c>reset_month</c> for the
+    ///   type), so the raw calendar year of the hire IS its accrual year. This is geometry, not the
+    ///   VACATION defect; do not "fix" it.</description></item>
     ///   <item><description><b>Type-scoped anti-join</b> — the not-due predicate excludes a tuple with
     ///   any non-REVERSED <c>vacation_settlements</c> row of <c>entitlement_type = 'SPECIAL_HOLIDAY'</c>
     ///   (the 8001 Step-5a note: NEVER reuse the VACATION cache/anti-join without the type dimension).
