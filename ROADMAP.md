@@ -128,6 +128,27 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   recurring self-approval defect class. [carried since S125; RES-003]
 - **`ProjectionBackfillService` unlocked writes** — writes projections outside the advisory lock. [S128 §3.4 exception]
 - **JWT 8h expiry, no revocation list** — no runtime invalidation of a minted token. [SECURITY.md]
+- **★ DECISION OWED — the agreement code carried on a login token goes stale when a scheduled change takes
+  effect** (owner-deferred 2026-09-11, S141 planning OQ-4; owner: *"this is an important decision"*).
+  **The shape.** A login token carries the holder's `agreement_code`, copied at mint time, and lasts 480
+  minutes with no revocation. Today that is harmless, because a change to someone's agreement can only be
+  dated today or earlier, so a token minted before the change is refreshed by ordinary expiry well inside the
+  period the change affects. **S141's future-dating removes that guarantee:** a token minted at 17:00 on the
+  day before an effective date carries the superseded code past midnight, for up to 8 hours into a period
+  where the records say something else.
+  **What must be established BEFORE deciding, and was not established during S141 planning.** The severity
+  depends entirely on *what reads the code from the token rather than from the records*, and that trace was
+  never done — the Orchestrator's belief that the load-bearing calculations read the records is an inference
+  from the surrounding code's pattern, not a verified fact. **Do the trace first; the ruling is not
+  meaningful without it.** If only display surfaces read it, this is cosmetic and self-correcting. If any
+  authorization or rule-resolution path reads it, it is not.
+  **The options, as framed for the owner:** (a) accept and document the window, costing nothing and adding no
+  moving parts; (b) shorten the token lifetime, which taxes every login every day to shrink a window that
+  opens rarely and closes itself, and which degrades the dev/test workflow this project has deliberately
+  protected before; (c) resolve the agreement per request instead of trusting the token, which removes the
+  window but pays a read on every request and makes authentication depend on the scheduling machinery.
+  **Related:** the row immediately above (no revocation list) is the general case of the same weakness; if
+  that is ever picked up, these two should be ruled together rather than separately.
 - **Role/user deactivation windows** — check-then-act gaps across the write paths. [SECURITY.md]
 - **S91 secondary-principal binding** — accepted lateral-assignment hole; owed a dedicated pass. [SECURITY.md]
 - **`Auth:UseDatabase` fail-open** — defaults false → a hardcoded credential table (`admin01/admin`). [WS5 recon]

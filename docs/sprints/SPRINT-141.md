@@ -1,0 +1,595 @@
+# Sprint 141 — Increment 4 (employment lifecycle UX) + the settlement anchor
+
+| Field | Value |
+|-------|-------|
+| **Sprint** | 141 |
+| **Status** | planning |
+| **Start Date** | 2026-09-11 |
+| **End Date** | — |
+| **Orchestrator Approved** | **plan: pending Step 0b.** Refinement `.claude/refinements/REFINEMENT-s141-increment4-and-the-settlement-anchor.md` **rev 5**, READY. Step-4 ran **three** dual-lens cycles: Codex c1 1B/4W/8N → c2 1W/1N → c3 **1B**/1W/5N; Reviewer c1 0B/9W/7N → c2 **1B**/3W/1N → c3 APPROVED-WITH-WARNINGS 0B/5W/5N. Both lenses BLOCKER-free at c3; the skill's two-cycle cap stopped it there and the remaining WARNINGs were absorbed rather than deferred. A post-rev-4 **independent write-path enumeration** then found four more items and, more usefully, the two *mechanisms* generating them. Owner rulings 2026-09-11: **OQ-1 (a)** A+B+C, Increment 4 whole, with a pre-declared cut order · **OQ-2 (a)** anchor at `max(ferieårStart, hire)`, OK-version included, SPECIAL_HOLIDAY in the same ruling · **OQ-3 (a)** profile concurrency token moves to `users.version` · **OQ-4 DEFERRED** to `ROADMAP.md` as a decision owed, trace required first · **OQ-5 (a)** delete both, ruled *against* the Orchestrator's recommendation · **OQ-6 (a)** a today-dated edit asks which period HR meant · **B0** owner-raised requirement: a scheduled change must be VISIBLE wherever a profile is read or edited |
+| **Build Verified** | — |
+| **Test Verified** | — |
+| **Orchestrator model** | Refinement revs 1–5, Steps 0a/0b, this log, all rulings: **Opus 5**. **Disclosed deviation:** the routing rule reserves planning and rulings for the review floor (Fable 5.1); OQ-2 was a domain-correctness ruling taken on Opus. The Step-4 and Step-0b *reviews* run on the floor (hook-enforced), so the review is unaffected; the proposal was not. Recorded rather than quietly absorbed |
+| **Sprint-start commit** | `050fa00` (S140 CI-green backfill) — the `codex review --base` anchor for Step 7a |
+| **CI at start** | **green** — run `34469581974`, sha `050fa00`, all jobs |
+
+## Step 0a — entropy scan
+
+| Check | Result |
+|-------|--------|
+| Working tree | clean at scan time (only this sprint's `ROADMAP.md` edit) |
+| Untracked source | none under `src/`, `frontend/src/`, `tests/` |
+| CI health | green on HEAD; the last red (`34366179123`) was S140's first close run, both causes fixed |
+| `tools/check_docs.py` | **NOT RUN — cannot run.** Python is absent from this machine (verified, not assumed: `python`, `python3` and `py` all resolve to nothing). The docs gate, the db-schema generator and the design-sync checker are **CI-only this sprint** |
+| **Stale agent worktrees** | **★ FINDING — 8 worktrees, 1.5 GB, all merged into master.** See below |
+
+**The worktree finding, and the correction that produced it.** Rev 1 of the refinement asserted "entropy scan clean". That was
+false, and I wrote it without checking the one thing S140 changed about how agents run. S140 made `isolation: "worktree"`
+mandatory for concurrent agents; eight of those worktrees survive on disk, each a full repo copy including build output. **All
+eight commits are merged into master, so no agent work is at risk** — this is waste and noise, not loss. The noise is not
+harmless: a repo-wide filename search now returns **nine copies** of every source file, so any agent or scout searching by name
+rather than by path gets eight decoys, one of them a stale `bin/Release` tree. It already misled a search in this session.
+**Not cleaned during planning** — removing worktrees is a delete, one of the eight is `locked`, and it was outside what the
+planning step was asked to do. **Action: teardown at Step 7**, and the "auto-cleaned if unchanged" default is not to be trusted,
+since it demonstrably fired for none of the eight.
+
+## Sprint Goal
+
+Two deliverables, the second of which grew by a factor of nine under review and is the reason this plan looks the way it does.
+
+**Part A — the settlement anchor.** An employee hired part-way through a holiday year cannot have that year settled. The system
+asks "which agreement, which agreement-version, which position governed this person?" about the *start of the holiday year*,
+which for a May hire is a date before they were employed — so the dated read misses and the capture **throws**. Owner ruling
+OQ-2 (a): anchor every such read at `max(ferieårStart, employmentStart)`, **OK-version included**, so every read answers one
+coherent question — *what was true on this person's first accruing day of that year*. The decisive argument came from the
+internal lens: the version also **keys the entitlement-config read**, so anchoring data at the hire while leaving the version at
+the year start asks for a `(version, date)` pair that never coexisted, and resolves today only because the seeded config rows are
+open-ended. The same ruling governs SPECIAL_HOLIDAY, whose parallel capture has the same defect but **degrades silently** through
+fallbacks instead of throwing — and whose snapshot really does carry a payout wage-type key, contrary to a code comment saying it
+does not. QUAL-168 rides along: one expression gives the candidate-year lower bound the reset-month mapping the upper bound
+already has, so a January–August hire's first ferieår is finally enumerated.
+
+**Part B — the precondition for scheduling a change ahead, which is now nine items.** ADR-040's Increment 4 needs HR to be able
+to date a change in the future. Today every write dated after today is refused, and that refusal is load-bearing in a way nobody
+had written down: **it is the only reason "the open row" and "the row covering today" are the same row.** Removing it breaks
+everything that quietly relied on that coincidence. Four review cycles and one independent enumeration found nine consequences,
+and the enumeration's real contribution was showing they are not nine discoveries but **two mechanisms**:
+
+1. **The split case hands a new row the *next* row's start, and that used to be infinity.** A value read off the future row gets
+   written forward into today (B6), and a value written today gets truncated at the future row (B7).
+2. **Nothing in the system is triggered by an effective date arriving.** Every cache refresh and self-heal fires on a *write*, so
+   a scheduled change silently stops being reflected on the day it takes effect (B2), and the "no row covers today" state has no
+   detector at all (B8).
+
+**B0, the owner's requirement, is the through-line.** Asked *"Should it not be visible to an HR employee looking at a page, that
+another has scheduled a change?"* — and that question reframed B6 and B7 from two defects with two fixes into **one problem**:
+the screen shows a value without saying which period it belongs to or that another period exists. **No review lens asked it.**
+Visibility is therefore a first-class requirement across the feature, not an option inside a ruling, and it demoted the
+concurrency-token question (OQ-3) from a product decision to plumbing.
+
+**Part C — the Increment-4 surfaces:** the termination screen, the effective-date picker, and the HR-gated history timeline.
+
+## Cut order (pre-declared, per OQ-1)
+
+**Cut in this order if the sprint slips: C2 (history timeline, TASK-14109) → C1 (termination screen, TASK-14108) → the date
+picker (TASK-14111).**
+**B0–B9 are NOT cuttable**, because they are correctness fixes to defects that future-dating *introduces*; shipping the picker
+without them ships the bug. Increment 4 has slipped twice, so declaring the order now makes a slip a **named partial** rather
+than a third silent slip.
+
+**What each cut actually leaves, stated so a partial is legible rather than just smaller:**
+
+| Cut to here | What HR gains | What is true underneath |
+|---|---|---|
+| Nothing cut | Terminate, schedule ahead, view history | Increment 4 complete |
+| C2 cut | Terminate, schedule ahead | No history view; every write still correct and visible |
+| C2 + C1 cut | Schedule ahead | Termination stays on today's screens |
+| C2 + C1 + picker cut | **Nothing new to click** | The guard is lifted, all nine consequences are fixed, and any scheduled change created by any path **is visible**. Nothing is silently wrong |
+
+**The bottom row has an honest name, supplied at Step 0b [W-3]: "Increment 4's precondition shipped; the feature did not."**
+It is a coherent and shippable state, and it is genuinely worth shipping, because the nine defects it fixes are real whether or
+not a picker exists. But the review is right that it is hollower than the first draft admitted: **the picker is the only path
+through the product that creates a scheduled change**, so with it cut, the visibility work and the edit prompt have nothing to
+display and cannot be exercised end-to-end. They would be correct and dormant, which is the same condition as the quality
+finding this sprint is fixing precisely because dormancy hid it for four sprints. **So cutting the picker is the sprint failing
+to deliver, and the plan should say so in those words rather than presenting the floor as a success.**
+
+**A cut also trims its own verification** [Codex NOTE]. Cutting C1 or C2 removes their E2E obligations from TASK-14110 and their
+route registrations from the lazy-route guard. A cut that leaves the E2E for a screen that was never built turns a deliberate
+partial into a red close run, which is exactly the confusion the pre-declared order exists to prevent.
+
+## Task decomposition
+
+**Decomposition is by FILE OWNERSHIP, not by finding.** Several findings land in the same files — `EmployeeProfileRepository.cs`
+alone carries B1, B3, B4 and B5 — and S140's lesson was that worktrees prevent *build* races but do nothing about *merge*
+conflicts. Grouping by finding would have produced four agents fighting over one file.
+
+### Wave 1 — parallel, file-disjoint
+
+| Task | Agent | Scope | Owns |
+|------|-------|-------|------|
+| **TASK-14101** | backend-infrastructure | **Part A**: anchor sites 1–4 at `max(ferieårStart, hire)` + per-probe `max(probeAnchor, hire)` for site 5; SPECIAL_HOLIDAY anchored *and* its snapshot key made fail-closed; QUAL-168's lower-bound reset-month mapping. Fix the `:1488` comment that conflates payout-key correctness with replay determinism. **Also owns the single B1 site inside this file, `:1359-1368`, by line range** — the call change, the nine-line comment rewrite, **and the clock decision**: `todayAgreementCode` keys the live-config read at `:1385` and the probe skip at `:1426`, so it must use the **writers' UTC day**, agreeing with what the caches would say rather than the service's Copenhagen helper. Also update the D9-parity comment at `:1402-1412`, which stops holding verbatim after the anchor change | `VacationSettlementService.cs` (capture paths), `SettlementCloseService.cs` |
+| **TASK-14102** | backend-infrastructure | **B-core, the timeline data layer**: B1 as-of-today census **excluding `VacationSettlementService.cs`**; B3 lift the future-date refusal at **all four** sites and update the router rationale; B4 delete per OQ-5 (a), repository side; B5 token move to `users.version`, repository side; B2a record the absence of an employment-end ceiling; **★ B0's READ SIDE — a "next scheduled row after today" read on BOTH repositories, returned alongside the as-of-today row** [cycle-3, section 5: this had no owner at all, and without it TASK-14104 in wave 2 must either breach scope into a sibling's file or block. Same agent, same files, same worktree — free now, a collision later]; **sweep `FutureDated` in owned files** for comments and the two constants that go dead | `EmployeeProfileRepository.cs`, `UserAgreementCodeRepository.cs`, `TemporalWriteRouter.cs`, `ApprovalPeriodRepository.cs`, `AuthEndpoints.cs` |
+
+> **★ Wave-1 build trap — TASK-14102 must NOT delete the refusal symbols this wave** [cycle-2 W-2]. `dotnet build
+> StatsTid.sln` compiles the test projects, and `TemporalWriteRouterTests.cs:43/49/52/442` references
+> `TemporalWriteCase.RejectedFutureDated`. That file belongs to TASK-14112, **in a different worktree**. If TASK-14102 removes
+> that enum member, `TemporalWriteRejection.FutureDated`, or `IsFutureDated`, its own build gate fails on a file it cannot see,
+> and the tempting fix is an out-of-scope edit into another agent's worktree. **Instruction: leave all three symbols in place,
+> unreferenced, this wave.** Retiring them is a wave-2 or close concern. This is the exact class of problem the file-ownership
+> decomposition exists to prevent, arriving through the compiler rather than through git.
+>
+> **Ownership note — the one wave-1 collision, resolved before dispatch.** Refinement B1's census includes
+> `VacationSettlementService.cs:1368`, which sits in a file TASK-14101 owns. **Verified rather than assumed:** that file contains
+> exactly **one** `GetCurrentAsync` call, at `:1368`, together with the comment block at `:1359-1367` that justifies it; every
+> other agreement read in the file is already dated (`:827`, `:1423`, `:1495`). The justification is also the one the refinement
+> shows to be doubly dead — the service *does* have a `TimeProvider`, and the claimed equality with `GetByUserIdAt(today)`
+> expires the moment future-dating exists. **So the line and its comment go to TASK-14101**, which is rewriting that method
+> anyway, and **TASK-14102 does not open this file at all.** Wave 1 is therefore genuinely file-disjoint. Recording the check
+> because "the tasks look disjoint" is exactly the kind of claim this sprint's reviews have repeatedly falsified.
+| **TASK-14103** | test-qa | **Part A pins**: capture-derived `agreementCode`/`okVersion`/`position` for a mid-ferieår hire; `Earned` unchanged *outside* the divergence window and, *at* it, **differing OK24/OK26 configs seeded** with `okVersion` + `annualQuota` asserted directly; both stored boundaries pinned separately; **A4's two hire shapes**; **a pin on the SPECIAL_HOLIDAY fail-closed change**; rewrite the S140 `cannotCompute` fact | Part-A test files only |
+| **TASK-14112** | test-qa | **★ The wave-1 RED pins** [Step-0b W-4]: the **five router matrix shapes**, pure unit tests needing **no Docker and no database**, so they verify *locally, in this wave*. **Honesty correction from cycle 2: only FOUR are RED today.** Shape 4 (today-dated write with a future row → kind `Inserted`) is **already green**, because the router treats a future row like any history row. It is still a valuable regression pin, but **a green there must not be read as "the fix landed"**, and the task says so. Also: replacement assertions for the ~10 refusal tests, the two fixed-clock probe replacements **clock-sensitive**, and the JWT fixed-clock pin — **these are Docker-gated endpoint tests and complete at the wave-2 gate, not this one**, because the endpoint refusals they target are lifted by TASK-14104 | router + refusal test files, disjoint from TASK-14102's |
+
+### Wave 2 — after wave 1 merges
+
+| Task | Agent | Scope | Owns |
+|------|-------|-------|------|
+| **TASK-14104** | backend-infrastructure | **★ FIRST: lift the THREE endpoint-side future-date refusals** — profile PUT `EmployeeProfileEndpoints.cs:285-286`, users PUT `AdminEndpoints.cs:1615-1617`, agreement-code PUT `AdminEndpoints.cs:2534-2535`. **Keep** the `EffectiveFrom == default` presence guards (`:1613`, `:2529`, `EmployeeProfileEndpoints.cs:275`) — those are malformed-request checks, not policy. Update the doc comments at `EmployeeProfileEndpoints.cs:78` and `Contracts/UserAgreementCodeContracts.cs:24`. **OQ-6's request field is needed on all three of these endpoints, not two.** Then: B0 read payload carries the scheduled change **on BOTH sides** — the profile GET *and* the users/agreement GET, since OQ-6's prompt must work on the agreement side too; B4 endpoint + **the mandatory audit event** for the retired scheduled row, which needs a new event record, a mapper alongside `EmployeeProfileCreatedAuditMapper`, and its registration; B5 endpoint side, **returning the new `users.version` on the profile PUT response** so the drawer can re-stamp (see the BLOCKER); B6 round-trip made inert; B7/OQ-6 the two write branches | `EmployeeProfileEndpoints.cs`, `AdminEndpoints.cs` (agreement side), the new audit mapper |
+| **TASK-14113** | backend-infrastructure | **C2's BACKEND half, moved into wave 2** [cycle-2 W-3]: two range reads + one HR-gated endpoint, **shipped with its response type declared** or the API convention gate hard-fails it. **HR gate and org scope on the subject's CURRENT organisation is a security invariant and needs its own pin** [cycle-2 W-4]. Moved here so the wave-2 regeneration covers it | **NEW FILES ONLY** [cycle-3 §4 — every existing file this would naturally touch belongs to a wave-2 sibling]: a new endpoint class, a new read repository, plus **one line** in `ApiEndpoints.cs` `MapAll` (no other wave-2 task touches that file). **The two dependency-registration lines go to the Orchestrator at merge**, like the route files |
+| **TASK-14105** | backend-infrastructure | **B2** the effective-date refresh, hosted in **`DelegationExpiryService`**. **Plan premise corrected** [cycle-2 note]: that service no longer uses `CURRENT_DATE` — since S140 it reads the injected `TimeProvider`'s UTC day once per sweep (`:98-102`), which is exactly the clock this needs. **Reuse that `today`; do not add a second clock.** Also raise a QUAL row: a vikar-named service hosting the profile/agreement boundary refresh is a cohesion lie a future reader will not find. `users.version` semantics at the boundary stated and pinned; **B8** the "no row covers today" detector, extending HRP-015 to the profile hole and removing the inner join that filters out the very employee it should surface, **plus the fail-closed reader throw sites** (`EmployeeProfileRepository.cs:1123/1170/1196/1266/1288`) turned into a caught, named condition | `DelegationExpiryService.cs`, `HrFollowUpApprovalReadRepository.cs`, the named throw sites |
+| **TASK-14106** | test-qa | **The ENDPOINT-dependent pins only** — everything that needs a running endpoint, which is why it sits in wave 2: the B6 round-trip pin (GET → PUT unmodified → nothing changes, no absence revalued); GET-then-PUT **and** GET-then-DELETE token round trips; the B4 delete pins; OQ-6's two branches; the B0 payload pins; **B9** the repository-internal `expectedVersion` against a split write. **The router matrix and the refusal replacements are NOT here — they belong exclusively to TASK-14112 in wave 1** [cycle-2 WARNING: the split had left them owned twice, and a pin owned twice is a pin written twice and merged badly] | endpoint test files only, disjoint from TASK-14112's |
+
+### Wave 3 — frontend and Part C
+
+| Task | Agent | Scope |
+|------|-------|-------|
+| **TASK-14107** | ux | **★ The OQ-3 drawer fix (Step-0b BLOCKER) — see below, this is the task's first job.** Then **B0 visibility, ALL SIX surfaces**: profile page; edit drawer **covering the AGREEMENT-CODE field as well as the profile fields**, since it is a second dated field written on every save and a scheduled agreement change would otherwise be the owner's defect one field over; the **danger section** carrying "Slet" (there is no delete dialog, and profile deletion has no frontend caller at all today, so do not hunt for one); **organisation roster, people search, person-reference**. The drawer states what period a save will cover. **B7/OQ-6 prompt**, likewise covering the agreement-code field. **NOT CUTTABLE** |
+
+> ### ★ Step-0b BLOCKER — OQ-3 (a) breaks every HR save until the drawer threads the new token
+>
+> **What it means for a person using this.** HR opens someone, changes a job title, saves. The profile section returns "someone
+> else changed this, reload and retry". They reload and try again and get the same thing. **Every save, for every employee,
+> permanently** — not one refusal at rollout.
+>
+> **The mechanism, verified in the code rather than reasoned.** The edit drawer saves in steps. Step 1 is the users PUT, which
+> runs **unconditionally on every save** (`frontend/src/hooks/useEditPerson.ts:147-163`) and bumps `users.version` exactly once
+> per request even when nothing changed (`AdminEndpoints.cs:1859-1880`, the one-bump rule). Step 2 then PUTs the profile using
+> an ETag captured when the drawer opened (`:200`). Today that ETag is the **profile row's** own version, which step 1 does not
+> touch, so the two never interfere. **OQ-3 (a) makes the profile's token `users.version`** — the very value step 1 just
+> advanced. The drawer would send the pre-bump number and the server would compare it against the post-bump number.
+>
+> **The project already solved this exact problem twice, in this exact function.** The comment at `:222-237` describes it for
+> the date-of-birth and employment-start writes: they mutate the same user row, so a version captured at dialog-open is stale
+> the moment the users PUT commits. The fix there is read-your-write threading — carry a running version cursor and re-stamp it
+> after each write. **The profile PUT simply joins that family.** The comment also records how it was missed last time: *"the
+> mock that accepted every PUT masked this."*
+>
+> **Why no planned test would have caught it.** TASK-14106's pin is a GET then a PUT, which never interposes the users PUT, so
+> it passes. No frontend test drives the save sequence against a server that rejects a stale token. The close would have been
+> green with the drawer unusable.
+>
+> **This is a plan fix, not a re-ruling.** OQ-3 (a) stands and remains right. **But the cost I quoted the owner was wrong.** I
+> said "one stale refusal per open browser tab on release day". That is only true once the drawer threads the token; without
+> that work it is every save, forever. Owner informed.
+>
+> **★ The first version of this fix was WRONG, and Step-0b cycle 2 caught it. I flagged the doubt to both lenses rather than
+> waiting to be corrected, and both confirmed it.** The fix said: thread the cursor into the profile PUT and re-stamp *the
+> profile snapshot* from its response. That leaves the date-of-birth and employment-start writes — which run **after** the
+> profile write at `:246` onward and share the **same** `users.version` cursor — holding a value that the profile write has
+> since advanced. **So the 412 would have moved from the profile save to the date-of-birth save rather than disappearing, which
+> is strictly worse than the original defect, because it would have looked fixed.**
+>
+> **★ And the SECOND version was still wrong. Cycle 2 corrected it precisely, and found a third consumer nobody had named.**
+> My second attempt said "thread `usersRowVersion` into the profile PUT". **That is literally impossible as written**: the
+> cursor is declared at `useEditPerson.ts:243-244`, *after* the profile PUT at `:200`. I also cited `:238-244` as the re-stamp
+> pattern; it is the *seed* comment. The actual re-stamp pattern is at `:259-265`.
+>
+> **The third consumer:** `frontend/src/hooks/usePlacement.ts:164-178` issues a unit change using `live.user.version`
+> **after all of the drawer's sub-writes**. So changing someone's unit and their job title in one save would 412 as well.
+> Three writes downstream of the profile save, not two.
+>
+> **The specification, exactly.** The profile PUT sends `If-Match` = the **post-step-1 `live.user.etag`**. On success it
+> re-stamps **`live.user.version`, `live.user.etag` and `live.profile`** — the user-side re-stamp is the part that matters, and
+> re-stamping only `live.profile.etag` (the obvious move, and what the existing profile code does) is what leaves the next three
+> writes holding a superseded number.
+> - **TASK-14107** implements that, and its frontend test **dirties the profile AND the date of birth together** against a
+>   double that 412s any stale token, asserting the final user version matches the double's. A test that dirties only the
+>   profile field passes while the defect is fully present.
+> - **TASK-14104** returns the new `users.version` on the profile PUT response, **and `EmployeeProfileResponse.version` must
+>   carry the same token as the ETag header** — otherwise the frontend's fallback at `employeeProfileApi.ts:47` formats the
+>   profile-row number into an If-Match that means something else entirely.
+> - **TASK-14110**'s end-to-end save changes **title plus hire date, or title plus unit**, so it crosses the boundary where the
+>   defect lives. "Covering both steps" was not enough; the failure is at step three.
+>
+> **Three attempts at one fix, each wrong in a different way, each caught by asking rather than asserting.** That is the
+> strongest argument in this document for why the dual lens is not ceremony.
+| **TASK-14108** | ux | **C1 termination screen** — eleven statuses, both 409 shapes typed and pinned frontend-side, ETag from the terminated-inclusive GET. **Carries the B0 obligation too**: it shows profile values, so a scheduled change must be visible on it |
+| **TASK-14109** | ux | **C2 history timeline — the SCREEN only.** Its backend half moved to wave 2 as TASK-14113 [cycle-2 W-3], so the API regeneration after wave 2 covers the new endpoint and this screen can type against it. **FIRST TO CUT** — and cutting it now cuts only the screen, leaving a typed, tested endpoint nobody calls, which is a cleaner partial than half a feature |
+| **TASK-14111** | ux | **The effective-date picker** — the screen that lets HR date a change ahead. **LAST TO CUT**, and split out from TASK-14107 deliberately |
+
+> **Completeness note — B0's surface list, corrected at Step 0b [Codex BLOCKER].** The first draft of this plan scoped B0 to
+> the profile page, edit drawer and delete confirmation. **The refinement says "wherever a profile value is shown", and named
+> three more surfaces the B1 census already touches** — the organisation roster, people search and the person-reference
+> resolver, all three of which display a **position** read from the timeline. Scoping B0 to the edit surfaces alone would have
+> reproduced the exact defect the owner raised, one screen removed: HR would see a promotion's job title on the roster weeks
+> before it takes effect, with nothing saying so. **The termination screen (TASK-14108) carries the same obligation**, since it
+> shows profile values too. Corrected: six surfaces in TASK-14107, plus the obligation named in TASK-14108's scope.
+> **Why this slipped:** I wrote B0 into the refinement as a principle and then decomposed it from memory of the principle
+> rather than from its own text, which is the same class of error as paraphrasing a mechanism instead of reading it.
+>
+> **Split note — why the picker is its own task, found while writing this plan rather than by a lens.** The cut order says B0 is
+> not cuttable and the picker is. In the first draft both lived in one ux task, which would have made that distinction
+> unenforceable: cutting the picker would have cut the owner's visibility requirement with it.
+> **The split also answers what a cut actually leaves.** If the picker goes, the backend still accepts future-dated writes,
+> because B3 lifts the refusal at all four sites and B3 is not cuttable. Future rows remain creatable through the agreement-side
+> admin writes. So a picker-less S141 must still **show** a scheduled change wherever one exists, or the sprint would ship a
+> system that can hold scheduled changes it never displays — which is precisely the defect B0 was raised to kill.
+> **The coherent partial is therefore: guard lifted, every consequence fixed, every scheduled change visible, no picker yet.**
+> HR gains nothing new to click, and nothing is silently wrong. That is a shippable state; "picker but no visibility" is not.
+
+### Wave 4 — close
+
+| Task | Agent | Scope |
+|------|-------|-------|
+| **TASK-14110** | **ux** (not test-qa) | E2E terminate + view-history flows; **one end-to-end drawer save** covering both steps of the save sequence, which is the BLOCKER's regression guard; **both new pages registered in `frontend/e2e/lazy-routes.spec.ts`** (S140's first CI red); no new `frontend/src/components/ui/` component (S140's second CI red; the design-sync gate **cannot be run locally** — Python is absent, so this is avoidance by design, not preference). **Agent reassigned at Step 0b** [W-7]: the E2E spec lives under `frontend/**`, which is ux scope, not `tests/**`, so the original test-qa assignment asked an agent to edit outside its declared scope |
+
+## Orchestrator steps between waves — the close-time bites, declared
+
+Three things belong to the Orchestrator and to no agent. Each was found at Step 0b, and each would otherwise have surfaced as a
+red close run.
+
+**1. Regenerate the API contract after EVERY wave that changes the API surface — which is waves 2 AND 3** [W-5; the "waves 2 and
+3" placement was itself a **BLOCKER at cycle 2**]. B0's payload and OQ-6's request and response change the API shape, and **three
+CI gates fire on that**: the OpenAPI sync check, the generated-types freshness check, and a convention check that **hard-fails
+any new untyped operation**. `docs/api/openapi.json` sits under `docs/`, which is Orchestrator-only, so no agent can do this.
+
+| Regeneration | Why |
+|---|---|
+| **After wave 2 merges** | B0's payload and OQ-6's shapes exist; **TASK-14107 cannot type against the new payload until this runs**, and would otherwise hand-edit the generated types and turn the freshness gate red — exactly S140's pattern |
+| **After wave 3 merges** | **TASK-14109 adds a new endpoint *during* wave 3.** The first draft regenerated only before wave 3, so that endpoint could never ship freshly generated, and the convention gate hard-fails a new untyped operation. Missing this would have turned the close red with no local way to detect it, since Python is absent and these gates are CI-only |
+
+TASK-14109's endpoint must also ship with its response type declared, or the convention gate fails it regardless of
+regeneration; that instruction is in its task text.
+
+**2. Own the shared frontend registration files** [W-7]. C1 and C2 are both new pages, so TASK-14108 and TASK-14109 would each
+add a lazy import and a route to `frontend/src/App.tsx` and an entry to the sidebar. That is the merge collision the whole
+file-ownership principle exists to prevent. **The Orchestrator registers routes and navigation after the ux tasks land**; the
+agents build their pages and declare what needs registering rather than editing those two files.
+
+**3. Register rows owed at close** [N-3]: the quality row for the interval constraint deferred out of B4, the HRP-015 row
+re-read for the profile-hole extension, and the model-routing register row for this sprint.
+
+## Step 5a — where the per-task reviews sit
+
+Mandatory per-task review is not optional for any task here, since every one touches an invariant, and the refinement makes the
+**dual lens** mandatory on A1 and on B3/B4/B5. The plan previously said where waves merge but not where reviews sit [W-6].
+
+| Review | When |
+|---|---|
+| TASK-14101 (A1) — **dual lens** | at the wave-1 gate |
+| TASK-14102 (B3 repository side) | at the wave-1 gate — **repository half only** |
+| TASK-14104 (B4 + B5 endpoint side) — **dual lens** | at the wave-2 gate |
+| **B3, B4 and B5 as wholes** — **dual lens** | **only after wave 2**, because each spans both waves. **B3 joined this list at cycle 2**: once the three endpoint refusals moved into TASK-14104, lifting the guard became a two-wave change like the others, and a wave-1-only review would have reviewed half of it — precisely what scheduling the reviews was meant to prevent |
+| **B0 and OQ-6 as wholes** | at the **wave-3** gate — backend payload in wave 2, frontend in wave 3; not dual-lens-mandated, but they deserve one whole-feature look |
+| All other tasks | at their own wave's gate |
+
+## Pin register — every acceptance criterion has a named owner
+
+Added at Step 0b [Codex WARNING: several pins had no explicit owner]. A pin nobody owns is a pin nobody writes, and this sprint
+verifies almost everything for the first time in CI at close, so an unowned pin is discovered at the worst possible moment.
+
+| Pin | Owner |
+|---|---|
+| Capture-derived `agreementCode` / `okVersion` / `position` for a mid-ferieår hire | TASK-14103 |
+| `Earned` unchanged **outside** the divergence window; **at** it, differing OK24/OK26 configs seeded, `okVersion` + `annualQuota` asserted | TASK-14103 |
+| Both stored boundaries pinned **separately** (YEAR_END `boundaryDate`, TERMINATION `terminationCutoff`) | TASK-14103 |
+| **A4's two hire shapes** — a Jan–Aug hire's first ferieår IS enumerated; SPECIAL_HOLIDAY enumeration unchanged | TASK-14103 |
+| SPECIAL_HOLIDAY snapshot key fail-closed (no `?? user.AgreementCode`, no live-config chain) | TASK-14103 |
+| S140's `cannotCompute` fact rewritten, list membership determined not assumed | TASK-14103 |
+| The **five** router matrix shapes, incl. today-dated-write-with-future-row asserting kind `Inserted` | **TASK-14112** (wave 1, local, no Docker) |
+| **B3 revaluation**: absences ≥ `from` revalued, none before, none past the next scheduled row's start | TASK-14106 |
+| **B3 worklist**: no rows for a future date in a **later month**; exported-month rule **unchanged** for a future date inside the current month; no settlement row for any future date | TASK-14106 |
+| **B6** round-trip inert: GET → PUT unmodified → timeline unchanged, no absence revalued | TASK-14106 |
+| **B5** GET-then-PUT **and** GET-then-DELETE token round trips, both succeeding with a future row present | TASK-14106 |
+| **B4** audit: `previous_data` shows **today's** values; the retired scheduled row's retirement is **itself audited** | TASK-14106 |
+| Replacement assertions for all ~10 refusal tests; the two fixed-clock probes' replacements **clock-sensitive** | **TASK-14112** (wave 1) |
+| The JWT carries the code effective **today**, pinned under a fixed clock, on the `useDbAuth` branch only | **TASK-14112** (wave 1) |
+| **The full drawer save sequence** — users → profile → date of birth → employment start — succeeds against a server that 412s a stale token. The unit test **dirties profile AND date of birth**; the E2E changes **title plus hire date, or title plus unit** | TASK-14107 (unit) + TASK-14110 (E2E) |
+| **B1 backend**: with a future row present, the roster, people search and person-reference reads return **today's** position | TASK-14106 |
+| **B0 backend**: both GETs carry the scheduled change in the payload | TASK-14106 |
+| **OQ-6 backend**: the two write branches pinned on **all three** endpoints — profile PUT, users PUT, agreement-code PUT | TASK-14106 |
+| **A future write leaves both caches untouched** | TASK-14106 |
+| **C2 security**: the timeline read is HR-gated and org-scoped on the subject's **current** organisation | TASK-14113 |
+| **The three ENDPOINT refusals are lifted** — a future-dated save succeeds through the profile PUT, the users PUT and the agreement-code PUT | TASK-14112 (completes at the wave-2 gate) |
+| **B9** repository-internal `expectedVersion` against a split write | TASK-14106 |
+| **B2** refresh fires on the writers' UTC day; `users.version` semantics pinned either way | TASK-14105 |
+| **B8** the fail-closed readers' 500 path pinned as a caught, named condition; HRP-015 surfaces a profile hole | TASK-14105 |
+| **B0** the six surfaces show a scheduled change; the drawer states the period a save covers | TASK-14107 |
+| **B7/OQ-6** both branches — until the scheduled change, and carry-forward touching **only the edited field** | TASK-14107 |
+| E2E terminate + view-history; both new pages in `lazy-routes.spec.ts` | TASK-14110 |
+
+## Verification gates between waves
+
+Added at Step 0b [Codex WARNING: verification deferred too far]. **The risk this closes:** production code and its tests are
+written in separate worktrees, Docker-gated tests run only at close, and without an explicit gate a merge or fixture mismatch
+would surface at the close run rather than before the next wave builds on it.
+
+**After every wave merges, the Orchestrator runs, on the merged tree, reading each exit status from the UNPIPED command:**
+1. `dotnet build StatsTid.sln -c Release --no-incremental` — 0 errors, warning count compared to the 145 baseline.
+2. The **non-Docker** test set, which is the part that can run here at all.
+3. `npx tsc --noEmit` and the frontend unit suite, from wave 2 onward.
+
+**A wave does not close until those pass.** Docker-gated facts still verify only at close; that is a standing constraint, not a
+choice, and this gate exists to shrink what reaches that point unverified rather than to pretend it does not.
+
+**TASK-14106's dependency, stated rather than implied** [Codex WARNING: wave 2 is not parallel-executable as written]. The pins
+are authored **RED-first from the spec**, concurrently with their siblings, which is the project's convention and is why the task
+sits in wave 2. But they cannot be **verified** until TASK-14104 and TASK-14105 merge. So TASK-14106 completes at the wave-2
+gate, not when its agent returns, and its agent is told that explicitly so it does not report green against code that does not
+exist yet.
+
+## Standing constraints for every agent
+
+- **Docker is unavailable locally.** Most Part-A and Part-B pins verify only in the watched CI run at close. Do not block on it.
+  **Corrected at Step 0b [N-4]: "every Part-B pin" was over-broad.** The router matrix is pure unit testing and runs here, now,
+  which is why TASK-14112 moved into wave 1. Do not assume a pin cannot run locally without checking.
+- **Read exit status from the unpiped command.** S140 lost a cycle to `npx tsc --noEmit | tail` reporting the *pipe's* status as 0 while ten real type errors printed.
+- **Report anything this plan does not name.** Five reviews each found one more write-side consequence than the last. The list is
+  believed closed only because an independent enumeration read every SQL statement naming either table and concluded so. If you
+  find a tenth, say so rather than assuming it was considered and omitted.
+- `isolation: "worktree"` for every concurrent agent, and **teardown at Step 7**.
+
+## Step 0b — plan review
+
+**External (Codex): 1 BLOCKER / 3 WARNING / 2 NOTE — all absorbed above.**
+
+- **BLOCKER — B0 was scoped to three surfaces when the refinement names six.** The roster, people search and person-reference
+  screens all display a position read from the timeline, and none had an owner. Scoping visibility to the edit surfaces alone
+  would have reproduced the owner's own defect one screen removed: a promotion's title visible on the roster weeks early with
+  nothing saying so. The termination screen carries the obligation too. **Fixed:** six surfaces in TASK-14107, the obligation
+  named in TASK-14108.
+- **WARNING — several acceptance criteria had no named owner**, including B9, A4's two hire shapes, B2's refresh pins, B3's
+  revaluation/worklist/settlement pins, B4's audit pins and B8's fail-closed-reader pin. **Fixed:** a pin register assigning
+  every criterion to a task. An unowned pin in a sprint that verifies at close is discovered at the worst moment.
+- **WARNING — wave 2 was not parallel-executable as written.** TASK-14106's pins test behaviour its two siblings implement.
+  **Fixed:** stated explicitly — pins are authored RED-first from the spec concurrently, but the task completes at the wave gate
+  rather than when its agent returns, and the agent is told so.
+- **WARNING — verification was deferred too far.** No post-wave gate was declared, so a merge or fixture mismatch would surface
+  at the close run. **Fixed:** an explicit build + non-Docker test + type-check gate after every wave merge.
+- **NOTE — the wave-1 ownership collision is correctly resolved**, and the refinement's "one line in one method" was imprecise:
+  it is one call site plus a nine-line comment rewrite. Corrected in the refinement.
+- **NOTE — a cut must trim its own E2E obligations**, or a deliberate partial becomes a red close run. Added to the cut table.
+
+**Internal (Reviewer, `claude-fable-5-1`): verdict BLOCKED — 1 BLOCKER / 7 WARNING / 6 NOTE. All absorbed; re-review owed.**
+
+- **BLOCKER — owner ruling OQ-3 (a) makes every HR save fail permanently until the edit drawer threads the new token, and the
+  cost quoted to the owner was wrong.** Detailed in the boxed note under TASK-14107. The ruling stands; the plan gains three
+  pieces of work and the owner has been told the real cost. **This is the single most valuable finding of the whole sprint's
+  review history**, because it would have shipped green with the drawer unusable.
+- **W-1 — the settlement seam needed a clock decision**, not just an owner. Assigned to TASK-14101 by line range, with the
+  writers' UTC day specified and the reason stated.
+- **W-2 — more unowned criteria than the external lens found**, including the D9-parity comment, a pin on the special-holiday
+  change, the fail-closed reader throw sites as *code* rather than just a pin, and visibility on the agreement side. All now
+  owned; the pin register is the enforcement.
+- **W-3 — the cut floor was named too kindly.** Without the picker, the visibility work is correct and dormant. The cut table
+  now names that row "Increment 4's precondition shipped; the feature did not."
+- **W-4 — the pins were placed GREEN-first**, and the router matrix does not need Docker at all. Split out as TASK-14112 into
+  wave 1 so RED is actually demonstrated before the fix lands.
+- **W-5 — no API regeneration step**, with three CI gates waiting on it. Now an explicit Orchestrator step between waves 2 and 3.
+- **W-6 — Step 5a was not scheduled**, and B4/B5 span two waves so a wave-1 review would have reviewed half a change. Scheduled.
+- **W-7 — wave-3 frontend ownership was undeclared** and one task was assigned outside its agent's scope. Shared registration
+  files move to the Orchestrator; the E2E task moves from test-qa to ux.
+- **Verified sound:** wave-1 backend disjointness, the wave 2 → 3 payload gating direction, the cut-order principle, the
+  termination screen's token source, TASK-14103's match to the refinement, and the refusal inventory of roughly ten.
+
+### Step 0b cycle 2 — re-review of the revision
+
+**External (Codex): 2 BLOCKER / 1 WARNING — all absorbed.**
+
+- **BLOCKER — the cycle-1 blocker's FIX was wrong, and would have moved the failure rather than removed it.** Re-stamping only
+  the profile snapshot leaves the date-of-birth and employment-start writes, which run afterwards and share the same cursor,
+  holding a superseded value. **The 412 would have migrated to the next write and the plan would have looked fixed.** Corrected
+  to a single running cursor across all four writes, with the test driving the whole sequence.
+  *Worth recording how this was caught:* the Orchestrator **doubted its own fix and said so in both cycle-2 prompts**, asking
+  specifically whether the ordering still worked. Both lenses were pointed at the right place because the doubt was declared
+  rather than suppressed. A fix that is uncertain should be reviewed as a question, not asserted as an answer.
+- **BLOCKER — the API regeneration was placed only before wave 3, but wave 3 ADDS an endpoint.** That endpoint could never ship
+  freshly generated, and the convention gate hard-fails a new untyped operation. Since Python is absent, none of these gates can
+  be run locally, so this would have surfaced as a red close with no local reproduction. **Corrected: regenerate after wave 2
+  AND after wave 3.**
+- **WARNING — the router matrix pins had two owners** after the wave-1 split, in both the task table and the pin register. A pin
+  owned twice is written twice and merged badly. **Corrected: exclusively TASK-14112.**
+- **Verified sound:** the router tests really are pure and local, so the failing-first demonstration is real; the UTC day is the
+  right clock for the settlement seam; `DelegationExpiryService` is a registered five-minute UTC poller and a suitable host; the
+  shared route and sidebar files are Orchestrator-only with no agent needing them; and the end-to-end spec is indeed frontend
+  scope, so the agent reassignment was correct.
+
+**Internal (Reviewer, `claude-fable-5-1`): verdict BLOCKED — 2 BLOCKER / 5 WARNING / 6 NOTE. All absorbed.**
+
+- **BLOCKER — the future-date refusal has SEVEN sites, not four, and the three that face the user were unowned.** The
+  refinement counted only the repository guards. The endpoints validate independently *before* the repository is reached.
+  **Consequence had it stood: the date picker ships dead.** HR picks 1 November, the endpoint returns "cannot be dated in the
+  future", and every layer beneath it would have accepted the write happily. The sprint's headline feature would have looked
+  finished and been unreachable. Two knock-ons absorbed: the refusal replacement tests are Docker-gated endpoint tests and so
+  complete at the wave-2 gate, not wave 1; and B3 becomes a two-wave change, so its review moves after wave 2.
+- **BLOCKER — the drawer fix was wrong for a THIRD time, and has a third consumer.** "Thread the cursor into the profile PUT"
+  is impossible as written, because the cursor is declared *after* the profile write. The correct specification is now exact:
+  send the post-step-1 user ETag, and re-stamp the **user** version and ETag, not just the profile's. The unnamed third
+  consumer is the unit-change hook, which writes after all the drawer's sub-writes — so changing someone's unit and job title
+  together would have failed too. Both tests widened, because the originals would have passed with the defect fully present.
+- **W-2 — a wave-1 build trap.** The solution build compiles test projects, so if TASK-14102 deletes the refusal symbols its
+  own build fails on a file owned by another agent in another worktree. Instruction added: leave them in place this wave.
+- **W-3 — C2's backend half moved into wave 2** as TASK-14113, so the wave-2 regeneration covers its new endpoint.
+- **W-4 — six more unowned pins**, including C2's HR gate and org scope, which is a **security invariant that had no test
+  owner at all**. All added to the register.
+- **W-5 — the agreement code is a second dated field in the same drawer**, written on every save, so OQ-6's request field is
+  needed on three endpoints and the visibility indicator must cover that field too. Otherwise the owner's defect reappears one
+  field over.
+- **Notes absorbed:** the UTC day is exact parity with the year-overview reader, which is a better justification than the one
+  I gave; the poller premise was stale, since that service already reads the right clock, and a QUAL row is owed for the
+  cohesion problem of hosting this there; only four of the five router shapes are red today, and the plan now says so rather
+  than implying a green means the fix landed; the delete confirmation is a danger section rather than a dialog, and profile
+  deletion has no frontend caller at all today; the changed delete response must ship typed.
+- **Verified sound:** the agent reassignment, the Orchestrator's ownership of the shared registration files, the regeneration
+  actually unblocking the frontend, wave-1 file disjointness, and the after-wave-2 review placement.
+
+**Verdict on dispatch: both blockers were plan-text fixes of a few lines, now applied.**
+
+### Step 0b cycle 3 — confirmation pass
+
+**Internal (Reviewer, `claude-fable-5-1`): APPROVED-WITH-WARNINGS. Safe to dispatch wave 1.** Every cycle-2 line citation
+re-verified against the code. Both blockers correctly absorbed, and the drawer's consumer census closed at **three, not four**.
+
+Two gaps found in the absorption itself, both fixed before dispatch:
+
+- **★ B0's READ side had no owner at all** [§5]. The payload must carry the scheduled change, and the edit prompt reuses the
+  same lookup — but neither repository exposes a "next scheduled row" read, and no task owned adding one. TASK-14104 in wave 2
+  would have had to reach into a sibling's file or stop. **Added to TASK-14102**: same agent, same files, same worktree, free
+  now and a collision later. *This is the third time a requirement of the owner's has needed a home the plan had not built.*
+- **Wave 2 had wave 1's collision** [§4]. TASK-14113's file ownership said "the new endpoint + its reads", and every existing
+  file it would naturally touch belongs to a wave-2 sibling. **Constrained to new files only**, plus one line in a routing file
+  nothing else touches, with dependency registration handed to the Orchestrator.
+
+Smaller corrections absorbed: a filename I got wrong; "update the two doc comments" is a floor, so each agent sweeps its own
+files for the now-dead future-dating comments and two constants; the agreement-code field named explicitly in the frontend
+task; and the edit prompt's carry-forward is a **second routed write through the existing writer**, not a new repository
+method — worth saying, because an implementer could easily build a method that need not exist.
+
+**Verified sound:** the post-step-1 ETag really is a fresh value; the profile response's version already promises to match its
+ETag header, so that instruction preserves an existing contract rather than inventing one; the poller already reads the right
+clock; four of five router shapes are genuinely red; and a test harness that records the header per call already exists, so
+the widened drawer test has somewhere to live.
+
+**STATUS: WAVE 1 DISPATCHED.**
+
+## Wave 1 — agent findings the plan did not name
+
+The dispatch prompts told every agent that finding a false claim in its own instructions is a success rather than an
+embarrassment, and that anything the plan failed to name should be reported rather than assumed considered. That is producing
+results, so the findings are recorded here as they arrive rather than at close.
+
+### TASK-14101 (settlement anchor) — complete, build green, 5 findings
+
+Build `0 errors / 145 warnings`, matching the declared baseline. Unit suite `1238 passed / 0 failed`. No Docker-gated test
+attempted or claimed. **Every falsifiable claim in the dispatch prompt was checked against the code and all held** — the five
+site line numbers, the two dates that must not move, the clock seam's four members, the parity citation, the emitter citation,
+the accrual helper's internal maximum, and that the file contains exactly one call of the read being replaced.
+
+1. **★ RULED — the anchor was unclamped at the top, turning a loud failure into quiet junk data.** If the hire date falls after
+   the END of the settled year, `max()` yields an anchor outside that year, the reads succeed, and the result is a **zero-earned
+   settlement snapshot keyed at the hire for a year the employee never worked here** — recorded, audited, and capable of
+   emitting a zero payout event. Previously this threw. The agent verified it is unreachable from either poller branch and is
+   reachable only by a direct call with an arbitrary year, **and declined to clamp it unilaterally because the ruling said
+   `max()`** — correct judgment, and exactly the behaviour the prompts asked for.
+   **Orchestrator ruling: fail closed, restoring the throw.** Junk data that looks deliberate is worse than a loud failure, and
+   this is not a deviation from OQ-2 (a): that ruling was made about a year the employee was employed for *part* of, and never
+   contemplated one they were not employed for at all. Restoring the throw keeps the ruling inside the case it was made about.
+2. **A documented parity claim is now deliberately false.** The probe anchors are no longer a strict subset of the year-overview
+   reader's. The divergence is one-directional — more closed years become settleable, never fewer — and cannot change a settled
+   quantity. Documented in code at both the probe and the fallback throw, whose message named anchors it may no longer use.
+3. **The capture's clock dependency is now explicit where it was hidden.** Reading "the open row" was always a disguised
+   dependency on *now*; it is now an explicit clock read. Strictly better and testable, but a change of kind — relevant to both
+   test tasks, which are told.
+4. **The special-holiday position read is still null-tolerant while its three siblings are now fail-closed.** The emitter
+   coalesces a null position to empty and the seeded mappings carry a default row, so an absent profile resolves a mapping
+   instead of failing. **Registered as a quality finding rather than fixed**, because widening the fail-closed change to the
+   position is outside what the owner ruled. The code comment must say it is a *registered* asymmetry, so a later reader does
+   not tidy it into consistency without a ruling.
+5. **A4 has a one-time backlog effect nobody had costed.** Every January-to-August-hired employee gains a previously
+   unenumerated first holiday year, so the first poll after this ships settles a backlog, each row emitting an outbox event and
+   an audit row. Bounded by the go-live gate and the candidate-year floor, but **there is no per-run batch cap** — the agent
+   checked. No action: the service is dormant today, so there is no backlog to process yet. Recorded so it is not discovered
+   during a close run.
+
+**TASK-14101 ruling applied — the guard is in, and the agent avoided a fresh defect while adding it.** Build `0 errors / 145
+warnings` (baseline held), unit suite `1238 passed / 0 failed`, no Docker-gated claim. Two comparand choices it made
+deliberately and justified in code, both of which a careless implementation would have got wrong:
+
+- **The vacation guard compares against the holiday-year end, NOT the valuation boundary.** The valuation boundary is pulled
+  earlier by a termination cutoff, so comparing against it would have **rejected a legitimate leaver whose hire preceded their
+  leave date** — turning a correctness guard into a new defect on the leaver path. This is the kind of second-order effect the
+  sprint's reviews kept finding in the plan; here the implementer found it unprompted.
+- **The special-holiday guard compares against the ACCRUAL end (31 December of the accrual year), not the much later
+  settlement boundary**, because the accrual window is the period the employee must have overlapped for anything to have
+  accrued at all.
+
+It also verified the guard cannot disturb existing fixtures before adding it, and correctly observed that the two new throws
+are behaviour changes owed a failing-first pin that no task owned — **relayed to TASK-14103 while it was still running**,
+including the warning that a pin asserting against the valuation boundary would encode the leaver bug.
+
+**QUAL-171 registered** for finding 4 (the special-holiday position read still tolerant while its three siblings are now
+fail-closed, with a seeded blank-position mapping row that makes the degradation resolve a real payroll code rather than fail).
+The code comment at the site is headed as a known, registered asymmetry so it is not tidied into consistency without a ruling.
+
+### TASK-14112 (router + refusal pins) — complete, 4 of 5 RED as predicted, 2 more prompt claims falsified
+
+**The failing-first discipline is now real rather than nominal**, which was the whole reason this task was split into wave 1.
+Unit suite: **1244 total, 1239 passed, 5 failed — exactly the five intended**, nothing else regressed. Non-Docker regression
+104/104, demo-seed 165/165.
+
+| Shape | State | Why |
+|---|---|---|
+| 1, 2, 3, 5 | **RED now** | They hit the guard; they turn green when TASK-14102 lifts it |
+| 4 — today-dated write while a future row exists | **GREEN now** | Today is not *after* today, so the guard never sees it; the router already handled a history row covering today |
+
+Shape 4's green was predicted in the dispatch prompt and the test's own comment says why, so **a green there cannot be misread
+as evidence the fix landed**. That instruction earned its place.
+
+**Two more claims of mine falsified** (running total across this sprint's planning: eleven, six of them mine):
+- **"The agreement-code backdating tests (four)"** — there are **three**. The agent listed every fact in the file and checked
+  each future-dated one rather than trusting the number.
+- **The blanket "these complete at the wave-2 gate" framing was wrong for three pins.** Two repository-direct tests and the
+  login-token pin never reach an endpoint validator at all — they call the repositories directly, or seed by direct SQL. Their
+  real dependency is **TASK-14102, a wave-1 sibling**, so they could go green as early as the wave-1 gate. Each pin's comment
+  now carries its true dependency instead of the blanket claim. This matters for when to re-verify, which is exactly the kind
+  of thing a blanket statement hides.
+
+**Inventory: nine refusal tests, not "roughly ten."** All nine got real replacement assertions; none was deleted. Correctly
+excluded: two tests pinning an unrelated validator for local agreement profiles, which this sprint does not touch.
+
+**The two fixed-clock probe replacements are genuinely clock-sensitive**, and the construction is better than the instruction
+asked for. Once future-dating is universally accepted, "a future date returns success" is true whether or not the fixed clock
+reaches the endpoint — so a bare success assertion would have silently destroyed what those probes exist to prove. Instead each
+asserts the response still carries **today's** value rather than the scheduled one, which only holds under a correctly-seamed
+clock: an unconverted real-clock path would treat the fixture's date as over a year in the past and flip the assertion.
+
+**One addition beyond the named five, flagged as such.** An existing test asserted refusal on both an empty and a populated
+timeline. Its populated half became shape 1; its empty half became a new pin for a new hire's very first row being scheduled
+ahead. Leaving it unreplaced would have left a permanently-false pin in a file no other task owns.
+
+**Found, not fixed, out of scope:** a stale prose comment in a config test file naming a renamed method. Doc hygiene; fix at
+merge.
+
+### TASK-14103 (Part A pins) — complete, and it avoided the trap the prompt warned about
+
+Build `0 errors / 145 warnings` (baseline held). Non-Docker suites all green: unit 1238/1238, demo-seed 165/165, regression
+104/104. **Every new pin is Docker-gated and therefore CI-verified at close, not green locally** — reported as such, not as
+passing.
+
+**The trap avoided.** The obvious pin at the divergence window would assert `Earned` is unchanged. It cannot fail there,
+because the two seeded agreement-version configs are identical, so it passes under either anchor and proves nothing. The agent
+instead seeded **two differing test-owned configs** (25 days against 30) and asserted the version and the quota **directly**.
+That is the only form of this pin that can fail, and it is the difference between a guard and a decoration.
+
+**Two boundaries pinned separately, as required** — the year-end path stores the period end, the termination path stores the
+employment end date. A single pin over "the boundary" would have covered one path and silently missed the other.
+
+**The added guard pins were designed to discriminate.** For the special-holiday path the agent chose a hire date sitting
+*between* the two candidate comparands, so a guard wrongly compared against the later payout deadline would let it through and
+the pin would catch it. That is a pin built to fail for the right reason rather than merely to pass.
+
+**What it declined to write, correctly.** A discriminating pin for the vacation guard's comparand choice. It could not
+construct a scenario it was confident was both realistic and correct without the merged implementation, and said so rather than
+guessing. **Orchestrator follow-up: the scenario appears to be unconstructible, and that is the real answer.** For the wrong
+comparand to fire, the anchor would have to fall after the employee's leaving date, which means being hired after leaving. So
+the guard is safe by construction rather than by test. **Recorded as a reachability argument in a comment at the guard**,
+because an untestable safety property should be written down as an argument rather than left as an absence — if someone later
+changes how the leaving date is derived, that comment is what tells them the argument needs re-checking.
+
+**A gap it spotted and I took up:** the special-holiday path had a fail-closed pin but no positive capture-correctness pin, so
+we would have proved it refuses bad input without ever proving it captures the right values from good input. Mirror pin
+commissioned.
+
+**And one more caveat of mine resolved rather than assumed.** I had said a partial-year hire "may legitimately land in neither
+list". The agent computed it: this one lands in `items`, with the numbers worked rather than guessed. The caveat was an
+instruction not to assume, not a prediction.
