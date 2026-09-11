@@ -503,63 +503,73 @@ public sealed class HrFollowUpSettlementEndpointTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// HRP-010 pin (6), RE-SEEDED in S140 / TASK-14012: an employee hired DURING the target ferieår
-    /// whose valuation FAILS CLOSED lands in <c>cannotCompute</c>, NOT in the needed list.
+    /// HRP-010 pin (6) — REWRITTEN in S141 / TASK-14103 (TASK-14101's settlement-anchor fix). An
+    /// employee hired DURING the target ferieår now VALUES SUCCESSFULLY and appears in the NEEDED
+    /// list — not in <c>cannotCompute</c>, which is what this same fact asserted before the fix.
     ///
-    /// <para><b>The shape, and why it is this shape.</b> The hire date
-    /// (<see cref="HiredDuringTargetFerieaar"/>, 1 Jan 2025) sits INSIDE ferieår 2024
-    /// (1 Sep 2024 – 31 Aug 2025), so this employee can legitimately hold part of that ferieår —
-    /// the §21 question genuinely applies to them. Their dated <c>user_agreement_codes</c> /
-    /// <c>employee_profiles</c> history is dated from that same hire, so it does NOT cover the
-    /// ferieår START (1 Sep 2024); the settlement service's dated read at the ferieår start
-    /// therefore finds no covering row and throws (<c>VacationSettlementService.cs</c> ~:1495-1498, no
-    /// fallback on that read). That throw is a REAL signal — missing dated history for someone the
-    /// rule applies to — and must stay visible on the tile.
+    /// <para><b>Why the old assertion is simply wrong now, in plain language.</b> Settling a closed
+    /// holiday year asks "which pay agreement, which agreement-version, which job title governed this
+    /// person on the first day of the year" — and before TASK-14101 it asked that question about the
+    /// literal first day of the ferieår (1 Sep 2024), which for this employee (hired 1 Jan 2025) is a
+    /// date before they even worked here. The fix asks instead about the LATER of "the year started"
+    /// and "this person's first day" — 1 Jan 2025 here — which their own dated records do cover, so
+    /// the valuation now SUCCEEDS instead of throwing.
     /// </para>
     ///
-    /// <para><b>What TASK-14012 changed here, stated plainly.</b> Before this task the fact left
-    /// <c>users.employment_start_date</c> NULL (the <c>RegressionSeed</c> default, ADR-040 D2
-    /// "unbounded") and so pinned only "broken dated history ⇒ cannotCompute", saying nothing about
-    /// the hire date. TASK-14012 makes the hire date decide whether the §21 question APPLIES at all,
-    /// so the fact now states its hire date explicitly and names which side of the boundary it is
-    /// on. The cannotCompute assertion itself is UNCHANGED — this fact asserts exactly what it
-    /// asserted before, now for an employee whose applicability is explicit rather than incidental.
-    /// The complementary NOT-APPLICABLE case is its own fact,
-    /// <see cref="TransferAgreementsNeeded_HiredAfterFerieaarAccrualEnd_InNeitherList"/>.
-    /// </para>
+    /// <para><b>Why this fact does not simply flip to "asserts <c>items</c>" on faith — the
+    /// membership was WORKED OUT, not assumed.</b> Whether a successfully-valued employee ends up in
+    /// the needed list, in neither list, or (in principle) still in <c>cannotCompute</c> for an
+    /// unrelated reason depends on one number: <c>Partition(snapshot).UnderCap</c>, listed only when
+    /// it is greater than zero (<c>HrFollowUpSettlementReadRepository.cs</c> ~:647). Working the
+    /// actual numbers for this employee — hired 1 Jan 2025, ferieår 2024 (1 Sep 2024 – 31 Aug 2025),
+    /// the seeded VACATION config (25 days, MONTHLY_ACCRUAL, carryover_max 5), no recorded balance or
+    /// consumption — gives 8 whole accrued months (Jan..Aug) of the 25-day quota ⇒ earned ≈ 16.67,
+    /// which EXCEEDS the 5-day cap ⇒ <c>underCapDays = min(16.67, 5) = 5.00</c>, strictly greater than
+    /// zero. So this particular partial-year hire lands in <c>items</c> — a different partial-year
+    /// hire whose accrued fraction fell BELOW the cap could legitimately land in NEITHER list, which
+    /// is exactly why this rewrite computes the number rather than assuming a list.</para>
     ///
-    /// <para><b>RED conditions.</b> (i) RED if the per-employee try/catch in
-    /// <c>HrFollowUpSettlementReadRepository.GetTransferAgreementsNeededAsync</c> were removed — one
-    /// bad history would 500 the whole list instead of degrading one row. (ii) RED if a caught
-    /// failure were silently dropped instead of reported. (iii) RED if TASK-14012's population term
-    /// were mis-bounded at the ferieår START (<c>EntitlementPeriod.AccrualStart</c>) instead of its
-    /// END (<c>AccrualEnd</c>), or written with the comparison reversed: this employee would then be
-    /// excluded from the population and VANISH from <c>cannotCompute</c> — suppressing a real signal
-    /// in the name of removing noise, which is the one way this fix could go wrong.</para>
+    /// <para><b>What stays true, and why the scenario is otherwise unchanged.</b> The hire (1 Jan
+    /// 2025) sits comfortably inside ferieår 2024's own window and well before its 31 Aug 2025 end,
+    /// so neither this fix's hire-anchor nor the SEPARATE out-of-period guard S141 also added (a hire
+    /// AFTER the settled period ends must fail closed — <see cref="SettlementAnchorCaptureTests"/>)
+    /// has any bearing here; this remains a plain, ordinary mid-ferieår hire.</para>
+    ///
+    /// <para><b>RED conditions.</b> (i) RED (throws, 500, or a stale cannotCompute entry) if
+    /// TASK-14101's anchor fix regresses and the dated reads go back to the literal ferieår start.
+    /// (ii) RED if <c>underCapDays</c> or <c>carryoverMax</c> drift from 5.00 — either would mean the
+    /// wrong config or the wrong accrual window was captured. (iii) RED if this employee reappears in
+    /// <c>cannotCompute</c> at all, which would mean the fix did not actually land.</para>
     /// </summary>
     [Fact]
-    public async Task TransferAgreementsNeeded_HiredDuringFerieaar_ValuationFailsClosed_ReportedAsCannotCompute()
+    public async Task TransferAgreementsNeeded_HiredDuringFerieaar_ValuationSucceeds_AppearsInNeeded()
     {
         using var host = _factory.WithFixedToday(F);
         using var client = host.CreateClient();
 
-        var employeeId = NextId("s21_failclosed");
-        // Hired 1 Jan 2025 — INSIDE ferieår 2024, so the §21 question applies — but the dated
-        // history starts at that same hire, AFTER the ferieår-2024 start (1 Sep 2024), so the dated
-        // agreement-code read at the ferieår start finds no covering row and CaptureSnapshotAsync
-        // throws (VacationSettlementService.cs ~:1495-1498, no fallback on this specific read).
+        var employeeId = NextId("s21_midyear");
+        // Hired 1 Jan 2025 — INSIDE ferieår 2024 — with dated history starting at that same hire,
+        // AFTER the ferieår-2024 start (1 Sep 2024). Before TASK-14101 the dated read at the ferieår
+        // start missed and this fact asserted cannotCompute; after it, the read is anchored at the
+        // hire (which the history DOES cover) and the valuation succeeds.
         await RegressionSeed.SeedEmployeeAsync(
             _harness.ConnectionString, employeeId, OrgA, effectiveFrom: HiredDuringTargetFerieaar);
         await SetEmploymentStartAsync(employeeId, HiredDuringTargetFerieaar);
 
         var hr = Client(host, HrToken(OrgA));
         using var doc = JsonDocument.Parse(await hr.GetStringAsync("/api/hr/follow-up/transfer-agreements-needed"));
-        Assert.DoesNotContain(doc.RootElement.GetProperty("items").EnumerateArray(),
+
+        Assert.DoesNotContain(doc.RootElement.GetProperty("cannotCompute").EnumerateArray(),
             i => i.GetProperty("employeeId").GetString() == employeeId);
-        var cc = Assert.Single(doc.RootElement.GetProperty("cannotCompute").EnumerateArray(),
+        Assert.Equal(0, doc.RootElement.GetProperty("cannotComputeCount").GetInt32());
+
+        var item = Assert.Single(doc.RootElement.GetProperty("items").EnumerateArray(),
             i => i.GetProperty("employeeId").GetString() == employeeId);
-        Assert.Equal("VALUATION_FAILED", cc.GetProperty("reason").GetString());
-        Assert.True(doc.RootElement.GetProperty("cannotComputeCount").GetInt32() >= 1);
+        // 8 whole accrued months (Jan..Aug 2025) of a 25-day quota ≈ 16.67, capped at the 5-day
+        // carryover_max ⇒ underCapDays = 5.00 — strictly greater than zero, hence "needed".
+        Assert.Equal(5.00m, item.GetProperty("underCapDays").GetDecimal());
+        Assert.Equal(5.00m, item.GetProperty("carryoverMax").GetDecimal());
+        Assert.Equal(Section21AccrualEnd, ReadDate(item.GetProperty("ageAnchorDate")));
     }
 
     /// <summary>
