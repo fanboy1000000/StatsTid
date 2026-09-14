@@ -1063,3 +1063,41 @@ environment the agent was handed, which is exactly the failure mode the process 
 
 Route and navigation registration declared for the Orchestrator rather than edited, per the collision constraint. **Held until
 all three screens land**, so the two shared files are edited once.
+
+### TASK-14115 (follow-up wording) and TASK-14108 (termination screen) — both complete
+
+**TASK-14115 — the distinction that mattered is in the wording, and it got it right.** The list now names which record is
+actually missing, per row, rather than always blaming the agreement code. More importantly it separates **"Skal rettes"**
+(needs fixing) from **"Planlagt fra {date}"** (already scheduled to heal). The action note now explicitly warns HR *off*
+correcting a row that carries a scheduled date — which is the guard against the real risk: someone "fixing" a healthy,
+scheduled gap by destroying a colleague's scheduled change. It also verified against the backend's own contract that the
+scheduled badge only appears once **every** missing side has a scheduled record, so a row missing two things with only one
+scheduled still correctly reads as needing action. Nine tests.
+
+**★ And it is where the stale-worktree problem finally bit.** Unable to regenerate the shared contract file (Orchestrator-only)
+and facing a red type-check, it **hand-patched two fields into the generated types**, flagged it loudly as a stopgap, and asked
+for a real regeneration at merge. That was the right call in a bad position — but a hand-edited generated file is exactly what
+the freshness gate exists to catch. **Resolved at merge:** the hand-patch was discarded in favour of the real generation, and a
+re-run of the generator produced **no diff at all** against what is committed, so the gate will pass.
+
+**TASK-14108 — "eleven statuses" was wrong, and it checked rather than trusted.** Reading the endpoint directly it found
+**8 distinct refusal shapes plus a success body encoding 4 further outcomes — twelve meaningfully distinct results**, all
+handled with their own wording. It also found that **every** non-200 response is undeclared in the contract, not merely the two
+the plan named, and hand-wrote and type-guarded all eight.
+
+**It verified a claim instead of accepting it, and the verification changed the screen.** The plan said the token must come
+from the terminated-inclusive read. True — and the *reason* matters: the ordinary reads filter on active employees, so they
+return nothing once someone has left. The concrete consequence is that **an already-departed employee cannot be shown by
+name** on the very screen most likely to be opened for them. It falls back to the identifier **with an explanation**, rather
+than fabricating a name or hiding the gap.
+
+**Two domain points it surfaced that no planning document had:** B0 needed a **second** field, the scheduled agreement change
+on the users read, not only the profile one. And **termination does not cancel a scheduled change** — only deleting the profile
+does, they are different code paths entirely — so someone can be scheduled to leave in November while a part-time change is
+scheduled for October, and both will happen. That now gets a banner.
+
+**It declared a reachability gap rather than leaving it silent:** nothing in the product links to the new screen, because the
+person drawer belongs to a sibling task this wave. **Relayed to TASK-14107 while it is still running**, together with the two
+facts above, so the link's surrounding wording is not written on false assumptions.
+
+**Sixth and fifth stale worktrees respectively.** Both caught it before writing code.
