@@ -94,6 +94,24 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
+/// <b>★ S141 / TASK-14105 (refinement B8) — both of this class's "no record covers this date"
+/// exits became REACHABLE THROUGH THE PRODUCT, and are now one CAUGHT, NAMED condition at the
+/// caller.</b> Until S141 every write endpoint refused a future-dated write, so an employee always
+/// had a row covering today and these exits meant "a seeding or backfill defect". S141 lets HR date
+/// an employment change ahead (refinement B3), which makes an employee whose only row starts in
+/// November real — and for them this resolver answers "nothing covers today" on every payroll
+/// calculation and every compliance read until that row starts. <c>ComplianceEndpoints</c> now
+/// catches BOTH exits (the <c>null</c> and the throw below) as one condition named
+/// <c>employment_record_gap</c>, logged and returned with a body, instead of letting an anonymous
+/// 500 escape. The detector that SURFACES such an employee to HR is the follow-up list HRP-015
+/// (<c>HrFollowUpApprovalReadRepository.GetCannotRegisterAsync</c>), which S141 widened from the
+/// agreement hole to the profile hole for exactly this reason.
+/// <b>The equivalent PCS caller</b> (<c>PeriodCalculationService</c>, in the Payroll integration)
+/// still throws uncaught; naming that one is owed and was declared to the Orchestrator rather than
+/// reached into from this task's scope.
+/// </para>
+///
+/// <para>
 /// <b>Data-integrity fail-loud (S34 / TASK-3406).</b> If the
 /// <c>employee_profiles</c> JOIN succeeds but
 /// <see cref="UserAgreementCodeRepository.GetByUserIdAtAsync"/> returns <c>null</c> for
@@ -203,10 +221,22 @@ public sealed class EmploymentProfileResolver : IEmploymentProfileResolver
         {
             // Data-integrity fail-loud: employee_profiles row exists for this
             // (employee_id, asOfDate) but user_agreement_codes has no row covering the
-            // same date. Should never occur post-TASK-3403 backfill seeder (which seeds
-            // at '0001-01-01' covering all past periods). Surfacing as an exception
-            // keeps the contract loud rather than substituting an empty string and
-            // silently corrupting PCS replays / payroll export.
+            // same date. Surfacing as an exception keeps the contract loud rather than
+            // substituting an empty string and silently corrupting PCS replays / payroll export.
+            //
+            // S141 / TASK-14105 (B8) — "should never occur post-TASK-3403 backfill seeder" is NO
+            // LONGER TRUE, and the correction matters because the old sentence told a reader this
+            // branch was unreachable. Once HR can date an agreement-code change into the future
+            // (refinement B3), an employee can hold an agreement-code timeline whose only row
+            // starts next month, and then NOTHING covers today. A seeder cannot patch that shape
+            // either: the live partial-unique index means such an employee ALREADY has an open row,
+            // so a seeder that inserted a second would collide (wave-1 finding A).
+            //
+            // The throw STAYS — fail-closed is right, and guessing an agreement code would put a
+            // wrong wage type on a payroll line. What changed is that the callers no longer let it
+            // escape anonymously: ComplianceEndpoints catches it as the named
+            // `employment_record_gap` condition, and the HR follow-up list HRP-015 surfaces the
+            // employee so somebody can fix the records.
             throw new EmployeeProfileNotFoundException(employeeId, asOfDate);
         }
 
