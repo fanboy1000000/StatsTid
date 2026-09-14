@@ -580,10 +580,19 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
     /// Pin 9c. No SETTLED_YEAR row can arise from the DATE-based rule for ANY future-dated write: an
     /// active settlement's valuation boundary is always in the past, so "the correction starts before
     /// the boundary" is false whenever the correction itself starts in the future. No absence is
-    /// seeded here on purpose, so only the date-based path is exercised (the separate, UNCONDITIONAL
-    /// "skip" path — which fires whenever a revaluation actually declines to re-record a settled
-    /// group's absence, dates notwithstanding — is a distinct mechanism this pin does not address;
-    /// see the final report).
+    /// seeded here on purpose, so only the date-based path is exercised.
+    ///
+    /// <para>
+    /// <b>Resolved by trace, 2026-09-14 (owner/coordinator correction to the pin register).</b> The
+    /// separate, UNCONDITIONAL "skip" path (<c>WriteForSkippedSettledYearsAsync</c>) is a DIFFERENT
+    /// mechanism and is genuinely reachable for a future-dated write — see
+    /// <see cref="PUT_FutureDated_ReachingATerminationSettledYear_DoesRaiseASettledYearRow_ViaTheSkipPath"/>
+    /// immediately below, which pins that it is reachable and that the resulting row is CORRECT, not
+    /// spurious. This test's scope is therefore narrowed on purpose to the date-based rule alone —
+    /// "no settlement row for any future date" was never quite true; "no settlement row from the
+    /// DATE rule" is, and the counter-test below is what stops a future reader from "fixing" the skip
+    /// path into date-awareness and silencing a true finding.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task PUT_FutureDated_NeverRaisesASettledYearRow_ViaTheDateRule()
@@ -607,6 +616,86 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         Assert.Empty(await ReadWorklistRowsAsync(employeeId, "SETTLED_YEAR"));
+    }
+
+    /// <summary>
+    /// Pin 9d — the counter-test to 9c, requested after a read-only trace settled the skip-path
+    /// question. The DATE rule cannot fire for a future-dated write (9c); the SKIP path is a
+    /// different, UNCONDITIONAL mechanism, and it CAN and SHOULD fire.
+    ///
+    /// <para>
+    /// <b>The mechanism, in plain language.</b> A holiday year can be settled EARLY through the
+    /// termination trigger, which crystallises at the leaver's end date rather than at the year's
+    /// natural boundary. Nothing caps a profile effective date past someone's employment end (B2a),
+    /// and nothing purges a holiday booking made before they resigned. So: someone resigns, having
+    /// already booked a trip for a date that is still in the future; HR later schedules a fraction
+    /// correction dated after the resignation (and, in this pin, still in the future relative to
+    /// TODAY); the correction's revaluation interval reaches that booking; the booking belongs to a
+    /// year the termination has already settled. The revaluation correctly DECLINES to rewrite a
+    /// value a frozen settlement protects — and reporting that decline on the HR worklist is exactly
+    /// what the skip path exists to do. The resulting row is CORRECT, not a defect.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Scope, per the coordinator's correction.</b> The skip path is reachable ONLY through the
+    /// profile write — an agreement-code change runs no revaluation, so it can never produce a
+    /// skipped group. This pin is profile-only for that reason, not by omission.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task PUT_FutureDated_ReachingATerminationSettledYear_DoesRaiseASettledYearRow_ViaTheSkipPath()
+    {
+        var employeeId = await SeedEmployeeAsync();
+        await ReplaceProfileTimelineAsync(employeeId, (F.AddDays(-400), null, 1.000m, "Base", "Standard"));
+
+        // Terminated 60 days before today (2025-01-11) — a real leaver, not a hypothetical one.
+        var terminationDate = F.AddDays(-60);
+        await MarkTerminatedAsync(employeeId, terminationDate);
+
+        // A trip booked before they resigned, for a date still in the future relative to TODAY:
+        // 2025-06-10, a Tuesday (independently verified: 2025-01-01 is a Wednesday, day-of-year 161
+        // is 160 days later, 160 mod 7 = 6, Wednesday + 6 = Tuesday) — a weekday, so the zero-norm
+        // guard (S138/QUAL-153) cannot suppress it before the settlement logic ever sees it.
+        var futureAbsence = F.AddDays(90);
+        Assert.Equal(new DateOnly(2025, 6, 10), futureAbsence);
+        Assert.Equal(DayOfWeek.Tuesday, futureAbsence.DayOfWeek);
+        await SeedAbsenceAsync(employeeId, futureAbsence, "VACATION", hours: 7.4m, feriedage: 1.0m);
+
+        // The ferieår VACATION accrues under reset_month = 9 (the schema's own CHECK — VACATION's
+        // reset_month is fixed at September). June 2025 < September, so it belongs to ferieår 2024 —
+        // the year this employee's TERMINATION already settled.
+        const int resetMonth = 9;
+        var settledYear = futureAbsence.Month >= resetMonth ? futureAbsence.Year : futureAbsence.Year - 1;
+        Assert.Equal(2024, settledYear);
+        await SeedActiveSettlementAsync(
+            employeeId, "VACATION", settledYear, terminationDate, trigger: "TERMINATION");
+
+        var client = AdminClient();
+        var before = await GetProfileAsync(client, employeeId);
+        // A FUTURE-dated write (relative to TODAY) that changes the fraction, dated between today
+        // and the booked trip so its (open-ended) revaluation interval reaches the trip.
+        var scheduledFrom = F.AddDays(10);
+        Assert.True(scheduledFrom < futureAbsence, "the write must precede the absence it is meant to reach.");
+        var rsp = await PutProfileAsync(client, employeeId, scheduledFrom,
+            partTimeFraction: 0.500m, position: "Base",
+            employmentCategory: "Standard", ifMatch: $"\"{before.Version}\"",
+            carryForwardToScheduledChange: null);
+
+        // RED (wave-2 dependent — TASK-14104 has merged, so the endpoint's future-date refusal is
+        // lifted; this is the same status the other future-dated pins in this file already expect).
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+
+        // The skip actually happened: the settled year's absence keeps its recorded feriedage instead
+        // of being silently rewritten to the new fraction's value (which would be 2.0, not 1.0).
+        Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, futureAbsence));
+
+        // RED: fails if the withheld correction goes unreported — a future reader who "fixed" the
+        // skip path to also require a past-dated correction would make this assertion fail, which is
+        // precisely the regression this pin exists to catch.
+        var row = Assert.Single(await ReadSettledYearWorklistRowsAsync(employeeId));
+        Assert.Equal("VACATION", row.EntitlementType);
+        Assert.Equal(settledYear, row.EntitlementYear);
+        Assert.Contains("PROFILE_CHANGE", row.TriggersJson, StringComparison.Ordinal);
     }
 
     // ─── Seeding helpers ─────────────────────────────────────────────────
@@ -713,8 +802,27 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>Sets the employee's <c>employment_end_date</c> and deactivates them — the fact that
+    /// makes the TERMINATION settlement trigger (as opposed to YEAR_END) a real scenario rather than
+    /// a fixture artefact. B2a: there is no ceiling stopping a later profile write dated past this
+    /// date, which is the whole precondition for pin 9d's scenario.</summary>
+    private async Task MarkTerminatedAsync(string employeeId, DateOnly endDate)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE users SET employment_end_date = @end, is_active = FALSE WHERE user_id = @e", conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("end", endDate);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    /// <summary><paramref name="trigger"/> — 'YEAR_END' (default, matches the pre-existing pins) or
+    /// 'TERMINATION' (pin 9d — a year settled early because the employee left, not because the year
+    /// itself ended).</summary>
     private async Task SeedActiveSettlementAsync(
-        string employeeId, string entitlementType, int year, DateOnly boundaryDate)
+        string employeeId, string entitlementType, int year, DateOnly boundaryDate,
+        string trigger = "YEAR_END")
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -723,11 +831,12 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
             INSERT INTO vacation_settlements
                 (employee_id, entitlement_type, entitlement_year, sequence,
                  settlement_state, trigger, snapshot)
-            VALUES (@e, @t, @y, 1, 'SETTLED', 'YEAR_END',
+            VALUES (@e, @t, @y, 1, 'SETTLED', @trigger,
                     jsonb_build_object('settlementBoundaryDate', to_char(@b::date, 'YYYY-MM-DD')))
             """, conn);
         cmd.Parameters.AddWithValue("e", employeeId);
         cmd.Parameters.AddWithValue("t", entitlementType);
+        cmd.Parameters.AddWithValue("trigger", trigger);
         cmd.Parameters.AddWithValue("y", year);
         cmd.Parameters.AddWithValue("b", boundaryDate);
         await cmd.ExecuteNonQueryAsync();
@@ -821,6 +930,31 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
             rows.Add(new WorklistRow(
                 reader.IsDBNull(0) ? null : reader.GetInt32(0),
                 reader.IsDBNull(1) ? null : reader.GetInt32(1)));
+        }
+        return rows;
+    }
+
+    private sealed record SettledYearWorklistRow(string EntitlementType, int EntitlementYear, string TriggersJson);
+
+    /// <summary>The SETTLED_YEAR-specific read (pin 9d), carrying the (type, year) key and the
+    /// triggers array — the exported-month read above has no use for either.</summary>
+    private async Task<IReadOnlyList<SettledYearWorklistRow>> ReadSettledYearWorklistRowsAsync(string employeeId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT entitlement_type, entitlement_year, triggers::text
+            FROM hr_backdate_worklist
+            WHERE employee_id = @e AND kind = 'SETTLED_YEAR'
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        var rows = new List<SettledYearWorklistRow>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new SettledYearWorklistRow(
+                reader.GetString(0), reader.GetInt32(1), reader.GetString(2)));
         }
         return rows;
     }
