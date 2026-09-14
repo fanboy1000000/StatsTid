@@ -29,7 +29,7 @@
 // vikar status colours are declared as scoped CSS vars on .panel.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, useToast } from '../../../components/ui'
+import { Badge, Button, useToast } from '../../../components/ui'
 import { useAuth } from '../../../contexts/AuthContext'
 import { hasMinRole } from '../../../lib/roles'
 import { useUnitMutations } from '../../../hooks/useUnitMutations'
@@ -510,6 +510,14 @@ export function StrukturPanel({
     if (nr) return [nr.position, nr.unitName].filter(Boolean).join(' · ')
     return ''
   }
+
+  // B0 (S141) — the owner's visibility requirement: an id resolved either from the
+  // live roster row OR the by-id nameResolution fallback (an id outside the loaded
+  // roster, e.g. an external leader) may itself carry a scheduled change. This is
+  // an AWARENESS date only — never the future value itself, which the read never
+  // carries here on purpose (a screen must not show a value that is not yet true).
+  const resolveScheduledChange = (id: string): string | null =>
+    rosterIndex.rowById.get(id)?.scheduledChangeFrom ?? rosterIndex.nameResolution[id]?.scheduledChangeFrom ?? null
 
   const membersOf = (node: StrukturNode): RosterRow[] =>
     rosterIndex.rowsByUnit.get(node.kind === 'unit' ? node.id : ORG_MEMBER_KEY) ?? []
@@ -1383,15 +1391,21 @@ export function StrukturPanel({
       {upRefIds.length > 0 && (
         <div className={styles.upRef} data-testid="up-ref">
           <span className={styles.upRefLabel}>Refererer opad til</span>
-          {upRefIds.map((id) => (
-            <div key={id} className={styles.upRefChip} data-testid={`up-ref-${id}`}>
-              <span className={styles.upRefAvatar} aria-hidden="true">{initials(resolveName(id))}</span>
-              <span className={styles.upRefBody}>
-                <span className={styles.upRefName}>{resolveName(id)}</span>
-                <span className={styles.upRefWhere}>{resolveWhere(id)}</span>
-              </span>
-            </div>
-          ))}
+          {upRefIds.map((id) => {
+            const scheduledFrom = resolveScheduledChange(id)
+            return (
+              <div key={id} className={styles.upRefChip} data-testid={`up-ref-${id}`}>
+                <span className={styles.upRefAvatar} aria-hidden="true">{initials(resolveName(id))}</span>
+                <span className={styles.upRefBody}>
+                  <span className={styles.upRefName}>{resolveName(id)}</span>
+                  <span className={styles.upRefWhere}>{resolveWhere(id)}</span>
+                  {scheduledFrom && (
+                    <Badge variant="info">Ændring planlagt fra {formatDate(scheduledFrom)}</Badge>
+                  )}
+                </span>
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -1552,6 +1566,9 @@ export function StrukturPanel({
                       {v && <span className={styles.fravBadge} data-testid={`fravaerende-${n.row.employeeId}`}>Fraværende</span>}
                     </span>
                     {n.row.position && <span className={styles.personTitle}>{n.row.position}</span>}
+                    {n.row.scheduledChangeFrom && (
+                      <Badge variant="info">Ændring planlagt fra {formatDate(n.row.scheduledChangeFrom)}</Badge>
+                    )}
                     {v && (
                       <span className={styles.vikarLine} data-testid={`vikar-line-${n.row.employeeId}`}>
                         Vikar: {v.vikarDisplayName} · til {formatDate(v.untilDate)}
@@ -1586,6 +1603,9 @@ export function StrukturPanel({
                       onEdit={() => openEditPerson(n.row)}
                     />
                     {n.row.position && <span className={styles.personTitle}>{n.row.position}</span>}
+                    {n.row.scheduledChangeFrom && (
+                      <Badge variant="info">Ændring planlagt fra {formatDate(n.row.scheduledChangeFrom)}</Badge>
+                    )}
                   </span>
                   {n.variant === 'external' && (
                     <span className={styles.externalTag} data-testid={`external-${n.row.employeeId}`}>

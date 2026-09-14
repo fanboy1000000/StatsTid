@@ -34,8 +34,8 @@ function realResults(): SearchResponse {
       { unitId: 'u2', organisationId: 'STY03', type: 'team', name: 'Vejteam', path: ['Statens Indkøb', 'Drift'] },
     ],
     people: [
-      { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'] },
-      { userId: 'p2', organisationId: 'STY03', displayName: 'Per Vester', position: 'Konsulent', unitName: null, path: ['Statens Indkøb'] },
+      { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'], scheduledChangeFrom: null },
+      { userId: 'p2', organisationId: 'STY03', displayName: 'Per Vester', position: 'Konsulent', unitName: null, path: ['Statens Indkøb'], scheduledChangeFrom: null },
     ],
     // Not truncated: the server total equals the returned count for both sections.
     unitsTotal: 2,
@@ -201,5 +201,22 @@ describe('SearchOverlay — the read-only search palette', () => {
     expect(screen.getByTestId('search-section-enheder-more')).toBeDefined()
     fireEvent.click(screen.getByTestId('search-section-enheder'))
     expect(screen.queryByTestId('search-section-enheder-more')).toBeNull()
+  })
+
+  // SPRINT-141 / TASK-14117 — B0 the owner's visibility requirement: a search
+  // result carrying a scheduled change shows a quiet, dated awareness marker (never
+  // the future value itself — the read never carries what changes, only that
+  // something does, possibly the agreement code rather than the title shown here).
+  it('a person result with a scheduled change shows the quiet marker with the formatted date; one without shows nothing', () => {
+    h.results = {
+      ...realResults(),
+      people: [
+        { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'], scheduledChangeFrom: '2026-11-01' },
+        { userId: 'p2', organisationId: 'STY03', displayName: 'Per Vester', position: 'Konsulent', unitName: null, path: ['Statens Indkøb'], scheduledChangeFrom: null },
+      ],
+    }
+    renderOverlay()
+    expect(within(screen.getByTestId('search-person-p1')).getByText('Ændring planlagt fra 1. nov 2026')).toBeDefined()
+    expect(within(screen.getByTestId('search-person-p2')).queryByText(/Ændring planlagt/)).toBeNull()
   })
 })

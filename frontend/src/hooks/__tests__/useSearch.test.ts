@@ -12,7 +12,7 @@ import type { SearchResponse } from '../useSearch'
 const { mockGet, RESULTS } = vi.hoisted(() => {
   const results: SearchResponse = {
     units: [{ unitId: 'u1', organisationId: 'STY02', type: 'kontor', name: 'Vejledning', path: ['Statens IT'] }],
-    people: [{ userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'] }],
+    people: [{ userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'], scheduledChangeFrom: null }],
     unitsTotal: 1,
     peopleTotal: 1,
   }

@@ -132,6 +132,7 @@ function row(p: Partial<RosterResponse['employees'][number]> & { employeeId: str
     unitName: null,
     leaderIds: [],
     primaryReportingLineVersion: null,
+    scheduledChangeFrom: null,
     ...p,
   }
 }
@@ -200,8 +201,8 @@ function makeRoster(): RosterResponse {
     pendingCountByManager: {},
     pendingPastDeadlineCountByManager: {},
     nameResolution: {
-      dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
-      extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor' },
+      dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion', scheduledChangeFrom: null },
+      extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor', scheduledChangeFrom: null },
     },
   }
 }
@@ -719,8 +720,8 @@ function singleLeaderRoster(carlVersion: number | null): RosterResponse {
     pendingCountByManager: {},
     pendingPastDeadlineCountByManager: {},
     nameResolution: {
-      dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
-      extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor' },
+      dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion', scheduledChangeFrom: null },
+      extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor', scheduledChangeFrom: null },
     },
   }
 }
@@ -831,7 +832,7 @@ function settlementRoster(): RosterResponse {
     pendingCountByManager: { jens: 2 },
     pendingPastDeadlineCountByManager: {},
     nameResolution: {
-      dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
+      dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion', scheduledChangeFrom: null },
     },
   }
 }
@@ -865,7 +866,7 @@ describe('StrukturPanel — period-settlement overview (TASK-10904)', () => {
       pendingCountByManager: { jens: 1, trine: 1, bo: 1, anna: 1 },
       pendingPastDeadlineCountByManager: { jens: 1 },
       nameResolution: {
-        dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
+        dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion', scheduledChangeFrom: null },
       },
     }
     renderPanel({ selected: STY02_NODE, rosterByOrg: { STY02: roster } })
@@ -918,5 +919,64 @@ describe('StrukturPanel — period-settlement overview (TASK-10904)', () => {
     fireEvent.click(screen.getByTestId('settle-tile-indsend'))
     expect(screen.getByTestId('settle-tile-indsend').getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByTestId('employee-bo')).toBeDefined()
+  })
+})
+
+// ── SPRINT-141 / TASK-14117 — B0 the owner's visibility requirement, rendered ────
+// ("Should it not be visible to an HR employee looking at a page, that another has
+// scheduled a change?"). An AWARENESS-only marker: a bare date, never the future
+// value (title/agreement code), so the wording never claims what changes — only
+// that something does, on this date. A quiet info Badge, not a warning/error one.
+describe('StrukturPanel — the scheduled-change marker (B0, TASK-14117)', () => {
+  it('a roster row carrying a scheduled change shows the quiet marker with the formatted date; a row without one shows nothing', () => {
+    const roster: RosterResponse = {
+      employees: [
+        row({
+          employeeId: 'jens', displayName: 'Jens Kofoed', position: 'Kontorchef',
+          unitId: VEJL, unitName: 'Vejledning', leaderIds: ['jens'], structuralApproverId: 'dir1',
+          scheduledChangeFrom: '2026-11-01',
+        }),
+        row({
+          employeeId: 'anna', displayName: 'Anna Andersen', position: 'Sagsbehandler',
+          unitId: VEJL, unitName: 'Vejledning', leaderIds: ['jens'], structuralApproverId: 'jens',
+        }),
+      ],
+      pendingCountByManager: {},
+      pendingPastDeadlineCountByManager: {},
+      nameResolution: {},
+    }
+    renderPanel({ rosterByOrg: { STY02: roster } })
+    // Jens carries the marker — dated, and naming ONLY the date.
+    const jensRow = screen.getByTestId('leader-jens')
+    expect(within(jensRow).getByText('Ændring planlagt fra 1. nov 2026')).toBeDefined()
+    // Anna has nothing scheduled (the "nothing scheduled" null) — no marker at all.
+    const annaRow = screen.getByTestId('employee-anna')
+    expect(within(annaRow).queryByText(/Ændring planlagt/)).toBeNull()
+  })
+
+  it('the "Refererer opad til" person-reference chip carries the marker too, resolved via nameResolution for an id outside the loaded roster', () => {
+    // Jens (Vejledning's own leader) reports to 'extLeader', who is NOT part of
+    // the loaded roster body — resolved only through the by-id nameResolution
+    // fallback (RosterNameRef), exactly the "person-reference lookup" surface B0
+    // names explicitly.
+    const roster: RosterResponse = {
+      employees: [
+        row({
+          employeeId: 'jens', displayName: 'Jens Kofoed', position: 'Kontorchef',
+          unitId: VEJL, unitName: 'Vejledning', leaderIds: ['jens'], structuralApproverId: 'extLeader',
+        }),
+      ],
+      pendingCountByManager: {},
+      pendingPastDeadlineCountByManager: {},
+      nameResolution: {
+        extLeader: {
+          userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef',
+          unitName: 'Andet Kontor', scheduledChangeFrom: '2026-12-24',
+        },
+      },
+    }
+    renderPanel({ rosterByOrg: { STY02: roster } })
+    const chip = screen.getByTestId('up-ref-extLeader')
+    expect(within(chip).getByText('Ændring planlagt fra 24. dec 2026')).toBeDefined()
   })
 })

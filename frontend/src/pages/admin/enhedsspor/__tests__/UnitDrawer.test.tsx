@@ -89,7 +89,7 @@ function rrow(p: Partial<RosterResponse['employees'][number]> & { employeeId: st
   return {
     position: null, structuralApproverId: null, periodStatus: 'OPEN' as const,
     outgoingVikar: null, isRoot: false, isOrphan: false, unitId: VEJL, unitName: 'Vejledning',
-    leaderIds: LEADERS, primaryReportingLineVersion: null, ...p,
+    leaderIds: LEADERS, primaryReportingLineVersion: null, scheduledChangeFrom: null, ...p,
   }
 }
 function makeRoster(): RosterResponse {
@@ -103,7 +103,7 @@ function makeRoster(): RosterResponse {
     ],
     pendingCountByManager: {},
     pendingPastDeadlineCountByManager: {},
-    nameResolution: { dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' } },
+    nameResolution: { dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion', scheduledChangeFrom: null } },
   }
 }
 
