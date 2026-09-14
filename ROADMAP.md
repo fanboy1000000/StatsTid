@@ -159,6 +159,39 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Tier-probe log noise** — every legitimate leader read logs a spurious "Access denied" WARNING. [S128 FU-A]
 
 ### Correctness / domain
+- **★ DECISION MADE, WORK DEFERRED — move BUSINESS DATES to the Danish calendar day; the UTC business
+  day is an inherited accident and it writes a wrong date for one to two hours every night** (owner
+  ruling 2026-09-14, S141: *"Why not update the system's clock to the Danish clock? We will only have
+  Danish users."*).
+  **The user-facing defect, which is why this is more than tidiness.** The frontend sends "today" as
+  `new Date().toISOString().slice(0, 10)` (`frontend/src/hooks/useEditPerson.ts:44-46`) — the UTC
+  calendar day. In Copenhagen at 00:30 on 1 November that returns **31 October**. So a Danish HR user
+  working after midnight who records a change "from today" has it stored as effective **yesterday**.
+  Not an internal inconsistency between components: a wrong date, written to the record, originating
+  on the user's own screen.
+  **Why the whole split exists.** The backend's same-day validator was deliberately made to use the
+  UTC day *to agree with that frontend call* (`EmployeeProfileEndpoints.cs:84-90`, which says so
+  explicitly). Every writer, both `users.*` caches, the login-token mint and S141's new as-of-today
+  reads followed. So the two conventions are **not** a considered balance: the Copenhagen day was
+  chosen once, deliberately, for Danish employment law (`CopenhagenBusinessDate`, DST-correct, already
+  used by the §21 deadline and the settlement boundaries); the UTC day propagated outward from one
+  convenience call in the browser.
+  **What must NOT move, and why this is not a find-and-replace.** *Instants* — `created_at`,
+  `updated_at`, audit timestamps, outbox ordering — stay UTC. That is correct practice and ordering
+  depends on it. Only **business dates** move: which day a change takes effect, and which dated row is
+  current. The two concepts share the word "today" and are otherwise unrelated.
+  **The destination is already built:** `CopenhagenBusinessDate` is DST-correct (CET/CEST resolved
+  through the real zone, not a hardcoded offset — the QUAL-005 bug was exactly that), is already wired
+  to the `TimeProvider` seam so it stays deterministic under a fixed test clock, and is already the
+  convention for the statutory boundaries.
+  **Scope:** every write validator, both cache refreshes, the login mint, S141's as-of-today reads,
+  the frontend helper, plus DST-boundary pins. **Deliberately NOT folded into S141** — it would touch
+  precisely the surface wave 1 changed and both lenses reviewed, invalidating that review and mixing
+  two unrelated risks in one change. It also needs its own analysis of which dates are legally Danish
+  versus merely "now".
+  **Related:** QUAL-172 registers the S141-visible symptom (two clocks disagreeing nightly). S141's
+  own ruling — that the new "no row covers today" detector matches **whatever the writers use** — is
+  forward-compatible: when the writers move, the detector moves with them, no exception left behind.
 - **Employment lifecycle time-control — RUNNING (ADR-040; program plan `SPRINT-135.md` §Program Plan).**
   **Increment 1 (S136) SHIPPED** (enforcement core, SEC-046 closed). **Increment 2 (S137) SHIPPED** (calculation
   correctness: typed EMPLOYED/NOT_EMPLOYED segments, accrual end-cap, QUAL-147 closed, dated category

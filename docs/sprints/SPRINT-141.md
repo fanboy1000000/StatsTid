@@ -731,3 +731,45 @@ are unchanged.
 invariant that every token transition has an audit row — with two refinements for wave 2, a discriminating action on the row
 and a comment that is now false; three stale comments in wave-2 files, with line numbers; a test comment that gives the right
 assertion the wrong reason; a vacuous assertion to retire with its symbol; and the sprint header's stale status, **now fixed**.
+
+## OWNER RULING 2026-09-14 — the clock, and a defect the ruling exposed
+
+**Immediate ruling (asked at wave-2 dispatch, per QUAL-172): the "does any record cover today" detector uses the WRITERS'
+clock — the UTC day — not the Copenhagen day of the file family it lives in.** A deliberate, documented exception at both
+sites. Reasoning: it asks a *data-integrity* question about records written and dated on the UTC day, so asking it on another
+clock would report gaps that do not exist for an hour or two every night.
+
+**Then the owner questioned the premise of the fork itself** — *"Why not update the system's clock to the Danish clock? We will
+only have Danish users."* — and that turned out to expose a **real user-facing defect** nobody had found in six review passes.
+
+**The defect.** The frontend sends "today" as the UTC calendar day of the current instant
+(`frontend/src/hooks/useEditPerson.ts:44-46`). In Copenhagen at 00:30 on 1 November that returns **31 October**. So a Danish HR
+user working after midnight who records a change "from today" has it stored as effective **yesterday**. That is not an internal
+inconsistency between components — it is a wrong date, written to the record, originating on the user's own screen.
+
+**Why the whole split exists.** The backend's same-day validator was made UTC *deliberately, to agree with that frontend call*
+(`EmployeeProfileEndpoints.cs:84-90` says so in as many words). Every writer, both caches, the login mint and this sprint's new
+reads followed. So the two conventions are **not** a considered balance between two valid readings: the Copenhagen day was
+chosen once, for Danish employment law, and the UTC day propagated outward from one convenience call in the browser.
+
+**Decision: move business dates to the Danish day — as its own work, not in S141.** Added to `ROADMAP.md` § Correctness /
+domain with the full analysis. Deferred because it touches precisely the surface wave 1 changed and both lenses reviewed;
+folding it in would invalidate that review and mix two unrelated risks. *Instants* (created/updated stamps, audit timestamps,
+outbox ordering) stay UTC — that is correct practice and ordering depends on it. Only **business dates** move.
+
+**The immediate ruling is forward-compatible and needs no revisiting:** the rule is "match the writers", so when the writers
+move to the Danish day, the detector moves with them and no exception is left behind.
+
+**Process note worth keeping.** This is the **second** time in this sprint that the owner answered a fork by questioning
+whether the fork needed to exist — the first produced requirement B0 (visibility), this one produced the roadmap item above.
+Both times the constraint turned out to be inherited rather than chosen, and neither review lens had asked. The lenses are
+strong on "is this mechanism correct" and blind to "should this mechanism exist".
+
+## Wave 2 — DISPATCHED
+
+| Task | Agent | Carrying |
+|---|---|---|
+| **TASK-14104** | backend-infrastructure | The three endpoint refusals first (without them the picker ships dead); the delete adopting wave 1's new method so the owner's audit condition is met; W1's audit-column fix; the token response; B0's payload both sides; OQ-6's two branches on three endpoints; three stale comments |
+| **TASK-14105** | backend-infrastructure | The refresh job reusing the poller's existing clock (its stale premise corrected); the detector, **carrying the owner's clock ruling and the instruction to document the exception at both sites**; the correction that the seeders cannot be the fix |
+| **TASK-14113** | backend-infrastructure | The history endpoint, **new files only**, typed response, and its own security pin — the access gate had no test owner until Step 0b found it |
+| **TASK-14106** | test-qa | The ten endpoint-dependent pins, with both "cannot fail" warnings from earlier in this sprint restated |
