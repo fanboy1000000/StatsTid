@@ -1101,3 +1101,44 @@ person drawer belongs to a sibling task this wave. **Relayed to TASK-14107 while
 facts above, so the link's surrounding wording is not written on false assumptions.
 
 **Sixth and fifth stale worktrees respectively.** Both caught it before writing code.
+
+### TASK-14107 (drawer fix + visibility) — complete. The blocker is fixed and PROVED.
+
+`npx tsc --noEmit` clean. Frontend suite green. **It verified the fix discriminates**: reverted it, confirmed the new test went
+red, restored it, confirmed green. That is the difference between a test that guards the fix and one that merely accompanies it.
+
+**It got right the part both earlier specifications got wrong.** The profile write now sends the token step one just produced
+**and writes that token back onto the shared user record**, not only onto the profile snapshot. Its own summary states the
+consequence of the half-fix better than the plan did: *"Without that second half, the failure doesn't disappear, it just moves
+to the next write in the sequence, which would have looked like a different bug."* Three specifications of one fix, two wrong,
+each caught by asking rather than asserting.
+
+**★ It refused to fabricate a signal that has nowhere to live.** The task told it all six surfaces' payloads already carry the
+scheduled-change indicator. **True for the profile and users reads, false for the roster, people search and person-reference** —
+those response shapes carry a job title and no such field at all, and adding one needs either a forbidden second call per row
+or a backend contract change. It said so rather than inventing an indicator, and noted the dangerous half was already gone
+there: since wave 1 those screens show **today's** value, never a pulled-forward future one.
+
+**OWNER RULING 2026-09-14 — add the signal to all three.** The requirement stands as stated. **TASK-14116 dispatched** for the
+backend marker, then a regeneration, then the frontend pass. The owner chose the complete fix over both the "accept the gap"
+and the "only where HR can act" readings, consistent with every other ruling this sprint.
+
+**It also closed the reachability gap** the termination screen had declared, adding the link from the drawer — worded, per the
+relay, so it neither claims nor implies that ending employment cancels a scheduled change.
+
+**Seventh stale worktree, and this one had to merge TWICE** during the task to pick up siblings landing while it worked.
+
+## Wave-3 gate — PASSED
+
+| Check | Result |
+|---|---|
+| Build | **0 errors, 145 warnings** — baseline held |
+| `npx tsc --noEmit` | **clean** |
+| Frontend suite | **847 passing, 72 files** |
+
+**Route and navigation registration done by the Orchestrator**, as planned, so the two shared files were edited once rather
+than by three agents in three worktrees. The history screen is a browsable destination and gets a sidebar entry; the
+termination screen is a per-employee **action** page, reached from the drawer, and deliberately gets none.
+
+**Wave 3b dispatched:** TASK-14116 (the roster/search/person-reference marker) and **TASK-14111, the date picker — the feature
+every other task in this sprint exists to support, and the one item marked LAST TO CUT. It was not cut.**
