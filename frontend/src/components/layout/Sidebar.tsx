@@ -45,6 +45,9 @@ const tabGroups: TabGroup[] = [
       { label: 'Audit log', to: '/admin/auditlog', minRole: 'LocalHR' },
       // S140 / TASK-14006 — the HR follow-up landing page (S139's register).
       { label: 'Opfølgning', to: '/admin/opfoelgning', minRole: 'LocalHR' },
+      // S141 — a browsable destination (unlike the termination screen, which is a per-employee
+      // action page reached from the drawer and deliberately has no entry here).
+      { label: 'Ansættelseshistorik', to: '/admin/ansaettelseshistorik', minRole: 'LocalHR' },
       { label: 'Projekter', to: '/admin/projekter', minRole: 'LocalAdmin' },
       { label: 'Brugerrettigheder', to: '/admin/brugerrettigheder', minRole: 'LocalAdmin' },
     ],

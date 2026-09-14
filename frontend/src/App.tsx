@@ -52,6 +52,8 @@ const OvertimePreApprovalManagement = lazy(() => import('./pages/admin/OvertimeP
 // (S139's register: one tile per process, count + oldest, list on the same
 // page via a route param).
 const OpfoelgningPage = lazy(() => import('./pages/admin/opfoelgning/OpfoelgningPage').then(m => ({ default: m.OpfoelgningPage })))
+const EmploymentHistoryPage = lazy(() => import('./pages/admin/ansaettelseshistorik/EmploymentHistoryPage').then(m => ({ default: m.EmploymentHistoryPage })))
+const TerminationPage = lazy(() => import('./pages/admin/termination/TerminationPage').then(m => ({ default: m.TerminationPage })))
 
 import './styles/tokens.css'
 
@@ -122,6 +124,15 @@ function AppRoutes() {
                 route param without an optional-segment path syntax. */}
             <Route path="admin/opfoelgning" element={<OpfoelgningPage />} />
             <Route path="admin/opfoelgning/:tile" element={<OpfoelgningPage />} />
+            {/* S141 / ADR-040 Increment 4 — registered by the Orchestrator, not by the two screen
+                tasks that built them: both would otherwise have edited this file and the sidebar in
+                separate worktrees, which is the merge collision the file-ownership decomposition
+                exists to prevent. Both sit under the LocalHR floor, matching their endpoints' gates. */}
+            <Route path="admin/ansaettelseshistorik" element={<EmploymentHistoryPage />} />
+            <Route path="admin/ansaettelseshistorik/:employeeId" element={<EmploymentHistoryPage />} />
+            {/* A per-employee ACTION page rather than a destination, so it has no sidebar entry by
+                design — it is reached from the person drawer's Fratrædelse link (TASK-14107). */}
+            <Route path="admin/medarbejdere/:employeeId/fratraedelse" element={<TerminationPage />} />
           </Route>
           {/* LocalAdmin routes within Administration */}
           <Route element={<RequireRole minRole="LocalAdmin" />}>
