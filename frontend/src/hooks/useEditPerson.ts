@@ -97,6 +97,17 @@ export interface EditSaveInput {
       (partTimeFraction / position / employmentCategory), threaded into the
       employee-profiles PUT (step 2). */
   profileCarryForward?: boolean
+  /**
+   * S141 / TASK-14111 — the effective date for BOTH of this save's dated
+   * writes (the users PUT below, which carries the agreement-code field, and
+   * the employee-profiles PUT) — the drawer's new effective-date picker,
+   * threaded through as ONE date for the whole save rather than one per
+   * write, because HR makes one save decision, not two. Optional so every
+   * existing caller (and this file's own BLOCKER-regression test) keeps
+   * working unchanged: omitted defaults to today, exactly the previous
+   * hardcoded behaviour.
+   */
+  effectiveFrom?: string
 }
 
 export interface StaleConflict {
@@ -158,12 +169,18 @@ export function useEditPerson() {
       let firstError: string | null = null
       let ok = true
 
+      // S141 / TASK-14111 — ONE effective date for the whole save (both
+      // dated writes below use this SAME value): the drawer's effective-date
+      // picker, or today when the caller omits it (every pre-S141 caller,
+      // and the default the picker itself opens on).
+      const effectiveFrom = input.effectiveFrom ?? todayIsoUtc()
+
       // (1) users PUT — admin-strict If-Match.
       try {
         const updated = await updateUser(
           live.user.userId,
           {
-            effectiveFrom: todayIsoUtc(),
+            effectiveFrom,
             displayName: input.stamdata.displayName,
             email: input.stamdata.email || undefined,
             primaryOrgId: input.stamdata.primaryOrgId,
@@ -242,7 +259,7 @@ export function useEditPerson() {
           const parsedPtf = Number.isFinite(ptf) ? ptf : 1.0
           const positionTrimmed = input.profile.position.trim()
           const updatedProfile = await saveEmployeeProfile(live.profile.employeeId, live.user.etag, {
-            effectiveFrom: todayIsoUtc(),
+            effectiveFrom,
             partTimeFraction: parsedPtf,
             position: positionTrimmed || null,
             // S141 / OQ-6 (a) — only sent when the drawer detected a
