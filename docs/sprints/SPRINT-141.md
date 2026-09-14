@@ -773,3 +773,48 @@ strong on "is this mechanism correct" and blind to "should this mechanism exist"
 | **TASK-14105** | backend-infrastructure | The refresh job reusing the poller's existing clock (its stale premise corrected); the detector, **carrying the owner's clock ruling and the instruction to document the exception at both sites**; the correction that the seeders cannot be the fix |
 | **TASK-14113** | backend-infrastructure | The history endpoint, **new files only**, typed response, and its own security pin — the access gate had no test owner until Step 0b found it |
 | **TASK-14106** | test-qa | The ten endpoint-dependent pins, with both "cannot fail" warnings from earlier in this sprint restated |
+
+### TASK-14113 (employment history endpoint) — complete, and it corrected the plan on a blocking precondition
+
+Build `0 errors`. All 10 of its facts are Docker-gated and **CI-verified only**, not claimed green.
+
+**★ The plan was wrong about the dependency registration, and the correction is load-bearing.** The plan framed it as
+merge-time bookkeeping. It is a **hard startup precondition**: minimal APIs infer an unregistered complex parameter as a *body*
+parameter, and an inferred body on a GET throws at **endpoint-mapping time**, before any request. So without it the contract
+generator fails, its sync gate fails, and **every Docker-gated test in the suite fails at host boot** — not merely this
+endpoint's. The agent verified this by applying the line, confirming, then reverting it, leaving `Program.cs` untouched as its
+scope required. **Also: one service, not the two the plan anticipated** — a single read repository serves both range reads
+precisely so they can never disagree about what falls inside the window.
+**Applied by the Orchestrator at merge, and verified rather than assumed:** the contract generator now runs to completion
+(`exit 0`) and the new operation appears in the spec. **`docs/api/openapi.json` must be regenerated AGAIN at the wave-2 gate**,
+because TASK-14104 is still adding API surface.
+
+**★ A planning gap it found and filled: the history read's functional correctness had NO test owner anywhere.** The pin
+register assigns this task only the *security* pin. The agent added four behavioural facts in its own file — ordering by
+effective date, the scheduled/end-exclusive boundary, the agreement track, and the malformed-window refusal — and flagged the
+gap explicitly, on the grounds that *a gate around an unverified answer is half a deliverable*. That is the Orchestrator's
+planning error, not the agent's, and it is the second time this sprint that a security pin was assigned without the
+correctness pin beside it.
+
+**A security property that is structural rather than engineered, and a policy consequence worth the owner's attention.**
+Neither timeline table carries an organisation column at all, so the only organisation in play is the employee's current one,
+which the existing validator resolves. The stamped-organisation drift that S140's reads had to guard against **cannot arise
+here**. But the consequence is a real policy decision that nobody has explicitly made: **a transferred employee's ENTIRE
+history — including the years they worked in a previous organisation — is readable by their CURRENT organisation's HR, and by
+nobody else.** Changing that would need an organisation dimension on the timeline tables, i.e. a schema change; it is not a
+tuning knob. Recorded so it is a known property rather than an accident.
+
+**Its highest-value pin** is the mixed-role shape: a token whose *primary* role clears the HR floor but whose HR scope is in a
+different organisation, combined with a leader scope that does cover the subject. It goes red the moment someone reaches for
+the no-floor overload — the single most likely future weakening, because the call still looks correct.
+
+**Decisions it took, each with what was given up:** scheduled intervals are **included and marked as such** (hiding a booked
+change in a history view would be the most surprising possible place to hide it); "today" is the writers' UTC day, consistent
+with this sprint's ruling, so a change saved late in the evening does not read back as not-yet-in-force; no per-interval token
+on a read-only screen, which would invite a write against the wrong row; no stamped agreement version, since an interval can
+span a version transition; two parallel tracks rather than one merged timeline, because merging would invent composite
+intervals no stored record corresponds to; an unknown employee returns access-denied rather than not-found, so the endpoint is
+not an identifier oracle; and an employee with no records returns an empty result rather than an error, because a data hole is
+the new detector's job to surface rather than this read's to dress up.
+
+**The route for wave 3 (TASK-14109 needs it):** `GET /api/hr/employees/{employeeId}/history`, with optional `from` and `to`.

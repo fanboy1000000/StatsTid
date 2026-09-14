@@ -151,6 +151,17 @@ builder.Services.AddSingleton<HrBackdateWorklistRepository>();
 // in the endpoint and threaded in (PAT-028) — so both are singleton-safe.
 builder.Services.AddSingleton<HrFollowUpSettlementReadRepository>(); // TASK-14003 — HRP-005/005b/007/010; stateless over the connection factory + the settlement service's read-only valuation entry point ⇒ singleton-safe
 builder.Services.AddSingleton<HrFollowUpApprovalReadRepository>();  // TASK-14004 — HRP-011/012/013/014/015/022
+// S141 / TASK-14113 (refinement C2) — the employment-history range reads. Read-only, no clock, no
+// state beyond the connection factory (the HrFollowUpApprovalReadRepository shape) ⇒ singleton-safe.
+//
+// NOT optional bookkeeping, and the sprint plan was WRONG to frame it as such. Minimal APIs infer an
+// unregistered complex parameter as a BODY parameter, and an inferred body on a MapGet throws at
+// ENDPOINT-MAPPING time — before any request is served. So without this line the OpenAPI generator
+// fails, its CI sync gate fails, and EVERY Docker-gated test in the suite fails at host boot, not
+// merely this endpoint's. One service, not the two the plan anticipated: a single read repository
+// serves both range reads, because they share the window predicate and must never disagree about
+// what "inside the window" means.
+builder.Services.AddSingleton<EmploymentHistoryReadRepository>();   // TASK-14113 — C2 employment history
 builder.Services.AddSingleton<IAuditProjectionMapperRegistry, AuditProjectionMapperRegistry>();
 // S44 TASK-4407..4412 — 6 IAuditProjectionMapper<T> + 6 RegisteredAuditEventType marker pairs.
 // Mapper + marker registered together so the registry's RegisteredEventTypeNames filter

@@ -3568,6 +3568,51 @@
         }
       }
     },
+    "/api/hr/employees/{employeeId}/history": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "parameters": [
+          {
+            "name": "employeeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmploymentHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/balance/{employeeId}/summary": {
       "get": {
         "tags": [
@@ -5186,6 +5231,44 @@
           },
           "revoked": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.AgreementCodeHistoryInterval": {
+        "required": [
+          "agreementCode",
+          "changedFields",
+          "effectiveFrom",
+          "effectiveTo",
+          "isInitial",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "isInitial": {
+            "type": "boolean"
+          },
+          "changedFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agreementCode": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -7048,6 +7131,97 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmploymentHistoryResponse": {
+        "required": [
+          "agreementCodeHistory",
+          "employeeId",
+          "profileHistory",
+          "today",
+          "windowFrom",
+          "windowTo"
+        ],
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string"
+          },
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "windowTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "profileHistory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.EmploymentProfileHistoryInterval"
+            }
+          },
+          "agreementCodeHistory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.AgreementCodeHistoryInterval"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.EmploymentProfileHistoryInterval": {
+        "required": [
+          "changedFields",
+          "effectiveFrom",
+          "effectiveTo",
+          "employmentCategory",
+          "isInitial",
+          "partTimeFraction",
+          "position",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "isInitial": {
+            "type": "boolean"
+          },
+          "changedFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "partTimeFraction": {
+            "type": "number",
+            "format": "double"
+          },
+          "position": {
+            "type": "string",
+            "nullable": true
+          },
+          "employmentCategory": {
+            "type": "string"
           }
         },
         "additionalProperties": false
