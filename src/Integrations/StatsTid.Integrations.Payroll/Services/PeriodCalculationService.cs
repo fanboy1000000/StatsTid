@@ -500,10 +500,84 @@ public sealed class PeriodCalculationService
             // hire date, and EmployeeProfileNotFoundException embeds its as-of date in the message,
             // which reaches exception logs and could reach a detailed 500 body — an employment date
             // must not leak through either. Diagnostics keep the employee id + the period.
-            var segmentProfile = _profileResolver is not null
-                ? (await _profileResolver.GetByEmployeeIdAtAsync(profile.EmployeeId, segment.StartDate, ct))
-                    ?? throw new EmployeeProfileNotFoundException(profile.EmployeeId, plan.PeriodStart)
-                : profile;
+            //
+            // ── S141 / TASK-14114 — THE FAIL-CLOSED PATH IS NOW CAUGHT AND NAMED ────────────────
+            // WHY THIS CHANGED. Before S141 this branch could only be reached by a seeding or
+            // backfill defect, so an anonymous unhandled exception was an acceptable "should never
+            // happen". S141 lets HR date an employment change into the FUTURE, which makes "no
+            // employment record covers this date" a state the PRODUCT ITSELF can now produce — a
+            // record ended in September whose replacement does not start until November leaves the
+            // employee with no record describing them today. From then on every payroll calculation
+            // touching that hole would surface as an unnamed crash, and whoever read the log could
+            // not tell a broken server from an employee whose records have a gap. Failing closed
+            // was always right; failing closed ANONYMOUSLY is what was wrong.
+            //
+            // ONE CONDITION, ONE NAME — `employment_record_gap`, the same name ComplianceEndpoints
+            // uses for the same state (S141 / TASK-14105), so one grep finds every refusal caused
+            // by a record gap regardless of which read hit it. The resolver reports this one state
+            // two different ways: it RETURNS NULL when no employee_profiles row covers the as-of
+            // date, and it THROWS EmployeeProfileNotFoundException when a profile row covers it but
+            // no user_agreement_codes row does (its documented data-integrity fail-loud). Both mean
+            // "this employee has no complete employment record on this date", so both land on the
+            // one named condition instead of escaping two different ways.
+            //
+            // STILL FAIL-CLOSED — DELIBERATELY UNCHANGED. No fallback profile is substituted, the
+            // segment is NOT skipped, and the calculation does not continue on a guess: a payroll
+            // figure derived from a guessed agreement code or part-time fraction puts wrong money
+            // on a real wage line, which is worse than producing no figure at all. The same
+            // EmployeeProfileNotFoundException, anchored on the same caller-supplied
+            // plan.PeriodStart, is still thrown and still reaches the caller.
+            //
+            // ADR-040 D7 — THE CAUGHT EXCEPTION IS NOT ATTACHED TO THE LOG, AND IS NOT WRAPPED AS
+            // AN INNER EXCEPTION. The resolver's own exception carries asOfDate == segment.StartDate
+            // in its Message, and per the paragraph above that date IS the hire date for a starter's
+            // first EMPLOYED segment. Passing it as ILogger's exception argument (or as an inner
+            // exception a handler later renders) would write that employment date straight into the
+            // very logs this site exists to keep it out of. The diagnostics below therefore carry
+            // only the employee id, the replay-stable manifest id, and the CALLER'S OWN period —
+            // nothing date-shaped that describes the employment itself. The log line replaces the
+            // discarded exception as the diagnosis.
+            EmploymentProfile segmentProfile;
+            if (_profileResolver is null)
+            {
+                segmentProfile = profile;
+            }
+            else
+            {
+                EmploymentProfile? resolvedProfile = null;
+                // WHICH effective-dated record is missing, named with the table an HR administrator's
+                // repair actually touches. The initial value covers the NULL return (no
+                // employee_profiles row spans the as-of date); the catch below narrows it to the
+                // agreement-code hole. Neither value is date-shaped.
+                var missingRecord = "employee_profiles";
+                try
+                {
+                    resolvedProfile = await _profileResolver.GetByEmployeeIdAtAsync(
+                        profile.EmployeeId, segment.StartDate, ct);
+                }
+                catch (EmployeeProfileNotFoundException)
+                {
+                    missingRecord = "user_agreement_codes";
+                }
+
+                if (resolvedProfile is null)
+                {
+                    _logger.LogError(
+                        "employment_record_gap: no effective-dated employment record ({MissingRecord}) covers " +
+                        "this calculation segment for employee {EmployeeId} manifest {ManifestId} period " +
+                        "{PeriodStart}-{PeriodEnd}. The calculation is REFUSED and no payroll figure is " +
+                        "produced for this period — a figure derived from a guessed employment record would " +
+                        "be worse than none. This is a data gap, not a server fault: the employee should " +
+                        "appear on the HR follow-up 'cannot register' list (HRP-015), which names the missing " +
+                        "record and whether a scheduled one will close the gap, and an HR administrator " +
+                        "repairs it there.",
+                        missingRecord, profile.EmployeeId, plan.ManifestId, plan.PeriodStart, plan.PeriodEnd);
+
+                    throw new EmployeeProfileNotFoundException(profile.EmployeeId, plan.PeriodStart);
+                }
+
+                segmentProfile = resolvedProfile;
+            }
 
             // OkVersion server-resolution overlay (ADR-003: the OK version is a pure
             // function of the date). S137 (TASK-13703, QUAL-147) made the resolver return
