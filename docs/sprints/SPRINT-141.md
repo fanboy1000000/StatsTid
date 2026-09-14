@@ -851,3 +851,54 @@ the docs referred to was retired two sprints ago; the agent followed the current
 **Open reconciliation for the wave-2 gate:** the pins guess two wire names for payload members TASK-14104 is defining right
 now. If that task names them differently, only the property-name assertions need reconciling — the behaviour each pins is
 spec-derived and not in doubt.
+
+### TASK-14105 (refresh job + gap detector) — complete, and it falsified five line numbers in its own instructions
+
+Build `0 errors / 145 warnings` (baseline held exactly). Unit 1244, regression non-Docker 104, demo-seed 165 — identical to
+the wave-1 gate. Its eight new pins are Docker-gated and **never executed**; each carries its failing condition in its doc
+comment and none is claimed green.
+
+**★ A claim in the task prompt was FALSE, and the agent proved it at two commits.** The prompt named five line numbers as
+"fail-closed dated readers" to convert. They are nothing of the kind — all five are defence-in-depth throws inside **write**
+helpers ("insert produced no row", "token bump found no row", two lock-invariant guards). None is a reader and none can fire
+from "no record covers today". Converting them would have been meaningless work on the wrong code. The agent found the **real**
+sites — the employment-profile resolver, the compliance read and the payroll calculation — and implemented against those.
+*This is the nineteenth claim in this sprint's planning contradicted by the code, and it is the most consequential kind: not an
+imprecise count, but an instruction pointing at entirely the wrong code.*
+
+**★ The clock pin is the best-constructed test of the sprint, and the reason is worth teaching.** The ordinary test fixture
+pins the host at **UTC midnight** — which is precisely the instant at which the UTC day and the Copenhagen day **agree**. A
+clock pin built on the standard fixture would therefore pass under either clock and prove nothing at all. The agent pinned the
+host at **23:30 UTC**, already the next day in Copenhagen, which is the only construction that can fail if someone later
+unifies the clocks. The owner's ruling is also stated at both sites and both file headers, each explaining *why* rather than
+asserting, and each warning against "correcting" it back.
+
+**What it built, in plain terms.** Before this, a change entered in October dated 1 November was correct when entered and
+silently stopped being reflected on the day it took effect, until some unrelated write happened to refresh things. A second
+sweep in the existing poller now finds every employee whose cached value disagrees with the record covering today and
+re-derives it. **Written as a divergence repair rather than as "apply today's scheduled changes"** — so it is idempotent and
+also self-heals drift from any other cause, such as a restored backup or a legacy row.
+
+**And the list that was supposed to find these employees was filtering them out.** The data-gap register inner-joined a profile
+record covering today and then looked only for the *agreement* hole — so an employee with a *profile* hole was excluded from
+the one list meant to surface them, while payroll and compliance failed closed for them every day. The join is gone, and the
+response now says **which** record is missing and **when** a scheduled one will cover again, because those are two different
+conversations with HR.
+
+**Handoffs created:**
+- **★ The frontend copy is now a lie.** The follow-up list is captioned "employees without an agreement code covering today"
+  and tells HR to fix the agreement code. For a profile-hole row both halves are wrong, and **a row that will heal itself on 1
+  November must not be presented as broken data**. Carried to wave 3's ux task.
+- **The payroll calculation still throws uncaught for the same state**, because it lives outside the agent's declared scope.
+  Correctly declared rather than reached into. **Dispatched as TASK-14114** to the payroll domain.
+- **New exposure to watch at close:** the poller now writes `users.version` on every host's five-minute timer, where the
+  previous sweep touched an unrelated table. A Docker test class holding one host beyond five minutes *with a deliberately
+  divergent cache* could see a mid-test bump. Judged low risk and reasoned, not assumed — but it is new.
+
+**Two findings registered:** **QUAL-173**, the naming lie now that a vikar-named service hosts this refresh (the honest name is
+already recorded in the class doc; the rename was declined only because it would have collided with a wave-2 sibling in
+`Program.cs`), and **QUAL-174**, a response field that can echo a record boundary which, for a new hire, *equals the hire date*
+— the exact shape ADR-040 D7 exists to prevent. Pre-existing, not created here.
+
+**Raised for a later ruling, not decided:** whether the named data-gap condition deserves a client-error status now that the
+product can create the state deliberately, rather than the server-error status it inherited.
