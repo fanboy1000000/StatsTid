@@ -1073,7 +1073,13 @@ public sealed class ApprovalPeriodRepository
                     mv.vikar_user_id         AS vikar_user_id,
                     vu.display_name          AS vikar_display_name,
                     mv.until_date            AS vikar_until_date,
-                    mv.reason                AS vikar_reason
+                    mv.reason                AS vikar_reason,
+                    -- S141 / TASK-14116 (B0): the owner's heads-up. Wave 1 made this read show
+                    -- TODAY's job title rather than a future one, which removed the dangerous half of
+                    -- the problem; what was still missing is the roster saying that a change is
+                    -- coming at all. NULL = nothing scheduled. See EmploymentTimelineSql for the rule
+                    -- and for why this rides the existing statement instead of a per-row lookup.
+                    sched.scheduled_change_from AS scheduled_change_from
                 FROM users u
                 JOIN organizations o ON o.org_id = u.primary_org_id
                 LEFT JOIN reporting_lines rl
@@ -1108,6 +1114,7 @@ public sealed class ApprovalPeriodRepository
                     FROM unit_leaders ul
                     WHERE ul.unit_id = u.unit_id
                 ) lead ON TRUE
+                """ + EmploymentTimelineSql.EarliestScheduledChangeLateral + """
                 LEFT JOIN manager_vikar mv
                     ON mv.absent_approver_id = u.user_id
                     AND mv.effective_to IS NULL
@@ -1134,6 +1141,7 @@ public sealed class ApprovalPeriodRepository
             var vikarNameOrd = reader.GetOrdinal("vikar_display_name");
             var vikarUntilOrd = reader.GetOrdinal("vikar_until_date");
             var vikarReasonOrd = reader.GetOrdinal("vikar_reason");
+            var schedOrd = reader.GetOrdinal("scheduled_change_from");
             while (await reader.ReadAsync(ct))
             {
                 OutgoingVikar? vikar = reader.IsDBNull(vikarIdOrd)
@@ -1164,7 +1172,9 @@ public sealed class ApprovalPeriodRepository
                     LeaderIds: leaderIds,
                     // The etag = the active PRIMARY reporting_lines.version (NULL when no active
                     // PRIMARY edge → root/orphan → the FE's "Ret" creates vs supersedes, S99).
-                    PrimaryReportingLineVersion: reader.IsDBNull(rlVersionOrd) ? null : reader.GetInt64(rlVersionOrd)));
+                    PrimaryReportingLineVersion: reader.IsDBNull(rlVersionOrd) ? null : reader.GetInt64(rlVersionOrd),
+                    // S141 / TASK-14116 (B0) — NULL = no change scheduled for this person.
+                    ScheduledChangeFrom: reader.IsDBNull(schedOrd) ? null : reader.GetFieldValue<DateOnly>(schedOrd)));
             }
         }
 
@@ -1206,7 +1216,8 @@ public sealed class ApprovalPeriodRepository
                 UnitId: r.UnitId,
                 UnitName: r.UnitName,
                 LeaderIds: r.LeaderIds,
-                PrimaryReportingLineVersion: r.PrimaryReportingLineVersion));
+                PrimaryReportingLineVersion: r.PrimaryReportingLineVersion,
+                ScheduledChangeFrom: r.ScheduledChangeFrom));
         }
 
         // (4) S106 / TASK-10602 — the DISPLAY-ONLY name resolution. Collect every id the roster
@@ -1265,7 +1276,14 @@ public sealed class ApprovalPeriodRepository
                 u.user_id       AS user_id,
                 u.display_name  AS display_name,
                 ep.position     AS position,
-                un.name         AS unit_name
+                un.name         AS unit_name,
+                -- S141 / TASK-14116 (B0): a referenced person's chip carries a job title, and a title
+                -- is a label the reader acts on. Wave 1 made that title as-of-today; this says whether
+                -- another is already scheduled. NULL = nothing scheduled. No new disclosure: the same
+                -- ids, already labelled with a position, gain one date about the same employment
+                -- record — and it is a profile/agreement effective date, never an employment date
+                -- (ADR-040 D7). See EmploymentTimelineSql.
+                sched.scheduled_change_from AS scheduled_change_from
             FROM users u
             LEFT JOIN LATERAL (
                 SELECT p.position
@@ -1276,6 +1294,7 @@ public sealed class ApprovalPeriodRepository
                 ORDER BY p.effective_from DESC
                 LIMIT 1
             ) ep ON TRUE
+            """ + EmploymentTimelineSql.EarliestScheduledChangeLateral + """
             LEFT JOIN units un ON un.unit_id = u.unit_id
             WHERE u.user_id = ANY(@ids)
             """, conn);
@@ -1288,6 +1307,7 @@ public sealed class ApprovalPeriodRepository
         var nameOrd = reader.GetOrdinal("display_name");
         var posOrd = reader.GetOrdinal("position");
         var unitOrd = reader.GetOrdinal("unit_name");
+        var schedOrd = reader.GetOrdinal("scheduled_change_from");
         while (await reader.ReadAsync(ct))
         {
             var userId = reader.GetString(idOrd);
@@ -1295,7 +1315,8 @@ public sealed class ApprovalPeriodRepository
                 UserId: userId,
                 DisplayName: reader.GetString(nameOrd),
                 Position: reader.IsDBNull(posOrd) ? null : reader.GetString(posOrd),
-                UnitName: reader.IsDBNull(unitOrd) ? null : reader.GetString(unitOrd));
+                UnitName: reader.IsDBNull(unitOrd) ? null : reader.GetString(unitOrd),
+                ScheduledChangeFrom: reader.IsDBNull(schedOrd) ? null : reader.GetFieldValue<DateOnly>(schedOrd));
         }
         return result;
     }
@@ -1311,7 +1332,8 @@ public sealed class ApprovalPeriodRepository
         Guid? UnitId,
         string? UnitName,
         IReadOnlyList<string> LeaderIds,
-        long? PrimaryReportingLineVersion);
+        long? PrimaryReportingLineVersion,
+        DateOnly? ScheduledChangeFrom);
 
     /// <summary>
     /// Maps a raw <c>approval_periods.status</c> (or <c>null</c> = no closed period) to the
@@ -1535,12 +1557,24 @@ public sealed class ApprovalPeriodRepository
             ),
             page AS (
                 SELECT
-                    m.user_id,
-                    m.display_name,
-                    m.unit_id,
-                    m.primary_org_id,
-                    ep.position AS position
-                FROM matched m
+                    u.user_id,
+                    u.display_name,
+                    u.unit_id,
+                    u.primary_org_id,
+                    ep.position AS position,
+                    -- S141 / TASK-14116 (B0): the heads-up that a change is already dated ahead for
+                    -- this person. NULL = nothing scheduled. The lateral AGGREGATES (MIN), so it
+                    -- returns exactly one row per matched person BY CONSTRUCTION — which is the
+                    -- property this query in particular needs, because `total` above is counted
+                    -- BEFORE this join and a fan-out here would ship more rows than the count that
+                    -- travels with them. See EmploymentTimelineSql for the rule and the reasoning.
+                    sched.scheduled_change_from AS scheduled_change_from
+                -- The matched row is aliased `u` (not `m`) because the shared scheduled-change
+                -- fragment spliced below correlates on `u.user_id`. It has to: CA2100 is a build
+                -- ERROR here, so the SQL must be a compile-time constant and the alias cannot be
+                -- passed in. Renaming the alias is the cost of having ONE definition of "scheduled"
+                -- rather than three that can drift apart. The rows are users rows, so `u` reads true.
+                FROM matched u
                 -- S141 / TASK-14102 (B1): the profile row COVERING TODAY, not the open row. Under
                 -- future-dating the open row can be a change that has not started, so search would
                 -- have labelled people with a job title they do not yet hold. LATERAL … LIMIT 1
@@ -1550,22 +1584,24 @@ public sealed class ApprovalPeriodRepository
                 LEFT JOIN LATERAL (
                     SELECT p.position
                     FROM employee_profiles p
-                    WHERE p.employee_id = m.user_id
+                    WHERE p.employee_id = u.user_id
                       AND p.effective_from <= @today
                       AND (p.effective_to IS NULL OR p.effective_to > @today)
                     ORDER BY p.effective_from DESC
                     LIMIT 1
                 ) ep ON TRUE
-                ORDER BY m.display_name, m.user_id
+            """ + EmploymentTimelineSql.EarliestScheduledChangeLateral + """
+                ORDER BY u.display_name, u.user_id
                 LIMIT @limit OFFSET @offset
             )
             SELECT
-                t.total_count        AS total_count,
-                p.user_id            AS user_id,
-                p.display_name       AS display_name,
-                p.position           AS position,
-                p.unit_id            AS unit_id,
-                p.primary_org_id     AS primary_org_id
+                t.total_count           AS total_count,
+                p.user_id               AS user_id,
+                p.display_name          AS display_name,
+                p.position              AS position,
+                p.unit_id               AS unit_id,
+                p.primary_org_id        AS primary_org_id,
+                p.scheduled_change_from AS scheduled_change_from
             FROM total t
             LEFT JOIN page p ON TRUE
             ORDER BY p.display_name, p.user_id
@@ -1587,6 +1623,7 @@ public sealed class ApprovalPeriodRepository
         var posOrd = reader.GetOrdinal("position");
         var unitOrd = reader.GetOrdinal("unit_id");
         var orgOrd = reader.GetOrdinal("primary_org_id");
+        var schedOrd = reader.GetOrdinal("scheduled_change_from");
         while (await reader.ReadAsync(ct))
         {
             total = (int)reader.GetInt64(totalOrd); // identical on every row
@@ -1597,7 +1634,10 @@ public sealed class ApprovalPeriodRepository
                 DisplayName: reader.GetString(reader.GetOrdinal("display_name")),
                 Position: reader.IsDBNull(posOrd) ? null : reader.GetString(posOrd),
                 UnitId: reader.IsDBNull(unitOrd) ? null : reader.GetGuid(unitOrd),
-                PrimaryOrgId: reader.GetString(orgOrd)));
+                PrimaryOrgId: reader.GetString(orgOrd),
+                // S141 / TASK-14116 (B0) — NULL = no change scheduled for this person. The sentinel
+                // row is skipped above, so this is only ever read on a real hit.
+                ScheduledChangeFrom: reader.IsDBNull(schedOrd) ? null : reader.GetFieldValue<DateOnly>(schedOrd)));
         }
         return (items, total);
     }
@@ -2069,6 +2109,13 @@ public sealed record MedarbejderRosterProjection(
 /// <c>reporting_lines.version</c> (the SAME row that surfaces <paramref name="StructuralApproverId"/>)
 /// — the FE etag: NULLABLE (a root/orphan has no active PRIMARY edge → null → the FE's "Ret" CREATES
 /// vs SUPERSEDES, the S99 distinction). It changes only with the reporting-line row.</para>
+///
+/// <para>S141 / TASK-14116 (refinement B0, owner requirement): <paramref name="ScheduledChangeFrom"/>
+/// is the date an already-scheduled employment change takes effect, or <c>null</c> when none is
+/// scheduled. <paramref name="Position"/> is the title in force TODAY (wave 1 / B1), so the roster no
+/// longer shows a future title as if it were current; this field is the other half of that fix —
+/// saying that a change is coming, so the reader knows to look before acting. See
+/// <see cref="EmploymentTimelineSql"/> for what counts as scheduled (a cancelled one does not).</para>
 /// </summary>
 public sealed record MedarbejderRosterRow(
     string EmployeeId,
@@ -2082,7 +2129,8 @@ public sealed record MedarbejderRosterRow(
     Guid? UnitId,
     string? UnitName,
     IReadOnlyList<string> LeaderIds,
-    long? PrimaryReportingLineVersion);
+    long? PrimaryReportingLineVersion,
+    DateOnly? ScheduledChangeFrom = null);
 
 /// <summary>
 /// S106 / TASK-10602 — one DISPLAY-ONLY resolved person reference for the roster's
@@ -2090,12 +2138,18 @@ public sealed record MedarbejderRosterRow(
 /// + <paramref name="Position"/> (the as-of-today <c>employee_profiles.position</c>, S141 B1) + <paramref name="UnitName"/>
 /// of an id the roster references (a manager / unit-leader) so the FE can label the upward-reference +
 /// cross-unit-leader chips without a blank. A pure by-id projection — NO scope is admitted by it.
+///
+/// <para>S141 / TASK-14116 (B0): <paramref name="ScheduledChangeFrom"/> = the date an already-scheduled
+/// employment change takes effect for this referenced person, <c>null</c> when none is. It exists for
+/// the same reason <paramref name="Position"/> was moved to as-of-today in wave 1 — the chip's title is
+/// acted on, so the reader must also be told when it is about to change.</para>
 /// </summary>
 public sealed record ResolvedPersonRef(
     string UserId,
     string DisplayName,
     string? Position,
-    string? UnitName);
+    string? UnitName,
+    DateOnly? ScheduledChangeFrom = null);
 
 /// <summary>
 /// S75-7500 (R1) — the per-away-manager outgoing-vikar marker: the active
@@ -2124,17 +2178,24 @@ public sealed record PersonSearchHit(
 
 /// <summary>
 /// S106 / TASK-10603 — one matched person from the merged-admin overlay SEARCH
-/// (<see cref="ApprovalPeriodRepository.SearchPeopleForOverlayAsync"/>). Carries the live
+/// (<see cref="ApprovalPeriodRepository.SearchPeopleForOverlayAsync"/>). Carries the as-of-today
 /// <paramref name="Position"/> (nullable) + the person's <paramref name="UnitId"/> (nullable =
 /// Organisation-homed) + <paramref name="PrimaryOrgId"/> so the endpoint builds the overlay's
 /// home-unit name + the Organisation/unit PATH in memory from the cheap unit/org maps (units ≪ people).
+///
+/// <para>S141 / TASK-14116 (B0): <paramref name="Position"/> is the title in force TODAY (wave 1 / B1 —
+/// before that, search could label someone with a job title they do not yet hold), and
+/// <paramref name="ScheduledChangeFrom"/> is the other half: the date an already-scheduled employment
+/// change takes effect, <c>null</c> when none is. Both ride the one paged statement; see
+/// <see cref="EmploymentTimelineSql"/> for why the marker is an aggregate and not a second query.</para>
 /// </summary>
 public sealed record OverlayPersonRow(
     string UserId,
     string DisplayName,
     string? Position,
     Guid? UnitId,
-    string PrimaryOrgId);
+    string PrimaryOrgId,
+    DateOnly? ScheduledChangeFrom = null);
 
 /// <summary>
 /// S87-8701 — one roster entry for the leader Teamoversigt aggregate

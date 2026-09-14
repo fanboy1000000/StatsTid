@@ -3437,7 +3437,11 @@ public static class AdminEndpoints
                     UnitId: e.UnitId,
                     UnitName: e.UnitName,
                     LeaderIds: e.LeaderIds,
-                    PrimaryReportingLineVersion: e.PrimaryReportingLineVersion)).ToList(),
+                    PrimaryReportingLineVersion: e.PrimaryReportingLineVersion,
+                    // S141 / TASK-14116 (B0, owner requirement) — the heads-up that a change is
+                    // already dated ahead for this person. null = nothing scheduled. The roster
+                    // already shows TODAY's position (wave 1); this says one is coming.
+                    ScheduledChangeFrom: e.ScheduledChangeFrom)).ToList(),
                 PendingCountByManager: roster.PendingCountByManager,
                 // S140 / TASK-14004 (QUAL-163) — the past-deadline SUBSET of the tally above, so the
                 // "efter frist" tile can state a number that actually means past deadline. The
@@ -3451,7 +3455,10 @@ public static class AdminEndpoints
                         UserId: kv.Value.UserId,
                         DisplayName: kv.Value.DisplayName,
                         Position: kv.Value.Position,
-                        UnitName: kv.Value.UnitName))));
+                        UnitName: kv.Value.UnitName,
+                        // S141 / TASK-14116 (B0) — the same marker on a referenced person's chip:
+                        // it carries a job title, so it owes the same "a change is coming".
+                        ScheduledChangeFrom: kv.Value.ScheduledChangeFrom))));
         }).RequireAuthorization("HROrAbove") // S91 TASK-9102: tree-page roster opened to LocalHR
         .Produces<RosterResponse>(StatusCodes.Status200OK); // S111 / TASK-11101
 
@@ -3633,7 +3640,12 @@ public static class AdminEndpoints
                     DisplayName: pp.DisplayName,
                     Position: pp.Position,
                     UnitName: unitName,
-                    Path: path);
+                    Path: path,
+                    // S141 / TASK-14116 (B0, owner requirement) — the search overlay is where HR
+                    // picks a person to act on, so a hit with a change already dated ahead must say
+                    // so. null = nothing scheduled. Carried from the same paged statement that
+                    // produced the row, so the marker and the position always describe one moment.
+                    ScheduledChangeFrom: pp.ScheduledChangeFrom);
             }).ToList();
 
             return Results.Ok(new SearchResponse(units, people, unitsTotal, peopleTotal));

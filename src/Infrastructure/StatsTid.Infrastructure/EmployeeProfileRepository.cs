@@ -389,6 +389,13 @@ public sealed class EmployeeProfileRepository
         // row [f, f) is excluded: it covers no day at all and is the retirement trace a soft-delete
         // leaves behind (S141 B4), so reporting it as a scheduled change would show HR a change that
         // was deliberately cancelled.
+        //
+        // That rule — "starts after today AND is not zero-width" — is stated once, with its full
+        // reasoning, in EmploymentTimelineSql.ScheduledRowPredicate (S141 / TASK-14116), which the
+        // three LIST reads splice in. The predicate below is character-identical to it and is spelled
+        // out here because this statement also SELECTS the scheduled row's values, which the list
+        // reads deliberately do not. If the rule ever changes, it changes in both places or the
+        // roster and the profile page will disagree about whether a change exists.
         const string sql =
             """
             SELECT
