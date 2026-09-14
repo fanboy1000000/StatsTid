@@ -13,45 +13,55 @@ using StatsTid.Tests.Regression.Segmentation;
 namespace StatsTid.Tests.Regression.EmployeeProfile;
 
 /// <summary>
-/// S141 / TASK-14106, wave 2 — pin 6: the AS-OF-TODAY reads that put an employee's position on a
-/// screen OTHER than the profile page/edit drawer, with a scheduled future change present.
+/// S141 / TASK-14106, wave 2/3 — pin 6: the AS-OF-TODAY reads that put an employee's position on a
+/// screen OTHER than the profile page/edit drawer, with a scheduled future change present; PLUS the
+/// owner's B0 marker (<c>scheduledChangeFrom</c>) on those same three surfaces, added by TASK-14116
+/// (now merged) and pinned here per the sprint-end review's W3 finding — the only pins that existed
+/// on the marker were string-contains checks against the SQL text, which pass whether or not the
+/// query returns the right date.
 ///
 /// <para>
 /// <b>Why this matters, in plain language.</b> Before this sprint, an employee's position never
 /// changed except by a today-dated edit, so any read of "the row with no end date" was always
 /// today's truth. Once HR can schedule a promotion for a future date, a read that still follows the
 /// OPEN row would show the roster (and the merged-admin overlay's people search) a job title that is
-/// not yet in force — weeks early, with nothing on screen saying so. TASK-14102 (wave 1, already
-/// merged) converted the underlying reads to as-of-today; this file is the HTTP-level proof that the
-/// conversion actually reaches the two screens that display it.
+/// not yet in force — weeks early, with nothing on screen saying so. That half (position accuracy)
+/// is TASK-14102's; the SECOND half — the marker itself, a date on screen saying "a change is coming"
+/// — is TASK-14116's, and is what most of this file pins. The marker's own rule (owner-critical): a
+/// CANCELLED scheduled change (a retired, zero-width row) must never be reported as scheduled — the
+/// owner's requirement hinges on not announcing a change somebody already called off.
 /// </para>
 ///
 /// <para>
 /// <b>Scope note, found while writing this file rather than assumed from the refinement's prose.</b>
 /// The refinement names "the organisation roster, people search and the person-reference resolver"
 /// as the three affected surfaces. Reading the actual endpoints (<c>AdminEndpoints.cs</c>) shows
-/// this maps to exactly TWO HTTP surfaces, not three: <c>GET
-/// /api/admin/reporting-lines/tree/{organisationId}/medarbejdere</c> (the roster) carries position
+/// this maps to exactly TWO HTTP surfaces: <c>GET
+/// /api/admin/reporting-lines/tree/{organisationId}/medarbejdere</c> (the roster) carries the marker
 /// on both its employee rows AND its <c>nameResolution</c> dictionary (the "person-reference
 /// resolver" the refinement names is this same endpoint's cross-reference lookup, not a separate
 /// route) — and <c>GET /api/admin/search</c> (the merged-admin overlay's people section, which is
 /// what "people search" means here). <c>GET /api/admin/users/search</c> — a DIFFERENT, older
-/// person-search endpoint — was deliberately left untouched by TASK-14102 (per its own doc comment:
-/// "the existing roster/picker reads are untouched") and never surfaced position on the wire at all,
-/// so it is out of scope for this pin and not tested here. This file only covers the two employee
-/// row / people-section assertions; it does NOT attempt to construct a scenario where this employee
-/// appears in the roster's <c>nameResolution</c> cross-reference (that requires being referenced as
-/// a structural approver or cross-unit leader elsewhere, which is a materially larger fixture setup
-/// for the same underlying SQL predicate already pinned via the employee row) — flagged in the
-/// final report as a narrower cut than the refinement's full census, made deliberately for cost.
+/// person-search endpoint — was deliberately left untouched by both TASK-14102 and TASK-14116 (per
+/// their own doc comments) and never surfaced position or the marker on the wire at all, so it is out
+/// of scope and not tested here. The <c>nameResolution</c> case (person-reference) IS now covered,
+/// via a minimal second employee whose PRIMARY reporting line names the subject as manager — the
+/// smallest fixture that gets the subject's id into the resolver's input set.
 /// </para>
 ///
 /// <para>
-/// <b>RED-FIRST.</b> Written from the spec; Docker is unavailable locally, so nothing here is
-/// verified and nothing is reported as passing before the wave-2 gate. Unlike this file's sibling
-/// endpoint-dependent pins, this ONE'S underlying reads (B1, wave 1) are already merged — so it is
-/// plausible this pin is closer to green than the others, but that is still unverified locally and
-/// must not be reported as passing.
+/// <b>One shared rule, tested through one timeline.</b> <c>EmploymentTimelineSql.EarliestScheduledChangeLateral</c>
+/// takes the MIN effective date over BOTH the profile and the agreement-code timelines. This file
+/// exercises the rule through the profile timeline only (matching this file's existing seeding); the
+/// agreement-code half of the same MIN is not separately pinned here, to avoid combinatorial re-tests
+/// of a rule this file already establishes is date-and-width based, not table-based — flagged in the
+/// final report as a deliberate narrower cut.
+/// </para>
+///
+/// <para>
+/// <b>RED-FIRST, expected UNRUNNABLE.</b> Written from the spec; Docker is unavailable locally, so
+/// nothing here is verified and nothing is reported as passing. TASK-14102 and TASK-14116 have both
+/// merged, so it is plausible these pins are close to or at green, but that remains unverified here.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -143,6 +153,160 @@ public sealed class ScheduledChangeVisibilityTests : IAsyncLifetime
         Assert.Equal("Specialkonsulent", row.GetProperty("position").GetString());
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    // The owner's marker (B0 / TASK-14116) — present AND cancelled, on all three surfaces
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>The roster must surface the scheduled change's DATE, not just hide the position.</summary>
+    [Fact]
+    public async Task Roster_ScheduledChangeMarker_ShowsTheDate_WhenAChangeIsScheduled()
+    {
+        var employeeId = await SeedEmployeeAsync("Roster Marker Present Test");
+        var scheduledFrom = F.AddDays(25);
+        await ReplaceProfileTimelineAsync(employeeId,
+            (F.AddDays(-400), scheduledFrom, "Today"),
+            (scheduledFrom, null, "Future"));
+
+        var client = AdminClient();
+        var rsp = await client.GetAsync($"/api/admin/reporting-lines/tree/{OrgId}/medarbejdere");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var row = Assert.Single(body.GetProperty("employees").EnumerateArray()
+            .Where(e => e.GetProperty("employeeId").GetString() == employeeId));
+
+        // RED: fails if the roster has no scheduledChangeFrom member at all, or if it is null despite
+        // a real scheduled change existing.
+        Assert.True(row.TryGetProperty("scheduledChangeFrom", out var marker),
+            "expected the roster row to carry scheduledChangeFrom (B0 / TASK-14116).");
+        Assert.Equal(scheduledFrom.ToString("yyyy-MM-dd"), marker.GetString());
+    }
+
+    /// <summary>
+    /// The case that matters most (per the sprint-end review): a scheduled change that was CANCELLED
+    /// — retired to a zero-width row, the trace a soft-delete leaves behind (S141 B4) — must read as
+    /// null, never as the cancelled date. Reporting a called-off change is worse than reporting
+    /// nothing, because it is confidently wrong.
+    /// </summary>
+    [Fact]
+    public async Task Roster_ScheduledChangeMarker_IsNull_WhenTheScheduledChangeWasCancelled()
+    {
+        var employeeId = await SeedEmployeeAsync("Roster Marker Cancelled Test");
+        var cancelledFrom = F.AddDays(25);
+        await ReplaceProfileTimelineAsync(employeeId,
+            (F.AddDays(-400), null, "Today"),
+            (cancelledFrom, cancelledFrom, "NeverTookEffect")); // zero-width — retired, not scheduled
+
+        var client = AdminClient();
+        var rsp = await client.GetAsync($"/api/admin/reporting-lines/tree/{OrgId}/medarbejdere");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var row = Assert.Single(body.GetProperty("employees").EnumerateArray()
+            .Where(e => e.GetProperty("employeeId").GetString() == employeeId));
+
+        // RED: fails if the zero-width exclusion is missing and the roster reports the cancelled
+        // date as though it were still scheduled.
+        Assert.True(row.TryGetProperty("scheduledChangeFrom", out var marker));
+        Assert.Equal(JsonValueKind.Null, marker.ValueKind);
+    }
+
+    /// <summary>The merged-admin overlay's people section must show the same marker.</summary>
+    [Fact]
+    public async Task PersonSearchOverlay_ScheduledChangeMarker_ShowsTheDate_WhenAChangeIsScheduled()
+    {
+        var employeeId = await SeedEmployeeAsync("Overlay Marker Present Test Zzq");
+        var scheduledFrom = F.AddDays(25);
+        await ReplaceProfileTimelineAsync(employeeId,
+            (F.AddDays(-400), scheduledFrom, "Today"),
+            (scheduledFrom, null, "Future"));
+
+        var client = AdminClient();
+        var rsp = await client.GetAsync("/api/admin/search?q=Overlay+Marker+Present+Test+Zzq");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var row = Assert.Single(body.GetProperty("people").EnumerateArray()
+            .Where(p => p.GetProperty("userId").GetString() == employeeId));
+
+        Assert.True(row.TryGetProperty("scheduledChangeFrom", out var marker),
+            "expected the overlay's people row to carry scheduledChangeFrom (B0 / TASK-14116).");
+        Assert.Equal(scheduledFrom.ToString("yyyy-MM-dd"), marker.GetString());
+    }
+
+    /// <summary>The overlay half of the "must not announce a cancelled change" requirement.</summary>
+    [Fact]
+    public async Task PersonSearchOverlay_ScheduledChangeMarker_IsNull_WhenTheScheduledChangeWasCancelled()
+    {
+        var employeeId = await SeedEmployeeAsync("Overlay Marker Cancelled Test Zzq");
+        var cancelledFrom = F.AddDays(25);
+        await ReplaceProfileTimelineAsync(employeeId,
+            (F.AddDays(-400), null, "Today"),
+            (cancelledFrom, cancelledFrom, "NeverTookEffect"));
+
+        var client = AdminClient();
+        var rsp = await client.GetAsync("/api/admin/search?q=Overlay+Marker+Cancelled+Test+Zzq");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var row = Assert.Single(body.GetProperty("people").EnumerateArray()
+            .Where(p => p.GetProperty("userId").GetString() == employeeId));
+
+        Assert.True(row.TryGetProperty("scheduledChangeFrom", out var marker));
+        Assert.Equal(JsonValueKind.Null, marker.ValueKind);
+    }
+
+    /// <summary>
+    /// The person-reference resolver — the roster's <c>nameResolution</c> cross-reference map, keyed
+    /// by every structural-approver / cross-unit-leader id the roster names. A second ("reportee")
+    /// employee whose PRIMARY reporting line names the subject as manager is the minimal fixture that
+    /// gets the subject's id into the resolver's input set (<c>ApprovalPeriodRepository</c>'s
+    /// <c>referencedIds</c>).
+    /// </summary>
+    [Fact]
+    public async Task PersonReference_NameResolutionMarker_ShowsTheDate_WhenAChangeIsScheduled()
+    {
+        var managerId = await SeedEmployeeAsync("Manager Marker Present Test");
+        var scheduledFrom = F.AddDays(25);
+        await ReplaceProfileTimelineAsync(managerId,
+            (F.AddDays(-400), scheduledFrom, "Today"),
+            (scheduledFrom, null, "Future"));
+        var reporteeId = await SeedEmployeeAsync("Reportee Of Present Manager Test");
+        await SeedPrimaryReportingLineAsync(reporteeId, managerId);
+
+        var client = AdminClient();
+        var rsp = await client.GetAsync($"/api/admin/reporting-lines/tree/{OrgId}/medarbejdere");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+
+        // RED: fails if the manager never made it into nameResolution at all (the fixture/census is
+        // wrong) or if the entry exists without the marker.
+        Assert.True(body.GetProperty("nameResolution").TryGetProperty(managerId, out var refEntry),
+            "expected the manager to be resolved in nameResolution via the reportee's PRIMARY reporting line.");
+        Assert.True(refEntry.TryGetProperty("scheduledChangeFrom", out var marker));
+        Assert.Equal(scheduledFrom.ToString("yyyy-MM-dd"), marker.GetString());
+    }
+
+    /// <summary>The person-reference half of the "must not announce a cancelled change" requirement —
+    /// arguably the most consequential of the six, since a name chip is exactly where HR would act on
+    /// a cross-reference without opening the referenced person's own profile.</summary>
+    [Fact]
+    public async Task PersonReference_NameResolutionMarker_IsNull_WhenTheScheduledChangeWasCancelled()
+    {
+        var managerId = await SeedEmployeeAsync("Manager Marker Cancelled Test");
+        var cancelledFrom = F.AddDays(25);
+        await ReplaceProfileTimelineAsync(managerId,
+            (F.AddDays(-400), null, "Today"),
+            (cancelledFrom, cancelledFrom, "NeverTookEffect"));
+        var reporteeId = await SeedEmployeeAsync("Reportee Of Cancelled Manager Test");
+        await SeedPrimaryReportingLineAsync(reporteeId, managerId);
+
+        var client = AdminClient();
+        var rsp = await client.GetAsync($"/api/admin/reporting-lines/tree/{OrgId}/medarbejdere");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.True(body.GetProperty("nameResolution").TryGetProperty(managerId, out var refEntry));
+        Assert.True(refEntry.TryGetProperty("scheduledChangeFrom", out var marker));
+        Assert.Equal(JsonValueKind.Null, marker.ValueKind);
+    }
+
     // ─── Seeding helpers ─────────────────────────────────────────────────
 
     private async Task<string> SeedEmployeeAsync(string displayName)
@@ -203,6 +367,28 @@ public sealed class ScheduledChangeVisibilityTests : IAsyncLifetime
             ins.Parameters.AddWithValue("v", version++);
             await ins.ExecuteNonQueryAsync();
         }
+    }
+
+    /// <summary>A PRIMARY reporting line naming <paramref name="managerId"/> as
+    /// <paramref name="employeeId"/>'s structural approver — the minimal fixture that puts the
+    /// manager's id into the roster's <c>nameResolution</c> input set
+    /// (<c>ApprovalPeriodRepository.referencedIds</c>).</summary>
+    private async Task SeedPrimaryReportingLineAsync(string employeeId, string managerId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO reporting_lines
+                (employee_id, manager_id, organisation_id, relationship,
+                 effective_from, effective_to, source, created_by)
+            VALUES (@e, @m, @org, 'PRIMARY', @from, NULL, 'MANUAL', 'test-seed')
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("m", managerId);
+        cmd.Parameters.AddWithValue("org", OrgId);
+        cmd.Parameters.AddWithValue("from", F.AddDays(-100));
+        await cmd.ExecuteNonQueryAsync();
     }
 
     // ─── HTTP helpers ────────────────────────────────────────────────────

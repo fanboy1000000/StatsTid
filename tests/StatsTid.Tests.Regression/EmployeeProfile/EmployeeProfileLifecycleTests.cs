@@ -473,19 +473,52 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         const string employeeId = "emp001";
         var client = AuthorizedClient();
 
-        // Capture predecessor version (= 1 from seeder).
+        // Sprint-end review (carried once, fixed here): since S141 (owner ruling OQ-3 (a)) the
+        // GET's `version` is the AGGREGATE token (`users.version`), while the row's OWN `version`
+        // column (what ADR-023 D8 says soft-delete must NOT bump, and what the audit's
+        // version_before/version_after narrate) is a DIFFERENT number. A freshly-seeded employee
+        // starts both at 1, so comparing everything against the GET's value could not tell a
+        // regression that bumped the wrong one from a correct implementation — it would pass either
+        // way. Diverge them on purpose: bump users.version independently (as an unrelated users-side
+        // change would) while leaving the profile row's own version untouched.
+        await using (var bumpConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await bumpConn.OpenAsync();
+            await using var bumpCmd = new NpgsqlCommand(
+                "UPDATE users SET version = version + 5 WHERE user_id = @e", bumpConn);
+            bumpCmd.Parameters.AddWithValue("e", employeeId);
+            await bumpCmd.ExecuteNonQueryAsync();
+        }
+
+        // The profile row's OWN version, read directly — independent of the aggregate token below.
+        long rowVersionBeforeDelete;
+        await using (var rowConn = new NpgsqlConnection(_harness.ConnectionString))
+        {
+            await rowConn.OpenAsync();
+            await using var rowCmd = new NpgsqlCommand(
+                "SELECT version FROM employee_profiles WHERE employee_id = @e AND effective_to IS NULL",
+                rowConn);
+            rowCmd.Parameters.AddWithValue("e", employeeId);
+            rowVersionBeforeDelete = (long)(await rowCmd.ExecuteScalarAsync())!;
+        }
+
+        // The client-facing token: users.version (the aggregate — owner ruling OQ-3 (a)).
         var getRsp = await client.GetAsync($"/api/admin/employee-profiles/{employeeId}");
         Assert.Equal(HttpStatusCode.OK, getRsp.StatusCode);
-        var predecessorVersion = (await getRsp.Content.ReadFromJsonAsync<JsonElement>())
+        var usersVersionToken = (await getRsp.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("version").GetInt64();
+        // Sanity: the two number spaces genuinely differ in this test now — if they did not, the
+        // assertions below would be back to unable to tell them apart.
+        Assert.NotEqual(rowVersionBeforeDelete, usersVersionToken);
 
         var delReq = new HttpRequestMessage(
             HttpMethod.Delete, $"/api/admin/employee-profiles/{employeeId}");
-        delReq.Headers.TryAddWithoutValidation("If-Match", $"\"{predecessorVersion}\"");
+        delReq.Headers.TryAddWithoutValidation("If-Match", $"\"{usersVersionToken}\"");
         var delRsp = await client.SendAsync(delReq);
         Assert.Equal(HttpStatusCode.NoContent, delRsp.StatusCode);
 
-        // Predecessor row: version unchanged.
+        // Predecessor row: its OWN version unchanged — checked against rowVersionBeforeDelete, not
+        // the aggregate client token.
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using (var rowCmd = new NpgsqlCommand(
@@ -500,10 +533,11 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         {
             rowCmd.Parameters.AddWithValue("employeeId", employeeId);
             var stored = (long)(await rowCmd.ExecuteScalarAsync())!;
-            Assert.Equal(predecessorVersion, stored);
+            Assert.Equal(rowVersionBeforeDelete, stored);
         }
 
-        // Audit row: action='DELETED', version_before = version_after = predecessor.version.
+        // Audit row: action='DELETED', version_before = version_after = the ROW's own version
+        // (ADR-023 D8) — again compared against rowVersionBeforeDelete, never the aggregate token.
         await using (var auditCmd = new NpgsqlCommand(
             """
             SELECT version_before, version_after
@@ -515,11 +549,12 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         {
             auditCmd.Parameters.AddWithValue("employeeId", employeeId);
             await using var reader = await auditCmd.ExecuteReaderAsync();
-            // RED: fails if soft-delete bumps the version (version_before != version_after) instead
-            // of leaving it unchanged per ADR-023 D8.
+            // RED: fails if soft-delete bumps the row's own version (version_before != version_after)
+            // instead of leaving it unchanged per ADR-023 D8, OR if either column is silently
+            // recording the aggregate token instead of the row's own version.
             Assert.True(await reader.ReadAsync(), "Expected a DELETED audit row.");
-            Assert.Equal(predecessorVersion, reader.GetInt64(0));
-            Assert.Equal(predecessorVersion, reader.GetInt64(1));
+            Assert.Equal(rowVersionBeforeDelete, reader.GetInt64(0));
+            Assert.Equal(rowVersionBeforeDelete, reader.GetInt64(1));
         }
     }
 
