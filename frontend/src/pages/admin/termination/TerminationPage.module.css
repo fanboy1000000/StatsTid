@@ -1,0 +1,99 @@
+.root {
+  font-family: var(--font-family);
+  max-width: 70ch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.back {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--color-link);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+}
+
+.back:hover {
+  text-decoration: underline;
+}
+
+.heading {
+  font-size: 20px;
+  font-weight: var(--font-weight-semibold);
+  margin: 0;
+}
+
+.spinner {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-8) 0;
+}
+
+.identityHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.identityName {
+  font-weight: var(--font-weight-semibold);
+  font-size: 16px;
+}
+
+.muted {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.factList {
+  margin: var(--space-2) 0 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-4);
+}
+
+.factList > div {
+  display: contents;
+}
+
+.factList dt {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.factList dd {
+  margin: 0;
+  font-size: 14px;
+}
+
+.scheduledBanner ul {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-4);
+}
+
+.scheduledList li {
+  margin-bottom: var(--space-1);
+}
+
+.hint {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  margin: var(--space-2) 0 var(--space-3) 0;
+  max-width: 60ch;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.refusalDetail {
+  margin: var(--space-2) 0 var(--space-3) 0;
+  padding-left: var(--space-4);
+  font-size: 13px;
+}
