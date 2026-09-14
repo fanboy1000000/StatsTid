@@ -3,10 +3,10 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 141 |
-| **Status** | planning |
+| **Status** | in progress — wave 1 merged and gated, Step 5a absorbed; wave 2 next |
 | **Start Date** | 2026-09-11 |
 | **End Date** | — |
-| **Orchestrator Approved** | **plan: pending Step 0b.** Refinement `.claude/refinements/REFINEMENT-s141-increment4-and-the-settlement-anchor.md` **rev 5**, READY. Step-4 ran **three** dual-lens cycles: Codex c1 1B/4W/8N → c2 1W/1N → c3 **1B**/1W/5N; Reviewer c1 0B/9W/7N → c2 **1B**/3W/1N → c3 APPROVED-WITH-WARNINGS 0B/5W/5N. Both lenses BLOCKER-free at c3; the skill's two-cycle cap stopped it there and the remaining WARNINGs were absorbed rather than deferred. A post-rev-4 **independent write-path enumeration** then found four more items and, more usefully, the two *mechanisms* generating them. Owner rulings 2026-09-11: **OQ-1 (a)** A+B+C, Increment 4 whole, with a pre-declared cut order · **OQ-2 (a)** anchor at `max(ferieårStart, hire)`, OK-version included, SPECIAL_HOLIDAY in the same ruling · **OQ-3 (a)** profile concurrency token moves to `users.version` · **OQ-4 DEFERRED** to `ROADMAP.md` as a decision owed, trace required first · **OQ-5 (a)** delete both, ruled *against* the Orchestrator's recommendation · **OQ-6 (a)** a today-dated edit asks which period HR meant · **B0** owner-raised requirement: a scheduled change must be VISIBLE wherever a profile is read or edited |
+| **Orchestrator Approved** | **plan: APPROVED — Step 0b ran THREE cycles** (Codex 1B/3W/2N → 2B/1W → clean; Reviewer 1B/7W/6N → 2B/5W/6N → APPROVED-WITH-WARNINGS). Four blockers, two of which would have shipped visibly broken features: the date picker refusing every date it offered, and the edit drawer rejecting every save. Refinement `.claude/refinements/REFINEMENT-s141-increment4-and-the-settlement-anchor.md` **rev 5**, READY. Step-4 ran **three** dual-lens cycles: Codex c1 1B/4W/8N → c2 1W/1N → c3 **1B**/1W/5N; Reviewer c1 0B/9W/7N → c2 **1B**/3W/1N → c3 APPROVED-WITH-WARNINGS 0B/5W/5N. Both lenses BLOCKER-free at c3; the skill's two-cycle cap stopped it there and the remaining WARNINGs were absorbed rather than deferred. A post-rev-4 **independent write-path enumeration** then found four more items and, more usefully, the two *mechanisms* generating them. Owner rulings 2026-09-11: **OQ-1 (a)** A+B+C, Increment 4 whole, with a pre-declared cut order · **OQ-2 (a)** anchor at `max(ferieårStart, hire)`, OK-version included, SPECIAL_HOLIDAY in the same ruling · **OQ-3 (a)** profile concurrency token moves to `users.version` · **OQ-4 DEFERRED** to `ROADMAP.md` as a decision owed, trace required first · **OQ-5 (a)** delete both, ruled *against* the Orchestrator's recommendation · **OQ-6 (a)** a today-dated edit asks which period HR meant · **B0** owner-raised requirement: a scheduled change must be VISIBLE wherever a profile is read or edited |
 | **Build Verified** | — |
 | **Test Verified** | — |
 | **Orchestrator model** | Refinement revs 1–5, Steps 0a/0b, this log, all rulings: **Opus 5**. **Disclosed deviation:** the routing rule reserves planning and rulings for the review floor (Fable 5.1); OQ-2 was a domain-correctness ruling taken on Opus. The Step-4 and Step-0b *reviews* run on the floor (hook-enforced), so the review is unaffected; the proposal was not. Recorded rather than quietly absorbed |
@@ -694,3 +694,40 @@ Docker-gated facts remain unverified and are **not** claimed green.
 **Re-verified after both fixes:** build `0 errors / 145 warnings`, unit `1244 passed`, regression non-Docker `104 passed`.
 
 **Internal lens: running.**
+
+**Internal (Reviewer, `claude-fable-5-1`): APPROVED-WITH-WARNINGS — 0 BLOCKER / 4 WARNING / 5 NOTE.**
+
+It read every production diff line by line, ran its own census of every remaining open-row read on both timeline tables, traced
+every token producer and consumer, and **ran the router unit tests on HEAD (48/48 green)** to confirm the four failing-first
+pins genuinely flipped. Reviewed at `94560a4`, i.e. before the two external blockers were fixed, so its note that the
+special-holiday position read is still tolerant is superseded.
+
+**Verified sound, and worth recording because these are the sprint's highest-risk changes:** all three roster joins are lateral
+single-row with outer-join semantics preserved, so the paged search's count and page can no longer disagree; **no current-state
+read is left on the old predicate anywhere, in SQL or in C#**; the read's token, the write's validation and the delete's
+predicate all use the same value and nothing compares a row version against a record version; the delete evaluates 404 before
+412 so the retry contract survives, cannot write an inverted interval, and cannot manufacture a phantom retirement on a repeat;
+both scheduled-change reads exclude cancelled rows; the router gained no new case and the three retained symbols have zero
+producers in production code; the anchor reaches the four intended sites and **not** the probe loop; and both stored boundaries
+are unchanged.
+
+**Warnings, all carried to wave 2 as handoffs:**
+- **W1 — the profile audit column now holds two different kinds of version.** The update records the record token; the delete
+  still records the closed row's own version, so a reconstruction cannot chain them. One line, and the right value is already
+  returned by the new delete result. **TASK-14104.**
+- **W2 — the visibility requirement cannot hold when nothing covers today.** Both reads anchor on the covering row, so an
+  employee whose only row is scheduled gets a 404 and the scheduled change is invisible with it. **Not reachable in wave 1** —
+  the create path always writes at today and the update path's existence probe blocks re-creation. **Orchestrator decision: B0
+  explicitly EXCLUDES the no-covering-row state and B8's detector owns it**, since that state is precisely what B8 exists to
+  surface. Recorded rather than left implicit, and if it ever becomes reachable through the product the read should return the
+  employee with a null profile rather than 404.
+- **W3 — the clock divergence: register and rule, do not fix here.** Registered as **QUAL-172** with the reasoning. **The
+  ruling is owed at TASK-14105 dispatch**, because that is the one place the two conventions collide in a single file.
+- **W4 — a rewritten pin hard-coded the token and so passed under BOTH token definitions**, unable to tell the new source from
+  the old, and would have failed for an unrelated reason as soon as any earlier record write appeared in a test. **Fixed**: a
+  helper now reads the live token from the read, mirroring the sibling file that already did it correctly.
+
+**Notes absorbed:** the audit-volume increase is confirmed correct and in fact *more* auditable, since it preserves the
+invariant that every token transition has an audit row — with two refinements for wave 2, a discriminating action on the row
+and a comment that is now false; three stale comments in wave-2 files, with line numbers; a test comment that gives the right
+assertion the wrong reason; a vacuous assertion to retire with its symbol; and the sprint header's stale status, **now fixed**.

@@ -692,7 +692,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         var rsp = await PutEmployeeProfileAsync(client, employeeId,
             effectiveFrom: today,
             weeklyNormHours: 32.0m, partTimeFraction: 0.750m, position: "Specialist",
-            ifMatch: "\"1\"");
+            ifMatch: $"\"{await ReadProfileTokenAsync(client, employeeId)}\"");
         // RED: fails if the cross-day write emits EmployeeProfileUpdated / an 'UPDATED' audit row
         // instead of Superseded/'SUPERSEDED' — the real subject this pin catches. (F sits in the
         // real past, so an unconverted future-dating validator would accept this PUT too; this pin
@@ -776,7 +776,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         var rsp = await PutEmployeeProfileAsync(client, "emp001",
             effectiveFrom: yesterday,
             weeklyNormHours: 37.0m, partTimeFraction: 0.500m, position: "Backdated",
-            ifMatch: "\"1\"");
+            ifMatch: $"\"{await ReadProfileTokenAsync(client, "emp001")}\"");
         // RED: fails if a backdated (yesterday = F-1) PUT is still refused with 422 (the retired
         // same-day-ONLY rule) instead of being accepted and split.
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
@@ -853,7 +853,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         var rsp = await PutEmployeeProfileAsync(client, "emp001",
             effectiveFrom: tomorrow,
             weeklyNormHours: 37.0m, partTimeFraction: 0.500m, position: "Scheduled",
-            ifMatch: "\"1\"");
+            ifMatch: $"\"{await ReadProfileTokenAsync(client, "emp001")}\"");
 
         // OLD: UnprocessableEntity. NEW: the scheduled change is recorded, not refused.
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
@@ -1185,6 +1185,28 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             });
         }
+    }
+
+    /// <summary>
+    /// S141 Step-5a (internal lens W4) — read the CURRENT concurrency token from the GET rather than
+    /// hard-coding it.
+    ///
+    /// <para>
+    /// Three pins in this file sent <c>If-Match: "1"</c>. Before S141 that was the seeded profile
+    /// row's own version; after S141 the token is <c>users.version</c>, which for the seeded fixtures
+    /// also happens to be 1 — but only because each test boots a fresh harness. **So the literal
+    /// passed under BOTH token definitions and could not tell them apart**, which is the same
+    /// "passes for the wrong reason" defect class this sprint keeps finding. It would also have
+    /// 412'd for an unrelated reason the moment any earlier users-row write appeared in a test.
+    /// The sibling file already did this correctly; this mirrors it.
+    /// </para>
+    /// </summary>
+    private static async Task<long> ReadProfileTokenAsync(HttpClient client, string employeeId)
+    {
+        var rsp = await client.GetAsync($"/api/admin/employee-profiles/{employeeId}");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        return body.GetProperty("version").GetInt64();
     }
 
     private static async Task<HttpResponseMessage> PutEmployeeProfileAsync(
