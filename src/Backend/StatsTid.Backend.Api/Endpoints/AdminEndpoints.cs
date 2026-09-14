@@ -24,21 +24,21 @@ public static class AdminEndpoints
         "MAO", "ORGANISATION"
     };
 
-    /// <summary>
-    /// S138 / TASK-13802 — the DATE-FREE future-dating refusal shared by the users PUT's
-    /// agreement-code path and the dedicated agreement-code endpoint. Deliberately carries no
-    /// <c>provided</c> / <c>expected</c> dates: it is the sibling of the writer's
-    /// employment-start-floor refusal, and THAT one must never echo the employee's hire date to
-    /// the wire (an HR-scoped field, same handling class as the birth date). Keeping both refusals
-    /// on one date-free shape means a client cannot tell the two apart by probing — and cannot
-    /// learn a date it was not shown.
-    /// </summary>
-    private const string FutureDatedAgreementCodeError =
-        "EffectiveFrom cannot be in the future; an agreement-code change may be recorded for today or any past date.";
+    // S141 / TASK-14104 — `FutureDatedAgreementCodeError` is GONE, with the two refusals that used
+    // it (the users PUT's agreement branch and the dedicated agreement-code PUT). ADR-040
+    // Increment 4 makes dating a change ahead the point of the feature, and these were two of the
+    // three ENDPOINT validators that refused it before the request ever reached the writer — so
+    // lifting only the repository guards would have shipped the date picker dead. A refusal message
+    // with no refusal behind it is worse than absent: the next reader would take it as evidence the
+    // policy still exists. The DATE-FREE discipline it carried is NOT gone and still governs what
+    // remains — the writer's employment-start-floor refusal must never echo the employee's hire date
+    // to the wire (ADR-040 D7; an HR-scoped field, same handling class as the birth date).
 
     /// <summary>
-    /// S138 / TASK-13802 — the missing-date refusal shared by both agreement-code surfaces. Kept
-    /// separate from the future-dating message because it names a MALFORMED REQUEST, not a policy.
+    /// S138 / TASK-13802 — the missing-date refusal shared by both agreement-code surfaces. It
+    /// OUTLIVES the future-dating refusal deliberately: this one names a MALFORMED REQUEST (a
+    /// non-nullable <c>DateOnly</c> that was omitted binds <c>0001-01-01</c>, which would route as a
+    /// correction covering all recorded history), not a policy about which dates are allowed.
     /// </summary>
     private const string MissingEffectiveFromError =
         "EffectiveFrom is required and must be a real date.";
@@ -796,6 +796,8 @@ public static class AdminEndpoints
         app.MapGet("/api/admin/users/{userId}", async (
             string userId,
             UserRepository userRepo,
+            // S141 / TASK-14104 (refinement B0) — the scheduled agreement-code change rides along.
+            UserAgreementCodeRepository userAgreementCodeRepo,
             OrgScopeValidator scopeValidator,
             HttpContext context,
             CancellationToken ct) =>
@@ -812,10 +814,27 @@ public static class AdminEndpoints
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
 
+            // ── S141 / TASK-14104 (refinement B0, owner requirement 2026-09-11) ──
+            // Read AFTER the scope check, deliberately: it is the same subject and the same tenant
+            // data, but a read that runs before authorisation is a habit worth not forming.
+            //
+            // This read is DELIBERATELY tolerant of "no row covers today". `user.AgreementCode` is
+            // the live cache and is NOT NULL, so this endpoint has always answered for such a user
+            // and must keep doing so — turning a 200 into a 404 here would be a behaviour regression
+            // dressed as a correctness fix, and the state has its own detector (S141's B8,
+            // TASK-14105). The profile GET 404s for the equivalent shape because its whole body
+            // comes from the covering row; here only this one additive member does, so a null is the
+            // honest answer: nothing is scheduled that we can name.
+            var agreementHit = await userAgreementCodeRepo.GetAsOfTodayWithScheduledAsync(userId, ct);
+            var scheduledAgreement = agreementHit?.Scheduled is { } s
+                ? new ScheduledAgreementCodeChangeDto(s.EffectiveFrom, s.EffectiveTo, s.AgreementCode)
+                : null;
+
             context.Response.Headers.ETag = $"\"{version}\"";
 
-            // S112 / TASK-11201 — named record (UserDetailResponse) replaces the anonymous shape;
-            // BYTE-IDENTICAL wire JSON (same member names/order/nullability, camelCase Web default).
+            // S112 / TASK-11201 — named record (UserDetailResponse) replaces the anonymous shape.
+            // S141 / TASK-14104 — one ADDITIVE, nullable member; every existing client reads the
+            // same nine fields in the same order and is unaffected.
             return Results.Ok(new UserDetailResponse(
                 user.UserId,
                 user.Username,
@@ -825,7 +844,8 @@ public static class AdminEndpoints
                 user.AgreementCode,
                 user.OkVersion,
                 user.EmploymentCategory,
-                version));
+                version,
+                scheduledAgreement));
         }).RequireAuthorization("HROrAbove")
         .Produces<UserDetailResponse>(StatusCodes.Status200OK);
 
@@ -1518,11 +1538,15 @@ public static class AdminEndpoints
             ILoggerFactory loggerFactory,
             // S139 / TASK-13907, widened S140 / TASK-14009 — the server-"today" seam
             // (TimeProvider.System in production). It serves EVERY business date this handler
-            // decides, and there are TWO: the future-dating validator's "is EffectiveFrom after
-            // today" comparison, and the cross-Organisation transfer fan-out's `today` (the date it
-            // closes reporting lines and vikar rows at). The handler's ONE real-clock value is the
-            // `now` audit stamp at the top of the transaction — see the BY DESIGN note there for
-            // the exact scope of that exemption and why nothing may derive a DATE from it.
+            // decides, and there are TWO. S141 / TASK-14104 changed WHICH two: the future-dating
+            // validator is gone (Increment 4 makes a future date legal), and in its place is owner
+            // ruling OQ-6's "does a row starting after TODAY truncate this write?" test — the one
+            // that separates a SCHEDULED change, which a carry-forward may rewrite, from ordinary
+            // closed history, which it must not. The second is unchanged: the cross-Organisation
+            // transfer fan-out's `today` (the date it closes reporting lines and vikar rows at).
+            // Both now read ONE hoisted value. The handler's ONE real-clock value is the `now` audit
+            // stamp at the top of the transaction — see the BY DESIGN note there for the exact scope
+            // of that exemption and why nothing may derive a DATE from it.
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -1592,29 +1616,35 @@ public static class AdminEndpoints
             // The writer compares against the covering row instead, which is right in both cases.
             var agreementCodeSupplied = request.AgreementCode is not null;
 
-            // S138 / TASK-13802 — EffectiveFrom validator, widened from "== today" to "<= today"
-            // (ADR-040 D8 as amended: backdating + today now; future-dating is Increment 4, because
-            // a not-yet-effective row would be read as "current" by the login token and the
-            // ~200 live-cache readers). Still gated on the agreement-code path: when the admin is
-            // only updating display_name or email, EffectiveFrom is irrelevant and skipping the
-            // validator preserves the no-mutation path's behaviour verbatim. The UTC day (not
-            // local time) aligns with the frontend's `new Date().toISOString().slice(0,10)` UTC
-            // extraction (TASK-3409 sync); since S139 / TASK-13907 that day is read from the
-            // injected TimeProvider rather than DateTime.UtcNow — same day, injectable source, so
-            // a fixed-clock test host moves the validator with it. The refusal body is DATE-FREE —
-            // it shares a shape with the writer's employment-start-floor refusal, which must never
-            // echo the hire date.
+            // ── S141 / TASK-14104 — THE FUTURE-DATE REFUSAL IS LIFTED HERE ──
+            // What used to sit below the presence guard: `if (request.EffectiveFrom > today) return
+            // 422`. It was one of the three ENDPOINT validators that refused a future date before
+            // the request reached the writer (the others: the profile PUT, and the dedicated
+            // agreement-code PUT further down this file). ADR-040 Increment 4 makes dating a change
+            // ahead the feature, so it goes — and with it the reason it was ever needed: a
+            // not-yet-effective row would have been read as "current" by the login token and the
+            // live `users.*` caches, which wave 1 (TASK-14102) converted to as-of-today reads.
             //
-            // The PRESENCE guard comes first: `EffectiveFrom` is a non-nullable DateOnly, so a
-            // request that OMITS it binds the .NET default 0001-01-01. Pre-S138 the "== today"
-            // rule rejected that as a side effect; now that any past date is legal, the sentinel
-            // would route as a correction covering ALL recorded history (0001-01-01 is also the
-            // backfill seeder's start). A missing date is a malformed request, not a backdate.
+            // The PRESENCE guard STAYS and is still gated on the agreement-code path: `EffectiveFrom`
+            // is a non-nullable DateOnly, so a request that OMITS it binds the .NET default
+            // 0001-01-01, which would route as a correction covering ALL recorded history
+            // (0001-01-01 is also the backfill seeder's start). A missing date is a malformed
+            // request, not a policy question — which is precisely why it outlives the refusal above
+            // it. Gating on `agreementCodeSupplied` preserves the no-mutation path verbatim: when
+            // the admin is only updating display_name or email, EffectiveFrom is irrelevant.
+            //
+            // "Today" is still needed further down (the transfer fan-out), still the UTC day off the
+            // injected TimeProvider (S139 / TASK-13907), still aligned with the frontend's
+            // `new Date().toISOString().slice(0,10)` UTC extraction (TASK-3409 sync).
             if (agreementCodeSupplied && request.EffectiveFrom == default)
                 return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
-            if (agreementCodeSupplied
-                && request.EffectiveFrom > DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime))
-                return Results.UnprocessableEntity(new { error = FutureDatedAgreementCodeError });
+
+            // ONE clock read for the whole handler (S139 / TASK-13907's "compute once" rule). Two
+            // consumers: owner ruling OQ-6's test for whether the row that truncated an agreement
+            // write is a SCHEDULED change or ordinary history, and the cross-Organisation transfer
+            // fan-out's four dated writes far below. Reading the provider twice would not be the
+            // same instant.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
             // NOTE (S138, deliberately unchanged): this endpoint stays ACTIVE-ONLY. Its
             // `is_active` / `isDeactivating` choreography is the sanctioned deactivation path, and
@@ -2066,6 +2096,10 @@ public static class AdminEndpoints
                         agreementCode = request.AgreementCode,
                         effectiveFrom = request.EffectiveFrom.ToString("yyyy-MM-dd"),
                         effectiveTo = agreementWrite.NewEffectiveTo?.ToString("yyyy-MM-dd"),
+                        // S141 / TASK-14104 — names this row as the write HR asked for, so the OQ-6
+                        // carry-forward row that may follow it in the same transaction is
+                        // distinguishable. See AgreementAuditSource.
+                        source = AgreementAuditSource.AdminEdit,
                     });
                     await using (var agreementAuditCmd = new NpgsqlCommand(
                         """
@@ -2201,6 +2235,31 @@ public static class AdminEndpoints
                         conn, tx, userId, agreementTrigger, agreementWorklistFrom, agreementWrite.NewEffectiveTo, ct);
                     await worklistRepo.WriteForSettledYearsAsync(
                         conn, tx, userId, agreementTrigger, agreementWorklistFrom, agreementWrite.NewEffectiveTo, ct);
+
+                    // ── S141 / TASK-14104 (owner ruling OQ-6 (a)) — carry into the scheduled change ──
+                    // The agreement code is the SECOND dated field the edit drawer writes, on every
+                    // save, so the truncation problem lands here exactly as it does on the profile
+                    // fields: an edit made today ENDS where a scheduled code change begins, and on
+                    // that day the code reverts by itself — taking the payroll wage-type key with it
+                    // (ADR-020). Covering only the profile fields would have left the owner's defect
+                    // one field over. See ResolveAgreementCarryForwardTarget for the two conditions.
+                    var carryTarget = ResolveAgreementCarryForwardTarget(
+                        request.CarryForwardToScheduledChange == true, agreementWrite, today);
+                    if (carryTarget is { } carryFrom)
+                    {
+                        newVersion = await ApplyAgreementCarryForwardAsync(
+                            conn, tx, userAgreementCodeRepo, worklistRepo, outbox, auditRepo,
+                            uacChangedMapper, uacSupersededMapper,
+                            userId, request.AgreementCode!, carryFrom,
+                            lockedUser.EmploymentStartDate, newVersion,
+                            lockedUser.AgreementCode, newPrimaryOrgId, actor, ct);
+                        // The ETag and the response body must carry the LAST token this request
+                        // produced. `newVersion` was already copied into `newUserVersion` above (it
+                        // is hoisted outside the try so the response builder can see it), so the
+                        // copy has to be refreshed here or the drawer would be handed a number this
+                        // very request has already superseded and its next save would 412.
+                        newUserVersion = newVersion;
+                    }
                 }
 
                 // S52 / ADR-027 deferred — when deactivating a user who is a manager,
@@ -2246,7 +2305,13 @@ public static class AdminEndpoints
                     // a date-sensitive test host can fix (PAT-008). S139 converted only this
                     // handler's future-dating validator; deriving a business DATE from the audit
                     // stamp is what hid this site from that pass.
-                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+                    //
+                    // S141 / TASK-14104 — `today` is now read ONCE for the whole handler (see its
+                    // declaration near the top) rather than a second time here. Two reads of the
+                    // same provider are not the same instant: a request crossing 23:59:59.9 UTC can
+                    // land on different days, and this handler's two consumers — the OQ-6
+                    // scheduled-vs-history test and this fan-out's four dated writes — would then
+                    // disagree about what day it is inside one transaction.
 
                     // (a) Clear the moved user's OLD-unit `unit_leaders` rows + emit UnitLeaderRemoved per
                     // row (a transferred leader must lose the old-unit designation — the D3 member-invariant
@@ -2379,10 +2444,11 @@ public static class AdminEndpoints
             }
             catch (TemporalWriteRejectedException ex)
             {
-                // S138 / TASK-13802 — the writer's two pure refusals: a FUTURE date (defence in
-                // depth behind the validator above) and a date BEFORE the employee's employment
-                // start. Both surface as a 422 whose body is DATE-FREE by construction — the
-                // exception's own messages never carry a date, so the hire date cannot leak.
+                // The writer's remaining pure refusal: a date BEFORE the employee's employment start.
+                // S141 / TASK-14104 — the future-dating refusal is GONE from this list; the router no
+                // longer raises it and the validator above no longer pre-empts it. What survives
+                // surfaces as a 422 whose body is DATE-FREE by construction — the exception's own
+                // messages never carry a date, so the hire date cannot leak (ADR-040 D7).
                 await tx.RollbackAsync(ct);
                 return Results.UnprocessableEntity(new { error = ex.Message });
             }
@@ -2481,8 +2547,15 @@ public static class AdminEndpoints
         // Concurrency: If-Match on `users.version` — the ONE client token for this aggregate
         // (`user_agreement_codes.version` is a repository-internal row version and is never issued
         // to a client). 428 missing/malformed, 412 stale, 404 unknown user, 403 out of scope,
-        // 422 future-dated or before the employment start (both DATE-FREE), 409 on a lost
+        // 422 missing date or before the employment start (the latter DATE-FREE), 409 on a lost
         // insert race.
+        //
+        // S141 / TASK-14104 (ADR-040 Increment 4) — two changes here. The FUTURE-DATE REFUSAL IS
+        // LIFTED: this was the third of three endpoint validators that refused a date ahead before
+        // the writer ever saw it. And owner ruling OQ-6 (a) arrives: when a code change is already
+        // scheduled, a correction made today ends where that change begins and then reverts by
+        // itself — so the request carries HR's answer to which they meant, and a "carry forward"
+        // answer performs a SECOND routed write at the scheduled change's own start.
         // ═══════════════════════════════════════════
         app.MapPut("/api/admin/users/{userId}/agreement-code", async (
             string userId,
@@ -2496,8 +2569,10 @@ public static class AdminEndpoints
             IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
             IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
             AuditProjectionRepository auditRepo,
-            // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production),
-            // consumed by the future-dating validator below.
+            // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
+            // S141 / TASK-14104: its consumer is no longer the future-dating validator (lifted) but
+            // owner ruling OQ-6's test for whether the row truncating this write is a SCHEDULED
+            // change or ordinary history.
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -2525,14 +2600,16 @@ public static class AdminEndpoints
 
             // Presence first (see the users PUT for the reasoning): an omitted non-nullable
             // DateOnly binds 0001-01-01, which any-past-date legality would otherwise turn into a
-            // correction covering all recorded history.
+            // correction covering all recorded history. This guard is a MALFORMED-REQUEST check and
+            // stays.
             if (request.EffectiveFrom == default)
                 return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
 
-            // Backdating + today are legal; the future is not (date-free, ADR-040 D8 amendment).
-            // S139 / TASK-13907 — "today" is the UTC day off the injected TimeProvider seam.
-            if (request.EffectiveFrom > DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime))
-                return Results.UnprocessableEntity(new { error = FutureDatedAgreementCodeError });
+            // S141 / TASK-14104 — the third and last ENDPOINT future-date refusal, lifted here.
+            // Backdating, today AND the future are all legal now (ADR-040 Increment 4). `today` is
+            // still read below: it is what separates a SCHEDULED change from ordinary history when
+            // owner ruling OQ-6 decides whether a carry-forward is even meaningful.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
 
             // Admin-strict If-Match on `users.version` (ADR-019 D2) — 428 on missing / malformed /
             // If-None-Match: *.
@@ -2598,7 +2675,9 @@ public static class AdminEndpoints
                 }
                 catch (TemporalWriteRejectedException ex)
                 {
-                    // Future-dated (defence in depth) or before the employment start. DATE-FREE.
+                    // Before the employment start. DATE-FREE (ADR-040 D7 — the hire date must never
+                    // reach the wire). S141 / TASK-14104: future-dating is no longer among the
+                    // writer's refusals, so this catch has one cause rather than two.
                     await tx.RollbackAsync(ct);
                     return Results.UnprocessableEntity(new { error = ex.Message });
                 }
@@ -2669,6 +2748,10 @@ public static class AdminEndpoints
                     agreementCode = request.AgreementCode,
                     effectiveFrom = writtenFrom.ToString("yyyy-MM-dd"),
                     effectiveTo = result.NewEffectiveTo?.ToString("yyyy-MM-dd"),
+                    // S141 / TASK-14104 — names this row as the write HR asked for, so the OQ-6
+                    // carry-forward row that may follow it in the same transaction is
+                    // distinguishable. See AgreementAuditSource.
+                    source = AgreementAuditSource.AdminEdit,
                 });
                 await using (var agreementAuditCmd = new NpgsqlCommand(
                     """
@@ -2706,10 +2789,12 @@ public static class AdminEndpoints
                 var previousUserData = JsonSerializer.Serialize(new
                 {
                     agreementCode = result.PreviousAgreementCodeCache ?? lockedUser.AgreementCode,
+                    source = AgreementAuditSource.AdminEdit,
                 });
                 var newUserData = JsonSerializer.Serialize(new
                 {
                     agreementCode = result.NewAgreementCodeCache ?? lockedUser.AgreementCode,
+                    source = AgreementAuditSource.AdminEdit,
                 });
                 await using (var userAuditCmd = new NpgsqlCommand(
                     """
@@ -2818,8 +2903,28 @@ public static class AdminEndpoints
                 await worklistRepo.WriteForSettledYearsAsync(
                     conn, tx, userId, trigger, writtenFrom, result.NewEffectiveTo, ct);
 
+                // ── S141 / TASK-14104 (owner ruling OQ-6 (a)) — carry into the scheduled change ──
+                // Same question as on the users PUT, asked on the surface that exists for LEAVERS:
+                // a correction made today ends where a scheduled code change begins, and on that day
+                // the code reverts by itself. See ResolveAgreementCarryForwardTarget for the two
+                // conditions, and ApplyAgreementCarryForwardAsync for what the second write owes.
+                var carryTarget = ResolveAgreementCarryForwardTarget(
+                    request.CarryForwardToScheduledChange == true, result, today);
+                if (carryTarget is { } carryFrom)
+                {
+                    newUsersVersion = await ApplyAgreementCarryForwardAsync(
+                        conn, tx, userAgreementCodeRepo, worklistRepo, outbox, auditRepo,
+                        uacChangedMapper, uacSupersededMapper,
+                        userId, request.AgreementCode, carryFrom,
+                        lockedUser.EmploymentStartDate, newUsersVersion,
+                        lockedUser.AgreementCode, lockedUser.PrimaryOrgId, actor, ct);
+                }
+
                 await tx.CommitAsync(ct);
 
+                // The ETag is the token after the LAST write this request performed — the
+                // carry-forward's, when HR chose it. Handing back the first write's number would give
+                // the client a value this same request has already superseded.
                 context.Response.Headers.ETag = $"\"{newUsersVersion}\"";
                 // S138 / TASK-13810 — the SHARED RESPONSE RULE (see the no-op branch above):
                 // `NewAgreementCodeCache` is the code on the row covering TODAY, which the writer
@@ -3689,6 +3794,29 @@ public static class AdminEndpoints
         public bool? IsActive { get; init; }
 
         /// <summary>
+        /// S141 / TASK-14104 (owner ruling OQ-6 (a)) — OPTIONAL. HR's answer to "what did you mean
+        /// by today?" when a change to the AGREEMENT CODE is already scheduled ahead.
+        ///
+        /// <para>
+        /// <b>Plain language.</b> HR corrects someone's agreement code today; a code change is
+        /// already dated for 1 November. Does the correction apply UNTIL that change (and then
+        /// revert), or should it carry into the scheduled change as well? Only HR can answer, so the
+        /// drawer asks and sends the answer here. <c>true</c> = carry it forward; <c>null</c> or
+        /// <c>false</c> = apply until the scheduled change only.
+        /// </para>
+        ///
+        /// <para>
+        /// <b>Why the default is "do not carry".</b> Absent means the client did not know about the
+        /// prompt — an older frontend, a script, a test. The safe reading of silence is the pre-S141
+        /// behaviour, which is incomplete but never destructive. Defaulting the other way would let a
+        /// client that never asked HR anything overwrite a colleague's scheduled decision. It is
+        /// ignored unless the write is actually truncated by a row starting after today, so a client
+        /// may set it without reasoning about the timeline.
+        /// </para>
+        /// </summary>
+        public bool? CarryForwardToScheduledChange { get; init; }
+
+        /// <summary>
         /// S104 / ADR-038 D8 (Enhedsspor) — the target structural unit on a CROSS-Organisation
         /// transfer (interpreted ONLY when <see cref="PrimaryOrgId"/> changes — a same-Organisation
         /// unit-change goes through <c>PUT /api/admin/users/{id}/unit</c>, TASK-10403). On a transfer
@@ -3713,6 +3841,316 @@ public static class AdminEndpoints
     {
         public required Guid AssignmentId { get; init; }
         public string? Reason { get; init; }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S141 / TASK-14104 (owner ruling OQ-6 (a)) — the agreement-code carry-forward
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Decide whether an agreement-code write should carry into the change already SCHEDULED after
+    /// it, and if so, name the day that change begins.
+    ///
+    /// <para>
+    /// <b>The problem this answers, in plain language.</b> HR corrects someone's agreement code
+    /// today while a code change is already dated for 1 November. The correction becomes a row that
+    /// ENDS on 1 November, so on that date the code silently reverts — and the agreement code is the
+    /// key the payroll wage-type mapping is resolved under (ADR-020), so the reversion is not
+    /// cosmetic. Nobody chose it and no screen showed it. Owner ruling OQ-6 (a): ask HR which they
+    /// meant, and act on the answer.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Two conditions, both necessary.</b> HR must have asked (the request field — silence means
+    /// the safe, pre-S141 reading), AND the write must actually have been truncated by a row that
+    /// starts strictly AFTER today. The second is what separates a SCHEDULED change, which has not
+    /// happened yet and can legitimately be rewritten, from ordinary closed HISTORY, which a
+    /// backdated insert-between also truncates against and which carrying into would silently
+    /// rewrite the past. OQ-6 never contemplated that and nobody asked for it.
+    /// </para>
+    /// </summary>
+    private static DateOnly? ResolveAgreementCarryForwardTarget(
+        bool requested, SaveUserAgreementCodeResult write, DateOnly today)
+        => requested && !write.IsNoOp && write.NewEffectiveTo is { } boundary && boundary > today
+            ? boundary
+            : null;
+
+    /// <summary>
+    /// Perform the OQ-6 carry-forward: a SECOND routed agreement-code write, dated at the scheduled
+    /// change's own start, so the code HR just set also governs the period that change opens.
+    ///
+    /// <para>
+    /// <b>Why a second routed write and not a new repository method.</b> Nothing about this is new
+    /// behaviour — it is a second use of the existing dated writer, landing on its in-place-edit case
+    /// because the date is exactly where the scheduled row starts. Building a bespoke method would
+    /// have created a second place for the routing, the cache rule and the token bump to be got
+    /// subtly wrong.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why it owes a FULL set of records.</b> It is a state-changing write like any other, so
+    /// ADR-018 D3 gives it its event in the same transaction, ADR-026 its audit-projection row, and
+    /// ADR-013 its HR worklist rows for the exported months and settled years its interval touches.
+    /// Writing it "lightly" would have produced a timeline row nobody could explain.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why the token moves again — and why that is not a breach of the one-bump rule.</b> That
+    /// rule exists so TWO PARTIES cannot both bump for ONE logical write (the endpoint's own
+    /// <c>UPDATE users</c> and the repository's cache refresh). Here there are genuinely two writes,
+    /// so there are two transitions and two <c>users_audit</c> rows — the invariant worth keeping is
+    /// "every token transition has an audit row", which a single spanning row would break. What the
+    /// caller MUST do is stamp the LAST token as the ETag: hand back the first write's number and the
+    /// client's very next save 412s against a bump this same request performed.
+    /// </para>
+    /// </summary>
+    /// <returns>The <c>users.version</c> after this write, or <paramref name="tokenBefore"/>
+    /// unchanged when the carry-forward turned out to be a no-op (HR asked to propagate a code the
+    /// scheduled row already carries — nothing written, nothing to record).</returns>
+    private static async Task<long> ApplyAgreementCarryForwardAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        UserAgreementCodeRepository userAgreementCodeRepo,
+        HrBackdateWorklistRepository worklistRepo,
+        IOutboxEnqueue outbox,
+        AuditProjectionRepository auditRepo,
+        IAuditProjectionMapper<UserAgreementCodeChanged> uacChangedMapper,
+        IAuditProjectionMapper<UserAgreementCodeSuperseded> uacSupersededMapper,
+        string userId,
+        string agreementCode,
+        DateOnly carryFrom,
+        DateOnly? employmentStartDate,
+        long tokenBefore,
+        string fallbackAgreementCode,
+        string targetOrgId,
+        ActorContext actor,
+        CancellationToken ct)
+    {
+        var actorId = actor.ActorId ?? "unknown";
+        var actorRole = actor.ActorRole ?? "unknown";
+        var streamId = $"user-{userId}";
+
+        // `expectedVersion: null` on purpose, and for a sharper reason than on the first write: the
+        // repository's own optimistic check is against the AGREEMENT ROW's internal version, which no
+        // client holds and which this handler has not re-read since the first write reshaped the
+        // timeline. Asserting a number we have not observed would be a guess dressed as a guard. The
+        // client's precondition was enforced once, against `users.version`, under the users FOR
+        // UPDATE lock; the writer holds the timeline lock for the rest.
+        var carry = await userAgreementCodeRepo.SupersedeAndCreateAsync(
+            conn, tx,
+            new UserAgreementCodeSupersedeRequest(
+                UserId: userId,
+                AgreementCode: agreementCode,
+                EffectiveFrom: carryFrom,
+                EmploymentStartDate: employmentStartDate),
+            expectedVersion: null,
+            ct);
+
+        // HR asked to propagate a code the scheduled row already carries. Nothing was written, so
+        // nothing is audited and the token has not moved. Recording it would manufacture an audit row
+        // describing a change that did not happen.
+        if (carry.IsNoOp)
+            return tokenBefore;
+
+        var covering = carry.Covering;
+        var tokenAfter = carry.UsersVersionAfter ?? tokenBefore;
+        var writtenFrom = carry.NewEffectiveFrom ?? carryFrom;
+
+        // user_agreement_codes_audit — action per the ROUTED case, inside the existing 4-valued
+        // CHECK. In practice this is UPDATED (the date is exactly where the scheduled row starts, so
+        // the router edits it in place), but the switch is total rather than assumed: an assumption
+        // about routing that silently stops holding is how a wrong audit action ships.
+        // version_before/after stay the agreement ROW's own version — this table's existing contract;
+        // the CLIENT token's transition is narrated by the users_audit row below.
+        var auditAction = carry.Kind switch
+        {
+            TemporalWriteKind.Updated => "UPDATED",
+            TemporalWriteKind.Superseded or TemporalWriteKind.Inserted => "SUPERSEDED",
+            _ => "CREATED",
+        };
+        var previousData = covering is null
+            ? null
+            : JsonSerializer.Serialize(new
+            {
+                userId,
+                agreementCode = covering.AgreementCode,
+                effectiveFrom = covering.EffectiveFrom.ToString("yyyy-MM-dd"),
+                effectiveTo = covering.EffectiveTo?.ToString("yyyy-MM-dd"),
+            });
+        var newData = JsonSerializer.Serialize(new
+        {
+            userId,
+            agreementCode,
+            effectiveFrom = writtenFrom.ToString("yyyy-MM-dd"),
+            effectiveTo = carry.NewEffectiveTo?.ToString("yyyy-MM-dd"),
+            // The discriminator that tells this row apart from the primary write's row: same actor,
+            // same instant, same action, different cause. One is what HR typed; the other is what
+            // owner ruling OQ-6 then did with it.
+            source = AgreementAuditSource.ScheduledCarryForward,
+        });
+        await using (var agreementAuditCmd = new NpgsqlCommand(
+            """
+            INSERT INTO user_agreement_codes_audit (
+                assignment_id, user_id, action,
+                previous_data, new_data,
+                version_before, version_after,
+                actor_id, actor_role)
+            VALUES (
+                @assignmentId, @userId, @action,
+                @previousData::jsonb, @newData::jsonb,
+                @versionBefore, @versionAfter,
+                @actorId, @actorRole)
+            """, conn, tx))
+        {
+            agreementAuditCmd.Parameters.AddWithValue("assignmentId", carry.AssignmentId);
+            agreementAuditCmd.Parameters.AddWithValue("userId", userId);
+            agreementAuditCmd.Parameters.AddWithValue("action", auditAction);
+            agreementAuditCmd.Parameters.AddWithValue("previousData",
+                previousData is null ? (object)DBNull.Value : previousData);
+            agreementAuditCmd.Parameters.AddWithValue("newData", newData);
+            agreementAuditCmd.Parameters.AddWithValue("versionBefore",
+                covering is null ? (object)DBNull.Value : covering.Version);
+            agreementAuditCmd.Parameters.AddWithValue("versionAfter", carry.Version);
+            agreementAuditCmd.Parameters.AddWithValue("actorId", actorId);
+            agreementAuditCmd.Parameters.AddWithValue("actorRole", actorRole);
+            await agreementAuditCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        // users_audit — the writer's cache refresh IS a users-row write (ADR-018 D7 / ADR-019 D8):
+        // it moved `users.version`, so the transition owes its own audit row. Note the cached CODE
+        // is typically UNCHANGED here: the cache follows the row covering TODAY, and this write
+        // touches a FUTURE row. That is the correct behaviour and exactly why the `source` field
+        // matters — without it an auditor sees a token transition with identical before- and
+        // after-images and no explanation. password_hash deliberately excluded: audit JSONB never
+        // carries credentials.
+        var previousUserData = JsonSerializer.Serialize(new
+        {
+            agreementCode = carry.PreviousAgreementCodeCache ?? fallbackAgreementCode,
+            source = AgreementAuditSource.ScheduledCarryForward,
+        });
+        var newUserData = JsonSerializer.Serialize(new
+        {
+            agreementCode = carry.NewAgreementCodeCache ?? fallbackAgreementCode,
+            source = AgreementAuditSource.ScheduledCarryForward,
+        });
+        await using (var userAuditCmd = new NpgsqlCommand(
+            """
+            INSERT INTO users_audit (
+                user_id, action,
+                previous_data, new_data,
+                version_before, version_after,
+                actor_id, actor_role)
+            VALUES (
+                @userId, 'UPDATED',
+                @previousData::jsonb, @newData::jsonb,
+                @versionBefore, @versionAfter,
+                @actorId, @actorRole)
+            """, conn, tx))
+        {
+            userAuditCmd.Parameters.AddWithValue("userId", userId);
+            userAuditCmd.Parameters.AddWithValue("previousData", previousUserData);
+            userAuditCmd.Parameters.AddWithValue("newData", newUserData);
+            userAuditCmd.Parameters.AddWithValue("versionBefore", carry.UsersVersionBefore ?? tokenBefore);
+            userAuditCmd.Parameters.AddWithValue("versionAfter", tokenAfter);
+            userAuditCmd.Parameters.AddWithValue("actorId", actorId);
+            userAuditCmd.Parameters.AddWithValue("actorRole", actorRole);
+            await userAuditCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        // UserAgreementCodeChanged — the narrow signal, on the canonical user-{userId} stream,
+        // emitted on every real write (the preserved S33 contract). OldAgreementCode is the COVERING
+        // row's code: what the scheduled period was going to say before HR carried the correction
+        // into it.
+        var changedEvent = new UserAgreementCodeChanged
+        {
+            UserId = userId,
+            OldAgreementCode = covering?.AgreementCode ?? fallbackAgreementCode,
+            NewAgreementCode = agreementCode,
+            EffectiveFrom = writtenFrom,
+            ActorId = actor.ActorId,
+            ActorRole = actor.ActorRole,
+            CorrelationId = actor.CorrelationId,
+        };
+        var changedOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, changedEvent, ct);
+        var changedCtx = new AuditProjectionContext(
+            ActorId: actor.ActorId,
+            ActorPrimaryOrgId: actor.OrgId,
+            CorrelationId: actor.CorrelationId,
+            OccurredAt: new DateTimeOffset(changedEvent.OccurredAt),
+            ResolvedTargetOrgId: targetOrgId);
+        var changedRow = uacChangedMapper.Map(changedEvent, changedCtx);
+        await auditRepo.InsertAsync(conn, tx, changedEvent.EventId, changedOutboxId, changedEvent.EventType, changedRow, changedCtx, ct);
+
+        // UserAgreementCodeSuperseded — ADDITIONALLY when a row was actually CLOSED (dual emission
+        // per the S25 publish-supersession precedent). Unusual on this path but mapped rather than
+        // assumed away, for the same reason the action switch above is total.
+        if (carry.Kind is TemporalWriteKind.Superseded or TemporalWriteKind.Inserted)
+        {
+            var supersededEvent = new UserAgreementCodeSuperseded
+            {
+                PredecessorAssignmentId = covering!.AssignmentId,
+                NewAssignmentId = carry.AssignmentId,
+                UserId = userId,
+                PredecessorEffectiveFrom = covering.EffectiveFrom,
+                PredecessorEffectiveTo = writtenFrom,
+                NewEffectiveFrom = writtenFrom,
+                NewEffectiveTo = carry.NewEffectiveTo,
+                OldAgreementCode = covering.AgreementCode,
+                NewAgreementCode = agreementCode,
+                VersionBefore = covering.Version,
+                VersionAfter = carry.Version,
+                ActorId = actor.ActorId,
+                ActorRole = actor.ActorRole,
+                CorrelationId = actor.CorrelationId,
+            };
+            var supersededOutboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, supersededEvent, ct);
+            var supersededCtx = new AuditProjectionContext(
+                ActorId: actor.ActorId,
+                ActorPrimaryOrgId: actor.OrgId,
+                CorrelationId: actor.CorrelationId,
+                OccurredAt: new DateTimeOffset(supersededEvent.OccurredAt),
+                ResolvedTargetOrgId: targetOrgId);
+            var supersededRow = uacSupersededMapper.Map(supersededEvent, supersededCtx);
+            await auditRepo.InsertAsync(conn, tx, supersededEvent.EventId, supersededOutboxId, supersededEvent.EventType, supersededRow, supersededCtx, ct);
+        }
+
+        // The HR diagnostic worklist over the interval this write produced (ADR-013: nothing
+        // recalculates automatically; what HR is owed is VISIBILITY). A carry-forward's interval
+        // starts in the FUTURE, so it will usually touch no exported month and no settled year and
+        // raise nothing — which is the correct outcome, not a reason to skip the call. It CAN raise
+        // rows when a taking window that is already settled extends into that interval.
+        var trigger = new WorklistTrigger(
+            WorklistTriggerKinds.AgreementCodeChange, changedEvent.EventId, writtenFrom, actorId);
+        await worklistRepo.WriteForExportedMonthsAsync(
+            conn, tx, userId, trigger, writtenFrom, carry.NewEffectiveTo, ct);
+        await worklistRepo.WriteForSettledYearsAsync(
+            conn, tx, userId, trigger, writtenFrom, carry.NewEffectiveTo, ct);
+
+        return tokenAfter;
+    }
+
+    /// <summary>
+    /// S141 / TASK-14104 — the <c>source</c> discriminator stamped into the audit JSONB written by
+    /// the two agreement-code write surfaces.
+    ///
+    /// <para>
+    /// <b>Why it exists.</b> Owner ruling OQ-6 lets ONE request perform TWO routed writes, and the
+    /// second one's <c>users_audit</c> row has identical before- and after-images (the cached code
+    /// follows the row covering TODAY, and a carry-forward touches a FUTURE row). An auditor would
+    /// otherwise see two rows from one actor at one instant with the same action and no way to tell
+    /// which is which. <c>action</c> cannot say — both audit tables constrain it with a four-valued
+    /// CHECK and widening that is a schema change S141 deliberately does not take (refinement
+    /// Assumption 3) — so the payload carries the discriminator instead.
+    /// </para>
+    /// </summary>
+    private static class AgreementAuditSource
+    {
+        /// <summary>The write HR asked for, through either agreement-code surface.</summary>
+        public const string AdminEdit = "ADMIN_AGREEMENT_CODE_PUT";
+
+        /// <summary>The second, DERIVED write of an OQ-6 carry-forward: the corrected code
+        /// propagated into the change that was already scheduled.</summary>
+        public const string ScheduledCarryForward = "SCHEDULED_CHANGE_CARRY_FORWARD";
     }
 
     /// <summary>
