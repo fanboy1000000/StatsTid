@@ -256,13 +256,30 @@ public static class ComplianceEndpoints
 
             if (profile is null)
             {
+                // S141 / TASK-14114 cross-domain finding — THE EXCEPTION IS DELIBERATELY NOT ATTACHED,
+                // and this line used to contradict the comment eleven lines above it.
+                //
+                // `EmployeeProfileNotFoundException` embeds its as-of date in its MESSAGE, and the
+                // as-of date here is `firstEmployedDay` — which for a mid-month starter IS THE HIRE
+                // DATE. Passing the exception to the logger therefore wrote an employment date into
+                // the very log this site's own comment says must never carry one (ADR-040 D7). It was
+                // a live leak, not a hypothetical: the payroll agent proved the equivalent one at its
+                // own site by reverting its fix and observing the hire date appear in the output where
+                // the caller's period start was a different day.
+                //
+                // Losing the stack trace costs nothing here — the throw site is one known call — and
+                // the discriminator below recovers the only thing the exception told us that the null
+                // path did not: WHICH record is missing. A null means no profile row covers the day;
+                // a fault means a profile row does, but no agreement-code row does. That distinction
+                // is what HR needs and it carries no date.
                 complianceLogger.LogError(
-                    coverageFault,
                     "employment_record_gap: compliance read for {EmployeeId} {Year}-{Month:00} cannot be " +
                     "computed because no effective-dated employment record covers the first employed day of " +
-                    "the month. This employee should appear on the HR follow-up 'cannot register' list " +
-                    "(HRP-015), which names which record is missing and whether a scheduled one will close it.",
-                    employeeId, year, month);
+                    "the month. Missing record: {MissingRecord}. This employee should appear on the HR " +
+                    "follow-up 'cannot register' list (HRP-015), which names which record is missing and " +
+                    "whether a scheduled one will close it.",
+                    employeeId, year, month,
+                    coverageFault is null ? "employment_profile" : "agreement_code");
 
                 return Results.Json(
                     new

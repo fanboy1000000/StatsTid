@@ -986,3 +986,50 @@ found a collision.*
 
 Route and navigation registration stays with the Orchestrator; the screen tasks declare what needs registering rather than
 editing the two shared files.
+
+### TASK-14114 (payroll gap condition) — complete, and it found a LIVE data leak, then found the same leak next door
+
+Build `0 errors / 145 warnings`. Unit **1247** (1244 baseline + 3 new, not Docker-gated so genuinely green here), non-Docker
+regression 104.
+
+**★ A real ADR-040 D7 violation, proved rather than argued.** The resolver's exception embeds its as-of date **in its message**,
+and that date is the segment start — which for a starter's first employed segment **is the hire date**. So attaching the
+exception to a logger writes an employment date into the very logs the rule exists to keep them out of. The agent did not
+assert this; it **reverted its own fix, re-ran the pin, and observed the hire date appear** where the caller's period start was
+a different day. It then designed around it: the caught exception is deliberately neither logged nor wrapped, and diagnostics
+carry the employee, the manifest and the caller's own period — nothing date-shaped about the employment.
+
+**★ Then it found the same leak at the sibling site it had been told to copy**, and reported rather than reached across the
+domain boundary: the compliance read attached the same exception to its logger, **contradicting its own comment eleven lines
+above**. That is a live leak in shipped code, reachable whenever a mid-month starter's compliance read finds a gap.
+**Fixed by the Orchestrator** (single site, precise diagnosis): the exception is no longer attached, and the one thing it told
+us that the null path did not — *which* record is missing — is recovered as a discriminator carrying no date. Losing the stack
+trace costs nothing, since the throw site is a single known call.
+
+**Its test discipline is the best of the sprint.** Three unit tests, no database needed, and it verified them **in both
+directions** — RED against the reverted production file (2 failed, 1 passed), then GREEN. The one that passes in *both* states
+is the counter-test proving the other two are not vacuous. It also chose geometry deliberately: the plan covers all of March
+while employment starts on the tenth, so the segment start and the period start are **different dates** — with a
+window-aligned plan the leak assertions would have passed for the wrong reason.
+
+**Three more claims of mine falsified (running total: twenty-six, nine of them mine):**
+1. **"Two of the three sites were fixed" — only one was.** The others that catch this exception are older fail-*soft* handlers
+   that return null and render gracefully, the opposite posture, and were never part of this condition.
+2. **★ Its worktree was stale by the ENTIRE SPRINT**, sitting at the S140 close while master carried all of S141 — including
+   the sibling fix it was told to match. Had it worked as handed over, it would have built against the wrong baseline and
+   reported numbers that meant nothing. It noticed, confirmed the merge was a fast-forward, took it, and verified the target
+   site was byte-identical before and after so nothing in its change depended on the merge. **This is the THIRD agent this
+   sprint to report a stale worktree** — see the process note below.
+3. **A change I framed as pure legibility is partly behavioural**: unifying the thrown path re-anchors the exception's date
+   from the segment start to the period start. It checked first that nothing anywhere asserts on that value, found it entirely
+   unpinned, and shipped it with a pin — and noted that leaving it alone would have meant knowingly preserving the D7 leak at
+   the one site it was already editing.
+
+**★ PROCESS FINDING — agent worktrees are created stale, and three agents caught it independently.** TASK-14105, TASK-14106 and
+TASK-14114 all found their worktree pinned at the sprint-start commit rather than at current master, and all three merged
+before starting. **Two of them said so explicitly as a warning.** The failure mode if an agent does not notice is severe and
+quiet: it builds against a baseline missing the whole sprint, and its "baseline held exactly" report is meaningless. Until this
+is understood, **every future agent prompt should tell the agent to check its worktree against master before starting.**
+
+**Raised twice now, still undecided:** whether the named data-gap condition deserves a client-error status rather than the
+server-error one it inherited, now that the product can create the state deliberately. Both sites must move together.
