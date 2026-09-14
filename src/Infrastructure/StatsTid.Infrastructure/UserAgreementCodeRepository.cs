@@ -112,6 +112,19 @@ public sealed class UserAgreementCodeRepository
             WHERE user_id = @userId
               AND effective_from <= @asOfDate
               AND (effective_to IS NULL OR effective_to > @asOfDate)
+            -- S141 Step-5a BLOCKER (external lens) — DETERMINISTIC SINGLE ROW.
+            -- The retired `effective_to IS NULL` predicate could not match twice: the partial
+            -- unique index `WHERE effective_to IS NULL` forbade it at the database level. This
+            -- predicate has NO such backing — non-overlap of DATED rows is only a writer-side
+            -- invariant, and the history index is on (user_id, effective_from), which permits
+            -- overlap. Without this ORDER BY ... LIMIT 1 an overlapping pair makes the row
+            -- returned arbitrary, and `ExecuteScalar` would silently take whichever the planner
+            -- happened to emit first. The most important consumer of this read is the LOGIN
+            -- TOKEN, so "arbitrary" would mean a JWT carrying an agreement code chosen by the
+            -- query planner. Latest start wins, which is the same tie-break the sibling profile
+            -- read uses.
+            ORDER BY effective_from DESC
+            LIMIT 1
             """, conn);
         cmd.Parameters.AddWithValue("userId", userId);
         cmd.Parameters.AddWithValue("asOfDate", asOfDate);
@@ -669,6 +682,12 @@ public sealed class UserAgreementCodeRepository
             WHERE user_id = @userId
               AND effective_from <= @today
               AND (effective_to IS NULL OR effective_to > @today)
+            -- Same determinism requirement as the as-of read above, and for the same reason:
+            -- this predicate has no unique index behind it. An arbitrary row here would write an
+            -- arbitrary value into the cached `users.agreement_code`, which many live-only
+            -- consumers read.
+            ORDER BY effective_from DESC
+            LIMIT 1
             """, conn, tx))
         {
             todayCmd.Parameters.AddWithValue("userId", userId);

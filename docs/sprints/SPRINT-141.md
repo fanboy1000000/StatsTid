@@ -663,3 +663,34 @@ after merging TASK-14102 they pass. That is a real RED-to-GREEN transition rathe
 and it is the thing the wave-1 split was created to make possible.
 
 Docker-gated facts remain unverified and are **not** claimed green.
+
+## Step 5a — wave-1 per-task review
+
+**External (Codex): 2 BLOCKERS, both real, both fixed.**
+
+1. **★ The converted agreement-code read had no deterministic single-row clause, and its most important consumer is the login
+   token.** The retired predicate could not match twice, because a partial unique index forbade it at the database level. The
+   new predicate has no such backing — non-overlap of dated rows is only a writer-side invariant, and the history index permits
+   overlap. So an overlapping pair would have made the returned row **whatever the query planner emitted first**, and that value
+   goes into a JWT. The implementer had identified exactly this hazard (its own finding G) and fixed it in the profile read and
+   the three roster joins, but **applied the fix inconsistently and missed the agreement-code read and the cache refresh**.
+   Fixed at both sites with the same tie-break the sibling read uses.
+   *The lesson worth keeping: an implementer who finds a hazard is not thereby guaranteed to have found every instance of it.*
+2. **★ The special-holiday capture was not fail-closed after all — and the Orchestrator's earlier ruling was the reason.** A
+   missing profile row at the anchor degraded to null, the emitter coalesced null to empty, and the seeded default mapping row
+   **resolved a real wage type**, so an absent profile staged a payout line under a code nobody chose.
+   **This is the Orchestrator's error, not the implementer's.** TASK-14101 reported the asymmetry and I registered it as
+   QUAL-171 rather than fixing it, reasoning that widening "fail-closed" to the position exceeded owner ruling OQ-2 (a). That
+   reasoning was wrong. The ruling made the special-holiday **snapshot key** fail-closed like the vacation path's, and the
+   position **is** one of the four components of that key — the emitter resolves the lønart from
+   `(time_type, ok_version, agreement_code, position)`. Closing the hole **applies** the ruling; it does not widen it.
+   The original reading conflated two different things, and only one was ever in question:
+   - a **missing profile row** at the anchor → silent wrong data → **now throws**;
+   - a **resolved profile whose position is null** → legitimate, passed through, exactly as the vacation path does, because the
+     default mapping is the deliberate product answer for "no position recorded".
+   **QUAL-171 is therefore closed as FIXED, and its register row records that the registration itself was the error** — it
+   delayed a payroll-key correctness fix behind a ruling that had already been made.
+
+**Re-verified after both fixes:** build `0 errors / 145 warnings`, unit `1244 passed`, regression non-Docker `104 passed`.
+
+**Internal lens: running.**

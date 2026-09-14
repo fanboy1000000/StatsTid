@@ -942,18 +942,33 @@ public sealed class VacationSettlementService
             // key the emitter resolves off this snapshot, read at the SAME instant as AgreementCode
             // and OkVersion above so the key is internally consistent.
             //
-            // ★ KNOWN AND REGISTERED ASYMMETRY — DO NOT "TIDY" THIS INTO CONSISTENCY. This read is
-            // deliberately NULL-TOLERANT while its three sibling key components immediately above are
-            // now fail-closed. That is not an oversight and not an incomplete edit: it was found
-            // during S141 / TASK-14101, reported, and the Orchestrator ruled it a REGISTERED QUALITY
-            // FINDING rather than a fix, because widening the fail-closed change to `position` goes
-            // beyond what owner ruling OQ-2 (a) actually decided. Closing it needs its own ruling.
+            // ★ FAIL-CLOSED, matching the VACATION path — and the history of this line is worth
+            // keeping, because the FIRST ruling on it was wrong.
             //
-            // What the hole is, so the finding is legible here and not only in the register: the
-            // emitter coalesces a null position to "" and the seeded wage_type_mappings carry a ''
-            // default row, so an absent profile RESOLVES a mapping instead of failing — the one
-            // remaining silent-degradation path in this capture.
-            Position = (await _profileResolver.GetByEmployeeIdAtAsync(employeeId, anchorDate, ct))?.Position,
+            // S141 / TASK-14101 reported this read's null-tolerance as an asymmetry, and the
+            // Orchestrator initially registered it as a quality finding (QUAL-171) rather than
+            // fixing it, reasoning that widening "fail-closed" to `position` exceeded owner ruling
+            // OQ-2 (a). **The Step-5a external lens called that a BLOCKER and was right.** The
+            // ruling made the SPECIAL_HOLIDAY *snapshot key* fail-closed like VACATION's, and
+            // `position` IS one of the four components of that key — the emitter resolves the
+            // §15 stk.2/§17 lønart from (time_type, ok_version, agreement_code, position). So
+            // closing this hole APPLIES the ruling; it does not widen it. The first reading
+            // conflated two different things, which is why the correction is recorded here:
+            //   • a MISSING profile row at the anchor — silent wrong data, now throws (this line);
+            //   • a RESOLVED profile whose Position is itself null — legitimate, passed through,
+            //     exactly as the VACATION path does, because the emitter's '' default mapping is
+            //     the deliberate product answer for "no position recorded".
+            // Before this, a missing row degraded to null, the emitter coalesced null to "", and
+            // the seeded '' default row RESOLVED a mapping — so an absent profile staged a real
+            // payout line under a wage type nobody chose. That is the exact defect class this
+            // sprint exists to remove: a value that is not the truth being read as though it were.
+            Position = (await _profileResolver.GetByEmployeeIdAtAsync(employeeId, anchorDate, ct)
+                ?? throw new InvalidOperationException(
+                    $"SPECIAL_HOLIDAY settlement: no dated employee_profiles row covers " +
+                    $"{anchorDate:yyyy-MM-dd} (the settlement anchor — the later of the accrual " +
+                    $"start and the employment start date) for employee {employeeId}; cannot " +
+                    "capture the §15 stk.2/§17 wage-type-mapping position (ADR-033 D7) — capture " +
+                    "fails closed rather than degrading to the '' default mapping.")).Position,
             // The godtgørelse settlement boundary — 30 Apr (Y+2), the §12 stk.2 afholdelsesperiode end.
             SettlementBoundaryDate = period.Boundary,
             TransferAgreementDays = 0m,                    // no §21 for SPECIAL_HOLIDAY.
