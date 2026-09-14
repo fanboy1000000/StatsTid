@@ -8946,6 +8946,7 @@
           "organisationId",
           "path",
           "position",
+          "scheduledChangeFrom",
           "unitName",
           "userId"
         ],
@@ -8973,6 +8974,11 @@
             "items": {
               "type": "string"
             }
+          },
+          "scheduledChangeFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -9530,6 +9536,7 @@
           "periodStatus",
           "position",
           "primaryReportingLineVersion",
+          "scheduledChangeFrom",
           "structuralApproverId",
           "unitId",
           "unitName"
@@ -9592,6 +9599,11 @@
             "type": "integer",
             "format": "int64",
             "nullable": true
+          },
+          "scheduledChangeFrom": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -9600,6 +9612,7 @@
         "required": [
           "displayName",
           "position",
+          "scheduledChangeFrom",
           "unitName",
           "userId"
         ],
@@ -9617,6 +9630,11 @@
           },
           "unitName": {
             "type": "string",
+            "nullable": true
+          },
+          "scheduledChangeFrom": {
+            "type": "string",
+            "format": "date",
             "nullable": true
           }
         },

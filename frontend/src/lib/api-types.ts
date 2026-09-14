@@ -6364,6 +6364,8 @@ export interface components {
             position: string | null;
             unitName: string | null;
             path: string[];
+            /** Format: date */
+            scheduledChangeFrom: string | null;
         };
         "StatsTid.Backend.Api.Contracts.PositionOverrideActivateResponse": {
             /** Format: uuid */
@@ -6546,12 +6548,16 @@ export interface components {
             leaderIds: string[];
             /** Format: int64 */
             primaryReportingLineVersion: number | null;
+            /** Format: date */
+            scheduledChangeFrom: string | null;
         };
         "StatsTid.Backend.Api.Contracts.RosterNameRef": {
             userId: string;
             displayName: string;
             position: string | null;
             unitName: string | null;
+            /** Format: date */
+            scheduledChangeFrom: string | null;
         };
         "StatsTid.Backend.Api.Contracts.RosterOutgoingVikar": {
             vikarUserId: string;

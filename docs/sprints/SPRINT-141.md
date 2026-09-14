@@ -1142,3 +1142,48 @@ termination screen is a per-employee **action** page, reached from the drawer, a
 
 **Wave 3b dispatched:** TASK-14116 (the roster/search/person-reference marker) and **TASK-14111, the date picker — the feature
 every other task in this sprint exists to support, and the one item marked LAST TO CUT. It was not cut.**
+
+### TASK-14116 (the scheduled marker) — complete, and its design choices are better than the brief's
+
+Build `0 errors / 145 warnings`, unit **1255 passed** (+8), non-Docker regression 104. Contract and frontend types regenerated
+by the Orchestrator; three new nullable date members present.
+
+**★ It aggregated rather than ordered, and the reason is a correctness one.** The obvious lateral is "order by start, take
+one". It used `MIN()` instead, because **an aggregate over an empty set returns exactly one row containing null**, so the join
+cannot fan out *even on malformed data*. That matters in one specific place: the search read counts its total in a separate
+step *before* the join, so a fan-out there would ship more rows than the count travelling with them. Its own summary is the
+clearest statement of the principle anyone has written this sprint: *"`LIMIT 1` gives the same answer on good data and a
+corrupted page on bad data."*
+
+**★ It proved its most important test by breaking the thing the test guards.** It removed the zero-width exclusion from the
+canonical rule — the exact defect that would announce a change HR had already **cancelled** — re-ran, and **exactly one test
+failed, the right one**, with the other seven holding. Restored and re-verified. That is a pin demonstrated to discriminate,
+not merely to pass.
+
+**A repo rule reshaped the design, and the trade-off is recorded.** Non-constant SQL is a build *error* here, so a clean helper
+method failed at three sites. The fragment became a spliced constant, at the cost of a fixed correlation alias. **Given up:** a
+call site can no longer choose its alias. **Bought:** one definition of "scheduled" rather than three that drift apart.
+
+**RATIFIED — the marker spans BOTH timelines, not just the profile.** The agent extended it to cover a scheduled *agreement*
+change as well and asked for a ruling. **Correct, and it should stay.** The marker answers "is it safe to act on this row",
+and the drawer writes the agreement code on every save. Profile-only would have left the owner's original defect intact one
+field over — which is exactly the argument the codebase already makes for the drawer.
+
+**Not extended to a fourth surface, and I accept its reasoning:** the team overview shows an agreement code, but prefers the
+*period's stamped* value when a period exists, which is a historical fact about that month rather than a live value someone is
+about to edit. The "acting on a stale assumption" hazard is genuinely weaker there. Recorded as a considered exclusion.
+
+**It also fixed a stale comment wave 1 left behind**, which described a read as "the live row" — under future-dating the live
+row and today's row are different rows, and "live" is precisely the wrong one.
+
+**Eighth stale worktree, and the worst: 41 commits behind.** Its own note names the consequence exactly — the three reads it
+was asked to extend would not yet have had wave 1's changes, so it *"would have 'fixed' code that no longer exists."*
+
+**Owed, and carried to the close:** the two contract tests need the new field in their field lists, plus two behaviour cases
+that need a database — a future row surfaces its date, and a **cancelled (zero-width) row surfaces null**. That second is the
+highest-value untested behaviour in this task.
+
+**The regeneration broke 42 type errors across 7 test files** — every fixture constructing those three shapes without the new
+required member. Deliberately required-and-nullable, matching the neighbouring fields, so an always-present key distinguishes
+"nothing scheduled" from "this response predates the feature". **TASK-14117 dispatched** to render the marker and repair the
+fixtures together, since they are the same files.
