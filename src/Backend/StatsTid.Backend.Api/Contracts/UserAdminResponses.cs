@@ -54,7 +54,19 @@ public sealed record OrgUserListItem(
     long Version);
 
 /// <summary>The GET /api/admin/users/{userId} 200 body (ETag-stamped read; NEVER carries
-/// password_hash or the GDPR-gated dates).</summary>
+/// password_hash or the GDPR-gated dates).
+///
+/// <para>
+/// <b>S141 / TASK-14104 (refinement B0, owner requirement 2026-09-11) — one additive, nullable
+/// member: <paramref name="ScheduledAgreementCode"/>.</b> The owner's requirement is that a
+/// scheduled change be visible wherever a profile is read or edited, and the agreement code is a
+/// SECOND dated field on the same edit drawer, written on every save. A visibility guarantee that
+/// covered only the profile fields would have left the owner's own defect one field over: HR sees
+/// "AC", does not know it becomes "HK" on 1 November, re-sends what they see, and drags a
+/// not-yet-effective agreement into force early. <paramref name="AgreementCode"/> remains the code
+/// in force TODAY (the live <c>users.agreement_code</c> cache); the new member is what is coming.
+/// </para>
+/// </summary>
 public sealed record UserDetailResponse(
     string UserId,
     string Username,
@@ -64,7 +76,32 @@ public sealed record UserDetailResponse(
     string AgreementCode,
     string OkVersion,
     string EmploymentCategory,
-    long Version);
+    long Version,
+    ScheduledAgreementCodeChangeDto? ScheduledAgreementCode = null);
+
+/// <summary>
+/// S141 / TASK-14104 (refinement B0) — an agreement-code change already scheduled to take effect
+/// AFTER today: the next <c>user_agreement_codes</c> row starting strictly after today, with the
+/// interval it will occupy and the code it will bring.
+///
+/// <para>
+/// <see cref="EffectiveTo"/> is <c>null</c> in the ordinary case (the change runs indefinitely); a
+/// non-null value means a FURTHER change follows it, so a consumer that wants the whole future must
+/// read the timeline rather than this one hop. A zero-width row is excluded upstream — it covers no
+/// day and is the trace a retired scheduled change leaves behind, not a change.
+/// </para>
+///
+/// <para>
+/// <b>ADR-040 D7 check.</b> These are agreement-code effective dates, never the employee's hire or
+/// termination date; no agreement-code row is dated at the hire by any writer, and the
+/// employment-start floor that DOES consult the hire date refuses date-free precisely so it never
+/// reaches the wire.
+/// </para>
+/// </summary>
+public sealed record ScheduledAgreementCodeChangeDto(
+    DateOnly EffectiveFrom,
+    DateOnly? EffectiveTo,
+    string AgreementCode);
 
 /// <summary>One GET /api/admin/users/search result row (the approver/person picker).</summary>
 public sealed record UserSearchItem(

@@ -83,6 +83,10 @@ public static class EventSerializer
         ["EmployeeProfileUpdated"] = typeof(EmployeeProfileUpdated),
         ["EmployeeProfileSuperseded"] = typeof(EmployeeProfileSuperseded),
         ["EmployeeProfileSoftDeleted"] = typeof(EmployeeProfileSoftDeleted),
+        // S141 / TASK-14104 (owner ruling OQ-5 (a)): deleting a profile also retires any change
+        // already SCHEDULED ahead, and that destruction is audited in its own right rather than
+        // folded into the soft-delete event, which describes exactly one row and one date.
+        ["EmployeeProfileScheduledChangeRetired"] = typeof(EmployeeProfileScheduledChangeRetired),
         // Sprint 16: Working time compliance events
         ["RestPeriodViolationDetected"] = typeof(RestPeriodViolationDetected),
         ["CompensatoryRestGranted"] = typeof(CompensatoryRestGranted),

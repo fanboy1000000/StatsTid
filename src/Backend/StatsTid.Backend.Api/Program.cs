@@ -251,7 +251,10 @@ builder.Services.AddSingleton<IAuditProjectionMapper<EntitlementConfigSuperseded
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EntitlementConfigSuperseded), nameof(EntitlementConfigSuperseded)));
 builder.Services.AddSingleton<IAuditProjectionMapper<EntitlementConfigSoftDeleted>, EntitlementConfigSoftDeletedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EntitlementConfigSoftDeleted), nameof(EntitlementConfigSoftDeleted)));
-// EmployeeProfile family (4)
+// EmployeeProfile family (5 since S141 / TASK-14104 — the fifth is the retirement of a SCHEDULED
+// change, which owner ruling OQ-5 (a) requires to be audited in its own right: deleting a profile
+// destroys any change a colleague dated ahead, and a row that was audited into existence must not
+// vanish unrecorded).
 builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileCreated>, EmployeeProfileCreatedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileCreated), nameof(EmployeeProfileCreated)));
 builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileUpdated>, EmployeeProfileUpdatedAuditMapper>();
@@ -260,6 +263,8 @@ builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileSuperseded>,
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileSuperseded), nameof(EmployeeProfileSuperseded)));
 builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileSoftDeleted>, EmployeeProfileSoftDeletedAuditMapper>();
 builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileSoftDeleted), nameof(EmployeeProfileSoftDeleted)));
+builder.Services.AddSingleton<IAuditProjectionMapper<EmployeeProfileScheduledChangeRetired>, EmployeeProfileScheduledChangeRetiredAuditMapper>();
+builder.Services.AddSingleton(new RegisteredAuditEventType(typeof(EmployeeProfileScheduledChangeRetired), nameof(EmployeeProfileScheduledChangeRetired)));
 // S66 / TASK-6604 (ADR-032 D4) — profile-change revaluation balance event (emitted from the
 // EmployeeProfile PUT tx onto the employee-{id} stream). TENANT_TARGETED; target = employee_id.
 builder.Services.AddSingleton<IAuditProjectionMapper<EntitlementBalanceRevalued>, EntitlementBalanceRevaluedAuditMapper>();
