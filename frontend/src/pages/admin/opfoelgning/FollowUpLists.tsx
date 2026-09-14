@@ -289,6 +289,19 @@ export function UncoveredApproversList({
 
 // ── Employees who cannot register (HRP-015) ──────────────────────────────────
 
+// The backend's `missingRecord` is one of `HrMissingEmploymentRecordKinds`
+// (AGREEMENT_CODE / EMPLOYMENT_PROFILE / BOTH — S141 / refinement B8). The
+// generated contract types this as a plain `string`, not a literal union
+// (unlike e.g. `source`/`trigger`/`settlementState` elsewhere in this file,
+// which ARE backed by real C# enums and so arrive as string-literal unions)
+// — so this map falls back to the raw value for anything it doesn't
+// recognise rather than silently mislabeling it.
+const MISSING_RECORD_LABEL: Record<string, string> = {
+  AGREEMENT_CODE: 'Overenskomstkode',
+  EMPLOYMENT_PROFILE: 'Ansættelsesprofil',
+  BOTH: 'Overenskomstkode og ansættelsesprofil',
+}
+
 export function CannotRegisterList({
   data, loading, error,
 }: { data: HrCannotRegisterResponse | null; loading: boolean; error: string | null }) {
@@ -297,24 +310,36 @@ export function CannotRegisterList({
     <ListShell
       testId="list-cannot-register"
       heading="Kan ikke registrere tid"
-      subheading="Medarbejdere uden en overenskomstkode, der dækker i dag."
+      subheading="Medarbejdere uden en overenskomstkode eller ansættelsesprofil, der dækker i dag."
       loading={loading}
       error={error}
       isEmpty={items.length === 0}
-      emptyText="Ingen medarbejdere mangler en dækkende overenskomstkode."
+      emptyText="Ingen medarbejdere mangler en dækkende overenskomstkode eller ansættelsesprofil."
       actionNote={
         <>
-          Ret medarbejderens overenskomstkode under <Link to="/admin/organisation-medarbejdere">Organisation &amp; medarbejdere</Link>.
+          Ret den manglende overenskomstkode eller ansættelsesprofil under{' '}
+          <Link to="/admin/organisation-medarbejdere">Organisation &amp; medarbejdere</Link> — medmindre
+          rækkens status viser en planlagt dækning: så retter dækningen sig selv, og der skal ikke gøres noget.
         </>
       }
     >
-      <Table headers={['Medarbejder', 'Enhed', 'Mangler dækning siden', 'Dage']}>
+      <Table headers={['Medarbejder', 'Enhed', 'Manglende registrering', 'Mangler dækning siden', 'Dage', 'Status']}>
         {items.map((item) => (
           <tr key={item.employeeId} data-testid={`list-cannot-register-row-${item.employeeId}`}>
             <td>{item.displayName}</td>
             <td>{item.unitName ?? '—'}</td>
+            <td data-testid={`list-cannot-register-missing-${item.employeeId}`}>
+              {MISSING_RECORD_LABEL[item.missingRecord] ?? item.missingRecord}
+            </td>
             <td>{item.gapSince ?? '—'}</td>
             <td>{item.daysSinceGapStart !== null ? daysLabel(item.daysSinceGapStart) : '—'}</td>
+            <td data-testid={`list-cannot-register-status-${item.employeeId}`}>
+              {item.coveredFrom ? (
+                <Badge variant="success">Planlagt fra {formatDaLongDate(item.coveredFrom)}</Badge>
+              ) : (
+                <Badge variant="warning">Skal rettes</Badge>
+              )}
+            </td>
           </tr>
         ))}
       </Table>
