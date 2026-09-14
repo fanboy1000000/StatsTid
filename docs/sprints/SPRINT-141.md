@@ -1187,3 +1187,73 @@ highest-value untested behaviour in this task.
 required member. Deliberately required-and-nullable, matching the neighbouring fields, so an always-present key distinguishes
 "nothing scheduled" from "this response predates the feature". **TASK-14117 dispatched** to render the marker and repair the
 fixtures together, since they are the same files.
+
+### TASK-14111 (the date picker) and TASK-14117 (the marker) — both complete. **Nothing was cut.**
+
+**TASK-14111 — the feature every other task existed to make safe.** Default stays **today**, so the common case, correcting
+something now, is still one decision. Choosing a later date raises a notice *before* any click, saying plainly that nothing
+changes today. Past dates still work; backdating was never this sprint's business and was not narrowed.
+
+**★ It found that the sibling's wording becomes FALSE once a picker exists, and fixed it rather than shipping a contradiction.**
+The scheduled-change notice said "if you save **now**…", which was safe only while no save could be anything but now. It added
+an optional date so the sentence names the real one, and **proved the default path unchanged by keeping the sibling's own test
+suite green without editing it.** That is composition rather than collision.
+
+**And it verified a claim instead of assuming a convenient one.** It read the handler to confirm that name, email and
+organisation apply **immediately** regardless of the effective date, because those are not dated facts — then shaped both the
+label and the notice around that, so the control never implies a broader freeze than the backend actually gives.
+
+**It declined a post-save confirmation, with the better reasoning.** Such a toast would have to distinguish four independent
+outcomes with no field to key off, which is precisely the optimistic claim the task warned against. It left the notice, which
+reads real server state, as the single honest source of "did this actually get scheduled".
+
+**★ It found a THIRD stale doc comment. My plan named two.** The field a frontend developer reads to learn what they may send
+still said the validator refuses anything later than today — the exact reader a stale contract comment misleads, and the one
+least able to tell that the handler above now says the opposite. **Fixed by the Orchestrator**, with that reason recorded in
+the comment itself.
+
+**TASK-14117 — the marker renders, and it corrected my arithmetic.** A quiet informational badge, never a warning, on the
+roster, people search and the person-reference chips. Wording says only *a change is scheduled from this date* — never what
+changes — for two reasons it stated itself: the marker carries only a date, and **the date can come from either timeline**, so
+claiming the title changes would sometimes be wrong.
+
+**My per-file breakdown of the 42 errors was wrong and it checked rather than trusted.** The builder-shaped errors were spread
+across **three** files, not one, and **an eighth file was missing from my list entirely**. The totals were right; the
+attribution was not. It ran the type-checker itself before touching anything and counted.
+
+**It added three tests nobody asked for**, on the grounds that shipping rendering with zero coverage was the wrong trade-off —
+which is this sprint's own discipline applied without being told.
+
+**Two considered exclusions, both accepted and recorded as decisions rather than oversights:** the missing-approver card, which
+is an action view for assigning an approver rather than a routine roster read; and the history page's own person-picker, where
+the marker would be redundant because the history itself shows every scheduled interval in full.
+
+### ★ THE STALE WORKTREE ROOT CAUSE — diagnosed, after nine occurrences
+
+Nine agents this sprint were handed a worktree missing the entire sprint. TASK-14117 found why:
+
+> its worktree branch matched **GitHub's `origin/master` exactly** — but local `master`, the branch this project actually
+> integrates on, was **45 commits ahead**.
+
+**Worktrees are created from the remote-tracking branch, not from the local integration branch.** Since this project commits
+locally and pushes at close, `origin/master` lags by an entire sprint by design. Every "stale worktree" was this.
+
+**Consequences seen this sprint:** one agent nearly rebuilt code that no longer exists; one hand-edited a generated file to
+compile, which is exactly what a freshness gate exists to catch. **Every agent caught it** — several only because the prompt
+told them to look.
+
+**Action owed at close:** write this into the agent-dispatch documentation, so the instruction is standing rather than
+per-prompt, and state that "compare against master" means the **local** branch.
+
+## Wave 3b gate — PASSED. All implementation complete.
+
+| Check | Result |
+|---|---|
+| Build | **0 errors, 145 warnings** — baseline held every wave |
+| `npx tsc --noEmit` | **clean** |
+| Frontend | **864 passing, 73 files** (from 775 at sprint start) |
+| Unit | **1255 passing** |
+| Regression, non-Docker | **104 passing** |
+| Demo-seed | **165 passing** |
+
+**The pre-declared cut order was never used. C2, C1 and the picker all shipped.**

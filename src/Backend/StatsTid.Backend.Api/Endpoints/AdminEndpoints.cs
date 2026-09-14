@@ -3785,11 +3785,23 @@ public static class AdminEndpoints
         public string? AgreementCode { get; init; }
         /// <summary>
         /// S34 / TASK-3407 (ADR-023 D2 option (b)) — required.
-        /// Validator refuses anything LATER than today — backdating and today are both legal
-        /// since S138 / TASK-13802 (ADR-040 D8 as amended); the pre-S138 rule was the ADR-023 D8
-        /// same-day-only narrowing. "Today" is the UTC day, read since S139 / TASK-13907 from the
+        /// <b>S141 / TASK-14104 — THE FUTURE-DATE REFUSAL IS LIFTED. Any date is now legal here:</b>
+        /// past (backdating, since S138 / TASK-13802), today, and — new in S141, ADR-040 Increment 4 —
+        /// a date AHEAD, so HR can schedule a change. The pre-S138 rule was the ADR-023 D8
+        /// same-day-only narrowing; the pre-S141 rule was "nothing later than today".
+        /// <para>
+        /// This sentence said the opposite until S141 caught it, and it is worth recording why the
+        /// correction was late: the sprint plan named TWO doc comments to fix on this change and
+        /// there were THREE. The third was found by the frontend agent building the date picker,
+        /// reading this field to learn what it was allowed to send — which is exactly the reader a
+        /// stale contract comment misleads, and exactly the reader least able to tell that the
+        /// handler eleven hundred lines above now says the opposite.
+        /// </para>
+        /// "Today" is the UTC day, read since S139 / TASK-13907 from the
         /// injected <see cref="TimeProvider"/> rather than <c>DateTime.UtcNow</c>. Always sent by the frontend
-        /// (TASK-3409 — <c>new Date().toISOString().slice(0,10)</c> UTC extraction);
+        /// (TASK-3409 — a UTC date extraction; note the owner has ruled that business dates should move
+        /// to the Danish calendar day, since that UTC extraction reports YESTERDAY for a Danish user
+        /// working after midnight — deferred to its own work, see ROADMAP.md § Correctness / domain);
         /// drives ADR-020 D2 3-case routing in
         /// <c>UserAgreementCodeRepository.SupersedeAndCreateAsync</c> when
         /// <c>AgreementCode</c> mutates against an existing live row (Case B
