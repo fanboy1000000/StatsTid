@@ -1033,3 +1033,33 @@ is understood, **every future agent prompt should tell the agent to check its wo
 
 **Raised twice now, still undecided:** whether the named data-gap condition deserves a client-error status rather than the
 server-error one it inherited, now that the product can create the state deliberately. Both sites must move together.
+
+### TASK-14109 (history screen) — complete. FIRST TO CUT, and it did not need cutting.
+
+`npx tsc --noEmit` exit 0, no errors. Full frontend suite **790 tests across 67 files, all passing**. Fifteen new tests.
+
+**How a scheduled change reads differently, which is the owner's requirement applied to a screen.** Each row is tagged past,
+current, or **"Planlagt – endnu ikke i kraft"** (planned, not yet in force), and a scheduled row also carries **its own tinted
+row background** — so it is distinguishable in a screenshot, to a colour-blind reader, and by its wording, not by badge colour
+alone. A booked change must never be mistakable for something that already happened.
+
+**It preserved two distinctions the backend had deliberately made, either of which was easy to flatten:**
+- **Two tracks, interleaved for reading only.** The rows are sorted into one table for legibility, but every row still shows
+  exactly the dates the server gave it for its own track. **No combined period is invented**, which is precisely why the
+  endpoint returns two lists rather than one.
+- **★ A distinction it found in the endpoint's own doc comments, which the task never mentioned.** An interval that is *not* the
+  first can still legitimately carry an empty changed-fields list, when a backdated edit splits a row and a later edit restores
+  the values. That is **not** the same as "this is the first record ever". Both would naturally render as "nothing to report".
+  It rendered them differently, rather than quietly hiding a distinction the backend went out of its way to keep.
+
+**It refused to smooth over two refusals**, which is the right instinct for this project: a malformed date range surfaces as a
+real warning rather than as "this employee has no history", and an out-of-scope employee and a non-existent one return the
+**same** message, preserving the endpoint's deliberate choice not to let a caller discover which employee identifiers exist.
+
+**★ FOURTH agent this sprint to find its worktree stale** — checked out at the S140 close, with no sprint documents and the
+history endpoint absent from the generated types, despite the task briefing telling it the endpoint was "already built and
+typed". It merged to current master before doing anything. That briefing line was true of the repository and false of the
+environment the agent was handed, which is exactly the failure mode the process finding above describes.
+
+Route and navigation registration declared for the Orchestrator rather than edited, per the collision constraint. **Held until
+all three screens land**, so the two shared files are edited once.
