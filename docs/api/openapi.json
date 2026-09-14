@@ -7057,6 +7057,7 @@
           "isPartTime",
           "partTimeFraction",
           "position",
+          "scheduled",
           "version"
         ],
         "type": "object",
@@ -7078,6 +7079,15 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          },
+          "scheduled": {
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ScheduledProfileChange"
+              }
+            ],
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -7618,10 +7628,12 @@
       },
       "StatsTid.Backend.Api.Contracts.HrCannotRegisterEmployee": {
         "required": [
+          "coveredFrom",
           "daysSinceGapStart",
           "displayName",
           "employeeId",
           "gapSince",
+          "missingRecord",
           "orgId",
           "unitName"
         ],
@@ -7640,6 +7652,9 @@
             "type": "string",
             "nullable": true
           },
+          "missingRecord": {
+            "type": "string"
+          },
           "gapSince": {
             "type": "string",
             "format": "date",
@@ -7648,6 +7663,11 @@
           "daysSinceGapStart": {
             "type": "integer",
             "format": "int32",
+            "nullable": true
+          },
+          "coveredFrom": {
+            "type": "string",
+            "format": "date",
             "nullable": true
           }
         },
@@ -9672,6 +9692,63 @@
         },
         "additionalProperties": false
       },
+      "StatsTid.Backend.Api.Contracts.ScheduledAgreementCodeChangeDto": {
+        "required": [
+          "agreementCode",
+          "effectiveFrom",
+          "effectiveTo"
+        ],
+        "type": "object",
+        "properties": {
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "agreementCode": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.ScheduledProfileChange": {
+        "required": [
+          "effectiveFrom",
+          "effectiveTo",
+          "employmentCategory",
+          "partTimeFraction",
+          "position"
+        ],
+        "type": "object",
+        "properties": {
+          "effectiveFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "effectiveTo": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "partTimeFraction": {
+            "type": "number",
+            "format": "double"
+          },
+          "position": {
+            "type": "string",
+            "nullable": true
+          },
+          "employmentCategory": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "StatsTid.Backend.Api.Contracts.SearchResponse": {
         "required": [
           "people",
@@ -10777,6 +10854,10 @@
           "effectiveFrom": {
             "type": "string",
             "format": "date"
+          },
+          "carryForwardToScheduledChange": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -10867,6 +10948,7 @@
           "employmentCategory",
           "okVersion",
           "primaryOrgId",
+          "scheduledAgreementCode",
           "userId",
           "username",
           "version"
@@ -10901,6 +10983,15 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          },
+          "scheduledAgreementCode": {
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ScheduledAgreementCodeChangeDto"
+              }
+            ],
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -11693,6 +11784,10 @@
             "type": "boolean",
             "nullable": true
           },
+          "carryForwardToScheduledChange": {
+            "type": "boolean",
+            "nullable": true
+          },
           "unitId": {
             "type": "string",
             "format": "uuid",
@@ -12131,6 +12226,10 @@
           },
           "employmentCategory": {
             "type": "string",
+            "nullable": true
+          },
+          "carryForwardToScheduledChange": {
+            "type": "boolean",
             "nullable": true
           }
         },

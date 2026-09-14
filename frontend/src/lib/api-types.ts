@@ -3684,6 +3684,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/hr/employees/{employeeId}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path: {
+                    employeeId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.EmploymentHistoryResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/balance/{employeeId}/summary": {
         parameters: {
             query?: never;
@@ -5236,6 +5276,16 @@ export interface components {
             vikarUserId: string;
             revoked: boolean;
         };
+        "StatsTid.Backend.Api.Contracts.AgreementCodeHistoryInterval": {
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string | null;
+            status: string;
+            isInitial: boolean;
+            changedFields: string[];
+            agreementCode: string;
+        };
         "StatsTid.Backend.Api.Contracts.AgreementConfigArchiveResponse": {
             /** Format: uuid */
             configId: string;
@@ -5786,6 +5836,7 @@ export interface components {
             isPartTime: boolean;
             /** Format: int64 */
             version: number;
+            scheduled: components["schemas"]["StatsTid.Backend.Api.Contracts.ScheduledProfileChange"] | null;
         };
         "StatsTid.Backend.Api.Contracts.EmployeeReportingLinesResponse": {
             active: components["schemas"]["StatsTid.Backend.Api.Contracts.ReportingLineResponse"][];
@@ -5799,6 +5850,30 @@ export interface components {
             isActive: boolean;
             /** Format: int64 */
             version: number;
+        };
+        "StatsTid.Backend.Api.Contracts.EmploymentHistoryResponse": {
+            employeeId: string;
+            /** Format: date */
+            today: string;
+            /** Format: date */
+            windowFrom: string | null;
+            /** Format: date */
+            windowTo: string | null;
+            profileHistory: components["schemas"]["StatsTid.Backend.Api.Contracts.EmploymentProfileHistoryInterval"][];
+            agreementCodeHistory: components["schemas"]["StatsTid.Backend.Api.Contracts.AgreementCodeHistoryInterval"][];
+        };
+        "StatsTid.Backend.Api.Contracts.EmploymentProfileHistoryInterval": {
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string | null;
+            status: string;
+            isInitial: boolean;
+            changedFields: string[];
+            /** Format: double */
+            partTimeFraction: number;
+            position: string | null;
+            employmentCategory: string;
         };
         "StatsTid.Backend.Api.Contracts.EmploymentStartDateResponse": {
             employeeId: string;
@@ -5916,10 +5991,13 @@ export interface components {
             displayName: string;
             orgId: string;
             unitName: string | null;
+            missingRecord: string;
             /** Format: date */
             gapSince: string | null;
             /** Format: int32 */
             daysSinceGapStart: number | null;
+            /** Format: date */
+            coveredFrom: string | null;
         };
         "StatsTid.Backend.Api.Contracts.HrCannotRegisterResponse": {
             /** Format: date */
@@ -6495,6 +6573,23 @@ export interface components {
                 [key: string]: components["schemas"]["StatsTid.Backend.Api.Contracts.RosterNameRef"];
             };
         };
+        "StatsTid.Backend.Api.Contracts.ScheduledAgreementCodeChangeDto": {
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string | null;
+            agreementCode: string;
+        };
+        "StatsTid.Backend.Api.Contracts.ScheduledProfileChange": {
+            /** Format: date */
+            effectiveFrom: string;
+            /** Format: date */
+            effectiveTo: string | null;
+            /** Format: double */
+            partTimeFraction: number;
+            position: string | null;
+            employmentCategory: string | null;
+        };
         "StatsTid.Backend.Api.Contracts.SearchResponse": {
             units: components["schemas"]["StatsTid.Backend.Api.Contracts.UnitSearchResult"][];
             people: components["schemas"]["StatsTid.Backend.Api.Contracts.PersonSearchResult"][];
@@ -6797,6 +6892,7 @@ export interface components {
             agreementCode?: string;
             /** Format: date */
             effectiveFrom?: string;
+            carryForwardToScheduledChange?: boolean | null;
         };
         "StatsTid.Backend.Api.Contracts.UserAgreementCodeUpdatedResponse": {
             userId: string;
@@ -6831,6 +6927,7 @@ export interface components {
             employmentCategory: string;
             /** Format: int64 */
             version: number;
+            scheduledAgreementCode: components["schemas"]["StatsTid.Backend.Api.Contracts.ScheduledAgreementCodeChangeDto"] | null;
         };
         "StatsTid.Backend.Api.Contracts.UserRoleAssignmentItem": {
             /** Format: uuid */
@@ -7055,6 +7152,7 @@ export interface components {
             /** Format: date */
             effectiveFrom?: string;
             isActive?: boolean | null;
+            carryForwardToScheduledChange?: boolean | null;
             /** Format: uuid */
             unitId?: string | null;
         };
@@ -7203,6 +7301,7 @@ export interface components {
             partTimeFraction?: number;
             position?: string | null;
             employmentCategory?: string | null;
+            carryForwardToScheduledChange?: boolean | null;
         };
         "StatsTid.Backend.Api.Endpoints.EmploymentDateEndpoints.SetEmploymentEndDateRequest": {
             /** Format: date */

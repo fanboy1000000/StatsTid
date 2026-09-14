@@ -902,3 +902,61 @@ already recorded in the class doc; the rename was declined only because it would
 
 **Raised for a later ruling, not decided:** whether the named data-gap condition deserves a client-error status now that the
 product can create the state deliberately, rather than the server-error status it inherited.
+
+### TASK-14104 (endpoint layer) — complete. It caught the sprint's headline defect being reintroduced by a different fix.
+
+**★ C1 — the blocker came back through a different door, and only the implementer saw it.** Owner ruling OQ-6's carry-forward is
+a *second* routed write. Since wave 1 every such write bumps the concurrency token. The natural implementation returns the
+**first** write's token — and then the drawer's very next save fails against a bump *this same request* performed. That is
+exactly the Step-0b blocker that would have made every HR save fail forever, **reintroduced as a side effect of implementing an
+unrelated ruling**. All three endpoints now stamp the token after the *last* write, and each write gets its own audit row so the
+transition chain has no gap. On the users endpoint this also required restating the one-bump rule: it forbids *two parties*
+bumping for *one* write, not two writes each bumping once.
+*The lesson: a defect class does not stay fixed just because the fix was reviewed. A later change can re-open it from a
+direction nobody was watching.*
+
+**C2 — a silent wrong-data path in the same feature.** The revaluation helper took the request object. Reused unchanged,
+carry-forward would have revalued the *scheduled* interval's absences using the values HR typed for *today* rather than the
+merged values — wrong consumption data inside a write that looks entirely correct. The signature now takes the two written
+values explicitly.
+
+**C3 — a bug it wrote and then found itself**, reported rather than quietly fixed. Its first carry-forward addressed "the next
+row after today", which is the truncating row only when the primary write is dated today. Schedule something for 1 October
+while one exists for 1 November, and the nearest future row is the one the request just created — the carry-forward would have
+done nothing while reporting success. Now addressed by start date, the same way the write selects its row, so read and write
+agree by construction.
+
+**Four more claims of mine falsified (running total: twenty-three):**
+1. "Return the token on the PUT response" — **already done in wave 1**; verified at every site rather than assumed, nothing
+   needed changing.
+2. "Both reads anchor on the covering row, so such an employee gets a 404" — **false for the users read**, which reads a
+   NOT-NULL column on a different table and has always returned success. Making it 404 would have been a **regression dressed
+   as a correctness fix**. The scheduled block is null there instead.
+3. "The existence probe returns a confusing refusal code" — **worse than I said: it silently succeeds**, letting the one
+   edit-only verb create a net-new row for an employee whose only record is in the future.
+4. "Give the audit row a discriminating action" — **the action column is CHECK-constrained to four values** and this sprint is
+   schema-free, so the discriminator went into the payload as a source instead.
+
+**Orchestrator ruling on the item it raised.** The existence probe now asks "covers today", so an employee whose only record is
+scheduled gets a clean refusal instead of a silent net-new row. **Keep it.** The silent insert was the worse outcome: it let an
+edit verb create data it is documented as incapable of creating. The lost repair path costs nothing today because the state is
+unreachable through the product, and the new detector surfaces it. **If such data ever appears from an import, the answer is a
+deliberate repair path, not an accidental one.** Recorded in the code so a future reader can re-open it.
+
+**C5, carried to the test task:** two Docker-gated assertions change meaning and survive only on the current fixture — a count
+that becomes two or more once a retired row is audited, and an equality that holds only because two different kinds of number
+both happen to be 1 in the seed.
+
+## Wave-2 gate — PASSED
+
+| Check | Result |
+|---|---|
+| Build, non-incremental | **0 errors, 145 warnings** — baseline held across all four tasks |
+| Contract regeneration | **succeeded**; all three new wire shapes present |
+| Generated frontend types | **regenerated**; the guessed names matched the implementation, so no reconciliation was needed |
+| Frontend type-check | **clean, 0 errors** (status read from the unpiped command) |
+| Unit | **1244 passed** |
+| Regression, non-Docker | **104 passed** |
+| Demo-seed | **165 passed** |
+
+The audit-projection catalog gained its row for the new event. Docker-gated facts remain unverified and are **not** claimed.
