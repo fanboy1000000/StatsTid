@@ -150,13 +150,29 @@ public static class EmploymentHistoryEndpoints
             var profileRows = await historyRepo.GetProfileIntervalsAsync(employeeId, from, to, ct);
             var agreementRows = await historyRepo.GetAgreementCodeIntervalsAsync(employeeId, from, to, ct);
 
+            // "What changed here?" is answered by comparing an interval with the one before it — and
+            // with a bounded window the first interval returned usually HAS a predecessor that the
+            // window excluded. Fetch that one row as the comparison baseline; it is never returned.
+            //
+            // Skipped when `from` is unbounded, because then the first returned interval provably IS
+            // the employee's earliest (the `to` filter only bounds the high end), so the query could
+            // only ever come back empty. Skipped on an empty window because there is nothing to
+            // compare. Both mappers take the baseline as an option either way, so the two cases share
+            // one code path rather than branching on how the caller happened to ask.
+            var profileBaseline = from is not null && profileRows.Count > 0
+                ? await historyRepo.GetProfileIntervalBeforeAsync(employeeId, profileRows[0].EffectiveFrom, ct)
+                : null;
+            var agreementBaseline = from is not null && agreementRows.Count > 0
+                ? await historyRepo.GetAgreementCodeIntervalBeforeAsync(employeeId, agreementRows[0].EffectiveFrom, ct)
+                : null;
+
             return Results.Ok(new EmploymentHistoryResponse(
                 EmployeeId: employeeId,
                 Today: today,
                 WindowFrom: from,
                 WindowTo: to,
-                ProfileHistory: ToProfileIntervals(profileRows, today),
-                AgreementCodeHistory: ToAgreementIntervals(agreementRows, today)));
+                ProfileHistory: ToProfileIntervals(profileRows, profileBaseline, today),
+                AgreementCodeHistory: ToAgreementIntervals(agreementRows, agreementBaseline, today)));
         }).RequireAuthorization("HROrAbove")
         .Produces<EmploymentHistoryResponse>(StatusCodes.Status200OK);
 
@@ -168,6 +184,15 @@ public static class EmploymentHistoryEndpoints
     /// (ADR-018 D9): an interval ending ON today has already ended, because its last covered day was
     /// yesterday. Getting this backwards would show a superseded interval as the current one for one
     /// day at every boundary — the kind of off-by-one nobody notices until a payroll question.
+    ///
+    /// <para><b>This deliberately has no "retired" branch.</b> A cancelled scheduled change is a
+    /// ZERO-WIDTH row, and those are filtered out at the READ
+    /// (<see cref="EmploymentHistoryReadRepository"/>, via the shared
+    /// <c>EmploymentTimelineSql.CoversAtLeastOneDayPredicate</c>) so none ever reaches this method.
+    /// Doing it there rather than here is the point: the rule is "an interval covering no days is not
+    /// part of a history of effective periods", which is a statement about what belongs in the list,
+    /// not about how to label something that does. A fourth status would have put a cancelled change
+    /// back on screen under a different name.</para>
     /// </summary>
     private static string StatusOf(DateOnly effectiveFrom, DateOnly? effectiveTo, DateOnly today)
     {
@@ -181,15 +206,23 @@ public static class EmploymentHistoryEndpoints
     /// BEFORE it in effective-date order. The comparison is done here rather than in SQL on purpose: it
     /// is the question the user is asking ("what changed"), it is pure, and it is trivially testable
     /// without a database.
+    ///
+    /// <para><b><paramref name="baseline"/> is the predecessor of row 0 when the window excluded it</b>
+    /// (S141 sprint-end review). It is used ONLY for comparison and never appears in the output. When it
+    /// is non-null, row 0 is NOT the employee's first record, so <c>IsInitial</c> is false and its
+    /// <c>ChangedFields</c> are computed against it — which is the whole difference between a screen
+    /// saying "first registration, nothing changed" and one saying what actually changed that day.</para>
     /// </summary>
     private static IReadOnlyList<EmploymentProfileHistoryInterval> ToProfileIntervals(
-        IReadOnlyList<EmploymentProfileHistoryRow> rows, DateOnly today)
+        IReadOnlyList<EmploymentProfileHistoryRow> rows,
+        EmploymentProfileHistoryRow? baseline,
+        DateOnly today)
     {
         var result = new List<EmploymentProfileHistoryInterval>(rows.Count);
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-            var previous = i == 0 ? null : rows[i - 1];
+            var previous = i == 0 ? baseline : rows[i - 1];
             var changed = new List<string>(3);
             if (previous is not null)
             {
@@ -205,7 +238,7 @@ public static class EmploymentHistoryEndpoints
                 EffectiveFrom: row.EffectiveFrom,
                 EffectiveTo: row.EffectiveTo,
                 Status: StatusOf(row.EffectiveFrom, row.EffectiveTo, today),
-                IsInitial: i == 0,
+                IsInitial: i == 0 && baseline is null,
                 ChangedFields: changed,
                 PartTimeFraction: row.PartTimeFraction,
                 Position: row.Position,
@@ -214,15 +247,18 @@ public static class EmploymentHistoryEndpoints
         return result;
     }
 
-    /// <summary>Agreement-code sibling of <see cref="ToProfileIntervals"/>; same rules, one field.</summary>
+    /// <summary>Agreement-code sibling of <see cref="ToProfileIntervals"/>; same rules, including the
+    /// out-of-window <paramref name="baseline"/>, one field.</summary>
     private static IReadOnlyList<AgreementCodeHistoryInterval> ToAgreementIntervals(
-        IReadOnlyList<AgreementCodeHistoryRow> rows, DateOnly today)
+        IReadOnlyList<AgreementCodeHistoryRow> rows,
+        AgreementCodeHistoryRow? baseline,
+        DateOnly today)
     {
         var result = new List<AgreementCodeHistoryInterval>(rows.Count);
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-            var previous = i == 0 ? null : rows[i - 1];
+            var previous = i == 0 ? baseline : rows[i - 1];
             var changed = previous is not null && !string.Equals(previous.AgreementCode, row.AgreementCode, StringComparison.Ordinal)
                 ? new List<string> { EmploymentHistoryFields.AgreementCode }
                 : new List<string>();
@@ -231,7 +267,7 @@ public static class EmploymentHistoryEndpoints
                 EffectiveFrom: row.EffectiveFrom,
                 EffectiveTo: row.EffectiveTo,
                 Status: StatusOf(row.EffectiveFrom, row.EffectiveTo, today),
-                IsInitial: i == 0,
+                IsInitial: i == 0 && baseline is null,
                 ChangedFields: changed,
                 AgreementCode: row.AgreementCode));
         }

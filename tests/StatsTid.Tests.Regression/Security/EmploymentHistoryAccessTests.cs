@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
@@ -361,6 +362,152 @@ public sealed class EmploymentHistoryAccessTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// <b>★ A CANCELLED scheduled change must not display as still forthcoming</b> (S141 sprint-end
+    /// review, BLOCKER). HR schedules a change, then deletes the profile — which, by the owner's
+    /// ruling, retires the scheduled change too. The system retires it by a ZERO-WIDTH CLOSE
+    /// (<c>SET effective_to = effective_from</c>, <c>EmployeeProfileRepository.SoftDeleteAsync</c>
+    /// step 4) rather than a hard delete, so the row survives with its start date still in the future.
+    /// A status rule that asks "does it start after today?" first would call that SCHEDULED and tell HR
+    /// a change is coming that somebody deliberately called off — confidently wrong.
+    ///
+    /// <para><b>Seeded through the REAL write paths, deliberately.</b> The scheduled row is created by
+    /// the actual profile PUT and retired by the actual profile DELETE, never by a hand-written
+    /// <c>UPDATE</c> mimicking the idiom. The defect WAS a disagreement between the writer's idiom and
+    /// this reader; a pin that fabricated the idiom by hand could drift alongside the writer and quietly
+    /// stop catching it.</para>
+    ///
+    /// <para>RED before the fix: the retired row came back with <c>status = "SCHEDULED"</c>. Also RED
+    /// if the retirement were ever changed to a hard delete without this read being revisited — the
+    /// first assertion (the history SURVIVES the delete) would then fail instead, which is the honest
+    /// signal that the idiom moved.</para>
+    /// </summary>
+    [Fact]
+    public async Task History_RetiredScheduledChange_IsNotShownAsForthcoming()
+    {
+        using var host = _factory.WithFixedToday(F);
+        _ = host.CreateClient();
+
+        var employeeId = NextId("hist_retired");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, SubjectOrg,
+            effectiveFrom: new DateOnly(2025, 1, 1), position: "Fuldmægtig");
+
+        var hr = Client(host, HrToken(SubjectOrg));
+        var scheduledFrom = F.AddDays(30);
+
+        // 1. Schedule a change through the real PUT.
+        var putRsp = await PutProfileAsync(hr, employeeId, scheduledFrom, 0.600m, "Specialkonsulent",
+            await ProfileVersionAsync(hr, employeeId));
+        Assert.Equal(HttpStatusCode.OK, putRsp.StatusCode);
+
+        // 2. Pre-condition — it really is visible as SCHEDULED. Without this the pin below would pass
+        //    just as well on a read that never returns anything.
+        using (var beforeDoc = JsonDocument.Parse(await hr.GetStringAsync(Url(employeeId))))
+        {
+            Assert.Contains(beforeDoc.RootElement.GetProperty("profileHistory").EnumerateArray(),
+                i => i.GetProperty("effectiveFrom").GetString() == scheduledFrom.ToString("yyyy-MM-dd")
+                     && i.GetProperty("status").GetString() == "SCHEDULED");
+        }
+
+        // 3. Delete the profile through the real DELETE — this is what cancels the scheduled change.
+        var delRsp = await DeleteProfileAsync(hr, employeeId, await ProfileVersionAsync(hr, employeeId));
+        Assert.Equal(HttpStatusCode.NoContent, delRsp.StatusCode);
+
+        using var afterDoc = JsonDocument.Parse(await hr.GetStringAsync(Url(employeeId)));
+        var intervals = afterDoc.RootElement.GetProperty("profileHistory").EnumerateArray().ToList();
+
+        // The history SURVIVES the delete — the employee's past is not erased, only closed.
+        Assert.NotEmpty(intervals);
+        // …but the cancelled change is gone, by date and by status.
+        Assert.DoesNotContain(intervals,
+            i => i.GetProperty("effectiveFrom").GetString() == scheduledFrom.ToString("yyyy-MM-dd"));
+        Assert.DoesNotContain(intervals, i => i.GetProperty("status").GetString() == "SCHEDULED");
+    }
+
+    /// <summary>
+    /// <b>★ A windowed read must not claim a false first registration</b> (S141 sprint-end review,
+    /// WARNING). Three intervals exist; the caller asks for a window that starts at the THIRD. That
+    /// third interval plainly has predecessors — it is not the employee's first record and something
+    /// certainly changed at its boundary — but a comparison computed from the returned list alone made
+    /// the server say otherwise, and the screen renders that as "Første registrering"
+    /// (<c>EmploymentHistoryPage.tsx:141</c>) with no changed fields listed.
+    ///
+    /// <para>The server now fetches the one row immediately before the window purely as a comparison
+    /// baseline. RED before the fix on BOTH assertions: <c>isInitial</c> was true, and
+    /// <c>changedFields</c> was empty. The second assertion is the one that matters more — suppressing
+    /// the flag alone would still have left "we do not know what changed here" on screen.</para>
+    ///
+    /// <para>The window is also asserted NOT to widen: the baseline row is used for comparison and must
+    /// never appear in the output, or the <c>from</c> filter would silently mean something else.</para>
+    /// </summary>
+    [Fact]
+    public async Task History_WindowedRead_UsesTheRowBeforeTheWindowAsBaseline_NotAFalseFirstRegistration()
+    {
+        using var host = _factory.WithFixedToday(F);
+        _ = host.CreateClient();
+
+        var employeeId = NextId("hist_baseline");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, SubjectOrg,
+            effectiveFrom: new DateOnly(2023, 1, 1), position: "Fuldmægtig");
+
+        // [2023-01-01, 2024-01-01) 1.000 Fuldmægtig   — outside the window, the true first record
+        // [2024-01-01, 2025-01-01) 1.000 Specialkonsulent — outside the window, the BASELINE
+        // [2025-01-01, ∞)          0.800 Specialkonsulent — row 0 of the window
+        await ExecAsync(
+            "UPDATE employee_profiles SET effective_to = @to WHERE employee_id = @id AND effective_to IS NULL",
+            ("to", NpgsqlDbType.Date, new DateOnly(2024, 1, 1)), ("id", NpgsqlDbType.Text, employeeId));
+        await InsertProfileRowAsync(employeeId, new DateOnly(2024, 1, 1), new DateOnly(2025, 1, 1), 1.000m, "Specialkonsulent");
+        await InsertProfileRowAsync(employeeId, new DateOnly(2025, 1, 1), null, 0.800m, "Specialkonsulent");
+
+        using var doc = JsonDocument.Parse(
+            await Client(host, HrToken(SubjectOrg)).GetStringAsync($"{Url(employeeId)}?from=2025-01-01"));
+        var intervals = doc.RootElement.GetProperty("profileHistory").EnumerateArray().ToList();
+
+        // The window did not widen — the baseline is a comparison input, never output.
+        var only = Assert.Single(intervals);
+        Assert.Equal("2025-01-01", only.GetProperty("effectiveFrom").GetString());
+
+        // It is NOT the employee's first record…
+        Assert.False(only.GetProperty("isInitial").GetBoolean());
+        // …and what changed at that date is reported against the row OUTSIDE the window: the fraction
+        // dropped 1.000 → 0.800 while the title stayed Specialkonsulent.
+        Assert.Equal(new[] { "partTimeFraction" },
+            only.GetProperty("changedFields").EnumerateArray().Select(e => e.GetString()).ToArray());
+    }
+
+    /// <summary>
+    /// The counter-test to the one above, and the reason it cannot be satisfied by always reporting
+    /// <c>isInitial: false</c>. With an UNBOUNDED window the first interval genuinely IS the employee's
+    /// first record: the flag must stay true and the changed-field list must stay empty. RED if the
+    /// baseline lookup were run unconditionally against a wrong anchor, or if the flag were hard-wired.
+    /// </summary>
+    [Fact]
+    public async Task History_UnboundedRead_StillReportsAGenuineFirstRegistration()
+    {
+        using var host = _factory.WithFixedToday(F);
+        _ = host.CreateClient();
+
+        var employeeId = NextId("hist_genuine_first");
+        await RegressionSeed.SeedEmployeeAsync(
+            _harness.ConnectionString, employeeId, SubjectOrg,
+            effectiveFrom: new DateOnly(2023, 1, 1), position: "Fuldmægtig");
+        await ExecAsync(
+            "UPDATE employee_profiles SET effective_to = @to WHERE employee_id = @id AND effective_to IS NULL",
+            ("to", NpgsqlDbType.Date, new DateOnly(2024, 1, 1)), ("id", NpgsqlDbType.Text, employeeId));
+        await InsertProfileRowAsync(employeeId, new DateOnly(2024, 1, 1), null, 0.800m, "Fuldmægtig");
+
+        using var doc = JsonDocument.Parse(
+            await Client(host, HrToken(SubjectOrg)).GetStringAsync(Url(employeeId)));
+        var intervals = doc.RootElement.GetProperty("profileHistory").EnumerateArray().ToList();
+
+        Assert.Equal(2, intervals.Count);
+        Assert.True(intervals[0].GetProperty("isInitial").GetBoolean());
+        Assert.Empty(intervals[0].GetProperty("changedFields").EnumerateArray());
+        Assert.False(intervals[1].GetProperty("isInitial").GetBoolean());
+    }
+
+    /// <summary>
     /// <b>An inverted window is a caller mistake, not an empty history.</b> <c>from &gt;= to</c> answers
     /// 422 rather than a 200 with two empty tracks, because "you mistyped the filter" and "this employee
     /// has never changed" must not look identical on screen. RED if the guard were removed.
@@ -414,6 +561,49 @@ public sealed class EmploymentHistoryAccessTests : IAsyncLifetime
             ("position", NpgsqlDbType.Text, (object?)position ?? DBNull.Value),
             ("from", NpgsqlDbType.Date, from),
             ("to", NpgsqlDbType.Date, to.HasValue ? to.Value : (object)DBNull.Value));
+
+    // ─────────────── the real profile write paths (used by the retirement pin) ───────────────
+
+    /// <summary>
+    /// The employee's ONE concurrency token, read the way the product hands it out: the
+    /// <c>version</c> on <c>GET /api/admin/employee-profiles/{id}</c>, quoted as an If-Match value.
+    /// Re-read before every write rather than cached, so the pin asserts the product's own contract
+    /// instead of a guess about which row's version is current after a future-dated write.
+    /// </summary>
+    private static async Task<string> ProfileVersionAsync(HttpClient client, string employeeId)
+    {
+        var rsp = await client.GetAsync($"/api/admin/employee-profiles/{employeeId}");
+        rsp.EnsureSuccessStatusCode();
+        using var doc = JsonDocument.Parse(await rsp.Content.ReadAsStringAsync());
+        return $"\"{doc.RootElement.GetProperty("version").GetInt64()}\"";
+    }
+
+    private static Task<HttpResponseMessage> PutProfileAsync(
+        HttpClient client, string employeeId, DateOnly effectiveFrom,
+        decimal partTimeFraction, string? position, string ifMatch)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/employee-profiles/{employeeId}")
+        {
+            Content = JsonContent.Create(new
+            {
+                effectiveFrom = effectiveFrom.ToString("yyyy-MM-dd"),
+                partTimeFraction,
+                position,
+                employmentCategory = "Standard",
+                carryForwardToScheduledChange = (bool?)null,
+            }),
+        };
+        req.Headers.TryAddWithoutValidation("If-Match", ifMatch);
+        return client.SendAsync(req);
+    }
+
+    private static Task<HttpResponseMessage> DeleteProfileAsync(
+        HttpClient client, string employeeId, string ifMatch)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Delete, $"/api/admin/employee-profiles/{employeeId}");
+        req.Headers.TryAddWithoutValidation("If-Match", ifMatch);
+        return client.SendAsync(req);
+    }
 
     // ─────────────────────────────── tokens ───────────────────────────────
 

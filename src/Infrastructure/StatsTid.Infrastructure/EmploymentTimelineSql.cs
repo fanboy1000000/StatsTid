@@ -48,14 +48,41 @@ namespace StatsTid.Infrastructure;
 internal static class EmploymentTimelineSql
 {
     /// <summary>
+    /// The canonical <b>"this row covers at least one real day"</b> predicate, written against the
+    /// alias <c>s</c>. The inverse — a ZERO-WIDTH row <c>[f, f)</c> — is this system's idiom for a
+    /// RETIRED row: <c>EmployeeProfileRepository.SoftDeleteAsync</c> retires a scheduled change with
+    /// <c>SET effective_to = effective_from</c> rather than deleting it, because no timeline table
+    /// here has ever hard-deleted a row and the retirement is separately audited.
+    ///
+    /// <para>
+    /// <b>Why this is its own constant (S141 sprint-end review, TASK-14113).</b> It was extracted from
+    /// <see cref="ScheduledRowPredicate"/> — whose text is unchanged, byte for byte — because a SECOND
+    /// caller needs this half WITHOUT the "starts after today" half: the employment-history read
+    /// (<see cref="EmploymentHistoryReadRepository"/>) reports past, current AND scheduled intervals,
+    /// so it cannot reuse the scheduled predicate, but it must drop retired rows for exactly the same
+    /// reason the marker does. Sharing the halves keeps ONE definition of "retired" in the system; the
+    /// alternative — a second inline copy in the history read — is how the two surfaces would
+    /// eventually give different answers about the same cancelled change, and nobody would notice
+    /// until HR saw one.
+    /// </para>
+    ///
+    /// <para>Applies unchanged to BOTH dated employment tables: <c>employee_profiles</c> and
+    /// <c>user_agreement_codes</c> share the <c>effective_from</c>/<c>effective_to</c> column shape and
+    /// the ADR-018 D9 end-exclusive semantics.</para>
+    /// </summary>
+    public const string CoversAtLeastOneDayPredicate =
+        "(s.effective_to IS NULL OR s.effective_to > s.effective_from)";
+
+    /// <summary>
     /// The canonical "this row is a scheduled change" predicate, written against the alias <c>s</c>
-    /// and the bound parameter <c>@today</c>. Applies unchanged to BOTH dated employment tables —
-    /// <c>employee_profiles</c> and <c>user_agreement_codes</c> share the
+    /// and the bound parameter <c>@today</c>: it starts strictly after today AND it is not retired
+    /// (<see cref="CoversAtLeastOneDayPredicate"/>). Applies unchanged to BOTH dated employment
+    /// tables — <c>employee_profiles</c> and <c>user_agreement_codes</c> share the
     /// <c>effective_from</c>/<c>effective_to</c> column shape and the ADR-018 D9 end-exclusive
     /// semantics.
     /// </summary>
     public const string ScheduledRowPredicate =
-        "s.effective_from > @today AND (s.effective_to IS NULL OR s.effective_to > s.effective_from)";
+        "s.effective_from > @today AND " + CoversAtLeastOneDayPredicate;
 
     /// <summary>
     /// A <c>LEFT JOIN LATERAL … ON TRUE</c> block yielding ONE column,

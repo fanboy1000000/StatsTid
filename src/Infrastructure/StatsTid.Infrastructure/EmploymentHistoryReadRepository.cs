@@ -49,6 +49,17 @@ namespace StatsTid.Infrastructure;
 //     row's version, handed out by the profile GET's ETag — and a history row's version is not it.
 //     Selecting it here would put a plausible-looking-but-wrong If-Match value on a read-only
 //     screen, and the first person to use it would silently write against the wrong row.
+//
+//  5. RETIRED ROWS ARE NOT HISTORY (S141 sprint-end review, BLOCKER). When HR deletes a profile,
+//     any change they had SCHEDULED is cancelled — and this system cancels a dated row by closing
+//     it to ZERO WIDTH, `[f, f)`, rather than deleting it (EmployeeProfileRepository.SoftDeleteAsync
+//     step 4). Such a row covers no day at all: it was never in force and never will be. Left in,
+//     it would come back through this read wearing a future start date and the screen would tell HR
+//     a change is coming that somebody deliberately called off — confidently wrong, which is worse
+//     than silent. Every read below therefore filters on the SHARED
+//     `EmploymentTimelineSql.CoversAtLeastOneDayPredicate` — the same definition of "retired" the
+//     scheduled-change marker uses, deliberately not a second copy of it. The fact is not lost: the
+//     retirement is separately audited, which is what the owner's ruling required.
 // ═══════════════════════════════════════════════════════════════════════════════════════════
 
 /// <summary>
@@ -106,6 +117,9 @@ public sealed class EmploymentHistoryReadRepository
     /// an interval is in the window when it has not already ENDED at or before <paramref name="from"/>
     /// and it STARTS strictly before <paramref name="to"/>.</para>
     ///
+    /// <para><b>Retired rows are excluded</b> (header rule 5) via the shared
+    /// <see cref="EmploymentTimelineSql.CoversAtLeastOneDayPredicate"/>.</para>
+    ///
     /// <para><b>Index:</b> served by the existing <c>idx_employee_profiles_history</c> UNIQUE
     /// <c>(employee_id, effective_from)</c> — an exact match for this equality-plus-ordering shape,
     /// which is why no new index is needed.</para>
@@ -115,12 +129,15 @@ public sealed class EmploymentHistoryReadRepository
     {
         const string sql =
             """
-            SELECT effective_from, effective_to, part_time_fraction, position, employment_category
-            FROM employee_profiles
-            WHERE employee_id = @employeeId
-              AND (@from IS NULL OR effective_to IS NULL OR effective_to > @from)
-              AND (@to   IS NULL OR effective_from < @to)
-            ORDER BY effective_from
+            SELECT s.effective_from, s.effective_to, s.part_time_fraction, s.position, s.employment_category
+            FROM employee_profiles s
+            WHERE s.employee_id = @employeeId
+              AND
+            """ + " " + EmploymentTimelineSql.CoversAtLeastOneDayPredicate + "\n" +
+            """
+              AND (@from IS NULL OR s.effective_to IS NULL OR s.effective_to > @from)
+              AND (@to   IS NULL OR s.effective_from < @to)
+            ORDER BY s.effective_from
             """;
 
         await using var conn = _dbFactory.Create();
@@ -150,6 +167,12 @@ public sealed class EmploymentHistoryReadRepository
     /// <see cref="GetProfileIntervalsAsync"/> — deliberately the same predicate, so the two halves of
     /// one history response can never disagree about what "inside the window" means.
     ///
+    /// <para><b>Retired rows are excluded here too</b>, with the same shared predicate. The
+    /// agreement-code table has no delete path that produces one TODAY — only the profile
+    /// soft-delete retires scheduled rows — but the exclusion is a statement about what a zero-width
+    /// interval MEANS, not about which writer happens to create one, and applying it on one table
+    /// only would quietly expire the moment the agreement side grows a retirement path.</para>
+    ///
     /// <para><b>Index:</b> served by the existing <c>idx_user_agreement_codes_history</c> UNIQUE
     /// <c>(user_id, effective_from)</c>. No new index.</para>
     /// </summary>
@@ -158,12 +181,15 @@ public sealed class EmploymentHistoryReadRepository
     {
         const string sql =
             """
-            SELECT effective_from, effective_to, agreement_code
-            FROM user_agreement_codes
-            WHERE user_id = @employeeId
-              AND (@from IS NULL OR effective_to IS NULL OR effective_to > @from)
-              AND (@to   IS NULL OR effective_from < @to)
-            ORDER BY effective_from
+            SELECT s.effective_from, s.effective_to, s.agreement_code
+            FROM user_agreement_codes s
+            WHERE s.user_id = @employeeId
+              AND
+            """ + " " + EmploymentTimelineSql.CoversAtLeastOneDayPredicate + "\n" +
+            """
+              AND (@from IS NULL OR s.effective_to IS NULL OR s.effective_to > @from)
+              AND (@to   IS NULL OR s.effective_from < @to)
+            ORDER BY s.effective_from
             """;
 
         await using var conn = _dbFactory.Create();
@@ -183,6 +209,101 @@ public sealed class EmploymentHistoryReadRepository
                 AgreementCode: reader.GetString(2)));
         }
         return rows;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────────────────────
+    // THE COMPARISON BASELINE (S141 sprint-end review, WARNING).
+    //
+    // The problem, in plain language. "What changed here?" can only be answered by comparing an
+    // interval with the one BEFORE it. When the caller asks for a WINDOW, the first interval inside
+    // that window usually has a predecessor OUTSIDE it — so computing the comparison from the
+    // returned list alone made the read claim that interval was the employee's FIRST EVER record
+    // ("Første registrering" on screen) and that nothing had changed at it. Both statements were
+    // false, and both looked authoritative.
+    //
+    // The fix is to fetch the one row immediately before the first returned interval and use it ONLY
+    // as the comparison baseline — it is never returned, so it cannot widen the window the caller
+    // asked for. Note the anchor is the FIRST RETURNED ROW's start, not the `from` filter: a row that
+    // straddles `from` is itself inside the window, and the row before IT is the baseline. Anchoring
+    // on `from` would have silently compared that straddling row against itself.
+    //
+    // Same retired-row exclusion as the range reads: a cancelled change is not a state anything was
+    // ever in, so it must not become the thing a later interval is described as a change FROM.
+    // ───────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The profile interval immediately PRECEDING <paramref name="beforeEffectiveFrom"/> — the latest
+    /// non-retired row that starts strictly earlier — or <c>null</c> when none exists, which is the
+    /// honest signal that the caller's first interval really is the employee's first record.
+    ///
+    /// <para><b>Index:</b> a backward seek on <c>idx_employee_profiles_history</c>
+    /// <c>(employee_id, effective_from)</c> — the ordering the index already provides, stopped at one
+    /// row. No new index.</para>
+    /// </summary>
+    public async Task<EmploymentProfileHistoryRow?> GetProfileIntervalBeforeAsync(
+        string employeeId, DateOnly beforeEffectiveFrom, CancellationToken ct = default)
+    {
+        const string sql =
+            """
+            SELECT s.effective_from, s.effective_to, s.part_time_fraction, s.position, s.employment_category
+            FROM employee_profiles s
+            WHERE s.employee_id = @employeeId
+              AND s.effective_from < @before
+              AND
+            """ + " " + EmploymentTimelineSql.CoversAtLeastOneDayPredicate + "\n" +
+            """
+            ORDER BY s.effective_from DESC
+            LIMIT 1
+            """;
+
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.Add(new NpgsqlParameter("employeeId", NpgsqlDbType.Text) { Value = employeeId });
+        cmd.Parameters.Add(new NpgsqlParameter("before", NpgsqlDbType.Date) { Value = beforeEffectiveFrom });
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return new EmploymentProfileHistoryRow(
+            EffectiveFrom: reader.GetFieldValue<DateOnly>(0),
+            EffectiveTo: reader.IsDBNull(1) ? null : reader.GetFieldValue<DateOnly>(1),
+            PartTimeFraction: reader.GetDecimal(2),
+            Position: reader.IsDBNull(3) ? null : reader.GetString(3),
+            EmploymentCategory: reader.GetString(4));
+    }
+
+    /// <summary>
+    /// Agreement-code sibling of <see cref="GetProfileIntervalBeforeAsync"/>; same rule, same index
+    /// shape (<c>idx_user_agreement_codes_history</c>).
+    /// </summary>
+    public async Task<AgreementCodeHistoryRow?> GetAgreementCodeIntervalBeforeAsync(
+        string employeeId, DateOnly beforeEffectiveFrom, CancellationToken ct = default)
+    {
+        const string sql =
+            """
+            SELECT s.effective_from, s.effective_to, s.agreement_code
+            FROM user_agreement_codes s
+            WHERE s.user_id = @employeeId
+              AND s.effective_from < @before
+              AND
+            """ + " " + EmploymentTimelineSql.CoversAtLeastOneDayPredicate + "\n" +
+            """
+            ORDER BY s.effective_from DESC
+            LIMIT 1
+            """;
+
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.Add(new NpgsqlParameter("employeeId", NpgsqlDbType.Text) { Value = employeeId });
+        cmd.Parameters.Add(new NpgsqlParameter("before", NpgsqlDbType.Date) { Value = beforeEffectiveFrom });
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return new AgreementCodeHistoryRow(
+            EffectiveFrom: reader.GetFieldValue<DateOnly>(0),
+            EffectiveTo: reader.IsDBNull(1) ? null : reader.GetFieldValue<DateOnly>(1),
+            AgreementCode: reader.GetString(2));
     }
 
     /// <summary>

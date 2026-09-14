@@ -35,6 +35,13 @@ public static class EmploymentHistoryIntervalStatus
     /// made a future-dated change legal (ADR-040 D8) — a change HR has scheduled but which is not in
     /// force. It is shown, and shown as not-yet-in-force; see the endpoint's own note on why hiding it
     /// would be the worst possible place to hide it.
+    ///
+    /// <para><b>A CANCELLED scheduled change never appears with this status.</b> Retiring a scheduled
+    /// row closes it to zero width rather than deleting it, and the read drops zero-width rows
+    /// entirely — so a change somebody called off is absent from the history rather than displayed as
+    /// still forthcoming. There is deliberately no fourth "RETIRED" status: an interval covering no
+    /// days was never in force and never will be, and a history of EFFECTIVE PERIODS should not carry
+    /// one. The retirement itself is separately audited.</para>
     /// </summary>
     public const string Scheduled = "SCHEDULED";
 }
@@ -64,16 +71,21 @@ public static class EmploymentHistoryFields
 /// </param>
 /// <param name="Status">One of <see cref="EmploymentHistoryIntervalStatus"/>.</param>
 /// <param name="IsInitial">
-/// True for the EARLIEST interval returned. Its <paramref name="ChangedFields"/> is empty, and that
-/// emptiness means "this is the baseline", not "nothing changed". Note it is the earliest interval
-/// IN THE WINDOW — with a <c>from</c> filter the baseline is the window's first row, not the
-/// employee's first ever.
+/// True only when this really is the employee's FIRST recorded interval — nothing precedes it,
+/// inside the window or outside it. Its <paramref name="ChangedFields"/> is then empty, and that
+/// emptiness means "there is nothing to compare against", not "nothing changed".
+///
+/// <para><b>Corrected at the S141 sprint-end review.</b> This used to mean "first row in the window",
+/// so a windowed read announced a false "first registration" for an interval that plainly had
+/// predecessors. The server now fetches the row before the window purely as a comparison baseline
+/// (it is never returned), so the flag answers the question a reader actually asks.</para>
 /// </param>
 /// <param name="ChangedFields">
-/// Which fields differ from the IMMEDIATELY PRECEDING interval in this list, from
-/// <see cref="EmploymentHistoryFields"/>. Empty on the initial interval; empty on a later interval
-/// means the boundary carried no field change at all (possible when a backdated edit split a row and
-/// a still-later edit restored the values) — reported honestly rather than hidden.
+/// Which fields differ from the IMMEDIATELY PRECEDING interval, from
+/// <see cref="EmploymentHistoryFields"/> — including when that predecessor falls OUTSIDE the
+/// requested window. Empty on a genuinely initial interval; empty on a later interval means the
+/// boundary carried no field change at all (possible when a backdated edit split a row and a
+/// still-later edit restored the values) — reported honestly rather than hidden.
 /// </param>
 public sealed record EmploymentProfileHistoryInterval(
     DateOnly EffectiveFrom,
