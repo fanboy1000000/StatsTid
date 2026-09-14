@@ -27,7 +27,7 @@ import { useToast } from '../../../components/ui/Toast'
 import { useAuth } from '../../../contexts/AuthContext'
 import { useEntitlementEligibility } from '../../../hooks/useEntitlementEligibility'
 import { usePlacement } from '../../../hooks/usePlacement'
-import type { EditLiveState } from '../../../hooks/useEditPerson'
+import { todayIsoUtc, type EditLiveState } from '../../../hooks/useEditPerson'
 import type { Organization, WithEtag, User } from '../../../hooks/useAdmin'
 import type { ForestMaoNode } from '../../../hooks/useForest'
 import { fetchEmployeeProfile } from '../editPerson/employeeProfileApi'
@@ -36,6 +36,7 @@ import { ProfileSection } from '../editPerson/ProfileSection'
 import { EntitlementSection } from '../editPerson/EntitlementSection'
 import { LifecycleSections, type LifecycleContext } from '../editPerson/LifecycleSections'
 import { ScheduledChangeNotice } from '../editPerson/ScheduledChangeNotice'
+import { EffectiveDatePicker } from '../editPerson/EffectiveDatePicker'
 import {
   isHrCapable,
   INITIAL_SECTION_SAVE,
@@ -140,6 +141,13 @@ export function PersonDrawer({
   // every open so a stale choice from a previous edit never survives a reopen.
   const [profileCarryForward, setProfileCarryForward] = useState(false)
   const [agreementCarryForward, setAgreementCarryForward] = useState(false)
+  // S141 / TASK-14111 — the effective-date picker. ONE date governs the whole
+  // save (both the users PUT and the employee-profiles PUT below read it).
+  // Requirement 1: the default is ALWAYS today, reset on every open exactly
+  // like every other field — dating a change ahead is something HR must
+  // deliberately choose on THIS open, never something that survives from a
+  // previous edit or a stale render.
+  const [effectiveFrom, setEffectiveFrom] = useState<string>(todayIsoUtc())
 
   // The Placering options reload whenever the chosen Organisation changes (a unit
   // belongs to exactly one Organisation, so an org change invalidates the unit set).
@@ -158,6 +166,7 @@ export function PersonDrawer({
     setDraftApproverName(null)
     setProfileCarryForward(false)
     setAgreementCarryForward(false)
+    setEffectiveFrom(todayIsoUtc())
 
     if (isNew) {
       const orgId = defaultOrgId ?? organizations[0]?.orgId ?? ''
@@ -313,6 +322,15 @@ export function PersonDrawer({
     : ''
   const agreementScheduledSummary = scheduledAgreement ? `Overenskomst ${scheduledAgreement.agreementCode}` : ''
 
+  // S141 / TASK-14111 — recomputed fresh on every render (not read from
+  // state) so the picker's "is this future?" check and the ScheduledChangeNotice
+  // wording below can never disagree with each other even if the drawer sits
+  // open across a UTC midnight. `undefined` here (the write IS dated today) is
+  // exactly the value ScheduledChangeNotice's `writeEffectiveFrom` prop
+  // treats as "keep the previous 'gemmer du nu' wording".
+  const today = todayIsoUtc()
+  const writeEffectiveFrom = effectiveFrom === today ? undefined : effectiveFrom
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setFormError(null)
@@ -381,6 +399,9 @@ export function PersonDrawer({
           // save free of a field with no effect.
           ...(scheduledAgreement !== null ? { stamdataCarryForward: agreementCarryForward } : {}),
           ...(scheduledProfile !== null ? { profileCarryForward } : {}),
+          // S141 / TASK-14111 — the effective-date picker's value; governs
+          // BOTH of this save's dated writes (see useEditPerson.saveEdit).
+          effectiveFrom,
         },
         live,
         orgChanged,
@@ -518,9 +539,18 @@ export function PersonDrawer({
                   ? { checked: agreementCarryForward, onChange: setAgreementCarryForward, disabled: busy }
                   : undefined
               }
+              writeEffectiveFrom={writeEffectiveFrom}
               testId="pd-agreement-scheduled"
             />
           )}
+
+          {/* S141 / TASK-14111 — the effective-date picker. Governs BOTH
+              dated writes this drawer performs (the agreement-code field
+              just above, and the profile fields further down) — one HR
+              decision for the whole save. Edit mode only: a brand-new
+              person has no "existing value" for a scheduled change to
+              apply against. */}
+          {!isNew && <EffectiveDatePicker value={effectiveFrom} onChange={setEffectiveFrom} today={today} disabled={busy} />}
 
           {/* S109 — Placering (the unit Select, reloaded on Organisation change). */}
           <section className={styles.section} aria-labelledby="pd-placement-heading">
@@ -608,6 +638,7 @@ export function PersonDrawer({
                       ? { checked: profileCarryForward, onChange: setProfileCarryForward, disabled: busy }
                       : undefined
                   }
+                  writeEffectiveFrom={writeEffectiveFrom}
                   testId="pd-profile-scheduled"
                 />
               )}

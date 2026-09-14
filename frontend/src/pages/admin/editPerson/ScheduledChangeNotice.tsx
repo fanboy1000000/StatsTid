@@ -30,6 +30,21 @@ export interface ScheduledChangeNoticeProps {
       change — renders the OQ-6 (a) choice. Absent = pure visibility (B0),
       nothing to decide. */
   carryForward?: ScheduledChangeCarryForwardChoice
+  /**
+   * S141 / TASK-14111 — the date THIS save will actually use, ONLY when the
+   * drawer's effective-date picker has moved it away from today (the caller
+   * omits this when the write is dated today, which is the common case).
+   *
+   * Composition note, so the picker and this notice never talk past each
+   * other: the carry-forward copy below used to say "Gemmer du nu" ("if you
+   * save now"), which was always true because the drawer had no way to save
+   * anything else. Once a save can be dated ahead (or backdated), "nu" is
+   * simply wrong for it — the edit takes effect on the picked date, not on
+   * today. This prop lets the SAME copy stay correct in both cases without
+   * this component knowing what "today" is (the caller already computed
+   * that once, for the picker itself).
+   */
+  writeEffectiveFrom?: string
   testId: string
 }
 
@@ -49,8 +64,17 @@ export function formatScheduledDate(iso: string): string {
   }
 }
 
-export function ScheduledChangeNotice({ effectiveFrom, summary, carryForward, testId }: ScheduledChangeNoticeProps) {
+export function ScheduledChangeNotice({
+  effectiveFrom,
+  summary,
+  carryForward,
+  writeEffectiveFrom,
+  testId,
+}: ScheduledChangeNoticeProps) {
   const dateText = formatScheduledDate(effectiveFrom)
+  // undefined/omitted = the write is dated today, the previous (and still
+  // most common) wording. Present = name the real date rather than "nu".
+  const writeDateText = writeEffectiveFrom ? formatScheduledDate(writeEffectiveFrom) : null
   return (
     <div className={styles.scheduledNotice} data-testid={testId}>
       <p className={styles.scheduledText}>
@@ -59,9 +83,13 @@ export function ScheduledChangeNotice({ effectiveFrom, summary, carryForward, te
       {carryForward && (
         <div className={styles.scheduledChoice}>
           <p className={styles.scheduledText}>
-            {carryForward.checked
-              ? `Gemmer du nu, opdateres også den planlagte ændring fra ${dateText} (kun det felt, du har rettet her).`
-              : `Gemmer du nu, gælder ændringen kun indtil ${dateText}, hvor den planlagte ændring træder i kraft.`}
+            {writeDateText
+              ? carryForward.checked
+                ? `Gemmer du med virkning fra ${writeDateText}, opdateres også den planlagte ændring fra ${dateText} (kun det felt, du har rettet her).`
+                : `Gemmer du med virkning fra ${writeDateText}, gælder ændringen kun indtil ${dateText}, hvor den planlagte ændring træder i kraft.`
+              : carryForward.checked
+                ? `Gemmer du nu, opdateres også den planlagte ændring fra ${dateText} (kun det felt, du har rettet her).`
+                : `Gemmer du nu, gælder ændringen kun indtil ${dateText}, hvor den planlagte ændring træder i kraft.`}
           </p>
           <label className={styles.checkboxRow}>
             <input

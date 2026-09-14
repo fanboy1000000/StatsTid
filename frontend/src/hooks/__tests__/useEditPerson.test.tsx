@@ -31,7 +31,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { useEditPerson, type EditSaveInput } from '../useEditPerson'
+import { useEditPerson, todayIsoUtc, type EditSaveInput } from '../useEditPerson'
 import type { EditLiveState, SaveEditResult } from '../useEditPerson'
 
 const mockFetch = vi.fn()
@@ -268,5 +268,104 @@ describe('useEditPerson.saveEdit — the running users.version cursor (S141 / OQ
     // The short-circuit means the profile/DOB PUTs — which would need a
     // users.version this save never obtained — are never attempted.
     expect(calls).toHaveLength(1)
+  })
+})
+
+// SPRINT-141 / TASK-14111 — the effective-date picker's plumbing. The
+// picker itself lives in `PersonDrawer.tsx` / `EffectiveDatePicker.tsx`
+// (exercised in `PersonDrawer.effectiveDate.test.tsx`); THIS suite pins the
+// one thing a UI-level test cannot see directly — that the value the picker
+// produces is the SAME date sent on BOTH dated writes below it, and that an
+// omitted date (every caller that predates this task) still defaults to
+// today exactly as before.
+describe('useEditPerson.saveEdit — S141 / TASK-14111 the effective-date picker\'s value', () => {
+  // Deliberately narrower than the module's `dirtyInput()`: this suite is
+  // about what date reaches the users/profile PUTs, not the whole
+  // running-version cascade (the BLOCKER suite above already owns that), so
+  // birthDate/employmentStartDate are left AT their `makeLive()` initial
+  // values ('') and steps 3/4 never fire — no extra routes needed for them.
+  function minimalDirtyInput(): EditSaveInput {
+    return {
+      stamdata: { displayName: 'Test Bruger', email: 'e@x.dk', primaryOrgId: 'STY02', agreementCode: 'AC' },
+      profile: { partTimeFraction: '0.800', position: 'New Title' },
+      entitlement: { birthDate: '', employmentStartDate: '', childSickEligible: false },
+      childSickDirty: false,
+      isHr: true,
+    }
+  }
+
+  function routes() {
+    return {
+      '/api/admin/users/EMP1': {
+        expectIfMatch: '"5"',
+        ok: () =>
+          res(
+            true,
+            200,
+            {
+              userId: 'EMP1',
+              displayName: 'Test Bruger',
+              email: 'e@x.dk',
+              primaryOrgId: 'STY02',
+              agreementCode: 'AC',
+              version: 6,
+            },
+            '"6"',
+          ),
+      },
+      '/api/admin/employee-profiles/EMP1': {
+        expectIfMatch: '"6"',
+        ok: () =>
+          res(
+            true,
+            200,
+            {
+              employeeId: 'EMP1',
+              partTimeFraction: 0.8,
+              position: 'New Title',
+              isPartTime: true,
+              version: 7,
+              scheduled: null,
+            },
+            '"7"',
+          ),
+      },
+    }
+  }
+
+  it('threads a caller-supplied effectiveFrom onto BOTH the users PUT and the employee-profiles PUT verbatim', async () => {
+    setupRouter(routes())
+
+    const result = await run({ ...minimalDirtyInput(), effectiveFrom: '2026-11-01' }, makeLive())
+
+    expect(result.ok).toBe(true)
+    const usersPut = calls.find((c) => c.url.endsWith('/api/admin/users/EMP1'))!
+    expect(usersPut.body?.effectiveFrom).toBe('2026-11-01')
+    const profilePut = calls.find((c) => c.url.includes('/employee-profiles/'))!
+    expect(profilePut.body?.effectiveFrom).toBe('2026-11-01')
+  })
+
+  it('threads a PAST effectiveFrom the same way — backdating is not narrowed by adding the future half', async () => {
+    setupRouter(routes())
+
+    const result = await run({ ...minimalDirtyInput(), effectiveFrom: '2020-01-15' }, makeLive())
+
+    expect(result.ok).toBe(true)
+    const usersPut = calls.find((c) => c.url.endsWith('/api/admin/users/EMP1'))!
+    expect(usersPut.body?.effectiveFrom).toBe('2020-01-15')
+    const profilePut = calls.find((c) => c.url.includes('/employee-profiles/'))!
+    expect(profilePut.body?.effectiveFrom).toBe('2020-01-15')
+  })
+
+  it('defaults to today when effectiveFrom is omitted — every pre-S141 caller keeps working unchanged', async () => {
+    setupRouter(routes())
+
+    const result = await run(minimalDirtyInput(), makeLive())
+
+    expect(result.ok).toBe(true)
+    const usersPut = calls.find((c) => c.url.endsWith('/api/admin/users/EMP1'))!
+    expect(usersPut.body?.effectiveFrom).toBe(todayIsoUtc())
+    const profilePut = calls.find((c) => c.url.includes('/employee-profiles/'))!
+    expect(profilePut.body?.effectiveFrom).toBe(todayIsoUtc())
   })
 })
