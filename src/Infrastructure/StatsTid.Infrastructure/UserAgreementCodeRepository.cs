@@ -200,6 +200,9 @@ public sealed class UserAgreementCodeRepository
         // The scheduled row rides in a LATERAL on the same statement so the pair can never describe
         // two different moments. A ZERO-WIDTH row [f, f) is excluded: it covers no day and is a
         // retirement trace, not a scheduled change (the same rule the profile side applies).
+        // The rule is stated once, with its reasoning, in EmploymentTimelineSql.ScheduledRowPredicate
+        // (S141 / TASK-14116); the predicate below is character-identical and is spelled out here
+        // because this statement also SELECTS the scheduled row's values.
         await using var cmd = new NpgsqlCommand(
             """
             SELECT

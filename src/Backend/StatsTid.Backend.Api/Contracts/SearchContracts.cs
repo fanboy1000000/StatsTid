@@ -61,17 +61,33 @@ public sealed record UnitSearchResult(
 /// person's immutable primary Organisation (<c>primary_org_id</c>) — the SAME id the search scope admits
 /// by (D5: a person is admitted by their Organisation, never by a unit). The merged-admin FE (S107)
 /// filters the search people by the Afgrænsning scope SET against this id, NOT against the fragile
-/// <paramref name="Path"/> text. <paramref name="Position"/> is the live <c>employee_profiles.position</c>
-/// (nullable), <paramref name="UnitName"/> is the person's home-unit name (<c>null</c> = homed directly
+/// <paramref name="Path"/> text. <paramref name="Position"/> is the <c>employee_profiles.position</c>
+/// of the row COVERING TODAY (nullable) — S141 / TASK-14102 (B1) corrected this from the LIVE (open)
+/// row, which stopped being the same thing the moment a change could be dated ahead: the open row can
+/// be one that has not started yet, so search was able to label somebody with a job title they do not
+/// yet hold. <paramref name="UnitName"/> is the person's home-unit name (<c>null</c> = homed directly
 /// at the Organisation). <paramref name="Path"/> is the breadcrumb from the Organisation (root) DOWN to
 /// and INCLUDING the home unit (the unit chain is the person's container context; their
 /// <paramref name="DisplayName"/> is the leaf). An Organisation-homed person's path is just
 /// <c>[OrganisationName]</c>. The chain stays within the person's (accessible) primary Organisation —
-/// no cross-Organisation leak.</summary>
+/// no cross-Organisation leak.
+///
+/// <para>S141 / TASK-14116 (refinement B0, owner requirement 2026-09-11) — <paramref name="ScheduledChangeFrom"/>
+/// is the date an already-scheduled employment change takes effect for this person, or <c>null</c>
+/// when nothing is scheduled. Wave 1 made <paramref name="Position"/> the title in force TODAY, so
+/// search no longer labels someone with a job title they do not yet hold; this field is the other
+/// half of that fix — the search overlay is where HR picks a person to act on, and a result that
+/// looks settled while a change is already dated ahead is exactly the situation the owner asked
+/// about. A MARKER AND A DATE only: the overlay says "this changes on 1 November", it does not
+/// render the new values. A CANCELLED scheduled change (a zero-width, retired row) is excluded, and
+/// the date spans both dated employment timelines — profile and agreement code — so it answers "is
+/// it safe to act on this hit". ADR-040 D7: a profile / agreement effective date, never a hire or
+/// termination date.</para></summary>
 public sealed record PersonSearchResult(
     string UserId,
     string OrganisationId,
     string DisplayName,
     string? Position,
     string? UnitName,
-    IReadOnlyList<string> Path);
+    IReadOnlyList<string> Path,
+    DateOnly? ScheduledChangeFrom = null);
