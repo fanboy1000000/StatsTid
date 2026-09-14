@@ -818,3 +818,36 @@ not an identifier oracle; and an employee with no records returns an empty resul
 the new detector's job to surface rather than this read's to dress up.
 
 **The route for wave 3 (TASK-14109 needs it):** `GET /api/hr/employees/{employeeId}/history`, with optional `from` and `to`.
+
+### TASK-14106 (endpoint pins) — complete, 26 facts, and the counter-test I most wanted
+
+Build `0 errors / 145 warnings` (baseline held). Non-Docker suites identical to the wave-1 gate — unit 1244, seed 165,
+regression 104 — so the additions introduced no regression and, correctly, **none of the 26 new facts executed**. Not claimed
+green.
+
+**It merged master into its own worktree before starting**, having noticed the worktree was pinned at the sprint-start commit,
+so the pins were written against the real wave-1 code rather than against guessed line numbers. Unprompted and correct.
+
+**★ The counter-test is the most valuable thing here.** The worklist rule is conditional and an earlier draft of this sprint's
+plan got it wrong in a way that would have *suppressed a true finding*. The agent pinned **both** halves: a future date in a
+later month raises nothing **even with an export seeded for that month** — proving the absence is structural rather than
+coincidental — **and** a future date inside the current month **still raises** the exported-month row. The second is the
+counter-test. Without it, an implementer could have satisfied the first by suppressing the rule outright and the suite would
+have agreed with them.
+
+**★ One thing it could NOT settle, and correctly refused to guess at.** `WriteForSkippedSettledYearsAsync` appears
+**unconditional with respect to dates** — it fires whenever a revaluation declines to re-record an already-settled group. So a
+future-dated write whose revaluation interval touches a pre-existing far-future absence belonging to an already-settled year
+could, in principle, raise a settled-year worklist row through a path the date rule never sees. The agent pinned only that the
+**date rule** is structurally impossible for a future write, declined to construct the other scenario because it was not
+confident the result would be correct, and said it deserves attention before close. **A read-only trace is now running to
+settle it.** The wrong outcome here would be to silence a true finding, which is exactly the mistake review caught earlier in
+this sprint.
+
+**Two more imprecise claims corrected** (running total: eighteen). The surfaces carrying a job position are **two** HTTP
+endpoints, not three — one response carries it on both its employee rows and its name-resolution sub-object. And a test helper
+the docs referred to was retired two sprints ago; the agent followed the current convention rather than the documented one.
+
+**Open reconciliation for the wave-2 gate:** the pins guess two wire names for payload members TASK-14104 is defining right
+now. If that task names them differently, only the property-name assertions need reconciling — the behaviour each pins is
+spec-derived and not in doubt.
