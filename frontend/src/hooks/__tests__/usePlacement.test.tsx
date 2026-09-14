@@ -242,6 +242,66 @@ describe('usePlacement — the 4-case PLACEMENT routing (TASK-10902)', () => {
     expect(result.version).toBe(7)
   })
 
+  // S141 / TASK-14107 — the THIRD consumer of `useEditPerson`'s running
+  // users.version cursor, named explicitly in the sprint log: `usePlacement`
+  // issues the unit-assign using `result.live.user.version` AFTER ALL of
+  // `saveEdit`'s sub-writes, including the (S141-added) profile PUT. Before
+  // the OQ-3(a) fix, the profile PUT re-stamped only `live.profile` — so a
+  // save that changed BOTH the job title (HR, profile section) and the unit
+  // in one go would thread the unit-assign's If-Match from a version the
+  // profile PUT had already superseded, and this call would 412.
+  it('EDIT, SAME-Org, HR profile edit + Placering change TOGETHER: the /unit call threads the version AFTER the profile PUT, not just after stamdata', async () => {
+    setupRouter({
+      '/api/admin/users/EMP1/unit': () => res(true, 200, { version: 8 }, '"8"'),
+      // stamdata PUT (step 1): users.version 5 -> 6.
+      '/api/admin/users/EMP1': () => res(true, 200, userJson(6), '"6"'),
+      // employee-profiles PUT (step 2, HR): users.version 6 -> 7. The
+      // pre-S141 bug would have left the /unit call above still holding "6".
+      '/api/admin/employee-profiles/EMP1': () =>
+        res(
+          true,
+          200,
+          { employeeId: 'EMP1', partTimeFraction: 0.8, position: 'New Title', isPartTime: true, version: 7, scheduled: null },
+          '"7"',
+        ),
+    })
+
+    const live: EditLiveState = {
+      ...makeLive(5),
+      profile: {
+        employeeId: 'EMP1',
+        partTimeFraction: 1.0,
+        position: 'Old Title',
+        isPartTime: false,
+        version: 42, // the profile row's own (pre-S141, now orphaned) token
+        etag: '"42"',
+        scheduled: null,
+      },
+    }
+    const result = await run({
+      mode: 'edit',
+      userId: 'EMP1',
+      editInput: {
+        ...editInput('STY02'), // SAME org
+        isHr: true,
+        profile: { partTimeFraction: '0.800', position: 'New Title' }, // dirtied vs live.profile
+      },
+      live,
+      orgChanged: false,
+      targetUnitId: 'unit-C',
+      unitChanged: true,
+      designateUnitId: null,
+      removeLeaderUnitId: null,
+    })
+
+    expect(result.ok).toBe(true)
+    const unitCall = calls.find((c) => c.url.endsWith('/unit'))!
+    // MUST be "7" (post-PROFILE-PUT) — "6" (post-stamdata-only) or "42" (the
+    // profile's own stale token) both indicate the defect.
+    expect(unitCall.ifMatch).toBe('"7"')
+    expect(result.version).toBe(8)
+  })
+
   it('EDIT, SAME-Org, NO unit change: only the stamdata PUT (no /unit)', async () => {
     setupRouter({ '/api/admin/users/EMP1': () => res(true, 200, userJson(6), '"6"') })
     const result = await run({

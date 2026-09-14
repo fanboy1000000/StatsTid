@@ -14,6 +14,7 @@ import { useCallback, useState } from 'react'
 import { useToast } from '../../../components/ui/Toast'
 import { useReportingLines } from '../../../hooks/useReportingLines'
 import { PersonPickerDialog } from './PersonPickerDialog'
+import { ScheduledChangeNotice } from './ScheduledChangeNotice'
 import styles from './LifecycleSections.module.css'
 
 interface DangerSectionProps {
@@ -27,6 +28,13 @@ interface DangerSectionProps {
       same-Organisation-validated server-side (ADR-027 D2), so a cross-Organisation replacement
       was never a valid choice. */
   organisationId: string | null
+  /** S141 / TASK-14107 — B0 (visibility): this person's scheduled profile /
+      agreement-code change, if any, shown before HR confirms an action here.
+      NOTE this action is "Fjern medarbejder fra afgrænsning" (a reporting-line
+      removal + reassignment) — it does NOT touch either timeline table, so
+      the copy below is deliberately framed as awareness, not consequence. */
+  scheduledProfile?: { effectiveFrom: string; summary: string } | null
+  scheduledAgreement?: { effectiveFrom: string; summary: string } | null
   /** Fired after a successful removal so the caller refetches + closes. */
   onRemoved?: () => void
   disabled?: boolean
@@ -43,6 +51,8 @@ export function DangerSection({
   personName,
   forbidden,
   organisationId,
+  scheduledProfile,
+  scheduledAgreement,
   onRemoved,
   disabled = false,
 }: DangerSectionProps) {
@@ -138,6 +148,24 @@ export function DangerSection({
       {/* Step 1 — confirm. */}
       {phase.kind === 'confirm' && (
         <div className={styles.dangerDialog} role="dialog" aria-modal="true" data-testid="danger-confirm">
+          {/* S141 / TASK-14107 — B0: shown for AWARENESS, not consequence — this
+              action removes the person from the afgrænsning (reporting-line
+              scope) and does not touch either dated timeline, so a scheduled
+              profile/agreement change is unaffected either way. */}
+          {scheduledProfile && (
+            <ScheduledChangeNotice
+              effectiveFrom={scheduledProfile.effectiveFrom}
+              summary={scheduledProfile.summary}
+              testId="danger-profile-scheduled"
+            />
+          )}
+          {scheduledAgreement && (
+            <ScheduledChangeNotice
+              effectiveFrom={scheduledAgreement.effectiveFrom}
+              summary={scheduledAgreement.summary}
+              testId="danger-agreement-scheduled"
+            />
+          )}
           <p className={styles.dangerText}>
             Fjern <strong>{personName || employeeId}</strong> fra afgrænsningen? Hvis personen
             godkender andre, skal du vælge en erstatningsgodkender for hver.

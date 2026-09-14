@@ -44,6 +44,10 @@ interface LifecycleSectionsProps {
       same-Organisation-validated server-side, and an optional prop would let a forgotten caller
       silently fall back to the all-Organisations search. In CREATE mode this is the DRAFT org. */
   organisationId: string | null
+  /** S141 / TASK-14107 — B0 (visibility): threaded straight through to
+      DangerSection (edit mode only; see its own prop doc). */
+  scheduledProfile?: { effectiveFrom: string; summary: string } | null
+  scheduledAgreement?: { effectiveFrom: string; summary: string } | null
   /** S124 / TASK-12401 — optional one-line explanation of the approver field's Organisation
       coupling (a discarded create-mode pick, or a pending transfer in edit mode). */
   approverNotice?: string | null
@@ -72,6 +76,8 @@ export function LifecycleSections({
   onDraftApproverChange,
   onMutated,
   onPersonRemoved,
+  scheduledProfile,
+  scheduledAgreement,
   disabled = false,
 }: LifecycleSectionsProps) {
   const { fetchEmployeeLines, fetchDirectReports, fetchActiveVikar } = useReportingLines()
@@ -223,6 +229,8 @@ export function LifecycleSections({
           personName={personName}
           forbidden={forbidden}
           organisationId={organisationId}
+          scheduledProfile={scheduledProfile}
+          scheduledAgreement={scheduledAgreement}
           onRemoved={onPersonRemoved ?? onMutated}
           disabled={disabled}
         />

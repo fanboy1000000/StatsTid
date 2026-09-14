@@ -6,6 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '../../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import { orgsFromForest } from '../personDrawerData'
@@ -220,26 +221,31 @@ describe('PersonDrawer — the godkender picker is Organisation-scoped', () => {
   it('EDIT: keeps searching the PERSISTED organisation while an unsaved transfer is pending', async () => {
     const forest = makeForest()
     render(
-      <ToastProvider>
-        <PersonDrawer
-          open
-          user={{
-            userId: 'EMP1',
-            username: 'emp1',
-            displayName: 'Karen Nielsen',
-            email: 'k@x.dk',
-            role: 'Employee',
-            primaryOrgId: 'STY02', // the PERSISTED org — what the server validates against
-            agreementCode: 'HK',
-            isActive: true,
-          } as never}
-          organizations={orgsFromForest(forest)}
-          forest={forest}
-          currentUnitId={null}
-          onClose={vi.fn()}
-          onSaved={vi.fn()}
-        />
-      </ToastProvider>,
+      // S141 / TASK-14107 — the drawer's edit-mode "Fratrædelse" link
+      // (react-router-dom `Link`) needs a Router ancestor; CREATE-mode tests
+      // in this file don't render it and stay un-wrapped.
+      <MemoryRouter>
+        <ToastProvider>
+          <PersonDrawer
+            open
+            user={{
+              userId: 'EMP1',
+              username: 'emp1',
+              displayName: 'Karen Nielsen',
+              email: 'k@x.dk',
+              role: 'Employee',
+              primaryOrgId: 'STY02', // the PERSISTED org — what the server validates against
+              agreementCode: 'HK',
+              isActive: true,
+            } as never}
+            organizations={orgsFromForest(forest)}
+            forest={forest}
+            currentUnitId={null}
+            onClose={vi.fn()}
+            onSaved={vi.fn()}
+          />
+        </ToastProvider>
+      </MemoryRouter>,
     )
 
     // EDIT mode hydrates the HR profile before enabling its controls; wait that out, or the click

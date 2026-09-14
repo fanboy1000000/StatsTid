@@ -19,11 +19,32 @@
 //
 // `UserManagement.tsx` was retired (S109); this module is the single source of
 // truth for the drawer.
+//
+// S141 / TASK-14107 (B0 — the owner's visibility requirement: "should it not
+// be visible to an HR employee that another has scheduled a change?") — the
+// GET/PUT response now carries `scheduled`: the next dated profile row after
+// today, or an explicit `null` when nothing is scheduled. The drawer reads
+// this straight off the SAME payload (no second call — B0 forbids that bolt-on
+// shape). S141 / OQ-3 (a) also moves this row's concurrency token: `version` /
+// the ETag header are now the EMPLOYEE's one aggregate token (`users.version`),
+// not this row's own — see `useEditPerson.saveEdit`'s comment on the running
+// version cursor for why every write AFTER this one in the drawer's save
+// sequence depends on that. OQ-6 (a): the PUT body carries the caller's
+// `carryForwardToScheduledChange` choice (meaningful only when `scheduled` was
+// non-null at read time; the backend diffs the sent values against today's and
+// carries forward only the field(s) that actually differ).
 import { apiFetchWithEtag } from '../../../lib/api'
 import type { components } from '../../../lib/api-types'
 import { formatVersionAsIfMatch, resolveEtag } from '../../../lib/etag'
 
-/** Snapshot of an employee_profiles row + the row-version concurrency token. */
+/** The next dated employee-profile row after today (S141 B0) — `null` when
+    nothing is scheduled. The GENERATED spec type verbatim. */
+export type ScheduledProfileChange =
+  components['schemas']['StatsTid.Backend.Api.Contracts.ScheduledProfileChange']
+
+/** Snapshot of an employee_profiles row + the row-version concurrency token
+    (S141: the token is `users.version`, the employee's ONE aggregate token —
+    see the file header). */
 export interface EmployeeProfileSnapshot {
   employeeId: string
   partTimeFraction: number
@@ -31,6 +52,7 @@ export interface EmployeeProfileSnapshot {
   isPartTime: boolean
   version: number
   etag: string
+  scheduled: ScheduledProfileChange | null
 }
 
 /** The GET/PUT response — the GENERATED spec type verbatim (S113). */
@@ -45,6 +67,7 @@ function toSnapshot(data: EmployeeProfileWire, etag: string | null): EmployeePro
     isPartTime: data.isPartTime,
     version: data.version,
     etag: resolvedEtag ?? formatVersionAsIfMatch(data.version),
+    scheduled: data.scheduled,
   }
 }
 
@@ -73,6 +96,10 @@ export async function saveEmployeeProfile(
     effectiveFrom: string
     partTimeFraction: number
     position: string | null
+    /** S141 / OQ-6 (a) — set ONLY when a scheduled change exists and HR chose
+        to carry the edit into it too; omitted/undefined = the default "apply
+        until the scheduled change" behaviour. */
+    carryForwardToScheduledChange?: boolean
   },
 ): Promise<EmployeeProfileSnapshot> {
   const result = await apiFetchWithEtag('/api/admin/employee-profiles/{employeeId}', {
