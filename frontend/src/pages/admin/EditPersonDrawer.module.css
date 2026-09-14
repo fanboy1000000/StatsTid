@@ -172,6 +172,30 @@
   margin-bottom: 16px;
 }
 
+/* S141 / TASK-14107 (B0 — the owner's visibility requirement): a scheduled
+   change on a field this section shows. Informational (--color-info), not an
+   error — it is deliberate, saved state, not a conflict. */
+.scheduledNotice {
+  padding: 8px 12px;
+  border: 1px solid var(--color-info);
+  background: var(--color-info-light);
+  border-radius: 0px;
+  font-size: 13px;
+  line-height: 1.4;
+  margin-bottom: 12px;
+}
+
+.scheduledText {
+  margin: 0;
+  color: var(--color-text);
+}
+
+.scheduledChoice {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-info);
+}
+
 /* Per-section save failure (partial-failure honesty). */
 .sectionError {
   padding: 8px 12px;

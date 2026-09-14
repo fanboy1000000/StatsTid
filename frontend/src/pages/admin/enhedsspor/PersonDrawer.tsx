@@ -21,6 +21,7 @@
 // version-threading / the move-then-promote ordering on top.
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { Drawer } from '../../../components/ui'
 import { useToast } from '../../../components/ui/Toast'
 import { useAuth } from '../../../contexts/AuthContext'
@@ -34,6 +35,7 @@ import { StamdataSection } from '../editPerson/StamdataSection'
 import { ProfileSection } from '../editPerson/ProfileSection'
 import { EntitlementSection } from '../editPerson/EntitlementSection'
 import { LifecycleSections, type LifecycleContext } from '../editPerson/LifecycleSections'
+import { ScheduledChangeNotice } from '../editPerson/ScheduledChangeNotice'
 import {
   isHrCapable,
   INITIAL_SECTION_SAVE,
@@ -132,6 +134,12 @@ export function PersonDrawer({
   const [hydrating, setHydrating] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // S141 / TASK-14107 — OQ-6 (a): "apply until the scheduled change" (default,
+  // unchecked) vs "also carry this edit into it" — one choice per DATED field
+  // that can carry a scheduled change (profile / agreement code). Reset on
+  // every open so a stale choice from a previous edit never survives a reopen.
+  const [profileCarryForward, setProfileCarryForward] = useState(false)
+  const [agreementCarryForward, setAgreementCarryForward] = useState(false)
 
   // The Placering options reload whenever the chosen Organisation changes (a unit
   // belongs to exactly one Organisation, so an org change invalidates the unit set).
@@ -148,6 +156,8 @@ export function PersonDrawer({
     setChildSickDirty(false)
     setDraftApproverId(null)
     setDraftApproverName(null)
+    setProfileCarryForward(false)
+    setAgreementCarryForward(false)
 
     if (isNew) {
       const orgId = defaultOrgId ?? organizations[0]?.orgId ?? ''
@@ -281,6 +291,28 @@ export function PersonDrawer({
   const unitChanged = !isNew && placementUnitId !== (currentUnitId ?? null)
   const placementOrgId = stamdata.primaryOrgId || null
 
+  // S141 / TASK-14107 — B0 (visibility) + OQ-6 (a) (the edit prompt). Both
+  // read straight off the SAME payload the drawer already hydrated (`live`) —
+  // no second call (B0 forbids that bolt-on shape). `scheduled`/
+  // `scheduledAgreementCode` are `null` when nothing is scheduled, so these
+  // are `null` too in that case and nothing renders.
+  const scheduledProfile = live?.profile?.scheduled ?? null
+  const scheduledAgreement = live?.user.scheduledAgreementCode ?? null
+  // Dirty = the value HR is about to SEND differs from what a fresh open
+  // hydrated (mirrors exactly what `useEditPerson.saveEdit` sends, so the
+  // OQ-6 choice appears precisely when it would matter).
+  const profileDirty =
+    !!live?.profile &&
+    (profile.partTimeFraction !== live.profile.partTimeFraction.toFixed(3) ||
+      (profile.position.trim() || null) !== live.profile.position)
+  const agreementDirty = !isNew && !!live && stamdata.agreementCode !== live.user.agreementCode
+  const profileScheduledSummary = scheduledProfile
+    ? `Deltidsfraktion ${scheduledProfile.partTimeFraction.toFixed(3).replace('.', ',')}${
+        scheduledProfile.position ? ` · ${scheduledProfile.position}` : ''
+      }`
+    : ''
+  const agreementScheduledSummary = scheduledAgreement ? `Overenskomst ${scheduledAgreement.agreementCode}` : ''
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setFormError(null)
@@ -337,7 +369,19 @@ export function PersonDrawer({
       const result = await savePlacement({
         mode: 'edit',
         userId: user.userId,
-        editInput: { stamdata, profile, entitlement, childSickDirty, isHr },
+        editInput: {
+          stamdata,
+          profile,
+          entitlement,
+          childSickDirty,
+          isHr,
+          // S141 / OQ-6 (a) — only meaningful (and only sent) when a
+          // scheduled change actually exists for that field; the backend
+          // otherwise ignores the flag anyway, but omitting it keeps a plain
+          // save free of a field with no effect.
+          ...(scheduledAgreement !== null ? { stamdataCarryForward: agreementCarryForward } : {}),
+          ...(scheduledProfile !== null ? { profileCarryForward } : {}),
+        },
         live,
         orgChanged,
         targetUnitId: placementUnitId,
@@ -460,6 +504,24 @@ export function PersonDrawer({
             disabled={busy}
           />
 
+          {/* S141 / TASK-14107 — B0: the agreement code is a SECOND dated field
+              written on every save (bundled into the same users PUT as
+              Navn/E-mail/Organisation above), so a scheduled change to it must be
+              just as visible as one on the profile fields — otherwise the
+              owner's own defect reappears one field over. */}
+          {scheduledAgreement && (
+            <ScheduledChangeNotice
+              effectiveFrom={scheduledAgreement.effectiveFrom}
+              summary={agreementScheduledSummary}
+              carryForward={
+                agreementDirty
+                  ? { checked: agreementCarryForward, onChange: setAgreementCarryForward, disabled: busy }
+                  : undefined
+              }
+              testId="pd-agreement-scheduled"
+            />
+          )}
+
           {/* S109 — Placering (the unit Select, reloaded on Organisation change). */}
           <section className={styles.section} aria-labelledby="pd-placement-heading">
             <h3 id="pd-placement-heading" className={styles.sectionLabel}>
@@ -533,6 +595,23 @@ export function PersonDrawer({
                 saveState={INITIAL_SECTION_SAVE}
                 disabled={busy}
               />
+
+              {/* S141 / TASK-14107 — B0 + OQ-6 (a) for the profile fields
+                  (partTimeFraction / position). Read straight off the profile
+                  GET's `scheduled` member — no second call. */}
+              {scheduledProfile && (
+                <ScheduledChangeNotice
+                  effectiveFrom={scheduledProfile.effectiveFrom}
+                  summary={profileScheduledSummary}
+                  carryForward={
+                    profileDirty
+                      ? { checked: profileCarryForward, onChange: setProfileCarryForward, disabled: busy }
+                      : undefined
+                  }
+                  testId="pd-profile-scheduled"
+                />
+              )}
+
               <EntitlementSection
                 fields={entitlement}
                 onChange={patchEntitlement}
@@ -583,6 +662,30 @@ export function PersonDrawer({
             )}
           </section>
 
+          {/* SPRINT-141 / TASK-14108 (termination screen) + TASK-14107 follow-up
+              (owner-flagged gap: the screen existed but had no caller). A
+              per-employee ACTION page, not a destination — it deliberately has
+              no sidebar entry, so this link is the only way in. EDIT mode only
+              (there is nobody to terminate at create). Deliberately does NOT
+              reference the scheduled-change notices above: termination does
+              NOT cancel a scheduled profile/agreement change (only deleting
+              the profile does, a different action entirely) — the two are
+              independent and this link says nothing that would imply otherwise. */}
+          {!isNew && user && (
+            <section className={styles.section} aria-labelledby="pd-termination-heading">
+              <h3 id="pd-termination-heading" className={styles.sectionLabel}>
+                Fratrædelse
+              </h3>
+              <p className={styles.helperText}>
+                Registrér medarbejderens fratrædelsesdato på{' '}
+                <Link to={`/admin/medarbejdere/${user.userId}/fratraedelse`} data-testid="pd-termination-link">
+                  fratrædelsessiden
+                </Link>
+                .
+              </p>
+            </section>
+          )}
+
           {/* Reused lifecycle cores: Nærmeste leder (ApproverSection) + Vikar ved
               fravær (VikarSection) + Slet (DangerSection). */}
           <LifecycleSections
@@ -614,6 +717,11 @@ export function PersonDrawer({
               onSaved(placementOrgId)
               onClose()
             }}
+            // S141 / TASK-14107 — B0: the danger section (DangerSection, "Fjern
+            // medarbejder fra afgrænsning") shows this person's scheduled
+            // change too, for awareness (see DangerSection's own doc comment).
+            scheduledProfile={scheduledProfile ? { effectiveFrom: scheduledProfile.effectiveFrom, summary: profileScheduledSummary } : null}
+            scheduledAgreement={scheduledAgreement ? { effectiveFrom: scheduledAgreement.effectiveFrom, summary: agreementScheduledSummary } : null}
             disabled={busy}
           />
 

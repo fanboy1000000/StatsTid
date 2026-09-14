@@ -83,6 +83,20 @@ export interface EditSaveInput {
    * `PUT /users/{id}/unit` instead. On a non-transfer PUT the backend ignores it.
    */
   unitId?: string | null
+  /**
+   * S141 / OQ-6 (a) — set ONLY when a scheduled AGREEMENT-CODE change exists
+   * AND HR is editing the agreement code today: `true` = also carry the
+   * edited value into the scheduled row (the backend touches only the
+   * field(s) that actually differ from today's); omitted/`false` = the
+   * default "apply until the scheduled change" behaviour. Threaded into the
+   * users PUT (step 1) — the agreement code is a second dated field on that
+   * same request.
+   */
+  stamdataCarryForward?: boolean
+  /** S141 / OQ-6 (a) — the PROFILE-section counterpart of the above
+      (partTimeFraction / position / employmentCategory), threaded into the
+      employee-profiles PUT (step 2). */
+  profileCarryForward?: boolean
 }
 
 export interface StaleConflict {
@@ -158,6 +172,11 @@ export function useEditPerson() {
             // caller supplied it (a cross-Organisation transfer); omitted on a
             // same-Organisation save (the unit is changed via PUT /users/{id}/unit).
             ...(input.unitId !== undefined ? { unitId: input.unitId } : {}),
+            // S141 / OQ-6 (a) — only sent when the drawer detected a scheduled
+            // agreement-code change (see the field's own doc comment).
+            ...(input.stamdataCarryForward !== undefined
+              ? { carryForwardToScheduledChange: input.stamdataCarryForward }
+              : {}),
           },
           live.user.etag,
         )
@@ -192,17 +211,51 @@ export function useEditPerson() {
       // If-Match. Only attempted when (a) the actor is HR and (b) we captured a
       // profile snapshot (ETag). A non-HR actor's HR sections are hidden, but if
       // an HR PUT 403s it is recorded honestly here.
+      //
+      // S141 / OQ-3 (a) — BLOCKER FIX (Step-0b; the third specification, after
+      // two wrong ones — see SPRINT-141.md for the full history of why the
+      // first two were wrong). The profile row's concurrency token is no
+      // longer its own `ep.version`: it is now `users.version`, the ONE
+      // aggregate token for the whole employee record (the same choice
+      // `user_agreement_codes` already made — see the running-cursor comment
+      // below at (3)+(4)). Step 1 (the users PUT, just above) bumps
+      // `users.version` UNCONDITIONALLY, even when nothing in it changed. So:
+      //   - the If-Match sent here MUST be the POST-STEP-1 token
+      //     (`live.user.etag`), never the ETag captured at dialog-open
+      //     (`live.profile.etag` — that number is now ORPHANED: nothing
+      //     compares against it any more, and re-using it 412s every time).
+      //   - on success this PUT bumps `users.version` AGAIN (S141: every
+      //     write to the employee's token bumps it, even a no-op edit, or the
+      //     token would not detect anything) — so the response's `version` /
+      //     ETag must be re-stamped onto BOTH `live.user` (version + etag) AND
+      //     `live.profile`. Re-stamping only `live.profile.etag` — the
+      //     obvious move, and what this code did before — leaves the DOB /
+      //     employment-start writes below (which share the SAME running
+      //     cursor) and `usePlacement`'s post-save unit-assign
+      //     (`usePlacement.ts` — reads `live.user.version` AFTER this whole
+      //     sequence) holding a superseded number: every one of THOSE writes
+      //     would then 412 instead, which looks like a different bug rather
+      //     than the same one moved one step later.
       if (input.isHr && live.profile) {
         try {
           const ptf = Number.parseFloat(input.profile.partTimeFraction)
           const parsedPtf = Number.isFinite(ptf) ? ptf : 1.0
           const positionTrimmed = input.profile.position.trim()
-          const updatedProfile = await saveEmployeeProfile(live.profile.employeeId, live.profile.etag, {
+          const updatedProfile = await saveEmployeeProfile(live.profile.employeeId, live.user.etag, {
             effectiveFrom: todayIsoUtc(),
             partTimeFraction: parsedPtf,
             position: positionTrimmed || null,
+            // S141 / OQ-6 (a) — only sent when the drawer detected a
+            // scheduled profile change (see the field's own doc comment).
+            ...(input.profileCarryForward !== undefined
+              ? { carryForwardToScheduledChange: input.profileCarryForward }
+              : {}),
           })
-          live = { ...live, profile: updatedProfile }
+          live = {
+            ...live,
+            profile: updatedProfile,
+            user: { ...live.user, version: updatedProfile.version, etag: updatedProfile.etag },
+          }
           mark('profile', 'committed')
         } catch (err) {
           const e = err as StatusError
@@ -221,25 +274,30 @@ export function useEditPerson() {
 
       // (3)+(4) DOB + employment-start PUT — HR-gated, admin-strict If-Match.
       //
-      // BLOCKER 1 (S76b fix-forward): the users PUT (2nd step), the DOB PUT, AND
-      // the employment-start PUT all mutate the SAME `users` row → each one bumps
-      // `users.version`. The DOB/employment-start versions captured at dialog-open
-      // (`birthDateVersion`/`employmentStartVersion`) are STALE the moment the
-      // users PUT commits, so a blind re-use would 412 the 2nd/3rd writes against
-      // the REAL backend. The mock that accepted every PUT masked this.
+      // BLOCKER 1 (S76b fix-forward, joined by the profile PUT at S141 / OQ-3(a)):
+      // the users PUT (step 1), the employee-profiles PUT (step 2, above), the DOB
+      // PUT, AND the employment-start PUT ALL share ONE running concurrency token —
+      // `users.version`, the employee's single aggregate token — and each write
+      // bumps it. The DOB/employment-start versions captured at dialog-open
+      // (`birthDateVersion`/`employmentStartVersion`) are STALE the moment ANY
+      // earlier write in this sequence commits, so a blind re-use would 412 a later
+      // write against the REAL backend. The mock that accepted every PUT masked
+      // this originally; S141 re-broke it by adding a SECOND writer (the profile
+      // PUT) to the same token without re-threading it — see that step's comment.
       //
-      // FIX — read-your-write version threading ACROSS the users-row sequence: the
-      // users PUT ran first (step 1) and re-stamped `live.user.version` to the new
-      // users.version; we thread THAT into the DOB write's If-Match, capture the
-      // bumped version it returns, thread it into the employment-start write, and
-      // re-stamp `live.user.version` again so a second in-session save also works.
-      // A skipped write (untouched field) does NOT advance the version — the next
-      // write inherits the latest committed users.version regardless.
+      // FIX — read-your-write version threading ACROSS the ENTIRE users-row
+      // sequence, one running cursor for all four writes: each step re-stamps
+      // `live.user.version`/`etag` from its own response before the next step
+      // reads it, so every write always sends the token the PREVIOUS write in
+      // THIS save actually produced. A skipped write (untouched field) does NOT
+      // advance the version — the next write inherits the latest committed
+      // users.version regardless.
       //
-      // `live.user.version` is the AUTHORITATIVE running users.version after the
-      // users PUT (committed-or-skipped). We seed the running cursor from it and
-      // fall back to the dialog-open per-field capture only if the users row was
-      // never fetched with a version (defensive; both come from users.version).
+      // `live.user.version` is the AUTHORITATIVE running users.version after
+      // steps (1) and (2) (committed-or-skipped). We seed the running cursor
+      // from it and fall back to the dialog-open per-field capture only if the
+      // users row was never fetched with a version (defensive; both come from
+      // users.version).
       let usersRowVersion: number | null =
         live.user.version ?? live.birthDateVersion ?? live.employmentStartVersion
 

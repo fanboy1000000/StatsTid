@@ -44,12 +44,20 @@ export interface Organization {
   okVersion?: string
 }
 
+/** S141 / TASK-14107 (B0) — the next dated agreement-code row after today, or
+    `null` when nothing is scheduled. Carried ONLY by the per-user GET (the
+    spec `UserDetailResponse`) — the create POST / PUT / org-users list
+    responses don't serve it, hence optional below. The GENERATED spec type
+    verbatim. */
+export type ScheduledAgreementCodeChange =
+  components['schemas']['StatsTid.Backend.Api.Contracts.ScheduledAgreementCodeChangeDto']
+
 /** Local VIEW type — the shared subset read from the per-user GET (the spec
     `UserDetailResponse`, which additionally carries `okVersion` /
-    `employmentCategory`), the create POST (the spec `UserCreatedResponse`,
-    which additionally carries `okVersion`) and — since S115 — the org-users
-    list GET (the spec `OrgUserListItem`, which additionally carries
-    `employmentCategory`); all assign directly. */
+    `employmentCategory` / `scheduledAgreementCode`), the create POST (the spec
+    `UserCreatedResponse`, which additionally carries `okVersion`) and — since
+    S115 — the org-users list GET (the spec `OrgUserListItem`, which
+    additionally carries `employmentCategory`); all assign directly. */
 export interface User {
   userId: string
   username: string
@@ -63,6 +71,12 @@ export interface User {
   // `version: 1`; PUT returns the new post-update version. The frontend
   // captures it via `resolveEtag` and composes `If-Match` on the next PUT.
   version: number
+  // S141 / TASK-14107 (B0) — present (possibly `null`) ONLY when this `User`
+  // came from the per-user GET; absent from the create/PUT/list responses,
+  // which don't serve it. Optional (not `| null`) for exactly that reason —
+  // "not fetched from the GET yet" is a real, distinct third state from "GET
+  // said nothing is scheduled".
+  scheduledAgreementCode?: ScheduledAgreementCodeChange | null
 }
 
 /**
@@ -334,7 +348,19 @@ export function useOrgUsers(orgId: string) {
     // re-anchors edges + applies the unit in ONE call; a same-Organisation unit
     // change goes through `PUT /users/{id}/unit` instead (never here). Omitted ⇒
     // not serialized (the same-Org path).
-    body: { effectiveFrom: string; displayName?: string; email?: string; primaryOrgId?: string; agreementCode?: string; unitId?: string | null },
+    body: {
+      effectiveFrom: string
+      displayName?: string
+      email?: string
+      primaryOrgId?: string
+      agreementCode?: string
+      unitId?: string | null
+      // S141 / OQ-6 (a) — agreement code is a SECOND dated field on this same
+      // PUT (see `agreementCode` above). Set ONLY when a scheduled agreement
+      // change exists and HR chose to carry the edit into it; omitted =
+      // "apply until the scheduled change" (the default).
+      carryForwardToScheduledChange?: boolean
+    },
     ifMatch: string,
   ): Promise<WithEtag<UserUpdated>> => {
     // S112 — typed etag PUT. NOTE the honest return type: the PUT response is
