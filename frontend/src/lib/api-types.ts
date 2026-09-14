@@ -5916,10 +5916,19 @@ export interface components {
             displayName: string;
             orgId: string;
             unitName: string | null;
+            /** TASK-14115 manual sync: this worktree branched before the S141 wave that added
+             *  `MissingRecord`/`CoveredFrom` to `HrCannotRegisterItem` and regenerated this file from
+             *  `docs/api/openapi.json`. Added by hand here (matching the backend record + the already-
+             *  regenerated copy on the integration branch byte-for-byte) purely to type-check in
+             *  isolation; the Orchestrator should re-run `npm run gen:api` at merge so this file goes
+             *  back to being fully generated rather than hand-patched. */
+            missingRecord: string;
             /** Format: date */
             gapSince: string | null;
             /** Format: int32 */
             daysSinceGapStart: number | null;
+            /** Format: date */
+            coveredFrom: string | null;
         };
         "StatsTid.Backend.Api.Contracts.HrCannotRegisterResponse": {
             /** Format: date */
