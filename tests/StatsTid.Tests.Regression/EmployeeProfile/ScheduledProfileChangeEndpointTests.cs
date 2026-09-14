@@ -157,9 +157,13 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
             employmentCategory: "Standard", ifMatch: $"\"{before.Version}\"",
             carryForwardToScheduledChange: null);
 
-        // RED (expected, wave-2 gate): fails today only because the assertions below have nothing
-        // to compare against yet under the still-refusing/not-yet-wired endpoint shape in some
-        // builds; once TASK-14104 lands this must be a TRUE no-op end to end.
+        // Corrected at the sprint-end review: the earlier comment here described a failing
+        // condition ("the still-refusing/not-yet-wired endpoint shape") that never existed in any
+        // commit — this PUT is dated TODAY, so it was never subject to the future-date refusal
+        // TASK-14104 lifted, in this file or any earlier state of it. The pin is a valid contract
+        // check regardless: it proves the round-trip no-op end to end (B1's as-of-today read
+        // composing correctly with the writer's same-values no-op), and it is simply unverified
+        // here — Docker does not run on this machine, so no claim of RED or GREEN is made either way.
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         var rows = await ReadProfileTimelineAsync(employeeId);
@@ -278,8 +282,16 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
         // (c) The audit's previous_data reflects TODAY's values (0.800/"Today"), never the future
         //     row's (0.500/"Future") — this is what makes the audit trail honest about what was
         //     actually deleted.
-        var (action, previousData) = await ReadLatestProfileAuditAsync(employeeId, "DELETED");
-        Assert.Equal("DELETED", action);
+        //
+        //     Filtered by TODAY's OWN profile_id, not "the latest DELETED row" (sprint-end review
+        //     W2). The handler writes the main row's audit entry FIRST and then one DELETED row PER
+        //     RETIRED SCHEDULED ROW afterwards, so "latest by audit_id" is the retirement row — whose
+        //     previous_data is the SCHEDULED row's values, not today's. Asserting against the latest
+        //     row would therefore fail while production is correct, and a reader seeing it fail would
+        //     conclude the audit recorded the future row's values — exactly the pre-sprint defect
+        //     this area was fixed for. Filtering by the row's own identity avoids depending on write
+        //     order at all.
+        var previousData = await ReadProfileAuditPreviousDataAsync(todayRow.ProfileId, "DELETED");
         Assert.NotNull(previousData);
         using var prev = JsonDocument.Parse(previousData!);
         Assert.Equal(0.800m, prev.RootElement.GetProperty("partTimeFraction").GetDecimal());
@@ -959,21 +971,28 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
         return rows;
     }
 
-    private async Task<(string Action, string? PreviousData)> ReadLatestProfileAuditAsync(
-        string employeeId, string action)
+    /// <summary>
+    /// The audit row for ONE specific profile_id, not "the latest by this employee" (sprint-end
+    /// review W2) — a DELETE with a scheduled row present writes MULTIPLE audit rows (the main
+    /// closed-today row, then one per retired scheduled row), so "latest" is ambiguous and, in the
+    /// order this handler writes them, is actually the WRONG one for a test that means to check
+    /// today's own row.
+    /// </summary>
+    private async Task<string?> ReadProfileAuditPreviousDataAsync(Guid profileId, string action)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT action, previous_data::text FROM employee_profile_audit
-            WHERE employee_id = @e AND action = @a ORDER BY audit_id DESC LIMIT 1
+            SELECT previous_data::text FROM employee_profile_audit
+            WHERE profile_id = @p AND action = @a ORDER BY audit_id DESC LIMIT 1
             """, conn);
-        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("p", profileId);
         cmd.Parameters.AddWithValue("a", action);
         await using var reader = await cmd.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync(), $"expected an employee_profile_audit row with action='{action}'.");
-        return (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1));
+        Assert.True(await reader.ReadAsync(),
+            $"expected an employee_profile_audit row for profile_id='{profileId}' with action='{action}'.");
+        return reader.IsDBNull(0) ? null : reader.GetString(0);
     }
 
     /// <summary>

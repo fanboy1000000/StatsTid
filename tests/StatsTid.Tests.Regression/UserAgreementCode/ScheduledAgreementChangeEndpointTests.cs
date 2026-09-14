@@ -29,18 +29,22 @@ namespace StatsTid.Tests.Regression.UserAgreementCode;
 /// </para>
 ///
 /// <para>
-/// <b>RED-FIRST, and expected to STAY red until the S141 wave-2 gate.</b> Written from the spec
-/// while TASK-14104 (the endpoint-side work this file depends on) is being built concurrently in a
-/// sibling worktree. Docker is unavailable on the authoring machine, so nothing here is verified
-/// locally, and nothing is reported as passing.
+/// <b>Written RED, against wave-2 code that has since merged.</b> TASK-14104 has landed; Docker is
+/// still unavailable on this machine, so nothing here is verified locally and nothing is reported as
+/// passing regardless.
 /// </para>
 ///
 /// <para>
-/// <b>The same two provisional wire-contract guesses as the profile-side file</b> (see
-/// <c>ScheduledProfileChangeEndpointTests</c>'s class doc): a <c>scheduled</c> payload member and a
-/// <c>carryForwardToScheduledChange</c> request field. Neither name is fixed anywhere in code yet —
-/// the BEHAVIOUR pinned is not in doubt; the exact member names may need reconciling at the wave-2
-/// gate against whatever TASK-14104 actually ships.
+/// <b>Wire-contract note, corrected at the sprint-end review (W1).</b> Two names were originally
+/// written as provisional guesses. The request field, <c>carryForwardToScheduledChange</c>, matched
+/// what TASK-14104 shipped. The read-payload member did NOT: this file asserted a bare
+/// <c>scheduled</c> member (mirroring the profile side's actual name), but the merged contract names
+/// it <see cref="StatsTid.Backend.Api.Contracts.UserDetailResponse.ScheduledAgreementCode"/> —
+/// <c>scheduledAgreementCode</c> on the wire — because the users GET is a shared resource carrying
+/// several dated facts, and a bare "scheduled" would have been ambiguous the moment a second one was
+/// added. Both facts below now assert the real name; the earlier guess would have produced a FALSE
+/// RED against a correct payload, which is worse than no pin (a false red that resembles the pre-fix
+/// defect costs a debugging session and risks a correct fix being reverted).
 /// </para>
 ///
 /// <para>Conventions mirror <see cref="AgreementCodeBackdatingEndpointTests"/>.</para>
@@ -203,7 +207,7 @@ public sealed class ScheduledAgreementChangeEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
 
-        Assert.True(body.TryGetProperty("scheduled", out var scheduled),
+        Assert.True(body.TryGetProperty("scheduledAgreementCode", out var scheduled),
             "expected the users GET payload to carry the next scheduled agreement-code change (B0).");
         Assert.NotEqual(JsonValueKind.Null, scheduled.ValueKind);
         Assert.Equal(scheduledFrom.ToString("yyyy-MM-dd"), scheduled.GetProperty("effectiveFrom").GetString());
@@ -222,7 +226,7 @@ public sealed class ScheduledAgreementChangeEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
 
-        Assert.True(body.TryGetProperty("scheduled", out var scheduled));
+        Assert.True(body.TryGetProperty("scheduledAgreementCode", out var scheduled));
         Assert.Equal(JsonValueKind.Null, scheduled.ValueKind);
     }
 
