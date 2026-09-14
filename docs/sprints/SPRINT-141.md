@@ -288,7 +288,7 @@ verifies almost everything for the first time in CI at close, so an unowned pin 
 | S140's `cannotCompute` fact rewritten, list membership determined not assumed | TASK-14103 |
 | The **five** router matrix shapes, incl. today-dated-write-with-future-row asserting kind `Inserted` | **TASK-14112** (wave 1, local, no Docker) |
 | **B3 revaluation**: absences ≥ `from` revalued, none before, none past the next scheduled row's start | TASK-14106 |
-| **B3 worklist**: no rows for a future date in a **later month**; exported-month rule **unchanged** for a future date inside the current month; no settlement row for any future date | TASK-14106 |
+| **B3 worklist**: no rows for a future date in a **later month**; exported-month rule **unchanged** for a future date inside the current month; no settlement row **via the DATE rule** for any future date — the settlement's own recorded valuation boundary (the accrual end for a year-end settlement, the employment end date for a termination one) is always already in the past. **NOT covered by that guarantee, and this qualifier was missing until a trace restored it:** the independent SKIP-path report takes **no date test at all** and CAN still raise a settled-year row for a future-dated profile write whose revaluation interval reaches an absence grouped under an actively-settled year. **That row is CORRECT and must never be suppressed.** | TASK-14106 |
 | **B6** round-trip inert: GET → PUT unmodified → timeline unchanged, no absence revalued | TASK-14106 |
 | **B5** GET-then-PUT **and** GET-then-DELETE token round trips, both succeeding with a future row present | TASK-14106 |
 | **B4** audit: `previous_data` shows **today's** values; the retired scheduled row's retirement is **itself audited** | TASK-14106 |
@@ -960,3 +960,29 @@ both happen to be 1 in the seed.
 | Demo-seed | **165 passed** |
 
 The audit-projection catalog gained its row for the new event. Docker-gated facts remain unverified and are **not** claimed.
+
+## Wave 3 — a planning correction before dispatch
+
+**The picker and the visibility work share files, so they cannot run in parallel.** Step-0b split them into separate tasks so
+the cut order would be *enforceable* — B0 not cuttable, the picker cuttable — and that reasoning was right. But the split was
+never checked for **file disjointness**, and an effective-date input lives in exactly the drawer sections TASK-14107 is editing
+for visibility and for the token fix. Two agents, two worktrees, one set of files.
+
+**Correction: run them SEQUENTIALLY, not in parallel.** TASK-14111 (the picker) goes after TASK-14107 merges. The cut order
+survives intact — cutting the picker now simply means not dispatching it — and the collision disappears. *This is the third
+time this sprint that "these tasks look independent" has needed checking rather than assuming, and the second time the check
+found a collision.*
+
+**Wave 3a, dispatched in parallel (file-disjoint, verified):**
+
+| Task | Scope |
+|---|---|
+| **TASK-14107** | The drawer token fix (the Step-0b blocker, third specification), B0 on all six surfaces plus the agreement-code field and the danger section, the OQ-6 prompt. **NOT CUTTABLE** |
+| **TASK-14108** | The termination screen — new files, plus its own B0 obligation |
+| **TASK-14109** | The history screen — new files, against the route TASK-14113 defined. **FIRST TO CUT** |
+| **TASK-14115** | The follow-up list wording, which the detector work made wrong — **new, not in the original plan** |
+
+**Wave 3b:** TASK-14111, the picker, after TASK-14107 merges. **LAST TO CUT.**
+
+Route and navigation registration stays with the Orchestrator; the screen tasks declare what needs registering rather than
+editing the two shared files.
