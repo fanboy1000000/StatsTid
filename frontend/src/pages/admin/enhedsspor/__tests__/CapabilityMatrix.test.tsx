@@ -113,6 +113,7 @@ function row(p: Partial<RosterResponse['employees'][number]> & { employeeId: str
     unitName: 'Vejledning',
     leaderIds: ['jens'],
     primaryReportingLineVersion: null,
+    scheduledChangeFrom: null,
     ...p,
   }
 }
@@ -135,8 +136,8 @@ function makeRoster(): RosterResponse {
     pendingCountByManager: {},
     pendingPastDeadlineCountByManager: {},
     nameResolution: {
-      dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion' },
-      extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor' },
+      dir1: { userId: 'dir1', displayName: 'Direktør Dorthe', position: 'Direktør', unitName: 'Direktion', scheduledChangeFrom: null },
+      extLeader: { userId: 'extLeader', displayName: 'Ekstern Leder', position: 'Kontorchef', unitName: 'Andet Kontor', scheduledChangeFrom: null },
     },
   }
 }

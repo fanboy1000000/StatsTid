@@ -34,6 +34,7 @@ const { mockGet, ROSTER } = vi.hoisted(() => {
         unitName: 'Roster Enhed',
         leaderIds: ['roster_leader'],
         primaryReportingLineVersion: 1,
+        scheduledChangeFrom: null,
       },
       {
         employeeId: 'roster_leader',
@@ -53,6 +54,7 @@ const { mockGet, ROSTER } = vi.hoisted(() => {
         unitName: 'Roster Enhed',
         leaderIds: ['roster_leader'],
         primaryReportingLineVersion: null,
+        scheduledChangeFrom: null,
       },
     ],
     pendingCountByManager: { roster_leader: 0 },
@@ -63,6 +65,7 @@ const { mockGet, ROSTER } = vi.hoisted(() => {
         displayName: 'Roster Leader',
         position: null,
         unitName: 'Roster Enhed',
+        scheduledChangeFrom: null,
       },
     },
   }

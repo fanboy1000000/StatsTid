@@ -106,7 +106,7 @@ function rosterWithP1(): Record<string, RosterResponse> {
           employeeId: 'p1', displayName: 'Jens Vej', position: 'Kontorchef',
           structuralApproverId: null, periodStatus: 'OPEN', outgoingVikar: null,
           isRoot: false, isOrphan: false, unitId: VEJL, unitName: 'Vejledning',
-          leaderIds: [], primaryReportingLineVersion: null,
+          leaderIds: [], primaryReportingLineVersion: null, scheduledChangeFrom: null,
         },
       ],
       pendingCountByManager: {},
@@ -261,7 +261,7 @@ describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', 
       results: {
         units: [],
         people: [
-          { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'] },
+          { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'], scheduledChangeFrom: null },
         ],
         unitsTotal: 0,
         peopleTotal: 1,
@@ -289,7 +289,7 @@ describe('OrganisationOgMedarbejdere — page (shell + Afgrænsning + search)', 
       results: {
         units: [],
         people: [
-          { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'] },
+          { userId: 'p1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Kontorchef', unitName: 'Vejledning', path: ['Statens IT', 'Vejledning'], scheduledChangeFrom: null },
         ],
         unitsTotal: 0,
         peopleTotal: 1,

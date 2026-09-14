@@ -165,7 +165,7 @@ describe('EmploymentHistoryPage — picking an employee', () => {
     h.query = 'Jens'
     h.results = {
       units: [],
-      people: [{ userId: 'emp1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Konsulent', unitName: null, path: ['Statens IT'] }],
+      people: [{ userId: 'emp1', organisationId: 'STY02', displayName: 'Jens Vej', position: 'Konsulent', unitName: null, path: ['Statens IT'], scheduledChangeFrom: null }],
       unitsTotal: 0,
       peopleTotal: 1,
     }

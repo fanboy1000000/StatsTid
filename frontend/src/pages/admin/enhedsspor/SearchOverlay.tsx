@@ -27,11 +27,23 @@
 // Danish copy verbatim.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Badge } from '../../../components/ui'
 import { useSearch } from '../../../hooks/useSearch'
 import { isScoped } from './afgraensning'
 import type { SelectedNode } from './OrgStructureTree'
 import { LABEL, type UnitType } from './typeMaps'
 import styles from './SearchOverlay.module.css'
+
+// B0 (S141) — the owner's visibility requirement, applied to the search result: a
+// bare ISO date, never the future value itself (the read never carries what
+// changes — only that something does, on this same date, possibly on the
+// agreement code rather than the title shown here).
+const MONTHS_DA = ['jan', 'feb', 'mar', 'apr', 'maj', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
+function formatScheduledDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  if (!m) return iso
+  return `${parseInt(m[3], 10)}. ${MONTHS_DA[parseInt(m[2], 10) - 1] ?? ''} ${m[1]}`
+}
 
 interface SearchOverlayProps {
   open: boolean
@@ -189,6 +201,9 @@ export function SearchOverlay({ open, onClose, onNavigate, onNavigatePerson, sel
                       <span className={styles.resultBody}>
                         <span className={styles.resultName}>{p.displayName}</span>
                         {p.position && <span className={styles.personTitle}>{p.position}</span>}
+                        {p.scheduledChangeFrom && (
+                          <Badge variant="info">Ændring planlagt fra {formatScheduledDate(p.scheduledChangeFrom)}</Badge>
+                        )}
                         <span className={styles.resultPath}>{p.path.join(' › ')}</span>
                       </span>
                       <span className={styles.chevron} aria-hidden="true">›</span>
