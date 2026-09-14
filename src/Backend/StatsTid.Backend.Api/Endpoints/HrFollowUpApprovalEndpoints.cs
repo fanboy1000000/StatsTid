@@ -32,7 +32,10 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///   the cross-organisation orphan roll-up plus stand-in delegations the expiry sweep closed in the
 ///   last 30 days.</description></item>
 ///   <item><description><b>GET /api/hr/follow-up/cannot-register</b> (HRP-015) — employees whose
-///   registration is blocked by a missing agreement-code row.</description></item>
+///   registration is blocked because no effective-dated employment record covers today: the
+///   agreement-code row, the employment-profile row, or both (S141 / refinement B8). The response
+///   says WHICH, because the remedy is a different screen for each, and says when a scheduled record
+///   is due to cover them again, because that case is not a gap to repair by hand.</description></item>
 /// </list>
 ///
 /// <para><b>Read-only by ruling.</b> Owner ruling OQ-4: the S140 HR lists carry no write action.
@@ -43,10 +46,13 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///
 /// <para><b>Three shared rules.</b> (1) Org scope is the HR-floored accessible-org set matched
 /// against the SUBJECT's CURRENT <c>users.primary_org_id</c> — an EMPTY set is a 403, never an empty
-/// 200 that would present a scope problem as "nothing to do". (2) "Today" is the Copenhagen
-/// business day from the injected clock, computed ONCE per request and threaded into the repository
-/// (PAT-028) — no statement asks the database for a business date. (3) Every list is oldest-first
-/// and every item carries its age anchor plus <c>deadlineSource</c> (<c>stored</c> or
+/// 200 that would present a scope problem as "nothing to do". (2) "Today" is computed ONCE per
+/// request from the injected clock and threaded into the repository (PAT-028) — no statement asks
+/// the database for a business date. The four DEADLINE endpoints use the Copenhagen business day,
+/// because Danish employment-law deadlines are Danish calendar days; <b>cannot-register uses the
+/// writers' UTC day by owner ruling (2026-09-14)</b>, because it asks a data-integrity question about
+/// records the writers dated on that calendar — see the comment at its site. (3) Every list is
+/// oldest-first and every item carries its age anchor plus <c>deadlineSource</c> (<c>stored</c> or
 /// <c>computed</c>).</para>
 ///
 /// <para><b>Counts across these tiles are NOT additive</b> — a leaver's late final month is
@@ -252,7 +258,21 @@ public static class HrFollowUpApprovalEndpoints
             if (accessibleOrgIds is { Count: 0 })
                 return NoHrScopeForbidden();
 
-            var today = CopenhagenBusinessDate.Today(timeProvider);
+            // ★ S141 / TASK-14105 (refinement B8) — THE ONE ENDPOINT IN THIS FILE THAT DOES NOT USE
+            // THE COPENHAGEN BUSINESS DAY. Owner ruling, 2026-09-14: this list asks a DATA-INTEGRITY
+            // question — "does any effective-dated record cover this employee today?" — about rows
+            // that every writer in the system dated on the UTC day. Its four siblings above ask
+            // DEADLINE questions, which really are Danish calendar days, and they keep
+            // CopenhagenBusinessDate. The two calendars disagree for an hour or two each night; on
+            // the Danish day this read would report gaps that do not exist, every night, and a
+            // diagnostic list that cries wolf nightly is a list people stop reading.
+            //
+            // DO NOT "correct" this to CopenhagenBusinessDate to match its neighbours — the same
+            // statement is on GetCannotRegisterAsync, which is the read it feeds. The owner has
+            // separately decided that business dates should eventually move to the Danish day
+            // EVERYWHERE (a roadmap item of its own); the rule here is "match the WRITERS", which is
+            // forward-compatible with that — when they move, this moves with them, not before.
+            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
             var items = await followUpRepo.GetCannotRegisterAsync(accessibleOrgIds, today, ct);
 
             return Results.Ok(new HrCannotRegisterResponse(
@@ -268,8 +288,10 @@ public static class HrFollowUpApprovalEndpoints
                         DisplayName: i.DisplayName,
                         OrgId: i.OrgId,
                         UnitName: i.UnitName,
+                        MissingRecord: i.MissingRecord,
                         GapSince: i.GapSince,
-                        DaysSinceGapStart: i.DaysSinceGapStart)).ToList()));
+                        DaysSinceGapStart: i.DaysSinceGapStart,
+                        CoveredFrom: i.CoveredFrom)).ToList()));
         }).RequireAuthorization("HROrAbove")
         .Produces<HrCannotRegisterResponse>(StatusCodes.Status200OK);
 

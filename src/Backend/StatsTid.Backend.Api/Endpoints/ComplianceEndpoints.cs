@@ -52,6 +52,12 @@ public static class ComplianceEndpoints
             DesignatedApproverAuthorizer designatedAuthorizer,
             // S128 / TASK-12804 (RES-002) — period resolution for the leader-tier month gate.
             ApprovalPeriodRepository approvalRepo,
+            // S141 / TASK-14105 — the fail-closed "no employment record covers this date" path is
+            // now a CAUGHT, NAMED condition rather than an unhandled throw, so it has to log itself:
+            // catching an exception that the framework used to log is only an improvement if the
+            // diagnosis survives. Same ILoggerFactory handler-parameter idiom as AdminEndpoints /
+            // ApprovalEndpoints.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -194,8 +200,8 @@ public static class ComplianceEndpoints
 
             // ADR-023 D1+D3 cutover: resolve fully-hydrated dated profile via
             // EmploymentProfileResolver. Non-PCS rule-engine HTTP caller →
-            // fail-closed on null (caller maps to 500 via existing middleware per
-            // ADR-023 D3). Replaces hardcoded WeeklyNormHours=37.0m +
+            // fail-closed (S141: a CAUGHT, NAMED condition — see below — rather than an
+            // unhandled throw). Replaces hardcoded WeeklyNormHours=37.0m +
             // EmploymentCategory="STANDARD" defaults. Post-S137 (ADR-040 D4) every field the
             // resolver returns is dated: part-time fraction / position / employment_category
             // from employee_profiles, agreement_code from user_agreement_codes, and ok_version
@@ -210,8 +216,64 @@ public static class ComplianceEndpoints
             // detailed 500 body — an employment date must not leak through either. The resolver
             // was still asked at firstEmployedDay (the correct D10 as-of); only the reported
             // anchor is the month the caller named. Diagnostics keep the month + employee id.
-            var profile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, firstEmployedDay.Value, ct)
-                ?? throw new EmployeeProfileNotFoundException(employeeId, monthStart);
+            // ── S141 / TASK-14105 (refinement B8) — THE FAIL-CLOSED PATH IS NOW CAUGHT AND NAMED ──
+            // WHY THIS CHANGED. Until S141 this read could only fail this way through a seeding or
+            // backfill defect, so an anonymous 500 was an acceptable "should never happen". S141
+            // lets HR date an employment change in the FUTURE, which makes "no employment record
+            // covers this date" a state the product itself can produce — and then this endpoint
+            // would answer an unhandled 500, with no body and no name, every day until the
+            // scheduled record starts. An operator reading that could not tell a broken server from
+            // an employee whose records have a hole.
+            //
+            // ONE CONDITION, ONE NAME. The resolver can report the same underlying state two ways:
+            // `null` when no employee_profiles row covers the date, and a thrown
+            // EmployeeProfileNotFoundException when a profile row covers it but no
+            // user_agreement_codes row does (its documented data-integrity fail-loud). Both are
+            // "this employee has no complete employment record on this date", so both land on ONE
+            // named condition here instead of two different escapes.
+            //
+            // STILL FAIL-CLOSED, AND STILL A 500 (ADR-023 D3). Refusing to compute is the correct
+            // answer — a compliance verdict built on a guessed profile would be worse than no
+            // verdict. What changes is only that the refusal now says what it is. Whether this
+            // deserves a 4xx rather than a 500, now that the product can create the state
+            // deliberately, is a contract question raised to the Orchestrator, not decided here.
+            //
+            // ADR-040 D7: the body carries NO employment date and no as-of date. The log keeps the
+            // caller's own year/month plus the employee id, exactly as the exception message did —
+            // the resolver is still ASKED at firstEmployedDay (the correct D10 as-of), and that
+            // date is still never reported.
+            var complianceLogger = loggerFactory.CreateLogger("StatsTid.Compliance");
+            EmploymentProfile? profile = null;
+            EmployeeProfileNotFoundException? coverageFault = null;
+            try
+            {
+                profile = await profileResolver.GetByEmployeeIdAtAsync(employeeId, firstEmployedDay.Value, ct);
+            }
+            catch (EmployeeProfileNotFoundException ex)
+            {
+                coverageFault = ex;
+            }
+
+            if (profile is null)
+            {
+                complianceLogger.LogError(
+                    coverageFault,
+                    "employment_record_gap: compliance read for {EmployeeId} {Year}-{Month:00} cannot be " +
+                    "computed because no effective-dated employment record covers the first employed day of " +
+                    "the month. This employee should appear on the HR follow-up 'cannot register' list " +
+                    "(HRP-015), which names which record is missing and whether a scheduled one will close it.",
+                    employeeId, year, month);
+
+                return Results.Json(
+                    new
+                    {
+                        error = "employment_record_gap",
+                        reason = "No employment record covers this period for this employee. "
+                               + "An HR administrator must repair the employment profile or the agreement-code "
+                               + "history before compliance can be checked.",
+                    },
+                    statusCode: 500);
+            }
 
             var complianceRequest = new
             {

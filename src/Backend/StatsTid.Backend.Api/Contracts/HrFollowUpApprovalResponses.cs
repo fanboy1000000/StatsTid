@@ -230,28 +230,57 @@ public sealed record HrUncoveredApproversResponse(
 /// <summary>
 /// One employee who cannot register (HRP-015).
 /// </summary>
+/// <param name="MissingRecord">
+/// WHICH effective-dated record has no row covering today: <c>AGREEMENT_CODE</c>,
+/// <c>EMPLOYMENT_PROFILE</c> or <c>BOTH</c>. S141 / refinement B8 — before this sprint only the
+/// agreement hole was detectable, so the list never had to say; now it does, because the two are
+/// repaired on different screens.
+/// </param>
 /// <param name="GapSince">
-/// The first day of the current uncovered stretch — the day the employee's last agreement-code row
-/// stopped covering them. NULL when the gap cannot be dated (the only available anchor is the
-/// history-backfill sentinel); reported honestly rather than as an age of two millennia.
+/// The first day of the current uncovered stretch — the day the missing record last stopped
+/// covering them (the earlier of the two when both are missing). NULL when the gap cannot be dated
+/// (the only available anchor is the history-backfill sentinel); reported honestly rather than as an
+/// age of two millennia.
 /// </param>
 /// <param name="DaysSinceGapStart">NULL exactly when <paramref name="GapSince"/> is null.</param>
+/// <param name="CoveredFrom">
+/// The day a SCHEDULED record is due to start covering this employee again, when one exists (the
+/// later of the two when both are missing, since both must cover before registration works). A
+/// non-null value means this is not a gap to repair by hand: somebody scheduled a change ahead and
+/// left today uncovered. NULL means nothing is scheduled and the gap will not close on its own.
+/// </param>
 public sealed record HrCannotRegisterEmployee(
     string EmployeeId,
     string DisplayName,
     string OrgId,
     string? UnitName,
+    string MissingRecord,
     DateOnly? GapSince,
-    int? DaysSinceGapStart);
+    int? DaysSinceGapStart,
+    DateOnly? CoveredFrom);
 
 /// <summary>
-/// HRP-015 — employees who CANNOT REGISTER: employed today, with a profile row covering today, but
-/// no agreement-code row covering today.
+/// HRP-015 — employees who CANNOT REGISTER: employed today, but at least one of the two
+/// effective-dated employment records (the employment profile, the agreement code) has no row
+/// covering today.
 ///
 /// <para>Such an employee is refused (422) the moment they try to register a pro-rated absence,
 /// and today HR is never told — a fail-loud dead end for the employee and silence for the people
 /// who could fix it. One row per employee (duplicate gaps suppressed); leavers excluded, since
 /// their inability to register is not a data defect.</para>
+///
+/// <para><b>S141 / refinement B8 — what changed and why it matters.</b> Until this sprint the list
+/// looked only for the agreement-code hole, and it did so by joining a profile row covering today —
+/// which meant an employee with a PROFILE hole was filtered out of the very list meant to surface
+/// them. That was harmless only while the write endpoints refused every future-dated write. S141
+/// lifts that refusal so HR can schedule a change ahead, which makes "no record covers today"
+/// reachable; the same state also makes the payroll calculation and the compliance read fail closed
+/// for that employee every day until the scheduled record starts. This list is the thing that says
+/// so.</para>
+///
+/// <para><b><c>Today</c> is the UTC day here, not the Copenhagen business day</b> the sibling
+/// deadline lists report (owner ruling, 2026-09-14): this is a data-integrity question about records
+/// the writers dated on the UTC calendar.</para>
 ///
 /// <para>No aging colour: no rule states by when a registration-blocking data gap must be fixed
 /// (register row HRP-015 is NOT READY). The count and the oldest datable gap are the honest

@@ -24,7 +24,11 @@ namespace StatsTid.Infrastructure;
 //   HRP-022  approved not exported— an approved month with no payroll export record
 //   HRP-013  orphan employees     — nobody structurally approves them (cross-organisation roll-up)
 //   HRP-014  expired delegations  — a stand-in (vikar) the expiry sweep closed in the last 30 days
-//   HRP-015  cannot register      — employed today but no agreement-code row covers today
+//   HRP-015  cannot register      — employed today but no record covers today. S141 / TASK-14105
+//                                   (refinement B8) widened this from the agreement-code hole alone
+//                                   to the EMPLOYMENT-PROFILE hole as well, and removed the inner
+//                                   join that was filtering the profile-holed employee out of the
+//                                   very list meant to surface them
 //
 // THREE RULES THIS FILE OBEYS EVERYWHERE, because breaking any of them is how a diagnostic list
 // starts lying:
@@ -37,11 +41,20 @@ namespace StatsTid.Infrastructure;
 //     `null` = a GlobalAdmin's unrestricted read, an EMPTY set = the endpoint 403s before calling
 //     in here (never an empty 200, which would hide a scope problem as "nothing to do").
 //
-//  2. ONE DATE PER REQUEST (PAT-028). `today` is the Copenhagen business day, computed ONCE in
-//     the endpoint and threaded in as a parameter — which is why this repository holds no
-//     TimeProvider at all. No statement in this file uses CURRENT_DATE / NOW() for a business
-//     date; every date crosses the wire as a bound parameter, so a fixed test clock actually moves
-//     these reads.
+//  2. ONE DATE PER REQUEST (PAT-028). `today` is computed ONCE in the endpoint and threaded in as
+//     a parameter — which is why this repository holds no TimeProvider at all. No statement in this
+//     file uses CURRENT_DATE / NOW() for a business date; every date crosses the wire as a bound
+//     parameter, so a fixed test clock actually moves these reads.
+//
+//     ★ WHICH "today" is NOT uniform in this file, and the difference is deliberate (owner ruling,
+//     2026-09-14). The DEADLINE reads take the COPENHAGEN business day, because Danish
+//     employment-law deadlines are counted in Danish calendar days. HRP-015 (`GetCannotRegisterAsync`)
+//     takes the WRITERS' UTC DAY, because "does any record cover this employee today" is a
+//     data-integrity question about rows that writers dated on the UTC day — asked on the Danish
+//     calendar it would report non-existent gaps for the hour or two each night on which the two
+//     disagree. Each site says so; do not unify them without a ruling. The standing intent to move
+//     business dates to the Danish day everywhere is a separate roadmap item, and when the WRITERS
+//     move, HRP-015 moves with them.
 //
 //  3. EVERY ITEM CARRIES ITS AGE ANCHOR AND WHERE THAT ANCHOR CAME FROM (`stored` when the period
 //     row's deadline column holds it, `computed` when the row predates those columns and the
@@ -160,24 +173,56 @@ public sealed record HrExpiredDelegationItem(
     bool ApproverHasActiveCover);
 
 /// <summary>
-/// One employee who cannot register (HRP-015): employed today, with an <c>employee_profiles</c> row
-/// covering today, but NO <c>user_agreement_codes</c> row covering today — so a pro-rated absence
-/// registration answers 422 <c>employment_profile_missing</c> and HR is never told.
+/// Which of the two effective-dated employment records has no row covering today (HRP-015). The
+/// two have completely different remedies, so the list has to say which.
 /// </summary>
+public static class HrMissingEmploymentRecordKinds
+{
+    /// <summary>No <c>user_agreement_codes</c> row covers today. Fix the agreement-code history.</summary>
+    public const string AgreementCode = "AGREEMENT_CODE";
+
+    /// <summary>No <c>employee_profiles</c> row covers today (S141 / refinement B8). Fix the employment profile.</summary>
+    public const string EmploymentProfile = "EMPLOYMENT_PROFILE";
+
+    /// <summary>Neither record covers today.</summary>
+    public const string Both = "BOTH";
+}
+
+/// <summary>
+/// One employee who cannot register (HRP-015): employed today, but at least one of the two
+/// effective-dated employment records has no row covering today — so a pro-rated absence
+/// registration answers 422 <c>employment_profile_missing</c>, the payroll calculation and the
+/// compliance read fail closed, and HR is never told.
+/// </summary>
+/// <param name="MissingRecord">
+/// One of <see cref="HrMissingEmploymentRecordKinds"/>. S141 / refinement B8 — before this sprint
+/// only the agreement hole was detectable, so the list did not need to say which record was missing;
+/// now it does, because the remedy is a different screen for each.
+/// </param>
 /// <param name="GapSince">
-/// The first day of the current uncovered stretch — the day the employee's last agreement-code row
-/// stopped covering (intervals are end-EXCLUSIVE, ADR-018 D9), or the covering profile row's own
-/// start when the employee never had an agreement-code row at all. NULL when the only available
-/// anchor is the <c>0001-01-01</c> history-backfill sentinel: "the gap cannot be dated" is reported
-/// honestly rather than as an absurd age.
+/// The first day of the current uncovered stretch — the day the missing side's last covering row
+/// stopped covering (intervals are end-EXCLUSIVE, ADR-018 D9), falling back to the OTHER side's
+/// covering-row start when that side never had a row at all; the earlier of the two when both are
+/// missing. NULL when no anchor is datable, or when the only available anchor is the
+/// <c>0001-01-01</c> history-backfill sentinel: "the gap cannot be dated" is reported honestly
+/// rather than as an absurd age.
+/// </param>
+/// <param name="CoveredFrom">
+/// The day a SCHEDULED record is due to start covering this employee again, when one exists (both
+/// sides must cover, so this is the later of the two when both are missing). This is the B8
+/// signature: an employee whose only record starts in November is not a gap to repair by hand —
+/// somebody scheduled a change and left today uncovered. NULL means nothing is scheduled for at
+/// least one missing side, i.e. the gap will not close on its own.
 /// </param>
 public sealed record HrCannotRegisterItem(
     string EmployeeId,
     string DisplayName,
     string OrgId,
     string? UnitName,
+    string MissingRecord,
     DateOnly? GapSince,
-    int? DaysSinceGapStart);
+    int? DaysSinceGapStart,
+    DateOnly? CoveredFrom);
 
 /// <summary>
 /// The HR follow-up reads for the approval / employment-lifecycle / organisation processes
@@ -434,49 +479,145 @@ public sealed class HrFollowUpApprovalReadRepository
         """;
 
     /// <summary>
-    /// HRP-015 — employees who CANNOT REGISTER: employed today, with an <c>employee_profiles</c> row
-    /// covering today, but no <c>user_agreement_codes</c> row covering today. Effective-dated
-    /// intervals are end-EXCLUSIVE (ADR-018 D9): <c>effective_from &lt;= today AND (effective_to IS
-    /// NULL OR effective_to &gt; today)</c>. So a gap that CLOSED yesterday (a successor row now
-    /// covers today) does not appear, and a gap that OPENED today does.
+    /// HRP-015 — employees who CANNOT REGISTER: employed today, but at least one of the two
+    /// effective-dated employment records has no row covering today. Effective-dated intervals are
+    /// end-EXCLUSIVE (ADR-018 D9): <c>effective_from &lt;= today AND (effective_to IS NULL OR
+    /// effective_to &gt; today)</c>. So a gap that CLOSED yesterday (a successor row now covers
+    /// today) does not appear, and a gap that OPENED today does.
     ///
-    /// <para>ONE ROW PER EMPLOYEE (<c>DISTINCT ON</c>) — duplicate gaps are suppressed, per the
-    /// register row. LEAVERS are excluded (their inability to register is not a data defect), and
-    /// so is anyone whose employment has not started.</para>
+    /// <para><b>★ S141 / TASK-14105 (refinement B8) — this read used to be able to hide the very
+    /// employee it exists to surface, and the sprint that made that reachable is this one.</b> The
+    /// pre-S141 statement <c>INNER JOIN</c>ed a profile row covering today and then looked only for
+    /// the AGREEMENT hole. That was a defensible shortcut while the write endpoints refused every
+    /// future-dated write, because the create paths always wrote at today and a profile row covering
+    /// today therefore always existed. S141 lifts that refusal (refinement B3), so an employee whose
+    /// only profile row starts in November covers no day today — and the old inner join filtered
+    /// exactly that employee OUT of the list meant to find them, while the fail-closed dated readers
+    /// threw on every payroll calculation and compliance read for them. Both halves are fixed here:
+    /// the join is gone, and the PROFILE hole is detected alongside the agreement one.</para>
+    ///
+    /// <para><b>Why a seeder could not have been the fix</b> (wave-1 finding A, recorded so nobody
+    /// re-proposes it): the live partial-unique index means an employee whose only row is future
+    /// ALREADY has an open row, so a boot seeder converted to "has no row covering today" would try
+    /// to insert a second open row and collide. The hole is unfillable by an open-row insert; it has
+    /// to be detected and fixed deliberately, which is what this list is for.</para>
+    ///
+    /// <para><b>Single-row LATERAL joins everywhere</b> (the wave-1 Step-5a lesson): neither
+    /// "covering row" predicate has a unique index behind it — non-overlap is a writer-side
+    /// invariant and the history indexes permit an overlapping pair — so each covering read carries
+    /// the same <c>ORDER BY effective_from DESC LIMIT 1</c> tie-break the sibling reads and the
+    /// cache writers use. The outer <c>DISTINCT ON</c> is kept as a backstop, not as the mechanism:
+    /// the laterals already guarantee one row per employee.</para>
+    ///
+    /// <para><b>Zero-width rows are excluded from every date the list reports.</b> A row whose
+    /// <c>effective_to</c> equals its <c>effective_from</c> is the retirement trace left by a
+    /// soft-delete (owner ruling OQ-5 (a)); it covers no day, so it is neither a scheduled change
+    /// that will close the gap nor a row that ever "stopped covering" on a date worth showing.</para>
+    ///
+    /// <para>LEAVERS are excluded (their inability to register is not a data defect), and so is
+    /// anyone whose employment has not started — a new hire whose records start on their future
+    /// hire date is correctly dated, not holed.</para>
     /// </summary>
     private const string SelectCannotRegisterSql =
         """
-        SELECT d.employee_id, d.display_name, d.org_id, d.unit_name, d.gap_since
+        SELECT d.employee_id, d.display_name, d.org_id, d.unit_name,
+               d.gap_since, d.missing_record, d.covered_from
         FROM (
             SELECT DISTINCT ON (u.user_id)
                    u.user_id                                            AS employee_id,
                    u.display_name                                       AS display_name,
                    u.primary_org_id                                     AS org_id,
                    un.name                                              AS unit_name,
-                   COALESCE(gap.last_close, ep.effective_from)          AS gap_since
+                   -- WHICH record is missing. HR's remedy differs completely between the two, so a
+                   -- list that only said "this person cannot register" would hand over a mystery.
+                   CASE
+                       WHEN prof.profile_id IS NULL AND agr.assignment_id IS NULL THEN 'BOTH'
+                       WHEN prof.profile_id IS NULL THEN 'EMPLOYMENT_PROFILE'
+                       ELSE 'AGREEMENT_CODE'
+                   END                                                  AS missing_record,
+                   -- The day the FIRST hole opened. Per side: the day that side's last covering row
+                   -- stopped covering, falling back to the OTHER side's covering-row start when this
+                   -- side never had a row at all (the pre-S141 fallback, now symmetric). LEAST
+                   -- ignores NULLs, so it returns the single datable anchor when only one side is
+                   -- holed and NULL when neither can be dated.
+                   LEAST(
+                       CASE WHEN prof.profile_id IS NULL
+                            THEN COALESCE(pgap.last_close, agr.effective_from) END,
+                       CASE WHEN agr.assignment_id IS NULL
+                            THEN COALESCE(agap.last_close, prof.effective_from) END
+                   )                                                    AS gap_since,
+                   -- The day the records are next scheduled to cover this employee again — the
+                   -- B8 signal. An employee whose only record starts in November is NOT a gap to
+                   -- repair by hand; somebody scheduled a change and left today uncovered. NULL when
+                   -- at least one missing side has nothing scheduled, i.e. the gap will not close by
+                   -- itself. Both sides must cover before registration works, hence GREATEST.
+                   CASE
+                       WHEN prof.profile_id IS NULL AND agr.assignment_id IS NULL THEN
+                           CASE WHEN pnext.next_from IS NULL OR anext.next_from IS NULL THEN NULL
+                                ELSE GREATEST(pnext.next_from, anext.next_from) END
+                       WHEN prof.profile_id IS NULL THEN pnext.next_from
+                       ELSE anext.next_from
+                   END                                                  AS covered_from
             FROM users u
-            JOIN employee_profiles ep
-                 ON ep.employee_id = u.user_id
-                AND ep.effective_from <= @today
-                AND (ep.effective_to IS NULL OR ep.effective_to > @today)
             LEFT JOIN units un ON un.unit_id = u.unit_id
+            -- The profile row covering today (NULL = the profile hole).
+            LEFT JOIN LATERAL (
+                SELECT ep.profile_id, ep.effective_from
+                FROM employee_profiles ep
+                WHERE ep.employee_id = u.user_id
+                  AND ep.effective_from <= @today
+                  AND (ep.effective_to IS NULL OR ep.effective_to > @today)
+                ORDER BY ep.effective_from DESC
+                LIMIT 1
+            ) prof ON TRUE
+            -- The agreement-code row covering today (NULL = the agreement hole).
+            LEFT JOIN LATERAL (
+                SELECT uac.assignment_id, uac.effective_from
+                FROM user_agreement_codes uac
+                WHERE uac.user_id = u.user_id
+                  AND uac.effective_from <= @today
+                  AND (uac.effective_to IS NULL OR uac.effective_to > @today)
+                ORDER BY uac.effective_from DESC
+                LIMIT 1
+            ) agr ON TRUE
+            -- When each side last stopped covering (end-exclusive, so effective_to IS the first
+            -- uncovered day). Zero-width retirement traces never "stopped covering" anything.
+            LEFT JOIN LATERAL (
+                SELECT MAX(ep.effective_to) AS last_close
+                FROM employee_profiles ep
+                WHERE ep.employee_id = u.user_id
+                  AND ep.effective_to IS NOT NULL
+                  AND ep.effective_to <= @today
+                  AND ep.effective_to <> ep.effective_from
+            ) pgap ON TRUE
             LEFT JOIN LATERAL (
                 SELECT MAX(uac.effective_to) AS last_close
                 FROM user_agreement_codes uac
                 WHERE uac.user_id = u.user_id
                   AND uac.effective_to IS NOT NULL
                   AND uac.effective_to <= @today
-            ) gap ON TRUE
+                  AND uac.effective_to <> uac.effective_from
+            ) agap ON TRUE
+            -- The earliest row scheduled to start covering after today, per side.
+            LEFT JOIN LATERAL (
+                SELECT MIN(ep.effective_from) AS next_from
+                FROM employee_profiles ep
+                WHERE ep.employee_id = u.user_id
+                  AND ep.effective_from > @today
+                  AND ep.effective_to IS DISTINCT FROM ep.effective_from
+            ) pnext ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT MIN(uac.effective_from) AS next_from
+                FROM user_agreement_codes uac
+                WHERE uac.user_id = u.user_id
+                  AND uac.effective_from > @today
+                  AND uac.effective_to IS DISTINCT FROM uac.effective_from
+            ) anext ON TRUE
             WHERE (@allOrgs OR u.primary_org_id = ANY(@orgIds))
               AND (u.employment_start_date IS NULL OR u.employment_start_date <= @today)
               AND (u.employment_end_date   IS NULL OR u.employment_end_date   >= @today)
-              AND NOT EXISTS (
-                      SELECT 1
-                      FROM user_agreement_codes live
-                      WHERE live.user_id = u.user_id
-                        AND live.effective_from <= @today
-                        AND (live.effective_to IS NULL OR live.effective_to > @today))
-            ORDER BY u.user_id, ep.effective_from
+              AND (prof.profile_id IS NULL OR agr.assignment_id IS NULL)
+            ORDER BY u.user_id
         ) d
         -- Oldest DATABLE gap first. The '0001-01-01' history-backfill sentinel is not a real date,
         -- so it must not sort to the top as "the oldest problem" — NULLIF pushes those rows last.
@@ -672,6 +813,30 @@ public sealed class HrFollowUpApprovalReadRepository
     /// datable gap first. The <c>0001-01-01</c> history-backfill sentinel is reported as an UNKNOWN
     /// gap start rather than as an age of two millennia.
     /// </summary>
+    /// <param name="today">
+    /// <b>★ The one deliberate exception to this file's "one Copenhagen business date per request"
+    /// rule — owner ruling, 2026-09-14. This read takes the UTC day.</b>
+    ///
+    /// <para>The system currently holds two definitions of "today": the UTC day, used by every
+    /// writer, by both denormalised caches, by the login token and by S141's new dated reads; and the
+    /// Copenhagen business day, used by the rest of this HR follow-up family because Danish
+    /// employment-law deadlines are counted in Danish calendar days. For an hour or two each night
+    /// the two disagree about the date.</para>
+    ///
+    /// <para><b>Why this read follows the writers rather than its neighbours.</b> "Does any record
+    /// cover this employee today" is a DATA-INTEGRITY question about rows that were written and
+    /// dated on the UTC day. Asked on a different calendar it would report, every night between
+    /// Copenhagen midnight and UTC midnight, gaps that do not exist — a diagnostic list that cries
+    /// wolf nightly is a list people stop reading. The sibling reads in this file are genuinely
+    /// about deadlines, which is why they are genuinely Copenhagen.</para>
+    ///
+    /// <para><b>Do not "correct" this back to <c>CopenhagenBusinessDate</c>.</b> The same statement
+    /// is on the endpoint that supplies the value. The owner has separately decided that business
+    /// dates should eventually move to the Danish day EVERYWHERE (the UTC business day turns out to
+    /// be inherited from a frontend call rather than chosen); that is deferred to its own roadmap
+    /// item. The rule "match the writers" is forward-compatible with it — when the writers move,
+    /// this read moves with them, and it must not be moved before them.</para>
+    /// </param>
     public async Task<IReadOnlyList<HrCannotRegisterItem>> GetCannotRegisterAsync(
         IReadOnlyCollection<string>? accessibleOrgIds, DateOnly today, CancellationToken ct = default)
     {
@@ -691,6 +856,8 @@ public sealed class HrFollowUpApprovalReadRepository
         var orgOrd = reader.GetOrdinal("org_id");
         var unitOrd = reader.GetOrdinal("unit_name");
         var gapOrd = reader.GetOrdinal("gap_since");
+        var missingOrd = reader.GetOrdinal("missing_record");
+        var coveredOrd = reader.GetOrdinal("covered_from");
         while (await reader.ReadAsync(ct))
         {
             DateOnly? gapSince = reader.IsDBNull(gapOrd) ? null : reader.GetFieldValue<DateOnly>(gapOrd);
@@ -701,8 +868,10 @@ public sealed class HrFollowUpApprovalReadRepository
                 DisplayName: reader.GetString(nameOrd),
                 OrgId: reader.GetString(orgOrd),
                 UnitName: reader.IsDBNull(unitOrd) ? null : reader.GetString(unitOrd),
+                MissingRecord: reader.GetString(missingOrd),
                 GapSince: gapSince,
-                DaysSinceGapStart: gapSince is { } since ? today.DayNumber - since.DayNumber : null));
+                DaysSinceGapStart: gapSince is { } since ? today.DayNumber - since.DayNumber : null,
+                CoveredFrom: reader.IsDBNull(coveredOrd) ? null : reader.GetFieldValue<DateOnly>(coveredOrd)));
         }
         return items;
     }
