@@ -1384,3 +1384,59 @@ ignores it. **Eight new tests, proved RED-first** by stashing the fix and confir
 
 **And the worktree problem bit one last time, twice in one task** — 42 commits behind on resumption, then a second smaller
 fast-forward for a Step-7a fix landing mid-work. It verified by diff that neither touched its files before merging.
+
+---
+
+# SPRINT CLOSE
+
+## Step 7a — final outcome
+
+**Three cycles per lens. Both clear at the close commit.** Codex `APPROVED` (clean at cycles 2 and 3); Reviewer
+`APPROVED-WITH-WARNINGS` with two non-close notes. Artifacts in `.claude/reviews/`, anchored at `dccf87e` with the docs-only
+verification recorded in each, because the reviewed code and the closing code are byte-identical.
+
+**Cycle 2 produced the sprint's most pointed finding: fixing a pin that could never FAIL produced one that could never PASS** —
+the third instance of the false-red shape in one sprint. And it caught that the log's claim "both wrong sentences are
+corrected" was untrue; one still rendered directly above the notice contradicting it.
+
+## Final verification
+
+| Check | Result |
+|---|---|
+| `dotnet build StatsTid.sln -c Release --no-incremental` | **0 errors, 145 warnings** — the baseline held in every wave |
+| Unit | **1255 passed** (+11 vs S140's 1244) |
+| Demo-seed | **165 passed** (unchanged) |
+| Regression, non-Docker | **104 passed** (unchanged) |
+| Frontend | **873 passed across 73 files** (+98 vs S140's 775) |
+| `npx tsc --noEmit` | **clean** |
+| Contract + generated types | regenerated twice; the regenerator produces **no diff** against what is committed |
+
+**Every exit status was read from the unpiped command.** Docker is unavailable on this machine (standing), so **every
+Docker-gated fact written this sprint executes for the first time in the watched CI run** and none is claimed green here.
+
+## What shipped
+
+**Increment 4, whole — the pre-declared cut order was never used.** Termination screen, effective-date picker, HR-gated
+history. Plus the precondition that turned out to be nine deliverables, the settlement anchor, and **B0**, the owner's
+visibility requirement.
+
+## The three numbers worth carrying forward
+
+1. **Thirty-two claims in this sprint's planning were contradicted by the code; twelve were the Orchestrator's own.** Including
+   an instruction pointing five line numbers at entirely the wrong kind of code, and an acceptance criterion that *mandated* a
+   domain-wrong result.
+2. **Twice, a fix for one ruling re-broke something another task had just fixed** — and a third time, a fix for a test defect
+   introduced the same defect inverted. This is the argument for whole-sprint review as its own step: no per-task reviewer can
+   see another task's mechanism.
+3. **The two most valuable findings came from the owner, not from either lens.** *"Should a scheduled change be visible to an
+   HR employee looking at a page?"* collapsed two separately-written defects into one requirement. *"Why not update the
+   system's clock to the Danish clock?"* exposed a live user-facing bug — a Danish user working after midnight records changes
+   as effective yesterday — and traced it to a single frontend call. **The lenses are strong on whether a mechanism is correct
+   and blind to whether it should exist.**
+
+## Owed after close
+
+- **Push, then the watched CI run.** Every Docker-gated fact runs for the first time.
+- **Worktree teardown** — the Step-0a finding, plus this sprint's own.
+- **Registers:** QUAL-171 (fixed), 172, 173, 174, 175 recorded; the business-date move and the login-token staleness decision
+  are roadmap items with the analysis attached.
