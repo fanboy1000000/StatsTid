@@ -139,6 +139,21 @@ EXEMPT: dict[str, str] = {
     "/api/admin/entitlement-configs/{}": "single-object",
     "/api/admin/employees/{}/birth-date": "single-object",
     "/api/admin/employees/{}/employment-start-date": "single-object",
+    # S141 / TASK-14108 — the termination screen is the first FRONTEND consumer of this endpoint.
+    # It existed before, but nothing in the UI called it, so it was never enumerated and this gate
+    # never had to classify it. The gate did exactly its job: a new frontend dependency on an admin
+    # GET landed in neither list and failed CI, forcing this to be a decision rather than a drift.
+    #
+    # Classified `single-object` to sit beside its two siblings above, which are the same shape from
+    # the same family and are consumed by the same drawer: a by-id read of one employee field, with
+    # no list or envelope for the drift class this gate exists to catch.
+    #
+    # One caveat worth recording, since it is the reason this endpoint matters more than its siblings:
+    # it is the ONLY terminated-inclusive token source — the ordinary reads filter on active employees
+    # and return nothing once somebody has left, which is why the termination screen must use this one.
+    # That property lives in its ETag HEADER, not in its body, so it is outside what a body-shape
+    # contract test would pin anyway. If this endpoint ever grows an envelope, move it to the REGISTRY.
+    "/api/admin/employees/{}/employment-end-date": "single-object",
     # NOTE: the CHILD_SICK entitlement-eligibility GET is NOT exempt-listed here:
     # it is built via the ELIGIBILITY_PATH() helper in useEntitlementEligibility.ts
     # and is therefore NOT statically enumerated (the KNOWN BLIND SPOT documented

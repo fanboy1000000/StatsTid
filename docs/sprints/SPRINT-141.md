@@ -1510,3 +1510,27 @@ reviewed what I handed them; nothing checked whether I handed them everything.
 
 **Verification before the remediation push:** build `0 errors / 145 warnings` (baseline held), unit **1255**, non-Docker
 regression **104**, demo-seed **165**, frontend **873**, type-check clean. Every exit status read from the unpiped command.
+
+### Remediation run `34952883645` — **`build-and-test` GREEN.** All 1928 Docker-gated facts pass.
+
+**The nine repaired tests all pass**, confirming the diagnosis: every one was test-side and none touched the product. The
+route-coverage guard, the smoke suite, the frontend build and the secret scan are green too. **Six of seven jobs.**
+
+**One job still red, and I guessed at it twice before reading the log** — which is the exact mistake `SPRINT-140.md` records me
+making. First I assumed it was the unregistered pages (a different job entirely). Then I assumed stale freshness anchors, and
+bumped four; the log shows freshness is a **soft, report-only** warning for every document except the quality matrix, so those
+bumps were correct on their own terms and **fixed nothing here**. Twice, again, the same failure mode.
+
+**The real cause, read rather than inferred:** `uncovered admin GET /api/admin/employees/{}/employment-end-date`. The
+termination screen is the **first frontend consumer** of that endpoint. It existed long before, but nothing in the interface
+called it, so a gate requiring every frontend-consumed admin read to be either contract-tested or consciously exempted had
+never had to classify it. It landed in neither list and failed — **which is precisely the decision the gate exists to force.**
+
+Classified `single-object`, beside its two siblings (the birth-date and employment-start-date reads) — same shape, same family,
+same drawer, a by-identity read of one field with no list or envelope, which is the drift class that gate guards. One caveat
+recorded at the site: this endpoint matters more than its siblings because it is the **only terminated-inclusive token source**,
+and that property lives in its ETag *header* rather than its body, so a body-shape contract test would not have pinned it.
+
+**Three process failures this close, all mine, none of them code:** a wave never dispatched, four markers never bumped, and a
+registry decision never made. The code review layer caught everything in the code; nothing checks whether the coordinator did
+the coordinator's job.
