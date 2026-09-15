@@ -1534,3 +1534,60 @@ and that property lives in its ETag *header* rather than its body, so a body-sha
 **Three process failures this close, all mine, none of them code:** a wave never dispatched, four markers never bumped, and a
 registry decision never made. The code review layer caught everything in the code; nothing checks whether the coordinator did
 the coordinator's job.
+
+## Task ledger
+
+Added retroactively for S141 when the gate below was built. Every task the plan named, with its outcome.
+
+| Task | Disposition | Note |
+|---|---|---|
+| TASK-14101 | DONE | settlement anchor, special-holiday fail-closed, QUAL-168, out-of-period guard |
+| TASK-14102 | DONE | the timeline data layer — reads, router, delete, token, scheduled-change read |
+| TASK-14103 | DONE | Part A pins, incl. the differing-configs pin that can actually fail |
+| TASK-14104 | DONE | the API layer; three endpoint refusals, delete audit, payload, edit prompt |
+| TASK-14105 | DONE | effective-date refresh + the gap detector, on the owner's ruled clock |
+| TASK-14106 | DONE | endpoint pins, incl. the worklist counter-test and the skip-path pin |
+| TASK-14107 | DONE | the drawer token fix, B0 on six surfaces, the edit prompt, the termination link |
+| TASK-14108 | DONE | termination screen — twelve outcomes, eight refusal shapes hand-typed |
+| TASK-14109 | DONE | employment-history screen. **First to cut; not cut** |
+| TASK-14110 | **DROPPED** | **★ NEVER DISPATCHED — the failure that produced the gate below.** Its two jobs were done elsewhere: the route registrations by the Orchestrator during CI remediation, and the E2E flows are owed to S142 |
+| TASK-14111 | DONE | the effective-date picker. **Last to cut; not cut** |
+| TASK-14112 | DONE | router matrix + refusal replacements, four of five genuinely RED first |
+| TASK-14113 | DONE | employment-history endpoint, new files only, typed, with its own access pin |
+| TASK-14114 | DONE | payroll gap condition; found and proved a live employment-date log leak |
+| TASK-14115 | DONE | follow-up list wording — "needs fixing" vs "heals itself on a known date" |
+| TASK-14116 | DONE | the scheduled marker on three list reads, one canonical rule |
+| TASK-14117 | DONE | rendering that marker, plus 42 fixture repairs across 8 files |
+
+**The ledger's whole point is the TASK-14110 row.** Everything else was already knowable; that one was not, and nothing in the
+system would have told anybody.
+
+## The coordinator gate — built at the owner's suggestion, after this sprint's close
+
+The owner asked whether something should check *"whether the coordinator did the coordinator's job"*, having watched three
+things turn the build red across this close — **a wave never dispatched, four freshness markers never bumped, a registry
+decision never made — none of them code, and none of them visible to a code review.**
+
+**Assessment given, and it mattered more than the build.** Of those three, one was already caught by an existing gate (the
+registry decision — it fired exactly as designed, just at CI), one is a one-line hardening of an existing check, and **only the
+undispatched wave was genuinely uncovered.** Also declined: a checker for claims in planning prose. It could verify a citation
+resolves, but every expensive false claim this sprint was semantically wrong while pointing at a real line — only a reader
+catches those, and two readers caught thirty-one.
+
+**Built: a task-ledger gate in `sprint-close-guard.ps1`.** A plan that enumerates tasks must account for every one before it
+can close: `DONE`, `CUT`, `DEFERRED` or `DROPPED`, each in a ledger section. **The gate never judges which disposition — it
+only refuses silence**, which also makes a pre-declared cut order enforceable rather than aspirational.
+
+**Two pre-existing problems it exposed on its first run, both of the same family it was built to catch:**
+1. **The guard's own test harness had been silently broken.** Five tests were failing because the guard began requiring a
+   `reviewed-by-model:` line *after* the harness was written and the harness was never updated. Fixed.
+2. **The harness hardcoded a `C:\StatsTid` path**, so it could not run from this checkout at all — which is how a guard's tests
+   quietly stop being run. Fixed to resolve from its own location.
+3. **The harness reserves S99 as its mock sprint number and a REAL `SPRINT-99.md` exists**, naming seven tasks with no ledger.
+   The new gate blocked on genuine historical data the first time it ran. Given a neutral seam, like the other gates have.
+
+**19 of 19 harness tests now pass** — the five new ones, and the fourteen that had not meaningfully run in some time.
+
+**The honest limit, restated because it is the important part:** this gate catches bookkeeping and nothing else. The two most
+valuable findings of this sprint came from the owner asking whether a mechanism should exist at all, and no gate finds those.
+It is worth having precisely because bookkeeping should never consume review attention in the first place.

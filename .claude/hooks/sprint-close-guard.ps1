@@ -466,5 +466,115 @@ if (Test-Path $untrackedWaiver) {
     }
 }
 
+# --- Task-ledger gate (S141 post-close governance) ---------------------------
+# WHY THIS EXISTS. S141's plan named seventeen tasks across four waves. Waves 1,
+# 2, 3 and 3b were dispatched; WAVE 4 WAS NEVER DISPATCHED, and the sprint closed
+# without it. Nothing noticed for three hours, until a route-coverage E2E guard
+# fired on a SYMPTOM (two pages unregistered) — the task itself, which carried
+# that exact job annotated "(S140's first CI red)", was simply forgotten.
+#
+# Every other gate in this hook checks the WORK. This one checks the COORDINATOR:
+# a plan that enumerates tasks must account for every one of them before it can
+# close. Three things turned S141's close red and all three were of this class —
+# a wave never dispatched, four freshness markers never bumped, a registry
+# decision never made. None was a code defect; the dual-lens review caught
+# everything in the code and cannot see a task that was never handed to it.
+#
+# WHAT "ACCOUNTED FOR" MEANS. Each TASK-<n> mentioned in the sprint log must
+# appear in a "Task ledger" section with an explicit disposition: DONE, CUT,
+# DEFERRED or DROPPED. CUT is a first-class outcome, not a failure — a sprint
+# with a pre-declared cut order needs somewhere to record that the order was
+# actually used, which also makes the cut order enforceable rather than
+# aspirational. The gate never judges WHICH disposition; it only refuses silence.
+#
+# Test seam: $env:STATSTID_SPRINTLOG_MOCK (a path) — honored ONLY for the
+# harness-reserved S99, same hardening as the other seams.
+
+$ledgerWaiver = Join-Path $reviewsDir "SPRINT-$sprintNum-ledger-WAIVED.md"
+if (Test-Path $ledgerWaiver) {
+    [Console]::Error.WriteLine("sprint-close-guard: S$sprintNum has a task-ledger waiver at $ledgerWaiver -- skipping the task-ledger gate")
+} else {
+    $sprintLog = Join-Path (Get-Location) "docs/sprints/SPRINT-$sprintNum.md"
+    if ($env:STATSTID_SPRINTLOG_MOCK -and $sprintNum -eq '99') {
+        [Console]::Error.WriteLine("sprint-close-guard: task-ledger gate using MOCKED sprint log (test seam, S99 only)")
+        $sprintLog = $env:STATSTID_SPRINTLOG_MOCK
+    }
+
+    if (-not (Test-Path $sprintLog)) {
+        # Fail-open: a missing sprint log is already the docs job's hard failure
+        # (tools/check_docs.py sprint-inventory). Blocking here too would only
+        # duplicate that signal with a worse message.
+        [Console]::Error.WriteLine("sprint-close-guard: no sprint log at $sprintLog; skipping the task-ledger gate (the docs job owns that failure)")
+    } else {
+        $logText = ''
+        try {
+            $logText = Get-Content -Path $sprintLog -Raw -ErrorAction Stop
+        } catch {
+            [Console]::Error.WriteLine("sprint-close-guard: could not read $sprintLog ($_); allowing (fail-open)")
+        }
+
+        if ($logText) {
+            # Every distinct TASK-<digits> the log mentions anywhere.
+            $planned = @([regex]::Matches($logText, 'TASK-(\d+)') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+
+            if ($planned.Count -eq 0) {
+                [Console]::Error.WriteLine("sprint-close-guard: S$sprintNum names no TASK ids; task-ledger gate not applicable")
+            } else {
+                # The ledger section: from a "Task ledger" heading to the next
+                # top-or-second-level heading, or end of file.
+                $ledgerText = ''
+                $ledgerMatch = [regex]::Match(
+                    $logText,
+                    '(?ims)^\s{0,3}#{1,3}\s*task\s+ledger\b.*?(?=^\s{0,3}#{1,2}\s|\z)')
+                if ($ledgerMatch.Success) { $ledgerText = $ledgerMatch.Value }
+
+                if (-not $ledgerText) {
+                    [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
+                    [Console]::Error.WriteLine('')
+                    [Console]::Error.WriteLine("The sprint log names $($planned.Count) task(s) but has no 'Task ledger' section:")
+                    [Console]::Error.WriteLine("  $sprintLog")
+                    [Console]::Error.WriteLine('')
+                    [Console]::Error.WriteLine('Add a section like:')
+                    [Console]::Error.WriteLine('')
+                    [Console]::Error.WriteLine('  ## Task ledger')
+                    [Console]::Error.WriteLine('  | Task | Disposition | Note |')
+                    [Console]::Error.WriteLine('  |---|---|---|')
+                    [Console]::Error.WriteLine('  | TASK-1234 | DONE | merged in wave 1 |')
+                    [Console]::Error.WriteLine('  | TASK-1235 | CUT | per the pre-declared cut order |')
+                    [Console]::Error.WriteLine('')
+                    [Console]::Error.WriteLine('Dispositions: DONE | CUT | DEFERRED | DROPPED. CUT is a first-class')
+                    [Console]::Error.WriteLine('outcome, not a failure — a pre-declared cut order needs somewhere to')
+                    [Console]::Error.WriteLine('record that it was used.')
+                    [Console]::Error.WriteLine('')
+                    [Console]::Error.WriteLine('WHY: S141 closed with a whole wave never dispatched. Every other gate')
+                    [Console]::Error.WriteLine('here checks the work; this one checks that the plan was actually run.')
+                    exit 2
+                }
+
+                $unaccounted = @()
+                foreach ($t in $planned) {
+                    $pattern = [regex]::Escape($t) + '\b.*\b(DONE|CUT|DEFERRED|DROPPED)\b'
+                    if ($ledgerText -notmatch "(?im)$pattern") { $unaccounted += $t }
+                }
+
+                if ($unaccounted.Count -gt 0) {
+                    [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
+                    [Console]::Error.WriteLine('')
+                    [Console]::Error.WriteLine('These tasks are named in the sprint log but have no disposition in the Task ledger:')
+                    foreach ($t in $unaccounted) { [Console]::Error.WriteLine("  $t") }
+                    [Console]::Error.WriteLine('')
+                    [Console]::Error.WriteLine('Each needs a line carrying the task id and one of: DONE | CUT | DEFERRED | DROPPED.')
+                    [Console]::Error.WriteLine('')
+                    [Console]::Error.WriteLine('This is the S141 failure: a task can be planned, written down, reviewed,')
+                    [Console]::Error.WriteLine('and then simply never dispatched. A task written down is not a task done.')
+                    [Console]::Error.WriteLine('If one was deliberately not built, say CUT or DEFERRED and why — the gate')
+                    [Console]::Error.WriteLine('never judges which disposition, only refuses silence.')
+                    exit 2
+                }
+            }
+        }
+    }
+}
+
 # All checks passed
 exit 0
