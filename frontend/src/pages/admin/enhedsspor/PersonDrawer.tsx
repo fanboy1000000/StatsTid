@@ -20,7 +20,7 @@
 // only sends primaryOrgId; usePlacement layers the unit-assign / transfer / the
 // version-threading / the move-then-promote ordering on top.
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { Drawer } from '../../../components/ui'
 import { useToast } from '../../../components/ui/Toast'
@@ -36,7 +36,7 @@ import { ProfileSection } from '../editPerson/ProfileSection'
 import { EntitlementSection } from '../editPerson/EntitlementSection'
 import { LifecycleSections, type LifecycleContext } from '../editPerson/LifecycleSections'
 import { ScheduledChangeNotice } from '../editPerson/ScheduledChangeNotice'
-import { EffectiveDatePicker } from '../editPerson/EffectiveDatePicker'
+import { EffectiveDatePicker, relateToScheduled, type ScheduleRelation } from '../editPerson/EffectiveDatePicker'
 import {
   isHrCapable,
   INITIAL_SECTION_SAVE,
@@ -148,6 +148,17 @@ export function PersonDrawer({
   // deliberately choose on THIS open, never something that survives from a
   // previous edit or a stale render.
   const [effectiveFrom, setEffectiveFrom] = useState<string>(todayIsoUtc())
+  // SPRINT-END BLOCKER FIX (2026-09-14) — the baseline each of the two dated
+  // field-groups was last RE-PRE-FILLED from (today's values, or an existing
+  // scheduled change's values, per `relateToScheduled`), so the re-baseline
+  // effects below can tell "HR never touched this since the last baseline
+  // change" (→ follow the new baseline) apart from "HR deliberately edited
+  // it" (→ leave their edit alone). `null` = no baseline applied yet (right
+  // after open); the effects treat that as "apply unconditionally" instead
+  // of comparing against a nonexistent previous value. Refs, not state: this
+  // is bookkeeping for a comparison, not a value the render or the save reads.
+  const profileBaselineRef = useRef<{ partTimeFraction: string; position: string } | null>(null)
+  const agreementBaselineRef = useRef<string | null>(null)
 
   // The Placering options reload whenever the chosen Organisation changes (a unit
   // belongs to exactly one Organisation, so an org change invalidates the unit set).
@@ -167,6 +178,10 @@ export function PersonDrawer({
     setProfileCarryForward(false)
     setAgreementCarryForward(false)
     setEffectiveFrom(todayIsoUtc())
+    // A stale baseline from a PREVIOUS edit session must never suppress the
+    // first re-baseline of this one — null means "apply unconditionally".
+    profileBaselineRef.current = null
+    agreementBaselineRef.current = null
 
     if (isNew) {
       const orgId = defaultOrgId ?? organizations[0]?.orgId ?? ''
@@ -331,6 +346,85 @@ export function PersonDrawer({
   const today = todayIsoUtc()
   const writeEffectiveFrom = effectiveFrom === today ? undefined : effectiveFrom
 
+  // SPRINT-END BLOCKER FIX (2026-09-14, coordinator-verified) — relate the
+  // PICKED date to each of the two scheduled changes' own intervals. This is
+  // the classification the picker was missing entirely: it let HR date a
+  // write to fall INSIDE an existing scheduled change's interval while the
+  // form still showed TODAY's values, so an untouched field sent today's
+  // stale values dated into the scheduled interval — which the backend
+  // (correctly comparing against the row that actually covers that date)
+  // read as a genuine change and wrote forward, silently reverting the
+  // colleague's scheduled decision. See `EffectiveDatePicker.tsx`'s
+  // `relateToScheduled` doc for exactly what each relation means.
+  const profileRelation: ScheduleRelation = relateToScheduled(scheduledProfile, effectiveFrom)
+  const agreementRelation: ScheduleRelation = relateToScheduled(scheduledAgreement, effectiveFrom)
+
+  // 'covers' — re-baseline the profile fields FROM the scheduled row, so a
+  // field HR never touches sends the SCHEDULED value back (a genuine no-op)
+  // instead of today's stale one. Per-field tracking via `profileBaselineRef`:
+  // a field is only re-baselined while it still equals the PREVIOUS
+  // baseline — the moment HR deliberately edits it away from that, this
+  // effect leaves the edit alone rather than clobbering it on a later date
+  // change. Does NOT fire on every keystroke: its deps are the RELATION
+  // (a string, unchanged by typing) and `live.profile` (unchanged by
+  // typing), not the `profile` form state itself.
+  useEffect(() => {
+    if (isNew || !isHr || !live?.profile) return
+    const target =
+      profileRelation === 'covers' && scheduledProfile
+        ? { partTimeFraction: scheduledProfile.partTimeFraction.toFixed(3), position: scheduledProfile.position ?? '' }
+        : { partTimeFraction: live.profile.partTimeFraction.toFixed(3), position: live.profile.position ?? '' }
+    const prev = profileBaselineRef.current
+    setProfile((p) => ({
+      partTimeFraction:
+        prev === null || p.partTimeFraction === prev.partTimeFraction ? target.partTimeFraction : p.partTimeFraction,
+      position: prev === null || (p.position.trim() || null) === (prev.position || null) ? target.position : p.position,
+    }))
+    profileBaselineRef.current = target
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, isHr, live?.profile, profileRelation, scheduledProfile])
+
+  // Same re-baseline, for the AGREEMENT CODE (bundled into `stamdata`, not
+  // HR-gated). `live?.user.agreementCode` (today's value), not the whole
+  // `live` object, so this does not refire on unrelated `live` updates.
+  useEffect(() => {
+    if (isNew || !live) return
+    const target =
+      agreementRelation === 'covers' && scheduledAgreement ? scheduledAgreement.agreementCode : live.user.agreementCode
+    const prev = agreementBaselineRef.current
+    setStamdata((s) => ({
+      ...s,
+      agreementCode: prev === null || s.agreementCode === prev ? target : s.agreementCode,
+    }))
+    agreementBaselineRef.current = target
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, live?.user.agreementCode, agreementRelation, scheduledAgreement])
+
+  // 'beyond' — refuse rather than guess: a further row must exist past the
+  // scheduled change's own end and this payload (one hop ahead only) does
+  // not carry it. Blocks the WHOLE save (one submit covers both writes)
+  // rather than letting one dimension proceed while the other is unsafe.
+  const dateBlockedReason: string | null =
+    profileRelation === 'beyond' && agreementRelation === 'beyond'
+      ? 'Denne dato ligger efter både den planlagte ændring af deltid/stilling og den planlagte overenskomstændring. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
+      : profileRelation === 'beyond'
+        ? 'Denne dato ligger efter den planlagte ændring af deltid/stilling. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
+        : agreementRelation === 'beyond'
+          ? 'Denne dato ligger efter den planlagte overenskomstændring. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
+          : null
+
+  // 'covers' — an advisory note the picker itself cannot phrase (it doesn't
+  // know about either scheduled change): names which field(s) were just
+  // re-baselined and what leaving vs. editing them now does.
+  const coversFields = [
+    profileRelation === 'covers' ? 'deltid/stilling' : null,
+    agreementRelation === 'covers' ? 'overenskomstkoden' : null,
+  ].filter((f): f is string => f !== null)
+  const coversScheduledNote =
+    coversFields.length > 0
+      ? `Denne dato ligger inden for en allerede planlagt ændring af ${coversFields.join(' og ')}. Felterne herunder er derfor forudfyldt med de planlagte værdier — retter du et felt, erstatter din nye værdi den planlagte ændring fra denne dato; lader du det stå, bevares den planlagte værdi.`
+      : null
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setFormError(null)
@@ -371,6 +465,13 @@ export function PersonDrawer({
       }
 
       if (!live || !user) return
+      // SPRINT-END BLOCKER FIX — defensive, in-depth: the submit button is
+      // already disabled while `dateBlockedReason` holds, but this guard
+      // means a re-render race can never smuggle the save through anyway.
+      if (dateBlockedReason) {
+        setFormError(dateBlockedReason)
+        return
+      }
       // Promote/demote decisions. After an Org change or a unit change the person is
       // NOT a leader of the resulting unit (the transfer/move strips leadership), so
       // a checked promote always designates; an unchanged unit keys off the current
@@ -534,11 +635,19 @@ export function PersonDrawer({
             <ScheduledChangeNotice
               effectiveFrom={scheduledAgreement.effectiveFrom}
               summary={agreementScheduledSummary}
+              // SPRINT-END BLOCKER FIX — OQ-6's apply-until / carry-forward
+              // choice only makes sense in the 'before' relation (the write
+              // TRUNCATES this scheduled row). In 'covers'/'beyond' the
+              // checkbox is backend-inert (there is no bounded carry
+              // target), so showing it would be misleading; `supersedes`
+              // below explains the 'covers' case with an accurate sentence
+              // instead.
               carryForward={
-                agreementDirty
+                agreementRelation === 'before' && agreementDirty
                   ? { checked: agreementCarryForward, onChange: setAgreementCarryForward, disabled: busy }
                   : undefined
               }
+              supersedes={agreementRelation === 'covers' ? { writeEffectiveFrom: effectiveFrom } : undefined}
               writeEffectiveFrom={writeEffectiveFrom}
               testId="pd-agreement-scheduled"
             />
@@ -550,7 +659,16 @@ export function PersonDrawer({
               decision for the whole save. Edit mode only: a brand-new
               person has no "existing value" for a scheduled change to
               apply against. */}
-          {!isNew && <EffectiveDatePicker value={effectiveFrom} onChange={setEffectiveFrom} today={today} disabled={busy} />}
+          {!isNew && (
+            <EffectiveDatePicker
+              value={effectiveFrom}
+              onChange={setEffectiveFrom}
+              today={today}
+              disabled={busy}
+              blockedReason={dateBlockedReason}
+              coversScheduledNote={coversScheduledNote}
+            />
+          )}
 
           {/* S109 — Placering (the unit Select, reloaded on Organisation change). */}
           <section className={styles.section} aria-labelledby="pd-placement-heading">
@@ -633,11 +751,15 @@ export function PersonDrawer({
                 <ScheduledChangeNotice
                   effectiveFrom={scheduledProfile.effectiveFrom}
                   summary={profileScheduledSummary}
+                  // SPRINT-END BLOCKER FIX — see the agreement-code notice
+                  // above for why this is gated on 'before' and paired with
+                  // `supersedes`.
                   carryForward={
-                    profileDirty
+                    profileRelation === 'before' && profileDirty
                       ? { checked: profileCarryForward, onChange: setProfileCarryForward, disabled: busy }
                       : undefined
                   }
+                  supersedes={profileRelation === 'covers' ? { writeEffectiveFrom: effectiveFrom } : undefined}
                   writeEffectiveFrom={writeEffectiveFrom}
                   testId="pd-profile-scheduled"
                 />
@@ -767,7 +889,7 @@ export function PersonDrawer({
           <button type="button" className={styles.cancelBtn} onClick={onClose} disabled={busy}>
             Annullér
           </button>
-          <button type="submit" className={styles.submitBtn} disabled={busy}>
+          <button type="submit" className={styles.submitBtn} disabled={busy || dateBlockedReason !== null}>
             {saving ? 'Gemmer...' : submitLabel}
           </button>
         </div>

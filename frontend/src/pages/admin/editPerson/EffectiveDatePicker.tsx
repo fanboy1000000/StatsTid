@@ -34,7 +34,58 @@
 // take effect — and the two render as separate notices so neither's wording
 // contradicts the other (see `writeEffectiveFrom` on `ScheduledChangeNotice`,
 // which this file's caller also threads through for exactly that reason).
+//
+// SPRINT-END BLOCKER FIX (2026-09-14, verified by the coordinator) — this
+// sprint's own defect class (a same-values write silently reverting a
+// scheduled change) came back through the picker itself. Picking a date AT
+// OR AFTER an existing scheduled change's own start put the write INSIDE
+// that change's interval, but the drawer still pre-filled the profile/
+// agreement-code fields from TODAY's values — so an untouched field sent
+// today's stale values dated into the scheduled interval, which the backend
+// (correctly, comparing against the row that actually covers that date)
+// read as a genuine correction and wrote forward, quietly overwriting the
+// colleague's scheduled decision. `relateToScheduled` below names the three
+// relations a picked date can have to a scheduled change; `PersonDrawer.tsx`
+// uses it to (a) re-baseline the form fields to the SCHEDULED row's values
+// once the date falls inside it, so an untouched field now sends the
+// scheduled value back (a genuine no-op) rather than today's, and (b) refuse
+// the date entirely when it falls beyond the scheduled row's own end, where
+// no further row is known and guessing would be worse than refusing.
 import styles from '../EditPersonDrawer.module.css'
+
+/**
+ * How a candidate write date relates to an EXISTING scheduled change's own
+ * interval (`effectiveFrom` .. `effectiveTo`, where a `null` end means
+ * open-ended). `scheduled` is `null` when nothing is scheduled for that
+ * field at all — always 'before' in that case, which is the ordinary,
+ * unaffected path.
+ *
+ * - **'before'** — `date` is strictly earlier than the scheduled change's
+ *   own start (or nothing is scheduled). The write may TRUNCATE the
+ *   scheduled row; OQ-6's apply-until / carry-forward choice is the right
+ *   question here, unchanged from before this fix.
+ * - **'covers'** — `date` falls ON or AFTER the scheduled change's start,
+ *   and before its end (or the end is `null`). The write's own date lands
+ *   INSIDE the scheduled interval — the sprint-end BLOCKER's shape. The
+ *   form must pre-fill from the SCHEDULED row's values here, not today's.
+ * - **'beyond'** — the scheduled change has a bounded end and `date` is at
+ *   or after it. A further row must exist to cover that date and this
+ *   payload (one hop ahead only) does not carry it — refuse rather than
+ *   guess.
+ */
+export type ScheduleRelation = 'before' | 'covers' | 'beyond'
+
+export function relateToScheduled(
+  scheduled: { effectiveFrom: string; effectiveTo: string | null } | null,
+  date: string,
+): ScheduleRelation {
+  if (!scheduled) return 'before'
+  // ISO yyyy-MM-dd strings compare lexicographically = chronologically —
+  // the same idiom this file already relies on for `isFuture` below.
+  if (date < scheduled.effectiveFrom) return 'before'
+  if (scheduled.effectiveTo !== null && date >= scheduled.effectiveTo) return 'beyond'
+  return 'covers'
+}
 
 /** "1. november 2026" — UTC-anchored so a plain `date` string never rolls
     back a day under a viewer's local timezone. A deliberate, small copy of
@@ -68,6 +119,25 @@ export interface EffectiveDatePickerProps {
    */
   today: string
   disabled?: boolean
+  /**
+   * SPRINT-END BLOCKER FIX — non-null when `value` is at or beyond an
+   * existing scheduled change's own END (`relateToScheduled` === 'beyond'
+   * for the profile fields and/or the agreement code). Rendered INSTEAD of
+   * the notices below, and the caller separately disables Save: this
+   * payload only carries one hop ahead, so there is no honest baseline to
+   * pre-fill from and the drawer refuses rather than guesses.
+   */
+  blockedReason?: string | null
+  /**
+   * SPRINT-END BLOCKER FIX — non-null when `value` falls AT OR AFTER an
+   * existing scheduled change's own start (`relateToScheduled` === 'covers'
+   * for the profile fields and/or the agreement code). The fields below
+   * have been RE-PRE-FILLED from that scheduled row rather than from
+   * today's values (see `PersonDrawer.tsx`'s baseline-tracking effects), so
+   * this note tells HR why the values changed and what leaving vs. editing
+   * them now does. Ignored when `blockedReason` is set.
+   */
+  coversScheduledNote?: string | null
 }
 
 /**
@@ -92,7 +162,14 @@ export interface EffectiveDatePickerProps {
  * narrowing it to future-only here would quietly take away a capability
  * nobody asked to lose.
  */
-export function EffectiveDatePicker({ value, onChange, today, disabled }: EffectiveDatePickerProps) {
+export function EffectiveDatePicker({
+  value,
+  onChange,
+  today,
+  disabled,
+  blockedReason,
+  coversScheduledNote,
+}: EffectiveDatePickerProps) {
   // ISO yyyy-MM-dd strings compare lexicographically = chronologically —
   // the same idiom `EmploymentHistoryPage.tsx` already relies on for its own
   // sort, so this isn't a new assumption in the codebase.
@@ -122,14 +199,27 @@ export function EffectiveDatePicker({ value, onChange, today, disabled }: Effect
           denne dato.
         </div>
       </div>
-      {isFuture && (
-        <div className={styles.scheduledNotice} data-testid="pd-effective-future-notice">
-          <p className={styles.scheduledText}>
-            Overenskomstkoden og deltid/stilling ændres ikke i dag — de forbliver som nu, indtil{' '}
-            <strong>{formatEffectiveDateLong(value)}</strong>, hvor denne ændring træder i kraft. (Navn, e-mail og
-            organisation på denne side gemmes straks, uanset denne dato.)
-          </p>
+      {blockedReason ? (
+        <div className={styles.sectionError} data-testid="pd-effective-blocked">
+          {blockedReason}
         </div>
+      ) : (
+        <>
+          {isFuture && (
+            <div className={styles.scheduledNotice} data-testid="pd-effective-future-notice">
+              <p className={styles.scheduledText}>
+                Overenskomstkoden og deltid/stilling ændres ikke i dag — de forbliver som nu, indtil{' '}
+                <strong>{formatEffectiveDateLong(value)}</strong>, hvor denne ændring træder i kraft. (Navn, e-mail
+                og organisation på denne side gemmes straks, uanset denne dato.)
+              </p>
+            </div>
+          )}
+          {coversScheduledNote && (
+            <div className={styles.scheduledNotice} data-testid="pd-effective-covers-notice">
+              <p className={styles.scheduledText}>{coversScheduledNote}</p>
+            </div>
+          )}
+        </>
       )}
     </section>
   )

@@ -45,6 +45,22 @@ export interface ScheduledChangeNoticeProps {
    * that once, for the picker itself).
    */
   writeEffectiveFrom?: string
+  /**
+   * SPRINT-END BLOCKER FIX (2026-09-14) — present INSTEAD of `carryForward`
+   * when the picked write date is AT OR AFTER this scheduled change's own
+   * start (`relateToScheduled` in `EffectiveDatePicker.tsx` returns
+   * 'covers'). OQ-6's apply-until / carry-forward question presupposes the
+   * write TRUNCATES a scheduled row that starts LATER — that shape does not
+   * exist here (the write's own date is already inside, or past, the
+   * scheduled interval), and the backend ignores the carry-forward flag in
+   * this shape regardless of what HR checks. Rendering the old two-variant
+   * sentence here is what produced the sprint-end BLOCKER's "chronologically
+   * impossible" copy ("gælder kun indtil {a date the write has already
+   * passed}"); this prop replaces it with a sentence that is actually true
+   * for this shape. Mutually exclusive with `carryForward` — the caller
+   * passes exactly one of the two (or neither).
+   */
+  supersedes?: { writeEffectiveFrom: string }
   testId: string
 }
 
@@ -69,6 +85,7 @@ export function ScheduledChangeNotice({
   summary,
   carryForward,
   writeEffectiveFrom,
+  supersedes,
   testId,
 }: ScheduledChangeNoticeProps) {
   const dateText = formatScheduledDate(effectiveFrom)
@@ -80,7 +97,16 @@ export function ScheduledChangeNotice({
       <p className={styles.scheduledText}>
         En ændring er allerede planlagt fra <strong>{dateText}</strong>: {summary}.
       </p>
-      {carryForward && (
+      {supersedes && (
+        <div className={styles.scheduledChoice}>
+          <p className={styles.scheduledText} data-testid={`${testId}-supersedes`}>
+            Den valgte dato ({formatScheduledDate(supersedes.writeEffectiveFrom)}) ligger på eller efter denne
+            planlagte ændring. Retter du feltet ovenfor, erstatter din nye værdi den planlagte ændring fra denne
+            dato; lader du feltet stå uændret, bevares den planlagte værdi som nu.
+          </p>
+        </div>
+      )}
+      {!supersedes && carryForward && (
         <div className={styles.scheduledChoice}>
           <p className={styles.scheduledText}>
             {writeDateText
