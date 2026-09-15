@@ -104,6 +104,33 @@ Line: [approximate location]
 Detail: [what violates the rule]
 ```
 
+## ★ Worktree freshness — a MANDATORY first instruction in every agent prompt (S141)
+
+**Every agent dispatched with `isolation: "worktree"` must be told to check its worktree against master before
+doing anything else, and to fast-forward if it is behind.**
+
+**Why, diagnosed in S141 after NINE occurrences in one sprint.** A worktree is created from the **remote-tracking**
+branch, not from the local integration branch. This project commits locally through a sprint and pushes only at
+close, so `origin/master` lags by an entire sprint **by design**. Every agent dispatched mid-sprint therefore starts
+at the previous sprint's close unless it corrects for it — in S141 one agent was **45 commits behind**.
+
+**What it costs when an agent does not notice.** Two real consequences in S141, both caught only because the agents
+were alert: one was about to extend three database reads that its worktree still showed in their *pre-sprint* form,
+i.e. it would have carefully fixed code that no longer exists; another, unable to regenerate a file outside its
+scope and facing a failing type-check, **hand-edited a generated file** to compile — precisely what the generated-file
+freshness gate exists to catch. A third would have reported "baseline held exactly" against a baseline missing the
+whole sprint, making the number meaningless.
+
+**The instruction to include, verbatim:**
+```
+★ FIRST, BEFORE ANY WORK: check your worktree against master.
+Run `git log --oneline -1` and compare with the main checkout's LOCAL master — not `origin/master`,
+which lags by design because this project pushes only at sprint close. Fast-forward if you are
+behind, and say in your report what you found.
+```
+**"Compare against master" means the LOCAL branch.** An agent that compares against the remote will find itself
+apparently up to date while missing the entire sprint — which is exactly how this went unnoticed for nine dispatches.
+
 ## Agent Prompt Template
 When spawning a domain agent, use this structure:
 ```

@@ -353,3 +353,35 @@ employee deactivated without an end date accrues overdue months for ever — a p
 | HRP-012 unsubmitted / unapproved month | compute "past deadline" from the STORED `employee_deadline` / `manager_deadline`; the tile shows the past-deadline counts truthfully (today it counts every pending month); a period past the manager deadline surfaces on the HR landing page |
 | HRP-011 leaver's final month | a "deactivated employees whose final period is missing or not approved" read; ages against the manager deadline of that month |
 | HRP-022 approved month awaiting export | an "approved, not exported" read (ADR-034 D4 read-only cross-context lookup); ages against the export cutoff = the manager deadline; the export call itself stays a manual admin action (ADR-013 / ADR-034 unchanged) |
+
+## S141 update — HRP-015 widened, and it had been filtering out the very employees it exists to find
+
+**The row above describes HRP-015 as detecting "a profile row with no covering agreement row". That was true, and it was also
+the bug.** The read inner-joined a profile record covering today *before* looking for the agreement gap — so an employee missing
+a **profile** was excluded from the one list meant to surface them, while payroll and compliance failed closed for them every
+day. Found by the S141 implementer of the widening, not by a review.
+
+**What changed:**
+- The detector finds **both** kinds of gap, a missing profile record and a missing agreement record. The inner join is gone.
+- Each row now says **which** record is missing, and **when** a scheduled record will cover the employee again.
+- **That second field carries a distinction HR needs and the screen now makes.** A gap with a scheduled end is **not broken** —
+  it heals itself on a known date, and HR must **not** "fix" it, because the most likely correction would destroy a colleague's
+  scheduled change. A gap with no scheduled end is a real data error needing action. The list reads "Planlagt fra {date}" for
+  the first and "Skal rettes" for the second.
+- **Why the state became reachable at all:** S141 lets HR schedule a change ahead, so an employee can now have a record that
+  ended with a replacement that has not started. Before S141 this shape could only arrive from seeded, imported or legacy data.
+- **The boot seeders cannot be the fix**, which the refinement had implied. The live partial-unique index means an employee
+  whose only record is in the future *already has* an open row, so a seeder converted to "has no row covering today" would try
+  to insert a second and collide. The hole is unfillable that way; the detector is the answer.
+- **Two of the three fail-closed consumers now name the condition** instead of throwing anonymously, and point here. The third
+  sat outside the implementing agent's domain and became its own task — which is where a **live data-protection violation** was
+  found and fixed: the error type embeds its as-of date in its message, and for a mid-month starter that date is their hire date.
+
+**Clock note (owner ruling 2026-09-14):** the detector asks on the **writers' clock**, deliberately differing from the
+Copenhagen business day used elsewhere in this register's read family, because it asks a data-integrity question about records
+written and dated on that clock. Asking on another would report gaps that do not exist for an hour or two every night. The
+exception is documented at both sites. See QUAL-172, and the roadmap item to move business dates to the Danish day — which
+would make the exception unnecessary.
+
+**Still owed, unchanged:** nobody has ruled *by when* a registration-blocking data gap must be fixed. The gap is now visible and
+legible; its deadline is still unstated.

@@ -198,7 +198,16 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   read-side). **Increment 3 (S138) SHIPPED** (temporal editing, ADR-040 D8: dated profile + agreement-code
   writes through one pure router, category EDITABLE and NOT NULL, the HR backdate worklist, the S136
   leaver-send dead-end fixed; future-dating deliberately held for Increment 4 under the "current ≠ live"
-  precondition). **Increment 4 is UNCHANGED and NEXT (S141).** S140 deliberately did *not* claim any part of it: the owner ruled
+  precondition). **★ Increment 4 SHIPPED (S141) — all three deliverables, nothing cut.** The termination screen, the
+  effective-date picker, and the HR-gated history timeline all landed, along with the precondition that turned out to be nine
+  deliverables rather than one: as-of-today reads everywhere, the refusal lifted at **seven** sites (the refinement counted four
+  — the three missed were endpoint validators that would have shipped the picker *dead*), the concurrency token moved to the
+  employee record, a soft delete that retires **and audits** scheduled rows, a refresh job so a scheduled change is reflected on
+  the day it lands, and a detector for employees no record describes. **Plus B0, an owner-raised requirement no review lens had
+  asked for:** a scheduled change must be visible wherever a profile is read — six surfaces, three of which needed a new backend
+  field the owner ruled in. **Increment 4's own named follow-ups remain open:** org/unit membership history, re-hire spells, and
+  the OQ-4 pro-rating Phase-B question. *(Superseded planning text follows, kept for provenance.)* S140 deliberately did *not*
+  claim any part of it: the owner ruled
   (OQ-1) that S140 = the fixed-clock conversion + the HR follow-up surface, so the increment's three defining deliverables —
   the termination screen, a dated change with an effective-date picker, and the HR-gated history timeline — all remain owed, and
   none of its acceptance criteria was met. Two items that needed no design were pulled forward into S140 because they were

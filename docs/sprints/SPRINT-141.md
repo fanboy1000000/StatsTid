@@ -1257,3 +1257,130 @@ per-prompt, and state that "compare against master" means the **local** branch.
 | Demo-seed | **165 passing** |
 
 **The pre-declared cut order was never used. C2, C1 and the picker all shipped.**
+
+## Step 7a — the sprint-end review. BOTH lenses found real defects; both verdicts were BLOCKED-class.
+
+**External (Codex): 1 BLOCKER / 1 WARNING — both in the history endpoint, both fixed.**
+
+- **★ BLOCKER — a CANCELLED change displayed as still forthcoming.** The owner's delete ruling retires a scheduled row by
+  **zero-width close**, leaving it in place covering no days. The history endpoint classified by "starts after today" and so
+  reported a change somebody had deliberately called off as coming. **This is the cross-task shape the review exists to catch:**
+  the retirement mechanism and the history screen were built in the *same wave, by different tasks*, and neither task's own
+  review could see the other.
+- **WARNING — a date-filtered history claimed a false beginning.** The first row inside the window was treated as the
+  employee's first ever record, so the screen said "Første registrering" when it was not and reported no changes for a row that
+  certainly changed something. **Confirmed to be reaching a screen**, not theoretical — the page renders that flag directly.
+
+**The fix went further than the instruction, in two ways that matter.**
+- It **reused the canonical rule rather than copying it**, extracting the "covers at least one day" half so the history read
+  could take that half alone (a history reports past and current intervals too, so it cannot use the whole scheduled
+  predicate). It then **verified the recomposed constant is byte-identical to the original** by running the composition and
+  printing both statements — so the marker's behaviour provably did not move. Its stated reason for refusing an inline copy:
+  *"that is exactly how two surfaces end up giving different answers about the same cancelled change, and nobody notices until
+  HR sees one."*
+- It applied the exclusion to the **agreement** table too, which has **no retirement path today**, on the grounds that a rule
+  applied only where a writer currently produces the shape *"would quietly expire the moment the agreement side grows a
+  delete."*
+
+**And its refinement to the second fix is subtler than my instruction.** I said fetch the row before the window. It anchored on
+the row before **`rows[0].EffectiveFrom`**, not before `from` — because an interval that *straddles* `from` is itself inside the
+window, so anchoring on `from` would have compared that row **against itself**, producing an empty changed-field list. The same
+defect, surviving the fix, in the one case a reviewer would be least likely to construct.
+
+**Its pins are driven through the real endpoints, never a hand-written imitation of the retirement idiom**, with the reasoning
+stated: the defect *was* a disagreement between the writer's idiom and the reader's assumption, so a pin that fabricates the
+idiom could drift alongside the writer and stop catching it. Plus a counter-test, so the fix cannot be satisfied by hard-wiring
+the flag to false.
+
+**Contract unchanged** — verified by regenerating and diffing, so nothing to regenerate and the shipped screen needs no change.
+**RATIFIED deviation:** it edited a file belonging to another task, outside its original fence. Correct — the fence was a
+wave-2 collision measure, that wave is closed, the edit is additive and provably text-preserving, and the alternative was the
+duplicated rule I had explicitly told it not to write.
+
+Build `0 errors / 145 warnings`, unit **1255 passing** after the merge.
+
+**Internal (Reviewer, `claude-fable-5-1`): `verdict: BLOCKED` — 1 BLOCKER / 3 WARNING / 5 NOTE. All absorbed.**
+
+It read every production diff line by line across both repositories, the router, three write endpoints, the poller, the gap
+detector, the history endpoint, the settlement anchor and every new screen; traced the concurrency token through **every** write
+in the drawer's save sequence including the new carry-forward second writes; and read every Docker-gated pin **by construction**,
+since none has ever executed.
+
+### ★ B1 — the sprint's own defect class, reintroduced by its LAST task, with the screen actively misdescribing it
+
+**What it does to a real person.** A colleague schedules "0.6, Department Head, from 1 November". HR opens the same employee,
+picks **1 December** in the new picker, changes only the display name, and saves. From 1 December the employee **silently
+reverts** to today's fraction, today's title and today's agreement code. The colleague's decision, meant to run indefinitely,
+lasts thirty days. The payroll wage-type key reverts with it. Nobody chose it, and it is recorded as an ordinary edit — so the
+destruction is not even distinguishable in the audit trail, which is the condition the owner attached to OQ-5.
+
+**The backend is correct throughout.** The same-values no-op compares against the row covering the *requested* date, which for
+a date at or after the scheduled change is the scheduled row — so the router correctly splits it. **The defect is that the
+drawer pre-fills a form with the wrong period's values for the date being written**, and sends every field on every save.
+Carry-forward cannot rescue it: the resulting row is open-ended and the carry target requires a bounded one, so the checkbox is
+ignored.
+
+**And the copy is wrong in exactly this case**, which is worse than silence: the picker promises the values "forbliver som nu,
+indtil {picked}", untrue when a scheduled change intervenes; and the notice can render a **chronologically impossible**
+sentence. The dirty-check also diffs against today's values, so for the common "edit an unrelated field" case no prompt appears
+at all.
+
+**Why no test caught it, which is as instructive as the defect.** The picker's own suite schedules its fixture change for
+1 December and only ever picks 1 October — with a comment saying so. **The one relationship that matters, picked ≥ scheduled,
+is excluded by the fixture's construction.** Every backend pin is today-dated or single-row.
+
+**This is the SECOND time this sprint that a fix for one ruling re-broke something another task had just fixed.** It is the
+strongest possible argument for why a whole-sprint review exists separately from per-task review: neither task's own reviewer
+could see the other's mechanism.
+
+### The three warnings — two of them FALSE REDS that would have cost a debugging session each
+
+- **W1 — two agreement-side pins asserted a field name that does not exist** (`scheduled` where the member is
+  `scheduledAgreementCode`). They would have failed on the first database run **while the payload was entirely correct**.
+  **And my sprint-log claim that "the guessed names matched the implementation, so no reconciliation was needed" was false** —
+  true of the profile side, false of the agreement side. **Thirty-first falsified claim; eleventh of mine.**
+- **W2 — the delete-audit pin read the wrong audit row, and would have failed in a way that MIMICS the defect it guards.** It
+  read the *latest* deleted row, which is the retirement row, not the main one. A reader seeing it fail would have concluded
+  "the audit recorded the future row's values" — precisely the pre-sprint defect — **while the production code was right**. That
+  is the most expensive kind of bad test: it could have got a correct fix reverted.
+- **W3 — the owner's ruled marker had no executable behaviour test at all.** The only pins were string-contains checks against
+  the SQL text, which pass whether or not the query returns the right date. **The sprint log itself had recorded the two
+  database cases as owed and they were never written.** Now six facts, including the case the owner's requirement hinges on: a
+  **cancelled** change surfaces null, seeded as a genuine zero-width row on all three reads.
+- **Two notes absorbed:** a pin whose equality held only because two different kinds of version number both happened to be 1 in
+  the seed (flagged once already and carried); and a pin stating a failing condition that never existed in any commit.
+
+**RATIFIED deviation:** the test agent edited a file belonging to another task. Its reasoning is right — the fence existed to
+prevent concurrent double-ownership during authoring, not as a permanent bar, and every wave is merged.
+
+**Verified sound, and this list is the reason the blocker is survivable:** the concurrency-token chain holds on every path a
+whole-sprint view exposes, including the carry-forward second writes, each with its own chained audit row; the poller's refresh
+bumps the token **and** writes a system audit row, so "every token transition has an audit row" holds; the delete now records
+the aggregate token in both version columns while the event keeps the row version, so the two number-spaces are no longer mixed;
+the history endpoint 403s unknown identifiers, serves no token and carries only record dates; **both data-protection log leaks
+are closed**; and the clock pins and the settlement divergence-window pin are the only constructions of their assertions that
+can fail.
+
+Build `0 errors / 145 warnings`, non-Docker regression **104 passing** after the pin fixes merged.
+
+### The B1 blocker — fixed, and the fix is a three-way classification rather than a patch
+
+The agent's own diagnosis is the clearest statement of it: *"The picker itself was never the thing lying to HR; it was quietly
+handing the save a form full of the wrong period's numbers."*
+
+It classifies the picked date against each scheduled change's **own window**, not against "is there one":
+- **before** — unchanged behaviour; the write may truncate a later scheduled change and the existing choice still applies.
+- **covers** — the picked date falls *inside* the scheduled change's period, so the drawer **re-baselines the fields from the
+  scheduled row's values**, per field, and **only where HR has not deliberately diverged that field** — so changing the date
+  never silently discards something just typed. An untouched field then saves as a genuine no-op, preserving the colleague's
+  schedule; an edited field overrides only from that date forward, which is the intended behaviour.
+- **beyond** — the scheduled change has its own end and the picked date is past it, so there may be a further row the payload
+  never carries. **It refuses rather than guesses**: save disabled, with an explanation.
+
+Both wrong sentences are corrected, and the now-inert carry-forward checkbox is no longer shown in the shape where the backend
+ignores it. **Eight new tests, proved RED-first** by stashing the fix and confirming all seven discriminating ones failed.
+
+**Gates after the merge:** `npx tsc --noEmit` clean; frontend **872 passing across 73 files**.
+
+**And the worktree problem bit one last time, twice in one task** — 42 commits behind on resumption, then a second smaller
+fast-forward for a Step-7a fix landing mid-work. It verified by diff that neither touched its files before merging.
