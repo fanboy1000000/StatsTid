@@ -536,8 +536,28 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             Assert.Equal(rowVersionBeforeDelete, stored);
         }
 
-        // Audit row: action='DELETED', version_before = version_after = the ROW's own version
-        // (ADR-023 D8) — again compared against rowVersionBeforeDelete, never the aggregate token.
+        // Audit row: action='DELETED', version_before = version_after = the AGGREGATE TOKEN
+        // (`users.version`), NOT the row's own version.
+        //
+        // S141 Step-7a cycle 2 — THIS ASSERTION WAS WRONG IN THE OPPOSITE DIRECTION, and the way it
+        // was wrong is worth keeping. Cycle 1 found the original pin could not FAIL: it compared two
+        // numbers that both happened to be 1 in the seed, so it could not tell the two version
+        // number-spaces apart. The fix bumped one of them to force them apart — and then asserted the
+        // audit columns carry the ROW's version, which the DELETE handler deliberately does not do.
+        // So a pin that could never fail was replaced by one that could never PASS, and its own
+        // comment told the reader the defect was "recording the aggregate token instead of the row's
+        // own version" — which is the documented contract, not a defect. That is the same false-red
+        // shape this sprint found twice elsewhere: a test failing while production is correct, in a
+        // way that reads like the bug it guards, which is how a correct decision gets reverted.
+        //
+        // What the two number-spaces mean, so the next reader does not re-break this:
+        //   • the ROW's own `version` stays UNCHANGED across a soft delete (ADR-023 D8) — asserted
+        //     directly above against the stored row.
+        //   • the AUDIT row's version_before/version_after carry the per-employee aggregate token
+        //     (`users.version`), which is what the client holds as its ETag since S141 moved the
+        //     profile onto it. before == after because a delete does not bump it.
+        // The `+5` bump earlier in this fact exists to make those two numbers provably different, so
+        // neither assertion can pass by coincidence the way the pre-S141 pin did.
         await using (var auditCmd = new NpgsqlCommand(
             """
             SELECT version_before, version_after
@@ -549,12 +569,13 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         {
             auditCmd.Parameters.AddWithValue("employeeId", employeeId);
             await using var reader = await auditCmd.ExecuteReaderAsync();
-            // RED: fails if soft-delete bumps the row's own version (version_before != version_after)
-            // instead of leaving it unchanged per ADR-023 D8, OR if either column is silently
-            // recording the aggregate token instead of the row's own version.
+            // RED: fails if a soft delete BUMPS the token across the audit row (before != after),
+            // or if either column silently records the row's own version instead of the aggregate
+            // token — which is what a reader "tidying" this back toward the pre-S141 shape would do.
+            // Both numbers are forced apart by the bump above, so neither branch can pass by accident.
             Assert.True(await reader.ReadAsync(), "Expected a DELETED audit row.");
-            Assert.Equal(rowVersionBeforeDelete, reader.GetInt64(0));
-            Assert.Equal(rowVersionBeforeDelete, reader.GetInt64(1));
+            Assert.Equal(usersVersionToken, reader.GetInt64(0));
+            Assert.Equal(usersVersionToken, reader.GetInt64(1));
         }
     }
 

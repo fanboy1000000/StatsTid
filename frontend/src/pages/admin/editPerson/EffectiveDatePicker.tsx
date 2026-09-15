@@ -205,7 +205,20 @@ export function EffectiveDatePicker({
         </div>
       ) : (
         <>
-          {isFuture && (
+          {/*
+            S141 Step-7a cycle 2 — this notice is SUPPRESSED when the picked date falls inside an
+            already-scheduled change, because in that shape its sentence is FALSE.
+
+            It promises the values "forbliver som nu, indtil {picked}" — remain as they are until the
+            picked date. That is true only when nothing is scheduled in between. If a colleague has
+            scheduled a change from 1 December and HR picks 15 December, the values change on the
+            FIRST of December, not the fifteenth — and the covers notice directly below would then
+            sit under a sentence contradicting it, which is precisely what this component's own
+            header says it exists to prevent. The absorption that introduced the covers notice
+            corrected the OTHER wrong sentence and left this one standing; the sprint log's claim
+            that both were fixed was wrong, and this is the correction.
+          */}
+          {isFuture && !coversScheduledNote && (
             <div className={styles.scheduledNotice} data-testid="pd-effective-future-notice">
               <p className={styles.scheduledText}>
                 Overenskomstkoden og deltid/stilling ændres ikke i dag — de forbliver som nu, indtil{' '}

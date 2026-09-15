@@ -546,6 +546,31 @@ describe('PersonDrawer — SPRINT-END BLOCKER FIX: a picked date AT OR AFTER a s
     expect(note.textContent).toContain('deltid/stilling')
   })
 
+  /**
+   * S141 Step-7a cycle 2 — the two notices must never both render, because in this shape they
+   * CONTRADICT each other.
+   *
+   * The future notice promises the values "forbliver som nu, indtil {picked}". When the picked date
+   * falls inside a change somebody already scheduled, that is false: the values change on the
+   * SCHEDULED date, earlier. The covers notice sitting directly beneath it says the fields were
+   * re-filled from that scheduled change — so a reader would see one box telling them nothing
+   * happens until the fifteenth and another telling them it already has.
+   *
+   * This pin exists because the absorption that added the covers notice corrected the OTHER wrong
+   * sentence and left this one standing, and the sprint log recorded both as fixed. Nothing
+   * executable held that line until now.
+   */
+  it('suppresses the "remains as now until" notice when the picked date falls inside a scheduled change', async () => {
+    setupRouterWithProfileSchedule(null)
+    renderEdit()
+    await waitForHydrated()
+
+    fireEvent.change(screen.getByTestId('pd-effective-from'), { target: { value: SCHEDULED_FROM } })
+
+    expect(screen.queryByTestId('pd-effective-future-notice')).toBeNull()
+    expect(screen.getByTestId('pd-effective-covers-notice')).toBeTruthy()
+  })
+
   it('replaces the carry-forward checkbox with the "supersedes" wording — never the chronologically impossible "gælder kun indtil" sentence', async () => {
     setupRouterWithProfileSchedule(null)
     renderEdit()
