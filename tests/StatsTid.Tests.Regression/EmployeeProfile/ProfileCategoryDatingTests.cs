@@ -175,6 +175,7 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
         // Path 3a: SupersedeAndCreateAsync Case A (net-new via InsertLiveRowAsync).
         var caseAUser = await CreateUserWithoutProfileAsync("Chefkonsulent");
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        long caseAToken;
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
@@ -183,6 +184,12 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
                 new EmployeeProfileSupersedeRequest(caseAUser, 1.000m, null, today),
                 expectedVersion: null);
             Assert.Equal(SaveEmployeeProfileOutcome.Created, res.Outcome);
+            // S141 (OQ-3, TASK-14102 B5): capture the LIVE aggregate token (users.version) this
+            // create produced for path 3b's edit below, rather than assume "1". That literal was
+            // the PRE-S141 meaning of this token (the profile row's own version); the token is now
+            // the per-employee aggregate, which CreateUserWithoutProfileAsync leaves at the schema
+            // default of 1 and this Case A write bumps UNCONDITIONALLY to 2.
+            caseAToken = res.Version;
             await tx.CommitAsync();
         }
 
@@ -199,7 +206,7 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
             await using var tx = await conn.BeginTransactionAsync();
             var res = await _repo.SupersedeAndCreateAsync(conn, tx,
                 new EmployeeProfileSupersedeRequest(caseAUser, 0.900m, "Konsulent", today),
-                expectedVersion: 1L);
+                expectedVersion: caseAToken);
             Assert.Equal(SaveEmployeeProfileOutcome.Superseded, res.Outcome);
             await tx.CommitAsync();
         }

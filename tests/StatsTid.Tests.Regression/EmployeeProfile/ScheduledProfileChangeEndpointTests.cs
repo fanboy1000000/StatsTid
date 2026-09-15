@@ -335,7 +335,17 @@ public sealed class ScheduledProfileChangeEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         var rows = await ReadProfileTimelineAsync(employeeId);
-        Assert.Equal(2, rows.Count);
+        // The seeded "today" row runs [F-400, scheduledFrom) — it does NOT start today, so this
+        // edit (EffectiveFrom = F) cannot route to an in-place update (that requires the covering
+        // row to start exactly on the requested date, TemporalWriteRouter.cs's B' case). It is a
+        // genuine SplitCovering (C'): the seeded row is closed at F (kept as CLOSED history,
+        // "OldTitle") and a NEW row [F, scheduledFrom) is inserted with "NewTitle" — the "before"
+        // branch's documented behaviour ("unchanged behaviour; the write may truncate a later
+        // scheduled change and the existing choice still applies"). So the timeline now holds
+        // THREE rows total: the closed predecessor, the new today-row, and the untouched scheduled
+        // row — not two. (This count is unrelated to the OQ-3 token move; it is the pre-existing
+        // split-routing consequence of editing a date that is not the covering row's own start.)
+        Assert.Equal(3, rows.Count);
         var todayRow = rows.Single(r => r.From == F);
         Assert.Equal(scheduledFrom, todayRow.To);
         Assert.Equal("NewTitle", todayRow.Position);

@@ -1440,3 +1440,73 @@ visibility requirement.
 - **Worktree teardown** — the Step-0a finding, plus this sprint's own.
 - **Registers:** QUAL-171 (fixed), 172, 173, 174, 175 recorded; the business-date move and the login-token staleness decision
   are roadmap items with the analysis attached.
+
+## Post-close CI — run `34942169407`, two jobs red, BOTH of them the Orchestrator's process failures
+
+**Neither is a defect in the sprint's code.** Both are the same omission repeating from S140, which is the part worth
+recording.
+
+**1. The lazy-route coverage guard — and I never dispatched the wave that was meant to satisfy it.** The two new pages were
+not registered in `frontend/e2e/lazy-routes.spec.ts`, so the guard that fails when `App.tsx` gains a lazy page nothing
+exercises did exactly that. **The plan carried TASK-14110 with this precise job, annotated "(S140's first CI red)".** Waves 1,
+2, 3 and 3b were dispatched; **wave 4 was forgotten**, and the sprint closed without it. So the guard has now caught the same
+omission in two consecutive sprints — which is the strongest possible evidence it earns its place, and a reminder that **a task
+written down is not a task done.**
+
+**2. Four documents I materially changed still declared the previous sprint's freshness anchor** — the HR process register, the
+model-routing register, the quality register and the quality matrix. **`SPRINT-140.md:1039` records the identical failure last
+sprint**, naming the same four files.
+
+**Both fixed.** The two pages registered with the reason written at the site; the four anchors bumped.
+
+**The honest reading:** this sprint's review layer was the most effective it has ever been on *code*, and both close failures
+are things no code review looks at — a dispatch I never made, and a marker I never bumped. The lenses reviewed what I gave
+them. Nothing reviewed whether I gave them everything.
+
+## Post-close CI remediation — run `34942169407`: 9 of 1928 red, and **NONE was a product defect**
+
+**The result that matters: 1919 of 1928 Docker-gated facts passed on their first real execution**, including everything this
+sprint wrote — the settlement anchor, the five router shapes, the delete with its retirement audit, the token round-trips, the
+clock pins at 23:30 UTC, and the scheduled-change marker's cancelled case. **Every one of the nine failures was test-side.**
+
+### The one that looked worst, and was not
+
+`Poller_SpecialHoliday_CandidateYear_IsHiresOwnCalendarYear` failed with a message about candidate-year arithmetic — which read
+exactly like *"the QUAL-168 fix leaked from the vacation series into special holiday and changed a legal geometry."* **It had
+not.** A read-only trace established that the entire special-holiday settlement pass sits behind a **fail-closed feature gate**
+that this file's host helper never switched on, so the fact waited thirty seconds for a row that could never appear. The trace
+also confirmed structurally that the leak is impossible: **two independent methods with independent generation**, and the
+untouched lower bound carries its own comment saying it is deliberately not mapped.
+
+**This is why it went to a trace instead of a guess.** The failure message pointed squarely at the domain; the cause was one
+missing line of test configuration. Fixed, with that explanation written at the site so the next reader does not start by
+suspecting the legal geometry.
+
+### The other eight — seven token consequences, and one claim of mine that was wrong
+
+Seven are pre-existing tests still speaking the **old** concurrency dialect: hard-coded tokens, or counts of versions and audit
+rows that now advance further because owner ruling OQ-3 moved the token to the employee record and made it bump on every write.
+All were repaired by reading the live token rather than hard-coding one, and by deriving the correct new counts **from the
+production code rather than from what the run printed** — a test updated to match observed output is not a test.
+
+**★ The eighth was not a token consequence at all, and my dispatch said it was.** `PUT_TodayDatedEdit_ApplyUntilScheduledChange`
+already read its token live. Its miscount is independent and **pre-existing in a test this sprint wrote**: the fixture's today
+row starts 400 days back, so an edit dated today cannot be an in-place update — that case requires the row to *start* on the
+requested date — it is a genuine split, which closes one row and inserts another, giving three rows rather than two. Routing
+behaviour that predates this sprint by many sprints. **Thirty-third falsified claim; thirteenth of mine.**
+
+### And two process failures, both mine, both repeats of S140
+
+- **The two new pages were never registered in the route-coverage guard** — because **wave 4 was never dispatched**. The plan
+  carried that task, annotated *"(S140's first CI red)"*. I dispatched waves 1, 2, 3 and 3b and closed the sprint without it.
+- **Four documents I materially changed still declared the previous sprint's freshness anchor.** `SPRINT-140.md:1039` records
+  the identical failure, naming the same four files.
+
+**The honest reading of this close:** the review layer was the most effective it has ever been on code — it caught a defect that
+would have broken every save, a picker that would have refused every date it offered, a payroll figure built on a superseded
+fraction, a live data-protection leak, and three tests that could not do their job. **And nothing red in this run was code.**
+Both process failures are things no code review looks at: a dispatch I never made and a marker I never bumped. The lenses
+reviewed what I handed them; nothing checked whether I handed them everything.
+
+**Verification before the remediation push:** build `0 errors / 145 warnings` (baseline held), unit **1255**, non-Docker
+regression **104**, demo-seed **165**, frontend **873**, type-check clean. Every exit status read from the unpiped command.

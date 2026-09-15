@@ -176,7 +176,11 @@ public sealed class SettlementCandidateEnumerationTests : IAsyncLifetime
         await SetEmploymentStartDateAsync(employeeId, new DateOnly(2021, 3, 10));
 
         // Past BOTH the 2020 and 2021 SPECIAL_HOLIDAY godtgørelse boundaries (30 Apr Y+2).
-        BootFixedClockHost(new DateOnly(2024, 1, 1), BroadGoLive);
+        // The gate MUST be switched on: the entire SPECIAL_HOLIDAY pass is fail-closed behind it, so
+        // without this the poller never enumerates anything of this type and the wait below times out
+        // — which is exactly how this fact failed on the first real database run, with a message about
+        // candidate-year arithmetic that had nothing to do with the cause.
+        BootFixedClockHost(new DateOnly(2024, 1, 1), BroadGoLive, specialHolidayEnabled: true);
 
         var settled2021 = await WaitForSettlementAsync(
             employeeId, 2021, SpecialHolidayType, TimeSpan.FromSeconds(30));
@@ -192,7 +196,31 @@ public sealed class SettlementCandidateEnumerationTests : IAsyncLifetime
     /// <summary>Boots a derived WAF host whose <see cref="TimeProvider"/> is fixed and whose
     /// <c>Settlement:GoLiveDate</c> is set — the <c>SettlementCloseServiceBoundaryTests</c>
     /// pattern.</summary>
-    private void BootFixedClockHost(DateOnly fixedDate, DateOnly goLiveDate)
+    /// <summary>
+    /// S141 post-close CI fix — <paramref name="specialHolidayEnabled"/> exists because the whole
+    /// SPECIAL_HOLIDAY settlement pass sits behind a **fail-closed feature gate**
+    /// (`Settlement:SpecialHolidaySettlementEnabled`, the ADR-033 Slice 2 R5 safety gate), and this
+    /// file's helper never set it.
+    ///
+    /// <para>
+    /// The consequence was a failure that looked like a domain defect and was not. The SPECIAL_HOLIDAY
+    /// fact waited thirty seconds for a settlement row that **could never appear**, then failed with a
+    /// message about candidate-year arithmetic — so the first reading was "the QUAL-168 fix leaked from
+    /// the vacation series into the special-holiday one and changed a legal geometry". A read-only trace
+    /// established it had not: the two series are **independent methods with independent generation**,
+    /// and the special-holiday lower bound is byte-identical to before, carrying its own comment saying
+    /// it is deliberately not mapped. **The arithmetic was right the whole time; the pass simply never
+    /// ran.**
+    /// </para>
+    ///
+    /// <para>
+    /// The sibling file that settles special holiday through the same live poller threads this flag
+    /// explicitly. This helper is now the same shape. It defaults to <c>false</c> so the two VACATION
+    /// facts keep their exact previous behaviour — they do not need the gate, since the type they
+    /// assert on is not behind it.
+    /// </para>
+    /// </summary>
+    private void BootFixedClockHost(DateOnly fixedDate, DateOnly goLiveDate, bool specialHolidayEnabled = false)
     {
         var derived = _factory.WithWebHostBuilder(builder =>
         {
@@ -200,6 +228,7 @@ public sealed class SettlementCandidateEnumerationTests : IAsyncLifetime
                 new Dictionary<string, string?>
                 {
                     ["Settlement:GoLiveDate"] = goLiveDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    ["Settlement:SpecialHolidaySettlementEnabled"] = specialHolidayEnabled ? "true" : "false",
                 }));
             builder.ConfigureTestServices(services =>
             {

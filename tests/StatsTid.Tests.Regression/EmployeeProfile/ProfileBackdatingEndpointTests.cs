@@ -887,11 +887,21 @@ public sealed class ProfileBackdatingEndpointTests : IAsyncLifetime
             ifMatch: $"\"{version}\"");
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
-        // RED: fails if the live users cache/audit react to a category change confined to closed
+        // RED: fails if the live users cache VALUE reacts to a category change confined to closed
         // history (would prove the cache is not scoped to "as of today").
         Assert.Equal(NonDefaultCategory, await ReadDatedCategoryAtAsync(employeeId, t60.AddDays(5)));
         Assert.Equal("Standard", await ReadUsersCategoryAsync(employeeId));
-        Assert.Equal(0, await CountUsersAuditAsync(employeeId, "UPDATED"));
+        // S141 (OQ-3, TASK-14102 B5): this PUT is still a REAL timeline write (a genuine change to
+        // the closed-history row's employment_category), so it is NOT the same-values no-op — and
+        // every real write now bumps `users.version` UNCONDITIONALLY, even when (as here) the LIVE
+        // cached category value itself does not move. `UsersCacheWritten` is therefore true and one
+        // users_audit UPDATED row is written to record the token transition — with previous_data ==
+        // new_data for the category, which is the honest record of "the token moved, the cached
+        // value did not" (see EmployeeProfileRepository.cs's "Cache + TOKEN" step-6 comment). This
+        // is a real, named increase in audit volume the sprint's owner ruling accepted, not a test
+        // artefact — a pre-S141 run of this exact scenario genuinely wrote zero such rows, because
+        // the users row was written only when the cached VALUE moved.
+        Assert.Equal(1, await CountUsersAuditAsync(employeeId, "UPDATED"));
     }
 
     // ═════════════════════════════════════════════════════════════════════

@@ -118,18 +118,35 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
         // Use a fresh user (independent of other tests' fixtures) so this test can
-        // assert version goes 1 → 2 without coupling to xUnit's intra-class test order.
+        // assert the token advances by exactly one write, without coupling to xUnit's
+        // intra-class test order.
         var targetEmp = await CreateFreshUserAsync(client);
+
+        // S141 (owner ruling OQ-3): the profile PUT's concurrency token is now `users.version` —
+        // the per-EMPLOYEE aggregate token — never the profile row's own `version` column (which
+        // this PUT would still see as 1, since it is this fresh row's first edit). It is NOT "1"
+        // for a freshly created user: CreateFreshUserAsync's POST /api/admin/users writes the
+        // users row (version 1) AND, in the same request, an initial agreement-code row via
+        // UserAgreementCodeRepository.SupersedeAndCreateAsync — which caches the agreement code
+        // onto `users` and bumps the SAME token to 2 (a pre-existing S138 fact, not new this
+        // sprint; the agreement-code side made this token move first). A literal "1" here is
+        // therefore stale by construction and 412s. Read the live token from the GET instead.
+        var liveToken = await ReadProfileTokenAsync(client, targetEmp);
 
         var rsp = await PutAsync(client, targetEmp,
             weeklyNormHours: 32.0m, partTimeFraction: 0.8m, position: "Specialist",
-            ifMatchValue: "1");
+            ifMatchValue: liveToken.ToString());
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         Assert.NotNull(rsp.Headers.ETag);
-        Assert.Equal("\"2\"", rsp.Headers.ETag!.Tag);
+        // The AGGREGATE token after this write. S141/B5 bumps it UNCONDITIONALLY on every real
+        // profile write (a token that does not move on every change detects nothing), so it is
+        // exactly liveToken + 1 here — a genuinely different number from the profile row's own
+        // version (which this same write sets to 1, its first edit), so this pin cannot pass by
+        // the two number-spaces coincidentally matching.
+        Assert.Equal($"\"{liveToken + 1}\"", rsp.Headers.ETag!.Tag);
 
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(2L, body.GetProperty("version").GetInt64());
+        Assert.Equal(liveToken + 1, body.GetProperty("version").GetInt64());
         // S53/TASK-5306 (a7aee58): PUT DTO is now {EffectiveFrom, PartTimeFraction, Position};
         // the response carries no weeklyNormHours.
         Assert.Equal(0.8m, body.GetProperty("partTimeFraction").GetDecimal());
@@ -315,8 +332,13 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
         // Create a fresh user (independent of other tests' fixtures) so this test can
-        // PUT with If-Match: "1" deterministically regardless of execution ordering.
+        // PUT deterministically regardless of execution ordering.
         var fresh = await CreateFreshUserAsync(client);
+
+        // S141 (OQ-3): read the LIVE users.version token from the GET rather than assuming "1" —
+        // see Put_Success_RoundTripsAndIncrementsVersion for why a freshly created user's token is
+        // 2, not 1 (the agreement-code write CreateFreshUserAsync performs already bumps it once).
+        var liveToken = await ReadProfileTokenAsync(client, fresh);
 
         // employee_profiles.weekly_norm_hours is NUMERIC(5,2) with no CHECK constraint;
         // -1 fits in the column type and the endpoint has no input-range validator yet.
@@ -325,7 +347,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         // the test owner can flip with the validator change.
         var rsp = await PutAsync(client, fresh,
             weeklyNormHours: -1m, partTimeFraction: 1.000m, position: null,
-            ifMatchValue: "1");
+            ifMatchValue: liveToken.ToString());
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         // When validation is added, replace the line above with:
@@ -342,12 +364,16 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
 
         var fresh = await CreateFreshUserAsync(client);
 
+        // S141 (OQ-3): same live-token read as the sibling gap-documentation test above — a
+        // freshly created user's users.version is 2, not 1, by the time this PUT fires.
+        var liveToken = await ReadProfileTokenAsync(client, fresh);
+
         // part_time_fraction is NUMERIC(4,3) with no CHECK constraint; 1.5 fits in the
         // column type and is semantically out of [0, 1] range. Endpoint absorbs without
         // validation today.
         var rsp = await PutAsync(client, fresh,
             weeklyNormHours: 37.0m, partTimeFraction: 1.5m, position: null,
-            ifMatchValue: "1");
+            ifMatchValue: liveToken.ToString());
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
     }
 
@@ -416,7 +442,17 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     /// Creates a brand-new active user via <c>POST /api/admin/users</c> (which also
     /// inserts the live <c>employee_profiles</c> row at version=1 per TASK-3108's
     /// 4-way atomicity contract). Returns the fresh user_id. Used by tests that need
-    /// a deterministic version=1 baseline regardless of xUnit's intra-class ordering.
+    /// a deterministic FIXTURE regardless of xUnit's intra-class ordering.
+    ///
+    /// <para>
+    /// <b>S141 (OQ-3) correction:</b> this no longer leaves the PUT's concurrency token at 1. The
+    /// token is now <c>users.version</c> (the aggregate, not the profile row's own version), and
+    /// the same request's step (2c) routes an initial agreement-code write through
+    /// <c>UserAgreementCodeRepository.SupersedeAndCreateAsync</c>, which caches the code onto
+    /// <c>users</c> and bumps that token to 2 (a pre-existing S138 fact — the agreement side moved
+    /// this token first). Callers that need the live value must read it via
+    /// <see cref="ReadProfileTokenAsync"/> rather than assume "1".
+    /// </para>
     /// </summary>
     private static async Task<string> CreateFreshUserAsync(HttpClient client)
     {
@@ -435,6 +471,22 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         var rsp = await client.PostAsJsonAsync("/api/admin/users", body);
         Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
         return newId;
+    }
+
+    /// <summary>
+    /// S141 (OQ-3) — read the LIVE concurrency token (<c>users.version</c>, the profile GET's
+    /// ETag/<c>version</c> field) rather than hard-coding a value. Mirrors
+    /// <c>EmployeeProfileLifecycleTests.ReadProfileTokenAsync</c>, added the same sprint for the
+    /// same reason: a literal <c>"1"</c> passed under both the pre-S141 (profile row's own
+    /// version) and post-S141 (aggregate) meanings of this token for the SEEDED fixtures only by
+    /// coincidence, and not at all for a freshly created user (see <see cref="CreateFreshUserAsync"/>).
+    /// </summary>
+    private static async Task<long> ReadProfileTokenAsync(HttpClient client, string employeeId)
+    {
+        var rsp = await client.GetAsync($"/api/admin/employee-profiles/{employeeId}");
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        return body.GetProperty("version").GetInt64();
     }
 
     private async Task DeleteProfileRowAsync(string employeeId)

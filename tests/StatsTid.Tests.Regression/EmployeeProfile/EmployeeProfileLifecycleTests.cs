@@ -163,7 +163,15 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         // real past, so an unconverted repo's "today" would agree with F here too; this pin is
         // clock-insensitive — it is a genuine, now-deterministic pin of the ROUTING, not the clock.)
         Assert.Equal(SaveEmployeeProfileOutcome.Created, result.Outcome);
-        Assert.Equal(1L, result.Version);
+        // S141 (OQ-3, TASK-14102 B5): result.Version is the AGGREGATE token (users.version), NOT
+        // the profile row's own version column (asserted separately below at 1L — that read is
+        // unaffected by this change and stays a genuinely different number, so this pin cannot
+        // pass by the two number-spaces coincidentally matching). CreateUserWithoutProfileAsync
+        // leaves users.version at its schema default of 1 (a raw INSERT with no agreement-code
+        // write), and SupersedeAndCreateAsync now bumps that token UNCONDITIONALLY on every real
+        // write (a token that does not move on every change detects nothing) — so this single
+        // Case A insert takes it from 1 to 2.
+        Assert.Equal(2L, result.Version);
 
         // Verify the row is the one the repo claims (and only one live row).
         await using var verifyConn = _harness.Factory.Create();
@@ -180,6 +188,8 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         checkCmd.Parameters.AddWithValue("employeeId", employeeId);
         await using var reader = await checkCmd.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync(), "Case A should have inserted a live row.");
+        // The ROW's own version column — a separate number-space from result.Version above (the
+        // AGGREGATE users.version token). Unaffected by S141: a fresh INSERT still starts at 1.
         Assert.Equal(1L, reader.GetInt64(0));
         Assert.Equal(0.800m, reader.GetDecimal(1));
         Assert.Equal("Specialist", reader.GetString(2));
@@ -203,6 +213,7 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
         var today = F;
 
         Guid initialProfileId;
+        long tokenAfterSeed;
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
@@ -215,6 +226,13 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
             var seedResult = await _repo.SupersedeAndCreateAsync(conn, tx, seedReq, expectedVersion: null);
             initialProfileId = seedResult.ProfileId;
             Assert.Equal(SaveEmployeeProfileOutcome.Created, seedResult.Outcome);
+            // S141 (OQ-3): capture the LIVE aggregate token (users.version) this create produced,
+            // rather than assume "1" for the edit below. CreateUserWithoutProfileAsync leaves
+            // users.version at its schema default of 1, and SupersedeAndCreateAsync now bumps that
+            // token UNCONDITIONALLY on every real write (S141 / B5) — so the token this edit must
+            // present is 2, not 1 (the PRE-S141 meaning of this token, when it was the profile
+            // row's own version rather than the per-employee aggregate).
+            tokenAfterSeed = seedResult.Version;
             await tx.CommitAsync();
         }
 
@@ -229,18 +247,25 @@ public sealed class EmployeeProfileLifecycleTests : IAsyncLifetime
                 PartTimeFraction: 0.750m,
                 Position: "Department Head",
                 EffectiveFrom: today);
-            editResult = await _repo.SupersedeAndCreateAsync(conn, tx, editReq, expectedVersion: 1L);
+            editResult = await _repo.SupersedeAndCreateAsync(conn, tx, editReq, expectedVersion: tokenAfterSeed);
             await tx.CommitAsync();
         }
 
         // RED: fails if a same-day (EffectiveFrom == predecessor.effective_from == F) edit routes
         // to Case C (Superseded, new profile_id) instead of an in-place Case B update.
         Assert.Equal(SaveEmployeeProfileOutcome.Updated, editResult.Outcome);
-        Assert.Equal(2L, editResult.Version);
+        // editResult.Version is the AGGREGATE token again (users.version), not the row's own
+        // version (asserted separately below, still 2L). The aggregate bumps UNCONDITIONALLY on
+        // every real write, so this second write takes it from tokenAfterSeed (2) to 3 — a
+        // genuinely different number from the row's own version, so this pin cannot pass by the
+        // two number-spaces coincidentally matching.
+        Assert.Equal(tokenAfterSeed + 1, editResult.Version);
         // Case B preserves the predecessor's profile_id.
         Assert.Equal(initialProfileId, editResult.ProfileId);
 
-        // Verify: still exactly one live row, effective_from unchanged, version=2.
+        // Verify: still exactly one live row, effective_from unchanged, ROW'S OWN version=2 (this
+        // is the profile row's own version column, not the aggregate token asserted above — Case B
+        // bumps the row in place from 1 to 2, a fact untouched by S141).
         await using var verifyConn = _harness.Factory.Create();
         await verifyConn.OpenAsync();
         await using var cmd = new NpgsqlCommand(

@@ -48,6 +48,17 @@ const ROUTES: Array<{ path: string; page: string }> = [
   // Routed for the first time in S140 (QUAL-162) — finished and unit-tested since S116, reachable
   // by nobody until now, so this is also its first browser exercise.
   { path: '/godkend/overtid', page: 'OvertimePreApprovalManagement' },
+  // S141 — the two pages Increment 4 added. **This guard caught them because the Orchestrator never
+  // dispatched the wave that was supposed to register them**: the sprint plan carried TASK-14110 with
+  // this exact job, annotated "(S140's first CI red)", and the sprint closed with waves 1, 2, 3 and 3b
+  // dispatched and wave 4 forgotten. So the same guard has now caught the same omission in two
+  // consecutive sprints, which is the strongest evidence that it earns its place — and a reminder that
+  // a task written down is not a task done.
+  { path: '/admin/ansaettelseshistorik', page: 'EmploymentHistoryPage' },
+  // The termination screen is a per-employee ACTION page with no sidebar entry by design, reached from
+  // the person drawer. It takes an employee in its path, so this exercises it against the seeded
+  // admin fixture; the assertion below only needs the chunk to resolve and the shell to survive.
+  { path: '/admin/medarbejdere/emp001/fratraedelse', page: 'TerminationPage' },
   { path: '/admin/ledelseslinjer', page: 'RoleManagement' },
   { path: '/admin/auditlog', page: 'AuditLogView' },
   { path: '/admin/projekter', page: 'ProjectManagement' },

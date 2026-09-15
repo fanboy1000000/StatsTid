@@ -1,6 +1,6 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 140 -->
+<!-- anchor-sprint: 141 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
 
 ## S141 re-grade (2026-09-15) — time-control Increment 4: a change can be scheduled ahead
