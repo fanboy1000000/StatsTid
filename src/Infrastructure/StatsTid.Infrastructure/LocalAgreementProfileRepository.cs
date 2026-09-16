@@ -551,42 +551,20 @@ public sealed class LocalAgreementProfileRepository
         return (long)newVersion;
     }
 
-    /// <summary>
-    /// Closes the currently-active profile (if any) by setting <c>effective_to = today</c>
-    /// without inserting a successor. Returns the number of rows affected (0 = no current
-    /// open profile, 1 = closed). Implements the deactivation-without-supersession case
-    /// per ADR-017 D2.
-    ///
-    /// End-exclusive convention (ADR-018 D8): stamping <c>effective_to = today</c> means
-    /// "no longer active starting today" — the deactivation semantic. No <c>+1 day</c>
-    /// shift is needed because end-exclusive's lower-inclusive / upper-exclusive interval
-    /// expresses the "last active day was yesterday" meaning naturally. The S22 migration
-    /// shifted already-closed history rows by <c>+1 day</c> to relabel pre-S22 end-inclusive
-    /// values into the new convention; active-row deactivation here stamps the natural
-    /// end-exclusive value.
-    /// </summary>
-    public async Task<int> DeactivateAsync(
-        string orgId, string agreementCode, string okVersion, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        // "Today" is computed in UTC — see SupersedeAndCreateAsync for the
-        // Phase-4 hardening note on Europe/Copenhagen vs UTC midnight boundaries.
-        await using var cmd = new NpgsqlCommand(
-            """
-            UPDATE local_agreement_profiles
-            SET effective_to = @today
-            WHERE org_id = @orgId
-              AND agreement_code = @agreementCode
-              AND ok_version = @okVersion
-              AND effective_to IS NULL
-            """, conn);
-        cmd.Parameters.AddWithValue("today", DateOnly.FromDateTime(DateTime.UtcNow.Date));
-        cmd.Parameters.AddWithValue("orgId", orgId);
-        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
-        cmd.Parameters.AddWithValue("okVersion", okVersion);
-        return await cmd.ExecuteNonQueryAsync(ct);
-    }
+    // S142 / TASK-14208 (owner ruling OQ-4): DeactivateAsync was DELETED here, not migrated.
+    // It closed the live profile at `DateOnly.FromDateTime(DateTime.UtcNow.Date)` — the UTC
+    // calendar day used as a BUSINESS date — and its own comment conceded the gap
+    // ("'Today' is computed in UTC — see SupersedeAndCreateAsync for the Phase-4 hardening note
+    // on Europe/Copenhagen vs UTC midnight boundaries"). It also read the wall clock directly
+    // rather than an injected TimeProvider, so it was not testable at a pinned instant at all.
+    // Nothing called it: the only `DeactivateAsync` call sites in the repository resolve to
+    // PositionOverrideRepository (PositionOverrideEndpoints) and ProjectRepository
+    // (ProjectEndpoints) — never this one. It described the ADR-017 D2
+    // deactivation-without-supersession case; if that case is ever needed, the close-stamp must
+    // be an application-supplied Copenhagen business date (SharedKernel CopenhagenBusinessDate)
+    // bound as a parameter, and the end-exclusive [from, to) reasoning the old doc comment gave
+    // still holds: stamping effective_to = today means "no longer active starting today", with
+    // no +1-day shift, because the interval is upper-exclusive (ADR-018 D9).
 
     private static LocalAgreementProfile MapReader(NpgsqlDataReader reader) => new()
     {

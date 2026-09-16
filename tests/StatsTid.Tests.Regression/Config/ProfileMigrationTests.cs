@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.Tests.Regression.Hosting;
 
 namespace StatsTid.Tests.Regression.Config;
 
@@ -20,12 +21,45 @@ namespace StatsTid.Tests.Regression.Config;
 ///   <item>Unknown / typo key drop (#3)</item>
 ///   <item>Expired-but-active filter (#4)</item>
 ///   <item>Happy-path one-row-per-overridable-key (#5)</item>
+///   <item>The eligibility window is the DANISH calendar day, not UTC and not the DB server's
+///     (#6 — S142 / TASK-14208)</item>
 /// </list>
+///
+/// <para>
+/// <b>Why every fact now pins the clock (S142 / TASK-14208, owner ruling OQ-7).</b> "Which legacy
+/// rows are currently effective?" is a business-date question. Until S142 the migrator asked
+/// Postgres, via <c>CURRENT_DATE</c> — so the answer depended on the timezone of whatever container
+/// the database happened to be running in, and no test could pin it. The migrator now takes a
+/// <see cref="TimeProvider"/> and derives the day through <c>CopenhagenBusinessDate</c>, so these
+/// tests inject a <see cref="FixedTimeProvider"/> and the outcome is a pure function of
+/// (seed, pinned instant). <see cref="PinnedToday"/> is the everyday pin — comfortably inside every
+/// legacy fixture's window, so facts #1–#5 keep asserting exactly what they always asserted, now
+/// without a hidden dependency on the calendar day CI runs on.
+/// </para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class ProfileMigrationTests : IAsyncLifetime
 {
+    /// <summary>
+    /// The everyday pinned "today" for fixtures #1–#5: later than every seeded
+    /// <c>effective_from</c> (latest is 2025-06-01) and later than the expired fixture's
+    /// <c>effective_to</c> (2024-12-31), so the eligible/expired split those facts assert is
+    /// unchanged from the pre-S142 wall-clock behaviour — just deterministic now.
+    /// </summary>
+    private static readonly DateOnly PinnedToday = new(2026, 3, 2);
+
     private Segmentation.TestFixtures.DockerHarness _harness = null!;
+
+    /// <summary>
+    /// Builds the migrator under test with an explicit clock. Defaults to
+    /// <see cref="PinnedToday"/> at UTC midnight, where the UTC and Copenhagen calendar days agree
+    /// (Denmark's offset is never negative), so a fact that does not care about the zone is
+    /// unaffected by it. Fact #6 passes its own instant, chosen so the two calendars DISAGREE.
+    /// </summary>
+    private LocalAgreementProfileMigrator NewMigrator(TimeProvider? clock = null) =>
+        new(_harness.Factory,
+            NullLogger<LocalAgreementProfileMigrator>.Instance,
+            clock ?? new FixedTimeProvider(PinnedToday));
 
     public async Task InitializeAsync()
     {
@@ -49,8 +83,7 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
             "STY02", "HK", "OK24", "MaxFlexBalance", "100",
             new DateOnly(2025, 6, 1), effectiveTo: null);
 
-        var migrator = new LocalAgreementProfileMigrator(
-            _harness.Factory, NullLogger<LocalAgreementProfileMigrator>.Instance);
+        var migrator = NewMigrator();
         var result = await migrator.RebuildAsync();
 
         Assert.Equal(1, result.ProfilesCreated);
@@ -83,8 +116,7 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
             "STY02", "HK", "OK24", "PlanningStartDay", "\"MONDAY\"",
             new DateOnly(2024, 1, 1), effectiveTo: null);
 
-        var migrator = new LocalAgreementProfileMigrator(
-            _harness.Factory, NullLogger<LocalAgreementProfileMigrator>.Instance);
+        var migrator = NewMigrator();
         var result = await migrator.RebuildAsync();
 
         Assert.Equal(0, result.ProfilesCreated);
@@ -105,8 +137,7 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
             "STY02", "HK", "OK24", "MaxOvetimeHoursPerPeriod", "150",
             new DateOnly(2024, 1, 1), effectiveTo: null);
 
-        var migrator = new LocalAgreementProfileMigrator(
-            _harness.Factory, NullLogger<LocalAgreementProfileMigrator>.Instance);
+        var migrator = NewMigrator();
         var result = await migrator.RebuildAsync();
 
         Assert.Equal(0, result.ProfilesCreated);
@@ -129,8 +160,7 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
             "STY02", "HK", "OK24", "MaxFlexBalance", "60",
             new DateOnly(2024, 1, 1), effectiveTo: new DateOnly(2024, 12, 31));
 
-        var migrator = new LocalAgreementProfileMigrator(
-            _harness.Factory, NullLogger<LocalAgreementProfileMigrator>.Instance);
+        var migrator = NewMigrator();
         var result = await migrator.RebuildAsync();
 
         Assert.Equal(0, result.ProfilesCreated);
@@ -171,8 +201,7 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
         await InsertLegacyConfigAsync("STY02", "HK", "OK24", "MaxOvertimeHoursPerPeriod", "50", d4);
         await InsertLegacyConfigAsync("STY02", "HK", "OK24", "OvertimeRequiresPreApproval", "true", d5);
 
-        var migrator = new LocalAgreementProfileMigrator(
-            _harness.Factory, NullLogger<LocalAgreementProfileMigrator>.Instance);
+        var migrator = NewMigrator();
         var result = await migrator.RebuildAsync();
 
         Assert.Equal(1, result.ProfilesCreated);
@@ -191,6 +220,70 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
 
         // effective_from = MIN(picked rows' effective_from) — all 5 are winners, so MIN = d1.
         Assert.Equal(d1, profile.Value.EffectiveFrom);
+    }
+
+    /// <summary>
+    /// S142 / TASK-14208 (owner ruling OQ-7) — <b>fixture #6: "currently effective" is the DANISH
+    /// calendar day.</b>
+    ///
+    /// <para>
+    /// <b>The problem, in plain language.</b> StatsTid decides what is in force "today". Denmark is
+    /// one or two hours ahead of UTC, so between Copenhagen midnight and UTC midnight the two
+    /// calendars name DIFFERENT days. A migration run in that window used to ask the database
+    /// server which day it was — and got the answer for the server container's timezone, which
+    /// nobody sets, sees or tests. If that answer was yesterday, a configuration row that took
+    /// effect this morning was treated as not yet in force, and the migration silently dropped it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>How this test proves the fix rather than restating it.</b> The clock is pinned at
+    /// 2026-06-30 <b>22:30 UTC</b>. Denmark is on summer time (CEST, UTC+2) that day, so in
+    /// Copenhagen it is already 2026-07-01 00:30 — the two calendars disagree, and the expected
+    /// dates below are written as LITERALS, never computed by calling the helper under test (which
+    /// would only prove the helper agrees with itself). Two rows straddle the boundary from
+    /// opposite sides:
+    /// <list type="bullet">
+    ///   <item><c>WeeklyNormHours</c> starts ON 2026-07-01 — in force under the Copenhagen day,
+    ///     not yet in force under the UTC day.</item>
+    ///   <item><c>MaxFlexBalance</c> ends ON 2026-06-30 — still in force under the UTC day,
+    ///     expired under the Copenhagen day.</item>
+    /// </list>
+    /// Exactly one of the two survives, and WHICH one is the entire assertion. Under the old
+    /// UTC/server-clock behaviour every assertion below inverts, so the test cannot pass for the
+    /// wrong reason. (Docker-gated: verified in CI, not runnable on the author's machine.)
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task EligibilityWindow_UsesCopenhagenCalendarDay_NotUtcAndNotTheServerClock()
+    {
+        // In force from the Copenhagen "today" (2026-07-01) onward — invisible to a UTC reading.
+        await InsertLegacyConfigAsync(
+            "STY02", "HK", "OK24", "WeeklyNormHours", "36",
+            new DateOnly(2026, 7, 1), effectiveTo: null);
+        // Expired as of the Copenhagen "today" — but still open on the UTC day (2026-06-30).
+        var utcOnlyRowId = await InsertLegacyConfigAsync(
+            "STY02", "HK", "OK24", "MaxFlexBalance", "100",
+            new DateOnly(2024, 1, 1), effectiveTo: new DateOnly(2026, 6, 30));
+
+        // 22:30 UTC on 30 June = 00:30 on 1 July in Copenhagen (CEST, UTC+2).
+        var migrator = NewMigrator(new FixedTimeProvider(
+            new DateTimeOffset(2026, 6, 30, 22, 30, 0, TimeSpan.Zero)));
+        var result = await migrator.RebuildAsync();
+
+        Assert.Equal(1, result.ProfilesCreated);
+        Assert.Equal(1, result.RowsMigrated);
+
+        var profile = await GetSingleProfileAsync("STY02", "HK", "OK24");
+        Assert.NotNull(profile);
+        // The Copenhagen-day row was absorbed …
+        Assert.Equal(36m, profile!.Value.WeeklyNormHours);
+        Assert.Equal(new DateOnly(2026, 7, 1), profile.Value.EffectiveFrom);
+        // … and the row that only a UTC reading would still call live was NOT.
+        Assert.Null(profile.Value.MaxFlexBalance);
+
+        // Expired rows are filtered out before classification, so they emit no audit at all
+        // (the fixture-#4 contract). A UTC reading would have absorbed this row instead.
+        Assert.Null(await GetAuditActionForConfigAsync(utcOnlyRowId));
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────────
