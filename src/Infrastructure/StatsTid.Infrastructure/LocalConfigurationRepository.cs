@@ -43,25 +43,15 @@ public sealed class LocalConfigurationRepository
         return await ReadConfigsAsync(cmd, ct);
     }
 
-    public async Task<IReadOnlyList<LocalConfiguration>> GetActiveByOrgAsync(
-        string orgId, string agreementCode, string okVersion, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(
-            """
-            SELECT * FROM local_configurations
-            WHERE org_id = @orgId AND agreement_code = @agreementCode AND ok_version = @okVersion
-              AND is_active = TRUE
-              AND effective_from <= CURRENT_DATE
-              AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
-            ORDER BY config_area, config_key
-            """, conn);
-        cmd.Parameters.AddWithValue("orgId", orgId);
-        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
-        cmd.Parameters.AddWithValue("okVersion", okVersion);
-        return await ReadConfigsAsync(cmd, ct);
-    }
+    // S142 / TASK-14208 (owner ruling OQ-4): GetActiveByOrgAsync was DELETED here, not migrated.
+    // It asked Postgres "which legacy rows are in force today?" via CURRENT_DATE — the database
+    // server's clock, in whatever zone its container ran — which is exactly the defect class this
+    // sprint removes. It had ZERO callers repo-wide (nothing in src/, tests/, or the frontend
+    // named it; the only occurrence was its own declaration), so migrating it would have meant
+    // carefully translating, testing and documenting a read nobody performs. A dead path carrying
+    // a defect shape is deleted, because leaving it invites a future caller to adopt the defect.
+    // Live per-row reads on this legacy table remain: GetByIdAsync and GetByOrgAsync, neither of
+    // which asks a date question.
 
     public async Task<Guid> CreateAsync(LocalConfiguration config, CancellationToken ct = default)
     {

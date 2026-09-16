@@ -4260,14 +4260,31 @@ CREATE INDEX IF NOT EXISTS idx_manager_vikar_vikar
     ON manager_vikar (vikar_user_id)
     WHERE effective_to IS NULL;
 
--- (3) SELF_DELEGATION → manager_vikar migration (R4). On a greenfield DB this is a
---   no-op (no open SELF_DELEGATION ACTING rows exist). On a legacy DB it projects
---   each distinct delegating group into ONE manager_vikar row and closes the
---   per-report ACTING fan-out. Idempotent: skips a group that already has an active
---   manager_vikar row (so a re-apply never double-inserts), and ledger-guarded so it
---   runs at most once. The contract-stable endpoints + the go-forward
---   ManagerVikarCreated/Ended event family are TASK-7401's concern — this segment
---   only moves the legacy STORAGE.
+-- (3) SELF_DELEGATION → manager_vikar migration (R4). It projects each distinct
+--   delegating group into ONE manager_vikar row and closes the per-report ACTING
+--   fan-out. Idempotent: skips a group that already has an active manager_vikar row
+--   (so a re-apply never double-inserts), and ledger-guarded so it runs at most once.
+--   The contract-stable endpoints + the go-forward ManagerVikarCreated/Ended event
+--   family are TASK-7401's concern — this segment only moves the legacy STORAGE.
+--
+--   S142 / TASK-14208 CORRECTION — this block used to claim "on a greenfield DB this
+--   is a no-op (no open SELF_DELEGATION ACTING rows exist)". THAT WAS FALSE, and it
+--   misled at least one careful reviewer into concluding the CURRENT_DATE below could
+--   never execute. The S52 seed above (search for the reporting_lines INSERT carrying
+--   'emp005','ladm01','STY02','ACTING',…,'SELF_DELEGATION','mgr01','2026-07-01')
+--   supplies no effective_to, so that column is NULL, and BOTH statements in this
+--   block match it on EVERY greenfield database: the INSERT projects one manager_vikar
+--   row for mgr01, and the UPDATE closes the emp005 ACTING row (effective_to stamped,
+--   version 1 → 2). SelfDelegationCloseZoneTests pins exactly that, so the claim
+--   cannot silently come back.
+--
+--   DATE ZONE (S142 / TASK-14208, owner ruling OQ-8). The close-stamp below is a
+--   BUSINESS date, and every user of this system is Danish. CURRENT_DATE would have
+--   been evaluated by the POSTGRES SERVER in whatever zone its container happens to
+--   run — a day nobody can see, set or test. It is now derived explicitly through
+--   Europe/Copenhagen (DST-aware: CET in winter, CEST in summer), which is the same
+--   calendar day the application computes via SharedKernel CopenhagenBusinessDate.
+--   Instants (created_at/updated_at/audit/outbox) stay UTC and are untouched.
 DO $$
 BEGIN
     INSERT INTO schema_migrations (migration_id, notes)
@@ -4308,8 +4325,13 @@ BEGIN
 
     -- Close the projected per-report SELF_DELEGATION ACTING rows (storage swap; the
     -- contract-stable endpoints re-derive delegatedEmployees[] dynamically in 7401).
+    -- S142 / TASK-14208 (OQ-8): the close-stamp is the DANISH calendar day, not the
+    -- server's. NOW() is a timestamptz instant; AT TIME ZONE 'Europe/Copenhagen'
+    -- reads that instant as Copenhagen wall-clock time (DST-aware), and ::date takes
+    -- its calendar day. Replaces CURRENT_DATE, which silently used the container's zone.
     UPDATE reporting_lines
-       SET effective_to = CURRENT_DATE, version = version + 1
+       SET effective_to = (NOW() AT TIME ZONE 'Europe/Copenhagen')::date,
+           version = version + 1
      WHERE source = 'SELF_DELEGATION'
        AND relationship = 'ACTING'
        AND effective_to IS NULL;

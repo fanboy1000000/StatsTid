@@ -42,7 +42,7 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// <b>Atomic-outbox contract (ADR-018 D5).</b> <see cref="UpsertAsync"/> and
+/// <b>Atomic-outbox contract (ADR-018 D5).</b> <see cref="SupersedeAndCreateAsync"/> and
 /// <see cref="CreateAsync"/> are <c>(conn, tx)</c> overloads only — the endpoint or seeder
 /// owns the transaction, threading audit + outbox writes into the same atomic unit.
 /// <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/> is the convenience
@@ -50,7 +50,7 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// <b>ADR-019 admin-strict If-Match.</b> <see cref="UpsertAsync"/> accepts
+/// <b>ADR-019 admin-strict If-Match.</b> <see cref="SupersedeAndCreateAsync"/> accepts
 /// <c>expectedVersion: long?</c>; when supplied, a mismatch against the live row's
 /// <c>version</c> column throws <see cref="OptimisticConcurrencyException"/> for the
 /// endpoint to map to 412.
@@ -171,7 +171,7 @@ public sealed class EmployeeProfileRepository
     /// supplied <paramref name="conn"/> + <paramref name="tx"/> so the read sits inside the
     /// same transaction as a downstream write (ADR-018 D5 atomic-outbox contract). Used by
     /// admin endpoint handlers that need to read-then-emit-event atomically and by
-    /// <see cref="UpsertAsync"/>'s internal preflight when constructing audit payloads.
+    /// <see cref="SupersedeAndCreateAsync"/>'s internal preflight when constructing audit payloads.
     ///
     /// <para>
     /// <b>AS-OF-TODAY single-purpose read (S34 / TASK-3413 audit lock; re-based S141 / TASK-14102).</b>
@@ -768,7 +768,8 @@ public sealed class EmployeeProfileRepository
             //     read "no OPEN row", which was the same statement while a future row could not
             //     exist; restated against the day the client is looking at, because under scheduling
             //     an open row can be one that has not started. ActualVersion = null distinguishes
-            //     this branch, which UpsertAsync translates back to a 404.
+            //     this branch; the endpoint maps it to a 404 (the S31 UpsertAsync shim that used to
+            //     do that translation was removed in S142 / TASK-14208 as a caller-less dead path).
             if (coveringToday is null)
             {
                 throw new OptimisticConcurrencyException(
@@ -907,76 +908,17 @@ public sealed class EmployeeProfileRepository
         };
     }
 
-    /// <summary>
-    /// S31 / TASK-3102 — atomic-outbox UPDATE overload for the live row of an existing
-    /// employee profile. Used by TASK-3107 admin PUT handler. Caller threads audit + outbox
-    /// emission into the same transaction.
-    ///
-    /// <para>
-    /// <b>S33 / TASK-3302 refactor — now a thin shim that delegates to
-    /// <see cref="SupersedeAndCreateAsync"/> with
-    /// <c>EffectiveFrom = today</c> (UTC, via the injected <see cref="TimeProvider"/>).</b> The 2-tuple return
-    /// shape <c>(ProfileId, Version)</c> is preserved for backwards compatibility with
-    /// existing S31 callers (<see cref="EmployeeProfileEndpoints"/> PUT handler); the
-    /// underlying method's <see cref="SaveEmployeeProfileResult.Outcome"/> is discarded
-    /// here but routes correctly under the hood — for instance, when today's date is later
-    /// than the predecessor's <c>effective_from</c>, this shim will silently route through
-    /// Case C (cross-day supersession) rather than Case B (same-day in-place edit). The
-    /// TASK-3308 endpoint cutover will call <see cref="SupersedeAndCreateAsync"/> directly
-    /// to read <c>Outcome</c> and emit the correct event type.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>S31-compatible exception contract.</b> The S31 endpoint (PUT) caught both
-    /// <see cref="OptimisticConcurrencyException"/> (412) and <see cref="KeyNotFoundException"/>
-    /// (404). The shim translates "no live row + non-null <paramref name="expectedVersion"/>"
-    /// — which <see cref="SupersedeAndCreateAsync"/> raises as
-    /// <see cref="OptimisticConcurrencyException"/> with <c>ActualVersion = null</c> — back
-    /// to <see cref="KeyNotFoundException"/> so the existing endpoint surface continues to
-    /// return 404 in that case unchanged.
-    /// </para>
-    /// </summary>
-    /// <exception cref="KeyNotFoundException">
-    /// Thrown when no live row exists for <paramref name="req"/><c>.EmployeeId</c> and
-    /// <paramref name="expectedVersion"/> is non-null. Preserves the S31 endpoint contract
-    /// (PUT against a non-existent employee profile → 404).
-    /// </exception>
-    /// <exception cref="OptimisticConcurrencyException">
-    /// Thrown when a live row exists and <paramref name="expectedVersion"/> does not match
-    /// its <c>version</c>. Endpoint maps to 412 per ADR-019.
-    /// </exception>
-    /// <exception cref="InvalidProfileSupersessionException">
-    /// Not thrown via this shim under normal use — the shim always passes
-    /// <c>EffectiveFrom = today</c> (UTC, via the injected <see cref="TimeProvider"/>), which is
-    /// never earlier than the predecessor's <c>effective_from</c> (unless the clock is misconfigured).
-    /// </exception>
-    public async Task<(Guid ProfileId, long Version)> UpsertAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        EmployeeProfileUpsertRequest req, long? expectedVersion,
-        CancellationToken ct = default)
-    {
-        var supersedeRequest = new EmployeeProfileSupersedeRequest(
-            EmployeeId: req.EmployeeId,
-            PartTimeFraction: req.PartTimeFraction,
-            Position: req.Position,
-            EffectiveFrom: DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime));
-        try
-        {
-            var result = await SupersedeAndCreateAsync(conn, tx, supersedeRequest, expectedVersion, ct);
-            return (result.ProfileId, result.Version);
-        }
-        catch (OptimisticConcurrencyException ex) when (ex.ActualVersion is null && expectedVersion is not null)
-        {
-            // S31 endpoint contract: "no profile in force + If-Match supplied" → 404, not 412.
-            // SupersedeAndCreateAsync raises this as OCE-with-null-actual; translate back
-            // to KeyNotFoundException so the existing PUT handler's catch block is preserved.
-            // S141: the writer's condition behind that null is now "no row covers TODAY" where it
-            // used to be "no OPEN row" — the same statement before future-dating existed, and the
-            // one that still means "there is no profile to edit" now that it does.
-            throw new KeyNotFoundException(
-                $"Employee profile not found for employee_id='{req.EmployeeId}'.", ex);
-        }
-    }
+    // S142 / TASK-14208 (owner ruling OQ-4): the S31 `UpsertAsync` shim was DELETED here, not
+    // migrated. It dated its write at `DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime)`
+    // — the UTC calendar day used as a BUSINESS date, which is exactly the defect S142 removes (a
+    // Danish HR user working after midnight is a day ahead of UTC in summer, so the shim would have
+    // dated the change YESTERDAY). Nothing called it: the S31 admin PUT handler was cut over to
+    // `SupersedeAndCreateAsync` in TASK-3308, and its payload type `EmployeeProfileUpsertRequest`
+    // had zero references outside this file. Deleting is the ruling for a dead path carrying a
+    // defect shape — carefully migrating a method nobody calls only preserves the shape for a
+    // future caller to copy. The live write path is `SupersedeAndCreateAsync`, whose
+    // `EffectiveFrom` is supplied BY THE CALLER (the endpoint reads the clock, per refinement
+    // Assumption #14), so the repository has no clock dependency for the date at all.
 
     /// <summary>
     /// S33 / TASK-3303 — soft-delete the employee's profile by stamping
@@ -1644,26 +1586,17 @@ public sealed class EmployeeProfileRepository
 }
 
 // ------------------------------------------------------------------
-// Request records — Created + Upsert kept separate today for forward-compat with S32
-// where Create may take an explicit effective_from (cross-day supersession routing
-// per ADR-020 D2). In S31 the shapes are identical.
+// Request records. S142 / TASK-14208 removed EmployeeProfileUpsertRequest alongside the
+// caller-less UpsertAsync shim it was the payload for (owner ruling OQ-4); Create and
+// Supersede are what remain.
 // ------------------------------------------------------------------
 
 /// <summary>
-/// S31 / TASK-3102 — payload for <see cref="EmployeeProfileRepository.UpsertAsync"/>.
-/// All three S31-authoritative fields plus the natural key. <see cref="Position"/> is
-/// nullable per the schema definition (TEXT NULL).
-/// </summary>
-public sealed record EmployeeProfileUpsertRequest(
-    string EmployeeId,
-    decimal PartTimeFraction,
-    string? Position);
-
-/// <summary>
 /// S31 / TASK-3102 — payload for <see cref="EmployeeProfileRepository.CreateAsync"/>.
-/// Kept separate from <see cref="EmployeeProfileUpsertRequest"/> for forward-compat: S32
-/// will extend this with an explicit <c>EffectiveFrom</c> field once supersession routing
-/// is added. In S31, INSERTs always use the schema default <c>'0001-01-01'</c>.
+/// All three S31-authoritative fields plus the natural key; <see cref="Position"/> is
+/// nullable per the schema definition (TEXT NULL). Kept separate from
+/// <see cref="EmployeeProfileSupersedeRequest"/> because INSERTs here always use the schema
+/// default <c>'0001-01-01'</c> rather than an explicit <c>EffectiveFrom</c>.
 /// </summary>
 public sealed record EmployeeProfileCreateRequest(
     string EmployeeId,
@@ -1672,7 +1605,7 @@ public sealed record EmployeeProfileCreateRequest(
 
 /// <summary>
 /// S33 / TASK-3302 — payload for <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>.
-/// Extends <see cref="EmployeeProfileUpsertRequest"/>'s field set with the explicit
+/// Extends <see cref="EmployeeProfileCreateRequest"/>'s field set with the explicit
 /// <see cref="EffectiveFrom"/> date that drives the routing (the endpoint reads the clock per
 /// refinement Assumption #14 — no clock dependency in the repo for the DATE; seeders + admin-POST
 /// + admin-PUT supply it directly). Flat record (the S29 WTM precedent shape).

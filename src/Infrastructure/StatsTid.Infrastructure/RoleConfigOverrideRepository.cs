@@ -33,13 +33,15 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// <b>ADR-023 D8 SoftDelete</b> in <see cref="SoftDeleteAsync"/>: stamps
-/// <c>effective_to = NOW()::date</c> with the version column UNCHANGED. After the call
-/// the row "disappears" from live reads via the partial-unique-index predicate. The
-/// caller-emitted audit row records <c>version_before = version_after = version</c>
-/// per ADR-019 D8. A retry with stale If-Match after a successful soft-delete maps to
-/// 404 Not Found (row-disappearance idempotency), NOT 412 — mirrors S33
-/// EmployeeProfileRepository semantics.
+/// <b>ADR-023 D8 SoftDelete — REMOVED in S142 / TASK-14208 (owner ruling OQ-4).</b> This
+/// repository used to carry a <c>SoftDeleteAsync</c> that stamped
+/// <c>effective_to = NOW()::date</c> — a business date decided by the Postgres server's clock.
+/// It had no callers (nothing constructs this class at all), so it was deleted rather than
+/// migrated to the Copenhagen business day. The ADR-023 D8 contract it described — version
+/// column UNCHANGED, row "disappears" from live reads via the partial-unique-index predicate,
+/// caller-emitted audit recording <c>version_before = version_after = version</c>, stale-If-Match
+/// retry mapping to 404 rather than 412 — is still the contract any future soft-delete here must
+/// implement, alongside an application-supplied Copenhagen close-stamp.
 /// </para>
 ///
 /// <para>
@@ -47,8 +49,7 @@ namespace StatsTid.Infrastructure;
 /// <see cref="AppendAuditAsync"/> is a v3 atomic-outbox primitive (mirrors S24
 /// AgreementConfigRepository's audit-bearing Pattern B trio); the endpoint composes
 /// the JSON payloads + version-transition pair and threads the call through the same
-/// tx as the write — <see cref="SupersedeAndCreateAsync"/> and
-/// <see cref="SoftDeleteAsync"/> do NOT write audit rows themselves.
+/// tx as the write — <see cref="SupersedeAndCreateAsync"/> does NOT write audit rows itself.
 /// </para>
 /// </summary>
 public sealed class RoleConfigOverrideRepository
@@ -373,140 +374,17 @@ public sealed class RoleConfigOverrideRepository
             supersedingOverrideId, supersedingVersion, SaveOutcome.Superseded);
     }
 
-    /// <summary>
-    /// S40 / TASK-4003 — ADR-023 D8 soft-delete the live role config override row by
-    /// stamping <c>effective_to = NOW()::date</c> under end-exclusive
-    /// <c>[from, to)</c> semantics (ADR-018 D9). After this call, the row no longer
-    /// satisfies the partial-unique-index <c>idx_role_config_overrides_live</c>
-    /// predicate (<c>WHERE effective_to IS NULL</c>) and is invisible to
-    /// <see cref="GetCurrentAsync(string, string, string, CancellationToken)"/>, but
-    /// remains in the history table for replay determinism (ADR-016 D10).
-    ///
-    /// <para>
-    /// <b>Predecessor <c>version</c> column is UNCHANGED (ADR-023 D8).</b> Soft-delete
-    /// is a row-state-change, not a field-mutation: the row "disappears" from live
-    /// reads via the partial-unique-index predicate, so bumping <c>version</c> would
-    /// be redundant. The audit row emitted by the endpoint (S41) accordingly records
-    /// <c>version_before = version_after = predecessor.version</c> per ADR-019 D8 for
-    /// SOFT_DELETED actions — mirrors S33 EmployeeProfileRepository semantics, with
-    /// the deliberate divergence from sibling ADR-019 D8 endpoints
-    /// (<c>agreement_configs</c>, <c>wage_type_mappings</c>,
-    /// <c>entitlement_configs</c>) which all bump version + 1 on soft-delete.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>404-vs-412 retry semantic divergence.</b> Because the predecessor row's
-    /// version is unchanged, an admin retry with stale
-    /// <c>If-Match: "@expectedVersion"</c> after a successful soft-delete will hit
-    /// <b>404 Not Found</b> (the partial-unique-index <c>WHERE effective_to IS NULL</c>
-    /// matches no live row), <b>NOT 412 Precondition Failed</b>. This is intentional —
-    /// soft-delete is idempotent-by-row-disappearance rather than
-    /// idempotent-by-version-bump.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Atomic-outbox contract (ADR-018 D5).</b> Caller (S41 endpoint) owns the
-    /// transaction; this method only writes to <c>role_config_overrides</c>. The
-    /// endpoint emits the audit row (with
-    /// <c>version_before = version_after = predecessor.version</c>) + outbox event in
-    /// the same tx after this returns.
-    /// </para>
-    /// </summary>
-    /// <exception cref="OptimisticConcurrencyException">
-    /// Thrown when a live row exists for the natural-key triple but its
-    /// <c>version</c> column differs from <paramref name="expectedVersion"/>.
-    /// Endpoint maps to 412 Precondition Failed per ADR-019 D2.
-    /// </exception>
-    /// <exception cref="KeyNotFoundException">
-    /// Thrown when no live row (<c>effective_to IS NULL</c>) exists for the
-    /// natural-key triple. Endpoint maps to 404 Not Found. This is also the branch
-    /// hit by an admin retry with stale <c>If-Match</c> after a successful
-    /// soft-delete (the row "disappeared" from live reads per the partial-unique-
-    /// index predicate).
-    /// </exception>
-    public async Task SoftDeleteAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx,
-        string employmentCategory, string agreementCode, string okVersion,
-        long expectedVersion,
-        string actorId, string actorRole,
-        CancellationToken ct = default)
-    {
-        // 1. Single-statement UPDATE with row-disappearance semantic — no version bump
-        //    (ADR-023 D8). The AND version = @expectedVersion predicate enforces
-        //    optimistic concurrency without needing a separate SELECT ... FOR UPDATE
-        //    step — unlike SupersedeAndCreateAsync's 3-case routing, soft-delete has
-        //    no branching that needs the lock to be held across multiple statements.
-        //    NOW()::date pins the close-stamp to day-granularity (effective_to is a
-        //    DATE column per the S40 schema).
-        await using var cmd = new NpgsqlCommand(
-            """
-            UPDATE role_config_overrides
-               SET effective_to = NOW()::date
-             WHERE employment_category = @employmentCategory
-               AND agreement_code = @agreementCode
-               AND ok_version = @okVersion
-               AND effective_to IS NULL
-               AND version = @expectedVersion
-            RETURNING override_id, version
-            """, conn, tx);
-        cmd.Parameters.AddWithValue("employmentCategory", employmentCategory);
-        cmd.Parameters.AddWithValue("agreementCode", agreementCode);
-        cmd.Parameters.AddWithValue("okVersion", okVersion);
-        cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (await reader.ReadAsync(ct))
-        {
-            // Happy path: UPDATE matched exactly one row (partial-unique-index
-            // guarantees ≤1). Returned version is UNCHANGED from predecessor per
-            // ADR-023 D8 — actor metadata is unused by the write itself but kept on
-            // the signature so the endpoint passes through a consistent argument
-            // shape across SupersedeAndCreateAsync / SoftDeleteAsync.
-            _ = actorId;
-            _ = actorRole;
-            return;
-        }
-        // The reader must be disposed before we can issue the probe SELECT on the
-        // same connection (Npgsql forbids overlapping commands on a single
-        // connection).
-        await reader.DisposeAsync();
-
-        // 2. UPDATE matched no row. Probe to distinguish 404 (no live row) from 412
-        //    (live row exists, version differs) per S33 SoftDeleteAsync precedent.
-        //    This second read sits inside the same tx so it sees the same snapshot
-        //    as the failed UPDATE — no chance of a TOCTOU window mis-classifying a
-        //    concurrent insert as a 404.
-        await using var probeCmd = new NpgsqlCommand(
-            """
-            SELECT version FROM role_config_overrides
-            WHERE employment_category = @employmentCategory
-              AND agreement_code = @agreementCode
-              AND ok_version = @okVersion
-              AND effective_to IS NULL
-            """, conn, tx);
-        probeCmd.Parameters.AddWithValue("employmentCategory", employmentCategory);
-        probeCmd.Parameters.AddWithValue("agreementCode", agreementCode);
-        probeCmd.Parameters.AddWithValue("okVersion", okVersion);
-        var probeResult = await probeCmd.ExecuteScalarAsync(ct);
-        if (probeResult is null || probeResult is DBNull)
-        {
-            // No live row → 404. This branch is also hit by an admin retry with
-            // stale If-Match after a successful soft-delete (row disappeared per
-            // partial-unique-index predicate; ADR-023 D8 row-disappearance
-            // idempotency).
-            throw new KeyNotFoundException(
-                $"Role config override not found for " +
-                $"(employment_category='{employmentCategory}', " +
-                $"agreement_code='{agreementCode}', ok_version='{okVersion}').");
-        }
-        var actualVersion = (long)probeResult;
-        // Live row exists but version differs → 412 per ADR-019 D2 admin-strict
-        // If-Match.
-        throw new OptimisticConcurrencyException(
-            $"Role config override version is {actualVersion}, but caller sent " +
-            $"If-Match: \"{expectedVersion}\"; refresh and retry.",
-            expectedVersion: expectedVersion,
-            actualVersion: actualVersion);
-    }
+    // S142 / TASK-14208 (owner ruling OQ-4): SoftDeleteAsync was DELETED here, not migrated.
+    // It stamped `effective_to = NOW()::date` — a BUSINESS date decided by the Postgres server's
+    // clock, in whatever zone its container runs, which is the defect class this sprint removes.
+    // Nothing called it: `RoleConfigOverrideRepository` is never constructed anywhere (no DI
+    // registration in either Program.cs, no endpoint, no test); the only references to the class
+    // were doc-comment cross-links from RoleConfigOverride.cs and ConcurrentSeedConflictException.cs.
+    // Migrating it would have meant translating, testing and documenting a write nobody performs;
+    // a dead path carrying a defect shape is deleted so a future caller cannot adopt the defect by
+    // copying it. If role-config-override soft-delete is ever wired up, its close-stamp must be an
+    // application-supplied Copenhagen business date bound as a parameter — see
+    // LocalAgreementProfileMigrator (S142) or EmployeeProfileRepository.SoftDeleteAsync (S139).
 
     // ------------------------------------------------------------------
     // Audit — S24 Pattern B audit-bearing repository overload. Mirrors S25
@@ -520,17 +398,18 @@ public sealed class RoleConfigOverrideRepository
     /// AgreementConfigRepository.AppendAuditAsync v3 shape. The S41 endpoint composes
     /// the JSON snapshots (<paramref name="previousData"/> / <paramref name="newData"/>)
     /// and the version-transition pair, threading the call through the same tx as
-    /// the write — this repository's <see cref="SupersedeAndCreateAsync"/> and
-    /// <see cref="SoftDeleteAsync"/> do NOT write audit rows themselves per ADR-019
-    /// D8 "endpoint owns audit emission".
+    /// the write — this repository's <see cref="SupersedeAndCreateAsync"/> does NOT write
+    /// audit rows itself per ADR-019 D8 "endpoint owns audit emission".
     ///
     /// <para>
     /// <b>Action values</b> per the schema CHECK at <c>init.sql:1918</c>:
     /// <c>CREATED</c>, <c>UPDATED</c>, <c>SUPERSEDED</c>, <c>SOFT_DELETED</c>. The
     /// endpoint picks one based on the <see cref="SaveOutcome"/> returned from
     /// <see cref="SupersedeAndCreateAsync"/> (Created → CREATED, UpdatedInPlace →
-    /// UPDATED, Superseded → SUPERSEDED) or the call site
-    /// (<see cref="SoftDeleteAsync"/> → SOFT_DELETED).
+    /// UPDATED, Superseded → SUPERSEDED) or the call site (a soft-delete → SOFT_DELETED;
+    /// the repository's own <c>SoftDeleteAsync</c> was removed in S142 / TASK-14208 as a
+    /// caller-less dead path, but <c>SOFT_DELETED</c> remains a legal action value in the
+    /// schema CHECK).
     /// </para>
     ///
     /// <para>

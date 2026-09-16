@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
@@ -46,6 +47,25 @@ namespace StatsTid.Infrastructure;
 ///
 /// <para>Audit actor: all migration-emitted audit rows use <c>actor_id = 'system'</c>
 /// and <c>actor_role = 'GlobalAdmin'</c>.</para>
+///
+/// <para>
+/// <b>"Currently effective" is a DANISH calendar day (S142 / TASK-14208, owner ruling OQ-7).</b>
+/// Eligibility here is a BUSINESS-date question — "is this legacy config row in force today?" —
+/// and every user of StatsTid is Danish. Until S142 both eligibility queries asked Postgres via
+/// <c>CURRENT_DATE</c>, so the answer came from the DATABASE SERVER's clock in whatever zone its
+/// container happened to run: a day nobody could see, set, or test, and one that could disagree
+/// with the day the application believes it is. The date is now computed in the application from
+/// the injected <see cref="TimeProvider"/> through
+/// <see cref="CopenhagenBusinessDate.Today(TimeProvider)"/> (DST-aware: CET in winter, CEST in
+/// summer) and BOUND as the <c>@today</c> parameter — parameterised, not interpolated, so CA2100
+/// stays satisfied. Both queries read the SAME captured value, so a migration that straddles
+/// midnight cannot discover one row set and then load another.
+/// </para>
+///
+/// <para>
+/// INSTANTS are untouched and stay UTC: <c>created_at</c>, the audit rows' timestamps and outbox
+/// ordering all remain wall-clock UTC. Only the business DAY moved.
+/// </para>
 /// </summary>
 public sealed class LocalAgreementProfileMigrator
 {
@@ -54,13 +74,26 @@ public sealed class LocalAgreementProfileMigrator
 
     private readonly DbConnectionFactory _connectionFactory;
     private readonly ILogger<LocalAgreementProfileMigrator> _logger;
+    private readonly TimeProvider _timeProvider;
 
+    /// <param name="connectionFactory">Opens the connection the whole migration runs on.</param>
+    /// <param name="logger">Migration progress + idempotency-skip logging.</param>
+    /// <param name="timeProvider">
+    /// The clock the Copenhagen business day is derived from (PAT-008). Production passes
+    /// <see cref="TimeProvider.System"/>; a test passes a fixed provider so "which rows are
+    /// currently effective" is a pure function of (seed, pinned-now) rather than of the calendar
+    /// day the suite happens to run on. Required, not defaulted: a silent
+    /// <see cref="TimeProvider.System"/> fallback is how a caller accidentally keeps the old
+    /// invisible-clock behaviour.
+    /// </param>
     public LocalAgreementProfileMigrator(
         DbConnectionFactory connectionFactory,
-        ILogger<LocalAgreementProfileMigrator> logger)
+        ILogger<LocalAgreementProfileMigrator> logger,
+        TimeProvider timeProvider)
     {
         _connectionFactory = connectionFactory;
         _logger = logger;
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     /// <summary>
@@ -108,10 +141,17 @@ public sealed class LocalAgreementProfileMigrator
     private async Task<MigrationResult> RunMigrationAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
     {
-        var tuples = await DiscoverEligibleTuplesAsync(conn, tx, ct);
+        // Capture the Copenhagen business day ONCE for the whole run (S142 / TASK-14208, OQ-7).
+        // Discovery and per-tuple row loading must agree on "today": if they each re-read the
+        // clock, a migration running across midnight could discover a tuple and then load zero
+        // rows for it. Bound as @today in both statements — never interpolated (CA2100).
+        var today = CopenhagenBusinessDate.Today(_timeProvider);
+
+        var tuples = await DiscoverEligibleTuplesAsync(conn, tx, today, ct);
         _logger.LogInformation(
-            "LocalAgreementProfileMigrator discovered {TupleCount} eligible (org_id, agreement_code, ok_version) tuples.",
-            tuples.Count);
+            "LocalAgreementProfileMigrator discovered {TupleCount} eligible (org_id, agreement_code, ok_version) tuples " +
+            "as of Copenhagen business date {Today}.",
+            tuples.Count, today);
 
         int profilesCreated = 0;
         int rowsMigrated = 0;
@@ -133,7 +173,7 @@ public sealed class LocalAgreementProfileMigrator
                 continue;
             }
 
-            var rows = await LoadEligibleRowsForTupleAsync(conn, tx, tuple, ct);
+            var rows = await LoadEligibleRowsForTupleAsync(conn, tx, tuple, today, ct);
             if (rows.Count == 0)
             {
                 // Defensive: should not happen given the discovery query, but skip cleanly.
@@ -374,18 +414,24 @@ public sealed class LocalAgreementProfileMigrator
     // -------------------------------------------------------------------
     // Tuple discovery & row loading
     // -------------------------------------------------------------------
+    /// <param name="today">
+    /// The Copenhagen business day the eligibility window is evaluated against (S142 / TASK-14208).
+    /// Supplied by the application and BOUND as <c>@today</c>, replacing the former
+    /// <c>CURRENT_DATE</c>, which the Postgres server evaluated in its own container's zone.
+    /// </param>
     private static async Task<IReadOnlyList<TupleKey>> DiscoverEligibleTuplesAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction tx, DateOnly today, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
             SELECT DISTINCT org_id, agreement_code, ok_version
             FROM local_configurations
             WHERE is_active = TRUE
-              AND effective_from <= CURRENT_DATE
-              AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+              AND effective_from <= @today
+              AND (effective_to IS NULL OR effective_to >= @today)
             ORDER BY org_id, agreement_code, ok_version
             """, conn, tx);
+        cmd.Parameters.AddWithValue("today", today);
         var tuples = new List<TupleKey>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -416,8 +462,14 @@ public sealed class LocalAgreementProfileMigrator
         return found is not null;
     }
 
+    /// <param name="today">
+    /// The SAME Copenhagen business day <see cref="DiscoverEligibleTuplesAsync"/> used — captured
+    /// once per run so discovery and loading cannot disagree across a midnight boundary
+    /// (S142 / TASK-14208). Bound as <c>@today</c>; replaces the former server-side
+    /// <c>CURRENT_DATE</c>.
+    /// </param>
     private static async Task<IReadOnlyList<LegacyRow>> LoadEligibleRowsForTupleAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, TupleKey tuple, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction tx, TupleKey tuple, DateOnly today, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -427,12 +479,13 @@ public sealed class LocalAgreementProfileMigrator
               AND agreement_code = @agreementCode
               AND ok_version = @okVersion
               AND is_active = TRUE
-              AND effective_from <= CURRENT_DATE
-              AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+              AND effective_from <= @today
+              AND (effective_to IS NULL OR effective_to >= @today)
             """, conn, tx);
         cmd.Parameters.AddWithValue("orgId", tuple.OrgId);
         cmd.Parameters.AddWithValue("agreementCode", tuple.AgreementCode);
         cmd.Parameters.AddWithValue("okVersion", tuple.OkVersion);
+        cmd.Parameters.AddWithValue("today", today);
         var rows = new List<LegacyRow>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
