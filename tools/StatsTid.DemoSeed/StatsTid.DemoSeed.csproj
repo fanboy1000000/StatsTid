@@ -21,12 +21,44 @@
   </PropertyGroup>
 
   <!-- S84 / TASK-8401 + TASK-8403: deterministic demo-data generator + API loader.
-       SELF-CONTAINED: no production project references (the generator is pure C#;
-       the loader drives the live API over HttpClient; the optional post-load
-       verification uses Npgsql directly). Same Npgsql version as Infrastructure
-       (8.0.3) to avoid transitive drift. -->
+       The generator is pure C#; the loader drives the live API over HttpClient; the
+       optional post-load verification uses Npgsql directly. Same Npgsql version as
+       Infrastructure (8.0.3) to avoid transitive drift. -->
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="8.0.3" />
+  </ItemGroup>
+
+  <!-- S142 / TASK-14210 — THE S84 "SELF-CONTAINED: no production project references" CONTRACT
+       IS RETIRED, by owner ruling OQ-10 (2026-09-16). It held from S84 until that ruling; the
+       claim is deleted rather than left to rot, because a comment still promising self-
+       containment would be a worse defect than the coupling it used to describe.
+
+       WHAT IS REFERENCED: exactly ONE type — StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate,
+       the shared "which calendar day is it in Copenhagen?" helper (DST-correct: CET in winter,
+       CEST in summer). SharedKernel has ZERO package and project references of its own, so this
+       adds no transitive footprint. Precedent for a tools/ -> src/ edge: tools/ProjectionBackfill
+       (S27 / TASK-2705) already references SharedKernel + Infrastructure.
+
+       WHY THE RULING: StatsTid derives BUSINESS dates from the Danish calendar day, not the UTC
+       one (the S142 sprint theme; instants such as created_at stay UTC). Both of this tool's
+       wall-clock readings used to be correct only BECAUSE OF A FACT ABOUT THE MACHINE RUNNING
+       IT — DateTime.Today is the machine-LOCAL day, which on a Danish developer's laptop already
+       IS the Copenhagen day. A site that is correct for a reason nobody wrote down breaks the
+       first time the reason changes: here, the first time anyone runs the reseed on a UTC CI box.
+       The reference makes the Danish day EXPLICIT instead of circumstantially true.
+
+       WHY THE DETERMINISM GUARANTEE SURVIVES (the contract this tool exists to keep: same seed +
+       scale + reference-date => byte-identical output). The committed artifact
+       docker/postgres/99-demo-seed.sql and the golden-legacy pin
+       (tests/StatsTid.Tests.DemoSeed/GoldenLegacyPinTests.cs) are generated at the PINNED CONSTANT
+       ReferenceDateResolver.PinnedDefault (2026-06-15) and therefore NEVER TRAVERSE THE CLOCK PATH
+       AT ALL — no clock, Copenhagen or otherwise, can move them. Only the opt-in
+       `reference-date rolling` branch reaches the helper, and that branch is non-deterministic BY
+       DESIGN (it tracks the calendar so the local demo never goes stale) and is explicitly excluded
+       from the pin. The generator itself stays wall-clock-free: every date it emits derives from the
+       reference date it is handed. See README.md "Determinism". -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SharedKernel\StatsTid.SharedKernel\StatsTid.SharedKernel.csproj" />
   </ItemGroup>
 
   <!-- S114 / TASK-11400: the DemoSeed test suite constructs INTERNAL ScaleConfig/TreeProfile

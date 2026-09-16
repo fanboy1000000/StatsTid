@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.Tools.DemoSeed.Model;
 
 namespace StatsTid.Tools.DemoSeed.Loading;
@@ -458,7 +459,14 @@ public sealed class DemoLoader
     // ── Part-time / position via the profile PUT (GET version → If-Match PUT, EffectiveFrom=today) ──
     private async Task SetProfilesAsync(LoadResult result, CancellationToken ct)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        // S142 / TASK-14210 (owner ruling OQ-10, 2026-09-16): `effectiveFrom` is a BUSINESS date —
+        // the day a profile change takes effect — so it is the COPENHAGEN calendar day, not the UTC
+        // one. This used to read DateOnly.FromDateTime(DateTime.UtcNow), which between Copenhagen
+        // midnight and UTC midnight (the last 1h in winter / 2h in summer of every Danish day)
+        // stamped the change as effective YESTERDAY. Instants stay UTC; only business dates move.
+        // Future-dated `effectiveFrom` is legal since S141 / TASK-14104, so no server-side rule is
+        // tripped when the Danish day is already ahead of the host's UTC day.
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System).ToString("yyyy-MM-dd");
         _log($"Setting {_manifest.ProfileEdits.Count} part-time/position profiles ...");
         foreach (var p in _manifest.ProfileEdits)
         {
