@@ -12,8 +12,32 @@ using StatsTid.Infrastructure.Audit;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
+
+// ── S142 / TASK-14211a (owner ruling OQ-11) — the Copenhagen time-zone startup gate. ──
+// FIRST statement of the composition root: before the builder, before configuration, before DI.
+// If this host cannot answer "which calendar day is it in Copenhagen?", it must not start.
+//
+// Why refusing to boot is CORRECT here rather than an availability regression: since S142 every
+// BUSINESS DATE in StatsTid — employment start/end, the §21 stk.2 vacation-transfer deadline,
+// settlement and leaver boundaries — is the Europe/Copenhagen calendar day, not the UTC one. All
+// users are Danish, and 00:30 Copenhagen in summer is 22:30 UTC the PREVIOUS day. A host that
+// silently fell back to UTC (as CopenhagenBusinessDate used to) would record those dates one day
+// early with no signal anywhere. Domain correctness is an inviolable invariant; availability is
+// not on the trade-off list. The owner was put this exact trade and ruled: refuse the start.
+//
+// The probe checks BOTH seasonal offsets (+01:00 CET and +02:00 CEST), so it rejects UTC, a zone
+// hardcoded to +01:00 (the original QUAL-005 bug) and one hardcoded to +02:00 alike — a
+// winter-only check would have been passed by the very defect it exists to catch. The exception
+// message names the zone, both observed offsets and the host fix (tzdata / ICU); an unhandled
+// throw here exits the process non-zero with that message on stderr, which is exactly the loud
+// signal a slim container image would otherwise have swallowed.
+//
+// It runs before the `--openapi` doc-only entrypoint too, on purpose: spec generation is a boot,
+// and a host too degraded to run is too degraded to describe the API it would have served.
+CopenhagenBusinessDate.EnsureHostZoneResolves();
 
 var builder = WebApplication.CreateBuilder(args);
 
