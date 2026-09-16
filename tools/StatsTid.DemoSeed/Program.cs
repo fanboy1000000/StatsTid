@@ -68,8 +68,15 @@ static async Task<int> RunGenerateAsync(Dictionary<string, string> opts)
     var seed = int.TryParse(opts.GetValueOrDefault("seed", "42"), out var s) ? s : 42;
     // "rolling" ⇒ first of the current month ⇒ activity in the PREVIOUS month (recent, never stale);
     // absent/ISO ⇒ deterministic pinned/explicit date. See ReferenceDateResolver.
+    //
+    // S142 / TASK-14210 (owner ruling OQ-10, 2026-09-16): "today" is the COPENHAGEN calendar day,
+    // read through the shared helper via the TimeProvider seam. This used to be
+    // DateOnly.FromDateTime(DateTime.Today) — the MACHINE-LOCAL day, which is the Danish day only
+    // because a Danish developer's machine happens to sit in that zone, and is the UTC day on a CI
+    // box. Only `rolling` consumes the reading (and only its year + month), so the skew shows up
+    // solely at a month boundary; the resolver reads no clock at all on the deterministic paths.
     var referenceDate = ReferenceDateResolver.Resolve(
-        opts.GetValueOrDefault("reference-date"), DateOnly.FromDateTime(DateTime.Today));
+        opts.GetValueOrDefault("reference-date"), TimeProvider.System);
 
     var repoRoot = FindRepoRoot();
     var outSql = opts.GetValueOrDefault("out", Path.Combine(repoRoot, "docker", "postgres", "99-demo-seed.sql"));
