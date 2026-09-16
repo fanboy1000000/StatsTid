@@ -79,12 +79,19 @@ public sealed class LocalAgreementProfileMigrator
     /// <param name="connectionFactory">Opens the connection the whole migration runs on.</param>
     /// <param name="logger">Migration progress + idempotency-skip logging.</param>
     /// <param name="timeProvider">
-    /// The clock the Copenhagen business day is derived from (PAT-008). Production passes
-    /// <see cref="TimeProvider.System"/>; a test passes a fixed provider so "which rows are
-    /// currently effective" is a pure function of (seed, pinned-now) rather than of the calendar
-    /// day the suite happens to run on. Required, not defaulted: a silent
-    /// <see cref="TimeProvider.System"/> fallback is how a caller accidentally keeps the old
+    /// The clock the Copenhagen business day is derived from (PAT-008). A test passes a fixed
+    /// provider so "which rows are currently effective" is a pure function of (seed, pinned-now)
+    /// rather than of the calendar day the suite happens to run on. Required, not defaulted: a
+    /// silent <see cref="TimeProvider.System"/> fallback is how a caller accidentally keeps the old
     /// invisible-clock behaviour.
+    ///
+    /// <para>NOTE: this migrator currently has <b>no production caller</b> — it is a one-time legacy
+    /// cutover tool, constructed only by its own test fixtures, with no DI registration and no
+    /// endpoint. Said plainly here because an earlier version of this comment claimed "production
+    /// passes <see cref="TimeProvider.System"/>", which would have sent the next reader looking for
+    /// a caller that does not exist. Owner ruling OQ-7 converted it rather than deleting it because
+    /// it has real test coverage; the <c>CURRENT_DATE</c> it used to carry was never reachable in
+    /// production.</para>
     /// </param>
     public LocalAgreementProfileMigrator(
         DbConnectionFactory connectionFactory,

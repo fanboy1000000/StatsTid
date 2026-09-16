@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using StatsTid.Tests.Regression.Segmentation;
 using StatsTid.SharedKernel.Calendar;
 
 namespace StatsTid.Tests.Regression.Hosting;
@@ -66,5 +68,79 @@ public sealed class FixedInstantSeamTests
 
         Assert.Equal(new DateOnly(2026, 1, 15), utcDay);
         Assert.Equal(new DateOnly(2026, 1, 15), copenhagenDay);
+    }
+}
+
+/// <summary>
+/// S142 / Step-5a follow-up — proves <see cref="StatsTidWebApplicationFactory.WithFixedInstant"/>
+/// actually WIRES the pinned provider into a booted host's DI container.
+///
+/// <para>
+/// <b>Why this exists, and why the cheap probe above is not sufficient.</b>
+/// <see cref="FixedInstantSeamTests"/> proves that <see cref="FixedTimeProvider"/> answers the exact
+/// instant it was given — and it proves that by constructing the provider directly. It therefore
+/// establishes nothing about the seam itself: its own doc comment argues that
+/// <c>WithFixedInstant</c> "does exactly one thing", which is an assertion ABOUT the code rather
+/// than a test OF it. The external review lens caught this at Step 5a.
+/// </para>
+///
+/// <para>
+/// <b>What would go wrong without this test.</b> Seven wave-2 tasks pin their discriminating facts
+/// through <c>WithFixedInstant</c> against real endpoints. If the registration were ever overridden
+/// by the host's own <c>TimeProvider</c> registration, or resolved from a different container, every
+/// one of those pins would silently pin NOTHING — passing against correct and broken code alike.
+/// That is the exact blind spot this sprint exists to remove, and it would sit underneath the entire
+/// tooling built to remove it. The failure would be invisible: a green suite proving nothing.
+/// </para>
+///
+/// <para>Docker-gated, because proving the wiring requires really booting the host — so it is
+/// verified in CI, never on the author's machine. An unverifiable-locally test that can fail beats a
+/// locally-green one that cannot.</para>
+/// </summary>
+[Trait("Category", "Docker")]
+public sealed class FixedInstantHostWiringTests : IAsyncLifetime
+{
+    private TestFixtures.DockerHarness _harness = null!;
+    private StatsTidWebApplicationFactory _factory = null!;
+
+    public async Task InitializeAsync()
+    {
+        _harness = await TestFixtures.DockerHarness.StartAsync();
+        await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
+        _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
+    }
+
+    public async Task DisposeAsync()
+    {
+        _factory?.Dispose();
+        if (_harness is not null)
+            await _harness.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Boots a host pinned to the shared summer boundary instant and resolves
+    /// <see cref="TimeProvider"/> from the RUNNING host's container — not from the builder — so the
+    /// assertion covers the whole registration path, including anything the host registers after
+    /// the test override. Expected values are literals.
+    /// </summary>
+    [Fact]
+    public void WithFixedInstant_PinnedProviderSurvivesTheHostBuild_AndDrivesTheCopenhagenDay()
+    {
+        var pinned = _factory.WithFixedInstant(BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen);
+        _ = pinned.CreateClient(); // forces the host build; DI is not resolvable before this.
+
+        var resolved = pinned.Services.GetRequiredService<TimeProvider>();
+
+        // 1. The host resolves OUR provider, not the system clock.
+        Assert.IsType<FixedTimeProvider>(resolved);
+
+        // 2. It answers the exact pinned instant — literals, never derived from the seam.
+        Assert.Equal(new DateTimeOffset(2026, 7, 15, 22, 30, 0, TimeSpan.Zero), resolved.GetUtcNow());
+
+        // 3. And the business day the product would compute from it is the literal NEXT Danish day,
+        //    while the UTC calendar day is the literal earlier one. This is the fact every wave-2
+        //    pin relies on reaching the server.
+        Assert.Equal(new DateOnly(2026, 7, 15), DateOnly.FromDateTime(resolved.GetUtcNow().UtcDateTime));
+        Assert.Equal(new DateOnly(2026, 7, 16), CopenhagenBusinessDate.Today(resolved));
     }
 }

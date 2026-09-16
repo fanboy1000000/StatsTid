@@ -237,37 +237,57 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
     ///
     /// <para>
     /// <b>How this test proves the fix rather than restating it.</b> The clock is pinned at
-    /// 2026-06-30 <b>22:30 UTC</b>. Denmark is on summer time (CEST, UTC+2) that day, so in
-    /// Copenhagen it is already 2026-07-01 00:30 — the two calendars disagree, and the expected
-    /// dates below are written as LITERALS, never computed by calling the helper under test (which
-    /// would only prove the helper agrees with itself). Two rows straddle the boundary from
-    /// opposite sides:
+    /// 2099-12-31 <b>23:30 UTC</b>, so in Copenhagen it is already 2100-01-01 00:30 — the two
+    /// calendars disagree, and the expected dates below are written as LITERALS, never computed by
+    /// calling the helper under test (which would only prove the helper agrees with itself). Two
+    /// rows straddle the boundary from opposite sides:
     /// <list type="bullet">
-    ///   <item><c>WeeklyNormHours</c> starts ON 2026-07-01 — in force under the Copenhagen day,
+    ///   <item><c>WeeklyNormHours</c> starts ON 2100-01-01 — in force under the Copenhagen day,
     ///     not yet in force under the UTC day.</item>
-    ///   <item><c>MaxFlexBalance</c> ends ON 2026-06-30 — still in force under the UTC day,
+    ///   <item><c>MaxFlexBalance</c> ends ON 2099-12-31 — still in force under the UTC day,
     ///     expired under the Copenhagen day.</item>
     /// </list>
-    /// Exactly one of the two survives, and WHICH one is the entire assertion. Under the old
-    /// UTC/server-clock behaviour every assertion below inverts, so the test cannot pass for the
-    /// wrong reason. (Docker-gated: verified in CI, not runnable on the author's machine.)
+    /// Exactly one of the two survives, and WHICH one is the entire assertion.
+    ///
+    /// <para><b>Why a FAR-FUTURE WINTER instant, and not the 2026 summer one this fixture first
+    /// used (S142 Step-5a WARNING 2).</b> Two separate traps, and the choice avoids both.
+    /// <list type="bullet">
+    ///   <item><b>Far-future, because a near-dated pin cannot detect the defect actually removed.</b>
+    ///     The original pin sat at 2026-06-30. Against a regression back to SQL <c>CURRENT_DATE</c> —
+    ///     the database server's clock, which is what this task deleted — the real clock is already
+    ///     past 2026-07-01, so the row starting 2026-07-01 is eligible and the row ending 2026-06-30
+    ///     is expired: <i>exactly the expected outcome</i>. The test would have passed against the
+    ///     very bug it was written to catch. Dated 2100, <c>CURRENT_DATE</c> inverts both rows.</item>
+    ///   <item><b>Winter 23:30Z, because a summer instant would encode a legal assumption with an
+    ///     expiry date.</b> A far-future SUMMER pin only works while Denmark still observes daylight
+    ///     saving; if the EU abolishes seasonal clock changes, correct future tz data would put
+    ///     2099-06-30 22:30Z back on the same Danish day and this test would fail because the law
+    ///     changed. At <b>23:30Z</b> both a +01:00 and a +02:00 Copenhagen land on the next day, so
+    ///     the pin survives either outcome. (Same reasoning as the startup probe in
+    ///     <c>CopenhagenBusinessDate</c>, which anchors on immutable past offsets for the mirror-image
+    ///     reason.)</item>
+    /// </list></para>
+    /// (Docker-gated: verified in CI, not runnable on the author's machine.)
     /// </para>
     /// </summary>
     [Fact]
     public async Task EligibilityWindow_UsesCopenhagenCalendarDay_NotUtcAndNotTheServerClock()
     {
-        // In force from the Copenhagen "today" (2026-07-01) onward — invisible to a UTC reading.
+        // In force from the Copenhagen "today" (2100-01-01) onward — invisible to a UTC reading,
+        // and invisible to the database server's CURRENT_DATE, which is decades earlier.
         await InsertLegacyConfigAsync(
             "STY02", "HK", "OK24", "WeeklyNormHours", "36",
-            new DateOnly(2026, 7, 1), effectiveTo: null);
-        // Expired as of the Copenhagen "today" — but still open on the UTC day (2026-06-30).
+            new DateOnly(2100, 1, 1), effectiveTo: null);
+        // Expired as of the Copenhagen "today" — but still open on the UTC day (2099-12-31),
+        // and still open to CURRENT_DATE for the same reason.
         var utcOnlyRowId = await InsertLegacyConfigAsync(
             "STY02", "HK", "OK24", "MaxFlexBalance", "100",
-            new DateOnly(2024, 1, 1), effectiveTo: new DateOnly(2026, 6, 30));
+            new DateOnly(2024, 1, 1), effectiveTo: new DateOnly(2099, 12, 31));
 
-        // 22:30 UTC on 30 June = 00:30 on 1 July in Copenhagen (CEST, UTC+2).
+        // 23:30 UTC on 31 Dec = 00:30 on 1 Jan in Copenhagen — under +01:00 AND under +02:00,
+        // so the pin does not depend on whether seasonal clock changes still exist in 2099.
         var migrator = NewMigrator(new FixedTimeProvider(
-            new DateTimeOffset(2026, 6, 30, 22, 30, 0, TimeSpan.Zero)));
+            new DateTimeOffset(2099, 12, 31, 23, 30, 0, TimeSpan.Zero)));
         var result = await migrator.RebuildAsync();
 
         Assert.Equal(1, result.ProfilesCreated);
@@ -277,7 +297,7 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
         Assert.NotNull(profile);
         // The Copenhagen-day row was absorbed …
         Assert.Equal(36m, profile!.Value.WeeklyNormHours);
-        Assert.Equal(new DateOnly(2026, 7, 1), profile.Value.EffectiveFrom);
+        Assert.Equal(new DateOnly(2100, 1, 1), profile.Value.EffectiveFrom);
         // … and the row that only a UTC reading would still call live was NOT.
         Assert.Null(profile.Value.MaxFlexBalance);
 
