@@ -247,6 +247,44 @@ public sealed class StatsTidWebApplicationFactory : WebApplicationFactory<Progra
             builder.ConfigureTestServices(services =>
                 services.AddSingleton<TimeProvider>(new FixedTimeProvider(today))));
 
+    // ─── S142 / TASK-14200 fixed-INSTANT harness — the seam five downstream tasks share ──────
+    // Sprint 142 moves BUSINESS DATES (effective_from, a "is this in the past?" check, a stored
+    // effective-date stamp) from the UTC calendar day to the Europe/Copenhagen calendar day
+    // (StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate). INSTANTS (created_at, audit
+    // timestamps, outbox ordering, JWT expiry) stay UTC — moving one of those would corrupt the
+    // audit chain and event ordering, which are inviolable invariants, not a style choice.
+    //
+    // THE SEAM PROBLEM THIS SOLVES: WithFixedToday(DateOnly) above pins UTC MIDNIGHT — the one
+    // instant of every day where the UTC calendar day and the Copenhagen calendar day ALWAYS
+    // AGREE (Denmark's UTC offset is +1 winter / +2 summer, never negative, so Copenhagen local
+    // midnight never falls BEFORE UTC midnight of the same date). That makes WithFixedToday the
+    // right anchor for almost every "today"-dependent fact — and the WRONG one for any fact whose
+    // whole point is to tell the two calendars apart: NO test built on WithFixedToday can detect a
+    // UTC-vs-Copenhagen business-date bug, and none can be broken by the fix. Reach for
+    // WithFixedInstant below instead whenever the fact under test IS that distinction — pin an
+    // instant close to either midnight where the two calendars disagree.
+
+    /// <summary>
+    /// A derived host whose <see cref="TimeProvider"/> is pinned to an exact INSTANT — offset and
+    /// time-of-day included — rather than to a bare calendar date. Same registration mechanism as
+    /// <see cref="WithFixedToday"/>, one <see cref="FixedTimeProvider"/> constructor over; see the
+    /// section comment immediately above for why this seam exists and when to prefer it over
+    /// <see cref="WithFixedToday"/>. Promoted out of a private, single-file helper
+    /// (<c>EffectiveDateBoundaryTests.HostAtInstant</c>) so every regression test class needing the
+    /// UTC/Copenhagen boundary can reach it without copy-pasting the wiring.
+    ///
+    /// <para>
+    /// Same boot-order rule as <see cref="WithFixedToday"/>: any "absent-state" fixture the test
+    /// needs must be seeded AFTER this derived host's first <c>CreateClient()</c> call, never
+    /// before — that first call re-runs <c>Program.cs</c>'s startup seeders against the same
+    /// Postgres container.
+    /// </para>
+    /// </summary>
+    public WebApplicationFactory<Program> WithFixedInstant(DateTimeOffset instant)
+        => WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+                services.AddSingleton<TimeProvider>(new FixedTimeProvider(instant))));
+
     /// <summary>
     /// Applies the canonical <c>docker/postgres/init.sql</c> schema to
     /// <paramref name="connectionString"/>. Walks from

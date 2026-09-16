@@ -471,12 +471,25 @@ public sealed class EffectiveDateBoundaryTests : IAsyncLifetime
     /// <c>DateOnly</c> and pins UTC midnight — deliberately, because that is what almost every fact
     /// wants — but UTC midnight is precisely the instant at which the UTC day and the Copenhagen
     /// business day AGREE, so it cannot express the one distinction the two clock facts exist to
-    /// make. Same registration mechanism, one constructor over.
+    /// make.
+    ///
+    /// <para>
+    /// <b>S142 / TASK-14200 — promoted, not reimplemented.</b> This used to inline the
+    /// <see cref="FixedTimeProvider"/> wiring directly; that wiring now lives on the shared fixture
+    /// as <see cref="StatsTidWebApplicationFactory.WithFixedInstant"/>, so every regression test
+    /// class (not just this one) can reach the same seam without copy-pasting it — five other S142
+    /// tasks need exactly this. Kept as a one-line private alias here, rather than inlined at its two
+    /// call sites, so this promotion touches nothing else in this file: the two facts that call it
+    /// (<see cref="Refresh_UsesTheWritersUtcDay_NotTheCopenhagenBusinessDay"/> and
+    /// <see cref="CannotRegister_UsesTheWritersUtcDay_NotTheCopenhagenBusinessDay"/>) are owned by
+    /// other S142 tasks and are unchanged. The three canonical UTC instants for this boundary (this
+    /// class's own <see cref="FLateUtcEvening"/> among them, conceptually) are now also collected
+    /// once in <see cref="BoundaryInstants"/> for callers that do not already have a same-shaped
+    /// anchor of their own.
+    /// </para>
     /// </summary>
     private WebApplicationFactory<Program> HostAtInstant(DateTimeOffset instant)
-        => _factory.WithWebHostBuilder(builder =>
-            builder.ConfigureTestServices(services =>
-                services.AddSingleton<TimeProvider>(new FixedTimeProvider(instant))));
+        => _factory.WithFixedInstant(instant);
 
     /// <summary>
     /// Grabs the host's OWN running <see cref="DelegationExpiryService"/> — registered only as
