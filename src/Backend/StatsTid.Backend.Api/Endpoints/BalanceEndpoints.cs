@@ -729,10 +729,41 @@ public static class BalanceEndpoints
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
 
-            // Server date — sole past/current/future + "Nu" authority. Derived ONCE per request
-            // from the injected TimeProvider (no DateTime.Now/Today/UtcNow anywhere in this
-            // handler). Tests override the provider in the WebApplicationFactory host.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // Server date — sole past/current/future + "Nu" authority, and the `asOf` key for
+            // every dated read below (agreement code, OK version, employment profile, the
+            // senior-day age gate, child-sick eligibility, the current-ferieår tiles). Derived
+            // ONCE per request from the injected TimeProvider (no DateTime.Now/Today/UtcNow
+            // anywhere in this handler).
+            //
+            // S142 / census row 12 — this is a BUSINESS DATE, so it is the Europe/Copenhagen
+            // calendar day, NOT the UTC one. Every StatsTid user is Danish, and between Danish
+            // midnight and UTC midnight (one hour in CET, two in CEST) the UTC calendar still
+            // reads YESTERDAY. The pre-S142 expression
+            // `DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime)` therefore marked the
+            // wrong month "Nu" and dated every read above one day early for anyone working after
+            // local midnight. CopenhagenBusinessDate.Today converts through the real
+            // Europe/Copenhagen zone, so it is correct in both CET and CEST (the QUAL-005
+            // fixed-offset trap). INSTANTS — created_at, audit timestamps, outbox ordering —
+            // stay UTC and must never be routed through this helper.
+            //
+            // PARITY, LOAD-BEARING: VacationSettlementService (:1462-1489) exists to reproduce
+            // THIS chain byte-for-byte — its `today` keys the SAME
+            // GetByUserIdAtAsync(employeeId, today) dated read, whose result keys the liveConfig
+            // probe and the ResolveDatedConfig fallback branch. The two MUST derive the same day.
+            // Concretely, if they diverge: for the one-to-two-hour window between Danish midnight
+            // and UTC midnight, a user_agreement_codes row that starts on exactly that date is in
+            // force for one of them and not the other, so the settlement engine values a closed
+            // ferieår against a DIFFERENT agreement's quota/carryover_max than this page displays
+            // — a money-shaped disagreement inside a replay-sensitive capture, not a cosmetic one.
+            // Change one only together with the other. Pinned by
+            // YearOverviewSettlementClockParityTests (Regression, NOT Docker-gated — binds both
+            // call sites and evaluates the day against literals) and YearOverviewCopenhagenDayTests
+            // (Regression, Docker-gated — the served `today` at the divergent instants).
+            //
+            // Tests override the provider in the WebApplicationFactory host and MUST use
+            // WithFixedInstant, not WithFixedToday: the latter pins UTC MIDNIGHT, the one moment
+            // where both calendars agree, so it cannot detect this defect at all.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             // ── Header ──
             // agreementCode dated at today (user_agreement_codes, ADR-023 D3 graceful fallback to
