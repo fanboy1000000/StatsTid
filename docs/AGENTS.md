@@ -131,6 +131,36 @@ behind, and say in your report what you found.
 **"Compare against master" means the LOCAL branch.** An agent that compares against the remote will find itself
 apparently up to date while missing the entire sprint — which is exactly how this went unnoticed for nine dispatches.
 
+## ★ `git stash` is REPOSITORY-GLOBAL — forbidden while any other agent is running (S142)
+
+**A worktree isolates the working tree. It does NOT isolate the stash.** All worktrees of one repository share a
+single stash stack, so `git stash` from one agent and `git stash pop` from another operate on the *same* stack.
+
+**What actually happened, in S142 wave 2.** TASK-14204 stashed its production change to prove a test went RED —
+the exact discipline the sprint requires. Concurrently TASK-14202 stashed its own. TASK-14202's entry landed on
+top as `stash@{0}`, so TASK-14204's `git stash pop` **applied another agent's `AdminEndpoints.cs` and
+`UserAgreementCodeRepository.cs` into its own worktree, and dropped that agent's stash.** No work was lost only
+because TASK-14204 noticed the foreign files, reverted them, recovered the other agent's work from the dangling
+commit via `git stash store`, and then popped its own. **None of that recovery was guaranteed, and a less careful
+agent would have committed another task's half-finished work as its own.**
+
+**The Orchestrator caused this**, by putting *"stash your production change, confirm red, restore"* in seven
+concurrent agent prompts at once. The instruction was right about the goal — a test must be proven able to fail —
+and wrong about the mechanism.
+
+**The instruction to include, verbatim, wherever an agent is asked to prove a RED:**
+```
+Do NOT use `git stash` — it is repository-global, not per-worktree, and will collide with
+other agents running concurrently. To prove the RED:
+    git diff > /tmp/mychange.patch
+    git checkout -- <the production files>
+    ... run the test, capture the failure output ...
+    git apply /tmp/mychange.patch
+```
+**Generalise the rule when reviewing any agent instruction: a command is only safe for parallel agents if its state
+lives in the working tree.** `git stash`, `git worktree`, tags, `git config --local`, `refs/`, and the index of a
+*shared* checkout are all repository-global. The working tree is the only thing `isolation: "worktree"` isolates.
+
 ## Agent Prompt Template
 When spawning a domain agent, use this structure:
 ```

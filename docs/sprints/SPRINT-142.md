@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 142 |
-| **Status** | **in progress — wave 1 dispatched** (14200 harness · 14208 database-decided dates + deletes · 14210 tooling · 14211a startup guard) |
+| **Status** | **in progress — wave 1 merged + Step-5a absorbed + pushed; wave 2 (7 tasks) dispatched.** Wave 2 merges only onto a green base |
 | **Start Date** | 2026-09-16 |
 | **End Date** | — |
 | **Orchestrator Approved** | **APPROVED** — Step 0b ran **two cycles, both lenses**. Cycle 1: Reviewer CHANGES-REQUIRED (nine of 64 rows unassigned; the OQ-4 deletes unassigned; **the sprint-wide carve-out itself wrong**; four coupled pairs split; predecessors wrong both ways) · Codex 2 BLOCKER (test ownership unprovable; validator↔picker "ordered" ≠ atomic). Cycle 2: Reviewer verified 7 of 9 fixes APPLIED, 2 PARTIAL — **B1: the coverage enumeration still contradicted the picker fix it was meant to certify** — plus W1–W6 absorbed (all-or-nothing MOVE tasks; helper ownership; rows 48/49 are dead code → deleted under OQ-4; two files need the `TimeProvider` seam; a per-task *failing* pin; `docs/` split out of an agent task per CLAUDE.md). Refinement rev 9 + OQ-10, OQ-11. **12 tasks, 64/64 rows assigned exactly once** |
@@ -133,6 +133,24 @@ with them"* — a condition S142 satisfies. Neither needed the other, and both w
 | **OQ-9** | **SPLIT** — correctness in S142, hygiene in S143. The line: *"would this be wrong, or merely undisciplined?"* All three defective test shapes count as wrong | 2026-09-16 |
 | **OQ-10** | **Link the demo seeder to the shared helper** (`ProjectReference` → SharedKernel), making the Danish day explicit rather than circumstantially true | 2026-09-16 |
 | **OQ-11** | **A missing Copenhagen zone refuses the application's start** — the silent UTC fallback is replaced by a boot assertion probing **both** offsets (winter `+01:00`, summer `+02:00`) | 2026-09-16 |
+| **OQ-12** | **In the browser, an unresolvable zone disables the date picker with an explicit message** — loud, but contained to one control rather than blanking the config editor | 2026-09-17 |
+
+### OQ-12 — the same principle as OQ-11, adapted to where it fails
+
+TASK-14201's new frontend helper mirrors OQ-11: no degraded mode, because falling back to the browser's own clock would
+**silently reinstate the precise defect this sprint removes**. That much is settled.
+
+**But a server and a browser fail differently, and the ruling follows the difference.** A server either boots or does not,
+and an operator reads a log. An uncaught throw during *render* blanks the whole config editor: the admin sees a white
+screen with no explanation, and **every unrelated field on that page becomes unreachable too.**
+
+Disabling the one control with an explicit message keeps everything OQ-11 was protecting — a wrong date still cannot be
+entered, and the failure is still loud and visible — while confining the damage to the control that actually depends on the
+zone. **Both options satisfy the correctness invariant, so the usability trade-off decides**, which is the invariant model
+working exactly as written rather than being overridden.
+
+*Recorded honestly: this cannot occur on any browser the product supports — every current runtime ships the full tz
+database. It is settled now because it is cheap now and awkward later.*
 
 ### OQ-11 — why a documented "never crash" choice is being reversed
 
@@ -504,6 +522,413 @@ TASK-14211a both reported **145**. The delta is almost certainly how the build w
 agent reported a warning in a file it touched* — but the integrated build must be measured once against the S141 baseline of
 145 before wave 2 is dispatched. **Two numbers describing the same quantity is exactly the kind of discrepancy this sprint
 has learned not to reconcile by picking one.**
+
+### Step 5a — wave 1 dual-lens · APPROVED-WITH-WARNINGS, both lenses
+
+**Both lenses cleared the two things this wave could most easily have broken:** every converted site
+is a *business date*, and every *instant* — `created_at`, audit rows, event ordering — stayed on UTC. The four
+deletions are genuinely dead (no interface, no DI factory, no reflection). `(NOW() AT TIME ZONE 'Europe/Copenhagen')::date`
+is the correct Postgres idiom and, crucially, **independent of the server's own `TimeZone` setting** — which is the whole
+point of moving the decision out of the database.
+
+**Three findings absorbed, and two of them are the sprint's signature defect appearing inside the sprint's own work.**
+
+**1. A test that could not detect the defect its task removed** (internal W2). The migrator's boundary fixture claimed
+*"under the old UTC/server-clock behaviour every assertion below inverts."* That is true against a UTC-day regression — and
+**false against a regression back to `CURRENT_DATE`**, which is what the task actually deleted: the server's real clock is
+already past 2026-07-01, so the row starting 2026-07-01 is eligible and the row ending 2026-06-30 is expired — *exactly the
+expected outcome*. **The test would have passed against the very bug it was written to catch.**
+
+Moved to **2099-12-31 23:30Z → 2100-01-01**, which makes `CURRENT_DATE` invert both rows. **Deliberately a WINTER instant,
+not the summer one the review suggested:** at 23:30Z both a `+01:00` and a `+02:00` Copenhagen land on the next day, so the
+pin does not depend on whether seasonal clock changes still exist in 2099. A far-future *summer* pin would have encoded
+exactly the legal assumption TASK-14211a's probe deliberately avoids — **two agents' decisions pulling in opposite
+directions, reconciled rather than applied blindly.**
+
+**2. The seam itself was never exercised** (external WARNING). `FixedInstantSeamTests` proves `FixedTimeProvider` works by
+constructing it **directly** — so nothing proved that `WithFixedInstant` actually wires the pinned provider into a booted
+host. Its own doc comment argued the seam "does exactly one thing", which is *an assertion about the code, not a test of
+it*. **Seven wave-2 tasks pin through that seam.** Had it mis-wired — overridden by the host's own registration, or resolved
+from another container — every one of those pins would have passed against correct and broken code alike: *a green suite
+proving nothing, sitting underneath the entire tooling built to prevent exactly that.* Added a Docker-gated host-wiring
+test; unverifiable locally, which is the right trade over unverified everywhere.
+
+**3. The migrator's constructor doc claimed a production caller that does not exist** (internal N1). Corrected to say so
+plainly, rather than sending the next reader hunting for it.
+
+**Verified integration state:** build **0 errors / 145 warnings** on a clean `--no-incremental` build — the S141 baseline,
+unmoved · Unit **1264** · DemoSeed **170** · non-Docker regression **111**.
+
+**WARNING 1 was mine, and it was fair:** wave 1 had never been through CI — ten unpushed commits meant every Docker-gated
+fact in the wave had executed *nowhere*, while I was describing the wave as verified. **Local green plus "CI will check it"
+is not verification until someone pushes.**
+
+**✅ CI GREEN — run `35106215656`, sha `a9e6c87`, ALL 7 JOBS:** `build-and-test` · `frontend-build` · Smoke (docker-compose)
+· E2E (Playwright) · Documentation consistency (`check_docs.py`) · Secret scan (gitleaks) · Cyclomatic complexity. The
+preceding run `35105431170` (sha `ea6fe86`) was also green. **This is the first execution anywhere of wave 1's Docker-gated
+facts** — the six migrator fixtures, the greenfield `init.sql` pin, and the new host-wiring test for the seam. The docs job
+also settles what I could not check locally, Python being absent from this machine.
+
+**Wave 2 (7 tasks) is dispatched against this verified base.**
+
+*Carried to TASK-14211b (Orchestrator-executed docs): `legacy-db-upgrade-runbook.md:181` and the QUAL-156 register row both
+point at now-deleted code, and QUAL-156 names two dead sites where OQ-4 found four.*
+
+## Wave 2 — agent results
+
+### TASK-14204 — reporting lines, stand-ins & delegation expiry · COMPLETE
+
+All 10 rows moved. Row 25 — the one invisible to the standard grep, deriving a business date from an *instant* — was
+hoisted into a named local so the conversion is visible, with `SpecifyKind` pinning the instant as UTC so the conversion
+can never silently pick up the host's offset. **The instant is unmoved; only the day it is attributed to.** Five stale
+comments rewritten, three more than the brief named.
+
+**The `:261` fact is rewritten, not preserved** — same 23:30Z instant, now asserting `"HK"` and a version bump plus the
+audit row showing the transition, renamed so the method no longer asserts the UTC day.
+
+**RED proved without Docker, and the method is worth recording.** Docker is unavailable here, so the Postgres-gated
+assertion could not execute — but *the thing it discriminates on* could. The agent reverted the production files, invoked
+the real private `DelegationExpiryService.Today()` by reflection (it reads only the clock, so no database), and applied the
+sweep's own predicate to the test's literal seed rows: pre-change it resolves 2025-11-12 → `"AC"`, post-change 2025-11-13 →
+`"HK"`. **A derivation-level RED against the real production method**, honestly labelled as not a container run. The
+Docker-gated fact itself stays CI-verified only, and the agent explicitly declined to claim it green.
+
+**A better instant than the brief suggested.** For the replacement of the OR-tolerant assertion the agent chose the
+**summer** instant over the winter one, because *the winter instant is passed by a hardcoded `+01:00` implementation* —
+QUAL-005, the bug the helper exists to prevent — whereas 22:30Z in July only crosses midnight under the real CEST offset.
+Same reasoning the sprint applied twice already, reached independently.
+
+**Totals:** build **0 errors / 145 warnings** (`--no-incremental`, baseline held) · Unit **1264** · non-Docker regression
+**111** · net regression delta **−3** (the three dead-mechanism tests deleted; the rewrites are renames, not additions).
+
+### TASK-14202 — admin & agreement codes · COMPLETE
+
+Rows 1, 2, 3 and 52 converted; 14 comment blocks rewritten in `AdminEndpoints.cs` alone. **Worktree verified intact after
+the stash incident** — the pop had completed before the collision, all four files present.
+
+**In plain terms:** an HR admin creating a new hire at 00:30 Danish time dated that person's **entire record** — employment
+start, profile interval, agreement interval, manager edge, and all three mirroring outbox events — one day early, every
+night of the year. Every audit timestamp, `created_at` and outbox ordering value is untouched and still UTC.
+
+**RED proved in two executable halves, neither of them a claimed container run.** (1) A scratchpad console app
+project-referencing this worktree's real compiled `SharedKernel`, printing the actual assertion failures at both boundary
+instants — 4 assertions RED pre-change, 0 post-change. (2) Source-level: with the production files reverted, the regression
+**test project still compiled clean**, proving the new facts would have *run and failed* rather than failed to build. That
+second half is the one people skip, and it is the difference between "my test fails" and "my test doesn't exist yet".
+
+#### ★ The brief's failure mode was wrong, and the truth is worse
+
+I wrote that splitting the endpoint from its repository would write `users.agreement_code` **empty** and leave the login
+token with no agreement code until UTC midnight. **Neither happens.**
+
+- `RefreshAgreementCodeCacheAsync` writes `SET agreement_code = COALESCE(@agreementCode, agreement_code)`, and the POST's
+  own users INSERT already wrote the code earlier in the same transaction. With `todayCode` null, the COALESCE **keeps
+  'AC'** — the column is never empty.
+- `AuthEndpoints.cs:102-124` carries a defensive fallback: `canonicalAgreementCode ?? dbUser.AgreementCode`. A null
+  canonical read logs *"Inconsistent state: user_agreement_codes has no live row for user {UserId}"* and **mints a working
+  token anyway.**
+
+So a split produces **no visible failure at all** — one warning line, a silent disagreement between the canonical store and
+its cache, self-healing at UTC midnight. **The same-commit requirement is still exactly right; my reason for it was wrong in
+the direction that matters.** *"It fails loudly" and "it hides" call for different vigilance*, and I had described a hiding
+defect as a loud one. The corrected mechanism is now recorded at both sites and in the new tests' documentation, and the
+coupling test asserts the **canonical read** directly rather than an empty cache column that would never have appeared.
+
+**A stale comment the brief did not list**, found in a touched file: `UpdateUserRequest.EffectiveFrom`'s doc said the Danish
+-day move was *"deferred to its own work"*. **That deferral is this sprint.** Rewritten to say precisely which half moved
+(the server) and which has not (the frontend's `toISOString().slice(0,10)`, another task's scope) — because that field's
+documentation is what a frontend author reads to learn what they may send.
+
+**Totals:** build **0 errors / 145 warnings** (`--no-incremental`) · Unit **1264** · non-Docker regression **111**.
+
+### TASK-14206 — HR follow-up detector · COMPLETE (committed `f82a2e6`)
+
+Row 22 and the read-repository's `today` parameter moved together. The `:401` fact is rewritten to the Copenhagen outcome
+at the same 23:30Z instant and renamed, and it now asserts four literals rather than one — `missingRecord`, `gapSince`,
+`daysSinceGapStart` and a null `coveredFrom` — all derived from the SQL rather than from the helper under test. `:261` is
+confirmed byte-identical and untouched.
+
+**RED proved by replaying the rewritten assertion against the reverted production expression** with real xunit: expected
+2025-11-13, actual 2025-11-12. Plus confirmation that the regression project still **compiles** when reverted, so the CI
+failure would be an assertion failure and not a build break. Docker-gated facts CI-verified, not claimed green.
+
+**Totals:** build **0 errors / 145 warnings** · Unit **1264** · non-Docker regression **111**.
+
+#### ★ My brief named two stale comments. There were five.
+
+The three I missed were all inside files this task owned, all asserting the retired UTC-day exception as current truth:
+the read-repository's file-header "THREE RULES", the endpoint's class-doc shared rules, and — **the consequential one** —
+`HrFollowUpApprovalResponses.cs:282`, the **API response-contract doc for the `Today` field itself**: *"`Today` is the UTC
+day here, not the Copenhagen business day."* **That is what a frontend author reads to learn what the server sends them.**
+
+**This is now the third time in this sprint that stale commentary has produced or nearly produced a wrong conclusion in a
+careful reader** — `init.sql`'s "greenfield no-op", the QUAL-157 comments that generated my retracted carve-out, and now a
+contract doc that would have taught the frontend the opposite of the truth. **My per-task comment lists have been
+incomplete every single time.** The instruction to agents should be a grep, not a list: search each touched file for
+`UTC day`, `writers' UTC`, `not the Copenhagen`, `deferred`.
+
+#### ★ Confirmed merge hazard between TASK-14204 and TASK-14206
+
+`EffectiveDateBoundaryTests.cs:513-516` — both tasks renamed their own fact, and each therefore had to fix its own
+`<see cref>` on **adjacent lines** (`:514` and `:515`). **Expect a conflict; the resolution is to take both renames.**
+Additionally the prose there says the two facts *"are owned by other S142 tasks and are unchanged"* — **now false for both**,
+since both were rewritten. That sentence and the class doc at `:55-66` get one Orchestrator fix at merge; both agents
+correctly declined to touch shared prose that would have collided.
+
+#### A limit in the wave-1 harness, found by using it
+
+**The three shared `BoundaryInstants` are all mid-month**, so they discriminate the *day* but not the *month*. The worklist
+test needed a month-granular clip, so this task defined a local `2026-07-31T22:30Z`. **22:30 rather than 23:30 deliberately:
+at 22:30 a hardcoded `+01:00` still answers "July", so one pin kills both the raw-UTC and the winter-offset-year-round
+bugs** — and it does not discriminate a hardcoded `+02:00`, which the agent stated in the doc comment rather than leaving
+implied. **If a second task needs a month boundary, promote this into `BoundaryInstants` at merge.**
+
+**UNRESOLVED-1 settled in the census's favour:** `GetCannotRegisterAsync` has exactly one caller, so no second clock exists
+and the endpoint+repository pair is the whole move.
+
+**Two writer-side stale comments flagged out of scope** — `EmployeeProfileRepository.cs:351` and
+`UserAgreementCodeRepository.cs:157`, both documenting "today is the writers' UTC day". The first was relayed to TASK-14205
+mid-flight; **the second must be checked at merge**, since TASK-14202 rewrote `:245` in that file but not `:157`.
+
+### TASK-14207 — settlement & balance parity · COMPLETE (committed `35b1d12`)
+
+Rows 12 and 53 in one commit. `VacationSettlementService` now has **one** clock→business-day derivation with four callers
+rather than two intentional clocks — a strictly stronger invariant than the one the census recorded.
+
+**The parity pin asserts the LITERAL Danish day at each of the three boundary instants — never site-against-site.**
+That distinction is the whole design: *before this change both sites agreed on the wrong day, so a parity-only test would
+have passed.* Two RED scenarios were executed: a full revert (3 of 10 fail) and — the one that matters — **the half-move**,
+settlement reverted while the reader moved, which fails 2 of 10 naming row 53 exactly.
+
+**Totals:** build **0 errors / 145 warnings** · Unit **1264** · non-Docker regression **121** (+10). Three Docker-gated
+facts CI-verified, not claimed green.
+
+#### ★ My acceptance criteria were mutually exclusive, and the agent resolved it correctly
+
+I required the parity pin to use the wave-1 harness (`WithFixedInstant`, which needs Postgres) **and** to be proven RED
+locally (where Docker does not run). **One artifact cannot satisfy both.** The agent split it: a non-Docker parity pin over
+`BoundaryInstants`, locally RED-proven, plus a Docker-gated behavioural companion using `WithFixedInstant`. Both harness
+artifacts are exercised and neither claim is unverifiable. **A contradiction in the brief, surfaced rather than silently
+resolved by dropping whichever half was inconvenient.**
+
+#### ★ My description of the half-move symptom was wrong — the second time this wave, and again worse than I said
+
+I wrote that a divergence means *"the balance page would mark a period 'now' that the settlement engine considers past."*
+**The settlement engine does no past/current/future marking with this value.** The agent traced every use of the variable
+in scope: site 53's `today` has **exactly one consumer**, and what actually diverges is `todayAgreementCode`, which keys
+`liveConfig` and the dated-config fallback terminal.
+
+**So a half-move means the settlement engine values a closed ferieår against a DIFFERENT agreement's `annual_quota` and
+`carryover_max` than the screen displays** — a money-shaped disagreement inside a replay-sensitive, ADR-033 D3 immutable
+capture. The in-code comments now say that rather than repeating my version.
+
+**The pattern is now established and it is about my analysis, not theirs.** Twice this wave an agent has traced a failure
+mode I asserted and found the real one both *different* and *more severe* — the agreement-code cache (I said "empty column,
+broken token"; truth: silent divergence that self-heals and hides), and this one (I said "a display marker disagrees";
+truth: money computed against the wrong agreement). **I have been describing plausible symptoms instead of following the
+value to its consumer.** The correction is mechanical: trace the variable, do not narrate it.
+
+**Declared deviation, accepted:** no Docker-gated behavioural assertion for site 53's day. Observing it end-to-end needs a
+contrived topology fighting the config seeder, in a test that could not be run locally. **A fragile, unverifiable CI test is
+worse than a fully machine-checked local chain** — call site → adapter body → `using` binding → literal-pinned evaluation.
+Correct judgement; recorded rather than hidden.
+
+*Census row 53's note ("the file already runs both clocks on purpose") is stale after this change and should be updated.*
+
+### TASK-14203 — approval & skema · COMPLETE
+
+All 17 rows moved — handlers, the period repository and the authorizer together, so the admission gate and the candidate
+query can never describe different days. **No stash used** (copy-aside); the foreign stash entry was seen and left alone.
+
+**Totals:** build **0 errors / 145 warnings** · Unit **1264** · non-Docker regression **116**. Docker-gated boundary facts
+CI-verified, not claimed green.
+
+**★ The best-designed RED proof of the sprint, and the design choice is the point.** A stand-in approver whose inclusive
+last day is 15 July, pinned at `2026-07-15 22:30Z` — Copenhagen is already the 16th, so the stand-in holds no authority.
+Pre-change the code asked the UTC calendar, still said the 15th, and **granted**. 4 of 5 facts RED with real output; the
+5th is the deliberate "calendars agree" control that must stay green in both states.
+
+**The agent chose a fail-OPEN shape over a deny-side one on purpose**: this defect does not lock people out, it **grants
+stale privilege**. That is the security-relevant direction, and it is the one a casual test would have missed by asserting
+the easier "access denied" case. It also runs **without Postgres** — the authorizer's overloads accept in-memory sources —
+and the `NpgsqlConnection` argument deliberately points at an unreachable host, so a future edit that stops honouring the
+stubs **fails loudly rather than passing quietly**.
+
+#### My caller mapping was wrong for one row, and it would have produced a test that covered nothing
+
+I wrote that rows 38–41 are called from four `AdminEndpoints.cs` handlers. Rows 38, 39 and 41 check out. **Row 40 does
+not** — it lives in a private method whose only caller is the roster, not person search, and the person-search handler
+binds **no `today` at all**. A test written against person search, as my brief implied, would have asserted nothing. The
+agent asserted row 40 through the roster instead.
+
+#### ★ Row 31 is a correctness site, not the consistency site OQ-6 called it
+
+OQ-6 ruled the catalog anchor moves "for consistency", on the strength of the site's own comment that nothing durable
+depends on it. **True for the preferences themselves — and that same `today` also feeds `GetByUserIdAtAsync`, which selects
+the employee's dated agreement code.** On a boundary day the two calendars can therefore select **different agreement
+codes, and validate against different catalogs.**
+
+The ruling does not change — the site moves either way — but the *reason* recorded for it was too generous, and the code
+comment now states the real one. **This is the fourth time this sprint that a site's own comment understated what it
+does**, and the third time the understatement came from trusting that comment rather than tracing the value.
+
+#### Two smaller findings worth keeping
+
+- **A comment broke a source-text guard.** `ScheduledChangeMarkerTests.cs` asserts a SQL constant name appears exactly three
+  times in a file — a "no fourth hand-written copy" guard. **Merely naming the constant in a prose comment made it four and
+  turned the guard red.** Worked around by paraphrasing, but the guard cannot distinguish a splice from a mention; brittle
+  by construction, and outside this task's scope to fix.
+- **A latent flake fixed at the source.** `InsertAbsenceTodayAsync` seeded UTC-today against an *unpinned* host; once the
+  query moved to Copenhagen, seed and server would have disagreed nightly between 22:00 and midnight UTC. Now derived the
+  same way the server does. **This is one instance of the wider flake surface TASK-14204 flagged** — fixture inputs built
+  from the UTC day against validators that now mean the Danish day.
+
+### TASK-14205 — employee profile, history, eligibility & compliance · COMPLETE
+
+All 7 rows moved; both ambient-clock files (`ComplianceEndpoints`, `EntitlementEligibilityEndpoints`) converted to **real
+`TimeProvider` injection**, not `TimeProvider.System` handed to the helper. `CreateAsync`'s stamp was routed through the
+repository's single `Today()` rather than a second inline derivation, so **the file now has one calendar.** Roughly
+**eighteen** stale comment blocks rewritten — including one that actively *argued for* UTC. **No stash used.**
+
+**Totals:** build **0 errors / 145 warnings** · Unit **1264** · non-Docker regression **111**. The six new facts sit behind
+HTTP + Postgres and are **CI-verified only; explicitly not claimed green.**
+
+**RED proved two ways without Docker:** the regression project compiles cleanly with all five production files reverted
+(so the failure is an assertion, not a build break), plus the decision arithmetic executed against the real `SharedKernel`
+— including the carry-forward predicate flipping `True → False` and the history label flipping `SCHEDULED → CURRENT`.
+
+#### ★ My brief's central claim was wrong, and a test built on it could not have failed
+
+I wrote that row 15 *"decides OQ-6 routing: whether an edit is an update to the row covering today, or a new dated
+interval… writing a wrongly dated history row."* **It does not.** Routing is `TemporalWriteRouter.Decide(timeline,
+requestFrom, today)`, and **no branch of that method reads `today`** — the router's own comment says so explicitly. Cases
+B′/C′/E/G/T are decided purely by the *request's* `EffectiveFrom` against the locked timeline.
+
+**The agent's own words on why this mattered: "the obvious test built on the brief's premise cannot fail."** My wrong
+premise would have produced a vacuous test — inside the sprint whose entire purpose is deleting vacuous tests.
+
+**What row 15 actually decides**, and where the durable defect really lives, is the carry-forward test
+`boundary > today` (`EmployeeProfileEndpoints.cs:987`). On the UTC day, **a row that has ALREADY TAKEN EFFECT is classified
+as a future scheduled change and receives a second routed write into it** — an un-asked-for change to a live row. It also
+decides the covers-today **404**: a profile whose only row begins today (*which is exactly what the demo seeder now
+writes*) could not be edited at all.
+
+**This is the third failure mode I asserted that turned out wrong on tracing** — and the three form one pattern: I described
+a plausible consequence rather than following the value to its consumer. The census was right in all three cases; my prose
+around it was not.
+
+#### Row 47 — RULED: convert, do not delete, and register the finding
+
+`EmployeeProfileRepository.CreateAsync` has **zero production callers** — the boot seeder and `AdminEndpoints` both INSERT
+inline — so it has the same shape as rows 48/49, which OQ-4 deleted. **It is not the same case: it has three live test
+callers** exercising real dating semantics. OQ-4 deleted paths with *no* callers of any kind; deleting this one means ruling
+those tests worthless, which is a larger decision than a date sprint should take in passing. **Converted, as the agent did.**
+
+The residual is real and gets registered rather than lost: *a repository method with no production callers whose behaviour
+is asserted only by tests is a latent divergence risk* — it can drift from the two inline INSERTs that do the real work,
+and the tests would keep passing. Quality-register item, not an S142 deletion.
+
+#### The grep beat my list again — and caught a doubly-wrong contract doc
+
+My "known stale" line numbers were **pre-merge** (TASK-14208 had already removed the shim and shifted the file). Grepping
+instead caught the one my mid-flight message predicted would be missed:
+**`S112EmployeeProfileSpecRuntimeTests.cs:20`**, a class doc asserting `effectiveFrom` *"MUST be today (UTC)"* **and**
+citing an ADR-023 D8 validator that S138/S141 already deleted — **two wrong statements in one sentence, in a file a
+contract reader consults.**
+
+#### Two harness notes for the merge
+
+- **A second task hit the month-boundary limit** and defined its own local instant. **Promote it into `BoundaryInstants` at
+  merge.** The agent's observation is the reason it matters: *the month version is the payroll-visible form of this defect*,
+  because every export, settlement and approval period here is month-bounded.
+- **Both seasons are exercised** in the new class (CEST for the marquee facts, CET for the deletes), so a hardcoded `+01:00`
+  "fix" — the QUAL-005 shape — cannot pass it.
+- **Row 13 has no cheap behavioural discriminator**; proving it needs a full authority-window fixture belonging to another
+  task. Converted and on the seam, **pinned by reasoning only — declared rather than hidden.**
+
+### TASK-14201 — config family + the frontend helper · COMPLETE (wave 2's largest)
+
+All eleven rows moved. The four config endpoints now take `TimeProvider` **by injection** — they previously read the
+ambient wall clock, so nothing could pin them. `ConfigEndpoints.cs:180`'s `CreatedAt = DateTime.UtcNow` deliberately
+untouched: **an instant.** The new single frontend helper `frontend/src/lib/copenhagenDate.ts` replaces the picker's
+browser-local `formatLocalDate`, which was **deleted rather than left unused.**
+
+**In plain terms:** between Danish midnight and UTC midnight, the four config-editing endpoints believed it was still
+yesterday and **refused the date on the Danish admin's own wall calendar** — while the picker on that same screen was
+asking a *third* clock, the browser's.
+
+**Totals:** build **0 errors / 145 warnings** · Unit **1264** · non-Docker regression **111** · **frontend 887 passed
+across 74 files** (proving the zone forcing does not leak) · `tsc --noEmit` clean.
+
+#### ★ The owner's machine is Danish — so every frontend boundary test would have passed against the bug
+
+**Without explicitly forcing a test zone, the browser-local day and the Copenhagen day are identical on this machine**, and
+every frontend fact would have been silently vacuous. The agent forced the zone, and then **added a guard-on-the-guard**:
+an assertion in both files that fails loudly if the forcing ever stops working, rather than letting the suite go quietly
+green. *This is the most transferable finding of wave 2 — it applies to every frontend date test this project will ever
+write, not just S142's.*
+
+**Three independent falsifications, with real output:** picker reverted to browser-local under `America/New_York` (3 fail),
+helper swapped for browser-local (2 fail), helper swapped for a hardcoded `+02:00` (1 fail). All expected values literals.
+
+#### ★ A `tsc` trap my acceptance criteria would have missed
+
+I asked for *"`npm test` for the files you touch."* The frontend `tsconfig` sets `types: ["vitest/globals"]` with
+`include: ["src"]`, so `process` is untyped — **the agent's first zone-forcing draft kept `npm test` green while breaking
+`npm run build`.** Resolved by reaching `process` through `globalThis` in a dedicated helper, with no tsconfig change.
+**Acceptance criteria for frontend work must name the type-check, not only the test run.**
+
+#### Corrections to the brief
+
+- **The picker's own test was never in the failure class I described.** It used `9999-01-01` and `2020-01-15` — nowhere
+  near a boundary. Nothing to fix; **boundary coverage added instead**, which is what it always lacked.
+- **"~46 sites" vs 31.** Both true of different things: **31 distinct expressions**, three of which are `Today()` helpers
+  with 8, 2 and 3 call sites behind them. Neither number was wrong; they count different nouns.
+- **My `:199` diagnosis was imprecise, and the real defect is the familiar one.** The same-day check *runs* before the
+  reset-month guard but *passes* normally, so the reset-month guard usually produced the 422. The always-present defect is
+  weaker and worse: **the test asserted only the status code, never the body — so it could not tell two different 422s
+  apart, and would have passed against a deleted reset-month guard.** Fixed by asserting the body.
+- **The test census names a file that does not exist** (`LocalAgreementProfileEndpoints.cs`); the route is served by
+  `ConfigEndpoints.cs`. The *assignment* was right, the name was not — recorded in the file.
+
+#### Deliberate self-reference, flagged so a reviewer does not misread it
+
+The 31 fixture sites remain self-referential by design: those facts test 201/412/428 semantics and only need *a date the
+gate accepts*. **Every site says so in a comment, and the correctness claim is carried by four new clock-pinned facts
+instead.** Flagged because it otherwise reads exactly like the Shape-3 anti-pattern this sprint exists to delete — *the
+distinction is whether the date is the subject of the assertion or merely its setup.*
+
+**Gap declared, not hidden:** no pinned fact for the DELETE soft-close stamps (rows 6/20/34) — same converted expression,
+same files as the POST pins, and a dedicated fact costs another container boot per family.
+
+### ⚠ HARNESS DEFECT — `git stash` is repository-global, and the Orchestrator caused it
+
+**A worktree isolates the working tree. It does not isolate the stash.** TASK-14204 stashed to prove its RED; TASK-14202
+stashed concurrently; TASK-14202's entry became `stash@{0}`, so **TASK-14204's `pop` applied another task's
+`AdminEndpoints.cs` and `UserAgreementCodeRepository.cs` into its worktree and dropped that task's stash.** Recovery
+happened only because the agent noticed the foreign files, reverted them, rebuilt the other agent's stash from the dangling
+commit `fee142e` via `git stash store`, and then popped its own.
+
+**This was my instruction.** I put *"stash your production change, confirm red, restore"* into seven concurrent prompts.
+The goal was right — a test must be proven able to fail — the mechanism was wrong. **Six running agents were warned
+mid-flight**, and the durable fix is a standing rule in `docs/AGENTS.md`: use `git diff > patch` + `git checkout --` +
+`git apply`, and more generally *a command is safe for parallel agents only if its state lives in the working tree*.
+`git stash`, `git worktree`, tags, `git config --local` and `refs/` are all repository-global.
+
+### Carried to the wave-2 merge
+
+- **A stale class-level comment both boundary tasks share.** `EffectiveDateBoundaryTests.cs:56-66` still says *both* clock
+  facts use "the WRITERS' UTC DAY". It is already wrong for 14204's half and will be wrong for 14206's. **Deliberately left
+  by 14204 to avoid conflicting with 14206 on the same lines** — correct call; the Orchestrator fixes it once at merge.
+- **One line edited outside the owned fact**, justified: renaming the method broke a `<see cref>` in `HostAtInstant`'s doc
+  comment, which would raise CS1574 and push warnings off the 145 baseline. Only the token naming 14204's own method was
+  touched; 14206's cref on the adjacent line was left alone.
+- **★ A new flake surface for the sprint as a whole, outside any one task's scope.** Several Docker-gated suites build
+  request *inputs* from `DateOnly.FromDateTime(DateTime.UtcNow)` — none asserts a production-derived date, so none breaks
+  today. But after S142 a CI run landing between 22:00/23:00 UTC and midnight sends a UTC date to a validator that now means
+  the *Danish* day. Sharpest case: `ReportingLineWriteLifecycleTests.cs:1499` PUTs `effectiveFrom = <UTC today>` to
+  `AdminEndpoints.cs` — TASK-14202's file. **Must be swept before close**, or the sprint ships the nightly flake it was run
+  to remove.
 
 ## Census — production surface
 
