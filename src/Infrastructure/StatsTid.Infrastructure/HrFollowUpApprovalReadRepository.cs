@@ -46,15 +46,13 @@ namespace StatsTid.Infrastructure;
 //     file uses CURRENT_DATE / NOW() for a business date; every date crosses the wire as a bound
 //     parameter, so a fixed test clock actually moves these reads.
 //
-//     ★ WHICH "today" is NOT uniform in this file, and the difference is deliberate (owner ruling,
-//     2026-09-14). The DEADLINE reads take the COPENHAGEN business day, because Danish
-//     employment-law deadlines are counted in Danish calendar days. HRP-015 (`GetCannotRegisterAsync`)
-//     takes the WRITERS' UTC DAY, because "does any record cover this employee today" is a
-//     data-integrity question about rows that writers dated on the UTC day — asked on the Danish
-//     calendar it would report non-existent gaps for the hour or two each night on which the two
-//     disagree. Each site says so; do not unify them without a ruling. The standing intent to move
-//     business dates to the Danish day everywhere is a separate roadmap item, and when the WRITERS
-//     move, HRP-015 moves with them.
+//     ★ WHICH "today" IS uniform in this file as of S142 / TASK-14206: every read, HRP-015
+//     (`GetCannotRegisterAsync`) included, takes the COPENHAGEN business day, because Danish
+//     employment-law deadlines are counted in Danish calendar days and — since S142 (owner ruling
+//     OQ-3) — every WRITER stamps its business dates on that same day. From S141 to S142 HRP-015
+//     was the one exception, taking the writers' UTC day under the 2026-09-14 ruling; that ruling
+//     said "when the WRITERS move, HRP-015 moves with them", and S142 is the sprint that moved
+//     them. Do not reintroduce a per-read clock without a ruling.
 //
 //  3. EVERY ITEM CARRIES ITS AGE ANCHOR AND WHERE THAT ANCHOR CAME FROM (`stored` when the period
 //     row's deadline column holds it, `computed` when the row predates those columns and the
@@ -814,28 +812,18 @@ public sealed class HrFollowUpApprovalReadRepository
     /// gap start rather than as an age of two millennia.
     /// </summary>
     /// <param name="today">
-    /// <b>★ The one deliberate exception to this file's "one Copenhagen business date per request"
-    /// rule — owner ruling, 2026-09-14. This read takes the UTC day.</b>
+    /// The Copenhagen business day, computed once per request by the endpoint (PAT-028) — the SAME
+    /// definition every other read in this file uses. There is no longer an exception here.
     ///
-    /// <para>The system currently holds two definitions of "today": the UTC day, used by every
-    /// writer, by both denormalised caches, by the login token and by S141's new dated reads; and the
-    /// Copenhagen business day, used by the rest of this HR follow-up family because Danish
-    /// employment-law deadlines are counted in Danish calendar days. For an hour or two each night
-    /// the two disagree about the date.</para>
-    ///
-    /// <para><b>Why this read follows the writers rather than its neighbours.</b> "Does any record
-    /// cover this employee today" is a DATA-INTEGRITY question about rows that were written and
-    /// dated on the UTC day. Asked on a different calendar it would report, every night between
-    /// Copenhagen midnight and UTC midnight, gaps that do not exist — a diagnostic list that cries
-    /// wolf nightly is a list people stop reading. The sibling reads in this file are genuinely
-    /// about deadlines, which is why they are genuinely Copenhagen.</para>
-    ///
-    /// <para><b>Do not "correct" this back to <c>CopenhagenBusinessDate</c>.</b> The same statement
-    /// is on the endpoint that supplies the value. The owner has separately decided that business
-    /// dates should eventually move to the Danish day EVERYWHERE (the UTC business day turns out to
-    /// be inherited from a frontend call rather than chosen); that is deferred to its own roadmap
-    /// item. The rule "match the writers" is forward-compatible with it — when the writers move,
-    /// this read moves with them, and it must not be moved before them.</para>
+    /// <para><b>S142 / TASK-14206 — why this changed, for anyone reading the history.</b> Between
+    /// S141 and S142 this one read deliberately took the writers' UTC day (owner ruling,
+    /// 2026-09-14): "does any record cover this employee today" is a DATA-INTEGRITY question about
+    /// rows that writers had stamped on the UTC day, and asking it on the Danish calendar would have
+    /// reported non-existent gaps every night between Copenhagen midnight and UTC midnight. That
+    /// ruling stated its own exit condition — "match the writers; when the writers move, this read
+    /// moves with them". S142 (owner ruling OQ-3) moved every writer to the Danish calendar day, so
+    /// the read moved with them in the same commit as its endpoint. The exception is executed, not
+    /// overturned; on the UTC day it would now be the one producing the nightly false alarms.</para>
     /// </param>
     public async Task<IReadOnlyList<HrCannotRegisterItem>> GetCannotRegisterAsync(
         IReadOnlyCollection<string>? accessibleOrgIds, DateOnly today, CancellationToken ct = default)

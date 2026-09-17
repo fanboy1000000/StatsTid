@@ -278,9 +278,13 @@ public sealed record HrCannotRegisterEmployee(
 /// for that employee every day until the scheduled record starts. This list is the thing that says
 /// so.</para>
 ///
-/// <para><b><c>Today</c> is the UTC day here, not the Copenhagen business day</b> the sibling
-/// deadline lists report (owner ruling, 2026-09-14): this is a data-integrity question about records
-/// the writers dated on the UTC calendar.</para>
+/// <para><b><c>Today</c> is the Copenhagen business day</b> — the same day the sibling deadline
+/// lists report. From S141 to S142 this one list reported the writers' UTC day instead (owner
+/// ruling, 2026-09-14), because it asks a data-integrity question about records the writers had
+/// dated on the UTC calendar. S142 / TASK-14206 moved it, executing that ruling's own exit
+/// condition: every writer now stamps its business dates on the Danish day, so the detector follows
+/// them. A client that renders this field as "as of &lt;date&gt;" is showing the Danish date after
+/// Danish midnight, which is what a Danish user expects.</para>
 ///
 /// <para>No aging colour: no rule states by when a registration-blocking data gap must be fixed
 /// (register row HRP-015 is NOT READY). The count and the oldest datable gap are the honest

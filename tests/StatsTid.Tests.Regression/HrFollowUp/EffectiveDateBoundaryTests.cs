@@ -54,14 +54,22 @@ namespace StatsTid.Tests.Regression.HrFollowUp;
 /// </para>
 ///
 /// <para>
-/// <b>★ The two CLOCK facts are the load-bearing ones.</b> Owner ruling, 2026-09-14: the boundary
-/// refresh and the "no record covers today" detector both use the WRITERS' UTC DAY, not the
-/// Copenhagen business day that the rest of the HR follow-up family uses. The ordinary fixture
-/// (<c>WithFixedToday</c>) pins UTC midnight, where the two calendars AGREE — so it cannot tell the
-/// two apart, and a pin built on it would pass under either clock. The two clock facts below
-/// therefore pin the host at <b>23:30 UTC</b>, which is already the NEXT day in Copenhagen, and are
-/// the only construction that can fail if somebody "corrects" either site back to
-/// <c>CopenhagenBusinessDate</c>.
+/// <b>★ The two CLOCK facts are the load-bearing ones.</b> They now assert the <b>COPENHAGEN</b>
+/// business day — S142 / owner ruling OQ-3, 2026-09-17.
+///
+/// <para><b>This is the 2026-09-14 ruling being EXECUTED, not overturned.</b> That ruling said the
+/// boundary refresh and the "no record covers today" detector must <i>match the writers</i>, and the
+/// sites' own comments stated the condition explicitly: <i>"when they move, this moves with them."</i>
+/// S142 moved every writer to the Danish calendar day, so the condition is satisfied and these two
+/// follow. Left on UTC they would have reported gaps that do not exist and expired stand-ins a day
+/// early — every night, for the one to two hours Denmark runs ahead of UTC.</para>
+///
+/// <para>The ordinary fixture (<c>WithFixedToday</c>) pins UTC <b>midnight</b>, the one instant where
+/// the two calendars AGREE — so it cannot tell them apart, and any pin built on it would pass under
+/// either clock. Both facts below therefore pin the host at <b>23:30 UTC</b>, already the NEXT day in
+/// Copenhagen, and are the only construction here that can fail if either site is reverted to the UTC
+/// day. They were rewritten under that same instant by TASK-14204 and TASK-14206 respectively —
+/// the instant did not change, the expected outcome did.</para>
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -434,33 +442,64 @@ public sealed class EffectiveDateBoundaryTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// <b>★ The clock pin for B8 — the owner's 2026-09-14 ruling, made falsifiable.</b> At 23:30 UTC
-    /// on F it is already F+1 in Copenhagen. An agreement-code row that stops covering on F+1 still
-    /// covers the employee on the UTC day, so they must NOT be listed.
+    /// <b>★ The clock pin for B8 — S142 / TASK-14206 rewrote WHICH answer it demands, not the
+    /// instant it demands it at.</b> The host is still pinned at 23:30 UTC on 2025-11-12, still the
+    /// only instant in this class at which the two candidate definitions of "today" are
+    /// distinguishable: Copenhagen is CET (UTC+01:00) in November, so local time is already
+    /// 2025-11-13 00:30 while the UTC calendar still reads the 12th.
     ///
-    /// <para>RED if the endpoint or the read used <c>CopenhagenBusinessDate</c> like its four
-    /// siblings in the same file: this employee would be reported as unable to register for the hour
-    /// or two between Copenhagen midnight and UTC midnight, EVERY night, and a diagnostic list that
-    /// cries wolf nightly is a list people stop reading. This fact is the reason the exception is
-    /// safe to keep: somebody who "tidies" the clock back to match the neighbours breaks it.</para>
+    /// <para><b>What the seed sets up.</b> The employee's agreement-code row is closed at
+    /// <c>effective_to = 2025-11-13</c>. Intervals are end-EXCLUSIVE (ADR-018 D9), so that row
+    /// covers the 12th and stops covering on the 13th. The profile row is open, so exactly one of
+    /// the two required records is holed.
+    /// <list type="bullet">
+    ///   <item>On the <b>Copenhagen</b> day (2025-11-13) nothing covers the agreement side → the
+    ///     employee IS listed, as <c>AGREEMENT_CODE</c>, with the hole opening that same day.</item>
+    ///   <item>On the <b>UTC</b> day (2025-11-12) the row still covers → absent from the list.</item>
+    /// </list>
+    /// Every expectation below is written as a LITERAL rather than derived from <c>F</c>, because a
+    /// pin that recomputes its own expected date with the same arithmetic the product uses cannot
+    /// fail when that arithmetic is wrong.</para>
+    ///
+    /// <para><b>RED if the endpoint or the read is put back on the UTC day</b> (<c>DateOnly</c> over
+    /// <c>GetUtcNow().UtcDateTime</c>): <c>today</c> would come back as 2025-11-12 and the employee
+    /// would be missing from <c>items</c> entirely — so both halves of this fact fail, not just one.
+    /// This is the pin that makes the S142 move falsifiable in the one direction that matters.</para>
+    ///
+    /// <para><b>This supersedes, by executing, the owner's 2026-09-14 ruling.</b> That ruling put
+    /// this one detector on the writers' UTC day so it would not report non-existent gaps nightly,
+    /// and stated its own exit condition: "match the WRITERS — when they move, this moves with them,
+    /// not before". S142 (owner ruling OQ-3) moved every writer to the Danish calendar day, so the
+    /// condition is satisfied and the same reasoning now demands the opposite answer.</para>
     /// </summary>
     [Fact]
-    public async Task CannotRegister_UsesTheWritersUtcDay_NotTheCopenhagenBusinessDay()
+    public async Task CannotRegister_UsesTheCopenhagenBusinessDay_NotTheWritersUtcDay()
     {
         using var host = HostAtInstant(FLateUtcEvening);
         using var client = host.CreateClient();
 
         var employeeId = NextId("b8_clock");
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, OrgA);
-        // End-exclusive (ADR-018 D9): effective_to = F+1 means the row covers F and stops on F+1.
-        await CloseAgreementCodeRowAsync(employeeId, F.AddDays(1));
+        // End-exclusive (ADR-018 D9): effective_to = 2025-11-13 means the row covers the 12th and
+        // stops covering on the 13th — which is what the pinned instant already is in Copenhagen.
+        await CloseAgreementCodeRowAsync(employeeId, new DateOnly(2025, 11, 13));
 
         using var doc = JsonDocument.Parse(
             await Client(host, HrToken(OrgA)).GetStringAsync("/api/hr/follow-up/cannot-register"));
-        Assert.Equal(F, ReadDate(doc.RootElement.GetProperty("today")));
-        Assert.DoesNotContain(
-            doc.RootElement.GetProperty("items").EnumerateArray(),
-            i => i.GetProperty("employeeId").GetString() == employeeId);
+
+        // The Danish calendar day at the pinned instant — NOT the UTC day (2025-11-12).
+        Assert.Equal(new DateOnly(2025, 11, 13), ReadDate(doc.RootElement.GetProperty("today")));
+
+        var item = Assert.Single(
+            doc.RootElement.GetProperty("items").EnumerateArray()
+                .Where(i => i.GetProperty("employeeId").GetString() == employeeId));
+        Assert.Equal("AGREEMENT_CODE", item.GetProperty("missingRecord").GetString());
+        // The agreement row's effective_to IS the first uncovered day, and on the Copenhagen
+        // calendar that day is today — so the gap is exactly zero days old.
+        Assert.Equal(new DateOnly(2025, 11, 13), ReadDate(item.GetProperty("gapSince")));
+        Assert.Equal(0, item.GetProperty("daysSinceGapStart").GetInt32());
+        // Nothing is scheduled to start covering after today, so this gap will not heal itself.
+        Assert.Equal(JsonValueKind.Null, item.GetProperty("coveredFrom").ValueKind);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -530,8 +569,10 @@ public sealed class EffectiveDateBoundaryTests : IAsyncLifetime
     /// tasks need exactly this. Kept as a one-line private alias here, rather than inlined at its two
     /// call sites, so this promotion touches nothing else in this file: the two facts that call it
     /// (<see cref="Refresh_UsesTheCopenhagenBusinessDay_NotTheUtcDay"/> and
-    /// <see cref="CannotRegister_UsesTheWritersUtcDay_NotTheCopenhagenBusinessDay"/>) are owned by
-    /// other S142 tasks and are unchanged. The three canonical UTC instants for this boundary (this
+    /// <see cref="CannotRegister_UsesTheCopenhagenBusinessDay_NotTheWritersUtcDay"/>) were each
+    /// REWRITTEN by their own S142 task (14204 and 14206) to assert the Copenhagen outcome at this same
+    /// 23:30Z instant — OQ-3 executing the 2026-09-14 ruling's own stated condition ("match the writers;
+    /// when they move, this moves with them"), not overturning it. The three canonical UTC instants for this boundary (this
     /// class's own <see cref="FLateUtcEvening"/> among them, conceptually) are now also collected
     /// once in <see cref="BoundaryInstants"/> for callers that do not already have a same-shaped
     /// anchor of their own.

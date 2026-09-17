@@ -3,7 +3,6 @@ using Npgsql;
 using StatsTid.Backend.Api.AuditMappers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
-using StatsTid.SharedKernel.Calendar;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using StatsTid.Tests.Regression.TestSupport;
@@ -48,6 +47,17 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
 {
     private const string Actor = "hr_s138_actor";
 
+    /// <summary>
+    /// S142 / TASK-14206 — 2026-07-31 22:30 UTC: the last evening of July in UTC, and already
+    /// 2026-08-01 00:30 in Copenhagen (CEST, UTC+02:00). The ONLY shape of instant at which a
+    /// MONTH-granular clip can tell the two calendars apart, which is why it is not one of the three
+    /// mid-month <see cref="BoundaryInstants"/>. See
+    /// <see cref="WriteForExportedMonths_OpenEnded_SelectsThroughCurrentCopenhagenMonth_NotBeyond"/>
+    /// for the full reasoning, including which wrong implementations it kills and which it does not.
+    /// </summary>
+    private static readonly DateTimeOffset LastEveningOfJulyAlreadyAugustInCopenhagen =
+        new(2026, 7, 31, 22, 30, 0, TimeSpan.Zero);
+
     private TestFixtures.DockerHarness _harness = null!;
     private HrBackdateWorklistRepository _repo = null!;
 
@@ -55,13 +65,7 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
-        _repo = new HrBackdateWorklistRepository(
-            _harness.Factory,
-            new PostgresEventStore(_harness.Factory, new OutboxServiceContext("backend-api")),
-            new BackdateWorklistRowCreatedAuditMapper(),
-            new BackdateWorklistRowResolvedAuditMapper(),
-            new AuditProjectionRepository(_harness.Factory),
-            TimeProvider.System);
+        _repo = RepositoryAt(TimeProvider.System);
     }
 
     public async Task DisposeAsync()
@@ -69,6 +73,25 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         if (_harness is not null)
             await _harness.DisposeAsync();
     }
+
+    /// <summary>
+    /// The class's repository, wired against a caller-chosen clock. Every fact but the month-clip one
+    /// is clock-independent and shares the <see cref="TimeProvider.System"/> instance built in
+    /// <see cref="InitializeAsync"/>; the month-clip fact builds its own pinned-instant instance
+    /// rather than pinning the whole class, so no other fact's timestamps move with it.
+    /// </summary>
+    private HrBackdateWorklistRepository RepositoryAt(TimeProvider timeProvider) =>
+        new(
+            _harness.Factory,
+            new PostgresEventStore(_harness.Factory, new OutboxServiceContext("backend-api")),
+            new BackdateWorklistRowCreatedAuditMapper(),
+            new BackdateWorklistRowResolvedAuditMapper(),
+            new AuditProjectionRepository(_harness.Factory),
+            timeProvider);
+
+    /// <inheritdoc cref="RepositoryAt(TimeProvider)"/>
+    private HrBackdateWorklistRepository RepositoryAt(DateTimeOffset pinnedInstant) =>
+        RepositoryAt(new FixedTimeProvider(pinnedInstant));
 
     // ════════════════════════════════════════════════════════════════════════
     // EXPORTED_MONTH selection
@@ -125,27 +148,56 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
             "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowCreated' AND target_resource_id = @p0 AND target_org_id = 'STY_WL_A' AND visibility_scope = 'TENANT_TARGETED'", emp));
     }
 
+    /// <summary>
+    /// The open-ended interval clips at the CURRENT month — and "current" means the month of the
+    /// <b>Copenhagen</b> calendar day, not the UTC one.
+    ///
+    /// <para><b>S142 / TASK-14206 — why this was rewritten.</b> Until S142 this fact computed its own
+    /// expected months as <c>CopenhagenBusinessDate.Today(TimeProvider.System)</c> — the same helper,
+    /// reading the same wall clock, that the production code under test calls. Both sides therefore
+    /// moved together no matter what either one did, so the assertion could not fail: had the
+    /// repository been "corrected" to the UTC day, the test would have been corrected with it. A test
+    /// that cannot fail is not a pin. The fix is the ordinary one: pin an instant on the repository's
+    /// injected <see cref="TimeProvider"/> and assert LITERAL months against it.</para>
+    ///
+    /// <para><b>Why this particular instant.</b> The clip is MONTH-granular, so it can only tell the
+    /// two calendars apart at an instant where the UTC day and the Copenhagen day fall in DIFFERENT
+    /// MONTHS — the last evening of a month. None of the three shared
+    /// <see cref="BoundaryInstants"/> qualifies (all three sit mid-month, where the two calendars,
+    /// however they disagree about the DAY, agree about the month), so this one is defined locally.
+    /// 2026-07-31 22:30 UTC is July's last evening; Copenhagen is CEST (UTC+02:00) in July, so local
+    /// time is already 2026-08-01 00:30 — August. It is the summer-shaped instant deliberately, by
+    /// the same reasoning as <see cref="BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen"/>:
+    /// at 22:30 UTC a hardcoded +01:00 offset would still read 23:30 on 31 July and answer "July",
+    /// so this single pin kills BOTH the raw-UTC and the winter-offset-year-round implementations.
+    /// (It does not discriminate a hardcoded +02:00 implementation — that blind spot is stated rather
+    /// than hidden, and belongs to the shared helper's own unit tests, not to this repository fact.)
+    /// The nearest DST transition is 25 October, fifteen weeks away.</para>
+    ///
+    /// <para><b>RED if the repository's month clip goes back to the UTC day:</b> <c>hi</c> would be
+    /// 2026-08-01 instead of 2026-09-01, the August export would fall outside the half-open interval,
+    /// and one row would be written where two are asserted.</para>
+    /// </summary>
     [Fact]
-    public async Task WriteForExportedMonths_OpenEnded_SelectsThroughCurrentMonth_NotBeyond()
+    public async Task WriteForExportedMonths_OpenEnded_SelectsThroughCurrentCopenhagenMonth_NotBeyond()
     {
         const string emp = "wl_emp_exp_open";
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, emp, "STY_WL_A");
-        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
-        var thisMonth = new DateOnly(today.Year, today.Month, 1);
-        var prevMonth = thisMonth.AddMonths(-1);
-        var twoBack = thisMonth.AddMonths(-2);
-        await SeedExportAsync(emp, twoBack.Year, twoBack.Month, "h-two-back");
-        await SeedExportAsync(emp, prevMonth.Year, prevMonth.Month, "h-prev");
-        await SeedExportAsync(emp, thisMonth.Year, thisMonth.Month, "h-current");
+        // June (before `from`), July and August (both in range), and a far-future month that pins
+        // the clip. On the Copenhagen calendar the pinned instant is already 1 August 2026.
+        await SeedExportAsync(emp, 2026, 6, "h-two-back");
+        await SeedExportAsync(emp, 2026, 7, "h-prev");
+        await SeedExportAsync(emp, 2026, 8, "h-current");
         await SeedExportAsync(emp, 2999, 1, "h-far-future"); // cannot legitimately exist; pins the clip
 
-        var ids = await RunExportedAsync(emp, Trigger(WorklistTriggerKinds.AgreementCodeChange, prevMonth.AddDays(4)),
-            from: prevMonth.AddDays(4), toExclusive: null);
+        var repo = RepositoryAt(LastEveningOfJulyAlreadyAugustInCopenhagen);
+        var ids = await RunExportedAsync(emp, Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 7, 5)),
+            from: new DateOnly(2026, 7, 5), toExclusive: null, repo: repo);
 
         Assert.Equal(2, ids.Count);
-        var rows = await _repo.GetOpenAsync(emp);
+        var rows = await repo.GetOpenAsync(emp);
         Assert.Equal(
-            new[] { (prevMonth.Year, prevMonth.Month), (thisMonth.Year, thisMonth.Month) },
+            new[] { (2026, 7), (2026, 8) },
             rows.Select(r => (r.Year!.Value, r.Month!.Value)).ToArray());
     }
 
@@ -743,12 +795,19 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     private static WorklistTrigger Trigger(string kind, DateOnly effectiveFrom) =>
         new(kind, Guid.NewGuid(), effectiveFrom, Actor);
 
-    private async Task<IReadOnlyList<Guid>> RunExportedAsync(string employeeId, WorklistTrigger trigger, DateOnly from, DateOnly? toExclusive)
+    /// <param name="repo">
+    /// Defaults to the class's shared <see cref="TimeProvider.System"/> repository. The month-clip
+    /// fact passes its own pinned-instant instance instead (S142 / TASK-14206), because the
+    /// open-ended upper bound is the only thing in this file that reads a clock.
+    /// </param>
+    private async Task<IReadOnlyList<Guid>> RunExportedAsync(
+        string employeeId, WorklistTrigger trigger, DateOnly from, DateOnly? toExclusive,
+        HrBackdateWorklistRepository? repo = null)
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync();
-        var ids = await _repo.WriteForExportedMonthsAsync(conn, tx, employeeId, trigger, from, toExclusive, CancellationToken.None);
+        var ids = await (repo ?? _repo).WriteForExportedMonthsAsync(conn, tx, employeeId, trigger, from, toExclusive, CancellationToken.None);
         await tx.CommitAsync();
         return ids;
     }

@@ -48,12 +48,13 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// against the SUBJECT's CURRENT <c>users.primary_org_id</c> — an EMPTY set is a 403, never an empty
 /// 200 that would present a scope problem as "nothing to do". (2) "Today" is computed ONCE per
 /// request from the injected clock and threaded into the repository (PAT-028) — no statement asks
-/// the database for a business date. The four DEADLINE endpoints use the Copenhagen business day,
-/// because Danish employment-law deadlines are Danish calendar days; <b>cannot-register uses the
-/// writers' UTC day by owner ruling (2026-09-14)</b>, because it asks a data-integrity question about
-/// records the writers dated on that calendar — see the comment at its site. (3) Every list is
-/// oldest-first and every item carries its age anchor plus <c>deadlineSource</c> (<c>stored</c> or
-/// <c>computed</c>).</para>
+/// the database for a business date. <b>All five endpoints use the Copenhagen business day</b>:
+/// Danish employment-law deadlines are Danish calendar days, and since S142 (owner ruling OQ-3)
+/// every WRITER stamps its business dates on that same day. From S141 to S142 cannot-register was
+/// the one exception, on the writers' UTC day by the 2026-09-14 ruling; that ruling's own exit
+/// condition ("when the writers move, this moves with them") is what S142 satisfied — see the
+/// comment at its site. (3) Every list is oldest-first and every item carries its age anchor plus
+/// <c>deadlineSource</c> (<c>stored</c> or <c>computed</c>).</para>
 ///
 /// <para><b>Counts across these tiles are NOT additive</b> — a leaver's late final month is
 /// deliberately on both the past-deadline and the leaver list, because the two hand work to
@@ -258,21 +259,24 @@ public static class HrFollowUpApprovalEndpoints
             if (accessibleOrgIds is { Count: 0 })
                 return NoHrScopeForbidden();
 
-            // ★ S141 / TASK-14105 (refinement B8) — THE ONE ENDPOINT IN THIS FILE THAT DOES NOT USE
-            // THE COPENHAGEN BUSINESS DAY. Owner ruling, 2026-09-14: this list asks a DATA-INTEGRITY
-            // question — "does any effective-dated record cover this employee today?" — about rows
-            // that every writer in the system dated on the UTC day. Its four siblings above ask
-            // DEADLINE questions, which really are Danish calendar days, and they keep
-            // CopenhagenBusinessDate. The two calendars disagree for an hour or two each night; on
-            // the Danish day this read would report gaps that do not exist, every night, and a
-            // diagnostic list that cries wolf nightly is a list people stop reading.
+            // ★ S142 / TASK-14206 — the COPENHAGEN business day, exactly like the four deadline
+            // reads above. Between S141 and S142 this one endpoint deliberately used the writers'
+            // UTC day (owner ruling, 2026-09-14), because "does any effective-dated record cover
+            // this employee today?" is a DATA-INTEGRITY question about rows that every writer
+            // stamped on the UTC day: asked on the Danish calendar it would have reported gaps that
+            // do not exist, every night, for the hour or two on which the two calendars disagree.
             //
-            // DO NOT "correct" this to CopenhagenBusinessDate to match its neighbours — the same
-            // statement is on GetCannotRegisterAsync, which is the read it feeds. The owner has
-            // separately decided that business dates should eventually move to the Danish day
-            // EVERYWHERE (a roadmap item of its own); the rule here is "match the WRITERS", which is
-            // forward-compatible with that — when they move, this moves with them, not before.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // That ruling carried its own exit condition — the rule was "match the WRITERS … when
+            // they move, this moves with them, not before". S142 (owner ruling OQ-3) is the sprint
+            // that moves every writer to the Danish calendar day, so the condition is satisfied and
+            // the detector moves WITH them. Moving it here EXECUTES the 2026-09-14 ruling rather
+            // than reversing it: leaving it on UTC now would produce precisely the nightly false
+            // alarms that ruling existed to prevent, only with the two calendars swapped.
+            //
+            // The same statement is on GetCannotRegisterAsync, the read this value feeds. The two
+            // must never disagree about which calendar "today" comes from, which is why they moved
+            // in one commit.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var items = await followUpRepo.GetCannotRegisterAsync(accessibleOrgIds, today, ct);
 
             return Results.Ok(new HrCannotRegisterResponse(
