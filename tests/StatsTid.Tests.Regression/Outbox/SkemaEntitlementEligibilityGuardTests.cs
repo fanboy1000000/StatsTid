@@ -9,6 +9,7 @@ using Npgsql;
 using StatsTid.Auth;
 using StatsTid.RuleEngine.Api.Contracts;
 using StatsTid.RuleEngine.Api.Rules;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -150,7 +151,8 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
     /// driven by the eligibility projection the admin endpoint writes — not a hardcoded deny.
     ///
     /// <para>
-    /// The admin endpoint server-stamps <c>effective_from = today (UTC)</c> (ADR-023 D8,
+    /// The admin endpoint server-stamps <c>effective_from = today</c> — the COPENHAGEN business
+    /// day since S142 / TASK-14205 — (ADR-023 D8,
     /// forward-only), and both the GET filter (as-of month-end) and the POST gate (as-of
     /// absence.Date) are DATED reads — so the grant only takes effect for dates on/after
     /// today. This test therefore exercises the CURRENT month (its month-end ≥ today) and a
@@ -162,7 +164,15 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
     {
         // Current month (month-end ≥ today) so the grant's effective_from=today covers the
         // GET month-end anchor and the save date.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        //
+        // S142 / TASK-14205 — derived the SAME way the server derives it (the Copenhagen business
+        // day). This class runs on the UNPINNED host, so the test's `today` and the endpoint's
+        // server-stamped `effective_from` are two independent clock reads; they agree only if both
+        // use the same calendar. Left on `DateTime.UtcNow`, this test would fail for the one-to-two
+        // hours between Danish midnight and UTC midnight: the grant would be stamped one day AHEAD
+        // of `saveDate`, the `absence.Date >= effective_from` coverage check would go false, and the
+        // expected-200 save at the end of this test would return 422.
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         // ADR-032 D3 (S66): entitlement-consuming absences on zero-norm days (weekends) are
         // now rejected 422 — book the next weekday ON OR AFTER today. Coverage is preserved
         // (eligibility row is effective_from=today, open-ended ⇒ any date ≥ today is covered);

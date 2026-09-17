@@ -2,6 +2,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -82,16 +83,21 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// </para>
 ///
 /// <para>
-/// <b>"Today" is the UTC day, not the Copenhagen business day.</b> The two agree except for a
-/// late-evening window, and in that window the choice decides whether a change saved as "today" reads
-/// back as CURRENT or as SCHEDULED. Every profile / agreement-code write path derives its own day as
-/// <c>DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime)</c> — in
-/// <c>EmployeeProfileEndpoints</c>, in <c>AdminEndpoints</c>' users and agreement-code PUTs, and in
-/// <c>EmployeeProfileRepository</c>'s own dated writes — so this read uses the SAME derivation: a view
-/// whose "today" disagreed with the writer's would mark a just-saved change as
-/// not-yet-in-force. (<c>CopenhagenBusinessDate</c> is the right clock for the approval-deadline
-/// reads, which age against business days; it is the wrong one here, and picking the familiar helper
-/// over the matching one would have been the easy mistake.)
+/// <b>"Today" is the COPENHAGEN business day (S142 / TASK-14205, census row 17).</b> The two
+/// calendars agree except for a late-evening window (Denmark is UTC+1 in winter, UTC+2 in summer, so
+/// between Danish midnight and UTC midnight the UTC calendar is still on yesterday), and in that
+/// window the choice decides whether a change saved as "today" reads back as CURRENT or as SCHEDULED.
+/// <br/>
+/// This paragraph used to argue the opposite — that the UTC day was right HERE because it was what
+/// every profile / agreement-code WRITER used, and a view whose "today" disagreed with the writer's
+/// would mark a just-saved change as not-yet-in-force. That reasoning was sound and its premise has
+/// now moved: S142 puts every one of those writers
+/// (<c>EmployeeProfileEndpoints</c>, <c>AdminEndpoints</c>' users and agreement-code PUTs,
+/// <c>EmployeeProfileRepository</c>'s dated writes) on
+/// <see cref="StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate"/>, so matching the writers is
+/// now exactly what this line does. The rule the old comment was really stating — <i>this read must
+/// use the same calendar as the writers it renders</i> — is preserved verbatim; only the calendar
+/// both sides use has changed. If a future change moves the writers again, move this with them.
 /// </para>
 ///
 /// <para>
@@ -144,8 +150,11 @@ public static class EmploymentHistoryEndpoints
             }
 
             // ONE date for the whole response (PAT-028): both tracks describe the same day, or the two
-            // halves of one screen could disagree about what is in force.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // halves of one screen could disagree about what is in force. S142 / TASK-14205 (census
+            // row 17) — the COPENHAGEN business day, matching the writers this view renders (see the
+            // class doc). On the old UTC day, an HR user opening the history screen at 00:30 Danish
+            // time saw a change that took effect TODAY labelled "not yet in force".
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             var profileRows = await historyRepo.GetProfileIntervalsAsync(employeeId, from, to, ct);
             var agreementRows = await historyRepo.GetAgreementCodeIntervalsAsync(employeeId, from, to, ct);

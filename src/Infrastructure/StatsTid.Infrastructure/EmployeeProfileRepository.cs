@@ -1,5 +1,6 @@
 using Npgsql;
 using StatsTid.Infrastructure.Temporal;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Models;
 
@@ -111,9 +112,9 @@ public sealed class EmployeeProfileRepository
     /// existing direct test constructions keep compiling. DI fills it from the <c>TimeProvider</c>
     /// singleton registered in <c>Program.cs</c>; a date-sensitive test host may register a FIXED
     /// provider instead, so this repository's dated write paths observe the same "today" the suite
-    /// fixes. The DAY DERIVATION is unchanged — still the UTC day
-    /// (<c>DateOnly.FromDateTime(GetUtcNow().UtcDateTime)</c>), matching the endpoints' validators
-    /// and the frontend's <c>toISOString().slice(0,10)</c>; only the SOURCE of the clock moved.
+    /// fixes. S139 moved only the SOURCE of the clock; S142 / TASK-14205 (census rows 46 and 47)
+    /// moved the DAY DERIVATION, from the UTC calendar day to the Copenhagen business day — see
+    /// <see cref="Today"/>.
     /// </summary>
     public EmployeeProfileRepository(DbConnectionFactory dbFactory, TimeProvider? timeProvider = null)
     {
@@ -348,11 +349,14 @@ public sealed class EmployeeProfileRepository
     /// </para>
     ///
     /// <para>
-    /// <b>"today" is the writers' UTC day</b> (<c>DateOnly.FromDateTime(GetUtcNow().UtcDateTime)</c>,
-    /// via the injected <see cref="TimeProvider"/>) — the SAME day the writers and the caches use
-    /// (QUAL-157), deliberately NOT the Copenhagen business day some HR reads use. If the read
-    /// flipped at a different midnight from the write, a change scheduled for the 1st would be
-    /// visible before, or after, the row that produced it took effect.
+    /// <b>"today" is the writers' COPENHAGEN business day</b>
+    /// (<see cref="Today"/>, via the injected <see cref="TimeProvider"/>) — the SAME day the writers
+    /// and the caches use (QUAL-157). That invariant is what this paragraph has always stated: if the
+    /// read flipped at a different midnight from the write, a change scheduled for the 1st would be
+    /// visible before, or after, the row that produced it took effect. Until S142 both sides were the
+    /// UTC day and this paragraph said so, describing the Copenhagen day as deliberately NOT used
+    /// here; S142 / TASK-14205 moved BOTH sides together, so the rule is unchanged and only the
+    /// calendar it names has moved.
     /// </para>
     /// </summary>
     private static async Task<ProfileAsOfTodayHit?> ExecuteGetByEmployeeIdAsync(
@@ -479,8 +483,29 @@ public sealed class EmployeeProfileRepository
         return new ProfileAsOfTodayHit(profile, version, scheduled);
     }
 
-    /// <summary>The writers' "today": the UTC day off the injected clock (QUAL-157 / S139 seam).</summary>
-    private DateOnly Today() => DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+    /// <summary>
+    /// The writers' "today": the COPENHAGEN business day off the injected clock
+    /// (QUAL-157 / S139 seam for the SOURCE; S142 / TASK-14205, census row 46, for the CALENDAR).
+    ///
+    /// <para>
+    /// Every business date this class produces or compares against goes through here, which is why
+    /// it is one method and not five inlined expressions. Five call sites depend on it and they span
+    /// both mechanisms the sprint distinguishes: the as-of-today READS at <c>:164</c>, <c>:194</c>
+    /// and <c>:255</c> (which row is in force right now), the dated writer's routing/cache anchor at
+    /// <c>:709</c>, and the soft-delete's close-date FALLBACK at <c>:1155</c>, which becomes a row's
+    /// <c>effective_to</c> and the emitted event's <c>EffectiveTo</c> — a STORED date, not a view.
+    /// On the UTC calendar, all five were a day early for the one-to-two hours between Danish
+    /// midnight and UTC midnight (Denmark is UTC+1 CET / UTC+2 CEST), which for the writer means a
+    /// row stamped as having ended yesterday.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Business dates only.</b> <c>created_at</c>, <c>updated_at</c> and outbox ordering in this
+    /// class stay UTC instants and must never be routed through here — moving one of those would
+    /// corrupt the audit chain, which is an inviolable invariant rather than a convention.
+    /// </para>
+    /// </summary>
+    private DateOnly Today() => CopenhagenBusinessDate.Today(_timeProvider);
 
     // ------------------------------------------------------------------
     // Writes — atomic-outbox (conn, tx) overloads only (ADR-018 D5).
@@ -516,7 +541,7 @@ public sealed class EmployeeProfileRepository
     {
         // profile_id is generated client-side so the endpoint can include it in the
         // outbox event body (S29 WTM precedent at WageTypeMappingRepository.cs:137).
-        // S33 in-flight defect fix: stamp effective_from = today (UTC) instead of using
+        // S33 in-flight defect fix: stamp effective_from = today instead of using
         // the schema DEFAULT '0001-01-01' (S31 placeholder). Under TASK-3302's new
         // 3-case routing, the first PUT against a default-seeded row would trigger
         // Case C cross-day supersession (because '0001-01-01' < today), creating a
@@ -545,8 +570,12 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("employeeId", req.EmployeeId);
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
-        cmd.Parameters.AddWithValue(
-            "effectiveFrom", DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime));
+        // S142 / TASK-14205 (census row 47) — a STORED STAMP: this value IS the new profile row's
+        // `effective_from`, the first day the employee's profile is in force, so it must be the
+        // COPENHAGEN business day. Creating an employee at 00:30 Danish time used to stamp the
+        // profile as having started YESTERDAY. Routed through the class's single `Today()` so the
+        // create, the dated writer and the soft-delete can never drift onto different calendars.
+        cmd.Parameters.AddWithValue("effectiveFrom", Today());
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
@@ -702,10 +731,18 @@ public sealed class EmployeeProfileRepository
         EmployeeProfileSupersedeRequest req, long? expectedVersion,
         CancellationToken ct = default)
     {
-        // "Today" is UTC, read via the injected TimeProvider — the endpoints' validators and the
-        // S33 today-stamp use the same clock (S139 / TASK-13907 moved the SOURCE of that clock
-        // onto the DI seam; the day it yields is unchanged). The router below stays PURE: `today`
+        // "Today" is the COPENHAGEN business day, read via the injected TimeProvider (S139 /
+        // TASK-13907 moved the SOURCE onto the DI seam; S142 / TASK-14205 moved the CALENDAR). The
+        // endpoints and the S33 today-stamp derive theirs the same way, so caller and repository
+        // cannot disagree about which day a write belongs to. The router below stays PURE: `today`
         // is passed IN as a parameter (PAT-025), never read inside it.
+        //
+        // What `today` decides HERE — worth naming, because it is not the routing case. The router
+        // reads `requestFrom` and the locked timeline to choose B'/C'/E/G/T and (see its own comment)
+        // does not read `today` at all. This value decides (a) `coveringToday` below, which is the
+        // "nothing covers today" 404 branch an If-Match caller hits, and (b) the anchor for the
+        // employment-category cache refresh at step 6, which must follow the row IN FORCE rather than
+        // the row being written.
         var today = Today();
 
         // 0. Pure refusals BEFORE any lock — nothing to roll back, nothing to contend on.
@@ -922,8 +959,10 @@ public sealed class EmployeeProfileRepository
 
     /// <summary>
     /// S33 / TASK-3303 — soft-delete the employee's profile by stamping
-    /// <c>effective_to = @today</c> (the UTC day from the injected <see cref="TimeProvider"/>,
-    /// bound as a parameter — S139 / TASK-13907 replaced the former DB-side <c>NOW()::date</c>)
+    /// <c>effective_to = @today</c> (the COPENHAGEN business day from the injected
+    /// <see cref="TimeProvider"/> since S142 / TASK-14205, bound as a parameter — S139 /
+    /// TASK-13907 replaced the former DB-side <c>NOW()::date</c>, which took its calendar from the
+    /// database container's own time zone)
     /// under end-exclusive <c>[from, to)</c> semantics
     /// (ADR-018 D9). After this call no row covers today, so the profile is
     /// invisible to <see cref="GetByEmployeeIdAsync(string, CancellationToken)"/>, but every row
@@ -985,7 +1024,7 @@ public sealed class EmployeeProfileRepository
     /// which the caller computes ONCE for the whole request so the row and the
     /// <c>EmployeeProfileSoftDeleted</c> event it describes carry the same date by construction
     /// (ADR-023 D8's shape). OPTIONAL and trailing: when omitted, the repository reads its own
-    /// injected <see cref="TimeProvider"/> for the UTC day — correct for any caller that needs
+    /// injected <see cref="TimeProvider"/> for the Copenhagen business day — correct for any caller that needs
     /// only one date, and it keeps existing callers and direct test constructions compiling.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>
@@ -1087,8 +1126,8 @@ public sealed class EmployeeProfileRepository
         // request's "today" ONCE and hands it in as `closeDate`, so the row's `effective_to` and
         // the `EmployeeProfileSoftDeleted` event's `EffectiveTo` are THE SAME VALUE by
         // construction, not by two reads that happen to agree. Two separate reads of the same
-        // provider are not the same instant: at 23:59:59.9 UTC the first can land on the 7th and
-        // the second on the 8th, and the row would then disagree with the event that describes
+        // provider are not the same instant: a hair before the Copenhagen midnight the first can land
+        // on the 7th and the second on the 8th, and the row would then disagree with the event that describes
         // it — an auditability defect, not a rounding nuisance. This is the same "compute once"
         // rule S137 wrote for the create POST (AdminEndpoints.cs, the `effectiveFrom` comment).
         // The parameter is OPTIONAL and trailing so existing direct constructions and callers
@@ -1126,9 +1165,10 @@ public sealed class EmployeeProfileRepository
         // 3. Close the row covering today at `today` (end-exclusive, ADR-018 D9 — it no longer covers
         //    today). Its `version` is NOT bumped: ADR-023 D8 treats soft-delete as a row-state change,
         //    and the audit row the endpoint writes records version_before == version_after.
-        //    `updated_at = NOW()` stays a DB timestamp on purpose — row-maintenance metadata, not a
-        //    temporal boundary anyone reasons about. (The close-stamp itself has been the APP-side
-        //    UTC day since S139 / TASK-13907, so one HR action depends on one clock.)
+        //    `updated_at = NOW()` stays a DB timestamp on purpose — it is an INSTANT (row-maintenance
+        //    metadata), not a business date, and S142 moves business dates only. (The close-stamp
+        //    itself has been APP-side since S139 / TASK-13907, so one HR action depends on one clock;
+        //    S142 / TASK-14205 makes that clock's calendar the Copenhagen business day.)
         await using (var closeCmd = new NpgsqlCommand(
             """
             UPDATE employee_profiles

@@ -4,6 +4,7 @@ using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -58,6 +59,13 @@ public static class ComplianceEndpoints
             // diagnosis survives. Same ILoggerFactory handler-parameter idiom as AdminEndpoints /
             // ApprovalEndpoints.
             ILoggerFactory loggerFactory,
+            // S142 / TASK-14205 — the server-"today" seam (TimeProvider.System in production; a
+            // date-sensitive test host registers a FIXED provider). This handler used to read the
+            // ambient DateTime.UtcNow, which is a correct-looking clock NO TEST CAN PIN: a fixed-clock
+            // host would have been silently ignored here, so any date assertion written against it
+            // would have passed without exercising anything. Taking the provider by injection is what
+            // makes the Copenhagen conversion below observable.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -82,7 +90,16 @@ public static class ComplianceEndpoints
                     // S105 / ADR-038 D4 — the edge OR the secondary-unit-leader path (the same centralized
                     // predicate the team-overview roster + allocation-breakdown gate use, so a unit leader
                     // who can ACT can also lazy-fetch the Advarsel detail). org-scope stays the primary gate.
-                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    //
+                    // S142 / TASK-14205 — "today" is the COPENHAGEN business day (census row 13).
+                    // This is the `asOf` date an authority window is measured against: a stand-in
+                    // arrangement that runs "until the 15th" ends at the end of the Danish 15th, not
+                    // at 01:00 or 02:00 Danish time on the 16th. On the old UTC day a unit leader
+                    // acting after Danish midnight was authorised against YESTERDAY — which both
+                    // grants an expired authority and denies one that started today. Same clock as
+                    // the writers that record those authority rows, so the two can never disagree
+                    // about which day a delegation belongs to.
+                    var today = CopenhagenBusinessDate.Today(timeProvider);
                     var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                         actor.ActorId!, employeeId, asOf: today, ct: ct);
                     if (!hasEdgeOrUnit)
