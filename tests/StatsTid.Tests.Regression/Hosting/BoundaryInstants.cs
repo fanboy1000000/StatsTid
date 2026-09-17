@@ -89,4 +89,35 @@ public static class BoundaryInstants
     /// </summary>
     public static readonly DateTimeOffset WinterEveningCalendarsStillAgree =
         new(2026, 1, 15, 22, 30, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// <b>A fourth instant, added at the wave-2 merge because two independent tasks needed it and
+    /// each had to define its own copy.</b> 2026-07-31 22:30 UTC — in Copenhagen (CEST, +02:00) it
+    /// is already <b>1 August 00:30</b>, so the two calendars disagree about the MONTH, not merely
+    /// the day.
+    ///
+    /// <para>
+    /// <b>Why the three instants above cannot serve this.</b> All three sit mid-month, so any code
+    /// that clips a date to its month — an export window, a settlement period, an approval period —
+    /// gets the same answer from the UTC day and the Copenhagen day, and a test built on them
+    /// passes under either. <b>The month-boundary form is the payroll-visible shape of this
+    /// defect</b>: every export, settlement and approval period in StatsTid is month-bounded, so a
+    /// day that lands in the wrong month lands in the wrong PERIOD.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>RED condition — and why 22:30 rather than 23:30.</b> A raw-UTC implementation answers
+    /// "31 July" (wrong month). A hardcoded <c>+01:00</c> answers 23:30 on the 31st — also "July",
+    /// so it dies here too. Only the real CEST offset rolls into August. One pin therefore kills
+    /// both the no-conversion bug AND the winter-offset-year-round bug. It is DELIBERATELY silent
+    /// about a hardcoded <c>+02:00</c>, which agrees with the correct answer here —
+    /// <see cref="WinterEveningCalendarsStillAgree"/> is what catches that one. At 23:30 the
+    /// <c>+01:00</c> implementation would also roll into August and the pin would lose half its
+    /// discriminating power.
+    /// </para>
+    ///
+    /// <para>Twelve weeks from the nearest DST transition, consistent with the three above.</para>
+    /// </summary>
+    public static readonly DateTimeOffset SummerMonthEndAlreadyNextMonthInCopenhagen =
+        new(2026, 7, 31, 22, 30, 0, TimeSpan.Zero);
 }

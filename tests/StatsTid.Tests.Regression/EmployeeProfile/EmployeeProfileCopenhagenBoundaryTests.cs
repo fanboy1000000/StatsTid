@@ -110,7 +110,7 @@ public sealed class EmployeeProfileCopenhagenBoundaryTests : IAsyncLifetime
     /// a month boundary, none of them do.</para>
     /// </summary>
     private static readonly DateTimeOffset SummerMonthEndAlreadyNextMonthInCopenhagen =
-        new(2026, 7, 31, 22, 30, 0, TimeSpan.Zero);
+        BoundaryInstants.SummerMonthEndAlreadyNextMonthInCopenhagen; // promoted at the wave-2 merge: two tasks had defined this independently
 
     /// <summary>The Copenhagen day at <see cref="SummerMonthEndAlreadyNextMonthInCopenhagen"/> — a
     /// literal, and in a DIFFERENT MONTH from the UTC day (2026-07-31) at the same instant.</summary>

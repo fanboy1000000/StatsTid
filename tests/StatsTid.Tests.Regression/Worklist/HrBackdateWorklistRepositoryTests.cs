@@ -56,7 +56,7 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     /// for the full reasoning, including which wrong implementations it kills and which it does not.
     /// </summary>
     private static readonly DateTimeOffset LastEveningOfJulyAlreadyAugustInCopenhagen =
-        new(2026, 7, 31, 22, 30, 0, TimeSpan.Zero);
+        BoundaryInstants.SummerMonthEndAlreadyNextMonthInCopenhagen; // promoted at the wave-2 merge: two tasks had defined this independently
 
     private TestFixtures.DockerHarness _harness = null!;
     private HrBackdateWorklistRepository _repo = null!;
