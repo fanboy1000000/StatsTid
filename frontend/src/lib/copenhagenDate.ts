@@ -36,15 +36,32 @@
 /** The IANA zone id every business date in StatsTid is measured against. */
 export const COPENHAGEN_TIME_ZONE = 'Europe/Copenhagen'
 
-// Built once: constructing an Intl.DateTimeFormat is comparatively expensive and this is called
-// on render. 'en-CA' is irrelevant to the output below — we assemble from formatToParts by part
-// TYPE, never by relying on a locale's field order or separators.
-const copenhagenParts = new Intl.DateTimeFormat('en-CA', {
-  timeZone: COPENHAGEN_TIME_ZONE,
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-})
+// Built once, but LAZILY — on first call, never at module scope. S142 Step-7a found that this
+// distinction is the difference between owner ruling OQ-12 working and not working at all.
+//
+// `new Intl.DateTimeFormat({ timeZone })` throws RangeError for a zone the runtime cannot resolve
+// (ECMA-402). At module scope that throw happens during MODULE EVALUATION — before any importing
+// component exists, let alone its try/catch. Every OQ-12 guard in the UI (the date picker, the
+// person drawer, the delegation return-date field) would be dead code, and the user would get the
+// blank screen the ruling exists to prevent, one layer earlier than anyone was looking.
+//
+// Constructed here on first call, the throw lands inside `copenhagenToday()` where the callers'
+// guards can actually catch it. Still built once: the cached instance is reused thereafter, so the
+// render-path cost the eager version was avoiding is unchanged.
+//
+// 'en-CA' is irrelevant to the output below — we assemble from formatToParts by part TYPE, never by
+// relying on a locale's field order or separators.
+let cachedParts: Intl.DateTimeFormat | undefined
+
+function copenhagenParts(): Intl.DateTimeFormat {
+  cachedParts ??= new Intl.DateTimeFormat('en-CA', {
+    timeZone: COPENHAGEN_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  return cachedParts
+}
 
 /**
  * The Copenhagen calendar date of `now`, as an ISO `yyyy-MM-dd` string — the same shape
@@ -61,7 +78,7 @@ const copenhagenParts = new Intl.DateTimeFormat('en-CA', {
  *   see the "NO DEGRADED MODE" note at the top of this file.
  */
 export function copenhagenToday(now: Date = new Date()): string {
-  const parts = copenhagenParts.formatToParts(now)
+  const parts = copenhagenParts().formatToParts(now)
   let year = ''
   let month = ''
   let day = ''

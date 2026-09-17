@@ -93,3 +93,49 @@ describe('copenhagenToday', () => {
     expect(copenhagenToday()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 })
+
+// ── S142 Step-7a WARNING 1 — the ruling and the code had disagreed ────────────────────────────
+//
+// Owner ruling OQ-12 says an unresolvable Europe/Copenhagen must DISABLE the affected control with
+// a message, not blank the page. Every UI guard implementing that is a try/catch around
+// `copenhagenToday()`.
+//
+// Those guards were dead code. The formatter used to be constructed at MODULE SCOPE, and
+// `new Intl.DateTimeFormat({ timeZone })` throws RangeError (ECMA-402) for a zone the runtime
+// cannot resolve — so the throw happened during module EVALUATION, before any importing component
+// existed to catch it. The user would have got the blank screen the ruling exists to prevent, one
+// layer earlier than anyone was looking.
+//
+// The OQ-12 component tests could not see this: they `vi.doMock` the FUNCTION to throw when called,
+// which is a failure the real module could not produce. These two facts exercise the real module
+// with a real failing `Intl`, and are the only place that distinction is observable.
+describe('copenhagenDate — an unresolvable zone fails at CALL time, not at import (OQ-12)', () => {
+  const RealDateTimeFormat = Intl.DateTimeFormat
+
+  afterEach(() => {
+    ;(Intl as { DateTimeFormat: typeof Intl.DateTimeFormat }).DateTimeFormat = RealDateTimeFormat
+    vi.resetModules()
+  })
+
+  function breakTheZone() {
+    ;(Intl as { DateTimeFormat: unknown }).DateTimeFormat = function () {
+      throw new RangeError('Invalid time zone specified: Europe/Copenhagen')
+    } as unknown as typeof Intl.DateTimeFormat
+  }
+
+  it('IMPORTS cleanly even when the zone cannot be resolved', async () => {
+    vi.resetModules()
+    breakTheZone()
+    // The assertion is that this resolves at all. With the module-scope formatter it rejected here,
+    // and no component guard downstream could ever have run.
+    const mod = await import('../copenhagenDate')
+    expect(typeof mod.copenhagenToday).toBe('function')
+  })
+
+  it('throws from copenhagenToday(), where the UI guards can catch it', async () => {
+    vi.resetModules()
+    breakTheZone()
+    const mod = await import('../copenhagenDate')
+    expect(() => mod.copenhagenToday(new Date('2026-07-15T22:30:00Z'))).toThrow(RangeError)
+  })
+})

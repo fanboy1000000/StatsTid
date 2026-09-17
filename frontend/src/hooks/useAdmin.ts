@@ -335,9 +335,21 @@ export function useOrgUsers(orgId: string) {
    * banner-with-retry per the S25/S29/S30 precedent.
    *
    * S34 TASK-3409 (ADR-023 D8). `effectiveFrom` remains required on the wire —
-   * the backend `UpdateUserRequest` DTO (TASK-3407) carries a non-nullable
-   * `DateOnly EffectiveFrom` validated against `DateTime.UtcNow`. Frontend
-   * stamps today (UTC) at the call site so the validator passes.
+   * the backend `UpdateUserRequest` DTO carries a non-nullable `DateOnly
+   * EffectiveFrom`.
+   *
+   * ⚠ This comment was wrong TWICE over and is corrected here (S142 Step-7a).
+   * It said the value is "validated against `DateTime.UtcNow`" and that the
+   * frontend should "stamp today (UTC) so the validator passes". The validator
+   * was REMOVED in S141 (a future-dated change is legal), and since S142 the
+   * server's day is the COPENHAGEN business day, not UTC.
+   *
+   * If you need "today" here, call `copenhagenToday()` from
+   * `src/lib/copenhagenDate.ts` — never `new Date().toISOString().slice(0,10)`,
+   * and never the browser's own day. Both are different wrong calendars, and a
+   * Danish user working after midnight would have their change recorded as
+   * effective YESTERDAY. That defect is what S142 removed; this comment was
+   * instructing the next author to put it back.
    */
   const updateUser = async (
     userId: string,

@@ -127,9 +127,14 @@ public sealed record AgreementCodeHistoryInterval(
 /// <param name="Today">
 /// The server day every <c>status</c> in this response was derived against — ONE date for the whole
 /// response (PAT-028), so a request crossing midnight cannot age one track against one day and the
-/// other against the next. It is the UTC day, which is the SAME derivation the profile and
-/// agreement-code write validators use, so a change saved as "today" can never come back marked
-/// SCHEDULED.
+/// other against the next. **It is the COPENHAGEN business day** (S142 / ADR-041), which is the same
+/// derivation the profile and agreement-code write validators use, so a change saved as "today" can
+/// never come back marked SCHEDULED.
+///
+/// <para>Until S142 this said "the UTC day", and the *reason* it gave — that it matches the writers —
+/// is why it had to change: the writers moved to the Danish calendar day, so a UTC reading here would
+/// have broken the very guarantee this sentence promises. A client rendering this value should label
+/// it a Danish calendar day, not a UTC one.</para>
 /// </param>
 /// <param name="WindowFrom">The <c>from</c> filter actually applied, or null when unbounded.</param>
 /// <param name="WindowTo">The <c>to</c> filter actually applied (END-EXCLUSIVE), or null when unbounded.</param>

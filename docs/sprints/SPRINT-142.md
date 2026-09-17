@@ -3,12 +3,12 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 142 |
-| **Status** | **in progress — wave 1 merged + Step-5a absorbed + pushed; wave 2 (7 tasks) dispatched.** Wave 2 merges only onto a green base |
+| **Status** | **COMPLETE** — 13 tasks, all DONE; Step 7a dual-lens absorbed; CI green |
 | **Start Date** | 2026-09-16 |
-| **End Date** | — |
+| **End Date** | 2026-09-17 |
 | **Orchestrator Approved** | **APPROVED** — Step 0b ran **two cycles, both lenses**. Cycle 1: Reviewer CHANGES-REQUIRED (nine of 64 rows unassigned; the OQ-4 deletes unassigned; **the sprint-wide carve-out itself wrong**; four coupled pairs split; predecessors wrong both ways) · Codex 2 BLOCKER (test ownership unprovable; validator↔picker "ordered" ≠ atomic). Cycle 2: Reviewer verified 7 of 9 fixes APPLIED, 2 PARTIAL — **B1: the coverage enumeration still contradicted the picker fix it was meant to certify** — plus W1–W6 absorbed (all-or-nothing MOVE tasks; helper ownership; rows 48/49 are dead code → deleted under OQ-4; two files need the `TimeProvider` seam; a per-task *failing* pin; `docs/` split out of an agent task per CLAUDE.md). Refinement rev 9 + OQ-10, OQ-11. **12 tasks, 64/64 rows assigned exactly once** |
-| **Build Verified** | — |
-| **Test Verified** | — |
+| **Build Verified** | ✅ `dotnet build StatsTid.sln --no-incremental` → **0 errors, 145 warnings** — the S141 baseline, unmoved across all 13 tasks · `npx tsc --noEmit` clean |
+| **Test Verified** | ✅ Unit **1264** · DemoSeed **170** · Regression non-Docker **128** · Frontend **894 / 74 files** · **CI GREEN run `35214127713`, sha `afbae25`, all 7 jobs** — including the full Docker-gated regression suite (**1971 tests**), which is where this sprint's discriminating pins actually execute |
 | **Orchestrator model** | Refinement revs 1–9, rulings OQ-1…OQ-10, Step 0a and this log: **Opus 5**. Both Step-4 review lenses ran on the review floor (Fable 5.1, hook-enforced). Same disclosed deviation as S141: the rulings were *proposed* on Opus; the *reviews* that checked them ran on the floor |
 | **Sprint-start commit** | `e4207a2` (S141 close bookkeeping) — the `codex review --base` anchor for Step 7a |
 | **CI at start** | **green** — run `35071162514`, sha `e4207a2`, all jobs |
@@ -925,6 +925,117 @@ ever going to surface.
 `useSkema` compute today from **browser-local** rather than UTC — *wrong in the other direction*, outside this sprint's
 UTC-specific census, and filed S143. Worth flagging loudly for that sprint: **browser-local is a third calendar, not a
 lesser version of the same bug.**
+
+### CI — the first real run of the Docker-gated pins, and what it caught
+
+**Six regression failures, one root cause, zero product defects.** Every one was
+`InvalidCastException: Unable to cast 'System.DateTime' to 'System.DateOnly'` — four in TASK-14205's boundary class, two in
+TASK-14202's. **Npgsql boxes a Postgres `DATE` column as `DateTime`**, so `(DateOnly)scalar` compiles cleanly and throws only
+**against a real database** — which is unreachable on this machine.
+
+**This is exactly what the agents' "CI-verified, not claimed green" caveat was protecting.** Every one of them refused to
+call these tests passing, and every one was right to: the failure is a type error at the database boundary that no amount of
+local reasoning could have surfaced. *The discipline of declining to claim an unverifiable result is what made this a
+twenty-minute fix instead of a mystery.*
+
+Fixed to the suite's established idiom, `DateOnly.FromDateTime((DateTime)raw)`, behind a named `ScalarDateAsync` helper that
+records **why** the direct cast is wrong — so the next boundary test cannot repeat it. Verified suite-wide that no direct
+scalar `DateOnly` cast survives anywhere.
+
+**One frontend failure, assessed as a flake and not claimed otherwise.** `SkemaPage.test.tsx` failed on the wave-2 run and
+**passed on the next one**, passes locally under Copenhagen *and* under a forced UTC zone, and took **25.5 seconds on CI
+against 0.46 locally** — a loaded runner, not a wrong result. Recorded as a flake with the evidence, not asserted as fixed.
+
+**Runs:** `35197952262` (wave 2) — 6 failures + the frontend flake. `35201223479` (sweep) — the same 6, expected, since it
+predates the fix; **frontend passed**. The run carrying the fix was still in flight at the time of writing; the regression
+suite takes roughly 1h45m.
+
+### Step 7a — internal lens: CLOSE-WITH-WARNINGS, all three absorbed
+
+**The headline it gave, verified independently by grep at HEAD rather than read from the log:** across `src/**/*.cs` there
+are **zero** live `DateTime.UtcNow.Date`, `GetUtcNow().Date`, `DateOnly.FromDateTime(DateTime.UtcNow|Today|Now)`,
+`DateTime.Today` or `GetLocalNow()`; **zero** executable `CURRENT_DATE` / `NOW()::date` / `LOCALTIMESTAMP` (all 30 matches
+are comments); and no live `toISOString().slice(0,10)` in the frontend. **Every coupled pair moved in one commit**, listed
+side by side. **No instant was moved anywhere in twelve tasks.**
+
+It also checked the deferral properly: the four remaining browser-local reads feed a CSS class and the `year`/`month` view
+state. *A registration's date is the grid cell's own `(year, month, day)`, never "today".* **No navigation default can reach
+a stored date.**
+
+#### ★ WARNING 1 — an owner ruling that the shipped code could not deliver
+
+**OQ-12 said an unresolvable zone must disable the date control with a message rather than blank the page. The code could
+not do that**, and the tests could not see it. `Intl.DateTimeFormat` was constructed at **module scope**, so a `RangeError`
+fires during *module evaluation* — before any importing component exists, let alone its `try/catch`. **Every OQ-12 guard in
+the UI was dead code, and the user would have got the blank screen the ruling exists to prevent, one layer earlier than
+anyone was looking.**
+
+The OQ-12 component tests `vi.doMock` the *function* to throw when called — **a failure the real module cannot produce**. So
+the tests proved the guard worked against a failure mode that did not exist, while the real one walked past them. *This is
+the sprint's own signature defect — a test that cannot fail for the right reason — found in the work written to satisfy a
+ruling about it.*
+
+**Fixed:** the formatter is now built lazily on first call, so the throw lands inside `copenhagenToday()` where the guards
+can catch it; still constructed once, so the render-path cost is unchanged. **Two new facts exercise the REAL module with a
+real failing `Intl`** — proved RED against the old version, where *the import itself rejects*.
+
+#### WARNING 2 — two live contract comments still teaching the retired rule
+
+Both in the "what the next author reads before calling this" class the sprint had already identified as most dangerous:
+`EmploymentHistoryResponses.cs` (the `Today` field's own contract doc) and `frontend/src/hooks/useAdmin.ts`, the latter
+**wrong twice over** — it cited a validator S141 deleted *and* instructed the reader to "stamp today (UTC) so the validator
+passes", which is an instruction to reintroduce the exact defect. Both rewritten.
+
+#### WARNING 3 — the declared coverage gap was wrong, and the fix is structural
+
+The log declared **three** unpinned rows; enumeration found about **twenty**. Every task met its "at least one failing pin"
+criterion, so this was record-accuracy plus durability, not a defect — **but nothing would have failed if a single site were
+reverted to the UTC day.**
+
+**Closed with a repo-wide source-text guard** (`BusinessDateCalendarGuardTests`) that scans all of `src/` for the retired
+day-derivation shapes *and* for database-decided days — **pinning all 64 rows at once for the cost of one non-Docker test
+rather than twenty container boots.** Comments and string literals are stripped before matching, deliberately: this
+repository *quotes* the retired shapes when explaining why they were removed, and a guard that fired on its own explanation
+would push authors toward deleting the explanation. **Proved able to fail**: injecting `DateOnly.FromDateTime(DateTime.UtcNow.Date)`
+into a production endpoint turns it red with the file and expression named.
+
+*It cannot prove a site computes the right day — only that it does not compute the retired one. It is the net under the
+behavioural pins, not a replacement for them.*
+
+### Step 7a — external lens (Codex): NO BLOCKERS
+
+Clean on six of seven questions, including the two that mattered most:
+
+- **Q1 instant-vs-date — clean.** Every converted value is a business date. It specifically checked the one that looks
+  doubtful (the stand-in start date derived from a stored instant) and confirmed the instant itself stays UTC; only its
+  *calendar projection* is Copenhagen-derived. **No instant was mistaken for a date anywhere in twelve tasks.**
+- **Q2 is the defect gone — clean** for the 22:00/23:00–midnight window across endpoint, repository, scheduled job, SQL,
+  seeder and frontend. It also checked the deferral specifically: **browser-local navigation defaults select a view period
+  and never supply a stored effective date.**
+- Q4 tests, Q5 fallback, Q6 deletions, Q7 documentation — all clean. No surviving direct `(DateOnly)` scalar cast; no
+  document or touched source comment still teaches the retired rule as current.
+
+#### WARNING (Q2/Q3) — one writer/reader source split, recorded with its true severity
+
+On the stand-in creation path, `effectiveFrom` is computed from the **injected** clock while `created_at` is persisted from
+the **real** clock (`DateTime.UtcNow`) — and the read then derives its displayed date *from `created_at`*. So the writer and
+the reader take the same logical value from two different sources.
+
+**What this is and is not.** `created_at` is an instant and correctly stays UTC; nothing here converts an instant to a date
+wrongly. In production both are the same system clock, so divergence requires two statements microseconds apart to straddle
+a midnight tick. **The real cost is testability, not live correctness: a pinned test cannot control `created_at`, so that
+displayed value is not pinnable.** TASK-14204 independently flagged the identical shape in the migrator and called it an
+optional tidy.
+
+**The clean fix is small** — read `created_at` from the injected provider too (still UTC, still an instant), so the two
+values cannot diverge and the read becomes pinnable.
+
+#### NOTE (Q4b) — the one moved family without a divergent-instant pin
+
+`init.sql`'s conversion cannot be pinned through a `TimeProvider` at all: **no injected clock reaches the database's own
+clock.** Its test therefore proves the block *fires* and that the statement text carries the Copenhagen zone, rather than
+behaviour at a controlled divergent instant. That was a deliberate choice recorded at the time — the alternative test would
+have been self-referential or midnight-flaky, i.e. one of the shapes this sprint deleted.
 
 ### ⚠ HARNESS DEFECT — the census was invisible to every agent that needed it
 
