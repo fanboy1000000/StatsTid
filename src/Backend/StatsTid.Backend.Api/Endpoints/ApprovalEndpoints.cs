@@ -227,9 +227,14 @@ public static class ApprovalEndpoints
             // the designated approver for the persisted audit metadata uses THIS value, so the
             // pre-tx admission gate, the in-lock re-evaluation and the recorded approver can never
             // describe two different days (the handler previously read the clock twice, plus a third
-            // time inside the resolver's own fallback). Source = the injected TimeProvider's UTC day
-            // (TimeProvider.System in production, so the day is exactly what it was before).
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // time inside the resolver's own fallback).
+            //
+            // S142 / TASK-14203 — that day is the COPENHAGEN calendar day, off the injected
+            // TimeProvider seam. Every user is Danish: a manager approving at 00:30 local time is
+            // acting on today's Danish date, but 00:30 CEST is 22:30Z the PREVIOUS day, so the old
+            // UTC derivation resolved their authority — and stamped the recorded designated approver
+            // — against yesterday for the ~2 hours after Danish midnight.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)
@@ -331,9 +336,10 @@ public static class ApprovalEndpoints
 
             // The in-lock re-evaluation reuses the REQUEST's date (`today`, read once at the top —
             // PAT-028). S140 / TASK-14001 corrected the previous comment here, which claimed a fresh
-            // "asOf at action-time": there is no second clock read, and a request that straddled UTC
-            // midnight would otherwise have admitted the actor against one day and recorded the
-            // approver against the next. Only re-check the edge / unit-leader path for AUTHORITY when
+            // "asOf at action-time": there is no second clock read, and a request that straddled the
+            // day boundary would otherwise have admitted the actor against one day and recorded the
+            // approver against the next. (S142 / TASK-14203 — that boundary is COPENHAGEN midnight
+            // now, which is what `today` derives; it used to say UTC midnight.) Only re-check the edge / unit-leader path for AUTHORITY when
             // the pre-tx ORG-scope gate did NOT already admit the actor (orgScopeAllowed): an
             // org-scope-admitted approval does not depend on the edge, so a revoked edge must not
             // flip it to 403 (not the authorizing surface).
@@ -460,7 +466,8 @@ public static class ApprovalEndpoints
             // S140 / TASK-14001 (PAT-028) — THE single business-date read for this reject; the same
             // shape as approve. The pre-tx admission gate, the in-lock re-evaluation and the recorded
             // designated approver all use THIS value.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // S142 / TASK-14203 — the COPENHAGEN calendar day, for the reason spelled out on approve.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)
@@ -847,8 +854,10 @@ public static class ApprovalEndpoints
             // VACATION — derived here without re-implementing the dated-config resolution.
             var vacationYear = month >= 9 ? year : year - 1;
             // S140 / TASK-14001 — the request's one business date, off the injected TimeProvider
-            // seam (PAT-008 / PAT-028). Same UTC day as before under TimeProvider.System.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // seam (PAT-008 / PAT-028). S142 / TASK-14203 — derived as the COPENHAGEN calendar day,
+            // so the roster shows the reporting edges and stand-ins in force on the Danish today
+            // (the repository's candidate CTE derives the same day, so gate and roster agree).
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             // (2) ONE bounded query per field, set-based over the team's employee-ids (≤ ~40 rows) —
             //     NOT a per-employee /summary loop, NOT a per-employee event replay.
@@ -1244,7 +1253,10 @@ public static class ApprovalEndpoints
             // — exactly the centralized predicate the team-overview roster filters through, so a row the
             // leader can see (incl. a unit-led member) is always breakdown-authorized (no org-scope leak).
             // S140 / TASK-14001: the request's one business date, off the injected TimeProvider seam.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // S142 / TASK-14203: the COPENHAGEN calendar day — this predicate is the SAME one the
+            // team-overview roster filters through, so both must name the same day or a leader could
+            // see a row here they are then denied on (or vice versa) after Danish midnight.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var authorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                 actor.ActorId!, employeeId, asOf: today, ct: ct);
             if (!authorized)
@@ -1536,7 +1548,8 @@ public static class ApprovalEndpoints
             // at handler scope because BOTH of the Leader arm's authority checks need it (the pre-tx
             // admission gate and the in-lock re-evaluation, which sit in different blocks); the
             // Employee arm never consults a date. It was two separate clock reads before.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // S142 / TASK-14203 — the COPENHAGEN calendar day, for the reason spelled out on approve.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             var period = await approvalRepo.GetByIdAsync(periodId, ct);
             if (period is null)

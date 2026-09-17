@@ -5,6 +5,7 @@ using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -312,6 +313,28 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
+    /// <summary>
+    /// Seeds an absence on the day the SERVER will call "today" for the <c>awayToday</c> flag.
+    ///
+    /// <para>
+    /// S142 / TASK-14203 — this used to seed <c>DateOnly.FromDateTime(DateTime.UtcNow)</c>, and that
+    /// became a latent nightly flake the moment the team-overview handler moved its business date to
+    /// the Copenhagen calendar day (<c>ApprovalEndpoints.cs</c>, the <c>awayToday</c> query binds
+    /// <c>@today</c> from it). This suite runs against the UNPINNED host, so between Danish midnight
+    /// and UTC midnight — roughly 22:00-00:00 UTC, i.e. a real window in CI — the seed would have
+    /// written yesterday's date while the server looked for today's, and
+    /// <c>AwayToday_True_ForEmployeeWithTodayCoveringAbsence</c> would fail for no reason a reader
+    /// could see. Deriving the fixture date the SAME way the server derives it is what keeps the test
+    /// about the flag rather than about the clock.
+    /// </para>
+    ///
+    /// <para>
+    /// This is fixture ARRANGEMENT, not an expected value: the assertion under test is the boolean
+    /// <c>awayToday</c>. The discriminating "which calendar does the server use" facts are pinned
+    /// separately, against fixed instants and LITERAL dates, in
+    /// <see cref="DesignatedApproverCopenhagenDayTests"/>.
+    /// </para>
+    /// </summary>
     private async Task InsertAbsenceTodayAsync(string employeeId)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
@@ -324,7 +347,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
                 (gen_random_uuid(), @emp, @today, 'VACATION', 7.4, 1.0, 'HK', 'OK24', NOW(), @outbox)
             """, conn);
         cmd.Parameters.AddWithValue("emp", employeeId);
-        cmd.Parameters.AddWithValue("today", DateOnly.FromDateTime(DateTime.UtcNow));
+        cmd.Parameters.AddWithValue("today", CopenhagenBusinessDate.Today(TimeProvider.System));
         cmd.Parameters.AddWithValue("outbox", _outboxSeq++);
         await cmd.ExecuteNonQueryAsync();
     }
