@@ -223,3 +223,70 @@ describe('MondayDatePicker', () => {
     })
   })
 })
+
+// ── S142 / owner ruling OQ-12 (2026-09-17) ────────────────────────────────────────────────
+//
+// If a runtime cannot resolve Europe/Copenhagen, `copenhagenToday()` throws — deliberately, so a
+// business date is never quietly computed from the browser's own zone (that fallback would look
+// like resilience while silently reinstating the exact defect S142 removes).
+//
+// The RULING is about where that failure is PRESENTED. An uncaught throw during render blanks the
+// whole config editor: white screen, no explanation, every unrelated field on the page unreachable.
+// OQ-12 requires the picker to catch it and disable THIS control with a message instead — still
+// impossible to enter a wrong date, still loud, but the damage confined to the control that
+// actually depends on the zone.
+//
+// These facts fail if anyone "simplifies" the try/catch away (back to a white screen) OR replaces
+// it with a browser-local fallback (silently wrong dates, the thing being removed).
+describe('MondayDatePicker — unresolvable time zone (OQ-12)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it('renders disabled with an explanation instead of blanking the page', async () => {
+    vi.resetModules()
+    vi.doMock('../../../lib/copenhagenDate', () => ({
+      COPENHAGEN_TIME_ZONE: 'Europe/Copenhagen',
+      copenhagenToday: () => {
+        throw new RangeError('Invalid time zone specified: Europe/Copenhagen')
+      },
+    }))
+    const { MondayDatePicker: Picker } = await import('../MondayDatePicker')
+
+    const onChange = vi.fn()
+    // The assertion is that this RENDERS AT ALL — pre-OQ-12 the throw propagated and React
+    // unmounted the whole tree.
+    render(
+      <Picker id="dp" value="" onChange={onChange} mondayOnly={false} pastOrTodayOnly={true} />,
+    )
+
+    const input = document.querySelector('input[type="date"]') as HTMLInputElement
+    expect(input).not.toBeNull()
+    expect(input.disabled).toBe(true)
+    // The message must name the cause, not just fail silently: a disabled control with no
+    // explanation is indistinguishable from a bug.
+    expect(screen.getByRole('alert').textContent).toMatch(/dansk kalenderdag|Europe\/Copenhagen/i)
+  })
+
+  it('does not fall back to the browser day when the zone is unresolvable', async () => {
+    vi.resetModules()
+    vi.doMock('../../../lib/copenhagenDate', () => ({
+      COPENHAGEN_TIME_ZONE: 'Europe/Copenhagen',
+      copenhagenToday: () => {
+        throw new RangeError('Invalid time zone specified: Europe/Copenhagen')
+      },
+    }))
+    const { MondayDatePicker: Picker } = await import('../MondayDatePicker')
+
+    render(
+      <Picker id="dp" value="" onChange={vi.fn()} mondayOnly={false} pastOrTodayOnly={true} />,
+    )
+
+    // `max` caps the picker at "today". With no resolvable today there is no honest value for it,
+    // so it must be ABSENT rather than filled from the browser's clock — guessing a business date
+    // is the one thing this sprint refuses to do.
+    const input = document.querySelector('input[type="date"]') as HTMLInputElement
+    expect(input.getAttribute('max')).toBeNull()
+  })
+})

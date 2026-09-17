@@ -56,8 +56,36 @@ export function MondayDatePicker({
   // fact about Danish employment law, not about where the person filling in the form is sitting
   // (owner ruling OQ-1), so a laptop on New York time must still be offered — and must still
   // accept — the Danish today.
-  const today = copenhagenToday()
-  const maxAttr = pastOrTodayOnly ? today : undefined
+  // S142 / owner ruling OQ-12 (2026-09-17) — WHERE the "no degraded mode" rule is enforced, and
+  // where it is PRESENTED, are deliberately two different places.
+  //
+  // `copenhagenToday()` still throws on a runtime that cannot resolve Europe/Copenhagen, and that
+  // is right: it is the single source of truth for a business date, and a helper that quietly fell
+  // back to the browser's zone would silently reinstate the exact defect S142 removes (OQ-11 took
+  // the same line on the server, which refuses to boot).
+  //
+  // But a server and a browser fail differently. A server either starts or does not, and an
+  // operator reads the log. An uncaught throw during RENDER blanks the whole config editor: the
+  // admin gets a white screen, no explanation, and every unrelated field on the page becomes
+  // unreachable too — for a fault that has nothing to do with those fields. So the UI boundary
+  // catches it and disables THIS control with an explicit message. A wrong date still cannot be
+  // entered and the failure is still loud; the damage is just confined to the control that
+  // actually depends on the zone.
+  //
+  // Unreachable on any supported runtime — every current browser ships IANA tz data. Settled now
+  // because it is cheap now and awkward once someone is staring at a blank screen.
+  let today: string | null = null
+  let zoneError: string | null = null
+  try {
+    today = copenhagenToday()
+  } catch {
+    zoneError =
+      'Datoen kan ikke vaelges: denne browser kan ikke bestemme den danske kalenderdag ' +
+      '(tidszonedata for Europe/Copenhagen mangler). Proev en anden browser eller opdater den.'
+  }
+
+  const zoneUnavailable = zoneError !== null
+  const maxAttr = pastOrTodayOnly && today !== null ? today : undefined
 
   // Re-validate the currently selected date when constraints flip on. Without
   // this, an admin who picks a non-Monday date and *then* enables a
@@ -68,7 +96,10 @@ export function MondayDatePicker({
     if (!value) return
     const parsed = parseIsoDate(value)
     if (!parsed) return
-    if (pastOrTodayOnly && value > today) {
+    // `today === null` only when the zone is unresolvable (OQ-12). The control is disabled in that
+    // state, so there is nothing to re-validate — and comparing against a missing day would be
+    // guessing, which is the one thing this sprint refuses to do with a business date.
+    if (pastOrTodayOnly && today !== null && value > today) {
       setWarning('Datoen kan ikke vaere i fremtiden.')
       onChange('')
       return
@@ -100,7 +131,7 @@ export function MondayDatePicker({
       return
     }
 
-    if (pastOrTodayOnly && next > today) {
+    if (pastOrTodayOnly && today !== null && next > today) {
       setWarning('Datoen kan ikke vaere i fremtiden.')
       // Do not propagate the value — keep the previous one.
       return
@@ -124,8 +155,13 @@ export function MondayDatePicker({
         value={value}
         max={maxAttr}
         onChange={handleChange}
-        disabled={disabled}
+        disabled={disabled || zoneUnavailable}
       />
+      {zoneError && (
+        <div role="alert" style={{ color: 'var(--color-error)', fontSize: '0.8125rem', marginTop: '0.25rem' }}>
+          {zoneError}
+        </div>
+      )}
       {warning && (
         <div role="alert" style={{ color: 'var(--color-error)', fontSize: '0.8125rem', marginTop: '0.25rem' }}>
           {warning}
