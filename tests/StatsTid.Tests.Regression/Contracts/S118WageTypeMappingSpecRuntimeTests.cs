@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using Xunit.Sdk;
@@ -215,7 +216,14 @@ public sealed class S118WageTypeMappingSpecRuntimeTests : IAsyncLifetime
     /// by the same-day validator; same-day ⇒ in-place UPDATE); wageType edited.</summary>
     private static string PutJson(string timeType)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date)
+        // S142 / TASK-14201 — "today" is the EUROPE/COPENHAGEN business day: the same calendar
+        // WageTypeMappingEndpoints now computes. Both sides used to read the UTC day and so agreed
+        // only by coincidence; leaving this side on UTC would have reddened every fact here that
+        // must get PAST the same-day gate, for the one-to-two hours each night between Danish and
+        // UTC midnight. This is a FIXTURE, NOT AN ASSERTION — the same helper on the same real
+        // clock cannot disagree with itself. The discriminating coverage is the clock-PINNED facts
+        // (WithFixedInstant + BoundaryInstants + LITERAL dates) and Hosting/FixedInstantSeamTests.cs.
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System)
             .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         return $$"""
                { "timeType": "{{timeType}}", "wageType": "SLS_S118B", "okVersion": "{{OkVersion}}",

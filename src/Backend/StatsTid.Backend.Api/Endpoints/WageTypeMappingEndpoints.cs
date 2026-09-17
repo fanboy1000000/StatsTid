@@ -6,6 +6,7 @@ using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -90,6 +91,10 @@ public static class WageTypeMappingEndpoints
             IAuditProjectionMapper<WageTypeMappingCreated> createdMapper,
             IAuditProjectionMapper<WageTypeMappingUpdated> updatedMapper,
             AuditProjectionRepository auditRepo,
+            // S142 / TASK-14201 — the server-"today" seam. DI supplies TimeProvider.System in
+            // production; a fixed provider in tests. Injected so the Copenhagen business date
+            // below is pinnable (PAT-008); it was previously read off the ambient wall clock.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -100,7 +105,11 @@ public static class WageTypeMappingEndpoints
             // 1. Same-day-only-edit validator (refinement L127, cycle 3 symmetric forbid).
             //    POST defaults a missing body.EffectiveFrom to today (preserves the common
             //    admin-create-now case); any other supplied date → 422.
-            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            //    S142 / TASK-14201 (census row 32): "today" is the EUROPE/COPENHAGEN calendar
+            //    day, not the UTC one. effective_from is a BUSINESS date, so between Danish
+            //    midnight and UTC midnight the UTC day was still yesterday and this equality
+            //    validator REFUSED the date on the admin's own calendar.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var requestedEffectiveFrom = body.EffectiveFrom ?? today;
             if (requestedEffectiveFrom != today)
             {
@@ -403,6 +412,8 @@ public static class WageTypeMappingEndpoints
             IAuditProjectionMapper<WageTypeMappingUpdated> updatedMapper,
             IAuditProjectionMapper<WageTypeMappingSuperseded> supersededMapper,
             AuditProjectionRepository auditRepo,
+            // S142 / TASK-14201 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -415,7 +426,10 @@ public static class WageTypeMappingEndpoints
             //    body.EffectiveFrom is now OPTIONAL — omitted defaults to server today
             //    (compute-once; the ONLY body.EffectiveFrom read in this handler); an
             //    explicitly-sent value != today still 422s (S29 semantics unchanged).
-            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            //    S142 / TASK-14201 (census row 33): "today" is the EUROPE/COPENHAGEN calendar
+            //    day. Same reasoning as the POST — this is the value an omitted EffectiveFrom
+            //    is defaulted to and stored as, and the value echoed in the 422 body.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var requestedEffectiveFrom = body.EffectiveFrom ?? today;
             if (requestedEffectiveFrom != today)
             {
@@ -577,6 +591,8 @@ public static class WageTypeMappingEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<WageTypeMappingDeleted> deletedMapper,
             AuditProjectionRepository auditRepo,
+            // S142 / TASK-14201 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -609,7 +625,11 @@ public static class WageTypeMappingEndpoints
                     // replaced by SoftDeleteAsync (sets effective_to = today on the open row)
                     // per ADR-020 D2. Replay determinism preserved — past forward-calcs against
                     // the (then-open) row continue to read the closed row via GetByKeyAtAsync.
-                    var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+                    // S142 / TASK-14201 (census row 34): that effective_to stamp is a BUSINESS
+                    // date (end-exclusive, ADR-018 D9), so it is the EUROPE/COPENHAGEN calendar
+                    // day off the injected TimeProvider — not the UTC day, which closed the row
+                    // a day early for any admin deleting after Danish midnight.
+                    var today = CopenhagenBusinessDate.Today(timeProvider);
                     var success = await repo.SoftDeleteAsync(
                         conn, tx, timeType, okVersion, agreementCode, pos, expectedVersion, today, ct);
                     if (!success)

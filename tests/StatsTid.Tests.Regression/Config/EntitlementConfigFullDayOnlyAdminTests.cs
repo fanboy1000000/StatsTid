@@ -5,6 +5,7 @@ using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
@@ -34,6 +35,21 @@ namespace StatsTid.Tests.Regression.Config;
 ///     (the R2 additive-nullable event extension).</item>
 /// </list>
 /// </summary>
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// S142 / TASK-14201 — every business-date "today" in this file is the EUROPE/COPENHAGEN day
+// (CopenhagenBusinessDate), matching the same-day gate that BOTH endpoints exercised here
+// (EntitlementConfigEndpoints and the sub-resource AgreementEntitlementEndpoints) now compute.
+// Both sides used to read the UTC day and agreed only by coincidence; leaving this side on UTC
+// would have replaced each expected status or error-body shape below with the differently-shaped
+// same-day 422 for the one-to-two hours each night between Danish and UTC midnight.
+//
+// THESE READS ARE FIXTURES, NOT ASSERTIONS — the same helper on the same real clock cannot
+// disagree with itself. The discriminating coverage is the clock-PINNED facts (WithFixedInstant +
+// BoundaryInstants + LITERAL dates) and Hosting/FixedInstantSeamTests.cs.
+//
+// NOT TOUCHED: the `CreatedAt`/`UpdatedAt` fixture values further down are INSTANTS, not business
+// dates. They stay UTC — moving an instant is what corrupts audit ordering.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 [Trait("Category", "Docker")]
 public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
 {
@@ -86,7 +102,7 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
     {
         var client = AdminClient();
         var fakeOk = "OK_S73FDO_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         // The flag is deliberately ABSENT from the body — binder-400 (ruling #3), nothing
         // reaches the guard, nothing persists.
@@ -170,7 +186,7 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
     {
         var client = AdminClient();
         var fakeOk = "OK_S73FDO_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var rsp = await client.PostAsJsonAsync("/api/admin/entitlement-configs", new
         {
@@ -203,7 +219,7 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
     {
         var client = AdminClient();
         var (configId, version) = await ReadSeededConfigAsync(client, "CARE_DAY", "PROSA", "OK26");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var rsp = await PutAsync(client, configId, "CARE_DAY", "PROSA", "OK26",
             annualQuota: 2m, description: "s73-unrule-attempt",
@@ -233,7 +249,7 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
     {
         var client = AdminClient();
         var (configId, version) = await ReadSeededConfigAsync(client, "SENIOR_DAY", "AC", "OK24");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var rsp = await PutAsync(client, configId, "SENIOR_DAY", "AC", "OK24",
             annualQuota: 2m, description: "s73-unrelated-field-edit",
@@ -388,7 +404,7 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
 
     private static object ChildEntitlementBody(string entitlementType, bool fullDayOnly)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         return new
         {
             entitlementType,
@@ -473,7 +489,7 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
 
     private static object CareDayPostBody(string fakeOk, bool fullDayOnly)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         return new
         {
             entitlementType = "CARE_DAY",
@@ -567,6 +583,84 @@ public sealed class EntitlementConfigFullDayOnlyAdminTests : IAsyncLifetime
             new AuthenticationHeaderValue("Bearer", MintAdminToken());
         return client;
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // S142 / TASK-14201 — THE DISCRIMINATING FACT for census rows 4/5/6
+    // (AgreementEntitlementEndpoints — the SUB-RESOURCE admin surface).
+    //
+    // WHAT IT PROVES: at an instant where Denmark has already turned the page to a new day but
+    // Greenwich has not, the child-entitlement surface calls the DANISH day "today" — it refuses
+    // the stale UTC date and names the Danish one in the body the admin is shown. This surface
+    // needs its own pin because it is a SEPARATE copy of the same-day gate: the two admin
+    // surfaces were converted independently, so proving one says nothing about the other. That is
+    // exactly the wiring-drift class this file already exists to guard (the S68-B1 lesson).
+    //
+    // WHY IT IS BUILT THIS WAY: every other "today" in this file is read off the real clock, which
+    // makes it a fixture, not evidence. This fact PINS the server clock and states expected dates
+    // as LITERALS. WithFixedToday(DateOnly) is unusable — it pins UTC MIDNIGHT, where the two
+    // calendars always agree. The instant is 2026-07-15 22:30Z; Copenhagen is CEST (+02:00) so it
+    // is already 00:30 on the 16th there, killing a no-conversion AND a hardcoded +01:00
+    // implementation at once (see BoundaryInstants).
+    //
+    // RED ON THE PRE-CHANGE CODE: with the endpoint on DateTime.UtcNow.Date the server's "today"
+    // is 2026-07-15, so the UTC-dated POST is ACCEPTED (201) rather than refused and the
+    // Danish-dated one is refused. Docker-gated → CI-VERIFIED, not verified locally.
+    // ═════════════════════════════════════════════════════════════════════════
+    [Fact]
+    public async Task SubResource_Post_AtCopenhagenDayRollover_TreatsTheDanishDayAsToday()
+    {
+        using var pinned = _factory.WithFixedInstant(
+            BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen);
+        // PAT-008 boot order: the PINNED host boots before the fixture is seeded below, so the
+        // startup seeders cannot re-run over it.
+        var client = pinned.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintAdminToken());
+
+        var (parentId, code, _) = await SeedAgreementConfigWithCodeAsync();
+
+        // (a) The UTC calendar day is REFUSED, and the 422 names the DANISH day as today.
+        var staleRsp = await client.PostAsJsonAsync(
+            $"/api/agreement-configs/{parentId}/entitlements",
+            BoundaryChildBody("2026-07-15"));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, staleRsp.StatusCode);
+        var staleBody = await staleRsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("2026-07-15", staleBody.GetProperty("suppliedEffectiveFrom").GetString());
+        Assert.Equal("2026-07-16", staleBody.GetProperty("today").GetString());
+
+        // (b) The DANISH calendar day is ACCEPTED and STORED on that day.
+        var okRsp = await client.PostAsJsonAsync(
+            $"/api/agreement-configs/{parentId}/entitlements",
+            BoundaryChildBody("2026-07-16"));
+        Assert.Equal(HttpStatusCode.Created, okRsp.StatusCode);
+
+        var storedRaw = await ScalarAsync(
+            """
+            SELECT effective_from FROM entitlement_configs
+            WHERE entitlement_type = 'VACATION' AND agreement_code = @p0
+            """, code);
+        Assert.Equal(new DateOnly(2026, 7, 16), DateOnly.FromDateTime((DateTime)storedRaw!));
+    }
+
+    /// <summary>A guard-legal child body whose only variable of interest is
+    /// <paramref name="effectiveFrom"/>, sent as a LITERAL <c>yyyy-MM-dd</c> string rather than
+    /// derived from a clock. VACATION with resetMonth 9 satisfies the statutory guard and is not
+    /// a full-day-only forced type, so the same-day gate under test is the only thing that can
+    /// reject the request.</summary>
+    private static object BoundaryChildBody(string effectiveFrom) => new
+    {
+        entitlementType = "VACATION",
+        annualQuota = 25m,
+        accrualModel = "IMMEDIATE",
+        resetMonth = 9,
+        carryoverMax = 5m,
+        proRateByPartTime = true,
+        isPerEpisode = false,
+        minAge = (int?)null,
+        description = "s142-boundary",
+        fullDayOnly = false,
+        effectiveFrom,
+    };
 
     private static string MintAdminToken()
     {

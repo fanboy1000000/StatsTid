@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
@@ -45,6 +46,17 @@ namespace StatsTid.Tests.Regression.Config;
 /// fallback key fires), verbatim from <see cref="WageTypeMappingEndpointTests"/>. The
 /// <c>GlobalAdminOnly</c> policy requires the GlobalAdmin role on the JWT.
 /// </summary>
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// S142 / TASK-14201 — every "today" in this file is the EUROPE/COPENHAGEN business day
+// (CopenhagenBusinessDate). S133/QUAL-020 rewired this suite to drive the shipped HTTP endpoint
+// rather than the repository, so it inherited WageTypeMappingEndpoints' same-day gate; once that
+// gate moved to the Danish calendar, a client still on the UTC day would have been refused for the
+// one-to-two hours each night between Danish and UTC midnight, reddening the 200/201 facts below.
+//
+// THESE READS ARE FIXTURES, NOT ASSERTIONS — the same helper on the same real clock cannot
+// disagree with itself. The discriminating coverage is the clock-PINNED facts (WithFixedInstant +
+// BoundaryInstants + LITERAL dates) and Hosting/FixedInstantSeamTests.cs.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 [Trait("Category", "Docker")]
 public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
 {
@@ -89,7 +101,7 @@ public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
     public async Task SameDayEdit_ViaPut_InPlaceUpdate_BumpsVersion_EmitsUpdatedAuditAndOutbox()
     {
         var timeType = NewTimeType("SAMEDAY");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         // Data setup: one open row at effective_from = today, version = 1.
         await SeedOpenRowAsync(timeType, effectiveFrom: today, wageType: "SLS_0110", description: "original");
@@ -134,7 +146,7 @@ public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
     public async Task CrossDayEdit_ViaPut_ClosesPredecessor_InsertsNewRow_EmitsSupersededAuditAndOutbox()
     {
         var timeType = NewTimeType("CROSSDAY");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         var predecessorEffectiveFrom = new DateOnly(2020, 1, 1); // mirrors init.sql backfill epoch
 
         // Data setup: an open, day-old predecessor (the endpoint's validator forbids creating
@@ -237,7 +249,7 @@ public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
     public async Task CaseB_DeleteThenRecreate_PredecessorBeforeToday_FreshInsert_DeletedThenCreatedAudit()
     {
         var timeType = NewTimeType("CASEB");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         var pastEffectiveFrom = new DateOnly(2024, 1, 1);
 
         await SeedOpenRowAsync(timeType, effectiveFrom: pastEffectiveFrom, wageType: "SLS_0110", description: "original-seed");
@@ -295,7 +307,7 @@ public sealed class WageTypeMappingSupersessionTests : IAsyncLifetime
     public async Task CaseC_CreateDeleteRecreateSameDay_ZeroWidthReopen_UpdatesInPlace_EmitsUpdatedAudit()
     {
         var timeType = NewTimeType("CASEC");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var client = AdminClient();
 

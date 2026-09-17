@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -31,6 +32,19 @@ namespace StatsTid.Tests.Regression.Config;
 /// requires the GlobalAdmin role on the JWT — no org-scope required (admin-strict
 /// surface per ADR-019).
 /// </summary>
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// S142 / TASK-14201 — every "today" in this file is the EUROPE/COPENHAGEN business day
+// (CopenhagenBusinessDate), matching the calendar WageTypeMappingEndpoints now computes for its
+// same-day gate and for the DELETE's `effective_to` stamp. Both sides used to read the UTC day and
+// so agreed only by coincidence; leaving this side on UTC would have reddened the 201/412/428/200
+// facts below — and the one that echoes the server's `today` back — for the one-to-two hours each
+// night between Danish and UTC midnight.
+//
+// THESE READS ARE FIXTURES, NOT ASSERTIONS — the same helper on the same real clock cannot
+// disagree with itself. The discriminating coverage is the clock-PINNED facts at the bottom of
+// this file (WithFixedInstant + BoundaryInstants + LITERAL expected dates) plus
+// Hosting/FixedInstantSeamTests.cs.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 [Trait("Category", "Docker")]
 public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
 {
@@ -76,7 +90,7 @@ public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
         var staleRsp = await PutAsync(client,
             timeType: "OVERTIME_50", okVersion: "OK24", agreementCode: "HK", position: "",
             wageType: "SLS_STALE", description: "stale-test",
-            effectiveFrom: DateOnly.FromDateTime(DateTime.UtcNow.Date),
+            effectiveFrom: CopenhagenBusinessDate.Today(TimeProvider.System),
             ifMatchValue: staleIfMatch.ToString());
 
         Assert.Equal(HttpStatusCode.PreconditionFailed, staleRsp.StatusCode);
@@ -95,7 +109,7 @@ public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
         var rsp = await PutAsync(client,
             timeType: "OVERTIME_50", okVersion: "OK24", agreementCode: "HK", position: "",
             wageType: "SLS_NOPRE", description: "no-precondition",
-            effectiveFrom: DateOnly.FromDateTime(DateTime.UtcNow.Date),
+            effectiveFrom: CopenhagenBusinessDate.Today(TimeProvider.System),
             ifMatchValue: null);
         Assert.Equal((HttpStatusCode)428, rsp.StatusCode);
     }
@@ -131,7 +145,7 @@ public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
 
         // Verify the row was soft-closed (effective_to = today, not hard-deleted — replay
         // determinism preserved per ADR-020 D2).
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
@@ -159,7 +173,7 @@ public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
         // forces the cross-day path inside SupersedeAndCreateAsync).
         var (currentVersion, _) = await ReadVersionAsync(client, "VACATION", "OK24", "PROSA", position: "");
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         var rsp = await PutAsync(client,
             timeType: "VACATION", okVersion: "OK24", agreementCode: "PROSA", position: "",
             wageType: "SLS_VACA_UPDATED",
@@ -185,7 +199,7 @@ public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
 
         var pastDate = new DateOnly(2025, 6, 1);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var body = new
         {
@@ -213,7 +227,7 @@ public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         var futureDate = today.AddDays(30);
 
         // Read current version for an existing seed so the PUT shape is otherwise valid;
@@ -242,7 +256,7 @@ public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         var uniqueTimeType = "WTM_S29_OK_" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
         var body = new
@@ -310,6 +324,75 @@ public sealed class WageTypeMappingEndpointTests : IAsyncLifetime
         }
         return await client.SendAsync(req);
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // S142 / TASK-14201 — THE DISCRIMINATING FACT for census rows 32/33/34.
+    //
+    // WHAT IT PROVES: at an instant where Denmark has already turned the page to a new day but
+    // Greenwich has not, this endpoint calls the DANISH day "today" — it refuses the stale UTC
+    // date and names the Danish one in the error body the admin is shown.
+    //
+    // WHY IT IS BUILT THIS WAY: every other "today" in this file is read off the real clock, which
+    // makes it a fixture rather than evidence (client and server call the same helper, so they
+    // cannot disagree). This fact PINS the server clock to an exact instant and states every
+    // expected date as a LITERAL. WithFixedToday(DateOnly) is unusable here — it pins UTC
+    // MIDNIGHT, the one moment where the two calendars always agree, so nothing built on it can
+    // detect this bug. The instant is 2026-07-15 22:30Z: Copenhagen is CEST (+02:00) so it is
+    // already 00:30 on the 16th there, which kills a no-conversion implementation AND a hardcoded
+    // +01:00 one at once (see BoundaryInstants for the full reasoning).
+    //
+    // RED ON THE PRE-CHANGE CODE: with the endpoint on DateTime.UtcNow.Date the server's "today"
+    // is 2026-07-15, so the UTC-dated POST is ACCEPTED (201) instead of refused, and the
+    // Danish-dated one is refused instead of accepted. Docker-gated → CI-VERIFIED, not local.
+    // ═════════════════════════════════════════════════════════════════════════
+    [Fact]
+    public async Task Post_AtCopenhagenDayRollover_TreatsTheDanishDayAsToday()
+    {
+        using var pinned = _factory.WithFixedInstant(
+            BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen);
+        // PAT-008 boot order: the PINNED host boots before any HTTP call below.
+        var client = pinned.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintAdminToken());
+
+        var staleTimeType = "S142UTC_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var freshTimeType = "S142CPH_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+
+        // (a) The UTC calendar day is REFUSED, and the 422 names the DANISH day as today.
+        var staleRsp = await client.PostAsJsonAsync("/api/admin/wage-type-mappings",
+            BoundaryPostBody(staleTimeType, "2026-07-15"));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, staleRsp.StatusCode);
+        var staleBody = await staleRsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("2026-07-15", staleBody.GetProperty("suppliedEffectiveFrom").GetString());
+        Assert.Equal("2026-07-16", staleBody.GetProperty("today").GetString());
+
+        // (b) The DANISH calendar day is ACCEPTED, and the row is STORED on that day.
+        var okRsp = await client.PostAsJsonAsync("/api/admin/wage-type-mappings",
+            BoundaryPostBody(freshTimeType, "2026-07-16"));
+        Assert.Equal(HttpStatusCode.Created, okRsp.StatusCode);
+
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT effective_from FROM wage_type_mappings WHERE time_type = @tt", conn);
+        cmd.Parameters.AddWithValue("tt", freshTimeType);
+        var stored = (DateTime)(await cmd.ExecuteScalarAsync())!;
+        Assert.Equal(new DateOnly(2026, 7, 16), DateOnly.FromDateTime(stored));
+    }
+
+    /// <summary>A minimal POST body whose only variable of interest is
+    /// <paramref name="effectiveFrom"/>, sent as a LITERAL <c>yyyy-MM-dd</c> string and never
+    /// derived from a clock — deriving it would prove only that the test agrees with itself.</summary>
+    private static object BoundaryPostBody(string timeType, string effectiveFrom) => new
+    {
+        timeType,
+        wageType = "SLS_S142",
+        okVersion = "OK24",
+        agreementCode = "HK",
+        position = "",
+        description = "s142-boundary",
+        effectiveFrom,
+    };
 
     private static string MintAdminToken()
     {

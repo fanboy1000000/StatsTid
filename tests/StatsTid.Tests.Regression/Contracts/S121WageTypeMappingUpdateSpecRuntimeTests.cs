@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using Xunit.Sdk;
@@ -229,7 +230,19 @@ public sealed class S121WageTypeMappingUpdateSpecRuntimeTests : IAsyncLifetime
     private HttpClient Admin()
         => SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, ActorId, JwtOrg);
 
-    private static DateOnly Today() => DateOnly.FromDateTime(DateTime.UtcNow.Date);
+    /// <summary>
+    /// S142 / TASK-14201 — the EUROPE/COPENHAGEN business day: the same calendar
+    /// <c>WageTypeMappingEndpoints</c> now computes. Both sides used to read the UTC day and so
+    /// agreed only by coincidence; one call site below filters rows with
+    /// <c>WHERE effective_from = @today</c> against a SERVER-stamped row, so a parted calendar
+    /// would have counted zero rows every night between Danish and UTC midnight.
+    ///
+    /// <para><b>This is a FIXTURE, not an assertion.</b> The same helper on the same real clock
+    /// cannot disagree with itself. The discriminating coverage is the clock-PINNED facts
+    /// (<c>WithFixedInstant</c> + <c>BoundaryInstants</c> + LITERAL dates) and
+    /// <c>Hosting/FixedInstantSeamTests.cs</c>.</para>
+    /// </summary>
+    private static DateOnly Today() => CopenhagenBusinessDate.Today(TimeProvider.System);
 
     /// <summary>Create a mapping through the REAL POST (effectiveFrom omitted ⇒ today);
     /// returns the 201 ETag version.</summary>

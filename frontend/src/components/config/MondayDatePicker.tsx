@@ -2,7 +2,9 @@
 //
 //   1. `pastOrTodayOnly` — reject future dates. The backend's ConfigEndpoints
 //      PUT rejects `effectiveFrom > today` with `EFFECTIVE_FROM_NOT_TODAY_OR_PAST`
-//      (D2 + cycle-2 fix). Always set true for profile saves.
+//      (D2 + cycle-2 fix). Always set true for profile saves. S142: "today" on
+//      BOTH sides is now the Europe/Copenhagen calendar day — see the note at
+//      the `copenhagenToday()` call below.
 //   2. `mondayOnly` — reject non-Mondays. The alignment policy for
 //      `WeeklyNormHours` (LocalAgreementProfileAlignmentPolicies) requires
 //      Monday. Set true only when WeeklyNormHours is in the changed-fields set,
@@ -16,6 +18,7 @@
 // Scope: basic functional. No animation, no min-attr-driven calendar
 // shading, no theming.
 import { useEffect, useState, type ChangeEvent } from 'react'
+import { copenhagenToday } from '../../lib/copenhagenDate'
 
 interface MondayDatePickerProps {
   id: string
@@ -36,11 +39,24 @@ export function MondayDatePicker({
 }: MondayDatePickerProps) {
   const [warning, setWarning] = useState<string | null>(null)
 
-  // Compute today's date in the browser's local zone as ISO yyyy-MM-dd.
-  // Backend uses DateOnly (no zone) and compares against UTC today; for the
-  // typical CET/CEST admin user the day boundaries align closely enough that
-  // local-zone today is the right UI default. Any drift is caught server-side.
-  const today = formatLocalDate(new Date())
+  // S142 / TASK-14201 (census row 59) — today is the EUROPE/COPENHAGEN calendar day.
+  //
+  // This value does three things: it caps the native picker via `max` below, it gates the
+  // onChange refusal, and it gates the re-validation effect. All three must agree with the
+  // server, whose `ConfigEndpoints` PUT (census row 14, moved in the SAME commit) rejects
+  // `effectiveFrom > today` against the Copenhagen day.
+  //
+  // The comment this replaces claimed the boundaries "align closely enough" for a CET/CEST admin
+  // and that "any drift is caught server-side". Both halves were wrong, which is why it is quoted
+  // rather than deleted. The drift was not caught: the server compared against the UTC day, so
+  // between Danish midnight and UTC midnight the picker OFFERED a date the server then refused as
+  // "in the future" — an admin working at 00:30 was told the day on their own wall calendar had
+  // not arrived. And "align closely enough" only ever described a browser sitting in Denmark; the
+  // browser zone is not a proxy for Copenhagen, it is a third calendar. An effective date is a
+  // fact about Danish employment law, not about where the person filling in the form is sitting
+  // (owner ruling OQ-1), so a laptop on New York time must still be offered — and must still
+  // accept — the Danish today.
+  const today = copenhagenToday()
   const maxAttr = pastOrTodayOnly ? today : undefined
 
   // Re-validate the currently selected date when constraints flip on. Without
@@ -119,12 +135,11 @@ export function MondayDatePicker({
   )
 }
 
-function formatLocalDate(d: Date): string {
-  const yyyy = d.getFullYear().toString().padStart(4, '0')
-  const mm = (d.getMonth() + 1).toString().padStart(2, '0')
-  const dd = d.getDate().toString().padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
-}
+// S142 / TASK-14201: the browser-local `formatLocalDate(d)` helper that used to live here
+// (getFullYear/getMonth/getDate) was DELETED rather than left unused. It is not a neutral
+// utility — it answers "what day is it where this laptop is", which is never the right question
+// for a StatsTid business date, and leaving it in the file is an invitation to reuse it. Use
+// `copenhagenToday()` from `src/lib/copenhagenDate.ts`.
 
 function parseIsoDate(iso: string): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
