@@ -350,6 +350,64 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         Assert.Equal("OPEN", projection.Employees.Single(e => e.EmployeeId == EmpApproved).Status);
     }
 
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S142 / TASK-14203 — the Copenhagen-day boundary on the ADMIN period-status tree
+    //
+    //  Census row 38. The consumer is the admin period-status tree (AdminEndpoints.cs:3366).
+    //  "Last closed month" is `period_end < @today`, so a period that ended YESTERDAY in Denmark is
+    //  closed — but on the retired UTC derivation "yesterday in Denmark" was still "today" for the
+    //  first hours of the Danish day, and the employee's badge read OPEN instead of their real
+    //  status. Expected values are LITERAL status strings.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Pinned at 2026-07-15 22:30Z (Copenhagen already 2026-07-16 00:30, CEST). A period ending on
+    /// the 15th is CLOSED on the Danish day, so its status must surface. On the UTC day (the 15th)
+    /// <c>period_end &lt; @today</c> is false, the period is not yet closed, and the badge degrades
+    /// to the "no closed period" default of OPEN — which is the pre-change answer.
+    /// </summary>
+    [Fact]
+    public async Task PeriodStatusProjection_PeriodEndingYesterdayInDenmark_IsAlreadyTheLastClosedMonth()
+    {
+        await InsertPeriodAsync(
+            EmpApproved, "STY02", "APPROVED", new DateOnly(2026, 6, 16), new DateOnly(2026, 7, 15));
+
+        var projection = await NewApprovalRepoAt(BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen)
+            .GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
+
+        Assert.Equal("APPROVED", projection.Employees.Single(e => e.EmployeeId == EmpApproved).Status);
+    }
+
+    /// <summary>The winter leg (2026-01-15 23:30Z → 2026-01-16 00:30 CET), so this is not DST-only.</summary>
+    [Fact]
+    public async Task PeriodStatusProjection_PeriodEndingYesterdayInDenmark_IsAlreadyClosed_InWinter()
+    {
+        await InsertPeriodAsync(
+            EmpApproved, "STY02", "APPROVED", new DateOnly(2025, 12, 16), new DateOnly(2026, 1, 15));
+
+        var projection = await NewApprovalRepoAt(BoundaryInstants.WinterEveningAlreadyTomorrowInCopenhagen)
+            .GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
+
+        Assert.Equal("APPROVED", projection.Employees.Single(e => e.EmployeeId == EmpApproved).Status);
+    }
+
+    /// <summary>
+    /// The control against a hardcoded <c>+02:00</c> mistake: at 2026-01-15 22:30Z Copenhagen is
+    /// still 23:30 on the 15th, so a period ending the 15th has NOT closed yet and the badge is OPEN.
+    /// A +02:00 implementation rolls the day over an hour early and would wrongly report APPROVED.
+    /// </summary>
+    [Fact]
+    public async Task PeriodStatusProjection_PeriodEndingToday_IsNotYetClosed_WhenCalendarsAgree()
+    {
+        await InsertPeriodAsync(
+            EmpApproved, "STY02", "APPROVED", new DateOnly(2025, 12, 16), new DateOnly(2026, 1, 15));
+
+        var projection = await NewApprovalRepoAt(BoundaryInstants.WinterEveningCalendarsStillAgree)
+            .GetPeriodStatusProjectionForTreeAsync("/MIN01/STY02/");
+
+        Assert.Equal("OPEN", projection.Employees.Single(e => e.EmployeeId == EmpApproved).Status);
+    }
+
     [Fact]
     public async Task PeriodStatusProjection_PerManagerPendingCount_TalliesToEffectiveApprover()
     {
@@ -940,6 +998,20 @@ public sealed class PeriodStatusAndPersonSearchReadsTests : IAsyncLifetime
         // S139/TASK-13908: pass the SAME FixedTimeProvider as the HTTP host so the repo-direct
         // tests' "today" (period_end < @today, phase-2 approver resolution) matches F too.
         return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo, new FixedTimeProvider(F));
+    }
+
+    /// <summary>
+    /// S142 / TASK-14203 — the same repository clocked at an exact INSTANT. <see cref="F"/> feeds
+    /// <see cref="FixedTimeProvider(DateOnly)"/>, which pins UTC MIDNIGHT — the one time of day where
+    /// the UTC and Copenhagen calendar days always agree, so nothing built on it can discriminate the
+    /// two derivations. The boundary facts below need an instant where they differ.
+    /// </summary>
+    private ApprovalPeriodRepository NewApprovalRepoAt(DateTimeOffset instant)
+    {
+        var clock = new FixedTimeProvider(instant);
+        var reportingRepo = new ReportingLineRepository(_dbFactory, vikarRepo: null, timeProvider: clock);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, reportingRepo, clock);
+        return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo, clock);
     }
 
     // S110 / TASK-11001: HasEnhedLabel captures whether the (now-removed) enhedLabel field is present

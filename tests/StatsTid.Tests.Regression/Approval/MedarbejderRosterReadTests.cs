@@ -531,6 +531,79 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  S142 / TASK-14203 — the Copenhagen-day boundary on the ADMIN tree read
+    //
+    //  These exercise census row 39: the profile join that picks the employee_profiles row
+    //  COVERING TODAY for the roster's job title. The consumer is the admin medarbejder roster
+    //  (AdminEndpoints.cs:3416), not an approval screen — this task's repository serves the admin
+    //  tree as well, and a date defect here shows up as a colleague's job title being wrong.
+    //
+    //  Each fact pins an INSTANT where the UTC and Copenhagen calendar days differ, and asserts the
+    //  position as a LITERAL string. Never re-derived from CopenhagenBusinessDate.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// A job title that starts TODAY in Denmark must be the one the roster shows, from the first
+    /// minute of the Danish day.
+    ///
+    /// <para>
+    /// Pinned at 2026-07-15 22:30Z, where Copenhagen is already 2026-07-16 00:30 (CEST). The profile
+    /// changes over on the 16th. On the retired UTC derivation the read asked for the 15th and
+    /// returned the OLD title for another two hours; on the Copenhagen day it returns the new one.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Roster_Position_TitleStartingOnTheDanishToday_IsAlreadyInForce()
+    {
+        await SetProfileChangeoverAsync(EmpA, "Fuldmægtig", "Specialkonsulent", new DateOnly(2026, 7, 16));
+        // RootMgr is REFERENCED by the roster (he is EmpA's structural approver), so his title comes
+        // from the separate name-resolver lateral — census row 40, whose only caller is this roster.
+        await SetProfileChangeoverAsync(RootMgr, "Kontorchef", "Afdelingschef", new DateOnly(2026, 7, 16));
+
+        var roster = await NewApprovalRepoAt(BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen)
+            .GetMedarbejderRosterForTreeAsync("/MIN01/STY02/");
+
+        // Row 39 — the roster row's own position lateral.
+        Assert.Equal("Specialkonsulent", roster.Employees.Single(e => e.EmployeeId == EmpA).Position);
+        // Row 40 — the referenced-person name resolver. A separate query with its own @today, so a
+        // conversion that moved only the roster's day would leave a manager labelled with the title
+        // he held yesterday, right next to a colleague labelled with today's.
+        Assert.Equal("Afdelingschef", roster.NameResolution[RootMgr].Position);
+    }
+
+    /// <summary>
+    /// The WINTER leg of the same fact (2026-01-15 23:30Z → 2026-01-16 00:30 CET), so the behaviour
+    /// is not a daylight-saving artefact.
+    /// </summary>
+    [Fact]
+    public async Task Roster_Position_TitleStartingOnTheDanishToday_IsAlreadyInForce_InWinter()
+    {
+        await SetProfileChangeoverAsync(EmpA, "Fuldmægtig", "Specialkonsulent", new DateOnly(2026, 1, 16));
+
+        var roster = await NewApprovalRepoAt(BoundaryInstants.WinterEveningAlreadyTomorrowInCopenhagen)
+            .GetMedarbejderRosterForTreeAsync("/MIN01/STY02/");
+
+        Assert.Equal("Specialkonsulent", roster.Employees.Single(e => e.EmployeeId == EmpA).Position);
+    }
+
+    /// <summary>
+    /// The CONTROL against a hardcoded <c>+02:00</c> ("summer offset all year") mistake: at
+    /// 2026-01-15 22:30Z Copenhagen is still 23:30 on the 15th, so a title starting on the 16th has
+    /// NOT started and the OLD one must still show. Without this, an implementation that rolls the
+    /// day over an hour early would pass both facts above.
+    /// </summary>
+    [Fact]
+    public async Task Roster_Position_TitleStartingTomorrow_IsNotYetInForce()
+    {
+        await SetProfileChangeoverAsync(EmpA, "Fuldmægtig", "Specialkonsulent", new DateOnly(2026, 1, 16));
+
+        var roster = await NewApprovalRepoAt(BoundaryInstants.WinterEveningCalendarsStillAgree)
+            .GetMedarbejderRosterForTreeAsync("/MIN01/STY02/");
+
+        Assert.Equal("Fuldmægtig", roster.Employees.Single(e => e.EmployeeId == EmpA).Position);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Helpers
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -541,6 +614,58 @@ public sealed class MedarbejderRosterReadTests : IAsyncLifetime
         // S139/TASK-13908: pass the SAME FixedTimeProvider as the HTTP host so the repo-direct
         // tests' "today" matches F too.
         return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo, new FixedTimeProvider(F));
+    }
+
+    /// <summary>
+    /// S142 / TASK-14203 — the same repository, clocked at an exact INSTANT instead of a date.
+    ///
+    /// <para>
+    /// <see cref="FixedTimeProvider(DateOnly)"/> (what <see cref="NewApprovalRepo"/> uses, via
+    /// <see cref="F"/>) pins UTC MIDNIGHT, where the UTC and Copenhagen calendar days always agree —
+    /// so no test built on it can tell the two derivations apart. The boundary facts below need a
+    /// provider pinned to an instant where they DISAGREE.
+    /// </para>
+    /// </summary>
+    private ApprovalPeriodRepository NewApprovalRepoAt(DateTimeOffset instant)
+    {
+        var clock = new FixedTimeProvider(instant);
+        var reportingRepo = new ReportingLineRepository(_dbFactory, vikarRepo: null, timeProvider: clock);
+        var authorizer = new DesignatedApproverAuthorizer(_dbFactory, reportingRepo, clock);
+        return new ApprovalPeriodRepository(_dbFactory, authorizer, reportingRepo, clock);
+    }
+
+    /// <summary>
+    /// Replaces an employee's single open profile with a DATED PAIR that changes over on
+    /// <paramref name="changeoverDate"/>: the old row is closed end-EXCLUSIVE at that date
+    /// (ADR-018 D9 — <c>effective_to</c> is the first day NOT covered) and the new row opens on it.
+    /// </summary>
+    private async Task SetProfileChangeoverAsync(
+        string employeeId, string positionBefore, string positionAfter, DateOnly changeoverDate)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using (var del = new NpgsqlCommand(
+            "DELETE FROM employee_profiles WHERE employee_id = @emp", conn))
+        {
+            del.Parameters.AddWithValue("emp", employeeId);
+            await del.ExecuteNonQueryAsync();
+        }
+
+        await using var ins = new NpgsqlCommand(
+            """
+            INSERT INTO employee_profiles (employee_id, part_time_fraction, position, effective_from, effective_to,
+                                           employment_category)
+            VALUES
+                (@emp, 1.000, @before, '0001-01-01', @changeover,
+                 (SELECT u.employment_category FROM users u WHERE u.user_id = @emp)),
+                (@emp, 1.000, @after,   @changeover, NULL,
+                 (SELECT u.employment_category FROM users u WHERE u.user_id = @emp))
+            """, conn);
+        ins.Parameters.AddWithValue("emp", employeeId);
+        ins.Parameters.AddWithValue("before", positionBefore);
+        ins.Parameters.AddWithValue("after", positionAfter);
+        ins.Parameters.AddWithValue("changeover", changeoverDate);
+        await ins.ExecuteNonQueryAsync();
     }
 
     private static string MintAdminToken(string userId, string orgId)

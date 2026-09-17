@@ -1,4 +1,5 @@
 using Npgsql;
+using StatsTid.SharedKernel.Calendar;
 
 namespace StatsTid.Infrastructure;
 
@@ -68,7 +69,15 @@ public sealed class DesignatedApproverAuthorizer
     /// explicit <c>asOf</c> (the approve / reject / reopen / team-overview / allocation-breakdown
     /// sites in <c>ApprovalEndpoints</c>, plus <c>ComplianceEndpoints</c> and the Skema month GET),
     /// so this is a TEST SEAM for direct constructions rather than a change to any live decision.
-    /// The day derivation is the UTC day, unchanged (QUAL-157 owns the UTC-vs-Copenhagen question).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>S142 / TASK-14203 — the derivation is the COPENHAGEN calendar day</b>
+    /// (<see cref="CopenhagenBusinessDate.Today(TimeProvider)"/>), no longer the UTC one. Being
+    /// production-dead is exactly why it had to move anyway: a fallback left on the retired calendar
+    /// is a loaded gun for the first future caller who omits an <c>asOf</c>, and it would misfire
+    /// only between Danish and UTC midnight — the hardest window to notice. "Nothing depends on it
+    /// today" is a reason it is CHEAP to convert, never a reason to skip it.
     /// </para>
     /// </summary>
     public DesignatedApproverAuthorizer(
@@ -162,10 +171,11 @@ public sealed class DesignatedApproverAuthorizer
         if (string.IsNullOrEmpty(actorId) || string.IsNullOrEmpty(employeeId))
             return false;
 
-        // S140 / TASK-14001 — the tail of the fallback chain is the INJECTED clock's UTC day
-        // (PAT-008 seam), not the wall clock. Same day under TimeProvider.System, and every
-        // endpoint caller passes an explicit asOf, so no live decision changes.
-        var effectiveAsOf = asOf ?? ctx?.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        // S140 / TASK-14001 — the tail of the fallback chain reads the INJECTED clock (PAT-008 seam),
+        // never the wall clock. S142 / TASK-14203 — and it derives the COPENHAGEN calendar day: every
+        // caller passes an explicit asOf today, so this tail changes no live decision, but it must
+        // not be the one place from which the retired UTC calendar can creep back in.
+        var effectiveAsOf = asOf ?? ctx?.AsOf ?? CopenhagenBusinessDate.Today(_timeProvider);
 
         // (1) The actor must be an active LeaderOrAbove. The resolver only returns ACTIVE
         //     approvers, so "active" is implied when the resolved id == actor; but the role
@@ -297,7 +307,8 @@ public sealed class DesignatedApproverAuthorizer
         // question against TWO clock reads. Passing the resolved value is inert for every other
         // input (a non-null asOf, or a ctx-bound date, reaches each leg unchanged), and every
         // production caller of this predicate already passes an explicit asOf.
-        var effectiveAsOf = asOf ?? ctx?.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        // S142 / TASK-14203 — the resolved date is the COPENHAGEN calendar day.
+        var effectiveAsOf = asOf ?? ctx?.AsOf ?? CopenhagenBusinessDate.Today(_timeProvider);
 
         if (await IsEffectiveDesignatedApproverAsync(
                 conn, tx, ctx, source, facts, actorId, employeeId, effectiveAsOf, ct))
@@ -351,7 +362,8 @@ public sealed class DesignatedApproverAuthorizer
             return UnitLeaderApprovalKind.None;
 
         // S140 / TASK-14001 — same injected-clock fallback tail as the edge predicate above.
-        var effectiveAsOf = asOf ?? ctx?.AsOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        // S142 / TASK-14203 — and the same COPENHAGEN calendar day.
+        var effectiveAsOf = asOf ?? ctx?.AsOf ?? CopenhagenBusinessDate.Today(_timeProvider);
 
         // (1) The actor must be an active LeaderOrAbove — the SAME role floor the edge path applies
         //     (a unit_leaders row for an Employee-role / inactive user grants nothing; D3 role-coupling).

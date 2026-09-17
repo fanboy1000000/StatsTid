@@ -39,7 +39,15 @@ public sealed class ApprovalPeriodRepository
     /// compiling. DI fills it from the <c>TimeProvider</c> singleton registered in
     /// <c>Program.cs</c>; a date-sensitive test host may register a FIXED provider so the
     /// period-status projection's "already-ended period" cut-off (<c>period_end &lt; @today</c>)
-    /// moves with the suite's clock instead of the database's. The day derivation is the UTC day.
+    /// moves with the suite's clock instead of the database's.
+    /// </para>
+    ///
+    /// <para>
+    /// S142 / TASK-14203 — every business date this repository derives from that seam is the
+    /// <b>Copenhagen</b> calendar day (<see cref="CopenhagenBusinessDate.Today(TimeProvider)"/>),
+    /// not the UTC one. Note for tests: pinning UTC MIDNIGHT (the <c>DateOnly</c> fixed-provider
+    /// constructor) makes the two calendars agree and therefore cannot discriminate the two
+    /// derivations — pin an INSTANT near Danish midnight to exercise the difference.
     /// </para>
     /// </summary>
     public ApprovalPeriodRepository(
@@ -245,7 +253,10 @@ public sealed class ApprovalPeriodRepository
         // S140 / TASK-14001 — ONE date for this read, off the injected TimeProvider seam (PAT-028 /
         // PAT-008). It is bound as @today into the candidate CTE AND passed to the R5 filter below,
         // so the candidate superset and the authority filter describe the same day by construction.
-        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        // S142 / TASK-14203 — that day is the COPENHAGEN calendar day, the same derivation the
+        // calling handlers use, so an admitted request and the rows answering it cannot describe
+        // two different calendars between Danish and UTC midnight.
+        var today = CopenhagenBusinessDate.Today(_timeProvider);
 
         var sql = $"""
             {DesignatedCandidateEmployeesCte}
@@ -294,7 +305,8 @@ public sealed class ApprovalPeriodRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
 
-        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        // S142 / TASK-14203 — the COPENHAGEN calendar day; same CTE, same rule as the month read above.
+        var today = CopenhagenBusinessDate.Today(_timeProvider);
 
         var sql = $"""
             {DesignatedCandidateEmployeesCte}
@@ -497,7 +509,8 @@ public sealed class ApprovalPeriodRepository
         var nextMonthStart = monthStart.AddMonths(1);
         // S140 / TASK-14001 — ONE date for this roster read, off the injected TimeProvider seam
         // (PAT-028 / PAT-008). Bound as @today into the candidate CTE and reused by the R5 filter.
-        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        // S142 / TASK-14203 — the COPENHAGEN calendar day, matching the team-overview handler's own.
+        var today = CopenhagenBusinessDate.Today(_timeProvider);
 
         // (1) Candidate EMPLOYEES (tree-root-bounded superset) + their users name/agreement, LEFT
         //     JOINed to the (year,month) period. One styrelse-tree-bounded query. The LEFT JOIN to
@@ -582,9 +595,11 @@ public sealed class ApprovalPeriodRepository
     /// returns:
     /// <list type="bullet">
     /// <item><description>their <b>last-closed-month</b> approval status — the
-    /// <c>approval_periods</c> row with the greatest <c>period_end &lt; @today</c> (the UTC day
-    /// from the injected <see cref="TimeProvider"/>; S139 / TASK-13907 replaced the former DB-side
-    /// <c>CURRENT_DATE</c>, which under a UTC session time zone produced the same day),
+    /// <c>approval_periods</c> row with the greatest <c>period_end &lt; @today</c> (the COPENHAGEN
+    /// day from the injected <see cref="TimeProvider"/> — S139 / TASK-13907 replaced the former
+    /// DB-side <c>CURRENT_DATE</c>, and S142 / TASK-14203 moved the derivation off the UTC
+    /// calendar, so it no longer agrees with <c>CURRENT_DATE</c> for the hours between Danish and
+    /// UTC midnight; that divergence is the point, not a regression),
     /// projected to the FE's 3-state badge (OPEN / SUBMITTED / APPROVED) — or OPEN when the
     /// employee has no closed period at all;</description></item>
     /// <item><description>a <b>per-authorized-approver pending count</b> (S106 / TASK-10604 — the
@@ -628,11 +643,14 @@ public sealed class ApprovalPeriodRepository
         // ONE date for BOTH phases (PAT-028: one operation, one date — compute it once at the top,
         // pass it everywhere). Phase (1)'s "already ended" SQL cut-off and phase (2)'s vikar-aware
         // approver resolution are two halves of ONE response, so they must describe the same
-        // effective date. Read separately they would not: a projection spanning UTC midnight could
-        // badge the employees against the 7th and count the manager tiles against the 8th, and no
-        // instant in time would explain the page — the same skew the RepeatableRead snapshot below
+        // effective date. Read separately they would not: a projection spanning the day boundary
+        // could badge the employees against the 7th and count the manager tiles against the 8th, and
+        // no instant in time would explain the page — the same skew the RepeatableRead snapshot below
         // exists to close on the DATA side, closed here on the DATE side.
-        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        //
+        // S142 / TASK-14203 — the boundary that matters is COPENHAGEN midnight, not UTC midnight
+        // (which is what this comment used to name). Both phases derive the Danish calendar day.
+        var today = CopenhagenBusinessDate.Today(_timeProvider);
 
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
@@ -730,11 +748,14 @@ public sealed class ApprovalPeriodRepository
         // S139 / TASK-13907 — "already ended" is decided by the APP clock (the injected
         // TimeProvider), not the database's CURRENT_DATE. WHY: this projection is one of the
         // date-sensitive read models the converted regression suites pin, and a DB-side date is
-        // the one thing a fixed test clock cannot move. BEHAVIOUR-PRESERVING: the Postgres session
-        // time zone is UTC wherever this runs, so CURRENT_DATE already yielded the UTC day, which
-        // is exactly what `today` (hoisted to the top of the method) holds. Npgsql maps DateOnly to
-        // `date`, so the comparison against the `period_end` DATE column is unchanged in type and
-        // semantics.
+        // the one thing a fixed test clock cannot move. Npgsql maps DateOnly to `date`, so the
+        // comparison against the `period_end` DATE column is unchanged in type and semantics.
+        //
+        // S142 / TASK-14203 — TASK-13907 recorded this move as behaviour-preserving because the
+        // Postgres session time zone is UTC, so CURRENT_DATE and the old UTC-day derivation agreed.
+        // They no longer do: `today` (hoisted to the top of the method) is now the COPENHAGEN
+        // calendar day and is deliberately one day AHEAD of CURRENT_DATE between Danish and UTC
+        // midnight. Reinstating a DB-side CURRENT_DATE here would silently restore the old defect.
         cmd.Parameters.AddWithValue("today", today);
         // S140 / TASK-14004 (QUAL-163) — the ratified provisional institutional approval offset,
         // bound as a PARAMETER from InstitutionalDeadlines (SharedKernel) so the computed fallback
@@ -1054,7 +1075,11 @@ public sealed class ApprovalPeriodRepository
         //     not hold until November. Display-only severity, but the roster is exactly where a
         //     colleague forms a belief about someone's job — and a wrong belief here is how a wrong
         //     approval route or a wrong wage-type conversation starts.
-        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        //
+        //     S142 / TASK-14203 — "covering today" means covering the COPENHAGEN day. A job title
+        //     that starts today in Denmark was still in the future on the UTC calendar for the first
+        //     hours of that day, which is the same off-by-one B1 closed for the other direction.
+        var today = CopenhagenBusinessDate.Today(_timeProvider);
         var rosterRows = new List<RosterRow>();
         await using (var conn = _connectionFactory.Create())
         {
@@ -1299,8 +1324,15 @@ public sealed class ApprovalPeriodRepository
             WHERE u.user_id = ANY(@ids)
             """, conn);
         cmd.Parameters.AddWithValue("ids", ids.ToArray());
+        // S142 / TASK-14203 — @today is the COPENHAGEN calendar day. It drives BOTH the
+        // covering-today profile lateral and the spliced scheduled-change marker above: on the UTC
+        // day a change effective from the Danish today would still read as scheduled for the FUTURE
+        // for the first hours after Danish midnight.
+        // (Deliberately paraphrased rather than naming the spliced constant: ScheduledChangeMarkerTests
+        // counts that identifier's occurrences in this file as a source-level "no fourth copy" guard,
+        // and a mention in prose is indistinguishable from a fourth splice to a text count.)
         cmd.Parameters.AddWithValue(
-            "today", DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime));
+            "today", CopenhagenBusinessDate.Today(_timeProvider));
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         var idOrd = reader.GetOrdinal("user_id");
@@ -1612,8 +1644,10 @@ public sealed class ApprovalPeriodRepository
         cmd.Parameters.AddWithValue("orgIds", (object?)accessibleOrgIds?.ToArray() ?? Array.Empty<string>());
         cmd.Parameters.AddWithValue("limit", limit);
         cmd.Parameters.AddWithValue("offset", offset);
+        // S142 / TASK-14203 — the COPENHAGEN calendar day, same lateral, same reason as the person
+        // search above; the overlay must not disagree with the roster about what is "scheduled".
         cmd.Parameters.AddWithValue(
-            "today", DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime));
+            "today", CopenhagenBusinessDate.Today(_timeProvider));
 
         var items = new List<OverlayPersonRow>();
         var total = 0;

@@ -219,9 +219,12 @@ public static class SkemaEndpoints
                 var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
                 if (!allowed)
                 {
-                    // S140 / TASK-14001 — "who may act NOW" reads the injected TimeProvider's UTC
-                    // day (PAT-008 seam); the only business-date read on this handler's path.
-                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+                    // S140 / TASK-14001 — "who may act NOW" reads the injected TimeProvider (PAT-008
+                    // seam); the only business-date read on this handler's path. S142 / TASK-14203 —
+                    // it is the COPENHAGEN calendar day, the same day the Teamoversigt roster and the
+                    // allocation-breakdown gate derive, so this expander cannot admit or deny against
+                    // a different calendar than the sibling reads it mirrors.
+                    var today = CopenhagenBusinessDate.Today(timeProvider);
                     var hasEdgeOrUnit = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
                         actor.ActorId!, employeeId, asOf: today, ct: ct);
                     if (!hasEdgeOrUnit)
@@ -2059,7 +2062,17 @@ public static class SkemaEndpoints
             // honest "current catalog" check; the month GET keeps its month-end display
             // anchor and re-intersects on every read, so a type that later leaves the
             // catalog is filtered there regardless of what was accepted here.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            //
+            // S142 / TASK-14203, owner ruling OQ-6 — the anchor is nevertheless the COPENHAGEN
+            // calendar day. This site is the honest exception in the sweep: nothing durable is
+            // persisted from it (the argument above still holds), so it moves for CONSISTENCY, not
+            // for correctness. The reason that is worth a line of code: leaving one "today" on the
+            // retired UTC calendar with no stated reason is exactly how a later reader concludes the
+            // rule has exceptions and writes the next one the old way. It is also not entirely
+            // inert — `today` selects the employee's agreement code below, and agreement changes are
+            // dated, so on the boundary day the two calendars can pick different catalogs to
+            // validate against.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var prefAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, today, ct)
                 ?? user.AgreementCode;
 
