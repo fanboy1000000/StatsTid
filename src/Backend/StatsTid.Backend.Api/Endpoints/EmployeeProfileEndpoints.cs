@@ -89,12 +89,25 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// employment-start floor raised by the writer, which is date-free because the hire date must never
 /// reach the wire (ADR-040 D7).
 /// <br/>
-/// "Today" is still the UTC day, read from the injected <see cref="TimeProvider"/>
-/// (<c>TimeProvider.System</c> in production) since S139 / TASK-13907, so a date-sensitive test host
-/// can fix it. It no longer gates the request; it is what the response body and the scheduled-change
-/// lookup are anchored on. The Copenhagen business-date convention used by the settlement / worklist
-/// paths is deliberately NOT used here: this endpoint must agree with the browser's
-/// <c>new Date().toISOString().slice(0,10)</c> UTC slice, not with the settlement calendar.
+/// "Today" is the <b>Copenhagen business day</b> since S142 / TASK-14205 (census row 15) —
+/// <see cref="StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Today(TimeProvider)"/> over the
+/// injected <see cref="TimeProvider"/> (<c>TimeProvider.System</c> in production, a fixed provider in
+/// a date-sensitive test host, S139 / TASK-13907). It does not gate the request; it is what the
+/// covers-today 404 pre-check, the response body, the scheduled-change lookup and the OQ-6
+/// carry-forward test are anchored on.
+/// <br/>
+/// This paragraph used to say the opposite, and the reason it was wrong is worth keeping: it argued
+/// the UTC day because "this endpoint must agree with the browser's
+/// <c>new Date().toISOString().slice(0,10)</c> UTC slice". That made the BROWSER's accident of
+/// implementation the definition of a Danish business date. Every user of this system is in Denmark,
+/// and between Danish midnight and UTC midnight (Denmark is UTC+1 in winter, UTC+2 in summer) the UTC
+/// calendar is still on yesterday — so an HR user editing a profile at 00:30 was served a "today"
+/// that was yesterday, with four consequences: a profile whose row begins today was 404'd as
+/// "not found", the 200 body reported YESTERDAY's values for a change made now, a change already in
+/// force was reported as still <c>scheduled</c>, and the OQ-6 carry-forward treated a row that had
+/// already taken effect as a future scheduled change and wrote into it. S142 / TASK-14209 moves the
+/// browser onto the same Copenhagen day, so the agreement the old paragraph wanted is preserved —
+/// on the correct calendar rather than on the convenient one.
 /// </para>
 ///
 /// <para>
@@ -133,9 +146,10 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///
 /// <para>
 /// <b>ADR-023 D8 soft-delete divergence.</b> DELETE soft-deletes the live row by stamping
-/// <c>effective_to</c> = today (the UTC day from the injected <see cref="TimeProvider"/>, bound
-/// as a SQL parameter since S139 / TASK-13907 — it was the DB-side <c>NOW()::date</c> before,
-/// which under a UTC session time zone produced the same day) with the predecessor's
+/// <c>effective_to</c> = today (the COPENHAGEN business day since S142 / TASK-14205, off the
+/// injected <see cref="TimeProvider"/>, bound as a SQL parameter since S139 / TASK-13907 — it was
+/// the DB-side <c>NOW()::date</c> before, which on a UTC-configured Postgres container produced the
+/// UTC day, which is precisely the coupling S142 removed) with the predecessor's
 /// <c>version</c> column
 /// UNCHANGED — soft-delete is row-state-change, not field-mutation. The audit row
 /// accordingly carries <c>version_before = version_after = predecessor.version</c>
@@ -240,7 +254,10 @@ public static class EmployeeProfileEndpoints
         //
         // S33 / TASK-3308 changes:
         //   • DTO gains required `EffectiveFrom: DateOnly`; validator rejects anything
-        //     other than today (UTC) with 422 per ADR-023 D8.
+        //     other than today with 422 per ADR-023 D8. (HISTORY — that validator is gone:
+        //     S138 admitted past dates, S141 removed the upper bound. "Today" as S33 computed
+        //     it was the UTC day; since S142 it is the Copenhagen business day everywhere in
+        //     this file.)
         //   • Case A 404 pre-check (Step 0b Reviewer BLOCKER-3 absorption) — fail 404
         //     BEFORE routing through SupersedeAndCreateAsync when no live row exists.
         //   • Routes through SupersedeAndCreateAsync (TASK-3302) and discriminates on
@@ -324,13 +341,34 @@ public static class EmployeeProfileEndpoints
             // 1 November and being told the date cannot be in the future while every layer beneath
             // accepted it. See the class doc for what the refusal was load-bearing FOR.
             //
-            // `today` survives the refusal's removal and is now used for three things, none of them
-            // a gate: the AS-OF-TODAY response body, the scheduled-change lookup B0 returns, and the
-            // OQ-6 test for whether the row that truncated this write is a SCHEDULED change (it
-            // starts after today) or ordinary closed history (it does not). Still the UTC day off
-            // the injected TimeProvider (S139 / TASK-13907), so a fixed-clock test host moves all
-            // three together.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // `today` survives the refusal's removal and is now used for FOUR things, none of them a
+            // gate on the requested date: the covers-today 404 pre-check below, the AS-OF-TODAY
+            // response body, the scheduled-change lookup B0 returns, and the OQ-6 test for whether
+            // the row that truncated this write is a SCHEDULED change (it starts after today) or
+            // ordinary closed history (it does not). Read ONCE (PAT-028) so all four describe the
+            // same day.
+            //
+            // ── S142 / TASK-14205 (census row 15) — THE COPENHAGEN BUSINESS DAY ──
+            // Every user of this system is Danish, and Denmark is UTC+1 (CET) / UTC+2 (CEST), so
+            // between Danish midnight and UTC midnight the UTC calendar is still on YESTERDAY. On the
+            // old UTC day, an HR user editing a profile at 00:30 Danish time got a "today" of
+            // yesterday, and each of the four consumers above then did something wrong:
+            //
+            //   • the 404 pre-check asked whether a row covered YESTERDAY, so an employee whose only
+            //     profile row begins today (which is what the create POST and the demo seeder now
+            //     write) was reported "not found" and could not be edited at all;
+            //   • the 200 body reported the values in force YESTERDAY, not the ones just written;
+            //   • a change that is in force TODAY was reported back as still `scheduled`; and
+            //   • the OQ-6 carry-forward, whose whole test is `boundary > today`, classified a row
+            //     that had ALREADY taken effect as a future scheduled change and wrote HR's edit into
+            //     it — a durable, un-asked-for change to a live row, not a display glitch.
+            //
+            // The clock SOURCE is unchanged (the injected TimeProvider, S139 / TASK-13907, so a
+            // fixed-clock test host still moves all four together); only the calendar the instant is
+            // attributed to has moved. Note this is a CALENDAR-DAY question only: `created_at`, the
+            // audit timestamps and outbox ordering in this handler stay UTC instants and must not be
+            // routed through this helper (see CopenhagenBusinessDate's class remarks).
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             // Admin-strict If-Match parse — 428 if missing / malformed / If-None-Match: *
             // (per EtagHeaderHelper.TryParseIfMatch admin-strict mode).
@@ -1160,12 +1198,20 @@ public static class EmployeeProfileEndpoints
             // S139 / TASK-13907 (Step-5a W1) — ONE date for the whole DELETE, computed here and
             // used twice: as the row's close-stamp (passed to SoftDeleteAsync as `closeDate`) and
             // as the emitted event's `EffectiveTo`. Reading the provider twice would not be the
-            // same instant — a request crossing 23:59:59.9 UTC could stamp the row the 8th and
-            // announce the 7th in the event that describes it, which is an audit-trail
-            // contradiction, not a rounding detail. Same "compute ONCE so they can never disagree"
-            // rule S137 applied to the create POST (AdminEndpoints `effectiveFrom`). UTC day, per
-            // the endpoint convention documented on this class.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // same instant — a request crossing a midnight could stamp the row the 8th and announce
+            // the 7th in the event that describes it, which is an audit-trail contradiction, not a
+            // rounding detail. Same "compute ONCE so they can never disagree" rule S137 applied to
+            // the create POST (AdminEndpoints `effectiveFrom`).
+            //
+            // S142 / TASK-14205 (census row 16) — the COPENHAGEN business day, per the convention
+            // now documented on this class. This value is a STORED STAMP twice over: it becomes the
+            // row's `effective_to` and the `EmployeeProfileSoftDeleted` event's `EffectiveTo`. Under
+            // end-exclusive [from, to) semantics (ADR-018 D9) a close stamped one day early makes the
+            // profile invisible for a day it was actually still in force — HR deleting at 00:30
+            // Danish time would have retired the person as of yesterday, which every as-of read
+            // downstream then believes. The midnight that matters for a Danish business date is the
+            // Danish one; the two calendars differ by one for the one-to-two hours after it.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);

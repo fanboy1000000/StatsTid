@@ -7,6 +7,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Security;
 
@@ -29,7 +30,9 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///       any <c>entitlementType</c> other than <c>CHILD_SICK</c> with 422 (SENIOR_DAY is fully
 ///       age-derived and is NEVER recorded here — refinement line 117; this scope guard lives
 ///       at the endpoint, not the DB, mirroring role_config_overrides). EffectiveFrom is
-///       server-stamped to today (UTC) per ADR-023 D8. In one transaction (ADR-018 D3):
+///       server-stamped to today — the <b>Copenhagen business day</b> since S142 / TASK-14205
+///       (<see cref="StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate"/>, off the injected
+///       <see cref="TimeProvider"/>) — per ADR-023 D8. In one transaction (ADR-018 D3):
 ///       <see cref="EmployeeEntitlementEligibilityRepository.SupersedeAndCreateAsync"/>
 ///       (which writes the table-level eligibility audit row) + the
 ///       <see cref="EmployeeEntitlementEligibilitySet"/> outbox enqueue + the ADR-026
@@ -66,7 +69,8 @@ public static class EntitlementEligibilityEndpoints
         //   • If-None-Match: *          → first-create (Case A; expectedVersion = null)
         //   • If-Match: "<version>"     → toggle existing (Case B same-day / Case C cross-day)
         // Rejects entitlementType ∉ {CHILD_SICK} with 422 (scope guard). EffectiveFrom is
-        // server-stamped to today (UTC) per ADR-023 D8 — admins cannot back/forward-date.
+        // server-stamped to today — the COPENHAGEN business day since S142 / TASK-14205 — per
+        // ADR-023 D8; admins cannot back/forward-date.
         //
         // Error mapping:
         //   • 422 — entitlementType not settable (scope guard) OR backdate (repo defense)
@@ -87,6 +91,13 @@ public static class EntitlementEligibilityEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            // S142 / TASK-14205 — the server-"today" seam (TimeProvider.System in production; a
+            // date-sensitive test host registers a FIXED provider). This handler used to read the
+            // ambient DateTime.UtcNow, which no test clock can reach: passing TimeProvider.System to
+            // the Copenhagen helper would have produced the right date and an untestable one, so any
+            // pin written against it would have proved nothing. Injection is what makes the stamp
+            // below observable.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -124,7 +135,15 @@ public static class EntitlementEligibilityEndpoints
 
             var actorId = actor.ActorId ?? "unknown";
             var actorRole = actor.ActorRole ?? "unknown";
-            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow);
+            // S142 / TASK-14205 (census row 21) — the COPENHAGEN business day. This one value is a
+            // STORED STAMP: it becomes the eligibility row's `effective_from` AND rides on the
+            // EmployeeEntitlementEligibilitySet event, and the absence POST then gates on
+            // `absence.Date >= effective_from`. On the old UTC day, HR granting a child-sick
+            // entitlement at 00:30 Danish time stamped it as starting YESTERDAY — a grant that
+            // silently covers a day HR did not grant. Computed ONCE (PAT-028) so the row and the
+            // event that describes it carry the same date by construction, not by two clock reads
+            // that happen to agree.
+            var effectiveFrom = CopenhagenBusinessDate.Today(timeProvider);
             var streamId = $"employee-entitlement-eligibility-{employeeId}-{entitlementType}";
 
             await using var conn = connectionFactory.Create();
@@ -180,9 +199,12 @@ public static class EntitlementEligibilityEndpoints
                 }
                 catch (InvalidEligibilitySupersessionException ex)
                 {
-                    // Defense-in-depth — EffectiveFrom is server-stamped to today (UTC), so a
-                    // backdate is structurally impossible unless a predecessor's effective_from
-                    // is in the future. Map to 422 if it ever fires.
+                    // Defense-in-depth — EffectiveFrom is server-stamped to today (the Copenhagen
+                    // business day since S142), so a backdate is structurally impossible unless a
+                    // predecessor's effective_from is in the future. Map to 422 if it ever fires.
+                    // S142 note: a predecessor written by the OLD (UTC) stamp is never in the
+                    // future relative to the new one — Copenhagen is UTC+1/+2, so the Danish day is
+                    // the same day or one AHEAD, never behind. The cutover cannot manufacture this.
                     await tx.RollbackAsync(ct);
                     return Results.UnprocessableEntity(new { error = ex.Message });
                 }

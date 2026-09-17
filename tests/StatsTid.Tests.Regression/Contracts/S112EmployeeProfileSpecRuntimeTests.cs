@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 
@@ -16,8 +17,13 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// <para><b>Dedicated-row seeding (the ordering guarantee):</b> xUnit does NOT guarantee intra-class
 /// test order, so each op targets its OWN user + live <c>employee_profiles</c> row — the DELETE's
 /// soft-delete can never 404 the GET/PUT assertions. All rows seed at version=1 (schema default);
-/// PUT/DELETE use If-Match "1". The PUT's <c>effectiveFrom</c> MUST be today (UTC) — the ADR-023 D8
-/// validator rejects anything else with 422.</para>
+/// PUT/DELETE use If-Match "1". The PUT's <c>effectiveFrom</c> is today — the <b>COPENHAGEN business
+/// day</b> since S142 / TASK-14205, derived exactly as the endpoint derives it. It said "today (UTC)"
+/// until S142, and the reason it had to be today has also changed: the ADR-023 D8 same-day validator
+/// that once rejected anything else with 422 is gone (S138 admitted past dates, S141 the future), but
+/// the PUT's covers-today pre-check still 404s an employee no row covers on the SERVER's today — so a
+/// request dated on a different calendar from the server's would not reach the 200 whose schema this
+/// gate compares.</para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class S112EmployeeProfileSpecRuntimeTests : IAsyncLifetime
@@ -67,10 +73,18 @@ public sealed class S112EmployeeProfileSpecRuntimeTests : IAsyncLifetime
     [Fact]
     public async Task ProfilePut_200_SchemaMatchesRuntime()
     {
-        // ADR-023 D8: the validator accepts ONLY today (UTC). The seeded predecessor sits at
-        // '0001-01-01', so this routes through Case C supersession — the response shape is the
-        // same named record either way (EmployeeProfileResponse).
-        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        // ADR-023 D8 (as it stood at S112): the validator accepted ONLY today. That validator is
+        // gone since S138/S141, but a today-dated write is still what this op exercises. The seeded
+        // predecessor sits at '0001-01-01', so this routes through Case C supersession — the
+        // response shape is the same named record either way (EmployeeProfileResponse).
+        //
+        // S142 / TASK-14205 — "today" is the COPENHAGEN business day, derived here exactly as the
+        // endpoint derives it. On the unpinned host this is a second, independent read of the same
+        // wall clock, so only a matching CALENDAR keeps the two in agreement: with `DateTime.UtcNow`
+        // the request would carry the 15th while the server called it the 16th for the one-to-two
+        // hours after Danish midnight, and the PUT's covers-today pre-check would 404 rather than
+        // return the 200 whose schema this gate compares.
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System).ToString("yyyy-MM-dd");
         await AssertOpAsync(
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Put, $"/api/admin/employee-profiles/{PutEmployee}",
                 $$"""{ "effectiveFrom": "{{today}}", "partTimeFraction": 0.8, "position": "Specialkonsulent" }""",

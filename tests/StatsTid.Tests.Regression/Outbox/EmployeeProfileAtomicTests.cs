@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -82,6 +83,21 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
         // today so PUT routes to Case B (UPDATE-in-place, version 1 → 2). The
         // Case C semantic is exercised separately by the lifecycle tests'
         // PUT_CrossDayEdit_EmitsEmployeeProfileSuperseded_NotUpdated.
+        //
+        // ── S142 / TASK-14205 — this date must be the SERVER's "today", which is now the
+        // COPENHAGEN business day ──
+        // This class runs on the UNPINNED host (real wall clock), so the only way the seed row and
+        // the endpoint can agree about which day it is, is for both to derive the day the same way.
+        // The endpoint (EmployeeProfileEndpoints + EmployeeProfileRepository) moved to
+        // CopenhagenBusinessDate in S142, so a `DateTime.UtcNow` day here would have made this test
+        // FLAKY BY CLOCK: for the one-to-two hours between Danish midnight and UTC midnight the seed
+        // would say the 15th while the server said the 16th, the PUT would route to Case C
+        // (supersede) instead of Case B (update in place), and the `action='UPDATED'` assertion below
+        // would find zero rows. Reading it through the same helper the product uses removes that
+        // window. (This is NOT the discriminating test for the Copenhagen move — a test that reads
+        // the real clock cannot discriminate anything; see EmployeeProfileCopenhagenBoundaryTests,
+        // which pins an instant. This is only the gating fix that keeps the S31 marquee honest.)
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         await using (var seedConn = new NpgsqlConnection(_harness.ConnectionString))
         {
             await seedConn.OpenAsync();
@@ -91,7 +107,7 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
                    SET effective_from = @today
                  WHERE employee_id = @employeeId AND effective_to IS NULL
                 """, seedConn);
-            cmd.Parameters.AddWithValue("today", DateOnly.FromDateTime(DateTime.UtcNow));
+            cmd.Parameters.AddWithValue("today", today);
             cmd.Parameters.AddWithValue("employeeId", employeeId);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -108,9 +124,10 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
 
         // ── 2. PUT with If-Match: "1" → 200 + new ETag "2".
         // S33 TASK-3308 added required EffectiveFrom: DateOnly to PUT DTO; same-day-only
-        // validator (rejects backdated AND future-dated with 422). S31 marquee atomic test
-        // stamps today (UTC) so the round-trip-with-atomic-audit-and-event invariant
-        // survives the new validator unchanged.
+        // validator (rejects backdated AND future-dated with 422 — since S138/S141 that
+        // validator is gone, but the same-day date is still what routes to Case B). S31 marquee
+        // atomic test sends the SAME `today` it seeded above (the Copenhagen business day since
+        // S142) so the round-trip-with-atomic-audit-and-event invariant is unchanged.
         var putReq = new HttpRequestMessage(HttpMethod.Put,
             $"/api/admin/employee-profiles/{employeeId}")
         {
@@ -118,7 +135,7 @@ public sealed class EmployeeProfileAtomicTests : IAsyncLifetime
             {
                 // S53/TASK-5306 (a7aee58): weeklyNormHours removed from the PUT DTO
                 // (UpdateEmployeeProfileRequest) — only part_time_fraction varies.
-                effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                effectiveFrom = today,
                 partTimeFraction = 0.75m,
                 position = "Department Head",
             }),
