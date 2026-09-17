@@ -301,8 +301,8 @@ public sealed class EmployeeProfileCopenhagenBoundaryTests : IAsyncLifetime
 
         Assert.Equal(
             DanishWinterDay,
-            (DateOnly)(await ScalarAsync(
-                "SELECT effective_to FROM employee_profiles WHERE employee_id = @p0", employeeId))!);
+            await ScalarDateAsync(
+                "SELECT effective_to FROM employee_profiles WHERE employee_id = @p0", employeeId));
 
         var payload = await ScalarStringAsync(
             """
@@ -346,8 +346,8 @@ public sealed class EmployeeProfileCopenhagenBoundaryTests : IAsyncLifetime
         delReq.Headers.TryAddWithoutValidation("If-Match", getRsp.Headers.ETag!.Tag);
         Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(delReq)).StatusCode);
 
-        var closedOn = (DateOnly)(await ScalarAsync(
-            "SELECT effective_to FROM employee_profiles WHERE employee_id = @p0", employeeId))!;
+        var closedOn = await ScalarDateAsync(
+            "SELECT effective_to FROM employee_profiles WHERE employee_id = @p0", employeeId);
         Assert.Equal(DanishNextMonthDay, closedOn);
         // Stated separately so a failure says WHICH thing went wrong: the wrong month is the
         // payroll-visible consequence, the wrong day is only its cause.
@@ -393,11 +393,11 @@ public sealed class EmployeeProfileCopenhagenBoundaryTests : IAsyncLifetime
 
         Assert.Equal(
             DanishSummerDay,
-            (DateOnly)(await ScalarAsync(
+            await ScalarDateAsync(
                 """
                 SELECT effective_from FROM employee_entitlement_eligibility
                 WHERE employee_id = @p0 AND entitlement_type = 'CHILD_SICK' AND effective_to IS NULL
-                """, employeeId))!);
+                """, employeeId));
 
         var payload = await ScalarStringAsync(
             """
@@ -448,8 +448,8 @@ public sealed class EmployeeProfileCopenhagenBoundaryTests : IAsyncLifetime
 
         Assert.Equal(
             DanishWinterDay,
-            (DateOnly)(await ScalarAsync(
-                "SELECT effective_from FROM employee_profiles WHERE employee_id = @p0", employeeId))!);
+            await ScalarDateAsync(
+                "SELECT effective_from FROM employee_profiles WHERE employee_id = @p0", employeeId));
     }
 
     // ─────────────────────────────── fixtures ───────────────────────────────
@@ -533,6 +533,21 @@ public sealed class EmployeeProfileCopenhagenBoundaryTests : IAsyncLifetime
 
     private async Task<string> ScalarStringAsync(string sql, params object[] args)
         => (string)(await ScalarAsync(sql, args))!;
+
+    /// <summary>
+    /// Reads a Postgres <c>DATE</c> column as a <see cref="DateOnly"/>.
+    ///
+    /// <para><b>Why this helper exists rather than a direct <c>(DateOnly)</c> cast.</b> Npgsql boxes
+    /// a <c>DATE</c> column as <see cref="DateTime"/>, so <c>(DateOnly)scalar</c> compiles fine and
+    /// then throws <c>InvalidCastException</c> at runtime — and only against a real Postgres, which
+    /// is unreachable on the author's machine. Four facts in this class shipped with that cast and
+    /// failed on their first CI run; the suite's established idiom is
+    /// <c>DateOnly.FromDateTime((DateTime)raw)</c> (see <c>EndExclusiveMigrationTests</c>) or
+    /// <c>GetFieldValue&lt;DateOnly&gt;</c> on a reader. Named once here so the next boundary test
+    /// cannot repeat it.</para>
+    /// </summary>
+    private async Task<DateOnly> ScalarDateAsync(string sql, params object[] args)
+        => DateOnly.FromDateTime((DateTime)(await ScalarAsync(sql, args))!);
 
     private async Task<object?> ScalarAsync(string sql, params object[] args)
     {

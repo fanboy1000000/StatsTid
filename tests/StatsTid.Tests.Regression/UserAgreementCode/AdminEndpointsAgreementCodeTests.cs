@@ -315,9 +315,12 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
             "SELECT effective_from FROM user_agreement_codes WHERE user_id = @userId", conn))
         {
             uacCmd.Parameters.AddWithValue("userId", newUserId);
-            var stored = (DateOnly?)await uacCmd.ExecuteScalarAsync();
-            Assert.NotNull(stored);
-            Assert.Equal(expectedDanishDay, stored!.Value);
+            // Npgsql boxes a DATE column as DateTime, so `(DateOnly?)scalar` compiles and then throws
+            // InvalidCastException against a real Postgres — which is unreachable locally, so this
+            // shipped and failed on its first CI run. The suite's idiom is FromDateTime((DateTime)raw).
+            var storedRaw = await uacCmd.ExecuteScalarAsync();
+            Assert.NotNull(storedRaw);
+            Assert.Equal(expectedDanishDay, DateOnly.FromDateTime((DateTime)storedRaw!));
         }
 
         // (2) THE QUESTION. A repository on the SAME pinned clock must find that row when it asks
