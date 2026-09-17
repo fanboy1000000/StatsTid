@@ -901,6 +901,49 @@ distinction is whether the date is the subject of the assertion or merely its se
 **Gap declared, not hidden:** no pinned fact for the DELETE soft-close stamps (rows 6/20/34) — same converted expression,
 same files as the POST pins, and a dedicated fact costs another container boot per family.
 
+### TASK-14209 — the frontend moves to the Copenhagen day · COMPLETE (the last half of the fix)
+
+Five production sites on the shared helper. `todayIsoUtc()` renamed to `todayIso()` — **a name asserting UTC would actively
+mislead the next reader** now that it returns the Danish day, which is the same stale-commentary defect this sprint has
+caught four times, caught once more before it could be created.
+
+**Every render-path read wrapped per OQ-12**, and two were moved into their event handlers instead — which fixes the UTC bug
+and the blank-the-section hazard in one move. `EffectiveDatePicker`'s `today` prop widened to `string | null` so an
+unresolved zone can be passed through **honestly** rather than guessed at.
+
+**RED proved:** reverting the helper made **6 tests fail with `expected '2026-07-15' to be '2026-07-16'`** — the exact
+off-by-one — across all three rewritten files; restored, 31/31 pass, byte-for-byte diff confirmed.
+
+**Totals:** build **0 errors / 145 warnings** · `tsc --noEmit` clean · frontend **892 tests / 74 files**.
+
+**Four more corrections to my brief**, consistent with every other task this sprint: `PersonDrawer.tsx` had **four** call
+sites, not the one I named; `ApproverSection.tsx` is under `editPerson/`, not `enhedsspor/`; and **my stated baseline of 887
+tests was wrong — the agent measured 889 by restoring HEAD rather than trusting me**, which is the only way that error was
+ever going to surface.
+
+**A different defect shape found and correctly left alone:** `SkemaGrid`, `TeamOversigt`, `ArsoversigtPage`, `SkemaPage` and
+`useSkema` compute today from **browser-local** rather than UTC — *wrong in the other direction*, outside this sprint's
+UTC-specific census, and filed S143. Worth flagging loudly for that sprint: **browser-local is a third calendar, not a
+lesser version of the same bug.**
+
+### ⚠ HARNESS DEFECT — the census was invisible to every agent that needed it
+
+**`.claude/sweeps/` is gitignored, and a worktree is a separate checkout built from git's index. So the 87 KB census existed
+only in the Orchestrator's working copy.** Eleven agents were told *"the census is the authority; read it for your rows"*
+and **not one of them could open it.** The twelfth said so plainly — "the census file doesn't exist, I grepped for the sites
+myself" — and was right about its own tree.
+
+**The irony is the finding.** Both review lenses had BLOCKED this sprint's plan until the census was written to disk instead
+of living only in a conversation — the S125 loss pattern. It was then written somewhere only its author could read, which is
+a smaller version of the same failure. *An artefact nobody but its author can open is not much better than one never
+written.*
+
+**What saved it** was that the briefs inlined each agent's specific rows and `file:line` references, so the facts arrived
+even though the file did not — and several agents re-derived them from code, which is precisely how the briefs' own errors
+got caught. **That is the mitigation, not a lucky escape.** Standing rule added to `docs/AGENTS.md`: inline what the agent
+needs, track the artefact if it is durable, or copy it into the worktree — and **never write "read `<gitignored path>`" in a
+prompt**, because it reads as an instruction and arrives as a dead end.
+
 ### ✅ S141's worktree-freshness rule paid for itself, on the Orchestrator
 
 The flake-surface sweep agent ran its mandated first check, found its worktree at `a9e6c87` — **before all seven wave-2
@@ -1019,18 +1062,19 @@ and would have produced wasted tasks.**
 
 | Task | Disposition |
 |------|-------------|
-| TASK-14200 | **COMPLETE (pending Step 5a)** — harness seam (`WithFixedInstant`) |
-| TASK-14201 | PLANNED — config family + profile archive |
-| TASK-14202 | PLANNED — admin & agreement codes (+ login-token cache) |
-| TASK-14203 | PLANNED — approval & skema (+ period repo, authorizer) |
-| TASK-14204 | PLANNED — reporting lines, stand-ins & delegation expiry |
-| TASK-14205 | PLANNED — employee profile, history, eligibility, compliance |
-| TASK-14206 | PLANNED — HR follow-up detector |
-| TASK-14207 | PLANNED — settlement & balance parity pair |
-| TASK-14208 | **COMPLETE (pending Step 5a)** — database-decided dates + OQ-4 deletes |
-| TASK-14209 | PLANNED — frontend |
-| TASK-14210 | **COMPLETE (pending Step 5a)** — tooling (OQ-10) |
-| TASK-14211a | **COMPLETE (pending Step 5a)** — startup guard, two-offset probe (OQ-11) |
+| TASK-14200 | **DONE** — harness seam (`WithFixedInstant`) |
+| TASK-14201 | **DONE** — config family + the frontend Copenhagen helper + the picker (merged) |
+| TASK-14202 | **DONE** — admin & agreement codes with the login-token cache, one commit (merged) |
+| TASK-14203 | **DONE** — approval & skema with period repo and authorizer (merged) |
+| TASK-14204 | **DONE** — reporting lines, stand-ins & delegation expiry (merged) |
+| TASK-14205 | **DONE** — employee profile, history, eligibility, compliance (merged) |
+| TASK-14206 | **DONE** — HR follow-up detector (merged) |
+| TASK-14207 | **DONE** — settlement & balance parity pair (merged) |
+| TASK-14208 | **DONE** — database-decided dates + OQ-4 deletes |
+| TASK-14209 | **DONE** — frontend on the Copenhagen day; the last half of the fix (merged) |
+| TASK-14212 | **DONE** — test-clock sweep: all 75 UTC-today test sites classified INERT, reasons recorded in code (merged) |
+| TASK-14210 | **DONE** — tooling (OQ-10) |
+| TASK-14211a | **DONE** — startup guard, two-offset probe (OQ-11) |
 | TASK-14211b | PLANNED — decision record & docs (Orchestrator-executed) |
 
 **Coverage check, done by enumeration rather than by summing a table** — the failure that produced the Step-0b blocker:

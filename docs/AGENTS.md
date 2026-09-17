@@ -161,6 +161,36 @@ other agents running concurrently. To prove the RED:
 lives in the working tree.** `git stash`, `git worktree`, tags, `git config --local`, `refs/`, and the index of a
 *shared* checkout are all repository-global. The working tree is the only thing `isolation: "worktree"` isolates.
 
+## ★ A gitignored artifact does NOT reach a worktree — inline it or track it (S142)
+
+**`.claude/sweeps/`, `.claude/refinements/`, `.claude/reviews/` and `.claude/telemetry/` are gitignored.** A worktree is a
+separate checkout built from git's index, so **an untracked file exists only in the checkout that created it — the
+Orchestrator's.** Every agent dispatched with `isolation: "worktree"` sees an empty `.claude/` and cannot read any of it.
+
+**How S142 found out, and why it is worth a rule.** Eleven agents were told *"`.claude/sweeps/SWEEP-s142-…-census.md` is
+the authority; read it for your rows."* **None of them could open it.** The twelfth said so plainly — "the census file
+doesn't exist, I grepped for the sites myself instead" — and it was right about its own checkout. The file is 87 KB and sits
+in the main tree.
+
+**The irony is the lesson.** Both review lenses had BLOCKED that sprint's plan until the census was written to disk rather
+than living only in a conversation — the S125 loss pattern. It was then written somewhere that lives only in the
+Orchestrator's working copy, which is a smaller version of the same failure: *an artifact nobody but its author can read is
+not much better than one that was never written.*
+
+**What saved it** was that the briefs inlined the specific row numbers and file:line references each agent needed, so the
+agents had the facts even without the file — and several verified them against the code instead, which is why the briefs'
+errors got caught. That is the mitigation, not an accident to rely on.
+
+**The rule, three options in order of preference:**
+1. **Inline what the agent needs.** The rows, the file:line list, the verdicts — in the prompt itself. Always do this
+   regardless of the others; a prompt is the only channel guaranteed to arrive.
+2. **Track the artifact** if it is durable enough to belong in the repository (a census that a later sprint will re-read
+   probably is).
+3. **Copy it into the worktree** as an explicit dispatch step, if it must stay untracked.
+
+**Never write "read `<gitignored path>`" in an agent prompt.** It reads as an instruction and arrives as a dead end — and an
+agent that trusts it without checking will silently work from whatever it can find instead.
+
 ## Agent Prompt Template
 When spawning a domain agent, use this structure:
 ```
