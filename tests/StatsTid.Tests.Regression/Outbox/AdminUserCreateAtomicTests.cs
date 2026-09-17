@@ -48,6 +48,8 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// TASK-13708 owner ruling (2026-09-02) — DEFAULTS to the profile row's
 /// <c>effective_from</c> (today) when omitted, with the CREATED <c>users_audit</c> row
 /// recording the effective value plus an <c>employmentStartDateDefaulted</c> marker.
+/// <b>S142 / TASK-14202:</b> "today" there is the <b>Europe/Copenhagen</b> calendar day, and the
+/// defaulted-hire-date pin below is now anchored to a fixed instant that proves it.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -337,7 +339,8 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
 
     /// <summary>
     /// Create WITHOUT <c>employmentStartDate</c> ⇒ the stored hire date IS the live
-    /// profile row's <c>effective_from</c> (today, UTC) — never NULL from this path.
+    /// profile row's <c>effective_from</c> (today, on the Europe/Copenhagen calendar since
+    /// S142 / TASK-14202) — never NULL from this path.
     ///
     /// <para>
     /// FLIPPED PIN — S137 / TASK-13708, OWNER RULING 2026-09-02 ("default the hire date
@@ -356,6 +359,21 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
     /// </para>
     ///
     /// <para>
+    /// <b>S142 / TASK-14202 — THIS TEST USED TO BE UNABLE TO FAIL.</b> The "hired today" assertion
+    /// was <c>Assert.InRange(storedStart.DayNumber, utcToday.DayNumber - 1, utcToday.DayNumber + 1)</c>
+    /// — a three-day window around the UTC day, written to tolerate a midnight straddle between the
+    /// POST and the read-back. A one-day tolerance cannot detect a one-day error, so the pin
+    /// accepted yesterday, today and tomorrow alike and proved only that the column was not NULL.
+    /// It is replaced by an EXACT literal under a PINNED instant, which removes the straddle the
+    /// tolerance existed for (a fixed clock cannot cross midnight) and makes the assertion
+    /// discriminating at the same time. The instant is
+    /// <see cref="BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen"/>: 2026-07-15 22:30 UTC,
+    /// which is already 00:30 on 16 July in Copenhagen (CEST, UTC+2). A Danish HR admin creating a
+    /// hire at that moment is living on the 16th; the product must stamp the 16th. Against the
+    /// pre-S142 handler — which derived the UTC calendar day — this fails with 2026-07-15.
+    /// </para>
+    ///
+    /// <para>
     /// Pins: (1) users.employment_start_date == live employee_profiles.effective_from,
     /// both non-NULL, read in ONE statement so they are compared on the same snapshot;
     /// (2) the CREATED users_audit row carries that EFFECTIVE date with
@@ -370,9 +388,18 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
     [Fact]
     public async Task AdminUserCreate_WithoutEmploymentStartDate_DefaultsToProfileEffectiveFrom()
     {
-        var client = _factory.CreateClient();
+        // S142 / TASK-14202 — a host pinned to an exact INSTANT, not to a bare date.
+        // WithFixedToday(DateOnly) pins UTC MIDNIGHT, the one moment of every day at which the UTC
+        // calendar and the Copenhagen calendar always agree, so it could not express this fact.
+        var host = _factory.WithFixedInstant(BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen);
+        var client = host.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintAdminToken());
+
+        // The Danish calendar day at the pinned instant. A LITERAL — never
+        // CopenhagenBusinessDate.Today(...), which would be the helper under test computing its own
+        // expected answer and would pass against any implementation, correct or not.
+        var expectedDanishDay = new DateOnly(2026, 7, 16);
 
         var newUserId = "emp_s137_dflt_" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
@@ -419,10 +446,12 @@ public sealed class AdminUserCreateAtomicTests : IAsyncLifetime
             var storedStart = reader.GetFieldValue<DateOnly>(0);
             effectiveFrom = reader.GetFieldValue<DateOnly>(1);
             Assert.Equal(effectiveFrom, storedStart);
-            // "Hired today": the shared value is today (UTC). ±1 day tolerates a midnight
-            // straddle between the POST and this read; anything else is a wrong default.
-            var utcToday = DateOnly.FromDateTime(DateTime.UtcNow);
-            Assert.InRange(storedStart.DayNumber, utcToday.DayNumber - 1, utcToday.DayNumber + 1);
+            // "Hired today" — and "today" is the DANISH day. Exact, not a band: the pinned clock
+            // cannot straddle midnight, so the tolerance the old InRange existed for is gone, and
+            // with it the blind spot that made a one-day error undetectable. Against the pre-S142
+            // handler (UTC calendar day) this reads 2026-07-15 and the assertion fails.
+            Assert.Equal(expectedDanishDay, storedStart);
+            Assert.Equal(expectedDanishDay, effectiveFrom);
             Assert.False(await reader.ReadAsync(),
                 $"Expected exactly one live profile row for '{newUserId}', found more than one.");
         }

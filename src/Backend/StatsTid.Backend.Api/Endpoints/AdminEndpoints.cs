@@ -9,6 +9,7 @@ using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.Infrastructure.Temporal;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
@@ -868,6 +869,10 @@ public static class AdminEndpoints
             // of this create: the profile row's effective_from, the defaulted employment start,
             // the agreement-code effective_from and the reporting-line effective_from. The AUDIT
             // timestamps below deliberately keep DateTime.UtcNow.
+            //
+            // S142 / TASK-14202 — the INSTANT this provider yields is still UTC; the CALENDAR DAY
+            // derived from it below is now the Europe/Copenhagen day (CopenhagenBusinessDate). The
+            // audit stamps are unaffected: an instant is not a date.
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -927,7 +932,7 @@ public static class AdminEndpoints
             // for consistent "always here" semantics; HR overrides via TASK-3107
             // PUT /api/admin/employee-profiles/{employeeId}.
             // S137 / TASK-13708 (OWNER RULING 2026-09-02) — ONE date for the whole create.
-            // `effectiveFrom` (today, UTC) is the profile row's effective_from (S33 today-stamp,
+            // `effectiveFrom` (today in Copenhagen) is the profile row's effective_from (S33 today-stamp,
             // step (2) below) AND the EmployeeProfileCreated event's EffectiveFrom (step (4)),
             // AND — when the request omits a hire date — the stored employment_start_date
             // (step (1)). Computed ONCE here so the three can never disagree (e.g. a midnight
@@ -952,12 +957,33 @@ public static class AdminEndpoints
             // field is omitted.
             //
             // S139 / TASK-13907 — the clock SOURCE is the injected TimeProvider
-            // (TimeProvider.System in production), not the wall clock. Same UTC day, injectable.
-            // Step-5a EXTENDED the S137 "ONE date" rule above to the create's other two dated
-            // writes: the agreement-code row and the new PRIMARY reporting line now REUSE this
-            // value instead of each reading the clock again, so "the three can never disagree"
-            // is true of every dated cell this request writes, not just the first three.
-            var effectiveFrom = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // (TimeProvider.System in production), not the wall clock. Step-5a EXTENDED the S137
+            // "ONE date" rule above to the create's other two dated writes: the agreement-code row
+            // and the new PRIMARY reporting line now REUSE this value instead of each reading the
+            // clock again, so "the three can never disagree" is true of every dated cell this
+            // request writes, not just the first three.
+            //
+            // S142 / TASK-14202 (census row 1) — THE DAY CHANGED, NOT THE CLOCK. This used to be
+            // `DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime)` — the UTC calendar day.
+            // Every user of this product is Danish, and Copenhagen is one hour (CET) or two (CEST)
+            // ahead of UTC, so between Danish midnight and UTC midnight the UTC day is still
+            // YESTERDAY in Denmark. An HR admin creating a new hire at 00:30 local therefore dated
+            // that person's ENTIRE record — employment start, profile interval, agreement interval,
+            // manager edge, and all three mirroring events — one day early, every night of the year.
+            // The value is now the Copenhagen calendar day off the same injected instant
+            // (DST-correct; see CopenhagenBusinessDate). The instant itself stays UTC, and so does
+            // every audit / `created_at` stamp below it: moving an INSTANT would reorder the audit
+            // chain, which is an inviolable invariant, and is a different change from this one.
+            //
+            // SHIPS IN ONE COMMIT WITH UserAgreementCodeRepository's own `Today()` (census row 52),
+            // for a concrete reason. That repository re-derives "today" itself to decide which row
+            // feeds the `users.agreement_code` cache and — via GetCurrentAsync — the agreement code
+            // the LOGIN TOKEN carries. Had only one of the two moved, a user created at 23:30Z would
+            // hold an agreement row starting on the Copenhagen day while the repository still asked
+            // for the UTC day: no row would cover "today", and login would fall through
+            // AuthEndpoints' `canonicalAgreementCode ?? dbUser.AgreementCode` defensive fallback
+            // until UTC midnight — a silent inconsistency logged as a warning, not a failure.
+            var effectiveFrom = CopenhagenBusinessDate.Today(timeProvider);
             var employmentStartDateDefaulted = request.EmploymentStartDate is null;
             var employmentStartDate = request.EmploymentStartDate ?? effectiveFrom;
 
@@ -1044,7 +1070,8 @@ public static class AdminEndpoints
 
                 // (2) employee_profiles INSERT — S31 invariant: every active user has
                 // exactly one live profile row (effective_to IS NULL).
-                // S33 in-flight defect fix: stamp effective_from = today (UTC) instead of
+                // S33 in-flight defect fix: stamp effective_from = today (the Copenhagen day
+                // since S142 / TASK-14202; the UTC day before that) instead of
                 // using the schema DEFAULT '0001-01-01'. Under TASK-3302's new 3-case
                 // routing, default-seeded rows would trigger Case C cross-day supersession
                 // on the first PUT (because '0001-01-01' < today), creating a brand-new
@@ -1116,7 +1143,8 @@ public static class AdminEndpoints
                 // user_agreement_codes + user_agreement_codes_audit + 3 outboxes.
                 // Routes through UserAgreementCodeRepository.SupersedeAndCreateAsync
                 // with expectedVersion=null → Case A (Created) because POST creates a
-                // brand-new user with no predecessor row. EffectiveFrom = today (UTC)
+                // brand-new user with no predecessor row. EffectiveFrom = today (the
+                // Copenhagen day, S142 / TASK-14202)
                 // mirrors the employee_profiles today-stamp convention at L383 (S33
                 // in-flight defect fix — keeps same-day-edit semantics aligned).
                 // Diverges from the seeder's '0001-01-01' anchor because admin-POST
@@ -1125,9 +1153,11 @@ public static class AdminEndpoints
                 // S139 / TASK-13907 (Step-5a) — this REUSES the once-computed `effectiveFrom`
                 // rather than reading the clock again. It was a second `DateTime.UtcNow` read
                 // before, which quietly contradicted the S137 "computed ONCE so the three can
-                // never disagree" rule above: a create crossing UTC midnight could date the
+                // never disagree" rule above: a create crossing midnight could date the
                 // profile row the 7th and the agreement row the 8th, leaving the agreement
                 // uncovered for the employee's first day. Same date by construction now.
+                // S142 / TASK-14202 — the midnight that matters is now COPENHAGEN midnight, which
+                // is exactly why the shared variable matters: both rows cross it together.
                 var agreementToday = effectiveFrom;
                 var agreementResult = await userAgreementCodeRepo.SupersedeAndCreateAsync(
                     conn, tx,
@@ -1280,9 +1310,9 @@ public static class AdminEndpoints
                 // replays in one walk. Seeded — NOT Changed/Superseded — because this
                 // is the FIRST-EVER agreement-code assignment for the user (Step 0b
                 // BLOCKER 1 absorption: no predecessor; matches the backfill seeder's
-                // bootstrap semantic). EffectiveFrom = today (UTC) mirrors the row's
-                // stamped effective_from at L432 (ADR-018 D3 atomic-outbox row/event
-                // parity).
+                // bootstrap semantic). EffectiveFrom = today (the Copenhagen day since S142 /
+                // TASK-14202) mirrors the row's stamped effective_from at L432 (ADR-018 D3
+                // atomic-outbox row/event parity) — same variable, so parity is by construction.
                 var agreementSeededEvent = new UserAgreementCodeSeeded
                 {
                     UserId = request.UserId,
@@ -1502,7 +1532,8 @@ public static class AdminEndpoints
         // S34 / TASK-3407 (ADR-023 D2 option (b)) — extends the S33 / TASK-3309
         // UserAgreementCodeChanged emission with full versioned-history routing
         // when agreement_code mutates. The DTO grows a required
-        // EffectiveFrom: DateOnly validated as today (UTC); on mutation the
+        // EffectiveFrom: DateOnly (the same-day-only validator it once had is long gone —
+        // S141 / TASK-14104; the handler's own dates are Copenhagen days since S142); on mutation the
         // handler routes through UserAgreementCodeRepository.SupersedeAndCreateAsync
         // (Case B same-day in-place vs Case C cross-day supersession against the
         // seeder-backfilled '0001-01-01' predecessor) and emits:
@@ -1537,8 +1568,9 @@ public static class AdminEndpoints
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
             // S139 / TASK-13907, widened S140 / TASK-14009 — the server-"today" seam
-            // (TimeProvider.System in production). It serves EVERY business date this handler
-            // decides, and there are TWO. S141 / TASK-14104 changed WHICH two: the future-dating
+            // (TimeProvider.System in production). S142 / TASK-14202: the instant stays UTC, the
+            // DAY derived from it is the Europe/Copenhagen day. It serves EVERY business date this
+            // handler decides, and there are TWO. S141 / TASK-14104 changed WHICH two: the future-dating
             // validator is gone (Increment 4 makes a future date legal), and in its place is owner
             // ruling OQ-6's "does a row starting after TODAY truncate this write?" test — the one
             // that separates a SCHEDULED change, which a carry-forward may rewrite, from ordinary
@@ -1633,9 +1665,13 @@ public static class AdminEndpoints
             // it. Gating on `agreementCodeSupplied` preserves the no-mutation path verbatim: when
             // the admin is only updating display_name or email, EffectiveFrom is irrelevant.
             //
-            // "Today" is still needed further down (the transfer fan-out), still the UTC day off the
-            // injected TimeProvider (S139 / TASK-13907), still aligned with the frontend's
-            // `new Date().toISOString().slice(0,10)` UTC extraction (TASK-3409 sync).
+            // "Today" is still needed further down (the transfer fan-out), still read off the
+            // injected TimeProvider (S139 / TASK-13907) — but since S142 / TASK-14202 it is the
+            // Europe/Copenhagen calendar day, not the UTC one. The frontend's own
+            // `new Date().toISOString().slice(0,10)` UTC extraction (TASK-3409) is the browser half
+            // of the same defect and is another task's scope; it does not gate this handler, which
+            // no longer compares the client's date to `today` at all (that refusal was lifted in
+            // S141 / TASK-14104).
             if (agreementCodeSupplied && request.EffectiveFrom == default)
                 return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
 
@@ -1644,7 +1680,14 @@ public static class AdminEndpoints
             // write is a SCHEDULED change or ordinary history, and the cross-Organisation transfer
             // fan-out's four dated writes far below. Reading the provider twice would not be the
             // same instant.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            //
+            // S142 / TASK-14202 (census row 2) — the Copenhagen calendar day, not the UTC one. Both
+            // consumers are BUSINESS dates and both were wrong for the hour or two each night when
+            // the two calendars disagree: OQ-6 would call a change the Danish admin scheduled for
+            // "tomorrow" a row starting after today when it is not (or the reverse), and the
+            // transfer fan-out would STAMP its reporting-line and stand-in close dates a day before
+            // the transfer that caused them. The `now` audit stamp below stays UTC BY DESIGN.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             // NOTE (S138, deliberately unchanged): this endpoint stays ACTIVE-ONLY. Its
             // `is_active` / `isDeactivating` choreography is the sanctioned deactivation path, and
@@ -1663,7 +1706,9 @@ public static class AdminEndpoints
             // users.agreement_code denormalized cache UPDATE is part of the same tx
             // per the canonical-write contract on UserAgreementCodeRepository.
             //
-            // BY DESIGN: an AUDIT/maintenance TIMESTAMP stays on the real clock (S140 / TASK-14009).
+            // BY DESIGN: an AUDIT/maintenance TIMESTAMP stays on the real clock, and stays UTC
+            // (S140 / TASK-14009; reaffirmed S142 / TASK-14202 — re-basing an instant on a local
+            // calendar would corrupt outbox ordering and the audit chain).
             // `now` is bound as @now into `updated_at` on the users UPDATE and is used for NOTHING
             // else — it records when the row was actually written. It is NOT a business date and
             // nothing may derive one from it: this handler's business dates read `timeProvider`
@@ -2040,9 +2085,9 @@ public static class AdminEndpoints
                 // emission with full versioned-history routing through
                 // SupersedeAndCreateAsync. The repo's ADR-020 D2 3-case routing
                 // selects:
-                //   • Case B (Updated)    — live row's effective_from == today (UTC);
+                //   • Case B (Updated)    — live row's effective_from == the write's own date;
                 //                           UPDATE-in-place with version bump.
-                //   • Case C (Superseded) — live row's effective_from < today (e.g.
+                //   • Case C (Superseded) — live row's effective_from < the write's date (e.g.
                 //                           seeder-backfilled '0001-01-01' or earlier
                 //                           admin edit); close predecessor + INSERT
                 //                           new live row at predecessor.Version + 1.
@@ -2300,18 +2345,20 @@ public static class AdminEndpoints
                     // value reaches all four, so the rows and the events that must reconstruct them
                     // cannot disagree (ADR-018 D3 / auditability).
                     //
-                    // Behaviour is unchanged: `now` was `DateTime.UtcNow` and the provider is
-                    // TimeProvider.System in production, so this is the SAME UTC day, from a source
-                    // a date-sensitive test host can fix (PAT-008). S139 converted only this
-                    // handler's future-dating validator; deriving a business DATE from the audit
-                    // stamp is what hid this site from that pass.
+                    // TASK-14009's move was source-only: `now` was `DateTime.UtcNow` and the
+                    // provider is TimeProvider.System in production, so it yielded the same UTC day
+                    // from a source a date-sensitive test host can fix (PAT-008). S142 / TASK-14202
+                    // then moved the DAY itself onto the Copenhagen calendar. S139 converted only
+                    // this handler's future-dating validator; deriving a business DATE from the
+                    // audit stamp is what hid this site from that pass.
                     //
                     // S141 / TASK-14104 — `today` is now read ONCE for the whole handler (see its
                     // declaration near the top) rather than a second time here. Two reads of the
-                    // same provider are not the same instant: a request crossing 23:59:59.9 UTC can
-                    // land on different days, and this handler's two consumers — the OQ-6
+                    // same provider are not the same instant: a request crossing the day boundary
+                    // can land on different days, and this handler's two consumers — the OQ-6
                     // scheduled-vs-history test and this fan-out's four dated writes — would then
-                    // disagree about what day it is inside one transaction.
+                    // disagree about what day it is inside one transaction. S142 / TASK-14202: the
+                    // boundary those four STAMPS cross is Copenhagen midnight, not UTC midnight.
 
                     // (a) Clear the moved user's OLD-unit `unit_leaders` rows + emit UnitLeaderRemoved per
                     // row (a transferred leader must lose the old-unit designation — the D3 member-invariant
@@ -2572,7 +2619,8 @@ public static class AdminEndpoints
             // S139 / TASK-13907 — the server-"today" seam (TimeProvider.System in production).
             // S141 / TASK-14104: its consumer is no longer the future-dating validator (lifted) but
             // owner ruling OQ-6's test for whether the row truncating this write is a SCHEDULED
-            // change or ordinary history.
+            // change or ordinary history. S142 / TASK-14202: the day it yields is the
+            // Europe/Copenhagen one.
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -2609,7 +2657,12 @@ public static class AdminEndpoints
             // Backdating, today AND the future are all legal now (ADR-040 Increment 4). `today` is
             // still read below: it is what separates a SCHEDULED change from ordinary history when
             // owner ruling OQ-6 decides whether a carry-forward is even meaningful.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            //
+            // S142 / TASK-14202 (census row 3) — the Copenhagen calendar day. Same reasoning as the
+            // users PUT above: OQ-6 asks "does a row starting after TODAY truncate this write?", and
+            // "today" has to mean the day the Danish admin is living in, or the answer flips for the
+            // hour or two each night when the two calendars disagree.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             // Admin-strict If-Match on `users.version` (ADR-019 D2) — 428 on missing / malformed /
             // If-None-Match: *.
@@ -3797,11 +3850,22 @@ public static class AdminEndpoints
         /// stale contract comment misleads, and exactly the reader least able to tell that the
         /// handler eleven hundred lines above now says the opposite.
         /// </para>
-        /// "Today" is the UTC day, read since S139 / TASK-13907 from the
-        /// injected <see cref="TimeProvider"/> rather than <c>DateTime.UtcNow</c>. Always sent by the frontend
-        /// (TASK-3409 — a UTC date extraction; note the owner has ruled that business dates should move
-        /// to the Danish calendar day, since that UTC extraction reports YESTERDAY for a Danish user
-        /// working after midnight — deferred to its own work, see ROADMAP.md § Correctness / domain);
+        /// <b>S142 / TASK-14202 — "today" on the SERVER is now the Europe/Copenhagen calendar day</b>
+        /// (still read from the injected <see cref="TimeProvider"/>, as since S139 / TASK-13907, rather
+        /// than <c>DateTime.UtcNow</c>). The deferral this comment used to record — "the owner has ruled
+        /// that business dates should move to the Danish calendar day … deferred to its own work" — IS
+        /// this sprint; the handler's server-side dates have moved. The FRONTEND half has not: the field
+        /// is always sent by the client, and the client still extracts its date with
+        /// <c>new Date().toISOString().slice(0,10)</c> (TASK-3409), which is a UTC extraction and
+        /// therefore still reports YESTERDAY for a Danish user working after local midnight. That is
+        /// another S142 task's scope, and it is named here rather than left implied because THIS is the
+        /// field a frontend author reads to learn what they are allowed to send — the same reader the
+        /// paragraph above records being misled by a stale contract comment.
+        /// <para>
+        /// Nothing on this path COMPARES the supplied date to the server's today any more (the refusal
+        /// was lifted in S141 / TASK-14104), so the two calendars disagreeing cannot make a request
+        /// fail; it decides which DAY an unattended client would name.
+        /// </para>
         /// drives ADR-020 D2 3-case routing in
         /// <c>UserAgreementCodeRepository.SupersedeAndCreateAsync</c> when
         /// <c>AgreementCode</c> mutates against an existing live row (Case B
@@ -3891,6 +3955,15 @@ public static class AdminEndpoints
     /// happened yet and can legitimately be rewritten, from ordinary closed HISTORY, which a
     /// backdated insert-between also truncates against and which carrying into would silently
     /// rewrite the past. OQ-6 never contemplated that and nobody asked for it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Which "today" (S142 / TASK-14202).</b> <paramref name="today"/> is the EUROPE/COPENHAGEN
+    /// calendar day, passed in by both calling handlers (this function reads no clock — PAT-025). It
+    /// has to be the Danish day: the question "does a row start strictly after today?" is asked about
+    /// a change HR scheduled on a Danish calendar, so answering it on the UTC day flips the verdict
+    /// for the hour or two each night when the two disagree — turning a scheduled change into
+    /// history, or the reverse.
     /// </para>
     /// </summary>
     private static DateOnly? ResolveAgreementCarryForwardTarget(

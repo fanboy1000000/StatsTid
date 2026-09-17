@@ -1,5 +1,6 @@
 using Npgsql;
 using StatsTid.Infrastructure.Temporal;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Models;
 
@@ -67,7 +68,8 @@ public sealed class UserAgreementCodeRepository
     /// existing direct test constructions keep compiling. DI fills it from the <c>TimeProvider</c>
     /// singleton registered in <c>Program.cs</c>; a date-sensitive test host may register a FIXED
     /// provider instead, so the dated write path below observes the same "today" the suite fixes.
-    /// The DAY DERIVATION is unchanged — still the UTC day, matching the endpoints' validators.
+    /// S142 / TASK-14202: the instant this provider yields is UTC, but the DAY derived from it is
+    /// the Europe/Copenhagen calendar day — see <see cref="Today"/> for why.
     /// </summary>
     public UserAgreementCodeRepository(DbConnectionFactory dbFactory, TimeProvider? timeProvider = null)
     {
@@ -154,9 +156,12 @@ public sealed class UserAgreementCodeRepository
     /// <c>(user_id, effective_from)</c> index rather than the live partial index the old form hit.
     /// The plan is marginally wider; login is rare relative to general traffic, which is the same
     /// budget argument that justified adding this SELECT to the login path in the first place.
-    /// "Today" is the writers' UTC day off the injected <see cref="TimeProvider"/> — the same day the
+    /// "Today" is the writers' day off the injected <see cref="TimeProvider"/> — the same day the
     /// cache and the writers use, so a change scheduled for the 1st becomes visible to login at the
-    /// same midnight the row itself takes effect at.
+    /// same midnight the row itself takes effect at. Since S142 / TASK-14202 that midnight is
+    /// COPENHAGEN midnight (see <see cref="Today"/>), which is also the midnight the admin endpoints
+    /// stamp their <c>effective_from</c> values at — the two must agree or this read returns null for
+    /// a row that was written moments ago.
     /// </para>
     ///
     /// <para>
@@ -242,8 +247,43 @@ public sealed class UserAgreementCodeRepository
         return new AgreementCodeAsOfTodayHit(reader.GetString(0), scheduled);
     }
 
-    /// <summary>The writers' "today": the UTC day off the injected clock (QUAL-157 / S139 seam).</summary>
-    private DateOnly Today() => DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+    /// <summary>
+    /// The writers' "today": the Europe/Copenhagen calendar day off the injected clock
+    /// (QUAL-157 / S139 seam for the SOURCE; S142 / TASK-14202, census row 52, for the DAY).
+    ///
+    /// <para>
+    /// <b>What changed and why (plain language).</b> This used to read
+    /// <c>DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime)</c> — the UTC calendar day.
+    /// Denmark is one hour ahead of UTC in winter and two in summer, so from Danish midnight until
+    /// UTC midnight the UTC day is still YESTERDAY in Copenhagen. Every one of this helper's three
+    /// consumers is a BUSINESS date and every one was therefore wrong in that nightly window:
+    /// <see cref="GetCurrentAsync"/> (which the login token's agreement code is minted from),
+    /// <see cref="GetAsOfTodayWithScheduledAsync"/> (today's code plus the next scheduled one), and
+    /// <see cref="SupersedeAndCreateAsync"/>, which passes it BOTH to the pure temporal router and
+    /// to <c>RefreshAgreementCodeCacheAsync</c> — the query that decides which row's code is written
+    /// into the denormalised <c>users.agreement_code</c>.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why it ships in the same commit as the admin endpoints (AdminEndpoints.cs:960, 1647,
+    /// 2612).</b> Those endpoints STAMP <c>user_agreement_codes.effective_from</c>; this helper asks
+    /// which row covers "today". Stamping and asking must use one calendar. Split across two
+    /// commits, a user created at 23:30Z would get a row starting on the Copenhagen day while this
+    /// helper still asked for the UTC day: no row would cover today, the cache refresh's COALESCE
+    /// would quietly keep the value the users INSERT wrote, and <see cref="GetCurrentAsync"/> would
+    /// return null so login fell through <c>AuthEndpoints</c>' defensive
+    /// <c>canonicalAgreementCode ?? dbUser.AgreementCode</c> branch — logging a warning about an
+    /// "inconsistent state" that would resolve itself at UTC midnight. That is a defect that hides,
+    /// which is worse than one that fails, and it is the reason the slice is by domain not by layer.
+    /// </para>
+    ///
+    /// <para>
+    /// INSTANTS in this file are untouched: <c>created_at</c> / <c>updated_at</c> stay <c>NOW()</c>
+    /// on the database's UTC clock and the outbox keeps its UTC ordering (ADR-018). Re-basing an
+    /// instant on a local calendar would corrupt replay, which is an inviolable invariant.
+    /// </para>
+    /// </summary>
+    private DateOnly Today() => CopenhagenBusinessDate.Today(_timeProvider);
 
     // ------------------------------------------------------------------
     // Writes — atomic-outbox (conn, tx) overload only (ADR-018 D5).
@@ -342,9 +382,13 @@ public sealed class UserAgreementCodeRepository
         UserAgreementCodeSupersedeRequest req, long? expectedVersion,
         CancellationToken ct = default)
     {
-        // "Today" is UTC, read via the injected TimeProvider — the endpoints' validators use the
-        // same clock (S139 / TASK-13907 moved the SOURCE of that clock onto the DI seam; the day
-        // it yields is unchanged). The router below stays PURE: `today` is passed IN (PAT-025).
+        // "Today" is the Europe/Copenhagen calendar day, read via the injected TimeProvider — the
+        // same day the admin endpoints stamp their effective_from values on (S139 / TASK-13907 moved
+        // the SOURCE of that clock onto the DI seam; S142 / TASK-14202 moved the DAY it yields off
+        // the UTC calendar — see Today()). It is used TWICE below and the two uses must agree: the
+        // pure router's routing decision (step 5) and the cache refresh that picks the row feeding
+        // `users.agreement_code` and the login token (step 6). The router below stays PURE:
+        // `today` is passed IN (PAT-025).
         var today = Today();
 
         // 0. Pure refusals BEFORE any lock — nothing to roll back, nothing to contend on.
