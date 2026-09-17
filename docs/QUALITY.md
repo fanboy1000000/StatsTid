@@ -1,7 +1,31 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 141 -->
+<!-- anchor-sprint: 142 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
+>
+> **This file is a stack of DATED snapshots, not a living statement.** Each section records the grade *as of that sprint* and
+> is never rewritten — S142's own review proposed editing a line in the S139 section, which would have falsified what was
+> true in September. Supersede by adding a section; leave the old one standing.
+
+## S142 re-grade (2026-09-17) — business dates move to the Danish calendar day
+
+**The sprint that fixed a bug nobody had chosen.** Every "today" in the product came from the UTC calendar, so a Danish HR
+user working after midnight recorded a change as effective **yesterday** — on every surface, every night, for one to two
+hours. The UTC day was never a decision: the frontend used `toISOString()` because it is JavaScript's easy path, the backend
+validators were made UTC to agree with it, and every writer, cache, login-token mint and as-of-today read followed. **An
+accident at the edge propagated inward until it looked like a design.** Twelve tasks, 64 production sites, the frontend
+included. QUAL-156, QUAL-157 and QUAL-172 all close here.
+
+| Domain | Grade | Evidence / what changed |
+|--------|-------|-------------------------|
+| **Domain Correctness** | B+ → **A−** ▲ | The two-clock split held *below* A− in S141 is resolved rather than documented: one definition of today, on the calendar Danish employment law actually uses. The defect was durable, not cosmetic — a profile edit after midnight was misclassified as a *future scheduled change* and received a second un-asked-for write into a row already in force; a stand-in's authority outlived its last day by a day; and the settlement engine could value a closed holiday year against a different agreement's quota than the screen displayed. Held below A because the resolution's proof rests on Docker-gated pins whose first CI run found six broken by a type error, not by a product defect |
+| **Auditability** | A → **A** (held) | Deliberately untouched, and that is the achievement: `created_at`, `updated_at`, audit timestamps and outbox ordering stay UTC. Both review lenses checked every converted site specifically for an instant mistaken for a date and found none. The distinction is now stated at the top of PAT-008 rather than left to judgement |
+| **Security & Access Control** | A− → **A−** (held, ▲) | The approval-authority pin was written in the **fail-open** direction on purpose — a stand-in whose authority ended yesterday still *granting* it, rather than the easier deny-side case. That is the direction that matters and the one a casual test misses. No access rule changed; the day they are evaluated on did |
+| **Test Suite (cross-cutting)** | A− → **A−** (held) | The strongest and weakest results of the sprint are both here. Strongest: agents proved REDs by mutation, by reflection against real production methods, and by confirming the test project still *compiles* when reverted — the check that distinguishes "my test fails" from "my test does not exist yet". Weakest: **six new pins failed their first CI run on a `DateOnly` cast**, a type error at the database boundary that no local reasoning could surface. Held, not raised: a suite whose new tests cannot run where they are written is not yet an A-grade suite |
+| **Frontend** | A− → **A−** (held, ▲) | The last half of the fix, and the discovery that **this machine's own zone is Copenhagen — so every frontend date test would have passed against the bug** unless the test forced a different zone. The fix carries a guard-on-the-guard that fails loudly if the forcing stops working. One helper now answers "what day is it in Copenhagen", and browser-local was rejected explicitly as *a third wrong calendar*, not a lesser bug |
+| **Backend API** | A− → **A−** (held) | No contract change: this sprint moved which day a value means, not its shape. Four config endpoints gained real `TimeProvider` injection, which they had never had — without it no pin could reach them and every test written for them would have been vacuous |
+| **Documentation (canon)** | materially recovered → **materially recovered** (held, ▲) | Ten normative locations across five files corrected, and five more correctly identified as *historical* and left alone. **Stale commentary produced or nearly produced a wrong conclusion in a careful reader five times this sprint** — a database script claiming a block was a no-op when it demonstrably fires, comments that generated a retracted plan-wide instruction, an API contract doc teaching the opposite of the truth, and a runbook instructing the operator to do the reverse of this sprint. Comments are now treated as part of the code they describe |
+| **Governance / review effectiveness** | — | **Every single agent contradicted its brief, and every contradiction was right.** Among them: a pinned instant I specified that could not detect the bug it was specified for, a caller mapping that would have produced a test covering nothing, three failure-mode descriptions that tracing refuted — each understating severity — two "sharpest lead" claims that proved inert, and comment lists incomplete every time. **Two harness defects were mine:** `git stash` is repository-global and collided between agents, and the census both lenses forced onto disk sat under a gitignored path, invisible to all eleven agents told to read it. Against that, S141's worktree-freshness rule caught *me* making the same mistake it was written for. **The instruction that paid best was "contradicting this brief is valuable"** |
 
 ## S141 re-grade (2026-09-15) — time-control Increment 4: a change can be scheduled ahead
 

@@ -32,7 +32,7 @@ SQL parameters, event fields, audit payloads:
 
 ```csharp
 // handler — the single read for the whole operation
-var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);   // UTC-day form (see PAT-008 / QUAL-157)
+var today = CopenhagenBusinessDate.Today(timeProvider);   // the Danish business day (S142; see PAT-008)
 
 await repo.SoftDeleteAsync(conn, tx, employeeId, expectedVersion, closeDate: today, ct);
 outbox.Enqueue(new EmployeeProfileSoftDeleted { …, EffectiveTo = today });  // the SAME variable
@@ -43,7 +43,7 @@ outbox.Enqueue(new EmployeeProfileSoftDeleted { …, EffectiveTo = today });  //
 public async Task<…> SoftDeleteAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId,
     long expectedVersion, DateOnly? closeDate = null, CancellationToken ct = default)
 {
-    var today = closeDate ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+    var today = closeDate ?? CopenhagenBusinessDate.Today(_timeProvider);
     … "SET effective_to = @today, updated_at = NOW()" …   // the business DATE is a parameter; the maintenance INSTANT may stay NOW()
 }
 ```

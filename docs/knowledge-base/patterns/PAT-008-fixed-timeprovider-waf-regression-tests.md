@@ -29,8 +29,8 @@ seam on the paths the converted suites exercise.
 ```csharp
 public sealed class FixedTimeProvider : TimeProvider
 {
-    public FixedTimeProvider(DateOnly date)        // pins UTC midnight of that date — UTC-day and
-        : this(new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero)) { }   // Copenhagen-day agree
+    public FixedTimeProvider(DateOnly date)        // pins UTC MIDNIGHT — see the warning below:
+        : this(new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero)) { }   // both calendars AGREE there
     public FixedTimeProvider(DateTimeOffset value) => _fixed = value;   // verbatim instant
     public override DateTimeOffset GetUtcNow() => _fixed;
     private readonly DateTimeOffset _fixed;
@@ -87,12 +87,39 @@ replay-deterministic per the **Domain correctness** invariant. But a fixed TEST 
 is a new failure mode: the halves of one request disagree about "today" (S139 found the profile PUT reading C#
 `DateTime.UtcNow` while its soft-delete stamped the DATABASE clock). Hence the S139 rule: **on any path a fixed-clock
 suite exercises, every clock read — C# and SQL — comes from the injected provider**; SQL business dates are bound
-`@today` parameters, never `NOW()::date` / `CURRENT_DATE`. Day-derivation is a separate decision from clock
-SOURCE: the profile/agreement paths keep the UTC day (`DateOnly.FromDateTime(tp.GetUtcNow().UtcDateTime)`, matching
-the frontend's `toISOString().slice(0,10)`), settlement and the worklist keep the Copenhagen day
-(`CopenhagenBusinessDate.Today(tp)`); the fixture pins UTC midnight so both derivations yield the same date. The
+`@today` parameters, never `NOW()::date` / `CURRENT_DATE`. The
 boot-order combination matters because the two failure modes co-occur in practice: the same WAF host override
 that pins time also re-runs the seeders that destroy absent-state fixtures.
+
+### ★ There is ONE day-derivation, and it is the Copenhagen day (S142)
+
+**Every business date in StatsTid is `CopenhagenBusinessDate.Today(tp)`.** This entry previously taught a split —
+the profile and agreement paths keeping the UTC day *"matching the frontend's `toISOString().slice(0,10)`"*, with
+settlement and the worklist on Copenhagen. **That split was an accident, not a design.** The frontend used
+`toISOString()` because it is JavaScript's easy path; the backend validators were then made UTC to agree with it;
+everything downstream followed. S142 moved all of it — including the frontend — onto the Danish calendar day, which
+is the day Danish employment law actually means. **Instants are unaffected**: `created_at`, `updated_at`, audit
+timestamps and outbox ordering stay UTC, and converting one of those to a calendar day corrupts ordering.
+
+### ⚠ `WithFixedToday(DateOnly)` CANNOT detect a UTC-vs-Copenhagen defect
+
+The `DateOnly` constructor above pins **UTC midnight**, and UTC midnight is precisely the instant where the two
+calendars are guaranteed to agree — Denmark's offset is never negative, so Copenhagen's local midnight never falls
+before UTC midnight of the same date. **A pin built on it passes under both a correct and a broken implementation.**
+
+Roughly 150 existing fixtures use it, which is fine: they are not testing the calendar. But a test whose *subject*
+is the business day must pin an exact instant where the calendars disagree — `WithFixedInstant(DateTimeOffset)`,
+with the four shared anchors in `tests/StatsTid.Tests.Regression/Hosting/BoundaryInstants.cs`:
+
+| Instant | Danish day | Kills |
+|---|---|---|
+| Summer `2026-07-15 22:30Z` | 16 July | raw UTC **and** a hardcoded `+01:00` |
+| Winter `2026-01-15 23:30Z` | 16 January | raw UTC (a hardcoded `+01:00` passes — that is why there are others) |
+| Winter `2026-01-15 22:30Z` | 15 January | a hardcoded `+02:00` |
+| Summer `2026-07-31 22:30Z` | **1 August** | raw UTC and `+01:00`, at a **month** boundary — the payroll-visible form, since every export, settlement and approval period is month-bounded |
+
+**Expected values must be literals.** A test that computes its expectation by calling `CopenhagenBusinessDate`
+proves only that the helper agrees with itself — S142 found three such tests and deleted the shape.
 
 ## Agent Guidance
 
@@ -101,15 +128,17 @@ that pins time also re-runs the seeders that destroy absent-state fixtures.
   constant. Never compute expected values from `DateTime.UtcNow` / `DateOnly.FromDateTime(DateTime.Today)`; the
   S139 census regex `DateTime\.(Today|UtcNow|Now)\b|DateOnly\.FromDateTime\(DateTime\.` over a converted file
   must return zero (it is a plain-text scan — rephrase comments that quote those tokens).
-- **Verify the path reads the seam before relying on the override.** The seam covers: year-overview (S65),
-  `SkemaEndpoints.cs:2052` and `BalanceEndpoints.cs:735` (UTC-day form), the worklist and settlement cohort via
-  `CopenhagenBusinessDate`, and — since S139 — the profile path (incl. the soft-delete SQL write), the
-  agreement-code path, and `ApprovalPeriodRepository.GetPeriodStatusProjectionForTreeAsync` (both phases). Paths
-  still on the raw clock are listed in the QUAL register (S139 rows: remaining `src/` C# reads; unparameterised
-  SQL clock sites with reach — e.g. `DelegationExpiryService.cs:86`, `ReportingLineRepository.cs:1287`; the
-  designated-approver authorizer's fallback). A suite on one of those paths cannot be pinned until the seam
-  reaches it — say so, do not nudge dates onto weekdays (the S138 `OnWeekday` / `NextWeekday` helpers were
-  deleted in S139 for exactly this reason: a nudge is a guard, not a fix).
+- **Since S142 the seam reaches every business-date path**, so this guidance is now about *how* to pin, not
+  *whether* you can. The endpoint, repository, authorizer, settlement, worklist, migrator, schema-bootstrap and
+  frontend sites were all converted; `src/**/*.cs` contains **zero** executable `CURRENT_DATE` / `NOW()::date`
+  business-date derivations. If you find a path that still cannot be pinned, that is a defect worth a register row,
+  not a reason to work around it — and **do not nudge dates onto weekdays** (the S138 `OnWeekday` / `NextWeekday`
+  helpers were deleted in S139 for exactly this reason: a nudge is a guard, not a fix).
+
+  *Historical note on the list this replaces: it named `DelegationExpiryService.cs:86` and
+  `ReportingLineRepository.cs:1287` as unconverted for two sprints after S140 had already parameterised them, and
+  carried three `file:line` cites that had drifted. **A pinned line number in a KB entry is a claim with a short
+  shelf life** — prefer naming the symbol and the mechanism, which is why the replacement above names neither.*
 - Pin ONE anchor per test class, assert its weekday and OK side once, and derive all seeds relative to it;
   mixing pinned and relative dates re-introduces ambiguity. State each pin's RED condition in its comment.
 - Absent-state fixtures and fixture employees go in AFTER the last host boot (S63 lesson), with hire dates ≤ `F`,

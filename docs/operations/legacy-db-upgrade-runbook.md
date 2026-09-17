@@ -171,21 +171,26 @@ time zone is UTC** — the image default; no `TZ` / `PGTZ` / `timezone =` / `SET
 `docker-compose*.yml`, `docker/postgres/init.sql` or the Testcontainers harness (verified S139). Under UTC,
 `NOW()::date` was already the UTC day the app computes.
 
-**If a non-greenfield server is configured with another time zone** (e.g. `Europe/Copenhagen`), the two converted
-statements now write/compare the UTC day where they previously used the server's local day — a 1–2 hour window
-each night, and in the correct direction (the validator and the stamp finally agree). The remaining DATE reads still
-taken from the database clock follow the SERVER's zone and would disagree with the app for that window:
-`ReportingLineRepository.cs` (`SET effective_to = CURRENT_DATE` when closing an approver line),
-`DelegationExpiryService.cs` (`until_date < CURRENT_DATE`), `LocalAgreementProfileMigrator.cs` (startup compare),
-`init.sql` (the SELF_DELEGATION backfill block), plus two dead sites (`RoleConfigOverrideRepository`,
-`LocalConfigurationRepository.GetActiveByOrgAsync`). They are registered in the QUAL register (S139 rows: "SQL clock
-sites not parameterised") with their reach.
+**Since S142 the database server's time zone no longer affects any business date.** Every day-valued read that was
+still taken from the database clock has been moved into the application, where the zone is explicit and testable:
+`LocalAgreementProfileMigrator.cs` now binds an application-supplied `@today`, and `init.sql`'s SELF_DELEGATION
+block stamps `(NOW() AT TIME ZONE 'Europe/Copenhagen')::date`. The two dead sites
+(`RoleConfigOverrideRepository`, `LocalConfigurationRepository.GetActiveByOrgAsync`) were **deleted** rather than
+converted, under owner ruling OQ-4. `ReportingLineRepository.cs` and `DelegationExpiryService.cs` had already been
+parameterised in S140 — this runbook listed them as outstanding for two sprints after they were fixed, which is
+why the list above is now written as history rather than as a checklist.
 
-**Runbook step:** before upgrading a pre-existing database, verify the server/session zone — `SHOW timezone;` must
-return `UTC` (or set `ALTER DATABASE statstid SET timezone = 'UTC';`). Do not "fix" the remaining sites by changing
-the zone to Copenhagen: the app's UTC-day rule on the profile/agreement paths is deliberate (owner ruling OQ-3 (a),
-S139 — it matches the frontend's `toISOString().slice(0,10)`), and the UTC-vs-Copenhagen split is its own QUAL row
-awaiting a domain ruling.
+**Runbook step:** setting the server or session zone to `UTC` is **no longer required** and is no longer checked.
+A pre-existing database may run any zone; business dates are decided by the application on the Europe/Copenhagen
+calendar regardless.
+
+> **What changed and why (S142, owner rulings OQ-1 / OQ-7 / OQ-8).** This section previously instructed the
+> operator to force the server to UTC and, explicitly, *not* to "fix" the remaining sites by moving them to
+> Copenhagen — on the grounds that the UTC-day rule matched the frontend's `toISOString().slice(0,10)`. **That
+> premise was the defect.** Every user of StatsTid is Danish, and between Danish midnight and UTC midnight the UTC
+> calendar is still on yesterday, so a user working at 00:30 recorded a change as effective the day before. The
+> frontend extraction the rule was matching has itself moved to the Copenhagen day. The instruction is deleted
+> rather than corrected because, after the conversion, there is nothing for the operator to decide.
 
 ## Known Ordering Gap
 

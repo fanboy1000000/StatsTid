@@ -159,10 +159,13 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Tier-probe log noise** — every legitimate leader read logs a spurious "Access denied" WARNING. [S128 FU-A]
 
 ### Correctness / domain
-- **★ DECISION MADE, WORK DEFERRED — move BUSINESS DATES to the Danish calendar day; the UTC business
-  day is an inherited accident and it writes a wrong date for one to two hours every night** (owner
-  ruling 2026-09-14, S141: *"Why not update the system's clock to the Danish clock? We will only have
-  Danish users."*).
+- **✅ SHIPPED IN S142 — business dates are the Danish calendar day** (owner ruling 2026-09-14, S141:
+  *"Why not update the system's clock to the Danish clock? We will only have Danish users."*).
+  Twelve tasks, 64 production sites, the frontend included; instants stayed UTC. Recorded as
+  **ADR-041**; closes QUAL-156, QUAL-157 and QUAL-172. Detail in `docs/sprints/SPRINT-142.md`.
+  **Not carried over to S143:** display and navigation dates (which month a calendar view opens on)
+  are still **browser-local** — *a different wrong calendar, not a lesser instance of this one*.
+  The description below is kept as the statement of the problem that was solved.
   **The user-facing defect, which is why this is more than tidiness.** The frontend sends "today" as
   `new Date().toISOString().slice(0, 10)` (`frontend/src/hooks/useEditPerson.ts:44-46`) — the UTC
   calendar day. In Copenhagen at 00:30 on 1 November that returns **31 October**. So a Danish HR user

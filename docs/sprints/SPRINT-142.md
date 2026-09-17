@@ -1075,7 +1075,7 @@ and would have produced wasted tasks.**
 | TASK-14212 | **DONE** — test-clock sweep: all 75 UTC-today test sites classified INERT, reasons recorded in code (merged) |
 | TASK-14210 | **DONE** — tooling (OQ-10) |
 | TASK-14211a | **DONE** — startup guard, two-offset probe (OQ-11) |
-| TASK-14211b | PLANNED — decision record & docs (Orchestrator-executed) |
+| TASK-14211b | **DONE** — ADR-041, 10 normative doc locations across 5 files, a new QUALITY.md section, QUAL-156/157/172 closed |
 
 **Coverage check, done by enumeration rather than by summing a table** — the failure that produced the Step-0b blocker:
 

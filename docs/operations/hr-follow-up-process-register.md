@@ -377,11 +377,19 @@ day. Found by the S141 implementer of the widening, not by a review.
   sat outside the implementing agent's domain and became its own task — which is where a **live data-protection violation** was
   found and fixed: the error type embeds its as-of date in its message, and for a mid-month starter that date is their hire date.
 
-**Clock note (owner ruling 2026-09-14):** the detector asks on the **writers' clock**, deliberately differing from the
-Copenhagen business day used elsewhere in this register's read family, because it asks a data-integrity question about records
-written and dated on that clock. Asking on another would report gaps that do not exist for an hour or two every night. The
-exception is documented at both sites. See QUAL-172, and the roadmap item to move business dates to the Danish day — which
-would make the exception unnecessary.
+**Clock note — the exception is GONE (S142, owner ruling OQ-3).** The detector asks on the **Copenhagen business day**, the
+same day as everything else in this register's read family.
+
+> **This is the 2026-09-14 ruling being satisfied, not reversed.** That ruling said the detector must ask on the *writers'*
+> clock, because it asks a data-integrity question about records written and dated on that clock — and it named its own
+> expiry condition: *"the roadmap item to move business dates to the Danish day would make the exception unnecessary."*
+> **S142 is that item.** Every writer moved, so asking on the writers' clock and asking on the Copenhagen day are now the
+> same question. Had the detector been left behind, it would have reported gaps that do not exist for one to two hours every
+> night — the precise failure the original ruling was written to prevent, arriving from the opposite direction.
+>
+> QUAL-157 and QUAL-172, which registered the two-clock split, are both closed by this sprint. The "DO NOT correct this"
+> notes at the two code sites are deleted, not edited: *a comment warning against a correction that has since been ruled
+> correct is worse than no comment.*
 
 **Still owed, unchanged:** nobody has ruled *by when* a registration-blocking data gap must be fixed. The gap is now visible and
 legible; its deadline is still unstated.
