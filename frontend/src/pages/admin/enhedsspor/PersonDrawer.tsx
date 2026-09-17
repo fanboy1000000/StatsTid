@@ -27,7 +27,7 @@ import { useToast } from '../../../components/ui/Toast'
 import { useAuth } from '../../../contexts/AuthContext'
 import { useEntitlementEligibility } from '../../../hooks/useEntitlementEligibility'
 import { usePlacement } from '../../../hooks/usePlacement'
-import { todayIsoUtc, type EditLiveState } from '../../../hooks/useEditPerson'
+import { todayIso, type EditLiveState } from '../../../hooks/useEditPerson'
 import type { Organization, WithEtag, User } from '../../../hooks/useAdmin'
 import type { ForestMaoNode } from '../../../hooks/useForest'
 import { fetchEmployeeProfile } from '../editPerson/employeeProfileApi'
@@ -141,13 +141,39 @@ export function PersonDrawer({
   // every open so a stale choice from a previous edit never survives a reopen.
   const [profileCarryForward, setProfileCarryForward] = useState(false)
   const [agreementCarryForward, setAgreementCarryForward] = useState(false)
+  // S142 / TASK-14209 (census rows 60-64) — owner ruling OQ-12 (2026-09-17). `todayIso()` (the
+  // Europe/Copenhagen calendar day — see `useEditPerson.ts`) throws if the runtime cannot resolve
+  // that zone, deliberately: a fallback to the browser's own zone would silently reinstate the
+  // exact UTC/browser-local defect S142 removes. This drawer reads "today" in FOUR places within
+  // one render — the effective-date default just below, the open-time reset, the create-mode
+  // hire-date pre-fill, and the future/past classification further down — and previously called
+  // the (wrong) raw formula directly in each. An uncaught throw in ANY of them blanks the WHOLE
+  // drawer (Name, e-mail, Organisation, Placering, the approver section — everything), for a fault
+  // that has nothing to do with most of those fields. Resolved ONCE per render, mirroring
+  // `MondayDatePicker.tsx` (the first OQ-12 site), and reused everywhere below so all four agree
+  // with each other within the same render pass, instead of independently risking disagreement.
+  let today: string | null
+  let zoneError: string | null
+  try {
+    today = todayIso()
+    zoneError = null
+  } catch {
+    today = null
+    zoneError =
+      'Dags dato kan ikke bestemmes: denne browser kan ikke bestemme den danske kalenderdag ' +
+      '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.'
+  }
+
   // S141 / TASK-14111 — the effective-date picker. ONE date governs the whole
   // save (both the users PUT and the employee-profiles PUT below read it).
   // Requirement 1: the default is ALWAYS today, reset on every open exactly
   // like every other field — dating a change ahead is something HR must
   // deliberately choose on THIS open, never something that survives from a
-  // previous edit or a stale render.
-  const [effectiveFrom, setEffectiveFrom] = useState<string>(todayIsoUtc())
+  // previous edit or a stale render. `today ?? ''` (S142/OQ-12): an unresolvable
+  // zone leaves this EMPTY rather than guessing — HR must then pick a date
+  // explicitly, and the save stays blocked (see `dateBlockedReason` below)
+  // until the zone resolves or the tab is reloaded on a capable runtime.
+  const [effectiveFrom, setEffectiveFrom] = useState<string>(today ?? '')
   // SPRINT-END BLOCKER FIX (2026-09-14) — the baseline each of the two dated
   // field-groups was last RE-PRE-FILLED from (today's values, or an existing
   // scheduled change's values, per `relateToScheduled`), so the re-baseline
@@ -177,7 +203,10 @@ export function PersonDrawer({
     setDraftApproverName(null)
     setProfileCarryForward(false)
     setAgreementCarryForward(false)
-    setEffectiveFrom(todayIsoUtc())
+    // S142/OQ-12: `today` is the SAME zone-resolved (or null) value computed once at the top of
+    // this render — reused rather than re-derived so an unresolvable zone can never disagree with
+    // itself within the same open.
+    setEffectiveFrom(today ?? '')
     // A stale baseline from a PREVIOUS edit session must never suppress the
     // first re-baseline of this one — null means "apply unconditionally".
     profileBaselineRef.current = null
@@ -196,7 +225,13 @@ export function PersonDrawer({
       // back-filling any registration from before the record existed; pre-filling
       // (rather than leaving it blank) makes that default visible and correctable
       // in the one place a backdated hire can be recorded at create time.
-      setEntitlement({ ...EMPTY_ENTITLEMENT, employmentStartDate: new Date().toISOString().slice(0, 10) })
+      // S142 / TASK-14209 (census rows 60-64) — was the raw UTC formula; now the Copenhagen day
+      // (`today`, computed once at the top of this render). S142/OQ-12: when the zone cannot be
+      // resolved (`today === null`), this pre-fill is left BLANK rather than guessed — the field
+      // stays optional and editable either way, and an omitted value still means "hired today"
+      // per the S137 ruling, resolved correctly SERVER-side regardless of what the browser could
+      // determine (the backend's own S142 waves 1-2 already moved to the Copenhagen day).
+      setEntitlement({ ...EMPTY_ENTITLEMENT, employmentStartDate: today ?? '' })
       setCreds(EMPTY_CREDS)
       setPlacementUnitId(defaultUnitId ?? null)
       setApex(false)
@@ -337,14 +372,15 @@ export function PersonDrawer({
     : ''
   const agreementScheduledSummary = scheduledAgreement ? `Overenskomst ${scheduledAgreement.agreementCode}` : ''
 
-  // S141 / TASK-14111 — recomputed fresh on every render (not read from
-  // state) so the picker's "is this future?" check and the ScheduledChangeNotice
-  // wording below can never disagree with each other even if the drawer sits
-  // open across a UTC midnight. `undefined` here (the write IS dated today) is
-  // exactly the value ScheduledChangeNotice's `writeEffectiveFrom` prop
-  // treats as "keep the previous 'gemmer du nu' wording".
-  const today = todayIsoUtc()
-  const writeEffectiveFrom = effectiveFrom === today ? undefined : effectiveFrom
+  // S141 / TASK-14111 — `today` (computed once at the top of this render, S142/OQ-12) is reused
+  // here rather than re-derived, so the picker's "is this future?" check and the
+  // ScheduledChangeNotice wording below can never disagree with each other even if the drawer sits
+  // open across a Copenhagen midnight. `undefined` here (the write IS dated today) is exactly the
+  // value ScheduledChangeNotice's `writeEffectiveFrom` prop treats as "keep the previous 'gemmer du
+  // nu' wording". `today === null` (zone unresolvable) is NEVER treated as "dated today" — that
+  // would be guessing an agreement with a day we do not actually know — so it falls through to the
+  // dated ("gemmer du med virkning fra …") wording instead, which is the honest default.
+  const writeEffectiveFrom = today !== null && effectiveFrom === today ? undefined : effectiveFrom
 
   // SPRINT-END BLOCKER FIX (2026-09-14, coordinator-verified) — relate the
   // PICKED date to each of the two scheduled changes' own intervals. This is
@@ -404,14 +440,23 @@ export function PersonDrawer({
   // scheduled change's own end and this payload (one hop ahead only) does
   // not carry it. Blocks the WHOLE save (one submit covers both writes)
   // rather than letting one dimension proceed while the other is unsafe.
+  //
+  // S142 / TASK-14209 — OQ-12: an unresolvable Copenhagen zone (`zoneError`) blocks the save the
+  // SAME way, but ONLY in edit mode, where this drawer actually depends on "today" for a required
+  // value (the effective-date default). Create mode's own use of `today` (the hire-date pre-fill)
+  // is optional and already left blank rather than guessed — see the "open" effect above — so it
+  // has nothing that needs blocking, and gating it here too would needlessly refuse a create the
+  // zone problem never actually touches.
   const dateBlockedReason: string | null =
-    profileRelation === 'beyond' && agreementRelation === 'beyond'
-      ? 'Denne dato ligger efter både den planlagte ændring af deltid/stilling og den planlagte overenskomstændring. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
-      : profileRelation === 'beyond'
-        ? 'Denne dato ligger efter den planlagte ændring af deltid/stilling. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
-        : agreementRelation === 'beyond'
-          ? 'Denne dato ligger efter den planlagte overenskomstændring. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
-          : null
+    !isNew && zoneError !== null
+      ? zoneError
+      : profileRelation === 'beyond' && agreementRelation === 'beyond'
+        ? 'Denne dato ligger efter både den planlagte ændring af deltid/stilling og den planlagte overenskomstændring. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
+        : profileRelation === 'beyond'
+          ? 'Denne dato ligger efter den planlagte ændring af deltid/stilling. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
+          : agreementRelation === 'beyond'
+            ? 'Denne dato ligger efter den planlagte overenskomstændring. Hvad der gælder derefter, er ikke vist her — vælg en tidligere dato.'
+            : null
 
   // 'covers' — an advisory note the picker itself cannot phrase (it doesn't
   // know about either scheduled change): names which field(s) were just

@@ -12,6 +12,7 @@
 import { useCallback, useState } from 'react'
 import { useToast } from '../../../components/ui/Toast'
 import { useReportingLines } from '../../../hooks/useReportingLines'
+import { copenhagenToday } from '../../../lib/copenhagenDate'
 import { PersonPickerDialog } from './PersonPickerDialog'
 import styles from './LifecycleSections.module.css'
 
@@ -97,8 +98,6 @@ export function ApproverSection({
     localApproverId !== undefined ? localApproverName : currentApproverName ?? null
   const effectiveEtag = localEtag !== undefined ? localEtag : currentReportingLineEtag ?? null
 
-  const todayIso = new Date().toISOString().slice(0, 10)
-
   const handlePick = useCallback(
     async (userId: string, displayName: string) => {
       setPickerOpen(false)
@@ -111,10 +110,32 @@ export function ApproverSection({
 
       if (!employeeId) return
       setBusy(true)
+      // S142 / TASK-14209 (census rows 60-64) — was a render-body constant
+      // (`new Date().toISOString().slice(0, 10)`, the raw UTC formula this sprint removes),
+      // recomputed on every render of this section whether or not a pick ever happened. Now
+      // computed HERE instead, at the moment HR actually picks an approver: the Copenhagen
+      // calendar day, and — owner ruling OQ-12 — a zone-resolve failure surfaces through this
+      // same "Tildeling mislykkedes" toast this callback already has, rather than a render-time
+      // throw blanking the section (or, since this WAS a render-body call, potentially the whole
+      // drawer/page it sits in).
+      let today: string
+      try {
+        today = copenhagenToday()
+      } catch {
+        setBusy(false)
+        toast({
+          title: 'Tildeling mislykkedes',
+          description:
+            'Dags dato kan ikke bestemmes: denne browser kan ikke bestemme den danske kalenderdag ' +
+            '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.',
+          variant: 'error',
+        })
+        return
+      }
       // First assign → If-None-Match:*; reassign → If-Match the current line ETag.
       const ifMatch = effectiveApproverId && effectiveEtag ? effectiveEtag : undefined
       const result = await assignManager(
-        { employeeId, managerId: userId, effectiveFrom: todayIso },
+        { employeeId, managerId: userId, effectiveFrom: today },
         ifMatch,
       )
       setBusy(false)
@@ -146,7 +167,6 @@ export function ApproverSection({
       onDraftApproverChange,
       onChanged,
       toast,
-      todayIso,
     ],
   )
 

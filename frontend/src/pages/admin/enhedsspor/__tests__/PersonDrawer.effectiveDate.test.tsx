@@ -10,15 +10,15 @@
 // adding the future half), and it composes with the sibling B0/OQ-6 notice
 // (TASK-14107) rather than contradicting it once a save is no longer "now".
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '../../../../components/ui/Toast'
-import { todayIsoUtc } from '../../../../hooks/useEditPerson'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import type { WithEtag, User } from '../../../../hooks/useAdmin'
 import { orgsFromForest } from '../personDrawerData'
 import { PersonDrawer } from '../PersonDrawer'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../../../lib/__tests__/testTimeZone'
 
 const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
 vi.mock('../../../../contexts/AuthContext', () => ({
@@ -232,13 +232,10 @@ async function waitForHydrated() {
 }
 
 describe('PersonDrawer — S141 / TASK-14111 the effective-date picker: presence + default', () => {
-  it('renders in edit mode, defaulting to today (requirement 1 — the default stays today)', async () => {
-    renderEdit()
-    await waitForHydrated()
-
-    const input = screen.getByTestId('pd-effective-from') as HTMLInputElement
-    expect(input.value).toBe(todayIsoUtc())
-  })
+  // "renders in edit mode, defaulting to today (requirement 1)" moved to the dedicated
+  // "S142 / TASK-14209" describe block near the end of this file — it now needs a pinned clock
+  // + a forced time zone (see that block's own header for why), which does not fit this block's
+  // otherwise-unpinned tests.
 
   it('does NOT render at create — a brand-new person has no existing value for a scheduled change to apply against', () => {
     renderCreate()
@@ -271,17 +268,8 @@ describe('PersonDrawer — S141 / TASK-14111 requirement 2: say what will happen
     expect(banner.textContent).toMatch(/gemmes straks/)
   })
 
-  it('removes the banner again if HR changes the date back to today', async () => {
-    renderEdit()
-    await waitForHydrated()
-
-    const input = screen.getByTestId('pd-effective-from')
-    fireEvent.change(input, { target: { value: '2026-10-01' } })
-    expect(screen.getByTestId('pd-effective-future-notice')).toBeDefined()
-
-    fireEvent.change(input, { target: { value: todayIsoUtc() } })
-    expect(screen.queryByTestId('pd-effective-future-notice')).toBeNull()
-  })
+  // "removes the banner again if HR changes the date back to today" moved to the dedicated
+  // "S142 / TASK-14209" describe block near the end of this file (same reason as above).
 
   it('does NOT show the future banner for a PAST date (requirement 4 — backdating is not "the future")', async () => {
     renderEdit()
@@ -314,19 +302,9 @@ describe('PersonDrawer — S141 / TASK-14111: the picked date reaches BOTH dated
     expect(usersPut.body?.effectiveFrom).toBe('2026-10-01')
   })
 
-  it('still sends today when HR never touches the picker (the pre-existing behaviour, unchanged)', async () => {
-    renderEdit()
-    await waitForHydrated()
-
-    fireEvent.change(screen.getByTestId('ep-position'), { target: { value: 'New Title' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Gem ændringer' }))
-    await waitFor(() =>
-      expect(calls.some((c) => c.url.includes('/employee-profiles/') && c.method === 'PUT')).toBe(true),
-    )
-
-    const profilePut = calls.find((c) => c.url.includes('/employee-profiles/') && c.method === 'PUT')!
-    expect(profilePut.body?.effectiveFrom).toBe(todayIsoUtc())
-  })
+  // "still sends today when HR never touches the picker" moved to the dedicated
+  // "S142 / TASK-14209" describe block near the end of this file (same reason as the other two
+  // moved tests above).
 })
 
 describe('PersonDrawer — S141 / TASK-14111 requirement 3: composes with the B0/OQ-6 notice (TASK-14107) instead of contradicting it', () => {
@@ -368,6 +346,93 @@ describe('PersonDrawer — S141 / TASK-14111 requirement 3: composes with the B0
     const notice = screen.getByTestId('pd-agreement-scheduled')
     expect(notice.textContent).not.toContain('Gemmer du nu')
     expect(notice.textContent).toContain('Gemmer du med virkning fra')
+  })
+})
+
+// S142 / TASK-14209 — the effective-date default is the EUROPE/COPENHAGEN day, not the browser's.
+//
+// The three tests below used to assert `todayIsoUtc()` against a FRESH call to the very function
+// production uses to compute the default: `PersonDrawer.tsx`'s `useState<string>(today ?? '')`
+// (seeded from `todayIso()` in `useEditPerson.ts`). Comparing the code under test's output to
+// another call to the SAME code proves only that it agrees with itself — it passes no matter
+// whether the underlying computation is UTC, browser-local, or (correctly) the Copenhagen day.
+// That is precisely the self-referential shape this sprint exists to delete.
+//
+// WHY THE ZONE MUST BE FORCED. The developer machine this suite runs on is ALSO on Copenhagen
+// time, so browser-local and Copenhagen agree here by coincidence; pinning the clock without
+// ALSO forcing the zone away from Copenhagen would still let this pass against the exact
+// UTC/browser-local defect S142 removes. See `testTimeZone.ts` and `MondayDatePicker.test.tsx`
+// (the first site this pattern shipped for) for the full reasoning.
+describe('PersonDrawer — S142 / TASK-14209: the effective-date default is the Copenhagen day', () => {
+  let restoreTz: string | undefined
+
+  beforeAll(() => {
+    restoreTz = forceTestTimeZone('America/New_York')
+  })
+
+  afterAll(() => {
+    restoreTestTimeZone(restoreTz)
+  })
+
+  beforeEach(() => {
+    // `toFake: ['Date']` only — `setTimeout` stays REAL, so `waitForHydrated()`'s `waitFor` below
+    // keeps working normally; only `new Date()` (and therefore `todayIso()`) reads the pinned
+    // instant.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // 2026-07-15 22:30 UTC — the SAME pinned instant `MondayDatePicker.test.tsx` and
+    // `useEditPerson.test.tsx`'s own S142 guard use, for the same reason: Copenhagen (CEST,
+    // +02:00) already reads 00:30 on the 16th; New York (EDT, -04:00) still reads 18:30 on the
+    // 15th; UTC itself reads the 15th. Three different answers at the same instant.
+    vi.setSystemTime(new Date('2026-07-15T22:30:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // THE GUARD ON THE GUARD: if the zone forcing ever stopped taking effect, the facts below would
+  // not fail — they would quietly start passing again with browser-local and Copenhagen
+  // coincidentally agreeing (this host IS Copenhagen), which is the worst outcome available.
+  it('runs in a zone behind Copenhagen, which is what lets the facts below fail on a regression', () => {
+    const pinned = new Date('2026-07-15T22:30:00Z')
+    expect(pinned.getDate()).toBe(15)
+    expect(pinned.getHours()).toBe(18)
+  })
+
+  it('renders in edit mode, defaulting to the Copenhagen today (requirement 1 — the default stays today)', async () => {
+    renderEdit()
+    await waitForHydrated()
+
+    const input = screen.getByTestId('pd-effective-from') as HTMLInputElement
+    // LITERAL, not a second call to `todayIso()` — see this block's header. Pre-S142 (the raw UTC
+    // formula) this would have been '2026-07-15': the exact off-by-one the sprint removes.
+    expect(input.value).toBe('2026-07-16')
+  })
+
+  it('removes the banner again if HR changes the date back to the Copenhagen today', async () => {
+    renderEdit()
+    await waitForHydrated()
+
+    const input = screen.getByTestId('pd-effective-from')
+    fireEvent.change(input, { target: { value: '2026-10-01' } })
+    expect(screen.getByTestId('pd-effective-future-notice')).toBeDefined()
+
+    fireEvent.change(input, { target: { value: '2026-07-16' } })
+    expect(screen.queryByTestId('pd-effective-future-notice')).toBeNull()
+  })
+
+  it('still sends the Copenhagen today when HR never touches the picker (the pre-existing behaviour, unchanged)', async () => {
+    renderEdit()
+    await waitForHydrated()
+
+    fireEvent.change(screen.getByTestId('ep-position'), { target: { value: 'New Title' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Gem ændringer' }))
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.includes('/employee-profiles/') && c.method === 'PUT')).toBe(true),
+    )
+
+    const profilePut = calls.find((c) => c.url.includes('/employee-profiles/') && c.method === 'PUT')!
+    expect(profilePut.body?.effectiveFrom).toBe('2026-07-16')
   })
 })
 

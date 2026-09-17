@@ -29,10 +29,11 @@
 // If-Match ("42") will not match what the double expects ("6") and the whole
 // save reports `ok: false`.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { useEditPerson, todayIsoUtc, type EditSaveInput } from '../useEditPerson'
+import { useEditPerson, type EditSaveInput } from '../useEditPerson'
 import type { EditLiveState, SaveEditResult } from '../useEditPerson'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../lib/__tests__/testTimeZone'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -357,15 +358,67 @@ describe('useEditPerson.saveEdit — S141 / TASK-14111 the effective-date picker
     expect(profilePut.body?.effectiveFrom).toBe('2020-01-15')
   })
 
-  it('defaults to today when effectiveFrom is omitted — every pre-S141 caller keeps working unchanged', async () => {
-    setupRouter(routes())
+  // S142 / TASK-14209 — this test used to assert `todayIsoUtc()` against a FRESH call to the very
+  // function under test: `saveEdit`'s default is `input.effectiveFrom ?? todayIso()`, and the old
+  // assertion called `todayIsoUtc()` a second time and compared the two calls to each other. That
+  // passes no matter WHAT `todayIso()` computes — UTC, browser-local, or (correctly) the
+  // Copenhagen day — because both sides of the `expect` are the same computation. It is exactly
+  // the shape this sprint exists to delete (see this file's own header).
+  //
+  // The machine this suite runs on is ALSO on Copenhagen time (the project's dev host), so
+  // browser-local and Copenhagen agree here by coincidence — pinning the instant is not enough on
+  // its own; the zone must be forced away from Copenhagen too, or this test would pass against the
+  // very UTC-vs-Copenhagen defect S142 removes. See `testTimeZone.ts` and
+  // `MondayDatePicker.test.tsx` (the first site this pattern shipped for).
+  describe('the default is the Copenhagen day, not the browser day (S142 regression guard)', () => {
+    let restoreTz: string | undefined
 
-    const result = await run(minimalDirtyInput(), makeLive())
+    beforeAll(() => {
+      restoreTz = forceTestTimeZone('America/New_York')
+    })
 
-    expect(result.ok).toBe(true)
-    const usersPut = calls.find((c) => c.url.endsWith('/api/admin/users/EMP1'))!
-    expect(usersPut.body?.effectiveFrom).toBe(todayIsoUtc())
-    const profilePut = calls.find((c) => c.url.includes('/employee-profiles/'))!
-    expect(profilePut.body?.effectiveFrom).toBe(todayIsoUtc())
+    afterAll(() => {
+      restoreTestTimeZone(restoreTz)
+    })
+
+    beforeEach(() => {
+      // `toFake: ['Date']` only — `setTimeout` stays REAL, so the `waitFor` inside `run()` below
+      // keeps working normally; only `new Date()` (and therefore `todayIso()`) reads the pinned
+      // instant.
+      vi.useFakeTimers({ toFake: ['Date'] })
+      // 2026-07-15 22:30 UTC. Copenhagen (CEST, +02:00) already reads 00:30 on the 16th; New York
+      // (EDT, -04:00) still reads 18:30 on the 15th — the SAME pinned instant
+      // `MondayDatePicker.test.tsx` uses for the same reason, so this is a known-correct pin, not
+      // a fresh guess.
+      vi.setSystemTime(new Date('2026-07-15T22:30:00Z'))
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    // THE GUARD ON THE GUARD: if zone forcing ever stopped taking effect, the fact below would not
+    // fail — it would quietly start passing again with browser-local and Copenhagen coincidentally
+    // agreeing (this host IS Copenhagen), which is the worst outcome available.
+    it('runs in a zone behind Copenhagen, which is what lets the fact below fail on a regression', () => {
+      const pinned = new Date('2026-07-15T22:30:00Z')
+      expect(pinned.getDate()).toBe(15)
+      expect(pinned.getHours()).toBe(18)
+    })
+
+    it('defaults to the Copenhagen today when effectiveFrom is omitted — every pre-S141 caller keeps working unchanged', async () => {
+      setupRouter(routes())
+
+      const result = await run(minimalDirtyInput(), makeLive())
+
+      expect(result.ok).toBe(true)
+      // LITERAL, not a second call to `todayIso()` — see this block's header comment. Pre-S142
+      // (the raw UTC formula) this would have been '2026-07-15': the exact off-by-one the sprint
+      // removes.
+      const usersPut = calls.find((c) => c.url.endsWith('/api/admin/users/EMP1'))!
+      expect(usersPut.body?.effectiveFrom).toBe('2026-07-16')
+      const profilePut = calls.find((c) => c.url.includes('/employee-profiles/'))!
+      expect(profilePut.body?.effectiveFrom).toBe('2026-07-16')
+    })
   })
 })

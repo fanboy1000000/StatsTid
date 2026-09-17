@@ -5,12 +5,13 @@
 // body as `employmentStartDate` — the ONE thing an undated create silently
 // gets wrong (S137: omitted ⇒ "hired today" server-side, blocking any
 // back-filled registration from before the record existed).
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ToastProvider } from '../../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import { orgsFromForest } from '../personDrawerData'
 import { PersonDrawer } from '../PersonDrawer'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../../../lib/__tests__/testTimeZone'
 
 const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
 vi.mock('../../../../contexts/AuthContext', () => ({
@@ -109,26 +110,62 @@ function createRequestBody(): Record<string, unknown> {
   return JSON.parse(init.body as string)
 }
 
-// S142 test-clock sweep: INERT FOR NOW, DECLARED CROSS-DOMAIN DEPENDENCY (not fixed here — out of
-// tests/** scope). PersonDrawer.tsx:199 (production census row 62) is itself STILL on the raw
-// `new Date().toISOString().slice(0,10)` UTC formula — verified by reading the current file, it has
-// not yet been migrated to the Copenhagen day. Because this test's todayIso() and the component
-// compute the IDENTICAL expression in the SAME jsdom process, they cannot currently disagree
-// (self-referential, no independent oracle) — but the moment PersonDrawer.tsx is migrated to the
-// frontend Copenhagen helper (TASK-14201 introduced one; it has not been applied here), this test
-// will start failing specifically in the 22:00-24:00 UTC window unless updated in the SAME change.
-// Fixing this test's formula in isolation NOW (ahead of the component) would be premature — it would
-// newly diverge from the (still-UTC) component every night, introducing a flake rather than removing
-// one. Track this test update together with the PersonDrawer.tsx frontend fix, not separately.
-const todayIso = () => new Date().toISOString().slice(0, 10)
-
+// S142 test-clock sweep (701f4b6) flagged this suite's OWN `todayIso()` as INERT: it was a LOCAL
+// RE-IMPLEMENTATION of the raw UTC formula (`new Date().toISOString().slice(0, 10)`), not an
+// import, so it computed the IDENTICAL expression the component (then also still on the raw
+// formula) used — the two could never disagree, so this test would have passed whether or not
+// `PersonDrawer.tsx` was ever fixed. That sweep's comment tracked the fix to land together with
+// `PersonDrawer.tsx`'s own migration; TASK-14209 is that migration (census row 62 — the
+// create-mode hire-date pre-fill now reads the Copenhagen day via `useEditPerson.ts`'s
+// `todayIso()` / `copenhagenDate.ts`), so this file updates in the SAME change as promised.
+//
+// WHY THE ZONE MUST BE FORCED (not just the clock pinned). The developer machine this suite runs
+// on is ALSO on Copenhagen time, so browser-local and Copenhagen would agree here by coincidence —
+// forcing the zone away from Copenhagen is what makes the literals below actually discriminate a
+// regression. See `testTimeZone.ts` and `MondayDatePicker.test.tsx` (the first site this pattern
+// shipped for).
 describe('PersonDrawer — the create-mode hire date (HRP-016)', () => {
-  it('pre-fills the field with today', () => {
-    renderCreate()
-    expect((screen.getByTestId('pd-employment-start') as HTMLInputElement).value).toBe(todayIso())
+  let restoreTz: string | undefined
+
+  beforeAll(() => {
+    restoreTz = forceTestTimeZone('America/New_York')
   })
 
-  it('sends the pre-filled (today) date on the create POST when left untouched', async () => {
+  afterAll(() => {
+    restoreTestTimeZone(restoreTz)
+  })
+
+  beforeEach(() => {
+    // `toFake: ['Date']` only — `setTimeout` stays REAL, so the `waitFor` calls below keep
+    // working normally; only `new Date()` (and therefore `todayIso()`) reads the pinned instant.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // 2026-07-15 22:30 UTC — the SAME pinned instant `MondayDatePicker.test.tsx` and
+    // `useEditPerson.test.tsx`'s S142 guard use: Copenhagen (CEST, +02:00) already reads 00:30 on
+    // the 16th; New York (EDT, -04:00) still reads 18:30 on the 15th; UTC itself reads the 15th.
+    vi.setSystemTime(new Date('2026-07-15T22:30:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // THE GUARD ON THE GUARD: if the zone forcing ever stopped taking effect, the facts below would
+  // not fail — they would quietly start passing again with browser-local and Copenhagen
+  // coincidentally agreeing (this host IS Copenhagen), which is the worst outcome available.
+  it('runs in a zone behind Copenhagen, which is what lets the facts below fail on a regression', () => {
+    const pinned = new Date('2026-07-15T22:30:00Z')
+    expect(pinned.getDate()).toBe(15)
+    expect(pinned.getHours()).toBe(18)
+  })
+
+  it('pre-fills the field with the Copenhagen today', () => {
+    renderCreate()
+    // LITERAL, not a call to a formula the component also computes — see this block's header.
+    // Pre-S142 (the raw UTC formula) this would have been '2026-07-15'.
+    expect((screen.getByTestId('pd-employment-start') as HTMLInputElement).value).toBe('2026-07-16')
+  })
+
+  it('sends the pre-filled (Copenhagen today) date on the create POST when left untouched', async () => {
     mockFetch.mockImplementation(async () => jsonResponse({ userId: 'EMP010', version: 1 }))
     renderCreate()
 
@@ -140,7 +177,7 @@ describe('PersonDrawer — the create-mode hire date (HRP-016)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Opret medarbejder' }))
 
     await waitFor(() => expect(mockFetch).toHaveBeenCalled())
-    expect(createRequestBody().employmentStartDate).toBe(todayIso())
+    expect(createRequestBody().employmentStartDate).toBe('2026-07-16')
   })
 
   it('is editable, and the EDITED value — not today — reaches the create POST body', async () => {
