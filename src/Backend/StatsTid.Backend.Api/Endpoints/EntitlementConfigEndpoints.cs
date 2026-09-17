@@ -7,6 +7,7 @@ using StatsTid.Backend.Api.Validation;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -155,6 +156,10 @@ public static class EntitlementConfigEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<EntitlementConfigCreated> createdMapper,
             AuditProjectionRepository auditRepo,
+            // S142 / TASK-14201 — the server-"today" seam. DI supplies TimeProvider.System in
+            // production; a fixed provider in tests. Injected so the Copenhagen business date
+            // below is pinnable (PAT-008); it was previously read off the ambient wall clock.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -170,7 +175,12 @@ public static class EntitlementConfigEndpoints
                 return Results.BadRequest(new { error = rangeError });
 
             // 1. Same-day-only-edit validator (cycle 3 symmetric forbid).
-            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            //    S142 / TASK-14201 (census row 18): "today" is the EUROPE/COPENHAGEN calendar
+            //    day, not the UTC one. effective_from is a BUSINESS date, so between Danish
+            //    midnight and UTC midnight the UTC day was still yesterday and this equality
+            //    validator REFUSED the date on the admin's own calendar. The same value is the
+            //    default for an omitted EffectiveFrom, is stored, and is echoed in the 422.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var requestedEffectiveFrom = body.EffectiveFrom ?? today;
             if (requestedEffectiveFrom != today)
             {
@@ -389,6 +399,8 @@ public static class EntitlementConfigEndpoints
             IAuditProjectionMapper<EntitlementConfigCreated> createdMapper,
             IAuditProjectionMapper<EntitlementConfigSuperseded> supersededMapper,
             AuditProjectionRepository auditRepo,
+            // S142 / TASK-14201 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -407,7 +419,10 @@ public static class EntitlementConfigEndpoints
             //    (owner ruling #1): body.EffectiveFrom is now OPTIONAL — omitted defaults to
             //    server today (compute-once; the ONLY body.EffectiveFrom read in this
             //    handler); an explicitly-sent value != today still 422s.
-            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            //    S142 / TASK-14201 (census row 19): "today" is the EUROPE/COPENHAGEN calendar
+            //    day. Same reasoning as the POST — this is the value an omitted EffectiveFrom
+            //    is defaulted to and stored as, and the value echoed in the 422 body.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var requestedEffectiveFrom = body.EffectiveFrom ?? today;
             if (requestedEffectiveFrom != today)
             {
@@ -677,6 +692,8 @@ public static class EntitlementConfigEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<EntitlementConfigSoftDeleted> softDeletedMapper,
             AuditProjectionRepository auditRepo,
+            // S142 / TASK-14201 — the server-"today" seam (TimeProvider.System in production).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -689,7 +706,11 @@ public static class EntitlementConfigEndpoints
                     context.Request, out var expectedVersion, out var headerError))
                 return Results.Json(new { error = headerError }, statusCode: 428);
 
-            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            // S142 / TASK-14201 (census row 20): the soft-close stamp written to effective_to
+            // (end-exclusive, ADR-018 D9) is a BUSINESS date — the EUROPE/COPENHAGEN calendar
+            // day off the injected TimeProvider, not the UTC day, which would close the row a
+            // day early for any admin deleting after Danish midnight.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             await using var conn = connectionFactory.Create();
             await conn.OpenAsync(ct);

@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -35,6 +36,21 @@ namespace StatsTid.Tests.Regression.Config;
 /// GlobalAdmin role on the JWT — no org-scope required (admin-strict per ADR-019).
 /// </para>
 /// </summary>
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// S142 / TASK-14201 — every "today" in this file is the EUROPE/COPENHAGEN business day
+// (CopenhagenBusinessDate), because that is the calendar EntitlementConfigEndpoints now computes
+// its same-day gate and its soft-close `effective_to` stamp against. Both sides used to read the
+// UTC day and therefore agreed only by coincidence; leaving this side on UTC would have reddened
+// the 201/412/428/200 facts below for the one-to-two hours each night between Danish and UTC
+// midnight, because the server would have refused a date this file called "today".
+//
+// THESE READS ARE FIXTURES, NOT ASSERTIONS. Calling the same helper the product calls, against
+// the same real clock, cannot disagree with it — a bug inside CopenhagenBusinessDate would pass
+// here silently. The discriminating coverage is the clock-PINNED facts at the bottom of this file
+// (WithFixedInstant + BoundaryInstants + LITERAL expected dates) plus
+// Hosting/FixedInstantSeamTests.cs, which prove the endpoint reads the injected TimeProvider and
+// converts through the real Europe/Copenhagen zone rather than the UTC calendar day.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 [Trait("Category", "Docker")]
 public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
 {
@@ -115,7 +131,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
 
         // Use a synthetic natural key that doesn't exist in the seed.
         var fakeOk = "OK_S30POST_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var body = new
         {
@@ -196,7 +212,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
 
         var fakeOk = "OK_S68RESET_" + Guid.NewGuid().ToString("N").Substring(0, 8);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var body = new
         {
@@ -220,6 +236,21 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         var rsp = await client.PostAsJsonAsync("/api/admin/entitlement-configs", body);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
 
+        // S142 / TASK-14201 — ASSERT WHICH 422 THIS IS. The endpoint returns 422 from two
+        // different guards on this path: the same-day-only effective_from check (which runs
+        // first) and the VACATION reset_month = 9 check (which is what this test is about). This
+        // test used to assert the status code alone, so it passed whenever EITHER guard fired —
+        // it could not tell a working reset-month guard from a deleted one, and in the old
+        // UTC-vs-Copenhagen divergence window it was in fact proving the wrong guard. The two
+        // bodies are structurally distinct: only the reset-month rejection carries
+        // `suppliedResetMonth`; the same-day rejection carries `suppliedEffectiveFrom`/`today`.
+        var errorBody = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(
+            errorBody.TryGetProperty("suppliedResetMonth", out var suppliedResetMonth),
+            "Expected the VACATION reset_month 422, whose body carries `suppliedResetMonth`. " +
+            "Got a different 422 instead: " + errorBody.ToString());
+        Assert.Equal(1, suppliedResetMonth.GetInt32());
+
         // No row persisted (neither the endpoint guard nor the DB CHECK let it through).
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -241,7 +272,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         // Read a seeded config: SENIOR_DAY/AC/OK24 (annual_quota=0; min_age=60).
         var (configId, version) = await ReadSeededConfigAsync(client, "SENIOR_DAY", "AC", "OK24");
         Assert.Equal(1L, version);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         // PUT with stale If-Match (version - 1) = "0".
         var stale = version - 1;
@@ -279,7 +310,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
 
         var (configId, _) = await ReadSeededConfigAsync(client, "VACATION", "HK", "OK26");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var rsp = await PutAsync(client, configId,
             entitlementType: "VACATION",
@@ -309,7 +340,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
 
         // VACATION/AC/OK26 has reset_month=9; try to change to 1 → 422.
         var (configId, version) = await ReadSeededConfigAsync(client, "VACATION", "AC", "OK26");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var rsp = await PutAsync(client, configId,
             entitlementType: "VACATION",
@@ -348,7 +379,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintAdminToken());
 
         var (configId, version) = await ReadSeededConfigAsync(client, "CARE_DAY", "HK", "OK24");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
         var backdated = today.AddDays(-7);
 
         var rsp = await PutAsync(client, configId,
@@ -389,7 +420,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
 
         // CHILD_SICK/PROSA/OK26 (annual_quota=3; min_age=null).
         var (configId, version) = await ReadSeededConfigAsync(client, "CHILD_SICK", "PROSA", "OK26");
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         var req = new HttpRequestMessage(HttpMethod.Delete,
             $"/api/admin/entitlement-configs/{configId}");
@@ -449,7 +480,7 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         // ADR-020 D2 Case B: predecessor closes at today-1, new row opens at today.
         var (configId, version) = await ReadSeededConfigAsync(client, "VACATION", "AC", "OK24");
         Assert.Equal(1L, version);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        var today = CopenhagenBusinessDate.Today(TimeProvider.System);
 
         // ADR-030/S60 + S62 accrual guard; S64 F4-5 ruling. The seeded VACATION/AC/OK24 row
         // flipped to accrual_model='MONTHLY_ACCRUAL' in S60 (ADR-030 samtidighedsferie). The PUT
@@ -570,6 +601,92 @@ public sealed class EntitlementConfigEndpointTests : IAsyncLifetime
         }
         return await client.SendAsync(req);
     }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // S142 / TASK-14201 — THE DISCRIMINATING FACT for census rows 18/19/20.
+    //
+    // WHAT IT PROVES, in one sentence: at an instant where Denmark has already turned the page to
+    // a new day but Greenwich has not, this endpoint calls the DANISH day "today" — it accepts the
+    // date on the Danish admin's own wall calendar and refuses the stale UTC one.
+    //
+    // WHY IT IS BUILT THIS WAY. Every OTHER "today" in this file is read off the real clock, which
+    // makes it a fixture and not evidence: client and server call the same helper, so they agree
+    // no matter what that helper computes. This fact instead PINS the server's clock to an exact
+    // instant (BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen = 2026-07-15 22:30Z) and
+    // states every expected date as a LITERAL. WithFixedToday(DateOnly) cannot be used here: it
+    // pins UTC MIDNIGHT, the one moment of the day where the two calendars always agree, so no
+    // test built on it can detect — or be broken by — this sprint's change.
+    //
+    // WHY THIS PARTICULAR INSTANT. In July Copenhagen is CEST (UTC+02:00), so 22:30Z is already
+    // 00:30 on the 16th there while the UTC day is still the 15th. That kills BOTH a no-conversion
+    // implementation (answers the 15th) AND a plausible-looking hardcoded +01:00 one (22:30 + 1h =
+    // 23:30, still the 15th). See BoundaryInstants for the full three-instant reasoning; the
+    // hardcoded-+02:00 case is killed once, cheaply, at the seam in FixedInstantSeamTests rather
+    // than by booting a third Postgres-backed host per endpoint family.
+    //
+    // RED ON THE PRE-CHANGE CODE: with the endpoint on DateTime.UtcNow.Date the server's "today"
+    // is 2026-07-15, so (a) returns 201 instead of 422 and (b) returns 422 instead of 201 — both
+    // halves invert. Docker-gated, therefore CI-VERIFIED, not verified locally.
+    // ═════════════════════════════════════════════════════════════════════════
+    [Fact]
+    public async Task Post_AtCopenhagenDayRollover_TreatsTheDanishDayAsToday()
+    {
+        using var pinned = _factory.WithFixedInstant(
+            BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen);
+        // PAT-008 boot order: the PINNED host boots before any HTTP call below.
+        var client = pinned.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintAdminToken());
+
+        // (a) The UTC calendar day is REFUSED, and the 422 body names the DANISH day as today.
+        //     Literals, not derived values — 2026-07-15 is the UTC day at the pinned instant and
+        //     2026-07-16 is the Copenhagen day, and the test asserts exactly that mapping.
+        var staleOk = "OK_S142UTC_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var staleRsp = await client.PostAsJsonAsync(
+            "/api/admin/entitlement-configs", BoundaryPostBody(staleOk, "2026-07-15"));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, staleRsp.StatusCode);
+        var staleBody = await staleRsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("2026-07-15", staleBody.GetProperty("suppliedEffectiveFrom").GetString());
+        Assert.Equal("2026-07-16", staleBody.GetProperty("today").GetString());
+
+        // (b) The DANISH calendar day is ACCEPTED and stored as the row's effective_from.
+        var freshOk = "OK_S142CPH_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var okRsp = await client.PostAsJsonAsync(
+            "/api/admin/entitlement-configs", BoundaryPostBody(freshOk, "2026-07-16"));
+        Assert.Equal(HttpStatusCode.Created, okRsp.StatusCode);
+        var created = await okRsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("2026-07-16", created.GetProperty("effectiveFrom").GetString());
+
+        // (c) …and the DATABASE carries the Danish day too, not just the response projection.
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT effective_from FROM entitlement_configs WHERE ok_version = @ok", conn);
+        cmd.Parameters.AddWithValue("ok", freshOk);
+        var stored = (DateTime)(await cmd.ExecuteScalarAsync())!;
+        Assert.Equal(new DateOnly(2026, 7, 16), DateOnly.FromDateTime(stored));
+    }
+
+    /// <summary>A minimal, guard-legal POST body whose only variable of interest is
+    /// <paramref name="effectiveFrom"/> (sent as a literal <c>yyyy-MM-dd</c> string, never
+    /// derived from a clock). VACATION + resetMonth 9 keeps the statutory guard satisfied so the
+    /// only thing that can reject the request is the same-day gate under test.</summary>
+    private static object BoundaryPostBody(string okVersion, string effectiveFrom) => new
+    {
+        entitlementType = "VACATION",
+        agreementCode = "AC",
+        okVersion,
+        annualQuota = 25m,
+        accrualModel = "IMMEDIATE",
+        resetMonth = 9,
+        carryoverMax = 5m,
+        proRateByPartTime = true,
+        isPerEpisode = false,
+        minAge = (int?)null,
+        description = "s142-boundary",
+        fullDayOnly = false,
+        effectiveFrom,
+    };
 
     private static string MintAdminToken()
     {

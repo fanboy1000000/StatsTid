@@ -9,6 +9,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -128,6 +129,11 @@ public static class ConfigEndpoints
             IAuditProjectionMapper<LocalAgreementProfileChanged> auditMapper,
             AuditProjectionRepository auditRepo,
             ILoggerFactory loggerFactory,
+            // S142 / TASK-14201 — the server-"today" seam. DI supplies TimeProvider.System in
+            // production; a fixed provider in tests. Injected so the Copenhagen business date
+            // in step 4b is pinnable (PAT-008); it was previously read off the ambient wall
+            // clock, which no test could pin.
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -190,10 +196,19 @@ public static class ConfigEndpoints
 
             // 4b. No-scheduled-future rejection (ADR-017 D2; D11 fixture #15). Profile
             //     activations are "today onwards" only — admins set calendar reminders and
-            //     edit on the day rather than scheduling future profiles. UTC "today"
-            //     matches the repository's effective_to stamping (Phase-4 hardening
-            //     sub-sprint per D2.2 revisits TimeProvider/IClock injection).
-            var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+            //     edit on the day rather than scheduling future profiles.
+            //
+            //     S142 / TASK-14201 (census row 14): "today" is the EUROPE/COPENHAGEN calendar
+            //     day, read off the INJECTED TimeProvider (TimeProvider.System in production).
+            //     This is a strict-inequality FUTURE rejection — past dates stay legal — so
+            //     the UTC day did not merely shift the boundary, it told a Danish admin
+            //     working after local midnight that the day on their own calendar was "in the
+            //     future". The value is also echoed back as `nearestValid`, so a UTC day put a
+            //     wrong remediation date in the 400 body. (The stale comment this replaces
+            //     claimed UTC "today" matched the repository's effective_to stamping; that
+            //     claim was the S142 defect, not a justification.) MondayDatePicker.tsx is the
+            //     browser half of the same gate and moves to Copenhagen in the same commit.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var temporalityError = ProfileAlignmentValidator.ValidateEffectiveFromTemporality(
                 candidate.EffectiveFrom, today);
             if (temporalityError is not null)

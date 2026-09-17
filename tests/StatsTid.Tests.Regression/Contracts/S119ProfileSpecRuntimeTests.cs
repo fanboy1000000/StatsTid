@@ -2,8 +2,10 @@ using System.Globalization;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -328,12 +330,124 @@ public sealed class S119ProfileSpecRuntimeTests : IAsyncLifetime
     private static string ProfilePath(string orgId)
         => $"/api/config/{orgId}/profile/{AgreementCode}/{OkVersion}";
 
-    private static DateOnly Today() => DateOnly.FromDateTime(DateTime.UtcNow.Date);
+    /// <summary>
+    /// S142 / TASK-14201 — the EUROPE/COPENHAGEN business day: the same calendar
+    /// <c>ConfigEndpoints</c>' profile PUT now computes before calling
+    /// <c>ProfileAlignmentValidator.ValidateEffectiveFromTemporality</c>. Both sides used to read
+    /// the UTC day and so agreed only by coincidence; leaving this side on UTC would have reddened
+    /// the eight call sites below — which assert 200/412/version-continuity and therefore all have
+    /// to get PAST that gate — for the one-to-two hours each night between Danish and UTC midnight.
+    ///
+    /// <para><b>This is a FIXTURE, not an assertion.</b> Calling the same helper the product calls,
+    /// against the same real clock, cannot disagree with it: a bug inside
+    /// <c>CopenhagenBusinessDate</c> would pass here silently. The discriminating coverage is the
+    /// clock-PINNED facts (<c>WithFixedInstant</c> + <c>BoundaryInstants</c> + LITERAL expected
+    /// dates) and <c>Hosting/FixedInstantSeamTests.cs</c>.</para>
+    ///
+    /// <para>(The S142 test census names this endpoint <c>LocalAgreementProfileEndpoints.cs</c>.
+    /// No such file exists; the route <c>/api/config/{orgId}/profile/…</c> is served by
+    /// <c>ConfigEndpoints.cs</c> — production census row 14.)</para>
+    /// </summary>
+    private static DateOnly Today() => CopenhagenBusinessDate.Today(TimeProvider.System);
 
     /// <summary>The PUT body: <c>effectiveFrom</c> (required) + <c>maxFlexBalance</c> only —
     /// the one overridable field with NO alignment policy (WeeklyNormHours is Monday-locked;
     /// keeping it null keeps every fact date-independent). Omitted members serve as
     /// inherit-central nulls on the response.</summary>
+    // ════════════════════════════════════════════════════════════════════════════════
+    // S142 / TASK-14201 — THE DISCRIMINATING FACT for production census row 14
+    // (ConfigEndpoints' profile PUT → ProfileAlignmentValidator.ValidateEffectiveFromTemporality).
+    //
+    // WHAT IT PROVES, in one sentence: at an instant where Denmark has already turned the page to
+    // a new day but Greenwich has not, this endpoint accepts the day on the Danish admin's own
+    // wall calendar instead of calling it "in the future".
+    //
+    // WHY THIS GATE IS SHAPED DIFFERENTLY from the other three in this sprint. It is a STRICT
+    // INEQUALITY — `effectiveFrom > today` → 400 EFFECTIVE_FROM_NOT_TODAY_OR_PAST — not an
+    // equality check, so PAST dates stay legal. Moving it to the Copenhagen day therefore does not
+    // relocate a refusal, it REMOVES one: the day the admin calls today stops being rejected. The
+    // fact below asserts exactly that, plus the guard still being a guard (tomorrow is refused, and
+    // the 400's `nearestValid` names the Danish day the admin should have used).
+    //
+    // WHY IT IS BUILT THIS WAY: the file's own Today() is read off the real clock and is therefore
+    // a FIXTURE, not evidence. This fact PINS the server clock to an exact instant and states every
+    // expected date as a LITERAL. WithFixedToday(DateOnly) is unusable — it pins UTC MIDNIGHT,
+    // where the two calendars always agree, so nothing built on it can detect this bug. The instant
+    // is 2026-07-15 22:30Z; Copenhagen is CEST (+02:00) so it is already 00:30 on the 16th there,
+    // killing a no-conversion AND a hardcoded +01:00 implementation at once (see BoundaryInstants).
+    //
+    // WHY IT MINTS ITS OWN TOKEN instead of using AdminClient(): WithFixedInstant returns the base
+    // WebApplicationFactory<Program>, while SpecRuntimeTestSupport.CreateGlobalAdminClient takes
+    // the derived StatsTidWebApplicationFactory. Widening that shared signature mid-sprint would
+    // touch a support file several concurrent tasks depend on, so the token is minted here instead.
+    //
+    // RED ON THE PRE-CHANGE CODE: with the endpoint on DateTime.UtcNow.Date the server's "today"
+    // is 2026-07-15, so the Danish today (2026-07-16) is rejected 400 rather than accepted 200,
+    // and the second half's `nearestValid` reads 2026-07-15. Docker-gated → CI-VERIFIED, not local.
+    // ════════════════════════════════════════════════════════════════════════════════
+    [Fact]
+    public async Task ProfilePut_AtCopenhagenDayRollover_AcceptsTheDanishToday()
+    {
+        using var pinned = _factory.WithFixedInstant(
+            BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen);
+        // PAT-008 boot order: the PINNED host boots before any HTTP call below.
+        using var admin = BoundaryAdminClient(pinned);
+
+        // (a) The DANISH calendar day is ACCEPTED — the whole point of the change.
+        const string acceptOrg = "S142PRF_OK";
+        using var acceptRsp = await admin.SendAsync(S119ContractAssert.WithIfNoneMatchStar(
+            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Put, ProfilePath(acceptOrg),
+                BoundaryProfileBodyJson("2026-07-16"))));
+        var acceptBody = await acceptRsp.Content.ReadAsStringAsync();
+        Assert.Equal(200, (int)acceptRsp.StatusCode);
+        Assert.Equal("2026-07-16",
+            JsonDocument.Parse(acceptBody).RootElement.GetProperty("effectiveFrom").GetString());
+
+        // (b) The guard is still a guard: the day AFTER the Danish today is refused, and the
+        //     remediation hint names the Danish day — not the UTC one.
+        const string refuseOrg = "S142PRF_NO";
+        using var refuseRsp = await admin.SendAsync(S119ContractAssert.WithIfNoneMatchStar(
+            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Put, ProfilePath(refuseOrg),
+                BoundaryProfileBodyJson("2026-07-17"))));
+        Assert.Equal(400, (int)refuseRsp.StatusCode);
+        var refuseRoot = JsonDocument.Parse(await refuseRsp.Content.ReadAsStringAsync()).RootElement;
+        var field = refuseRoot.GetProperty("fields").EnumerateArray().Single();
+        Assert.Equal("EffectiveFrom", field.GetProperty("field").GetString());
+        Assert.Equal("EFFECTIVE_FROM_NOT_TODAY_OR_PAST", field.GetProperty("code").GetString());
+        // nearestValid is serialised with DateOnly's round-trip "O" format (yyyy-MM-dd).
+        Assert.Equal("2026-07-16",
+            field.GetProperty("nearestValid").EnumerateArray().Single().GetString());
+    }
+
+    /// <summary>A profile body whose <c>effectiveFrom</c> is a LITERAL <c>yyyy-MM-dd</c> string —
+    /// never derived from a clock, because a value the test computes the same way the product does
+    /// proves only that the test agrees with itself.</summary>
+    private static string BoundaryProfileBodyJson(string effectiveFrom)
+        => $$"""
+           { "effectiveFrom": "{{effectiveFrom}}", "maxFlexBalance": 30.0 }
+           """;
+
+    /// <summary>A GlobalAdmin client on an arbitrary (possibly clock-pinned) host. Mirrors
+    /// <c>SpecRuntimeTestSupport.CreateGlobalAdminClient</c>, which cannot be reused here because
+    /// it is typed to the derived factory; see the block comment above.</summary>
+    private static HttpClient BoundaryAdminClient(WebApplicationFactory<Program> factory)
+    {
+        var client = factory.CreateClient();
+        var tokenService = new JwtTokenService(new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        });
+        var token = tokenService.GenerateToken(
+            employeeId: AdminActorId, name: AdminActorId, role: StatsTidRoles.GlobalAdmin,
+            agreementCode: "AC", orgId: "/",
+            scopes: new[] { new RoleScope(StatsTidRoles.GlobalAdmin, "/", "GLOBAL") });
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
     private static string ProfileBodyJson(DateOnly effectiveFrom, decimal maxFlexBalance)
         => $$"""
            { "effectiveFrom": "{{effectiveFrom.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}}",
@@ -382,7 +496,12 @@ public sealed class S119ProfileSpecRuntimeTests : IAsyncLifetime
                 ('S119PRF_HIS', 'S119 Profil Org (history)',  'ORGANISATION', NULL, '/S119PRF_HIS/', 'AC', 'OK24'),
                 ('S119PRF_PRE', 'S119 Profil Org (428)',      'ORGANISATION', NULL, '/S119PRF_PRE/', 'AC', 'OK24'),
                 ('S119PRF_STA', 'S119 Profil Org (412)',      'ORGANISATION', NULL, '/S119PRF_STA/', 'AC', 'OK24'),
-                ('S119PRF_EMP', 'S119 Profil Org (403)',      'ORGANISATION', NULL, '/S119PRF_EMP/', 'AC', 'OK24')
+                ('S119PRF_EMP', 'S119 Profil Org (403)',      'ORGANISATION', NULL, '/S119PRF_EMP/', 'AC', 'OK24'),
+                -- S142 / TASK-14201: two orgs for the Copenhagen-boundary fact, one per half
+                -- (accepted Danish today / refused day-after). Own orgs so the fact stays
+                -- ordering-independent like every other fact in this class.
+                ('S142PRF_OK',  'S142 Profil Org (accept)',   'ORGANISATION', NULL, '/S142PRF_OK/',  'AC', 'OK24'),
+                ('S142PRF_NO',  'S142 Profil Org (refuse)',   'ORGANISATION', NULL, '/S142PRF_NO/',  'AC', 'OK24')
             ON CONFLICT DO NOTHING
             """, conn);
         await cmd.ExecuteNonQueryAsync();

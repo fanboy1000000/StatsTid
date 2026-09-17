@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using Npgsql;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using Xunit.Sdk;
@@ -286,7 +287,20 @@ public sealed class S121EntitlementWriteSpecRuntimeTests : IAsyncLifetime
     private HttpClient Admin()
         => SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, ActorId, JwtOrg);
 
-    private static DateOnly Today() => DateOnly.FromDateTime(DateTime.UtcNow.Date);
+    /// <summary>
+    /// S142 / TASK-14201 — the EUROPE/COPENHAGEN business day: the same calendar
+    /// <c>EntitlementConfigEndpoints</c> now computes. Both sides used to read the UTC day and so
+    /// agreed only by coincidence. This file is the sharpest case in the family, because one call
+    /// site compares this value DIRECTLY to the server-stamped
+    /// <c>effectiveFrom</c> in the 201 response — had the two calendars parted, that assertion
+    /// would have failed outright every night between Danish and UTC midnight.
+    ///
+    /// <para><b>This is a FIXTURE, not an assertion.</b> The same helper on the same real clock
+    /// cannot disagree with itself, so a bug inside <c>CopenhagenBusinessDate</c> passes here
+    /// silently. The discriminating coverage is the clock-PINNED facts (<c>WithFixedInstant</c> +
+    /// <c>BoundaryInstants</c> + LITERAL dates) and <c>Hosting/FixedInstantSeamTests.cs</c>.</para>
+    /// </summary>
+    private static DateOnly Today() => CopenhagenBusinessDate.Today(TimeProvider.System);
 
     /// <summary>Create a DRAFT parent agreement config through the REAL endpoint; returns its
     /// configId. A single config per (code, okVersion) keeps the child surface editable.</summary>
