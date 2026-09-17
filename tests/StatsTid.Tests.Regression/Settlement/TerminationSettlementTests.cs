@@ -514,6 +514,8 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
     {
         var service = BootService();
         var employeeId = await SeedEmployeeAsync();
+        // S142 test-clock sweep: INERT — a +2-YEAR margin on a "still active, not yet a leaver" end
+        // date; no one-day Copenhagen/UTC skew can make a two-years-out date look like the past.
         var futureEndDate = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(2);
         await SetEndDateAsync(employeeId, futureEndDate); // stored, is_active stays TRUE (R1b)
 

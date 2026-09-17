@@ -108,6 +108,8 @@ public sealed class AuditProjectionFamilyCutoverTests : IAsyncLifetime
         var ev = new PeriodSubmitted
         {
             PeriodId = Guid.NewGuid(), EmployeeId = "EMP_TEST", OrgId = TestOrgId,
+            // S142 test-clock sweep: INERT — placeholder dates on an in-memory event built only to
+            // exercise the audit-projection mapper's shape/row-presence; never asserted.
             PeriodStart = DateOnly.FromDateTime(DateTime.UtcNow),
             PeriodEnd = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
             PeriodType = "MONTHLY",
@@ -137,6 +139,8 @@ public sealed class AuditProjectionFamilyCutoverTests : IAsyncLifetime
         var ev = new OvertimePreApprovalCreated
         {
             EmployeeId = "EMP_TEST",
+            // S142 test-clock sweep: INERT — placeholder dates on an in-memory event built only to
+            // exercise the audit-projection mapper's shape/row-presence; never asserted.
             PeriodStart = DateOnly.FromDateTime(DateTime.UtcNow),
             PeriodEnd = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
             MaxHours = 10m, Status = "PENDING",
@@ -166,6 +170,8 @@ public sealed class AuditProjectionFamilyCutoverTests : IAsyncLifetime
         var ev = new UserAgreementCodeChanged
         {
             UserId = "USR_TEST", OldAgreementCode = "AC", NewAgreementCode = "HK",
+            // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only to
+            // exercise the audit-projection mapper's shape/row-presence; never asserted.
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
         };
 
@@ -216,6 +222,8 @@ public sealed class AuditProjectionFamilyCutoverTests : IAsyncLifetime
         var ev = new PeriodSubmitted
         {
             PeriodId = Guid.NewGuid(), EmployeeId = "EMP_TEST", OrgId = TestOrgId,
+            // S142 test-clock sweep: INERT — placeholder dates on an in-memory event built only to
+            // exercise the audit-projection mapper's shape/row-presence; never asserted.
             PeriodStart = DateOnly.FromDateTime(DateTime.UtcNow),
             PeriodEnd = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
             PeriodType = "MONTHLY",
@@ -242,6 +250,8 @@ public sealed class AuditProjectionFamilyCutoverTests : IAsyncLifetime
         var ev = new OvertimePreApprovalCreated
         {
             EmployeeId = "EMP_TEST",
+            // S142 test-clock sweep: INERT — placeholder dates on an in-memory event built only to
+            // exercise the audit-projection mapper's shape/row-presence; never asserted.
             PeriodStart = DateOnly.FromDateTime(DateTime.UtcNow),
             PeriodEnd = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30),
             MaxHours = 10m, Status = "PENDING",
@@ -268,6 +278,8 @@ public sealed class AuditProjectionFamilyCutoverTests : IAsyncLifetime
         var ev = new UserAgreementCodeChanged
         {
             UserId = "USR_TEST", OldAgreementCode = "AC", NewAgreementCode = "HK",
+            // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only to
+            // exercise the audit-projection mapper's shape/row-presence; never asserted.
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
         };
         var throwingOutbox = new ForcedRollbackHarness.ThrowingOutboxEnqueue();

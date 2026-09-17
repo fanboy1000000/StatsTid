@@ -443,6 +443,9 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     {
         // Give Mgr an active vikar (Mgr is absent_approver) AND make Mgr a vikar for someone
         // (Top is absent_approver, Mgr is the stand-in) → BOTH sides must be closed by step 4.
+        // S142 test-clock sweep: INERT — CreateVikarAsync only stores UntilDate (a +30-day margin);
+        // production's `vikar.UntilDate >= today` predicate can never be tripped by a one-day
+        // Copenhagen/UTC skew at this margin, and nothing below asserts an exact date.
         await CreateVikarAsync(Mgr, Repl, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30)); // Mgr = absent
         await CreateVikarAsync(Top, Mgr, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));  // Mgr = vikar
 
@@ -530,6 +533,8 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     public async Task R10_ForcedRollback_LeavesOriginalStateIntact_NoState_NoEvent_NoAudit()
     {
         // A pre-existing vikar (Mgr absent) to close inside the rolled-back tx.
+        // S142 test-clock sweep: INERT — +30-day margin; production's `UntilDate >= today` predicate
+        // can never be tripped by a one-day Copenhagen/UTC skew at this margin.
         var vikar = await CreateVikarAsync(Mgr, Repl, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
         var empPrimaryBefore = await _rlRepo.GetActiveByEmployeeAndRelationshipAsync(Emp, "PRIMARY");
         Assert.Equal(Mgr, empPrimaryBefore!.ManagerId);
@@ -540,6 +545,9 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync(IsolationLevel.RepeatableRead);
 
+            // S142 test-clock sweep: INERT — this whole tx is FORCE-ROLLED-BACK by design (the test's
+            // point is that nothing survives); today is only used to construct a row that never
+            // commits, and assertions check state/outbox/audit ABSENCE, never a date value.
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
             // (1) reassign Emp → Top (supersede Mgr-held PRIMARY).
@@ -1496,6 +1504,18 @@ public sealed class ReportingLineWriteLifecycleTests : IAsyncLifetime
     private static async Task<HttpResponseMessage> PutTransferAsync(
         HttpClient client, string userId, string newPrimaryOrgId, long ifMatchVersion)
     {
+        // S142 test-clock sweep: INERT, VERIFIED BY FULL TRACE (this site was flagged as the sharpest
+        // GATING candidate going in — it is not). This PUT never supplies agreementCode, so the entire
+        // `if (agreementCodeSupplied)` block in AdminEndpoints.cs (the ONLY reader of request.EffectiveFrom
+        // — confirmed by reading every `request.EffectiveFrom` occurrence in the handler and the exact
+        // opening/closing braces of that block) never executes; effectiveFrom here is dead. The actual
+        // dated writes of this transfer's fan-out (closing/reopening reporting lines and vikar rows) use
+        // the HANDLER's own `CopenhagenBusinessDate.Today(timeProvider)`, never this request field — and
+        // AdminEndpoints.cs's own XML doc on UpdateUserRequest.EffectiveFrom says so explicitly: "Nothing
+        // on this path COMPARES the supplied date to the server's today any more ... it decides which DAY
+        // an unattended client would name" (i.e., only when agreementCode is ALSO supplied). None of this
+        // helper's 3 callers assert a specific date on the transfer's closed/created rows either (they
+        // check status codes, primary_org_id, and edge existence/absence).
         var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
         var req = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/users/{userId}")
         {

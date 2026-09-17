@@ -219,6 +219,9 @@ public sealed class AuditVersionTransitionTests : IAsyncLifetime
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
+            // S142 test-clock sweep: INERT — repository-direct call (bypasses the HTTP endpoint's
+            // validator entirely); today is just the caller-supplied closeDate to store, and the
+            // assertions below check audit action/version-before/version-after, never the date value.
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
             var deleted = await _wageTypeMappingRepo.SoftDeleteAsync(
                 conn, tx,

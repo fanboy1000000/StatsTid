@@ -92,6 +92,8 @@ public sealed class AdminUserVersioningTests : IAsyncLifetime
     {
         var client = AuthorizedClient();
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — this PUT never sends agreementCode, so AdminEndpoints.cs's
+        // agreement-code branch (the only consumer of the body's effectiveFrom) never runs; the value is dead.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // (1) Capture initial ETag "1" via GET.
@@ -167,6 +169,8 @@ public sealed class AdminUserVersioningTests : IAsyncLifetime
         // gives us a fresh harness, but defense-in-depth on the user_id keeps
         // the audit-count assertion crisp).
         var userId = await CreateFreshUserAsync(displayName: "S35 Missing-IfMatch Target");
+        // S142 test-clock sweep: INERT — this PUT never sends agreementCode, so AdminEndpoints.cs's
+        // agreement-code branch (the only consumer of the body's effectiveFrom) never runs; the value is dead.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // PUT without If-Match → 428.
@@ -240,6 +244,8 @@ public sealed class AdminUserVersioningTests : IAsyncLifetime
     {
         var client = AuthorizedClient();
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — this PUT never sends agreementCode, so AdminEndpoints.cs's
+        // agreement-code branch (the only consumer of the body's effectiveFrom) never runs; the value is dead.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // Capture initial state: display_name='AC Medarbejder', agreement_code='AC',
@@ -352,6 +358,8 @@ public sealed class AdminUserVersioningTests : IAsyncLifetime
         // HttpClients so the two threads can independently issue requests without
         // shared header state.
         var userId = await CreateFreshUserAsync(displayName: "S35 Concurrent-PUT Target");
+        // S142 test-clock sweep: INERT — this PUT never sends agreementCode, so AdminEndpoints.cs's
+        // agreement-code branch (the only consumer of the body's effectiveFrom) never runs; the value is dead.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         var clientA = AuthorizedClient();

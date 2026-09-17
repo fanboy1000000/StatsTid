@@ -116,6 +116,9 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         var ev = new EntitlementConfigCreated
         {
             ConfigId = Guid.NewGuid(), EntitlementType = "VACATION", AgreementCode = "AC", OkVersion = "OK24",
+            // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only to
+            // exercise an audit-projection mapper's SHAPE (VisibilityScope/TargetOrgId/row-presence);
+            // never asserted, never touches an HTTP validator or a day comparison.
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow), RowVersion = 1,
             AnnualQuota = 25m, AccrualModel = "MONTHLY", ResetMonth = 1,
             CarryoverMax = 5m, ProRateByPartTime = true, IsPerEpisode = false,
@@ -149,6 +152,8 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         {
             ProfileId = Guid.NewGuid(), EmployeeId = "EMP_TEST",
             PartTimeFraction = 1m,
+            // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only to
+            // exercise an audit-projection mapper's shape/row-presence; never asserted.
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
         };
 
@@ -180,6 +185,8 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         {
             ProfileId = Guid.NewGuid(), OrgId = TestOrgId,
             AgreementCode = "AC", OkVersion = "OK24",
+            // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only to
+            // exercise an audit-projection mapper's shape/row-presence; never asserted.
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
         };
 
@@ -250,6 +257,9 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         var ev = new EntitlementConfigCreated
         {
             ConfigId = Guid.NewGuid(), EntitlementType = "VACATION", AgreementCode = "AC", OkVersion = "OK24",
+            // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only to
+            // exercise an audit-projection mapper's SHAPE (VisibilityScope/TargetOrgId/row-presence);
+            // never asserted, never touches an HTTP validator or a day comparison.
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow), RowVersion = 1,
             AnnualQuota = 25m, AccrualModel = "MONTHLY", ResetMonth = 1,
             CarryoverMax = 5m, ProRateByPartTime = true, IsPerEpisode = false,
@@ -277,6 +287,8 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         {
             ProfileId = Guid.NewGuid(), EmployeeId = "EMP_TEST",
             PartTimeFraction = 1m,
+            // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only to
+            // exercise an audit-projection mapper's shape/row-presence; never asserted.
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
         };
         var throwingOutbox = new ForcedRollbackHarness.ThrowingOutboxEnqueue();
@@ -307,6 +319,8 @@ public sealed class AuditProjectionCatalogCloseTests : IAsyncLifetime
         {
             OverrideId = Guid.NewGuid(), EmploymentCategory = "Standard",
             AgreementCode = "AC", OkVersion = "OK24",
+            // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only to
+            // exercise an audit-projection mapper's shape/row-presence; never asserted.
             EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
         };
         var ctx = MakeCtx(ev.OccurredAt);

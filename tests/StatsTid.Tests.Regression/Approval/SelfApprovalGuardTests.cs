@@ -362,6 +362,9 @@ public sealed class SelfApprovalGuardTests : IClassFixture<SelfApprovalGuardFixt
         // ReportingLineRepository), over the same test database — a read-only predicate, so a directly
         // constructed instance and the DI-resolved one evaluate identically.
         var authorizer = new DesignatedApproverAuthorizer(_fx.DbFactory, new ReportingLineRepository(_fx.DbFactory));
+        // S142 test-clock sweep: INERT — DirectLdr's authority over Emp comes via the unit-leader leg
+        // (unit_leaders INSERT at :148 carries only unit_id/user_id, no date column at all), so `asOf`
+        // is structurally unused by the branch this precondition exercises; verified against the schema.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // Positive control: DirectLdr is a real unit-leader approver of Emp, so the predicate returns TRUE

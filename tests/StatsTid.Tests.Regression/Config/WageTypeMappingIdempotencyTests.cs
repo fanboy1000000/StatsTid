@@ -100,6 +100,9 @@ public sealed class WageTypeMappingIdempotencyTests : IAsyncLifetime
         const string Position = "";
 
         var seedEffectiveFrom = new DateOnly(2020, 1, 1);
+        // S142 test-clock sweep: INERT — repository-direct SupersedeAndCreateAsync test (bypasses the
+        // HTTP validator); today is a self-consistent business date routing Case A/B/C, never compared
+        // to an independently-computed server clock.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         // Verify the seed row exists at effective_from = 2020-01-01 with effective_to = NULL.

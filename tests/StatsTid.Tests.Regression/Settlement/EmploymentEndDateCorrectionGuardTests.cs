@@ -46,6 +46,8 @@ public sealed class EmploymentEndDateCorrectionGuardTests : IAsyncLifetime
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
 
+    // S142 test-clock sweep: INERT — TodayUtc only anchors PastDate/FutureDate at a ±2-YEAR margin;
+    // no one-day Copenhagen/UTC skew can close a two-year gap.
     private static readonly DateOnly TodayUtc = DateOnly.FromDateTime(DateTime.UtcNow);
     private static readonly DateOnly PastDate = TodayUtc.AddYears(-2);
     private static readonly DateOnly FutureDate = TodayUtc.AddYears(2);

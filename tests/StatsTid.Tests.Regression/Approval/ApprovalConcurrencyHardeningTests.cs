@@ -478,6 +478,9 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
     [Fact]
     public async Task R1_RevokeCommittedWhileApproveBlocked_InTxReeval_Denies403()
     {
+        // S142 test-clock sweep: INERT — CreateVikarAsync only stores UntilDate (a +30-day margin);
+        // production's `vikar.UntilDate >= today` predicate can never be tripped by a one-day
+        // Copenhagen/UTC skew at this margin, and no assertion below checks an exact date.
         await CreateVikarAsync(Mgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
         var periodId = await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
         // Vik's TOKEN scope is STY01 (disjoint from Emp's STY02) → org-scope denies, so the ONLY grant is
@@ -570,6 +573,9 @@ public sealed class ApprovalConcurrencyHardeningTests : IAsyncLifetime
             // only report, Emp on STY02). This endpoint keys on Mgr's current tree root = STY02.
             vikarCreateLeg = adminClient.PostAsJsonAsync(
                 $"/api/admin/reporting-lines/{Mgr}/vikar",
+                // S142 test-clock sweep: INERT — effectiveTo is a +30-day margin on a vikar create;
+                // the server's own effectiveFrom (its Copenhagen "today") is what the row is bounded
+                // against, and a 30-day window absorbs any one-day calendar skew with room to spare.
                 new { vikarUserId = Cov, effectiveTo = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30).ToString("yyyy-MM-dd"), reason = "FERIE" });
 
             // BOTH legs must park on the SAME reporting-org-STY02 advisory key — the real-co-location

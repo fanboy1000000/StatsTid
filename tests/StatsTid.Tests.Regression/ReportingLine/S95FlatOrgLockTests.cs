@@ -629,6 +629,9 @@ public sealed class S95FlatOrgLockTests : IAsyncLifetime
     //  Helpers — clients / tokens
     // ════════════════════════════════════════════════════════════════════════════════
 
+    // S142 test-clock sweep: INERT — both call sites (:313, :410) use Today().AddDays(30) as a vikar
+    // effectiveTo/until margin; production's `UntilDate >= today` predicate can never be tripped by a
+    // one-day Copenhagen/UTC skew at this margin.
     private static DateOnly Today() => DateOnly.FromDateTime(DateTime.UtcNow);
 
     private HttpClient AdminClient(string userId, string orgId, string? scopeOrg = null)

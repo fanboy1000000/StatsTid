@@ -418,6 +418,10 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task Roster_IsActAuthoritySet_Vikar_And_Escalation_Appear_ActingReassigned_DoesNot()
     {
+        // S142 test-clock sweep: INERT — CreateVikarAsync only stores UntilDate (a +30-day margin);
+        // production's `vikar.UntilDate >= today` predicate can never be tripped by a one-day
+        // Copenhagen/UTC skew at this margin. (Distinct from InsertAbsenceTodayAsync above, which
+        // TASK-14203 already moved onto CopenhagenBusinessDate.Today because IT is date-exact.)
         await CreateVikarAsync(AwayMgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
         await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
         await InsertPeriodAsync(EmpVik, "STY02", "SUBMITTED");
@@ -453,6 +457,10 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     [Fact]
     public async Task Roster_VikarCoverageReport_IsApprovable_SeeEqualsAct()
     {
+        // S142 test-clock sweep: INERT — CreateVikarAsync only stores UntilDate (a +30-day margin);
+        // production's `vikar.UntilDate >= today` predicate can never be tripped by a one-day
+        // Copenhagen/UTC skew at this margin. (Distinct from InsertAbsenceTodayAsync above, which
+        // TASK-14203 already moved onto CopenhagenBusinessDate.Today because IT is date-exact.)
         await CreateVikarAsync(AwayMgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
         var periodId = await InsertPeriodAsync(EmpVik, "STY02", "SUBMITTED");
 

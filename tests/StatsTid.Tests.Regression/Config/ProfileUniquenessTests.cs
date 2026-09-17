@@ -88,6 +88,9 @@ public sealed class ProfileUniquenessTests : IAsyncLifetime
         }
 
         // Step 2: close the predecessor by setting effective_to = today.
+        // S142 test-clock sweep: INERT — direct SQL against local_agreement_profiles (bypasses any
+        // HTTP endpoint); today is a self-consistent business date used to close/open rows in the
+        // same test, never compared to an independently-computed server clock.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
         await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
         {

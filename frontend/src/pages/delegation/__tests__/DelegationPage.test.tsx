@@ -47,6 +47,9 @@ const activeStatus = {
 // constraint (DelegationPage.tsx:194). Computed relative to "today" so the test
 // never time-bombs on a date rollover (was hardcoded '2026-06-15', which jsdom
 // constraint-validation rejected once the wall-clock passed it → submit blocked).
+// S142 test-clock sweep: INERT — a +7-day margin against the component's min={todayIso()}
+// constraint; no one-day Copenhagen/UTC skew (whether or not todayIso() itself is ever
+// migrated to the Danish day) can close a seven-day gap.
 const validReturnDate = (() => {
   const d = new Date()
   d.setDate(d.getDate() + 7)

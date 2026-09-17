@@ -109,6 +109,17 @@ function createRequestBody(): Record<string, unknown> {
   return JSON.parse(init.body as string)
 }
 
+// S142 test-clock sweep: INERT FOR NOW, DECLARED CROSS-DOMAIN DEPENDENCY (not fixed here — out of
+// tests/** scope). PersonDrawer.tsx:199 (production census row 62) is itself STILL on the raw
+// `new Date().toISOString().slice(0,10)` UTC formula — verified by reading the current file, it has
+// not yet been migrated to the Copenhagen day. Because this test's todayIso() and the component
+// compute the IDENTICAL expression in the SAME jsdom process, they cannot currently disagree
+// (self-referential, no independent oracle) — but the moment PersonDrawer.tsx is migrated to the
+// frontend Copenhagen helper (TASK-14201 introduced one; it has not been applied here), this test
+// will start failing specifically in the 22:00-24:00 UTC window unless updated in the SAME change.
+// Fixing this test's formula in isolation NOW (ahead of the component) would be premature — it would
+// newly diverge from the (still-UTC) component every night, introducing a flake rather than removing
+// one. Track this test update together with the PersonDrawer.tsx frontend fix, not separately.
 const todayIso = () => new Date().toISOString().slice(0, 10)
 
 describe('PersonDrawer — the create-mode hire date (HRP-016)', () => {

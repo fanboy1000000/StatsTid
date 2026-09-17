@@ -79,6 +79,8 @@ public sealed class UserAgreementCodeRepositoryTests : IAsyncLifetime
         // which would also Case A INSERT a user_agreement_codes row).
         var userId = await CreateUserWithoutAgreementRowAsync();
 
+        // S142 test-clock sweep: INERT — repository-direct SupersedeAndCreateAsync test (bypasses the
+        // HTTP endpoint); today is self-consistent (Case A insert with no predecessor to compare against).
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
@@ -125,6 +127,8 @@ public sealed class UserAgreementCodeRepositoryTests : IAsyncLifetime
     public async Task SupersedeAndCreate_CaseB_SameDayEdit_UpdatesInPlace_BumpsVersion()
     {
         var userId = await CreateUserWithoutAgreementRowAsync();
+        // S142 test-clock sweep: INERT — repository-direct test; today only decides Case B routing
+        // against the SAME test's own seeded row, never an independently-computed server clock.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // Build a Case A row at effective_from = today (so the next call routes
@@ -198,6 +202,8 @@ public sealed class UserAgreementCodeRepositoryTests : IAsyncLifetime
         // the TASK-3403 backfill seeder ran at WAF startup). Today is strictly
         // greater than '0001-01-01' so a today-effective edit routes to Case C.
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — repository-direct test; today only decides Case C routing
+        // against the seeded '0001-01-01' predecessor, never an independently-computed server clock.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         Guid predecessorAssignmentId;
@@ -304,6 +310,9 @@ public sealed class UserAgreementCodeRepositoryTests : IAsyncLifetime
     {
         var client = AuthorizedClient();
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — agreementCode IS supplied, but the assertion only checks that
+        // the users.agreement_code CACHE value equals the user_agreement_codes CANONICAL row's value
+        // ("HK" == "HK") — a code-equality check, never a date comparison.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // S35/TASK-3506 (a5e3ce0): /api/admin/users PUT is admin-strict If-Match

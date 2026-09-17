@@ -515,6 +515,10 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         {
             Content = JsonContent.Create(new
             {
+                // S142 test-clock sweep: INERT — S141/TASK-14104 removed this endpoint's date-equality
+                // validator (see the comment at EmployeeProfileEndpoints.cs:337); none of this helper's
+                // 7 callers exercise OQ-6 scheduled-row truncation — all assert ETag/412/428/403/negative-
+                // value acceptance, unrelated to the date's value.
                 effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
                 weeklyNormHours,
                 partTimeFraction,

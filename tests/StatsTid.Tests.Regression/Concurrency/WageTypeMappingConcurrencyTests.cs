@@ -108,6 +108,9 @@ public sealed class WageTypeMappingConcurrencyTests : IAsyncLifetime
             await using var conn = _harness.Factory.Create();
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
+            // S142 test-clock sweep: INERT — repository-direct call (bypasses the HTTP endpoint's
+            // validator); today is only the caller-supplied closeDate, and the test asserts the thrown
+            // OptimisticConcurrencyException's expected/actual VERSION, never the date value.
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
             await _repo.SoftDeleteAsync(
                 conn, tx, seed.TimeType, seed.OkVersion, seed.AgreementCode, seed.Position,

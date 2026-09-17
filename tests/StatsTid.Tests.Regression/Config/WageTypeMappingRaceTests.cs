@@ -98,6 +98,10 @@ public sealed class WageTypeMappingRaceTests : IAsyncLifetime
     public async Task DeleteVsPost_Race_ThreadBObservesClosedTodayPredecessor_RoutesCaseB()
     {
         var timeType = NewTimeType("DELPOST");
+        // S142 test-clock sweep: INERT — repository-direct race test (bypasses the HTTP endpoint);
+        // today only decides Case A/B/C routing against other locally-derived dates/predecessors,
+        // never against an independently-computed server clock; assertions check row counts / thrown
+        // exceptions, not the date's value.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
         var pastEffectiveFrom = new DateOnly(2024, 1, 1);
 
@@ -212,6 +216,10 @@ public sealed class WageTypeMappingRaceTests : IAsyncLifetime
     public async Task PostVsPost_Race_NoPredecessor_PartialUniqueIndexRejectsLoser()
     {
         var timeType = NewTimeType("POSTPOST");
+        // S142 test-clock sweep: INERT — repository-direct race test (bypasses the HTTP endpoint);
+        // today only decides Case A/B/C routing against other locally-derived dates/predecessors,
+        // never against an independently-computed server clock; assertions check row counts / thrown
+        // exceptions, not the date's value.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         // Setup: no row exists for the natural key. Both Thread A + Thread B race to
@@ -293,6 +301,10 @@ public sealed class WageTypeMappingRaceTests : IAsyncLifetime
 
     private async Task InsertOpenRowAsync(NpgsqlConnection conn, NpgsqlTransaction tx, string timeType)
     {
+        // S142 test-clock sweep: INERT — repository-direct race test (bypasses the HTTP endpoint);
+        // today only decides Case A/B/C routing against other locally-derived dates/predecessors,
+        // never against an independently-computed server clock; assertions check row counts / thrown
+        // exceptions, not the date's value.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
         await _repo.CreateAsync(conn, tx, new WageTypeMapping
         {

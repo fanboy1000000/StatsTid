@@ -285,6 +285,9 @@ public sealed class S132Sec004SiblingOrgVikarBindingTests : IAsyncLifetime
 
     private sealed record ErrorBody(string error, string[]? uncoveredEmployeeIds, int? uncoveredCount);
 
+    // S142 test-clock sweep: INERT — both call sites (:146, :172) use Today().AddDays(30) as a vikar
+    // effectiveTo margin; production's `UntilDate >= today` predicate can never be tripped by a one-day
+    // Copenhagen/UTC skew at this margin.
     private static DateOnly Today() => DateOnly.FromDateTime(DateTime.UtcNow);
 
     /// <summary>Mints a LOCAL_HR bearer with one ORG_ONLY scope per <paramref name="scopeOrgs"/> entry

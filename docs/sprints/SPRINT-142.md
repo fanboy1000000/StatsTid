@@ -901,6 +901,27 @@ distinction is whether the date is the subject of the assertion or merely its se
 **Gap declared, not hidden:** no pinned fact for the DELETE soft-close stamps (rows 6/20/34) — same converted expression,
 same files as the POST pins, and a dedicated fact costs another container boot per family.
 
+### ✅ S141's worktree-freshness rule paid for itself, on the Orchestrator
+
+The flake-surface sweep agent ran its mandated first check, found its worktree at `a9e6c87` — **before all seven wave-2
+merges** — and **stopped without touching a file**, exactly as `docs/AGENTS.md` instructs.
+
+**The cause was mine and it is the documented one.** A worktree branches from the **remote-tracking** branch, and I had
+merged wave 2 locally without pushing, so `origin/master` still pointed at the last thing I pushed. The rule exists
+verbatim in `AGENTS.md` because S141 hit this nine times in one sprint.
+
+**What stopping prevented, in the agent's own reasoning:** it would have classified and "fixed" stale copies of
+`ReportingLineWriteLifecycleTests.cs` and `TeamOverviewAggregateTests.cs` — the two files its brief cites as its sharpest
+lead and its worked example — **both already modified by wave-2 tasks. Its fixes would have silently reverted theirs at
+merge.** It would also have pinned against a `BoundaryInstants` missing the month-boundary instant added minutes earlier.
+
+**It also declined to fix the problem unilaterally**, correctly noting that rebasing or merging is a repo-state decision
+its brief did not authorize, in a sprint that had already had one cross-agent git collision. *That is the right instinct:
+the agent that fixed the last git problem on its own authority is the one that nearly lost another agent's work.*
+
+Fixed at the source — `origin/master` pushed to `22f01d0` — and the agent authorized to merge and proceed. **A governance
+rule written after a previous sprint's failure caught the current sprint's Orchestrator making the same mistake.**
+
 ### ⚠ HARNESS DEFECT — `git stash` is repository-global, and the Orchestrator caused it
 
 **A worktree isolates the working tree. It does not isolate the stash.** TASK-14204 stashed to prove its RED; TASK-14202

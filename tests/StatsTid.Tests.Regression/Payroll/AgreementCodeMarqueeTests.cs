@@ -75,6 +75,10 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
 
     // Mutation date = today UTC. PeriodEnd is before today so the predecessor's
     // [predecessor.effective_from='0001-01-01', today) window covers PeriodStart.
+    // S142 test-clock sweep: INERT — Today is fed only into `effectiveFrom:` on a direct
+    // RegressionSeed/repository seed call (no HTTP endpoint), and PeriodEnd (2026-04-30, a fixed
+    // literal) is ~4.5 months (or more) before whenever "Today" actually resolves — a wide margin no
+    // one-day Copenhagen/UTC skew can close.
     private static readonly DateOnly Today =
         DateOnly.FromDateTime(DateTime.UtcNow);
 

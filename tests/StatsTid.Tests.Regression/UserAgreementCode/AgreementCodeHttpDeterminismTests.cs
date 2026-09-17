@@ -108,6 +108,10 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
     {
         var client = AuthorizedClient();
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — agreementCode IS supplied (flip to HK "today"), but the
+        // assertion queries a PAST month (2 months prior, comment above) against the predecessor row
+        // seeded at '0001-01-01'; that ~2-month margin absorbs any one-day Copenhagen/UTC skew in
+        // exactly where the live row's effective_from lands.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // S35 / TASK-3506 — admin-strict If-Match required on PUT. Capture
@@ -180,6 +184,8 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
     {
         var client = AuthorizedClient();
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — same margin reasoning as Balance_PastMonthSummary above: a
+        // past-period query against the '0001-01-01' predecessor absorbs any one-day calendar skew.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // S35 / TASK-3506 — admin-strict If-Match required on PUT.
@@ -290,6 +296,8 @@ public sealed class AgreementCodeHttpDeterminismTests : IAsyncLifetime
     {
         var adminClient = AuthorizedClient();
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — same margin reasoning as the other two tests in this file: a
+        // past-period query against the '0001-01-01' predecessor absorbs any one-day calendar skew.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // (1) Admin GET to capture ETag (TASK-3506 added the GET endpoint with

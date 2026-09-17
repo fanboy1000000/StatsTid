@@ -91,6 +91,10 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     // accepts per ADR-023 D8 same-day-only-edit narrowing). PeriodEnd is
     // before this date so the predecessor's [predecessor.effective_from,
     // today) window still covers PeriodStart.
+    // S142 test-clock sweep: INERT — Today is fed only into `effectiveFrom:` on a direct
+    // repository seed call (no HTTP endpoint despite the comment above referencing "the PUT endpoint
+    // validator" as intent-documentation only); PeriodEnd (2026-04-30, fixed) is a wide margin behind
+    // whenever "Today" actually resolves.
     private static readonly DateOnly Today =
         DateOnly.FromDateTime(DateTime.UtcNow);
 

@@ -350,6 +350,10 @@ public sealed class UnitFoundationTests : IAsyncLifetime
         // reporting edge between them and U1's role-scope is STY01 (a DIFFERENT Organisation). The unit
         // membership is the ONLY thing they share.
         var authorizer = new DesignatedApproverAuthorizer(_dbFactory, new ReportingLineRepository(_dbFactory));
+        // S142 test-clock sweep: INERT — U1/U2 have zero reporting_lines rows between them anywhere in
+        // this fixture (verified: only a cleanup DELETE references reporting_lines in this file, never
+        // an INSERT for this pair), so the query returns no rows for ANY asOf value — structural, not
+        // date-sensitive.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // (a) Approval authority: a shared unit does NOT make U1 U2's designated approver (no edge) —

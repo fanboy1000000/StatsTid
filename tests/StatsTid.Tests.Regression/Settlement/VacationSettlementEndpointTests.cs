@@ -61,6 +61,10 @@ public sealed class VacationSettlementEndpointTests : IAsyncLifetime
             await _harness.DisposeAsync();
     }
 
+    // S142 test-clock sweep: INERT — structurally immune, verified against the actual validator
+    // (VacationSettlementEndpoints.cs:200, `if (body.AgreementDate > copenhagenToday)` 422). Denmark's
+    // offset is never behind UTC, so Copenhagen-today is always >= UTC-today; sending the UTC value can
+    // therefore never exceed the Copenhagen deadline it is compared against.
     private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
 
     // ════════════════════════════════════════════════════════════════════════

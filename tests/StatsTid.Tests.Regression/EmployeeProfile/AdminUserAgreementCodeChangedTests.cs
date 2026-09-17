@@ -74,6 +74,11 @@ public sealed class AdminUserAgreementCodeChangedTests : IAsyncLifetime
 
         // emp001 in the seeded init.sql is agreement_code='AC'. PUT to "HK".
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — agreementCode IS supplied here so the write path runs, but
+        // S141 removed the equality/future-date refusal (nothing compares this to the server's today
+        // any more), and the assertion below (:155ish) compares the emitted event's effectiveFrom
+        // against this SAME local `today` variable — a self-consistent client-echo, not an independent
+        // server-side Copenhagen-day computation to diverge from.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // S35/TASK-3506 (a5e3ce0): /api/admin/users PUT is admin-strict If-Match
@@ -171,6 +176,9 @@ public sealed class AdminUserAgreementCodeChangedTests : IAsyncLifetime
     {
         var client = AuthorizedClient();
         const string userId = "emp001";
+        // S142 test-clock sweep: INERT — this PUT omits agreementCode entirely (that's the point of
+        // this negative-predicate test), so AdminEndpoints.cs's agreement-code branch (the only
+        // consumer of the body's effectiveFrom) never runs; the value is dead.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // S35/TASK-3506 (a5e3ce0): /api/admin/users PUT is admin-strict If-Match

@@ -88,6 +88,9 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
     public async Task SupersedeAndCreate_CaseC_SuccessorCarriesDatedCategory_DatedEqualsLiveAcrossSupersession()
     {
         var employeeId = await CreateUserWithoutProfileAsync(NonDefaultCategory);
+        // S142 test-clock sweep: INERT — repository-direct test (CreateAsync/SupersedeAndCreateAsync);
+        // today only decides Case A/B/C routing against the SAME test's other locally-derived dates,
+        // never an independently-computed server clock.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var yesterday = today.AddDays(-1);
 
@@ -174,6 +177,8 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
 
         // Path 3a: SupersedeAndCreateAsync Case A (net-new via InsertLiveRowAsync).
         var caseAUser = await CreateUserWithoutProfileAsync("Chefkonsulent");
+        // S142 test-clock sweep: INERT — repository-direct test; today only decides Case A/B/C routing
+        // against the SAME test's other locally-derived dates, never an independently-computed server clock.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         long caseAToken;
         await using (var conn = _harness.Factory.Create())

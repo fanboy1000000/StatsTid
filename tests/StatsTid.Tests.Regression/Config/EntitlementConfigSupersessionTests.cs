@@ -59,6 +59,10 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         const string EntitlementType = "VACATION";
         const string AgreementCode = "AC";
         var fakeOk = "OK_CASEA_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        // S142 test-clock sweep: INERT — repository-direct test (bypasses the HTTP endpoint's now-
+        // Copenhagen validator entirely); today is a caller-supplied business date the pure repo just
+        // stores/routes Case A/B/C against other locally-derived dates — no independent Copenhagen-day
+        // computation exists on this path to disagree with.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         SaveEntitlementConfigResult result;
@@ -99,6 +103,10 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         const string EntitlementType = "CARE_DAY";
         const string AgreementCode = "PROSA";
         const string OkVersion = "OK24";
+        // S142 test-clock sweep: INERT — repository-direct test (bypasses the HTTP endpoint's now-
+        // Copenhagen validator entirely); today is a caller-supplied business date the pure repo just
+        // stores/routes Case A/B/C against other locally-derived dates — no independent Copenhagen-day
+        // computation exists on this path to disagree with.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         var predecessorBefore = await _repo.GetCurrentOpenAsync(EntitlementType, AgreementCode, OkVersion);
@@ -172,6 +180,10 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         const string EntitlementType = "VACATION";
         const string AgreementCode = "AC";
         var fakeOk = "OK_CASEC_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        // S142 test-clock sweep: INERT — repository-direct test (bypasses the HTTP endpoint's now-
+        // Copenhagen validator entirely); today is a caller-supplied business date the pure repo just
+        // stores/routes Case A/B/C against other locally-derived dates — no independent Copenhagen-day
+        // computation exists on this path to disagree with.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         // Step 1: Case A insert at effective_from=today.
@@ -273,6 +285,10 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         const string EntitlementType = "SPECIAL_HOLIDAY";
         const string AgreementCode = "HK";
         const string OkVersion = "OK24";
+        // S142 test-clock sweep: INERT — repository-direct test (bypasses the HTTP endpoint's now-
+        // Copenhagen validator entirely); today is a caller-supplied business date the pure repo just
+        // stores/routes Case A/B/C against other locally-derived dates — no independent Copenhagen-day
+        // computation exists on this path to disagree with.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         var before = await ReadAllForNaturalKeyAsync(EntitlementType, AgreementCode, OkVersion);
@@ -338,6 +354,10 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         const string EntitlementType = "CHILD_SICK";
         const string AgreementCode = "AC";
         const string OkVersion = "OK26";
+        // S142 test-clock sweep: INERT — repository-direct test (bypasses the HTTP endpoint's now-
+        // Copenhagen validator entirely); today is a caller-supplied business date the pure repo just
+        // stores/routes Case A/B/C against other locally-derived dates — no independent Copenhagen-day
+        // computation exists on this path to disagree with.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         var before = await ReadAllForNaturalKeyAsync(EntitlementType, AgreementCode, OkVersion);
@@ -388,6 +408,10 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
         const string EntitlementType = "SENIOR_DAY";
         const string AgreementCode = "PROSA";
         const string OkVersion = "OK24";
+        // S142 test-clock sweep: INERT — repository-direct test (bypasses the HTTP endpoint's now-
+        // Copenhagen validator entirely); today is a caller-supplied business date the pure repo just
+        // stores/routes Case A/B/C against other locally-derived dates — no independent Copenhagen-day
+        // computation exists on this path to disagree with.
         var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
 
         // Cross-day edit.

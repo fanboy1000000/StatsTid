@@ -490,6 +490,9 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Breakdown_CrossAfdelingVikarApprover_Is200()
     {
+        // S142 test-clock sweep: INERT — CreateVikarAsync only stores UntilDate (a +30-day margin);
+        // production's `vikar.UntilDate >= today` predicate (query-predicate) can never be tripped by a
+        // one-day Copenhagen/UTC skew at this margin, and no assertion below checks an exact date.
         await CreateVikarAsync(AwayMgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
         await InsertWorkTimeAsync(EmpVik, new DateOnly(2026, 5, 4), 7.4m);
         // S128 / TASK-12804 — the vikar approver is LEADER tier, so the month-gate requires a SENT
@@ -654,6 +657,9 @@ public sealed class AllocationBreakdownEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Compliance_CrossAfdelingVikarApprover_PassesAuth_NotForbidden()
     {
+        // S142 test-clock sweep: INERT — CreateVikarAsync only stores UntilDate (a +30-day margin);
+        // production's `vikar.UntilDate >= today` predicate (query-predicate) can never be tripped by a
+        // one-day Copenhagen/UTC skew at this margin, and no assertion below checks an exact date.
         await CreateVikarAsync(AwayMgr, Vik, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30));
         // S128 / TASK-12804 — the compliance read is now leader-tier month-gated (RES-002): without
         // a SENT month the vikar approver's 403 would come from the month gate, masking the B2
