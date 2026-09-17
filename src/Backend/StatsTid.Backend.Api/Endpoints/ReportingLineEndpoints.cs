@@ -7,6 +7,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -1293,7 +1294,14 @@ public static class ReportingLineEndpoints
                     // handed to every RemoveAsync below, whose UPDATE previously read the DATABASE
                     // clock (CURRENT_DATE). One request therefore cannot mix two clocks: the day a
                     // predecessor line closes is the day its successor opens, by construction.
-                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+                    //
+                    // S142 (census row 23) — that ONE date is the COPENHAGEN calendar day, not the
+                    // UTC one. Every user of this system is Danish; an admin removing a manager at
+                    // 00:30 local time is on a UTC clock that still says yesterday, and would stamp
+                    // yesterday's business date on every line this closure opens AND closes. The
+                    // instants written alongside (created_at, the audit row, outbox ordering) stay
+                    // UTC and are untouched — only the business DAY moves.
+                    var today = CopenhagenBusinessDate.Today(timeProvider);
 
                     // ── S74-7403 B4 / S78 R9: acquire the removed person's tree lock FIRST via the
                     //    DRIFT-GUARDED acquire, then RE-READ the incoming edge census IN-TX (the
@@ -1709,8 +1717,13 @@ public static class ReportingLineEndpoints
             // matching the POST's existing skip. Done in ONE query: actor's active PRIMARY
             // reports LEFT-anti-joined against any active admin ACTING for the same employee.
             // S140 / TASK-14001 — the request's one business date, off the injected TimeProvider
-            // seam (PAT-008 / PAT-028). Same UTC day as before under TimeProvider.System.
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // seam (PAT-008 / PAT-028). S142 (census row 24): that date is the COPENHAGEN calendar
+            // day. `until_date` is an INCLUSIVE Danish business date written by the create handlers
+            // (rows 26/28) and swept by DelegationExpiryService (row 42); asking "is this stand-in
+            // effective now?" on a different calendar than the one that wrote and expires it would
+            // keep an already-expired stand-in answering "active" for the first hour or two of each
+            // Danish day.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
             var isEffectiveNow = vikar.UntilDate >= today;
 
             var delegatedEmployeeIds = new List<string>();
@@ -1742,12 +1755,30 @@ public static class ReportingLineEndpoints
             var employeeIds = new HashSet<string>(delegatedEmployeeIds, StringComparer.Ordinal);
             var displayNames = await LookupDisplayNamesAsync(connectionFactory, employeeIds, ct);
 
+            // S142 (census row 25) — the delegation's reported start date is a BUSINESS date derived
+            // from a stored INSTANT: manager_vikar.created_at is a TIMESTAMPTZ, read back by Npgsql
+            // as a UTC DateTime. The instant is NOT moved (instants stay UTC — audit ordering
+            // depends on it); what moves is the CALENDAR DAY it is attributed to. It must be the
+            // same Copenhagen day the create handlers echoed as `effectiveFrom` (rows 26/28), or a
+            // delegation created at 00:30 Danish time answers one date from the POST and the
+            // PREVIOUS date from this GET — the QUAL-164 disagreement.
+            //
+            // Converted through the SHARED DST-correct zone (CopenhagenBusinessDate.Zone), the same
+            // one CopenhagenBusinessDate.Today resolves, following the HrFollowUpSettlementEndpoints
+            // `AgeInDays` precedent. A local fixed +01:00 assumption is the QUAL-005 bug and is not
+            // repeated here. SpecifyKind pins the interpretation of the stored value explicitly so
+            // the conversion cannot silently pick up the host's local offset.
+            var vikarEffectiveFrom = DateOnly.FromDateTime(
+                TimeZoneInfo.ConvertTime(
+                    new DateTimeOffset(DateTime.SpecifyKind(vikar.CreatedAt, DateTimeKind.Utc)),
+                    CopenhagenBusinessDate.Zone).DateTime);
+
             // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the SAME record as the
             // inactive branch above — the stable key set is what makes ONE record possible).
             return Results.Ok(new DelegationStatusResponse(
                 Active: true,
                 ActingManagerId: vikar.VikarUserId,
-                EffectiveFrom: DateOnly.FromDateTime(vikar.CreatedAt),
+                EffectiveFrom: vikarEffectiveFrom,
                 EffectiveTo: vikar.UntilDate,
                 DelegatedEmployees: delegatedEmployeeIds.Select(empId => new DelegatedEmployeeItem(
                     EmployeeId: empId,
@@ -1793,9 +1824,15 @@ public static class ReportingLineEndpoints
 
             // S140 / TASK-14001 (PAT-028) — the delegation's start date IS "today", read ONCE off
             // the injected TimeProvider seam and reused for both the `effectiveTo > today`
-            // validation and the echoed `effectiveFrom` in the response. Same UTC day as before
-            // under TimeProvider.System; a date-sensitive suite can now pin the echoed value.
-            var effectiveFrom = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // validation and the echoed `effectiveFrom` in the response.
+            //
+            // S142 (census row 26) — "today" is the COPENHAGEN calendar day. This is a
+            // VALIDATOR-REFUSAL site: on the UTC clock a manager delegating at 00:30 Danish time is
+            // told their own next Danish workday is "not after today" and refused, and the date
+            // echoed back is yesterday's. It moves in the SAME commit as the status read (row 25),
+            // the revokes (rows 27/29) and the expiry sweep (row 42), so no stand-in can be created
+            // on one calendar and expired on another.
+            var effectiveFrom = CopenhagenBusinessDate.Today(timeProvider);
             if (effectiveTo <= effectiveFrom)
                 return Results.BadRequest(new { error = "effectiveTo must be after today" });
 
@@ -2137,7 +2174,10 @@ public static class ReportingLineEndpoints
                     // S140 / TASK-14001 (PAT-028) — the ONE date this revoke closes the row at, off
                     // the injected TimeProvider seam; the same value reaches the row's effective_to
                     // and (via `closed`) the ManagerVikarEnded event's EffectiveTo.
-                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+                    // S142 (census row 27) — the COPENHAGEN calendar day: `effective_to` is an
+                    // end-exclusive business boundary (ADR-018 D9) and must be stamped on the same
+                    // calendar the create handler (row 26) opened the row on.
+                    var today = CopenhagenBusinessDate.Today(timeProvider);
                     var closed = await vikarRepo.CloseByApproverAsync(conn, tx, actorId, today, ct);
                     if (closed is null)
                     {
@@ -2281,10 +2321,14 @@ public static class ReportingLineEndpoints
                 return Results.BadRequest(new { error = $"Invalid effectiveTo date: '{request.EffectiveTo}'" });
             // S140 / TASK-14001 (PAT-028) — the admin-created vikar's start date IS "today", read
             // ONCE off the injected TimeProvider seam and reused for both the `effectiveTo > today`
-            // validation and the echoed `effectiveFrom` in the response. Same UTC day as before
-            // under TimeProvider.System; this is the read the admin-vikar suite's echoed-date
-            // assertion depends on, which is why the seam must reach here.
-            var effectiveFrom = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+            // validation and the echoed `effectiveFrom` in the response. This is the read the
+            // admin-vikar suite's echoed-date assertion depends on, which is why the seam must
+            // reach here.
+            //
+            // S142 (census row 28) — the COPENHAGEN calendar day, same shape and same reason as the
+            // self-service create (row 26): a validator refusal and an echoed business date, both
+            // of which must speak the Danish calendar the admin is working in.
+            var effectiveFrom = CopenhagenBusinessDate.Today(timeProvider);
             if (effectiveTo <= effectiveFrom)
                 return Results.BadRequest(new { error = "effectiveTo must be after today" });
             // A manager cannot stand in for themselves; the vikar must differ from the manager.
@@ -2583,7 +2627,9 @@ public static class ReportingLineEndpoints
                     // S140 / TASK-14001 (PAT-028) — the ONE date this revoke closes the row at, off
                     // the injected TimeProvider seam; the same value reaches the row's effective_to
                     // and (via `closed`) the ManagerVikarEnded event's EffectiveTo.
-                    var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+                    // S142 (census row 29) — the COPENHAGEN calendar day, same reason as the
+                    // self-service revoke (row 27).
+                    var today = CopenhagenBusinessDate.Today(timeProvider);
                     var maybeClosed = await vikarRepo.CloseAsync(conn, tx, activeVikar.VikarId, today, ct);
                     if (maybeClosed is null)
                     {

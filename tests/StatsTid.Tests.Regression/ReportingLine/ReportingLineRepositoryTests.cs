@@ -1,6 +1,7 @@
 using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
+using StatsTid.Tests.Regression.Hosting;
 
 namespace StatsTid.Tests.Regression.ReportingLine;
 
@@ -185,25 +186,51 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
     //  3. Remove PRIMARY — closes active line
     // ════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Removing a PRIMARY line closes it at the repository's own fallback date, and that date is
+    /// the COPENHAGEN business day (S142 / TASK-14204, census row 50).
+    ///
+    /// <para><b>What this replaced, and why.</b> Until S142 this fact accepted EITHER the UTC day
+    /// OR the machine-local day — "to avoid TZ edge-case flakiness", written when the close date
+    /// came from the database's <c>CURRENT_DATE</c> and no test could pin it. An OR-tolerant
+    /// assertion over two candidate days is a DEFECTIVE SHAPE: the off-by-one-day bug this sprint
+    /// exists to remove is precisely the case where those two values differ, so the assertion was
+    /// structurally incapable of detecting it. It could not fail for the reason it existed.</para>
+    ///
+    /// <para><b>The pin.</b> 2026-07-15 22:30 UTC
+    /// (<see cref="BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen"/>). Denmark is CEST
+    /// (UTC+02:00) in July, so Copenhagen is already 2026-07-16 00:30 while the UTC calendar still
+    /// says the 15th. The expected value is the LITERAL <c>2026-07-16</c>, never a call to
+    /// <c>CopenhagenBusinessDate</c> — an expectation computed from the helper under test cannot
+    /// fail when that helper is wrong.</para>
+    ///
+    /// <para><b>RED for three different wrong implementations.</b> A raw UTC day answers the 15th.
+    /// A hardcoded <c>+01:00</c> offset (the QUAL-005 bug — plausible-looking, and correct only in
+    /// winter) also answers the 15th, because 22:30 + 1h is still the 15th. Only a conversion
+    /// through the real DST-aware Europe/Copenhagen zone crosses midnight here. The machine's local
+    /// clock no longer enters into it at all.</para>
+    /// </summary>
     [Fact]
-    public async Task Remove_Primary_ClosesActiveLine()
+    public async Task Remove_Primary_ClosesActiveLine_AtTheCopenhagenBusinessDay()
     {
-        var assigned = await _repo.AssignAsync(
+        // A repository on a PINNED clock. The seam is the optional TimeProvider ctor parameter
+        // (PAT-008); everything else about the repository is the production object.
+        var pinnedRepo = new ReportingLineRepository(
+            _factory,
+            vikarRepo: null,
+            timeProvider: new FixedTimeProvider(BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen));
+
+        var assigned = await pinnedRepo.AssignAsync(
             expectedCurrentVersion: null,
             MakeLine(TestEmp, TestMgrA));
 
-        var removed = await _repo.RemoveAsync(
+        // No closeDate supplied — this exercises the repository's OWN fallback read, which is the
+        // site under test (ReportingLineRepository.RemoveAsync, census row 50).
+        var removed = await pinnedRepo.RemoveAsync(
             expectedCurrentVersion: assigned.Version,
             TestEmp, "PRIMARY");
 
-        Assert.NotNull(removed.EffectiveTo);
-        // CURRENT_DATE is server-local (typically UTC in Docker).
-        // Accept today in either UTC or local to avoid TZ edge-case flakiness.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var todayLocal = DateOnly.FromDateTime(DateTime.Now);
-        Assert.True(
-            removed.EffectiveTo == today || removed.EffectiveTo == todayLocal,
-            $"Expected effective_to={removed.EffectiveTo} to be {today} or {todayLocal}");
+        Assert.Equal(new DateOnly(2026, 7, 16), removed.EffectiveTo);
 
         // GetActiveByEmployeeAndRelationshipAsync should return null now.
         var active = await _repo.GetActiveByEmployeeAndRelationshipAsync(TestEmp, "PRIMARY");
@@ -666,135 +693,22 @@ public sealed class ReportingLineRepositoryTests : IAsyncLifetime
             "scheduled_expiry must be NULL when not set");
     }
 
-    // 32. DelegationExpiry — closes expired SELF_DELEGATION ACTING lines
-    [Fact]
-    public async Task DelegationExpiry_ClosesExpiredLines()
-    {
-        var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
-        var line = new SharedKernel.Models.ReportingLine
-        {
-            ReportingLineId = Guid.Empty,
-            EmployeeId = TestEmp,
-            ManagerId = TestMgrC,
-            OrganisationId = "STY02",
-            Relationship = "ACTING",
-            EffectiveFrom = new DateOnly(2026, 5, 1),
-            Source = "SELF_DELEGATION",
-            Version = 0,
-            ScheduledExpiry = yesterday,
-            CreatedBy = "TEST",
-        };
-        var assigned = await _repo.AssignAsync(expectedCurrentVersion: null, line);
-
-        // Run expiry SQL directly
-        await using var conn = new NpgsqlConnection(ConnStr);
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            """
-            UPDATE reporting_lines
-            SET effective_to = scheduled_expiry, version = version + 1
-            WHERE source = 'SELF_DELEGATION' AND relationship = 'ACTING'
-              AND scheduled_expiry IS NOT NULL AND scheduled_expiry <= CURRENT_DATE
-              AND effective_to IS NULL
-            """, conn);
-        var affected = await cmd.ExecuteNonQueryAsync();
-        Assert.True(affected >= 1, $"Expected at least 1 row affected, got {affected}");
-
-        // Verify the line is closed
-        var active = await _repo.GetActiveByEmployeeAndRelationshipAsync(TestEmp, "ACTING");
-        Assert.Null(active);
-
-        // Verify via history that it was closed with scheduled_expiry as effective_to
-        var history = await _repo.GetHistoryAsync(TestEmp);
-        var closedLine = history.FirstOrDefault(l => l.ReportingLineId == assigned.ReportingLineId);
-        Assert.NotNull(closedLine);
-        Assert.Equal(yesterday, closedLine!.EffectiveTo);
-    }
-
-    // 33. DelegationExpiry — skips non-SELF_DELEGATION lines
-    [Fact]
-    public async Task DelegationExpiry_SkipsNonSelfDelegation()
-    {
-        var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
-        // Insert a MANUAL ACTING line with scheduled_expiry via direct SQL
-        // (the repo MakeLine helper defaults to MANUAL)
-        var lineId = Guid.NewGuid();
-        await using var conn = new NpgsqlConnection(ConnStr);
-        await conn.OpenAsync();
-        await using var insertCmd = new NpgsqlCommand(
-            """
-            INSERT INTO reporting_lines
-                (reporting_line_id, employee_id, manager_id, organisation_id, relationship,
-                 effective_from, source, version, scheduled_expiry, created_by)
-            VALUES
-                (@id, @emp, @mgr, 'STY02', 'ACTING',
-                 '2026-05-01', 'MANUAL', 1, @expiry, 'TEST')
-            """, conn);
-        insertCmd.Parameters.AddWithValue("id", lineId);
-        insertCmd.Parameters.AddWithValue("emp", TestEmp);
-        insertCmd.Parameters.AddWithValue("mgr", TestMgrC);
-        insertCmd.Parameters.AddWithValue("expiry", yesterday.ToDateTime(TimeOnly.MinValue));
-        await insertCmd.ExecuteNonQueryAsync();
-
-        // Run expiry SQL
-        await using var expiryCmd = new NpgsqlCommand(
-            """
-            UPDATE reporting_lines
-            SET effective_to = scheduled_expiry, version = version + 1
-            WHERE source = 'SELF_DELEGATION' AND relationship = 'ACTING'
-              AND scheduled_expiry IS NOT NULL AND scheduled_expiry <= CURRENT_DATE
-              AND effective_to IS NULL
-            """, conn);
-        await expiryCmd.ExecuteNonQueryAsync();
-
-        // Verify the MANUAL line is still open
-        await using var checkCmd = new NpgsqlCommand(
-            "SELECT effective_to FROM reporting_lines WHERE reporting_line_id = @id", conn);
-        checkCmd.Parameters.AddWithValue("id", lineId);
-        var effectiveTo = await checkCmd.ExecuteScalarAsync();
-        Assert.True(effectiveTo is null || effectiveTo == DBNull.Value,
-            "MANUAL ACTING line with scheduled_expiry should NOT be closed by expiry SQL");
-    }
-
-    // 34. DelegationExpiry — skips future-expiry lines
-    [Fact]
-    public async Task DelegationExpiry_SkipsFutureExpiry()
-    {
-        var tomorrow = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1));
-        var line = new SharedKernel.Models.ReportingLine
-        {
-            ReportingLineId = Guid.Empty,
-            EmployeeId = TestEmp,
-            ManagerId = TestMgrC,
-            OrganisationId = "STY02",
-            Relationship = "ACTING",
-            EffectiveFrom = new DateOnly(2026, 5, 1),
-            Source = "SELF_DELEGATION",
-            Version = 0,
-            ScheduledExpiry = tomorrow,
-            CreatedBy = "TEST",
-        };
-        var assigned = await _repo.AssignAsync(expectedCurrentVersion: null, line);
-
-        // Run expiry SQL
-        await using var conn = new NpgsqlConnection(ConnStr);
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            """
-            UPDATE reporting_lines
-            SET effective_to = scheduled_expiry, version = version + 1
-            WHERE source = 'SELF_DELEGATION' AND relationship = 'ACTING'
-              AND scheduled_expiry IS NOT NULL AND scheduled_expiry <= CURRENT_DATE
-              AND effective_to IS NULL
-            """, conn);
-        await cmd.ExecuteNonQueryAsync();
-
-        // Verify the line is still open
-        var active = await _repo.GetActiveByEmployeeAndRelationshipAsync(TestEmp, "ACTING");
-        Assert.NotNull(active);
-        Assert.Equal(assigned.ReportingLineId, active!.ReportingLineId);
-        Assert.Null(active.EffectiveTo);
-    }
+    // ════════════════════════════════════════════════════════════════
+    //  S142 / TASK-14204 — tests 32-34 (DelegationExpiry_*) DELETED, not migrated.
+    //
+    //  They exercised a mechanism production has fully RETIRED: closing expired
+    //  SELF_DELEGATION ACTING rows through reporting_lines.scheduled_expiry. Since the S74
+    //  storage cutover (ADR-027 Phase 5) a stand-in lives in manager_vikar and is expired by
+    //  DelegationExpiryService.CloseExpiredDelegationsAsync (until_date < @today).
+    //
+    //  More to the point: each of the three DECLARED ITS OWN inline UPDATE statement and then
+    //  asserted the effect of that statement — including its own CURRENT_DATE clock read. They
+    //  measured the test, not the product; no production code path was reachable from them, so
+    //  no production change could ever turn them red. Migrating them to the Copenhagen business
+    //  day would have carefully preserved coverage of dead code and left a suite that looks
+    //  larger than it is. The live expiry boundary is pinned where the mechanism now lives
+    //  (DelegationExpiryService + manager_vikar), not here.
+    // ════════════════════════════════════════════════════════════════
 
     // 35. SelfDelegation source constraint — accepts SELF_DELEGATION
     [Fact]

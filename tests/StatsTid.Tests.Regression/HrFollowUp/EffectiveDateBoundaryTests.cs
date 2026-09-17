@@ -246,33 +246,82 @@ public sealed class EffectiveDateBoundaryTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// <b>★ The clock pin for B2.</b> At 23:30 UTC on F it is already F+1 in Copenhagen. A change
-    /// scheduled for F+1 must NOT be applied yet, because every writer in this system stamps the UTC
-    /// day and the cache must flip at the midnight the WRITER would have chosen.
+    /// <b>★ The clock pin for B2 — REWRITTEN in S142 (TASK-14204, census row 42), same instant,
+    /// opposite expected outcome.</b>
     ///
-    /// <para>RED if the sweep read <c>CopenhagenBusinessDate</c> (or any local-time day): it would
-    /// flip the cache to the scheduled code an hour early, every night. This is the only fixture
-    /// construction that can catch that — the ordinary <c>WithFixedToday</c> anchor pins UTC
-    /// midnight, where both calendars agree and the assertion would pass under either clock.</para>
+    /// <para><b>What this pins, in plain language.</b> At 23:30 UTC on F it is already 00:30 on
+    /// F+1 in Copenhagen, because Denmark is CET (UTC+01:00) in November. A Danish HR user working
+    /// at that moment is, to themselves, on F+1. So a change SCHEDULED for F+1 has arrived for
+    /// them, and the two denormalised caches (<c>users.agreement_code</c>,
+    /// <c>users.employment_category</c>) must follow it: the seeded employee moves from
+    /// <c>"AC"</c> to <c>"HK"</c> and <c>users.version</c> moves exactly once.</para>
+    ///
+    /// <para><b>Why the expectation flipped, and why that is not a reversal.</b> Until S142 this
+    /// fact asserted the opposite — that the sweep stays on the WRITERS' UTC day — under the
+    /// owner's ruling of 2026-09-14. That ruling was never "UTC forever"; it was <i>match the
+    /// writers</i>, and both this test and <c>DelegationExpiryService.Today()</c> recorded the
+    /// condition in as many words: "when the writers move, this moves with them." S142 is the
+    /// sprint that moved the writers — every business date in the product now keys on the
+    /// Copenhagen calendar day (owner ruling OQ-3), including the stand-in handlers and the
+    /// employment-timeline writers whose dates these two sweeps read. The condition the old
+    /// comment stated is therefore satisfied, and asserting the Copenhagen outcome HONOURS the
+    /// 2026-09-14 ruling rather than overturning it.</para>
+    ///
+    /// <para><b>RED if the sweep reads the raw UTC day</b> (the pre-S142 behaviour, and the state
+    /// this test was stashed against to verify): <c>@today</c> would be F, no
+    /// <c>user_agreement_codes</c> row covers F on this seed (the "AC" row was closed
+    /// end-exclusively at F+1 and the "HK" row does not start until F+1), so the COALESCE rule
+    /// keeps the cached value and the employee stays on <c>"AC"</c> with an unchanged version —
+    /// both literal assertions below fail. <b>Also RED for a hardcoded <c>+02:00</c> offset</b>
+    /// only in summer, which is why <see cref="BoundaryInstants"/> exists for the sites that need
+    /// the seasonal discrimination; this fact's job is the one-day UTC-vs-Copenhagen distinction.
+    /// The ordinary <c>WithFixedToday</c> anchor CANNOT express it — it pins UTC midnight, the one
+    /// instant at which the two calendars agree, so a pin built on it passes under either clock.
+    /// That is why the 23:30Z instant is kept verbatim from the previous version of this fact: it
+    /// is the discriminating pin, and only the expected answer changed.</para>
+    ///
+    /// <para>Expected values are LITERALS (<c>"HK"</c>, <c>versionBefore + 1</c>), never derived by
+    /// calling <c>CopenhagenBusinessDate</c> — a test that computes its expectation from the helper
+    /// under test cannot fail when that helper is wrong.</para>
     /// </summary>
     [Fact]
-    public async Task Refresh_UsesTheWritersUtcDay_NotTheCopenhagenBusinessDay()
+    public async Task Refresh_UsesTheCopenhagenBusinessDay_NotTheUtcDay()
     {
         using var host = HostAtInstant(FLateUtcEvening);
         using var client = host.CreateClient();
 
         var employeeId = NextId("b2_clock");
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, OrgA, agreementCode: "AC");
-        // Scheduled for TOMORROW in UTC terms — which is TODAY on the Copenhagen calendar at 23:30.
+        // Scheduled for F+1 — which is ALREADY TODAY on the Copenhagen calendar at 23:30 UTC, and
+        // still TOMORROW on the UTC calendar. End-exclusive (ADR-018 D9): closing the "AC" row at
+        // F+1 means it covers through F and stops on F+1, exactly where the "HK" row starts.
         await CloseAgreementCodeRowAsync(employeeId, F.AddDays(1));
         await SeedAgreementCodeRowAsync(employeeId, F.AddDays(1), null, code: "HK");
+        Assert.Equal("AC", await ScalarStringAsync("SELECT agreement_code FROM users WHERE user_id = @p0", employeeId));
 
         var versionBefore = await ScalarLongAsync("SELECT version FROM users WHERE user_id = @p0", employeeId);
+        var auditBefore = await CountAsync("SELECT COUNT(*) FROM users_audit WHERE user_id = @p0", employeeId);
 
         await RunBoundaryRefreshAsync(host);
 
-        Assert.Equal("AC", await ScalarStringAsync("SELECT agreement_code FROM users WHERE user_id = @p0", employeeId));
-        Assert.Equal(versionBefore, await ScalarLongAsync("SELECT version FROM users WHERE user_id = @p0", employeeId));
+        Assert.Equal("HK", await ScalarStringAsync("SELECT agreement_code FROM users WHERE user_id = @p0", employeeId));
+        Assert.Equal(versionBefore + 1, await ScalarLongAsync("SELECT version FROM users WHERE user_id = @p0", employeeId));
+
+        // The version move is explained (ADR-026 / the wave-1 invariant that every users.version
+        // transition carries a users_audit row), and the row names the Danish-day transition.
+        Assert.Equal(auditBefore + 1, await CountAsync("SELECT COUNT(*) FROM users_audit WHERE user_id = @p0", employeeId));
+        Assert.Equal(1, await CountAsync(
+            """
+            SELECT COUNT(*) FROM users_audit
+            WHERE user_id = @p0
+              AND action = 'UPDATED'
+              AND actor_id = 'SYSTEM'
+              AND actor_role = 'SYSTEM'
+              AND previous_data->>'agreementCode' = 'AC'
+              AND new_data->>'agreementCode' = 'HK'
+              AND version_before = @p1
+              AND version_after = @p2
+            """, employeeId, versionBefore, versionBefore + 1));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -480,7 +529,7 @@ public sealed class EffectiveDateBoundaryTests : IAsyncLifetime
     /// class (not just this one) can reach the same seam without copy-pasting it — five other S142
     /// tasks need exactly this. Kept as a one-line private alias here, rather than inlined at its two
     /// call sites, so this promotion touches nothing else in this file: the two facts that call it
-    /// (<see cref="Refresh_UsesTheWritersUtcDay_NotTheCopenhagenBusinessDay"/> and
+    /// (<see cref="Refresh_UsesTheCopenhagenBusinessDay_NotTheUtcDay"/> and
     /// <see cref="CannotRegister_UsesTheWritersUtcDay_NotTheCopenhagenBusinessDay"/>) are owned by
     /// other S142 tasks and are unchanged. The three canonical UTC instants for this boundary (this
     /// class's own <see cref="FLateUtcEvening"/> among them, conceptually) are now also collected

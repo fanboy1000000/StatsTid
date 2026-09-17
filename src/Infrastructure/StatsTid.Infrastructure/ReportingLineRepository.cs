@@ -1,5 +1,6 @@
 using System.Data;
 using Npgsql;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
@@ -42,14 +43,22 @@ public sealed class ReportingLineRepository
     ///
     /// <para>
     /// S140 / TASK-14001 — <paramref name="timeProvider"/> is the server-"today" seam, appended
-    /// LAST and OPTIONAL so PRODUCTION BEHAVIOUR IS UNCHANGED (it defaults to
-    /// <see cref="TimeProvider.System"/>) and every existing direct test construction keeps
-    /// compiling. It backs two things: the <c>asOf</c> fallback in
+    /// LAST and OPTIONAL (it defaults to <see cref="TimeProvider.System"/>) so every existing
+    /// direct test construction keeps compiling. It backs two things: the <c>asOf</c> fallback in
     /// <see cref="ResolveDesignatedApproverAsync(NpgsqlConnection, NpgsqlTransaction?, string, DateOnly?, CancellationToken)"/>,
     /// and the <c>closeDate</c> fallback in <see cref="RemoveAsync(long, string, string, DateOnly?, CancellationToken)"/> —
     /// whose UPDATE previously read the DATABASE clock (<c>SET effective_to = CURRENT_DATE</c>).
-    /// The day derivation is the UTC day both before and after (QUAL-157 owns the
-    /// UTC-vs-Copenhagen question; it is NOT decided here).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>S142 (census rows 50 and 51) — both fallbacks derive the COPENHAGEN business day</b>
+    /// via <see cref="CopenhagenBusinessDate.Today(TimeProvider)"/>, not the UTC calendar day.
+    /// QUAL-157 asked the UTC-vs-Copenhagen question and S142 is the sprint that ANSWERED it: every
+    /// StatsTid business date keys on the Danish calendar, because every user of this system is
+    /// Danish and a change made after local midnight must not be recorded as effective yesterday.
+    /// <c>effective_to</c> is an end-exclusive business boundary (ADR-018 D9) and <c>asOf</c>
+    /// selects the interval covering "now" — both are business dates. INSTANTS on these rows
+    /// (<c>created_at</c>, <c>updated_at</c>) are unaffected and stay UTC.
     /// </para>
     /// </summary>
     public ReportingLineRepository(
@@ -341,8 +350,9 @@ public sealed class ReportingLineRepository
     /// caller owns an operation-level "today" it MUST pass it, so the row's <c>effective_to</c> and
     /// whatever the caller writes alongside it (an event's <c>EffectiveTo</c>, a successor line's
     /// <c>EffectiveFrom</c>) are provably the SAME value rather than two clock reads. When omitted
-    /// the repository falls back to the UTC day off its injected <see cref="TimeProvider"/> — the
-    /// same day the statement's former <c>CURRENT_DATE</c> produced under a UTC database session.
+    /// the repository falls back to the COPENHAGEN business day off its injected
+    /// <see cref="TimeProvider"/> (S142, census row 50) — the Danish calendar day, which is what
+    /// <c>effective_to</c> means as an end-exclusive business boundary (ADR-018 D9).
     /// </param>
     /// <returns>The closed <see cref="ReportingLine"/>.</returns>
     /// <exception cref="OptimisticConcurrencyException">If the precondition check fails.</exception>
@@ -399,10 +409,13 @@ public sealed class ReportingLineRepository
         }
 
         // 3. Close it at the operation's date with a version bump. S140 / TASK-14001: the date is
-        //    the caller's `closeDate` when supplied (one operation, one date — PAT-028), else the
-        //    UTC day off this repository's injected TimeProvider. It was `CURRENT_DATE` inside the
-        //    UPDATE, i.e. a second clock read on a clock no test host can fix.
-        var effectiveTo = closeDate ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        //    the caller's `closeDate` when supplied (one operation, one date — PAT-028), else this
+        //    repository's own read. It was `CURRENT_DATE` inside the UPDATE, i.e. a second clock
+        //    read on a clock no test host can fix.
+        //    S142 (census row 50): that read is the COPENHAGEN business day. `effective_to` is an
+        //    end-exclusive Danish business boundary (ADR-018 D9), so a line closed at 00:30 Danish
+        //    time must not be stamped with yesterday's date.
+        var effectiveTo = closeDate ?? CopenhagenBusinessDate.Today(_timeProvider);
         return await CloseAndReturnLineAsync(conn, tx, current.ReportingLineId, effectiveTo, ct);
     }
 
@@ -1077,10 +1090,13 @@ public sealed class ReportingLineRepository
         => ResolveDesignatedApproverAsync(
             new SqlReportingLineDataSource(conn, tx, _vikarRepo),
             employeeId,
-            // S140 / TASK-14001 — the `asOf` fallback is the UTC day off the INJECTED TimeProvider
-            // (PAT-008 seam), not the wall clock. Same day under TimeProvider.System; a caller that
-            // owns an operation-level "today" should pass it explicitly (PAT-028).
-            asOf ?? DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime),
+            // S140 / TASK-14001 — the `asOf` fallback comes off the INJECTED TimeProvider (PAT-008
+            // seam), not the wall clock; a caller that owns an operation-level "today" should pass
+            // it explicitly (PAT-028).
+            // S142 (census row 51) — it is the COPENHAGEN business day. `asOf` picks the reporting
+            // line covering "now", and every production caller already passes a Copenhagen date;
+            // moving the fallback is what stops the old calendar being reintroduced through it.
+            asOf ?? CopenhagenBusinessDate.Today(_timeProvider),
             ct);
 
     /// <summary>
@@ -1319,9 +1335,10 @@ public sealed class ReportingLineRepository
     ///
     /// <para>
     /// S140 / TASK-14001 — the date arrives as a BOUND PARAMETER from the caller (PAT-028 /
-    /// QUAL-156); the statement previously read <c>CURRENT_DATE</c>. Same day in production
-    /// (<see cref="TimeProvider.System"/> + a UTC database session), but now one honest value per
-    /// operation and reachable by a fixed test clock.
+    /// QUAL-156); the statement previously read <c>CURRENT_DATE</c>, a second clock read on a clock
+    /// no test host can fix. One honest value per operation, reachable by a fixed test clock.
+    /// S142: the value the caller supplies is now the COPENHAGEN business day (census row 50), so
+    /// the statement no longer depends on the database container's timezone setting at all.
     /// </para>
     /// </summary>
     private static async Task<ReportingLine> CloseAndReturnLineAsync(

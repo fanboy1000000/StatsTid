@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Infrastructure.Outbox;
@@ -47,15 +48,21 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// S140 / TASK-14001 (QUAL-154 / QUAL-156) — <c>@today</c> is the UTC day off the INJECTED
-/// <see cref="TimeProvider"/>, computed ONCE per sweep pass and bound as a parameter (PAT-028).
-/// The statement previously read the DATABASE clock (<c>CURRENT_DATE</c>). Production behaviour
-/// is UNCHANGED: the provider is <see cref="TimeProvider.System"/> and the Postgres session time
-/// zone is UTC (<c>docs/operations/legacy-db-upgrade-runbook.md</c> § "S139 — Database session
-/// time zone is assumed UTC"), under which <c>CURRENT_DATE</c> already WAS the UTC day. What
-/// changes is that a date-sensitive test host can now FIX the sweep's date — a database clock
-/// read is unreachable from an injected provider (PAT-008). The UTC-vs-Copenhagen business-day
-/// question is QUAL-157 and is deliberately NOT decided here.
+/// S140 / TASK-14001 (QUAL-154 / QUAL-156) — <c>@today</c> is computed ONCE per sweep pass and
+/// bound as a parameter (PAT-028), off the INJECTED <see cref="TimeProvider"/>. The statement
+/// previously read the DATABASE clock (<c>CURRENT_DATE</c>), which no test host can fix.
+/// </para>
+///
+/// <para>
+/// <b>S142 (census row 42) — the sweep's day is the COPENHAGEN business day.</b> QUAL-157 asked
+/// whether business dates should key on the Danish calendar everywhere rather than on UTC; S142
+/// is the sprint that answered YES, and this file is one of its sites. Both sweeps compare against
+/// dates that WRITERS produced, and every writer that produces the dates they read has moved to
+/// the Copenhagen day in the same change: the stand-in create/revoke handlers
+/// (<c>ReportingLineEndpoints</c>, census rows 26–29) for sweep 1, and the employment-timeline
+/// writers for sweep 2. The rule has always been "match the writers" — it is the writers that
+/// moved. INSTANTS in this file (<c>created_at</c>, <c>updated_at = NOW()</c>, outbox ordering,
+/// audit timestamps) are untouched and stay UTC.
 /// </para>
 /// </summary>
 public sealed class DelegationExpiryService : BackgroundService
@@ -135,20 +142,25 @@ public sealed class DelegationExpiryService : BackgroundService
     }
 
     /// <summary>
-    /// The ONE clock read the poller is allowed (PAT-028 / QUAL-156): the UTC day off the INJECTED
-    /// <see cref="TimeProvider"/>. Under <see cref="TimeProvider.System"/> plus a UTC database
-    /// session this is exactly the value <c>CURRENT_DATE</c> used to produce, so no boundary moved
-    /// when S140 replaced the database clock; what changed is that a test host can now FIX it.
+    /// The ONE clock read the poller is allowed (PAT-028 / QUAL-156): the COPENHAGEN business day
+    /// off the INJECTED <see cref="TimeProvider"/>, DST-correct via
+    /// <see cref="CopenhagenBusinessDate"/>.
     ///
-    /// <para><b>Why UTC and not the Copenhagen business day.</b> Both sweeps compare against dates
-    /// that WRITERS produced, and every writer in this system stamps the UTC day. A poller that
-    /// asked a different calendar would flip a cache (or expire a stand-in) at a midnight the writer
-    /// never used, for the one or two hours a night on which the two disagree. QUAL-157 tracks the
-    /// standing question of whether business dates should move to the Danish day EVERYWHERE; the
-    /// rule "match the writers" is forward-compatible with that answer, because when the writers
-    /// move, this moves with them.</para>
+    /// <para><b>Why the Copenhagen day, and why it changed in S142.</b> The rule here is, and has
+    /// always been, <i>match the writers</i>: both sweeps compare against business dates that
+    /// WRITERS produced, so a poller asking a different calendar would expire a stand-in — or flip
+    /// a cache — at a midnight the writer never used, for the one or two hours a night on which the
+    /// two calendars disagree. Until S142 every writer stamped the UTC day, so this read did too,
+    /// and the doc comment recorded that the rule was forward-compatible: "when the writers move,
+    /// this moves with them." S142 is that move. The stand-in create/revoke handlers (census rows
+    /// 26–29) and the employment-timeline writers now stamp the Danish calendar day, so this read
+    /// follows them in the SAME change. Nothing about the rule changed; only the answer did.</para>
+    ///
+    /// <para>This is a BUSINESS DATE, not an instant. The instants this service writes —
+    /// <c>updated_at = NOW()</c>, the audit row's timestamp, outbox ordering — stay UTC and are
+    /// untouched (ADR-026 / ADR-018 D3).</para>
     /// </summary>
-    private DateOnly Today() => DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+    private DateOnly Today() => CopenhagenBusinessDate.Today(_timeProvider);
 
     /// <summary>
     /// Runs ONE expiry sweep (the body of the poll loop). Exposed for deterministic
