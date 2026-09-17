@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
@@ -80,11 +81,27 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
     /// <see cref="EmploymentProfileResolver.GetByEmployeeIdAtAsync"/>(today)
     /// succeeds — proving the new row is reachable through the dated lookup
     /// path consumed by PCS / Compliance / etc.
+    ///
+    /// <para>
+    /// <b>S142 / TASK-14202 — the host is now pinned and "today" is a literal.</b> This test used to
+    /// compute its own <c>DateOnly.FromDateTime(DateTime.UtcNow)</c> and compare the server's stamp
+    /// against it. That agreed with the product only because BOTH derived the UTC calendar day; once
+    /// the product moved to the Europe/Copenhagen day (all users are Danish), the two would have
+    /// disagreed for the hour or two each night when the calendars differ — a test that fails on the
+    /// clock rather than on the code. The host is pinned to
+    /// <see cref="BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen"/> (2026-07-15 22:30 UTC
+    /// = 00:30 on 16 July in Copenhagen) and the expected date is the literal 2026-07-16, so the
+    /// assertion is both deterministic and RED against the pre-S142 handler.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task AdminPostUser_NewUserGetsBothUsersRowAndUserAgreementCodesCaseAInsert_EmitsSeededEvent()
     {
-        var client = AuthorizedClient();
+        // S142 / TASK-14202 — pinned to an exact INSTANT. WithFixedToday(DateOnly) pins UTC
+        // midnight, the one moment of every day at which the UTC and Copenhagen calendars agree, so
+        // it cannot express this fact.
+        var host = _factory.WithFixedInstant(BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen);
+        var client = AuthorizedClient(host);
         var newUserId = "emp_s34_post_" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
         var rsp = await client.PostAsJsonAsync("/api/admin/users", new
@@ -113,7 +130,11 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
         }
 
         // (2) user_agreement_codes Case A row landed — version=1, today-stamp.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        // The Danish calendar day at the pinned instant, as a LITERAL. Never
+        // CopenhagenBusinessDate.Today(...) — that would let the helper under test supply its own
+        // expected answer, which passes against any implementation, right or wrong.
+        var danishToday = new DateOnly(2026, 7, 16);
+        const string danishTodayIso = "2026-07-16";
         await using (var uacCmd = new NpgsqlCommand(
             """
             SELECT agreement_code, effective_from, effective_to, version
@@ -125,7 +146,7 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
             await using var reader = await uacCmd.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync(), "POST must create a user_agreement_codes row.");
             Assert.Equal("AC", reader.GetString(0));
-            Assert.Equal(today, reader.GetFieldValue<DateOnly>(1));
+            Assert.Equal(danishToday, reader.GetFieldValue<DateOnly>(1));
             Assert.True(reader.IsDBNull(2), "Case A insert must leave effective_to NULL.");
             Assert.Equal(1L, reader.GetInt64(3));
             Assert.False(await reader.ReadAsync(), "Exactly one user_agreement_codes row expected.");
@@ -166,7 +187,7 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
             using var payloadDoc = JsonDocument.Parse(rawPayload!);
             Assert.Equal(newUserId, payloadDoc.RootElement.GetProperty("userId").GetString());
             Assert.Equal("AC", payloadDoc.RootElement.GetProperty("agreementCode").GetString());
-            Assert.Equal(today.ToString("yyyy-MM-dd"),
+            Assert.Equal(danishTodayIso,
                 payloadDoc.RootElement.GetProperty("effectiveFrom").GetString());
             Assert.Equal(1L, payloadDoc.RootElement.GetProperty("rowVersion").GetInt64());
         }
@@ -178,9 +199,134 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
         var resolver = new EmploymentProfileResolver(_harness.Factory, repo);
         // employee_profiles row was also INSERTed atomically by the POST (4-way → 6-way
         // atomicity per TASK-3407), so the resolver's JOIN should succeed.
-        var resolved = await resolver.GetByEmployeeIdAtAsync(newUserId, today);
+        var resolved = await resolver.GetByEmployeeIdAtAsync(newUserId, danishToday);
         Assert.NotNull(resolved);
         Assert.Equal("AC", resolved!.AgreementCode);
+    }
+
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S142 / TASK-14202 — the endpoint and the repository must share ONE calendar
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>The fact this sprint exists for, on the agreement-code aggregate.</b> All StatsTid users
+    /// are Danish. Copenhagen runs one hour ahead of UTC in winter (CET) and two in summer (CEST),
+    /// so between Danish midnight and UTC midnight the UTC calendar day is still YESTERDAY in
+    /// Denmark. Until S142 the admin create derived its dates from the UTC day, so an HR admin
+    /// registering a new hire at 00:30 local dated that person's agreement interval — and their
+    /// whole record — one day early, every single night.
+    ///
+    /// <para>
+    /// <b>Why this test asserts TWO things, and why the endpoint and the repository ship in one
+    /// commit.</b> Two different pieces of code answer "what day is it?" on this path:
+    /// <c>AdminEndpoints.cs</c> STAMPS <c>user_agreement_codes.effective_from</c> (census row 1),
+    /// and <c>UserAgreementCodeRepository.Today()</c> ASKS which row covers today (census row 52) —
+    /// the question behind <c>users.agreement_code</c> and behind <c>GetCurrentAsync</c>, which is
+    /// what the LOGIN TOKEN's agreement code is minted from. The two assertions below nail the
+    /// stamp and the question to the SAME Danish day:
+    /// </para>
+    /// <list type="number">
+    ///   <item><description>the stored <c>effective_from</c> is the Danish day (a literal) — this
+    ///   is what fails against the pre-S142 handler, which writes the UTC day;</description></item>
+    ///   <item><description>the row does <b>not</b> cover the UTC day, and <b>does</b> answer the
+    ///   repository's own "today" — so a future change that moved only one of the two is caught
+    ///   here rather than in production.</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// <b>What a split would actually look like</b> (recorded because it is quieter than it sounds):
+    /// the cache refresh writes <c>COALESCE(todaysCode, agreement_code)</c>, so
+    /// <c>users.agreement_code</c> would KEEP the value the users INSERT wrote rather than going
+    /// empty, and <c>AuthEndpoints</c> falls back to that cache when the canonical read returns null
+    /// — logging a warning about an "inconsistent state" and minting a working token anyway. The
+    /// damage is therefore not a visible failure but a silent disagreement that heals itself at UTC
+    /// midnight. A defect that hides is worse than one that fails, which is why it gets a pin.
+    /// </para>
+    ///
+    /// <para>
+    /// Docker-gated, and Docker is unavailable on the authoring machine (standing project
+    /// constraint) — CI-verified, not claimed green here.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public Task AdminPostUser_SummerEveningAfterDanishMidnight_StampsTheDanishDay_AndTheRepositoryAgrees()
+        // 2026-07-15 22:30 UTC = 2026-07-16 00:30 in Copenhagen (CEST, UTC+2).
+        // Expected values are LITERALS. Deriving them from CopenhagenBusinessDate would be the
+        // helper under test grading its own answer, and would pass against a wrong implementation.
+        => AssertCreateStampsTheDanishDayAsync(
+            BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen,
+            expectedDanishDay: new DateOnly(2026, 7, 16),
+            utcDayAtThatInstant: new DateOnly(2026, 7, 15),
+            idSuffix: "summer");
+
+    /// <summary>
+    /// The winter twin of the test above, at 2026-01-15 23:30 UTC = 2026-01-16 00:30 in Copenhagen
+    /// (CET, UTC+1). Both seasons are pinned deliberately: a "fix" that hardcoded a +01:00 offset
+    /// instead of converting through the real Europe/Copenhagen zone would pass the winter case and
+    /// fail the summer one (22:30 + 1h is still the 15th), which is the QUAL-005 defect class the
+    /// shared helper was written to prevent. Docker-gated; CI-verified.
+    /// </summary>
+    [Fact]
+    public Task AdminPostUser_WinterEveningAfterDanishMidnight_StampsTheDanishDay_AndTheRepositoryAgrees()
+        => AssertCreateStampsTheDanishDayAsync(
+            BoundaryInstants.WinterEveningAlreadyTomorrowInCopenhagen,
+            expectedDanishDay: new DateOnly(2026, 1, 16),
+            utcDayAtThatInstant: new DateOnly(2026, 1, 15),
+            idSuffix: "winter");
+
+    /// <summary>
+    /// The shared body of the two facts above. Parameterised as a private helper rather than an
+    /// xUnit <c>[Theory]</c> because <c>DateTimeOffset</c> / <c>DateOnly</c> are not xUnit-
+    /// serializable theory arguments; two thin <c>[Fact]</c>s keep the literals visible at the call
+    /// site and add no analyzer noise.
+    /// </summary>
+    private async Task AssertCreateStampsTheDanishDayAsync(
+        DateTimeOffset pinnedInstant,
+        DateOnly expectedDanishDay,
+        DateOnly utcDayAtThatInstant,
+        string idSuffix)
+    {
+        var host = _factory.WithFixedInstant(pinnedInstant);
+        var client = host.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
+
+        var newUserId = $"emp_s142_{idSuffix}_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var rsp = await client.PostAsJsonAsync("/api/admin/users", new
+        {
+            userId = newUserId,
+            username = newUserId,
+            password = "TestPassword123!",
+            displayName = "S142 Copenhagen-day create",
+            email = (string?)null,
+            primaryOrgId = "STY01",
+            agreementCode = "AC",
+            okVersion = "OK24",
+        });
+        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+
+        // (1) THE STAMP. The agreement interval starts on the Danish day the admin is living in.
+        //     RED against the pre-S142 handler, which writes utcDayAtThatInstant instead.
+        await using (var uacCmd = new NpgsqlCommand(
+            "SELECT effective_from FROM user_agreement_codes WHERE user_id = @userId", conn))
+        {
+            uacCmd.Parameters.AddWithValue("userId", newUserId);
+            var stored = (DateOnly?)await uacCmd.ExecuteScalarAsync();
+            Assert.NotNull(stored);
+            Assert.Equal(expectedDanishDay, stored!.Value);
+        }
+
+        // (2) THE QUESTION. A repository on the SAME pinned clock must find that row when it asks
+        //     for "today" — and must NOT find it on the UTC day, which is the day the two calendars
+        //     disagree about. Together these two say: the writer's calendar IS the reader's
+        //     calendar. If a later change moved one side only, exactly one of them breaks.
+        var repo = new UserAgreementCodeRepository(_harness.Factory, new FixedTimeProvider(pinnedInstant));
+        Assert.Equal("AC", await repo.GetCurrentAsync(newUserId));
+        Assert.Null(await repo.GetByUserIdAtAsync(newUserId, utcDayAtThatInstant));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -214,6 +360,13 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
     public async Task PUT_BackdatedEffectiveFrom_SplitsTheDatedTimeline()
     {
         var client = AuthorizedClient();
+        // S142 / TASK-14202 — DELIBERATELY NOT pinned, unlike the facts above and below. Every date
+        // here is client-supplied and every assertion resolves at a client-supplied date, so nothing
+        // is compared against the server's own "today"; the router picks its case from the
+        // PREDECESSOR row's effective_from ('0001-01-01'), never from a clock. A shift of the
+        // server's calendar by one day therefore cannot change any outcome asserted below — it only
+        // makes "yesterday" a two-day backdate, which is still a backdate. Left alone on purpose so
+        // the next reader does not "fix" it into a pin it does not need.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var yesterday = today.AddDays(-1);
         var twoDaysAgo = today.AddDays(-2);
@@ -288,20 +441,31 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
     /// would both be caught by these two resolutions disagreeing with what the split must produce.
     /// </para>
     /// <para>
-    /// <b>Docker-gated; completes at the wave-2 gate, not wave 1.</b> This endpoint's own
-    /// future-date validator (the users-PUT guard in <c>AdminEndpoints.cs</c>) is lifted by
-    /// TASK-14104 in wave 2. TASK-14112 (this file's owning task, wave 1) writes this replacement
-    /// and reports it RED against the still-refusing endpoint — Docker is unavailable on the
-    /// authoring machine (standing project constraint), so neither state is verified locally.
-    /// Expected GREEN once TASK-14104 merges.
+    /// <b>S142 / TASK-14202 — the host is pinned, and that is what keeps this test about the
+    /// FUTURE.</b> It used to compute <c>tomorrow</c> from the machine's own UTC clock. That made
+    /// the word "future" mean "one day after whatever day CI happened to run on", which is exactly
+    /// the shape S138 lost two CI runs to. Worse, once the product moved to the Europe/Copenhagen
+    /// business day, a run in the late-UTC-evening window would have sent the server's OWN current
+    /// day and silently converted a future-dating test into a same-day one — passing, and proving
+    /// something else. The host is now pinned to
+    /// <see cref="BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen"/>, where the Danish day
+    /// is 2026-07-16, and the scheduled date is the literal 2026-07-17.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Docker-gated.</b> Docker is unavailable on the authoring machine (standing project
+    /// constraint), so this is CI-verified, not claimed green here.
     /// </para>
     /// </summary>
     [Fact]
     public async Task PUT_FutureDatedEffectiveFrom_SplitsTheDatedTimeline()
     {
-        var client = AuthorizedClient();
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var tomorrow = today.AddDays(1);
+        var host = _factory.WithFixedInstant(BoundaryInstants.SummerEveningAlreadyTomorrowInCopenhagen);
+        var client = AuthorizedClient(host);
+        // LITERALS. 2026-07-15 22:30 UTC is 2026-07-16 00:30 in Copenhagen, so the server's business
+        // day is the 16th and a change dated the 17th is genuinely scheduled ahead of it.
+        var today = new DateOnly(2026, 7, 16);
+        var tomorrow = new DateOnly(2026, 7, 17);
 
         // S35 / TASK-3506 — admin-strict If-Match required (see backdated test
         // above for rationale).
@@ -336,6 +500,17 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
         var scheduled = await resolver.GetByEmployeeIdAtAsync("emp001", tomorrow);
         Assert.NotNull(scheduled);
         Assert.Equal("HK", scheduled!.AgreementCode);
+
+        // S142 / TASK-14202 — and the denormalised cache, which the repository refreshes from the
+        // row covering ITS OWN "today" (the Copenhagen day), must still read the OLD code. This is
+        // the half of the mechanism the endpoint cannot see: a scheduled change that leaked into
+        // users.agreement_code would reach every live-only consumer — and the login token's
+        // fallback — a day early.
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cacheCmd = new NpgsqlCommand(
+            "SELECT agreement_code FROM users WHERE user_id = 'emp001'", conn);
+        Assert.Equal("AC", (string?)await cacheCmd.ExecuteScalarAsync());
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -371,6 +546,11 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
     {
         var client = AuthorizedClient();
         const string userId = "emp001";
+        // S142 / TASK-14202 — DELIBERATELY NOT pinned (see the backdated fact above for the full
+        // reasoning). "Cross-day" here means the write's date differs from the PREDECESSOR row's
+        // date ('0001-01-01'), which is a comparison between two stored/supplied values; the
+        // server's own calendar day takes no part in it, and every value asserted below comes back
+        // out of the request.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // S35 / TASK-3506 — admin-strict If-Match required on PUT. Capture
@@ -469,6 +649,21 @@ public sealed class AdminEndpointsAgreementCodeTests : IAsyncLifetime
     private HttpClient AuthorizedClient()
     {
         var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
+        return client;
+    }
+
+    /// <summary>
+    /// S142 / TASK-14202 — the same authorized client against a DERIVED host (one pinned to a fixed
+    /// instant). Note the boot-order rule that comes with every <c>WithWebHostBuilder</c>-derived
+    /// host: its first <c>CreateClient()</c> re-runs <c>Program.cs</c>'s startup seeders against the
+    /// same Postgres container, so any "absent state" a test depends on must be created after this
+    /// call, never before. The facts here create their own users, so nothing is at risk.
+    /// </summary>
+    private static HttpClient AuthorizedClient(WebApplicationFactory<Program> host)
+    {
+        var client = host.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
         return client;
