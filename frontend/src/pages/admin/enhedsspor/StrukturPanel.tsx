@@ -56,6 +56,7 @@ import { RetLeaderPicker, type RetLeaderOption } from './RetLeaderPicker'
 import { orgsFromForest } from './personDrawerData'
 import { useReportingLines } from '../../../hooks/useReportingLines'
 import { formatVersionAsIfMatch } from '../../../lib/etag'
+import { copenhagenToday } from '../../../lib/copenhagenDate'
 import type { LifecycleContext } from '../editPerson/LifecycleSections'
 import { InlineApproverControl } from '../editPerson/InlineApproverControl'
 import { CHILD, LABEL, ORD, type UnitType } from './typeMaps'
@@ -894,17 +895,36 @@ export function StrukturPanel({
   // If-Match (supersede the active edge); null → If-None-Match:* (create — a
   // root/orphan with no active PRIMARY edge). This hits the SAME
   // POST /api/admin/reporting-lines the drawer's ApproverSection uses (P7).
-  const todayIso = new Date().toISOString().slice(0, 10)
-
+  //
+  // S142 / TASK-14209 (census rows 60-64) — was the raw UTC formula, computed as a RENDER-BODY
+  // constant (`new Date().toISOString().slice(0, 10)` above, evaluated on every render of this
+  // whole Struktur panel). Two fixes at once: (1) the Copenhagen calendar day, not UTC; (2) moved
+  // INTO `submitRet` below, computed only at the moment HR clicks "Ret"/"Tildel leder" — a
+  // render-body call to `copenhagenToday()` would have thrown on EVERY render of this entire admin
+  // page if the zone were ever unresolvable (owner ruling OQ-12), not just on this one action.
   const submitRet = async (row: RosterRow, managerId: string) => {
     setRetBusy(true)
     setRetError(null)
+    let today: string
+    try {
+      today = copenhagenToday()
+    } catch {
+      // OQ-12: confined to this action — reuses the SAME "Handlingen mislykkedes" surface this
+      // handler already has for a rejected reassignment, rather than a page-blanking throw.
+      setRetBusy(false)
+      const msg =
+        'Dags dato kan ikke bestemmes: denne browser kan ikke bestemme den danske kalenderdag ' +
+        '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.'
+      setRetError(msg)
+      if (!retPicker) toast({ title: 'Handlingen mislykkedes', description: msg, variant: 'error' })
+      return
+    }
     const ifMatch =
       row.primaryReportingLineVersion != null
         ? formatVersionAsIfMatch(row.primaryReportingLineVersion)
         : undefined
     const result = await assignManager(
-      { employeeId: row.employeeId, managerId, effectiveFrom: todayIso },
+      { employeeId: row.employeeId, managerId, effectiveFrom: today },
       ifMatch,
     )
     setRetBusy(false)

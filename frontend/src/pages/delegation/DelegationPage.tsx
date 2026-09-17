@@ -2,14 +2,20 @@ import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { useDelegation, type DelegationStatus } from '../../hooks/useDelegation'
 import { useToast } from '../../components/ui/Toast'
 import { Spinner } from '../../components/ui'
+import { copenhagenToday } from '../../lib/copenhagenDate'
 import styles from './DelegationPage.module.css'
 
 // S51 TASK-5107. Self-service delegation page for leaders. Two states:
 // (1) active delegation — card showing details + cancel button
 // (2) no delegation — form to create one (acting manager ID + return date)
 
+// S142 / TASK-14209 (census rows 60-64) — was the raw UTC formula
+// (`new Date().toISOString().slice(0, 10)`); now delegates to the single Europe/Copenhagen source
+// of truth. `copenhagenToday()` throws if the runtime cannot resolve that zone — see
+// `copenhagenDate.ts`'s own "NO DEGRADED MODE" note — so this thin wrapper does not catch it;
+// the render-time caller below does (owner ruling OQ-12).
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  return copenhagenToday()
 }
 
 export function DelegationPage() {
@@ -28,6 +34,22 @@ export function DelegationPage() {
 
   // Cancel state
   const [cancelling, setCancelling] = useState(false)
+
+  // S142 / TASK-14209 — owner ruling OQ-12 (2026-09-17). Resolved once per render (mirroring
+  // `MondayDatePicker.tsx`, the first OQ-12 site) so an unresolvable Europe/Copenhagen zone
+  // disables just the Returdato field below with an explicit message, instead of an uncaught
+  // throw blanking this whole page (the active-delegation card included).
+  let today: string | null
+  let zoneError: string | null
+  try {
+    today = todayIso()
+    zoneError = null
+  } catch {
+    today = null
+    zoneError =
+      'Dags dato kan ikke bestemmes: denne browser kan ikke bestemme den danske kalenderdag ' +
+      '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.'
+  }
 
   const loadStatus = useCallback(async () => {
     setLoading(true)
@@ -191,10 +213,16 @@ export function DelegationPage() {
                 id="effectiveTo"
                 type="date"
                 required
-                min={todayIso()}
+                min={today ?? undefined}
                 value={effectiveTo}
                 onChange={(e) => setEffectiveTo(e.target.value)}
+                disabled={zoneError !== null}
               />
+              {zoneError && (
+                <div className={styles.alert} role="alert">
+                  {zoneError}
+                </div>
+              )}
             </div>
 
             {formError && <div className={styles.alert}>{formError}</div>}

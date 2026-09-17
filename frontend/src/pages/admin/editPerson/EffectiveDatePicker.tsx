@@ -112,12 +112,18 @@ export interface EffectiveDatePickerProps {
   onChange: (next: string) => void
   /**
    * ISO yyyy-MM-dd — the SAME "today" the save itself defaults to
-   * (`todayIsoUtc()` in `useEditPerson.ts`), passed in rather than
+   * (`todayIso()` in `useEditPerson.ts`), passed in rather than
    * recomputed here so this control's "is this future?" check can never
    * disagree with the value it was itself defaulted to when the drawer
    * opened.
+   *
+   * S142 / TASK-14209 — OQ-12: `null` when the caller's zone-resolve failed
+   * (`copenhagenToday()` threw — the runtime cannot resolve Europe/Copenhagen).
+   * The caller has already shown its OWN message and blocked the save in that
+   * case (`blockedReason`), so this component just skips the future/past
+   * classification below rather than guessing against a day it does not have.
    */
-  today: string
+  today: string | null
   disabled?: boolean
   /**
    * SPRINT-END BLOCKER FIX — non-null when `value` is at or beyond an
@@ -172,8 +178,11 @@ export function EffectiveDatePicker({
 }: EffectiveDatePickerProps) {
   // ISO yyyy-MM-dd strings compare lexicographically = chronologically —
   // the same idiom `EmploymentHistoryPage.tsx` already relies on for its own
-  // sort, so this isn't a new assumption in the codebase.
-  const isFuture = value > today
+  // sort, so this isn't a new assumption in the codebase. `today === null`
+  // (S142/OQ-12, zone unresolvable) never classifies as future — the caller
+  // is already showing `blockedReason` and refusing the save in that case,
+  // so this is cosmetic-only and must not guess.
+  const isFuture = today !== null && value > today
 
   return (
     <section className={styles.section} aria-labelledby="pd-effective-heading">

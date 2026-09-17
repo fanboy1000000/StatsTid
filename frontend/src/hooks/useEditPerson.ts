@@ -38,11 +38,31 @@ import {
   type EntitlementFields,
   type StamdataFields,
 } from '../pages/admin/editPerson/types'
+import { copenhagenToday } from '../lib/copenhagenDate'
 
-// S34 TASK-3409 (ADR-023 D8). UTC year-month-day matches the backend's
-// `DateTime.UtcNow` reference for the same-day-only-edit validator.
-export function todayIsoUtc(): string {
-  return new Date().toISOString().slice(0, 10)
+// S34 TASK-3409 (ADR-023 D8) introduced this as `todayIsoUtc()`, matching the backend's then-UTC
+// `same-day-only-edit` reference. S142 / TASK-14209 renamed it: the name was a lie after S142 — it
+// now delegates to `copenhagenDate.ts`'s single source of truth, which is the EUROPE/COPENHAGEN
+// calendar day, not UTC (see that module's own header for why UTC was wrong — a Danish user
+// working between local and UTC midnight had their edit silently dated YESTERDAY). Both this
+// function's callers in this codebase (the default below, and the ONE zone-resolve try/catch
+// `PersonDrawer.tsx` runs once per render — see that file's own OQ-12 comment) move to the
+// corrected day in the SAME commit, since they both import this one function.
+//
+// `copenhagenToday()` THROWS if the runtime cannot resolve Europe/Copenhagen (deliberately — see
+// its own "NO DEGRADED MODE" note); this wrapper does not catch it. `PersonDrawer.tsx`'s render-
+// time callers apply the OQ-12 UI-boundary catch themselves (a throw during React render must not
+// blank the whole drawer). THIS callsite's own use, three lines below in `saveEdit`, is different:
+// it runs inside an event-handler-triggered async function, not render, and — as of this task —
+// every actual production caller (`PersonDrawer` via `usePlacement`) always supplies its own
+// `effectiveFrom`, so the `?? todayIso()` fallback below is only ever exercised by a caller that
+// omits the field entirely (today, that's test code only). If it ever throws there, `saveEdit`'s
+// returned promise rejects before its own try/catch begins, propagating uncaught to
+// `usePlacement.savePlacement` (which does not wrap this particular call either) — a gap this
+// task found and is recording here rather than silently patching, since closing it means changing
+// `usePlacement`'s broader error architecture, outside this task's 5 census sites.
+export function todayIso(): string {
+  return copenhagenToday()
 }
 
 /** A status-tagged error (the shape thrown by the user/profile PUT helpers). */
@@ -173,7 +193,7 @@ export function useEditPerson() {
       // dated writes below use this SAME value): the drawer's effective-date
       // picker, or today when the caller omits it (every pre-S141 caller,
       // and the default the picker itself opens on).
-      const effectiveFrom = input.effectiveFrom ?? todayIsoUtc()
+      const effectiveFrom = input.effectiveFrom ?? todayIso()
 
       // (1) users PUT — admin-strict If-Match.
       try {
