@@ -1459,18 +1459,34 @@ public sealed class VacationSettlementService
         //       row covering today stop being the same row, and the old read would have keyed the
         //       liveConfig probe off an agreement that has not taken effect yet.
         //
-        // WHICH CLOCK, and why it is the UTC day rather than this service's CopenhagenToday(). This
-        // read is EXACT-PARITY plumbing for the S66 D9 year-overview reader, and that reader derives
-        // its `today` as DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime)
-        // (BalanceEndpoints.cs:735) before calling GetByUserIdAtAsync(employeeId, today). The whole
-        // contract of this block is "reproduce D9's chain byte-for-byte", so it must use D9's day.
-        // Using the Copenhagen business date instead would diverge from D9 for ~2 hours each night
-        // — the window where Copenhagen has ticked over but UTC has not — and the divergence would
-        // be invisible until an agreement row happened to start on exactly that date. Note this is
-        // deliberately NOT the same clock as the leaver/no-partition decision below, which uses
-        // CopenhagenToday() because it is a Danish EMPLOYMENT-law boundary; this one is a
-        // reader-parity operand, not a legal boundary.
-        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        // WHICH CLOCK: the Europe/Copenhagen business day, which is ALSO the D9 reader's day.
+        //
+        // This read is EXACT-PARITY plumbing for the S66 D9 year-overview reader, so it must use
+        // whatever day that reader uses — that is the whole contract of this block. Until S142
+        // both sides derived the UTC calendar day, and the comment that stood here argued the UTC
+        // day was therefore correct. The argument was sound but the SHARED premise was wrong:
+        // "today" for a business date is the DANISH calendar day, because every StatsTid user is
+        // Danish and between Danish midnight and UTC midnight (one hour in CET, two in CEST) the
+        // UTC calendar still reads YESTERDAY. S142 moved BOTH sides to
+        // CopenhagenBusinessDate.Today, so parity is preserved and the shared off-by-one is gone.
+        //
+        // The old comment's own warning still applies, now in the other direction: if this line
+        // and BalanceEndpoints.cs:762 (the year-overview reader's `today`) stop agreeing, the two
+        // diverge for one to two hours every night — the window where Copenhagen has ticked over
+        // but UTC has not — and the divergence stays invisible until a user_agreement_codes row
+        // happens to start on exactly that date, at which point the settlement engine values a
+        // closed year under a different agreement than the screen displays. MOVE BOTH OR NEITHER.
+        // Pinned by YearOverviewSettlementClockParityTests (Regression, NOT Docker-gated — binds
+        // both call sites and evaluates the day against literals at the DST-divergent instants).
+        //
+        // This is now the SAME clock as the leaver/no-partition decision below (:277, :1242),
+        // which was already on CopenhagenToday() as a Danish EMPLOYMENT-law boundary. The two
+        // reasons differ — legal boundary there, reader parity here — but after S142 they agree
+        // on the answer, which is the point: one business calendar, one day.
+        //
+        // INSTANTS in this service (audit timestamps, outbox ordering, created_at) stay UTC and
+        // must never be routed through CopenhagenToday().
+        var today = CopenhagenToday();
         var todayAgreementCode = await _agreementCodeRepo.GetByUserIdAtAsync(employeeId, today, ct)
             ?? user.AgreementCode;
 
@@ -2005,6 +2021,17 @@ public sealed class VacationSettlementService
     // of the captured snapshot — ADR-033 D3. S132 TASK-132-3b (QUAL-005): the DST-correct zone
     // resolution + conversion now lives once in SharedKernel; this is a thin adapter to the injected
     // TimeProvider seam.
+    //
+    // S142 / census row 53 — this is now the service's ONLY clock→business-day derivation. Callers:
+    //   :254 / :277  leaver/no-partition decision      — Danish EMPLOYMENT-law boundary
+    //   :1242        supersession due-check            — same boundary
+    //   :1489        D9 reader-parity `today` operand  — must equal BalanceEndpoints.cs:762
+    // The last one joined in S142: it derived the UTC calendar day while the year-overview reader it
+    // mirrors did the same, so the two agreed — on the wrong day, one to two hours every night.
+    // Moving the reader to the Copenhagen day without moving this one would have turned a shared
+    // off-by-one into a genuine disagreement between the settlement engine and the screen, which is
+    // why the two sites are one change. INSTANTS (audit timestamps, outbox ordering, created_at)
+    // stay UTC and must never come through here.
     // ------------------------------------------------------------------
 
     private DateOnly CopenhagenToday() => CopenhagenBusinessDate.Today(_timeProvider);
