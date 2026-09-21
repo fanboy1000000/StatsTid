@@ -45,14 +45,20 @@ public sealed class BusinessDateCalendarGuardTests
     /// <summary>
     /// The retired shapes, each of which turns a clock reading into a CALENDAR DAY:
     /// <c>DateOnly.FromDateTime(... UtcNow ...)</c>, <c>....UtcDateTime.Date</c>,
-    /// <c>DateTime.Today</c> (machine-local), and <c>GetLocalNow()</c>.
+    /// <c>DateTime.Today</c> (machine-local), and a DAY taken from <c>GetLocalNow()</c>.
+    ///
+    /// <para><b>Every alternative ends in a calendar day, deliberately.</b> An earlier version matched
+    /// a bare <c>GetLocalNow()</c>, which the external lens correctly called a false-failure source:
+    /// held as a <c>DateTimeOffset</c> it is an INSTANT, and the class doc above promises instants are
+    /// exempt. A guard that contradicts its own stated exemption trains people to suppress it.</para>
     /// </summary>
     private static readonly Regex RetiredDayDerivation = new(
         @"DateOnly\.FromDateTime\([^;)]*(?:UtcNow|GetUtcNow\(\)|DateTime\.Today|DateTime\.Now)"
-        + @"|GetUtcNow\(\)\.UtcDateTime\.Date"
+        + @"|GetUtcNow\(\)\s*\.\s*(?:Date|UtcDateTime\s*\.\s*Date|DateTime\s*\.\s*Date)"
+        + @"|DateTimeOffset\s*\.\s*UtcNow\s*\.\s*Date"
         + @"|DateTime\.UtcNow\.Date"
         + @"|\bDateTime\.Today\b"
-        + @"|GetLocalNow\(\)",
+        + @"|GetLocalNow\(\)\s*\.\s*(?:Date|DateTime\s*\.\s*Date)",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
     /// <summary>The database deciding a day — owner ruling OQ-7 moved every one of these into the app.</summary>
@@ -77,10 +83,25 @@ public sealed class BusinessDateCalendarGuardTests
             + string.Join("\n", offenders));
     }
 
+    /// <summary>
+    /// ★ This fact KEEPS string literals; the one above strips them. That asymmetry is the whole
+    /// point, and getting it wrong made this test vacuous on its first outing (S142 Step-7a cycle 2).
+    ///
+    /// <para><b>SQL in C# lives ONLY inside string literals.</b> The first version of this guard
+    /// stripped every literal before matching — so the `CURRENT_DATE` pattern could never see a
+    /// single line of SQL, and every statement this sprint repaired (all of them in <c>"""raw"""</c>
+    /// strings, which the stripper deleted wholesale) could have been reverted with CI still green.
+    /// The sprint log meanwhile claimed all 64 rows were pinned. <b>A guard against tests that cannot
+    /// fail, half of which could not fail.</b></para>
+    ///
+    /// <para>Comments are still stripped, for the reason they always were: this repository quotes the
+    /// retired SQL when explaining why it was removed, and all 30 such matches at HEAD are comment
+    /// lines. Executable strings containing these tokens are exactly what we want to see.</para>
+    /// </summary>
     [Fact]
     public void NoProductionSql_LetsTheDatabaseDecideTheDay()
     {
-        var offenders = ScanCSharp(DatabaseDecidedDay);
+        var offenders = ScanCSharp(DatabaseDecidedDay, stripStringLiterals: false);
 
         Assert.True(
             offenders.Count == 0,
@@ -93,7 +114,7 @@ public sealed class BusinessDateCalendarGuardTests
 
     // ── scanning ────────────────────────────────────────────────────────────────────────────────
 
-    private static List<string> ScanCSharp(Regex pattern)
+    private static List<string> ScanCSharp(Regex pattern, bool stripStringLiterals = true)
     {
         var root = LocateRepoRoot();
         var src = Path.Combine(root, "src");
@@ -106,7 +127,7 @@ public sealed class BusinessDateCalendarGuardTests
                 || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
                 continue;
 
-            var executable = StripComments(File.ReadAllText(file));
+            var executable = StripComments(File.ReadAllText(file), stripStringLiterals);
             var match = pattern.Match(executable);
             if (!match.Success) continue;
 
@@ -117,20 +138,124 @@ public sealed class BusinessDateCalendarGuardTests
     }
 
     /// <summary>
-    /// Strips comments and string literals before matching.
+    /// Strips comments always; strips string literals only when asked.
     ///
-    /// <para>Comments must go because this repository deliberately <i>quotes</i> the retired shapes
-    /// when explaining why they were removed — S142 rewrote roughly forty such comments, and a guard
-    /// that fired on its own explanation would push authors toward deleting the explanation. String
-    /// literals go for the same reason: the SQL patterns above appear inside error messages and this
-    /// very test's own text.</para>
+    /// <para><b>Comments must always go</b> because this repository deliberately <i>quotes</i> the
+    /// retired shapes when explaining why they were removed — S142 rewrote roughly forty such
+    /// comments, and a guard that fired on its own explanation would push authors toward deleting the
+    /// explanation.</para>
+    ///
+    /// <para><b>String literals are conditional, and that is the correction.</b> For the C# fact,
+    /// stripping them is right: the retired expressions are code, and the patterns also appear inside
+    /// error-message text. For the SQL fact it was fatal — SQL exists in C# <i>only</i> inside
+    /// literals, so stripping them left that fact scanning for `CURRENT_DATE` among bare identifiers,
+    /// where it could never appear. Caught at Step-7a cycle 2.</para>
+    ///
+    /// <para><b>Why a single-pass scanner and not regexes.</b> The first version stripped comments
+    /// with one regex and strings with another, comments first. Both review lenses caught the same
+    /// class of bug in that: a comment marker INSIDE a string (a <c>//</c> in a URL, a <c>/*</c> in
+    /// SQL) erased the rest of that line, which could hide a real offender — and a quote inside a
+    /// comment could do the mirror image. Order-of-stripping cannot fix it, because each pass is
+    /// blind to the other's context. The scanner below walks the source once and recognises a
+    /// comment ONLY when it is genuinely outside every literal, which is the only way to get this
+    /// right.</para>
     /// </summary>
-    private static string StripComments(string source)
+    private static string StripComments(string source, bool stripStringLiterals)
     {
-        var withoutBlock = Regex.Replace(source, @"/\*.*?\*/", " ", RegexOptions.Singleline);
-        var withoutLine = Regex.Replace(withoutBlock, @"//[^\n]*", " ");
-        var withoutRawStrings = Regex.Replace(withoutLine, "\"\"\".*?\"\"\"", " \"\" ", RegexOptions.Singleline);
-        return Regex.Replace(withoutRawStrings, @"@?""(?:[^""\\\n]|\\.|"""")*""", " \"\" ");
+        var output = new System.Text.StringBuilder(source.Length);
+        var i = 0;
+
+        while (i < source.Length)
+        {
+            // ── raw string: """ … """ (no escapes inside) ──
+            if (Match(source, i, "\"\"\""))
+            {
+                var end = source.IndexOf("\"\"\"", i + 3, StringComparison.Ordinal);
+                var close = end < 0 ? source.Length : end + 3;
+                Emit(output, source, i, close, keep: !stripStringLiterals);
+                i = close;
+                continue;
+            }
+
+            // ── verbatim string: @" … " where "" is an escaped quote ──
+            if (Match(source, i, "@\""))
+            {
+                var j = i + 2;
+                while (j < source.Length)
+                {
+                    if (source[j] == '"')
+                    {
+                        if (Match(source, j, "\"\"")) { j += 2; continue; }
+                        j++; break;
+                    }
+                    j++;
+                }
+                Emit(output, source, i, j, keep: !stripStringLiterals);
+                i = j;
+                continue;
+            }
+
+            // ── ordinary string: " … " with backslash escapes; never spans a newline ──
+            if (source[i] == '"')
+            {
+                var j = i + 1;
+                while (j < source.Length && source[j] != '\n')
+                {
+                    if (source[j] == '\\') { j += 2; continue; }
+                    if (source[j] == '"') { j++; break; }
+                    j++;
+                }
+                Emit(output, source, i, j, keep: !stripStringLiterals);
+                i = j;
+                continue;
+            }
+
+            // ── char literal: '…' — skipped so a quote inside it cannot open a string ──
+            if (source[i] == '\'')
+            {
+                var j = i + 1;
+                while (j < source.Length && source[j] != '\n')
+                {
+                    if (source[j] == '\\') { j += 2; continue; }
+                    if (source[j] == '\'') { j++; break; }
+                    j++;
+                }
+                output.Append(' ');
+                i = j;
+                continue;
+            }
+
+            // ── comments: only recognised HERE, i.e. outside any literal ──
+            if (Match(source, i, "//"))
+            {
+                var nl = source.IndexOf('\n', i);
+                i = nl < 0 ? source.Length : nl;
+                output.Append(' ');
+                continue;
+            }
+
+            if (Match(source, i, "/*"))
+            {
+                var end = source.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                i = end < 0 ? source.Length : end + 2;
+                output.Append(' ');
+                continue;
+            }
+
+            output.Append(source[i]);
+            i++;
+        }
+
+        return output.ToString();
+
+        static bool Match(string s, int at, string token) =>
+            at + token.Length <= s.Length && string.CompareOrdinal(s, at, token, 0, token.Length) == 0;
+
+        static void Emit(System.Text.StringBuilder sb, string s, int from, int to, bool keep)
+        {
+            if (keep) sb.Append(s, from, to - from);
+            else sb.Append(' ');
+        }
     }
 
     private static string Truncate(string value) =>

@@ -3854,13 +3854,20 @@ public static class AdminEndpoints
         /// (still read from the injected <see cref="TimeProvider"/>, as since S139 / TASK-13907, rather
         /// than <c>DateTime.UtcNow</c>). The deferral this comment used to record — "the owner has ruled
         /// that business dates should move to the Danish calendar day … deferred to its own work" — IS
-        /// this sprint; the handler's server-side dates have moved. The FRONTEND half has not: the field
-        /// is always sent by the client, and the client still extracts its date with
-        /// <c>new Date().toISOString().slice(0,10)</c> (TASK-3409), which is a UTC extraction and
-        /// therefore still reports YESTERDAY for a Danish user working after local midnight. That is
-        /// another S142 task's scope, and it is named here rather than left implied because THIS is the
-        /// field a frontend author reads to learn what they are allowed to send — the same reader the
-        /// paragraph above records being misled by a stale contract comment.
+        /// this sprint; the handler's server-side dates have moved. <b>The frontend half has moved too,
+        /// in TASK-14209 — both calendars now agree.</b> The client sends a date derived from
+        /// <c>copenhagenToday()</c> (<c>frontend/src/lib/copenhagenDate.ts</c>); the raw
+        /// <c>new Date().toISOString().slice(0,10)</c> extraction it used to use is gone from the
+        /// frontend's production code entirely. **If you need "today" when calling this endpoint, use
+        /// that helper — never `toISOString()`, and never the browser's own day. Both are different
+        /// wrong calendars.**
+        ///
+        /// <para><i>This paragraph was written in wave 1, was true then, and was still asserting the
+        /// frontend sent UTC three waves after it stopped. It is corrected here because THIS is the
+        /// field a frontend author reads to learn what they may send — the same reader class the
+        /// paragraph above records being misled by a stale contract comment. A comment that describes
+        /// a mid-sprint state and is never revisited becomes a false instruction the moment the sprint
+        /// moves past it.</i></para>
         /// <para>
         /// Nothing on this path COMPARES the supplied date to the server's today any more (the refusal
         /// was lifted in S141 / TASK-14104), so the two calendars disagreeing cannot make a request
