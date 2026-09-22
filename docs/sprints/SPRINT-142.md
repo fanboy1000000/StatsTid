@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 142 |
-| **Status** | **COMPLETE** — 13 tasks, all DONE; Step 7a dual-lens absorbed; CI green |
+| **Status** | **COMPLETE** — 13 tasks, all DONE; Step 7a ran **three cycles** (cycles 2 and 3 each found a defect in the Orchestrator's own guard); CI green |
 | **Start Date** | 2026-09-16 |
 | **End Date** | 2026-09-17 |
 | **Orchestrator Approved** | **APPROVED** — Step 0b ran **two cycles, both lenses**. Cycle 1: Reviewer CHANGES-REQUIRED (nine of 64 rows unassigned; the OQ-4 deletes unassigned; **the sprint-wide carve-out itself wrong**; four coupled pairs split; predecessors wrong both ways) · Codex 2 BLOCKER (test ownership unprovable; validator↔picker "ordered" ≠ atomic). Cycle 2: Reviewer verified 7 of 9 fixes APPLIED, 2 PARTIAL — **B1: the coverage enumeration still contradicted the picker fix it was meant to certify** — plus W1–W6 absorbed (all-or-nothing MOVE tasks; helper ownership; rows 48/49 are dead code → deleted under OQ-4; two files need the `TimeProvider` seam; a per-task *failing* pin; `docs/` split out of an agent task per CLAUDE.md). Refinement rev 9 + OQ-10, OQ-11. **12 tasks, 64/64 rows assigned exactly once** |
@@ -994,13 +994,57 @@ reverted to the UTC day.**
 
 **Closed with a repo-wide source-text guard** (`BusinessDateCalendarGuardTests`) that scans all of `src/` for the retired
 day-derivation shapes *and* for database-decided days — **pinning all 64 rows at once for the cost of one non-Docker test
-rather than twenty container boots.** Comments and string literals are stripped before matching, deliberately: this
-repository *quotes* the retired shapes when explaining why they were removed, and a guard that fired on its own explanation
-would push authors toward deleting the explanation. **Proved able to fail**: injecting `DateOnly.FromDateTime(DateTime.UtcNow.Date)`
-into a production endpoint turns it red with the file and expression named.
+rather than twenty container boots.**
+
+**The guard as first written was half vacuous, and cycles 2 and 3 are the story of fixing it.** See below; the description
+that stood here originally — "comments and string literals are stripped before matching" — was true of both halves and was
+precisely the defect.
 
 *It cannot prove a site computes the right day — only that it does not compute the retired one. It is the net under the
 behavioural pins, not a replacement for them.*
+
+### Step 7a cycle 2 — ★ BLOCKER: the guard against vacuous tests was itself half vacuous
+
+**Both lenses found it independently.** `ScanCSharp` stripped **every string literal** before matching — and **SQL in C#
+lives only inside string literals.** So the half watching for database-decided days could never see a single line of SQL.
+Every statement this sprint repaired sits in a `"""raw"""` string, deleted wholesale by the stripper. **Reverting any of
+them would have passed CI while this log claimed all 64 rows were pinned.** I had proved the *C# half* could fail and then
+written "proved able to fail" about both.
+
+**Fixed:** the SQL fact keeps string literals; the C# fact still strips them (the retired expressions there *are* code, and
+error text quotes them). **Both halves then proven RED independently** — the SQL one by reverting `until_date < @today` to
+`CURRENT_DATE` **inside a raw string**, which is exactly where it had been blind.
+
+**Codex added two more, both real:** comments were stripped *before* strings, so a `//` inside a URL or `/*` inside SQL
+erased the rest of a line and could hide a genuine offender; and a bare `GetLocalNow()` was flagged even when correctly held
+as an instant, contradicting the exemption the class doc itself promises. **Replaced both regexes with a single-pass
+scanner** that recognises a comment only when genuinely outside every literal — *order of stripping cannot fix that class of
+bug, because each pass is blind to the other's context.*
+
+### Step 7a cycle 3 — owner-authorised past the two-cycle cap, and it earned the cost
+
+**The verification method is the most rigorous this sprint produced.** The reviewer extracted the scanner and both patterns
+**verbatim** from the test file — by `sed`, not retyped — and ran them over all **504 production C# files side by side with
+Roslyn, the real C# compiler's lexer**, plus 55 synthetic edge cases, and reproduced both RED proofs in memory rather than
+trusting this log.
+
+**Result: the scanner agrees with the compiler on every file for both facts, and hides nothing the compiler treats as code.**
+Where they differ (6 files, nested strings inside interpolation holes) the scanner *exposes* more, which can only cause a
+loud false positive, never a silent pass. The old regex version desynced on 26 files; **there is no file where the new one
+is worse.**
+
+**Three warnings, all absorbed:**
+- **`.Date` lacked a word boundary**, so `GetUtcNow().DateTime` — an instant the class doc explicitly exempts — was reported
+  as a calendar-day derivation. *The same "guard contradicts its own stated exemption" shape I had written a paragraph
+  against one cycle earlier.* Now `Date\b`.
+- **Three lexical shapes the new scanner could hide** that the old regex caught, none present in `src/` today: a raw fence
+  of 4+ quotes (which would have hidden the **rest of the file**), the `@$"` prefix order, and an unbounded char-literal
+  scan after `'"'` inside an interpolation hole. All three closed — the fence now counts the opening run and matches a
+  closer of equal length, both prefix orders are accepted, and the char-literal scan is bounded.
+- **A pathological EOF case threw instead of reporting.** A guard should report, not crash.
+
+**Codex could not run cycle 3** — its policy layer rejected every command, including read-only `git`, so it inspected
+nothing and correctly declined to assert a verdict. Recorded as a tooling outage, **not as a pass**.
 
 ### Step 7a — external lens (Codex): NO BLOCKERS
 

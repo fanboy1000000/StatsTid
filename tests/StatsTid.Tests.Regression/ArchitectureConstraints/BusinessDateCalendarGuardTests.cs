@@ -53,12 +53,15 @@ public sealed class BusinessDateCalendarGuardTests
     /// exempt. A guard that contradicts its own stated exemption trains people to suppress it.</para>
     /// </summary>
     private static readonly Regex RetiredDayDerivation = new(
-        @"DateOnly\.FromDateTime\([^;)]*(?:UtcNow|GetUtcNow\(\)|DateTime\.Today|DateTime\.Now)"
-        + @"|GetUtcNow\(\)\s*\.\s*(?:Date|UtcDateTime\s*\.\s*Date|DateTime\s*\.\s*Date)"
-        + @"|DateTimeOffset\s*\.\s*UtcNow\s*\.\s*Date"
-        + @"|DateTime\.UtcNow\.Date"
-        + @"|\bDateTime\.Today\b"
-        + @"|GetLocalNow\(\)\s*\.\s*(?:Date|DateTime\s*\.\s*Date)",
+        @"DateOnly\.FromDateTime\([^;)]*(?:UtcNow|GetUtcNow\(\)|GetLocalNow\(\)|DateTime\.Today|DateTime\.Now)"
+        // `.Date` must end on a word boundary. Without it, `GetUtcNow().DateTime` — an INSTANT read
+        // the class doc above explicitly exempts — matched the `Date` prefix and was reported as a
+        // calendar-day derivation. Step-7a cycle 3 caught that: a guard contradicting its own stated
+        // exemption is how people learn to suppress guards.
+        + @"|Get(?:Utc|Local)Now\(\)\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b"
+        + @"|DateTimeOffset\s*\.\s*(?:UtcNow|Now)\s*\.\s*Date\b"
+        + @"|DateTime\s*\.\s*(?:UtcNow|Now)\s*\.\s*Date\b"
+        + @"|\bDateTime\s*\.\s*Today\b",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
     /// <summary>The database deciding a day — owner ruling OQ-7 moved every one of these into the app.</summary>
@@ -167,20 +170,38 @@ public sealed class BusinessDateCalendarGuardTests
 
         while (i < source.Length)
         {
-            // ── raw string: """ … """ (no escapes inside) ──
+            // ── raw string: """…""" — the fence can be ANY run of 3+ quotes, and the closer must be
+            //    a run of the SAME length. Assuming 3 was a real hole (Step-7a cycle 3): for a
+            //    4-quote fence, an inner 3-quote run is legal CONTENT, so a 3-assuming scanner closed
+            //    early, then treated the real closer as a new opener and swallowed the rest of the
+            //    file. Zero 4-quote fences exist in src/ today; the hole is closed before one does.
             if (Match(source, i, "\"\"\""))
             {
-                var end = source.IndexOf("\"\"\"", i + 3, StringComparison.Ordinal);
-                var close = end < 0 ? source.Length : end + 3;
+                var fence = 0;
+                while (i + fence < source.Length && source[i + fence] == '"') fence++;
+
+                var close = source.Length;
+                for (var k = i + fence; k + fence <= source.Length; k++)
+                {
+                    if (source[k] != '"') continue;
+                    var run = 0;
+                    while (k + run < source.Length && source[k + run] == '"') run++;
+                    if (run == fence) { close = k + fence; break; }
+                    k += run - 1;
+                }
+
                 Emit(output, source, i, close, keep: !stripStringLiterals);
                 i = close;
                 continue;
             }
 
-            // ── verbatim string: @" … " where "" is an escaped quote ──
-            if (Match(source, i, "@\""))
+            // ── verbatim string: @"…" or @$"…" / $@"…" — both prefix orders are legal C# ──
+            if (Match(source, i, "@\"") || Match(source, i, "@$\"") || Match(source, i, "$@\""))
             {
-                var j = i + 2;
+                // Skip the prefix chars ('@', and '$' when present) then the opening quote.
+                var j = i;
+                while (j < source.Length && (source[j] == '@' || source[j] == '$')) j++;
+                j++; // the opening quote
                 while (j < source.Length)
                 {
                     if (source[j] == '"')
@@ -201,7 +222,10 @@ public sealed class BusinessDateCalendarGuardTests
                 var j = i + 1;
                 while (j < source.Length && source[j] != '\n')
                 {
-                    if (source[j] == '\\') { j += 2; continue; }
+                    // Math.Min: a file ending in a backslash escape with no closing quote would
+                    // otherwise overshoot Length and throw on the slice below — uncompilable input,
+                    // but a guard should report, not crash (Step-7a cycle 3, NOTE 2).
+                    if (source[j] == '\\') { j = Math.Min(j + 2, source.Length); continue; }
                     if (source[j] == '"') { j++; break; }
                     j++;
                 }
@@ -210,18 +234,34 @@ public sealed class BusinessDateCalendarGuardTests
                 continue;
             }
 
-            // ── char literal: '…' — skipped so a quote inside it cannot open a string ──
+            // ── char literal: '…' — skipped so a quote inside it cannot open a string.
+            //    BOUNDED to a few characters: a real char literal is at most ~10 (`'￿'`). An
+            //    unbounded scan swallowed to end of line whenever an apostrophe appeared in prose
+            //    or after a stray quote, which could hide an offender (Step-7a cycle 3). If no
+            //    closing quote appears within the bound, this is not a char literal — emit the
+            //    apostrophe as ordinary code and carry on, which also handles `#region Don't`.
             if (source[i] == '\'')
             {
+                const int maxCharLiteral = 12;
                 var j = i + 1;
-                while (j < source.Length && source[j] != '\n')
+                var closed = false;
+                while (j < source.Length && j - i <= maxCharLiteral && source[j] != '\n')
                 {
                     if (source[j] == '\\') { j += 2; continue; }
-                    if (source[j] == '\'') { j++; break; }
+                    if (source[j] == '\'') { j++; closed = true; break; }
                     j++;
                 }
-                output.Append(' ');
-                i = j;
+
+                if (closed)
+                {
+                    output.Append(' ');
+                    i = j;
+                }
+                else
+                {
+                    output.Append(source[i]);
+                    i++;
+                }
                 continue;
             }
 
