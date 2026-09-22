@@ -436,8 +436,19 @@ builder.Services.AddSingleton<StatsTid.Infrastructure.DatedEntitlementConfigReso
 // TASK-13907) the employee-profile, agreement-code and approval-period paths all resolve their
 // current date through it. TimeProvider.System is the production default and is what a plain host
 // gets; a date-sensitive test host registers a FIXED provider instead so those paths observe the
-// clock the suite pins. Injectable clock SOURCE only — each caller keeps its own day derivation
-// (UTC day, or the Copenhagen business date where that convention applies).
+// clock the suite pins.
+//
+// S142 / ADR-041 — this seam supplies INSTANTS; the calendar day is not a per-caller choice.
+// Every BUSINESS date in the product is now `CopenhagenBusinessDate.Today(timeProvider)`, the
+// Danish calendar day, because every user is Danish and between Danish midnight and UTC midnight
+// the UTC calendar still reads YESTERDAY. Instants taken straight off this provider — created_at,
+// updated_at, audit timestamps, outbox ordering, token expiry — stay UTC and must never be routed
+// through that helper, because turning an instant into a calendar day and back corrupts ordering.
+//
+// The sentence this replaces said each caller "keeps its own day derivation (UTC day, or the
+// Copenhagen business date where that convention applies)". That described the split S142 removed,
+// and it sat at the seam every date-sensitive path is wired through — the single most likely place
+// for a future author to learn the retired rule. Found at the last Step-7a gate.
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<ProfileAlignmentValidator>();
 builder.Services.AddSingleton<ProjectionBackfillService>();

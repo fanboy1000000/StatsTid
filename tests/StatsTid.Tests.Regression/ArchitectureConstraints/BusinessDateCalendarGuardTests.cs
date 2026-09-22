@@ -126,6 +126,18 @@ public sealed class BusinessDateCalendarGuardTests
             + "If the value is genuinely an INSTANT (created_at, an audit stamp, outbox ordering, "
             + "token expiry) then it should not be going through DateOnly at all — keep the "
             + "DateTimeOffset and it will not match this guard.\n\n"
+            + "If you are legitimately projecting a STORED instant onto its Danish calendar day — "
+            + "showing which day an existing timestamp fell on — the sanctioned form passes a "
+            + "DateTime through the zone, as ReportingLineEndpoints does for a stand-in's start "
+            + "date:\n"
+            + "    DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(\n"
+            + "        new DateTimeOffset(DateTime.SpecifyKind(stored, DateTimeKind.Utc)),\n"
+            + "        CopenhagenBusinessDate.Zone).DateTime)\n"
+            + "Spelling it with `.UtcDateTime` inside FromDateTime matches the indirection pattern "
+            + "and will be reported here. That is a deliberate false RED, not a defect: this guard "
+            + "errs toward a loud complaint rather than a silent pass, and switching to the form "
+            + "above is the fix — NOT CopenhagenBusinessDate.Today(), which answers a different "
+            + "question (what day is it NOW, rather than what day was that instant).\n\n"
             + string.Join("\n", offenders));
     }
 
