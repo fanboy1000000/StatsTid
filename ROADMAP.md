@@ -292,8 +292,25 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   "efter frist" tile stops claiming an aging computation that did not exist (QUAL-163). **Deliberately not built:** the four write
   forms those lists point at (owner ruling OQ-4 — they are S141 items), so the lists say "handled via API today" rather than
   offering a form. Four findings registered from the work: QUAL-164 (a start date reported from two clocks), QUAL-165 (a blocked-row
-  rule that lives only in the screen), QUAL-166 (generated contracts under-describing required inputs), QUAL-167 (deactivation
+  rule that lives only in the screen — **RULED 2026-09-22, build owed: split the verb**, see below), QUAL-166 (generated contracts under-describing required inputs), QUAL-167 (deactivation
   without an end date accruing overdue months for ever). [S140 TASK-14003/14004/14007/14010]
+
+- **★ RULED, NOT YET BUILT — split the worklist's "Recalculated" outcome in two** (QUAL-165; owner ruling
+  2026-09-22, registered S140, deferred from S141, decided at the S142 close).
+  **The problem in one sentence:** when a correction lands in an already-exported payroll month, HR closes the
+  worklist row by recording what happened — and "Recalculated" currently means two different things at once.
+  For months the system marks impossible to recalculate, the screen greys the option out for everyone, but the
+  **server never checks that flag**, so a direct API call records "recalculated" against a month the system
+  itself says must not be recalculated (demonstrated by an existing test: blocked row, admin, 200).
+  **Why it was not simply an authorisation bug.** The verb records what a human did OUTSIDE the tool. An
+  operator may genuinely have re-planned that month correctly by hand — in which case recording the truth is
+  right, and the screen is discouraging something *usually* wrong rather than forbidding something *always*
+  wrong. **The ruling:** "the system recalculated this" and "a human sorted it out" are two different facts
+  sharing one word. Split them; then the flag becomes binding for the recalculation verb specifically, because
+  with an honest alternative available, refusing the false one costs nobody anything.
+  **Build:** a second outcome, the server-side check, a migration (existing "recalculated" rows on blocked
+  months are ambiguous by construction — record that, do not guess), and the screen's missing 403 branch on
+  resolve. Nothing is at risk meanwhile: the screen still refuses the verb.
 
 ### Usability / accessibility
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
