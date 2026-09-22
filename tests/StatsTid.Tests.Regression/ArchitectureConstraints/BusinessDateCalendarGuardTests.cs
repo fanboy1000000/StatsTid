@@ -3,8 +3,8 @@ using System.Text.RegularExpressions;
 namespace StatsTid.Tests.Regression.ArchitectureConstraints;
 
 /// <summary>
-/// S142 Step-7a WARNING 3 — a repo-wide net over the 64 converted business-date sites, most of which
-/// have no behavioural pin of their own.
+/// S142 Step-7a WARNING 3 — a repo-wide net over the 64 converted business-date sites, roughly twenty
+/// of which have no behavioural pin of their own.
 ///
 /// <para>
 /// <b>Why this exists.</b> S142 moved every business date from the UTC calendar day to the
@@ -64,12 +64,13 @@ public sealed class BusinessDateCalendarGuardTests
     private static readonly Regex RetiredDayDerivation = new(
         // `\s*` before every `(`: `FromDateTime (DateTime.UtcNow)` and `GetUtcNow ()` are ordinary
         // legal spellings, not exotic evasions, and both defeated the first version (cycle 3).
-        @"DateOnly\s*\.\s*FromDateTime\s*\([^;)]*(?:UtcNow|GetUtcNow\s*\(\)|GetLocalNow\s*\(\)|DateTime\.Today|DateTime\.Now)"
+        @"DateOnly\s*\.\s*FromDateTime\s*\([^;)]*(?:UtcNow|Get(?:Utc|Local)Now\s*\(\s*\)|DateTime\.Today|DateTime\.Now)"
         // `.Date` must end on a word boundary. Without it, `GetUtcNow().DateTime` — an INSTANT read
         // the class doc above explicitly exempts — matched the `Date` prefix and was reported as a
         // calendar-day derivation. Step-7a cycle 3 caught that: a guard contradicting its own stated
         // exemption is how people learn to suppress guards.
-        + @"|Get(?:Utc|Local)Now\s*\(\)\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b"
+        // `\(\s*\)` not `\(\)`: `GetUtcNow ( )` is legal C# and defeated the previous spelling.
+        + @"|Get(?:Utc|Local)Now\s*\(\s*\)\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b"
         // `.UtcDateTime.Date` after DateTimeOffset.UtcNow was missed, and the class doc claimed to
         // cover exactly that spelling — the guard contradicting its own documentation again.
         + @"|DateTimeOffset\s*\.\s*(?:UtcNow|Now)\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b"
@@ -91,8 +92,11 @@ public sealed class BusinessDateCalendarGuardTests
     private static readonly Regex DatabaseDecidedDay = new(
         @"\bCURRENT_DATE\b"
         + @"|\b(?:now\s*\(\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s*::\s*date\b"
-        + @"|\bCAST\s*\(\s*(?:now\s*\(\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s+AS\s+date\s*\)"
-        + @"|\bdate_trunc\s*\(\s*'day'\s*,\s*now\s*\(\)",
+        + @"|\bCAST\s*\(\s*(?:now\s*\(\s*\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s+AS\s+date\s*\)",
+        // `date_trunc('day', now())` was listed here and removed: it returns a TIMESTAMP truncated
+        // to midnight, not a date, so matching it would have refused legitimate SQL while claiming
+        // the database was picking a day — the same false-fail shape as the bare LOCALTIMESTAMP one
+        // cycle earlier. If it is ever cast to date, the `::date` alternative above catches it.
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     [Fact]
@@ -239,6 +243,75 @@ public sealed class BusinessDateCalendarGuardTests
                             if (run == fence) { close = k + fence; break; }
                             k += run - 1;
                         }
+                    }
+                    else if (interpolated)
+                    {
+                        // ★ Interpolated, non-raw. The END must be found with BRACE-DEPTH tracking,
+                        // because a hole contains executable C# that may itself contain strings:
+                        // in `$"{string.Join(",", xs)} {DateTime.UtcNow.Date}"` the quote inside the
+                        // FIRST hole is not the end of anything. Treating it as the end closed the
+                        // literal early, and the remainder then parsed as a SECOND, non-interpolated
+                        // string — which IS stripped, hiding the offender in it. Keeping interpolated
+                        // strings whole (above) is necessary but not sufficient; the boundary has to
+                        // be right too, or the same hole simply reopens one level down.
+                        var j = p + 1;
+                        var depth = 0;
+                        while (j < source.Length)
+                        {
+                            var c = source[j];
+
+                            if (depth == 0)
+                            {
+                                if (c == '{')
+                                {
+                                    // `{{` is an escaped brace, not a hole.
+                                    if (Match(source, j, "{{")) { j += 2; continue; }
+                                    depth++;
+                                    j++;
+                                    continue;
+                                }
+                                if (!verbatim && c == '\\') { j = Math.Min(j + 2, source.Length); continue; }
+                                if (c == '"')
+                                {
+                                    if (verbatim && Match(source, j, "\"\"")) { j += 2; continue; }
+                                    j++; break;
+                                }
+                                if (!verbatim && c == '\n') break;
+                                j++;
+                                continue;
+                            }
+
+                            // Inside a hole: this is CODE. Skip nested literals so their quotes
+                            // cannot be mistaken for the interpolation's end.
+                            if (c == '}') { if (Match(source, j, "}}")) { j += 2; continue; } depth--; j++; continue; }
+                            if (c == '{') { depth++; j++; continue; }
+                            if (c == '\'')
+                            {
+                                var k = j + 1;
+                                while (k < source.Length && k - j <= 12 && source[k] != '\n')
+                                {
+                                    if (source[k] == '\\') { k = Math.Min(k + 2, source.Length); continue; }
+                                    if (source[k] == '\'') { k++; break; }
+                                    k++;
+                                }
+                                j = k > j ? k : j + 1;
+                                continue;
+                            }
+                            if (c == '"')
+                            {
+                                var k = j + 1;
+                                while (k < source.Length && source[k] != '\n')
+                                {
+                                    if (source[k] == '\\') { k = Math.Min(k + 2, source.Length); continue; }
+                                    if (source[k] == '"') { k++; break; }
+                                    k++;
+                                }
+                                j = k > j ? k : j + 1;
+                                continue;
+                            }
+                            j++;
+                        }
+                        close = j;
                     }
                     else if (verbatim)
                     {
