@@ -3,17 +3,26 @@ using System.Text.RegularExpressions;
 namespace StatsTid.Tests.Regression.ArchitectureConstraints;
 
 /// <summary>
-/// S142 Step-7a WARNING 3 — the repo-wide guard that keeps all 64 converted business-date sites on
-/// the Copenhagen calendar, rather than the ~20 that happen to have a behavioural pin.
+/// S142 Step-7a WARNING 3 — a repo-wide net over the 64 converted business-date sites, most of which
+/// have no behavioural pin of their own.
 ///
 /// <para>
 /// <b>Why this exists.</b> S142 moved every business date from the UTC calendar day to the
 /// Europe/Copenhagen day: every StatsTid user is Danish, and between Danish midnight and UTC
 /// midnight the UTC calendar still reads YESTERDAY, so an HR user working at 00:30 recorded a change
-/// as effective the day before. Twelve tasks converted 64 sites. **Roughly twenty of those rows have
-/// no discriminating behavioural test** — not because anyone was careless, but because each would
-/// need its own seeded fixture and container boot, and the per-task criterion was "at least one pin
-/// that fails on the old code", which every task met.
+/// as effective the day before. Twelve tasks converted 64 sites, and **roughly twenty of those sites
+/// have no discriminating behavioural test** — not because anyone was careless, but because each
+/// would need its own seeded fixture and container boot, and the per-task criterion was "at least one
+/// pin that fails on the old code", which every task met.
+/// </para>
+///
+/// <para>
+/// <b>What this guard can and cannot claim.</b> It catches a REVERT — a converted site changed back
+/// to a retired spelling this file knows. It does not and cannot prove the 64 sites are correct, and
+/// an unlisted novel respelling will pass. An earlier version of this doc said it "keeps all 64 sites
+/// on the Copenhagen calendar", which the external lens correctly called an overstatement, and which
+/// also contradicted the sentence above it about how many sites are pinned. *A net, described as a
+/// net.*
 /// </para>
 ///
 /// <para>
@@ -53,20 +62,37 @@ public sealed class BusinessDateCalendarGuardTests
     /// exempt. A guard that contradicts its own stated exemption trains people to suppress it.</para>
     /// </summary>
     private static readonly Regex RetiredDayDerivation = new(
-        @"DateOnly\.FromDateTime\([^;)]*(?:UtcNow|GetUtcNow\(\)|GetLocalNow\(\)|DateTime\.Today|DateTime\.Now)"
+        // `\s*` before every `(`: `FromDateTime (DateTime.UtcNow)` and `GetUtcNow ()` are ordinary
+        // legal spellings, not exotic evasions, and both defeated the first version (cycle 3).
+        @"DateOnly\s*\.\s*FromDateTime\s*\([^;)]*(?:UtcNow|GetUtcNow\s*\(\)|GetLocalNow\s*\(\)|DateTime\.Today|DateTime\.Now)"
         // `.Date` must end on a word boundary. Without it, `GetUtcNow().DateTime` — an INSTANT read
         // the class doc above explicitly exempts — matched the `Date` prefix and was reported as a
         // calendar-day derivation. Step-7a cycle 3 caught that: a guard contradicting its own stated
         // exemption is how people learn to suppress guards.
-        + @"|Get(?:Utc|Local)Now\(\)\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b"
-        + @"|DateTimeOffset\s*\.\s*(?:UtcNow|Now)\s*\.\s*Date\b"
+        + @"|Get(?:Utc|Local)Now\s*\(\)\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b"
+        // `.UtcDateTime.Date` after DateTimeOffset.UtcNow was missed, and the class doc claimed to
+        // cover exactly that spelling — the guard contradicting its own documentation again.
+        + @"|DateTimeOffset\s*\.\s*(?:UtcNow|Now)\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b"
         + @"|DateTime\s*\.\s*(?:UtcNow|Now)\s*\.\s*Date\b"
         + @"|\bDateTime\s*\.\s*Today\b",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
-    /// <summary>The database deciding a day — owner ruling OQ-7 moved every one of these into the app.</summary>
+    /// <summary>
+    /// The database deciding a <b>calendar day</b> — owner ruling OQ-7 moved every one of these into
+    /// the application, where the zone is explicit and testable.
+    ///
+    /// <para><b>Every alternative must end in a DAY.</b> A bare <c>LOCALTIMESTAMP</c> was matched by
+    /// the first version and is wrong to match: it yields a timestamp without time zone, not a
+    /// calendar day, so the guard would have refused legitimate SQL while claiming it "lets the
+    /// database decide the day" (Step-7a cycle 3, external lens). Only a cast to <c>date</c> makes it
+    /// a day. The same reasoning added the whitespace-tolerant and <c>CAST(… AS date)</c> spellings:
+    /// those are ordinary equivalents a revert would plausibly use, not exotic evasions.</para>
+    /// </summary>
     private static readonly Regex DatabaseDecidedDay = new(
-        @"\bCURRENT_DATE\b|\bnow\(\)::date\b|\bLOCALTIMESTAMP\b",
+        @"\bCURRENT_DATE\b"
+        + @"|\b(?:now\s*\(\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s*::\s*date\b"
+        + @"|\bCAST\s*\(\s*(?:now\s*\(\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s+AS\s+date\s*\)"
+        + @"|\bdate_trunc\s*\(\s*'day'\s*,\s*now\s*\(\)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     [Fact]
@@ -170,68 +196,85 @@ public sealed class BusinessDateCalendarGuardTests
 
         while (i < source.Length)
         {
-            // ── raw string: """…""" — the fence can be ANY run of 3+ quotes, and the closer must be
-            //    a run of the SAME length. Assuming 3 was a real hole (Step-7a cycle 3): for a
-            //    4-quote fence, an inner 3-quote run is legal CONTENT, so a 3-assuming scanner closed
-            //    early, then treated the real closer as a new opener and swallowed the rest of the
-            //    file. Zero 4-quote fences exist in src/ today; the hole is closed before one does.
-            if (Match(source, i, "\"\"\""))
+            // ── STRING LITERALS, with optional $ / @ prefixes in either legal order ──
+            //
+            // ★ AN INTERPOLATED STRING IS NEVER STRIPPED. Its holes contain EXECUTABLE C#, so
+            //   stripping `$@"Day: {DateTime.UtcNow.Date}"` deletes a genuine offender — a FALSE
+            //   PASS, and the third disguise of this guard's recurring defect (Step-7a cycle 3,
+            //   external lens). Properly lexing hole-vs-text needs real interpolation tracking;
+            //   keeping the whole construct is the conservative alternative, and it errs the right
+            //   way: the literal TEXT is then scanned too, which can only raise a loud false
+            //   positive, never hide a real one. That is the same trade the rest of this scanner
+            //   makes, stated rather than stumbled into.
             {
-                var fence = 0;
-                while (i + fence < source.Length && source[i + fence] == '"') fence++;
-
-                var close = source.Length;
-                for (var k = i + fence; k + fence <= source.Length; k++)
+                var p = i;
+                var interpolated = false;
+                var verbatim = false;
+                while (p < source.Length && (source[p] == '$' || source[p] == '@'))
                 {
-                    if (source[k] != '"') continue;
-                    var run = 0;
-                    while (k + run < source.Length && source[k + run] == '"') run++;
-                    if (run == fence) { close = k + fence; break; }
-                    k += run - 1;
+                    if (source[p] == '$') interpolated = true; else verbatim = true;
+                    p++;
                 }
 
-                Emit(output, source, i, close, keep: !stripStringLiterals);
-                i = close;
-                continue;
-            }
-
-            // ── verbatim string: @"…" or @$"…" / $@"…" — both prefix orders are legal C# ──
-            if (Match(source, i, "@\"") || Match(source, i, "@$\"") || Match(source, i, "$@\""))
-            {
-                // Skip the prefix chars ('@', and '$' when present) then the opening quote.
-                var j = i;
-                while (j < source.Length && (source[j] == '@' || source[j] == '$')) j++;
-                j++; // the opening quote
-                while (j < source.Length)
+                if (p < source.Length && source[p] == '"')
                 {
-                    if (source[j] == '"')
+                    var keep = !stripStringLiterals || interpolated;
+                    int close;
+
+                    if (Match(source, p, "\"\"\""))
                     {
-                        if (Match(source, j, "\"\"")) { j += 2; continue; }
-                        j++; break;
-                    }
-                    j++;
-                }
-                Emit(output, source, i, j, keep: !stripStringLiterals);
-                i = j;
-                continue;
-            }
+                        // Raw string. The fence is ANY run of 3+ quotes and the closer must be a run
+                        // of the SAME length — assuming 3 meant a 4-quote fence closed early on its
+                        // own legal content, after which the real closer opened a phantom string
+                        // that swallowed the rest of the file.
+                        var fence = 0;
+                        while (p + fence < source.Length && source[p + fence] == '"') fence++;
 
-            // ── ordinary string: " … " with backslash escapes; never spans a newline ──
-            if (source[i] == '"')
-            {
-                var j = i + 1;
-                while (j < source.Length && source[j] != '\n')
-                {
-                    // Math.Min: a file ending in a backslash escape with no closing quote would
-                    // otherwise overshoot Length and throw on the slice below — uncompilable input,
-                    // but a guard should report, not crash (Step-7a cycle 3, NOTE 2).
-                    if (source[j] == '\\') { j = Math.Min(j + 2, source.Length); continue; }
-                    if (source[j] == '"') { j++; break; }
-                    j++;
+                        close = source.Length;
+                        for (var k = p + fence; k + fence <= source.Length; k++)
+                        {
+                            if (source[k] != '"') continue;
+                            var run = 0;
+                            while (k + run < source.Length && source[k + run] == '"') run++;
+                            if (run == fence) { close = k + fence; break; }
+                            k += run - 1;
+                        }
+                    }
+                    else if (verbatim)
+                    {
+                        // @"…" — a doubled quote is an escaped quote, and the literal may span lines.
+                        var j = p + 1;
+                        while (j < source.Length)
+                        {
+                            if (source[j] == '"')
+                            {
+                                if (Match(source, j, "\"\"")) { j += 2; continue; }
+                                j++; break;
+                            }
+                            j++;
+                        }
+                        close = j;
+                    }
+                    else
+                    {
+                        // Ordinary "…" — backslash escapes, and it cannot span a newline.
+                        var j = p + 1;
+                        while (j < source.Length && source[j] != '\n')
+                        {
+                            // Math.Min: a file ending in a backslash escape with no closing quote
+                            // would otherwise overshoot Length and throw on the slice below —
+                            // uncompilable input, but a guard should report, not crash.
+                            if (source[j] == '\\') { j = Math.Min(j + 2, source.Length); continue; }
+                            if (source[j] == '"') { j++; break; }
+                            j++;
+                        }
+                        close = j;
+                    }
+
+                    Emit(output, source, i, close, keep);
+                    i = close;
+                    continue;
                 }
-                Emit(output, source, i, j, keep: !stripStringLiterals);
-                i = j;
-                continue;
             }
 
             // ── char literal: '…' — skipped so a quote inside it cannot open a string.
