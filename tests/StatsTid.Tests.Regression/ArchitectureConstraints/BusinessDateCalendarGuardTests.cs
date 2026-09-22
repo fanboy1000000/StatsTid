@@ -75,7 +75,14 @@ public sealed class BusinessDateCalendarGuardTests
         // cover exactly that spelling — the guard contradicting its own documentation again.
         + @"|DateTimeOffset\s*\.\s*(?:UtcNow|Now)\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b"
         + @"|DateTime\s*\.\s*(?:UtcNow|Now)\s*\.\s*Date\b"
-        + @"|\bDateTime\s*\.\s*Today\b",
+        + @"|\bDateTime\s*\.\s*Today\b"
+        // The two most plausible INDIRECTION spellings, where the clock is hoisted into a local
+        // first: `var now = tp.GetUtcNow(); DateOnly.FromDateTime(now.UtcDateTime)` and `now.Date`.
+        // A text guard cannot follow a variable in general — that limit is stated in the class doc —
+        // but these two shapes are what a revert would actually look like, and both match nothing in
+        // `src/` today (verified: zero `var now = ….GetUtcNow()` hoists exist).
+        + @"|DateOnly\s*\.\s*FromDateTime\s*\([^;)]*\.\s*UtcDateTime\b"
+        + @"|\bnow\s*\.\s*(?:(?:Utc|Local)?DateTime\s*\.\s*)?Date\b",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
     /// <summary>
@@ -91,12 +98,18 @@ public sealed class BusinessDateCalendarGuardTests
     /// </summary>
     private static readonly Regex DatabaseDecidedDay = new(
         @"\bCURRENT_DATE\b"
-        + @"|\b(?:now\s*\(\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s*::\s*date\b"
-        + @"|\bCAST\s*\(\s*(?:now\s*\(\s*\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s+AS\s+date\s*\)",
-        // `date_trunc('day', now())` was listed here and removed: it returns a TIMESTAMP truncated
-        // to midnight, not a date, so matching it would have refused legitimate SQL while claiming
-        // the database was picking a day — the same false-fail shape as the bare LOCALTIMESTAMP one
-        // cycle earlier. If it is ever cast to date, the `::date` alternative above catches it.
+        // `\(\s*\)` here too — the inner-space fix had been applied to the CAST alternative only,
+        // so `NOW( )::date` slipped through one line above where `CAST(NOW( ) AS date)` did not.
+        + @"|\b(?:now\s*\(\s*\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s*::\s*date\b"
+        + @"|\bCAST\s*\(\s*(?:now\s*\(\s*\)|CURRENT_TIMESTAMP|LOCALTIMESTAMP)\s+AS\s+date\s*\)"
+        // `date_trunc('day', now())` alone is NOT matched: it returns a TIMESTAMP truncated to
+        // midnight, not a date, so flagging it would refuse legitimate SQL — the same false-fail
+        // shape as the bare LOCALTIMESTAMP one cycle earlier. Cast to date, it IS the database
+        // picking a day, and needs its own alternative: the `::date` rule above requires `now()`
+        // immediately before the cast, so it does NOT reach through the date_trunc call. The comment
+        // that previously stood here claimed it did — *a comment asserting a fact about the code,
+        // inside the guard, in the sprint that made that its recurring lesson.*
+        + @"|\bdate_trunc\s*\(\s*'day'\s*,\s*now\s*\(\s*\)\s*\)\s*::\s*date\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     [Fact]
@@ -225,7 +238,11 @@ public sealed class BusinessDateCalendarGuardTests
                     var keep = !stripStringLiterals || interpolated;
                     int close;
 
-                    if (Match(source, p, "\"\"\""))
+                    // `!verbatim` first: C# never allows `@` on a raw literal, so `@"""abc"` is a
+                    // VERBATIM string whose content starts with an escaped quote. Reading it as a
+                    // 3-fence found no closer and swallowed the rest of the file — the same shape as
+                    // the 4-quote fence closed in cycle 3, one prefix along.
+                    if (!verbatim && Match(source, p, "\"\"\""))
                     {
                         // Raw string. The fence is ANY run of 3+ quotes and the closer must be a run
                         // of the SAME length — assuming 3 meant a 4-quote fence closed early on its

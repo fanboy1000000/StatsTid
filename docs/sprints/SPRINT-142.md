@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | **Sprint** | 142 |
-| **Status** | **COMPLETE** — 13 tasks, all DONE; Step 7a ran **three cycles** (cycles 2 and 3 each found a defect in the Orchestrator's own guard); CI green |
+| **Status** | **COMPLETE** — 13 tasks, all DONE; Step 7a ran **four passes** (cycles 2, 3 and the final pass each found a defect in the Orchestrator's own guard; the last also caught CI red on a pre-existing S127 race); CI green |
 | **Start Date** | 2026-09-16 |
 | **End Date** | 2026-09-17 |
 | **Orchestrator Approved** | **APPROVED** — Step 0b ran **two cycles, both lenses**. Cycle 1: Reviewer CHANGES-REQUIRED (nine of 64 rows unassigned; the OQ-4 deletes unassigned; **the sprint-wide carve-out itself wrong**; four coupled pairs split; predecessors wrong both ways) · Codex 2 BLOCKER (test ownership unprovable; validator↔picker "ordered" ≠ atomic). Cycle 2: Reviewer verified 7 of 9 fixes APPLIED, 2 PARTIAL — **B1: the coverage enumeration still contradicted the picker fix it was meant to certify** — plus W1–W6 absorbed (all-or-nothing MOVE tasks; helper ownership; rows 48/49 are dead code → deleted under OQ-4; two files need the `TimeProvider` seam; a per-task *failing* pin; `docs/` split out of an agent task per CLAUDE.md). Refinement rev 9 + OQ-10, OQ-11. **12 tasks, 64/64 rows assigned exactly once** |
@@ -993,8 +993,9 @@ criterion, so this was record-accuracy plus durability, not a defect — **but n
 reverted to the UTC day.**
 
 **Closed with a repo-wide source-text guard** (`BusinessDateCalendarGuardTests`) that scans all of `src/` for the retired
-day-derivation shapes *and* for database-decided days — **pinning all 64 rows at once for the cost of one non-Docker test
-rather than twenty container boots.**
+day-derivation shapes *and* for database-decided days — **covering all 64 rows for the cost of one non-Docker test rather than twenty container boots** — a NET that
+catches a revert, not a proof of correctness (the "pins all 64" phrasing that stood here was the overstatement the
+guard's own doc later had to retract).
 
 **The guard as first written was half vacuous, and cycles 2 and 3 are the story of fixing it.** See below; the description
 that stood here originally — "comments and string literals are stripped before matching" — was true of both halves and was
@@ -1045,6 +1046,58 @@ is worse.**
 
 **Codex could not run cycle 3** — its policy layer rejected every command, including read-only `git`, so it inspected
 nothing and correctly declined to assert a verdict. Recorded as a tooling outage, **not as a pass**.
+
+### The external lens outage — diagnosed properly only after the owner challenged the first answer
+
+I attributed it to endpoint-security policy from the error text alone, and the owner asked why the same method had worked
+hours earlier. It had. **The failing run used the byte-identical invocation, the same CLI version, the same model and the
+same `sandbox: read-only` setting as the two that worked.** Ruled out in order: authentication (logged in, model answering),
+my own Bash sandbox (disabling it changed nothing; PowerShell spawns fine), and execpolicy `.rules` files (none exist,
+`--ignore-rules` didn't help). **It was Codex's own sandbox mechanism** — it creates a restricted Windows process for
+`read-only` mode, that facility stopped working overnight, and Codex fails *closed*. A thirty-second probe with
+`--dangerously-bypass-approvals-and-sandbox` proved it; I should have run that before offering a theory, and the wrong
+theory cost the owner a pointless reinstall. **Owner authorised the bypass flag standing** — their environment is itself
+sandboxed, which is precisely the condition the flag's own help text names.
+
+**The interim workaround is worth keeping:** with the shell blocked but the model working, **inlining the source into the
+prompt produced a genuine review** — and it found a false pass the internal lens's compiler comparison *structurally could
+not*, because both the scanner and Roslyn treat an interpolated string as one token, so comparing them can never ask
+whether code is hiding inside it.
+
+### Step 7a final pass — both lenses on the close commit, and the guard finally holds
+
+**The external lens (shell restored) found my interpolation fix incomplete.** Keeping interpolated strings whole was
+necessary but not sufficient — the **end boundary** was still wrong: in `$"{string.Join(",", xs)} {DateTime.UtcNow.Date}"`
+the quote inside the *first* hole closed the literal early, and the remainder re-parsed as a second, non-interpolated
+string, **which is stripped — hiding the offender.** The same hole, one level down. Fixed with brace-depth tracking that
+skips nested literals inside holes.
+
+**★ My first attempt at that fix did nothing at all**, and only the RED proof revealed it: a convoluted condition meant the
+depth counter never incremented, so the injected case still passed. *That is the second time this sprint the RED proof
+caught me claiming a fix that was not one* — the alternative was reading the code, agreeing with myself, and shipping it.
+
+**The internal lens then verified the result against Roslyn on a clean `git archive` export: 0 token differences across all
+504 files for both facts**, 10 revert spellings firing, 41 synthetic lexical cases passing. It also **independently
+reproduced the external lens's false pass** at the previous commit, finding 9 real files where the scanner lost tokens the
+compiler kept.
+
+**Three more absorbed:** a verbatim string *beginning* with an escaped quote (`@"""abc"`) was misread as a raw fence and
+swallowed the rest of the file; `NOW( )::date` slipped through because the inner-space fix had been applied to only one of
+two alternatives; and the comment justifying the `date_trunc` removal **claimed the `::date` rule would catch a cast
+version, which it does not** — *a comment asserting a fact about the code, inside the guard, in the sprint that made that
+its recurring lesson.* Both the alternative and the comment are now correct. Two indirection spellings were added too.
+
+### ★ CI was RED on the close commit — a latent race, not a flake, and not this sprint's
+
+The final review refused to certify a close on a red sha, and it was right. Run `35714505921` failed in DemoSeed with
+*"Operations that change non-concurrent collections must have exclusive access"* — `DanishHolidays` cached into a plain
+`Dictionary` from a `static` field with no lock, **untouched since S127**, first surfacing in fifteen runs because xunit
+happened to schedule two classes into the generator at once.
+
+**Nothing in S142 touched that file.** The tempting move was to re-run CI and watch it go green, which it very likely would
+have — *leaving the next sprint to rediscover it at a worse moment.* Fixed at the source with a `ConcurrentDictionary` and
+`GetOrAdd`: the computation is pure and idempotent, so two threads racing to populate one year is harmless; only the write
+needed protecting.
 
 ### Step 7a — external lens (Codex): NO BLOCKERS
 

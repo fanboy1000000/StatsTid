@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 namespace StatsTid.Tools.DemoSeed.Generation;
 
 /// <summary>
@@ -25,18 +26,36 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 /// </summary>
 internal static class DanishHolidays
 {
-    private static readonly Dictionary<int, HashSet<DateOnly>> Cache = new();
+    /// <summary>
+    /// Year → that year's holidays. <b>Concurrent by necessity.</b>
+    ///
+    /// <para>This was a plain <see cref="Dictionary{TKey,TValue}"/> from S127 until S142's close,
+    /// when CI failed with <i>"Operations that change non-concurrent collections must have exclusive
+    /// access"</i> — its first appearance in fifteen runs. Nothing about the sprint touched this
+    /// file; xunit simply happened to schedule two test classes that both reach the generator at the
+    /// same moment, and an unsynchronised write into a shared static dictionary can corrupt its
+    /// internal buckets rather than merely losing an entry.</para>
+    ///
+    /// <para>The computation is pure and idempotent — the same year always yields the same set — so
+    /// two threads racing to populate one key is harmless; only the <i>write</i> needed protecting.
+    /// <see cref="ConcurrentDictionary{TKey,TValue}"/> is the smallest fix that makes that true, and
+    /// `GetOrAdd` keeps the read path allocation-free on the hit that matters.</para>
+    ///
+    /// <para><b>A latent race is not a flake.</b> It was tempting to re-run CI and watch it go green,
+    /// which it very likely would have — leaving the next sprint to rediscover this at a worse
+    /// moment.</para>
+    /// </summary>
+    private static readonly ConcurrentDictionary<int, HashSet<DateOnly>> Cache = new();
 
     /// <summary>Every Danish public holiday in <paramref name="year"/> (weekend-falling ones
     /// included — the gate filters weekends separately, so membership here is the only thing that
     /// matters).</summary>
-    internal static HashSet<DateOnly> For(int year)
-    {
-        if (Cache.TryGetValue(year, out var cached))
-            return cached;
+    internal static HashSet<DateOnly> For(int year) => Cache.GetOrAdd(year, Build);
 
+    private static HashSet<DateOnly> Build(int year)
+    {
         var easter = EasterSunday(year);
-        var set = new HashSet<DateOnly>
+        return new HashSet<DateOnly>
         {
             new(year, 1, 1),            // Nytaarsdag
             easter.AddDays(-3),         // Skaertorsdag
@@ -50,8 +69,6 @@ internal static class DanishHolidays
             new(year, 12, 25),          // Juledag
             new(year, 12, 26),          // 2. Juledag
         };
-        Cache[year] = set;
-        return set;
     }
 
     /// <summary>True when <paramref name="date"/> is neither a weekend nor a public holiday — i.e.
