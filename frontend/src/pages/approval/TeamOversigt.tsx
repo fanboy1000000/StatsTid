@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect, Fragment, type ReactNode } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
+import { useCalendarToday } from '../../contexts/CalendarContext'
 import { formatMonthLabel } from '../../lib/locale'
 import { apiClient } from '../../lib/api'
 import { Dialog } from '../../components/ui/Dialog'
@@ -378,12 +379,24 @@ function TeamRowDetail({
   )
 }
 
+/**
+ * S143 / TASK-14304 — parse the server-confirmed day (`useCalendarToday()`, `yyyy-MM-dd`) into
+ * year + 1-based month, for the INITIAL year/month seed only. Owner ruling OQ-1a/1b: the SERVER
+ * is the authority on "today," not the browser clock — see `contexts/CalendarContext.tsx`.
+ */
+function parseTodayYearMonth(today: string): { year: number; month: number } {
+  const [y, m] = today.split('-')
+  return { year: Number(y), month: Number(m) }
+}
+
 export function TeamOversigt() {
   const { orgId } = useAuth()
+  const calendarToday = useCalendarToday()
 
-  const now = new Date()
-  const [year, setYear] = useState(now.getFullYear())
-  const [month, setMonth] = useState(now.getMonth() + 1)
+  // The initial year/month this view opens on comes from the server-confirmed day, not
+  // `new Date()` — a wrong device clock/zone must never seed the wrong month here.
+  const [year, setYear] = useState(() => parseTodayYearMonth(calendarToday).year)
+  const [month, setMonth] = useState(() => parseTodayYearMonth(calendarToday).month)
 
   const { rows, loading, error, refetch } = useTeamOverview(year, month)
 

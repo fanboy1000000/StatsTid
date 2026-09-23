@@ -10,11 +10,13 @@
 //
 // PAT-007: the useAuth mock returns a referentially-stable object so the page's
 // memoised derivations don't thrash. fetch is mocked at the network boundary.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, afterAll } from 'vitest'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { TeamOversigt } from '../TeamOversigt'
+import { renderWithCalendar } from '../../../test/renderWithCalendar'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../../lib/__tests__/testTimeZone'
 // QUAL-121: the fixtures below are TYPED against the SERVED contract — `TeamOverviewRow`
 // is the generated spec record (components['schemas']['…TeamOverviewEmployeeRow']), the exact
 // shape `openapi-typescript` derives from docs/api/openapi.json. Binding the fixture factory to
@@ -142,8 +144,13 @@ function mockOverview(rows: TeamOverviewRow[] = team) {
   })
 }
 
-function renderPage() {
-  return render(
+// S143 / TASK-14304 — the page now seeds its initial year/month from the server-confirmed day
+// (`useCalendarToday()`) rather than the browser clock, so every render needs the calendar
+// context. `today` is a hand-written literal, arbitrary for tests that don't care what month the
+// page opens on — the dedicated "server-today authority" block below is the one that cares.
+function renderPage(today = '2026-03-15') {
+  return renderWithCalendar(
+    today,
     <MemoryRouter>
       <TeamOversigt />
     </MemoryRouter>,
@@ -805,7 +812,8 @@ describe('TeamOversigt — S116 typed-switch wire pins (approve/reject/reopen)',
 describe('TeamOversigt — nav redirect', () => {
   it('godkend/godkendelser redirects to godkend/oversigt (renders Teamoversigt)', async () => {
     mockOverview([team[0]])
-    render(
+    renderWithCalendar(
+      '2026-03-15',
       <MemoryRouter initialEntries={['/godkend/godkendelser']}>
         <Routes>
           <Route path="/godkend/oversigt" element={<TeamOversigt />} />
@@ -815,5 +823,74 @@ describe('TeamOversigt — nav redirect', () => {
     )
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'Teamoversigt' })).toBeInTheDocument())
+  })
+})
+
+// ── Server-today authority (S143 / TASK-14304) ───────────────────────────────
+// This page used to seed the year/month it opens on from `new Date()` — the DEVICE's clock. Owner
+// ruling OQ-1a/1b made the SERVER the authority instead, delivered once at app start and carried
+// by `useCalendarToday()` (`contexts/CalendarContext.tsx`). The two facts below prove the
+// migration: they force the device onto a time zone AND an instant that disagree with the
+// confirmed day on the calendar year, so the two clocks are provably in conflict — not
+// coincidentally aligned, which is exactly the blindness a Danish developer host has by default
+// (see `lib/__tests__/testTimeZone.ts`) — and then assert the page's FIRST request, and its
+// visible month label, both carry the SERVER's year+month, never the device's.
+describe('TeamOversigt — server-today authority (S143 / TASK-14304)', () => {
+  let restoreTz: string | undefined
+
+  beforeAll(() => {
+    // America/New_York is UTC-05:00 in January (EST) — 6 hours behind Copenhagen (CET,
+    // UTC+01:00), enough to put the two on different CALENDAR YEARS at the instant below.
+    restoreTz = forceTestTimeZone('America/New_York')
+  })
+
+  afterAll(() => {
+    restoreTestTimeZone(restoreTz)
+  })
+
+  beforeEach(() => {
+    // `toFake: ['Date']` only — `setTimeout`/`setInterval` stay REAL, so the `waitFor` below keeps
+    // working normally; only `new Date()` reads the pinned instant (mirrors
+    // `useEditPerson.test.tsx`'s S142 regression-guard block, the first site this exact
+    // fake-timers shape shipped for).
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // 2026-01-01 03:00 UTC. In New York (EST, UTC-05:00) it is still 2025-12-31 22:00 — the
+    // DEVICE's December, year 2025. In Copenhagen (CET, UTC+01:00) it is already 2026-01-01
+    // 04:00 — the AUTHORITY's January, year 2026.
+    vi.setSystemTime(new Date('2026-01-01T03:00:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // THE GUARD ON THE GUARD: if the zone forcing above ever stopped taking effect, this fact would
+  // not fail — it would quietly start passing again with the device and Copenhagen coincidentally
+  // agreeing, which is the worst outcome available. Literal values, never derived from the code
+  // under test.
+  it('runs on a device date behind the authority date, which is what lets the fact below fail on a regression', () => {
+    const pinned = new Date('2026-01-01T03:00:00Z')
+    expect(pinned.getFullYear()).toBe(2025)
+    expect(pinned.getMonth()).toBe(11) // December, 0-based
+    expect(pinned.getDate()).toBe(31)
+  })
+
+  it('opens on the SERVER month (Januar 2026), not the device month (December 2025), when the two disagree', async () => {
+    mockOverview()
+    renderPage('2026-01-01')
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+
+    // The visible month stepper reads the authority's month — LITERAL, not a re-derivation.
+    expect(screen.getByTestId('month-label')).toHaveTextContent('Januar 2026')
+
+    // And the request the page actually sent carries the authority's year+month, not the
+    // device's (which would have been year=2025&month=12 pre-migration).
+    const call = mockFetch.mock.calls.find(
+      (c: unknown[]) =>
+        typeof c[0] === 'string' && (c[0] as string).includes('/api/approval/team-overview'),
+    )
+    const url = call?.[0] as string
+    expect(url).toContain('year=2026')
+    expect(url).toContain('month=1')
   })
 })

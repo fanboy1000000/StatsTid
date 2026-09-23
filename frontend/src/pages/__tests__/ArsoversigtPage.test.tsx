@@ -5,10 +5,12 @@
 //
 // CRITICAL: every past/current/future + "Nu" classification is asserted against
 // the MOCKED server `today` — never the client clock (server-today authority).
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, afterAll } from 'vitest'
+import { screen, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { YearOverview } from '../../hooks/useYearOverview'
+import { renderWithCalendar } from '../../test/renderWithCalendar'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../lib/__tests__/testTimeZone'
 
 // ── useAuth: a fixed logged-in employee ──
 vi.mock('../../contexts/AuthContext', () => ({
@@ -139,8 +141,13 @@ function rowCells(label: string, occurrence = 0): HTMLElement[] {
   return within(tr).getAllByRole('cell')
 }
 
-function renderPage() {
-  return render(
+// S143 / TASK-14304 — the page now seeds its initial year from the server-confirmed day
+// (`useCalendarToday()`) rather than the browser clock, so every render needs the calendar
+// context. `today` is a hand-written literal, arbitrary for tests that don't care what year the
+// page opens on — the dedicated "server-today authority" block below is the one that cares.
+function renderPage(today = '2026-03-15') {
+  return renderWithCalendar(
+    today,
     <MemoryRouter>
       <ArsoversigtPage />
     </MemoryRouter>,
@@ -482,5 +489,65 @@ describe('ArsoversigtPage — states', () => {
     renderPage()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.queryByText(/Kunne ikke indlæse 20/)).not.toBeInTheDocument()
+  })
+})
+
+// ── Server-today authority (S143 / TASK-14304) ───────────────────────────────
+// This page's YEAR SWITCHER already read the server `today` (`data.today`, since S65) to classify
+// past/current/future months — that part is correct and untouched. What it still got from the
+// DEVICE clock was the INITIAL year to open on, seeded via `new Date().getFullYear()`. Owner
+// ruling OQ-1a/1b made the server the authority there too, via `useCalendarToday()`
+// (`contexts/CalendarContext.tsx`) — a bootstrap read, because this screen must ask the server
+// for A year before it can answer "what year is it." The two facts below force the device onto a
+// time zone AND instant that disagree with the confirmed day on the calendar year, so the two
+// clocks are provably in conflict, and assert the FIRST call into `useYearOverview` carries the
+// server's year, never the device's.
+describe('ArsoversigtPage — server-today authority, initial year seed (S143 / TASK-14304)', () => {
+  let restoreTz: string | undefined
+
+  beforeAll(() => {
+    // America/New_York is UTC-05:00 in January (EST) — 6 hours behind Copenhagen (CET,
+    // UTC+01:00), enough to put the two on different CALENDAR YEARS at the instant below.
+    restoreTz = forceTestTimeZone('America/New_York')
+  })
+
+  afterAll(() => {
+    restoreTestTimeZone(restoreTz)
+  })
+
+  beforeEach(() => {
+    // `toFake: ['Date']` only, mirroring `useEditPerson.test.tsx`'s S142 regression-guard block —
+    // only `new Date()` reads the pinned instant.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // 2026-01-01 03:00 UTC. In New York (EST, UTC-05:00) it is still 2025-12-31 22:00 — the
+    // DEVICE's December, year 2025. In Copenhagen (CET, UTC+01:00) it is already 2026-01-01
+    // 04:00 — the AUTHORITY's January, year 2026.
+    vi.setSystemTime(new Date('2026-01-01T03:00:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // THE GUARD ON THE GUARD: if the zone forcing above ever stopped taking effect, this fact would
+  // not fail — it would quietly start passing again with the device and Copenhagen coincidentally
+  // agreeing, which is the worst outcome available. Literal values, never derived from the code
+  // under test.
+  it('runs on a device date behind the authority date, which is what lets the fact below fail on a regression', () => {
+    const pinned = new Date('2026-01-01T03:00:00Z')
+    expect(pinned.getFullYear()).toBe(2025)
+    expect(pinned.getMonth()).toBe(11) // December, 0-based
+    expect(pinned.getDate()).toBe(31)
+  })
+
+  it('seeds the initial year from the SERVER day (2026), not the device day (2025), when the two disagree', () => {
+    mockUseYearOverview.mockReturnValue(overviewHook(makeOverview({ year: 2026, today: '2026-01-01' })))
+    renderPage('2026-01-01')
+    // The FIRST invocation of useYearOverview(employeeId, year) is what the seed produced —
+    // LITERAL 2026, not a re-derivation, and NOT 2025 (what `new Date().getFullYear()` would have
+    // read on this device at this instant, pre-migration).
+    const firstCall = mockUseYearOverview.mock.calls[0]
+    expect(firstCall?.[0]).toBe('emp001')
+    expect(firstCall?.[1]).toBe(2026)
   })
 })
