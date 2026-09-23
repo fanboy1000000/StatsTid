@@ -22,6 +22,22 @@ import { runNonce, targetMonth, nonBoundaryWeekday, nonceWeekdayIndex } from './
  * The save-side lock is `ApprovalPeriodSaveLock.IsPeriodLockedForSave` (lifted out of
  * SkemaEndpoints in S128/TASK-12803), located by name: the line number this comment
  * used to carry (`:604`) had drifted onto the route registration.
+ *
+ * S143 / TASK-14305 — this spec used to reach its target month by CLICKING "Næste"
+ * `forwardClicks` times from wherever the page opened, on the assumption "the app opens
+ * on the month I computed `forwardClicks` from." TASK-14303 moved SkemaPage's own
+ * "today" from the browser's UTC clock to the server-confirmed Europe/Copenhagen
+ * business day, which broke that assumption near a month boundary: the click count was
+ * computed for one calendar's current month while the page had already opened on the
+ * other's. The failure was an integer, not a date — no amount of avoiding boundary DAYS
+ * (R4, above) would have caught it, and it would have read as an ordinary intermittent
+ * e2e flake near month-end, not a bug.
+ *
+ * The fix removes the click-counting rather than re-basing it: SkemaPage already accepts
+ * `?year=&month=` on the URL (the Årsoversigt drill-in reads it the same way), so this
+ * spec now navigates straight to the target month by URL, exactly like approval.spec.ts's
+ * `openSkemaMonth`. That makes the journey correct regardless of which calendar the page
+ * would otherwise have opened on — there is no "current month" left to disagree about.
  */
 
 const ABSENCE_LABEL = 'Sygedag' // SICK_DAY — the cell aria-label is `${label} dag ${dayOfMonth}`
@@ -46,14 +62,33 @@ const HOURS_DISPLAY = '3,7'
 // slots, which this spec keeps to itself. See approval.spec.ts's MONTH_WINDOW_START.
 const SKEMA_MONTH_OFFSET = 0
 
-/** Drive the SkemaPage month-nav (internal year/month state, no URL param) FORWARD
- *  `clicks` whole months from the current UTC month onto the target. Each click is
- *  followed by a web-first assertion on the month title so navigation can't race. */
-async function navigateSkemaToMonth(page: Page, clicks: number, monthLabel: string): Promise<void> {
-  const next = page.getByRole('button', { name: /Næste/ })
-  for (let i = 0; i < clicks; i++) {
-    await next.click()
-  }
+/** Wait for the Skema month GET for exactly this (year, month). `useSkema` keeps the
+ *  PREVIOUS month's data on screen while the next one is in flight, so probing the
+ *  page without this wait can read the wrong month — mirrors approval.spec.ts's
+ *  `skemaMonthResponse`. */
+function skemaMonthResponse(page: Page, year: number, month: number) {
+  return page.waitForResponse((resp) => {
+    const url = new URL(resp.url())
+    return (
+      url.pathname === '/api/skema/emp001/month' &&
+      url.searchParams.get('year') === String(year) &&
+      url.searchParams.get('month') === String(month)
+    )
+  })
+}
+
+/**
+ * Open the Skema page directly on (year, month) via the `?year=&month=` URL param —
+ * no click-counting, no assumption about which calendar the page would otherwise open
+ * on (S143 / TASK-14305). Both waits are load-bearing: the response wait alone would
+ * not prove the render committed (a resolved fetch is not yet a painted month), and a
+ * fresh `page.goto` renders only the "Indlæser skema..." spinner until the data lands,
+ * so a visible heading proves this exact month is what's on screen.
+ */
+async function openSkemaMonth(page: Page, year: number, month: number, monthLabel: string): Promise<void> {
+  const loaded = skemaMonthResponse(page, year, month)
+  await page.goto(`/tid/registrering?year=${year}&month=${month}`)
+  await loaded
   await expect(page.getByRole('heading', { name: monthLabel })).toBeVisible()
 }
 
@@ -61,7 +96,7 @@ test('emp001 registers a Sygedag absence on a non-boundary weekday and it persis
   page,
 }) => {
   const nonce = runNonce()
-  const { year, month, forwardClicks } = targetMonth(nonce, SKEMA_MONTH_OFFSET)
+  const { year, month } = targetMonth(nonce, SKEMA_MONTH_OFFSET)
   // Nonce-rotated mid-month weekday: re-runs land on a fresh (month, day) slot, so
   // even when the bounded month window recycles, this never reuses a day a prior run
   // already wrote (idempotent registration would still pass, but this keeps it clean).
@@ -81,8 +116,9 @@ test('emp001 registers a Sygedag absence on a non-boundary weekday and it persis
   // Land on the registration page (the index redirect already put us there).
   await expect(page).toHaveURL(/\/tid\/registrering$/)
 
-  // Navigate to the unique target month.
-  await navigateSkemaToMonth(page, forwardClicks, monthLabel)
+  // Open the unique target month directly by URL (no click-counting — see the S143
+  // header note above).
+  await openSkemaMonth(page, year, month, monthLabel)
 
   // The "Ferie og fravær" disclosure band defaults open; the Sygedag row + its
   // per-day inputs are therefore present. Locate this day's SICK_DAY cell.
@@ -114,13 +150,16 @@ test('emp001 registers a Sygedag absence on a non-boundary weekday and it persis
   const saveResp = await savePromise
   expect(saveResp.status(), `skema save returned ${saveResp.status()}`).toBe(200)
 
-  // PERSISTENCE: a full page reload re-fetches the month from the server. Because
-  // SkemaPage initialises its month from "today", re-navigate to the target month
-  // and assert the cell still carries the registered value (server-truth, not the
-  // pre-reload in-memory state).
+  // PERSISTENCE: a full page reload re-fetches the month from the server. The address
+  // bar still carries the `?year=&month=` from `openSkemaMonth` above, so the reload
+  // re-mounts SkemaPage directly onto the SAME target month — no re-navigation needed
+  // (unlike the click-counting this replaced, which had to re-walk forward because a
+  // reload always restarted from whatever "today" the page opened on). Assert the cell
+  // still carries the registered value: server-truth, not the pre-reload in-memory state.
+  const reloaded = skemaMonthResponse(page, year, month)
   await page.reload()
-  await expect(page).toHaveURL(/\/tid\/registrering$/)
-  await navigateSkemaToMonth(page, forwardClicks, monthLabel)
+  await reloaded
+  await expect(page.getByRole('heading', { name: monthLabel })).toBeVisible()
 
   const reloadedCell = page.getByRole('textbox', { name: cellLabel })
   await expect(reloadedCell).toBeVisible()

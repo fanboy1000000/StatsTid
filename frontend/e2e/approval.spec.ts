@@ -1,6 +1,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { login } from './helpers/auth'
 import { addMonths, monthWeekdays, runNonce } from './helpers/dates'
+import { copenhagenToday } from '../src/lib/copenhagenDate'
 
 /**
  * S127 / TASK-12709 — the approval journey, REBUILT on a real month.
@@ -115,11 +116,19 @@ const DAY_HOURS_DA = '7,4'
 const REJECTION_REASON = 'E2E afvisning — hele måneden skal gennemgås igen'
 
 /**
- * This spec's forward month window, in whole months from the current UTC month.
- * DISJOINT from helpers/dates' `targetMonth` slots [1, 18] — see the header note on
- * the parallel skema-registration journey. The nonce picks a start inside
+ * This spec's forward month window, in whole months from the current Europe/Copenhagen
+ * month — the same calendar the app itself opens on (S143 / TASK-14305; see the
+ * `copenhagenToday()` note where the seed is computed below). DISJOINT from
+ * helpers/dates' `targetMonth` slots [1, 18] — see the header note on the parallel
+ * skema-registration journey. The nonce picks a start inside
  * [19, 19 + MONTH_WINDOW_SIZE); `findUnusedMonth` may then walk up to
  * MONTH_WALK_LIMIT months further out, which only ever moves further from 18.
+ *
+ * BOTH windows must share the SAME base calendar for the disjointness to hold: if this
+ * spec's seed and `targetMonth`'s base disagreed (one UTC, one Copenhagen) near a month
+ * boundary, Copenhagen's month could run one ahead of UTC's and the two windows would
+ * overlap at slot 19 — a contention bug masquerading as a flake. Both now derive from
+ * `copenhagenToday()`.
  */
 const MONTH_WINDOW_START = 19
 const MONTH_WINDOW_SIZE = 12
@@ -326,10 +335,16 @@ test('emp001 registers and allocates a whole month in Skema, sends it, and mgr03
   // The seed month: a nonce-selected slot inside THIS spec's window (see
   // MONTH_WINDOW_START). Computed here rather than via `targetMonth`, whose [1, 18]
   // window belongs to the parallel skema-registration journey.
-  const now = new Date()
+  //
+  // S143 / TASK-14305 — the base is the Europe/Copenhagen calendar day (`copenhagenToday()`),
+  // matching `targetMonth`'s base in helpers/dates.ts. It must match: this window's
+  // disjointness from `targetMonth`'s [1, 18] slots is a fixed 19-month gap, and that gap only
+  // stays a gap if both specs start counting from the same "current month" (see the
+  // MONTH_WINDOW_START doc comment above).
+  const today = copenhagenToday()
   const seed = addMonths(
-    now.getUTCFullYear(),
-    now.getUTCMonth() + 1,
+    Number(today.slice(0, 4)),
+    Number(today.slice(5, 7)),
     MONTH_WINDOW_START + (runNonce() % MONTH_WINDOW_SIZE),
   )
   const { year, month } = await findUnusedMonth(page, seed)
