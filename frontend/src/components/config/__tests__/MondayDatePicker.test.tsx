@@ -41,6 +41,29 @@ describe('MondayDatePicker', () => {
     expect(onChange).toHaveBeenCalledWith('2026-04-27')
   })
 
+  // S143 TASK-14306b (test-clock hygiene census) — DECLARED COVERAGE GAP, left as-is.
+  //
+  // The two tests below reject '9999-01-01' and accept '2020-01-15' under pastOrTodayOnly. Both
+  // dates sit so far from the real "today" (whatever day this suite happens to run on) that
+  // NEITHER test can tell a correctly-computed "today" apart from a badly wrong one — a
+  // regression that moved "today" by a day, a year, or onto the wrong side of the planet would
+  // still pass both, because a distant future/past date stays future/past regardless. There is
+  // nothing to fix IN these two tests: they are honest, correct smoke tests of the accept/reject
+  // branches, and pinning them to the real day-of-run would not make them more correct, only more
+  // fragile (see the "why literals, not copenhagenToday()" note at line ~116 below — the same
+  // trap applies here in reverse).
+  //
+  // The boundary case that WOULD discriminate a "today"-computation regression already exists in
+  // this same file: the 'Copenhagen "today" (S142)' describe block below (added by TASK-14201,
+  // ahead of this task) pins the clock with `vi.setSystemTime` and asserts, against LITERAL
+  // expected values, that the day exactly at "today" is accepted and the day right after it is
+  // refused — see 'accepts the Danish today even though the browser is still on yesterday' and
+  // 'still refuses the day AFTER the Danish today'. Adding a second, near-duplicate boundary case
+  // here — necessarily reaching for the same fake-timer machinery, since a real, unmocked "today"
+  // cannot be pinned to a literal without becoming flaky the next time this suite runs — would
+  // contort this file's plain smoke-test section for no additional protection: the regression net
+  // already exists, just lower in the file. So: option (a), documented here rather than silently
+  // left implicit.
   it('rejects a future date when pastOrTodayOnly is true', () => {
     const onChange = vi.fn()
     render(

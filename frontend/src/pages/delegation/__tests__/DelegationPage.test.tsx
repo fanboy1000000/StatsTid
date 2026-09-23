@@ -43,18 +43,20 @@ const activeStatus = {
   ],
 }
 
-// A return date guaranteed valid against the component's min={todayIso()}
-// constraint (DelegationPage.tsx:194). Computed relative to "today" so the test
-// never time-bombs on a date rollover (was hardcoded '2026-06-15', which jsdom
-// constraint-validation rejected once the wall-clock passed it → submit blocked).
-// S142 test-clock sweep: INERT — a +7-day margin against the component's min={todayIso()}
-// constraint; no one-day Copenhagen/UTC skew (whether or not todayIso() itself is ever
-// migrated to the Danish day) can close a seven-day gap.
-const validReturnDate = (() => {
-  const d = new Date()
-  d.setDate(d.getDate() + 7)
-  return d.toISOString().slice(0, 10)
-})()
+// A return date guaranteed valid against the component's min={todayIso()} constraint
+// (DelegationPage.tsx:216 — backed by copenhagenToday()). Originally computed as "today + 7
+// days" from a live new Date() so the test would never time-bomb on a date rollover (it had
+// been hardcoded to '2026-06-15', which jsdom's native <input type="date" min=...> constraint
+// validation started rejecting once the wall clock passed it — submit silently blocked).
+//
+// S143 TASK-14306b (clock guard TASK-14302): that +7-day version read the real wall clock,
+// which the S142 test-clock census flagged as "safe by margin, not by design" — the buffer
+// happened to swamp a one-day Copenhagen/UTC skew, but nothing chose that margin on purpose.
+// This test does not actually need a date "relative to today": the only thing the min=
+// constraint requires is SOME date that is never in the past, forever. A fixed far-future
+// literal satisfies that deterministically, with no clock read at all — simpler than deriving
+// from copenhagenToday() and just as immune to date rollover.
+const validReturnDate = '2099-12-31'
 
 function renderPage() {
   return render(
