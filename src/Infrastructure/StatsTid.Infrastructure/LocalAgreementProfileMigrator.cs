@@ -63,8 +63,40 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// INSTANTS are untouched and stay UTC: <c>created_at</c>, the audit rows' timestamps and outbox
-/// ordering all remain wall-clock UTC. Only the business DAY moved.
+/// INSTANTS stay UTC: <c>created_at</c>, the audit rows' timestamps and outbox ordering are all
+/// still UTC instants and are never routed through a calendar conversion (ADR-041). Only the
+/// business DAY moved calendars in S142.
+/// </para>
+///
+/// <para>
+/// <b>S143 / QUAL-176 — the profile row's <c>created_at</c> now reads the INJECTED clock.</b> It is
+/// still a UTC instant; only the SOURCE moved off <see cref="DateTime.UtcNow"/>. It is read ONCE per
+/// run (next to <c>today</c>), so every profile row a single migration writes carries the same
+/// creation instant — which is what one migration run should look like in the audit trail.
+/// </para>
+///
+/// <para>
+/// <b>Which criterion this move was made under — say it plainly, because there are two.</b> The
+/// clock-source rules are written out in full at the top of
+/// <c>src/Backend/StatsTid.Backend.Api/Endpoints/ReportingLineEndpoints.cs</c>. <b>RULE A</b> (a
+/// reader derives a business date from the stamp ⇒ moving it is MANDATORY) does <b>NOT</b> apply
+/// here: nothing derives a calendar day from <c>local_agreement_profiles.created_at</c>. This move
+/// was made under <b>RULE B</b> (the component is already on the seam and a pinned test wants
+/// deterministic stamps ⇒ moving it is PERMITTED): this migrator's business day is pinned by an
+/// injected <see cref="TimeProvider"/>, so leaving its row stamps on the wall clock would have left
+/// it running two clocks with a test able to pin only one. Rule B is a convenience, never an
+/// obligation — the four <c>reporting_lines</c> stamps in that same endpoints file would also
+/// qualify under B and deliberately stay on the real clock.
+/// </para>
+///
+/// <para>
+/// <b>Consequence worth knowing: this table now has TWO stamp sources.</b>
+/// <see cref="LocalAgreementProfileRepository"/>'s insert still stamps
+/// <c>local_agreement_profiles.created_at</c> from <see cref="DateTime.UtcNow"/>, so a row's
+/// creation instant comes from the injected clock when this migrator wrote it and from the wall
+/// clock when the repository did. That is harmless today — no reader derives a date from the column,
+/// and instants from either source are equally valid UTC instants — but a future task that wants the
+/// whole table deterministic must move BOTH writers, not just this one.
 /// </para>
 /// </summary>
 public sealed class LocalAgreementProfileMigrator
@@ -153,6 +185,13 @@ public sealed class LocalAgreementProfileMigrator
         // clock, a migration running across midnight could discover a tuple and then load zero
         // rows for it. Bound as @today in both statements — never interpolated (CA2100).
         var today = CopenhagenBusinessDate.Today(_timeProvider);
+
+        // S143 / QUAL-176 — the profile rows' created_at INSTANT, read ONCE off the SAME injected
+        // clock `today` comes from. Still UTC and still an instant (ADR-041: it is NOT converted to
+        // a calendar day anywhere); only the SOURCE moved off DateTime.UtcNow, so a run pinned to a
+        // fixed instant stamps a predictable created_at instead of the wall clock. Reading it once
+        // also means every row this run writes shares one creation instant.
+        var createdAt = _timeProvider.GetUtcNow().UtcDateTime;
 
         var tuples = await DiscoverEligibleTuplesAsync(conn, tx, today, ct);
         _logger.LogInformation(
@@ -302,7 +341,7 @@ public sealed class LocalAgreementProfileMigrator
             {
                 var newProfileId = Guid.NewGuid();
                 await InsertProfileRowAsync(
-                    conn, tx, newProfileId, tuple, earliestEffectiveFrom.Value, profileColumns, ct);
+                    conn, tx, newProfileId, tuple, earliestEffectiveFrom.Value, profileColumns, createdAt, ct);
                 await InsertProfileAuditAsync(
                     conn, tx, newProfileId, "MIGRATED_FROM_LEGACY",
                     BuildMigratedFromLegacyDelta(absorbedCount, profileColumns), ct);
@@ -510,10 +549,16 @@ public sealed class LocalAgreementProfileMigrator
     // -------------------------------------------------------------------
     // INSERT helpers — profile row, profile-audit row, legacy-audit row
     // -------------------------------------------------------------------
+    /// <param name="createdAt">
+    /// S143 / QUAL-176 — the row's creation INSTANT, captured ONCE per run by
+    /// <see cref="RunMigrationAsync"/> off the injected <see cref="TimeProvider"/>. Passed in rather
+    /// than read here so this helper stays a pure writer with no clock of its own: a second clock
+    /// read inside a per-tuple loop is exactly how a run ends up stamping rows from two sources.
+    /// </param>
     private static async Task InsertProfileRowAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         Guid profileId, TupleKey tuple, DateOnly effectiveFrom,
-        IReadOnlyDictionary<string, object> profileColumns, CancellationToken ct)
+        IReadOnlyDictionary<string, object> profileColumns, DateTime createdAt, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -541,7 +586,7 @@ public sealed class LocalAgreementProfileMigrator
         cmd.Parameters.AddWithValue("maxOvertimeHoursPerPeriod", ColumnOrNull(profileColumns, "max_overtime_hours_per_period"));
         cmd.Parameters.AddWithValue("overtimeRequiresPreApproval", ColumnOrNull(profileColumns, "overtime_requires_pre_approval"));
         cmd.Parameters.AddWithValue("createdBy", SystemActorId);
-        cmd.Parameters.AddWithValue("createdAt", DateTime.UtcNow);
+        cmd.Parameters.AddWithValue("createdAt", createdAt); // S143 / QUAL-176 — injected clock, still a UTC instant.
         await cmd.ExecuteNonQueryAsync(ct);
     }
 

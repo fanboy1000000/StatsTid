@@ -34,10 +34,29 @@ namespace StatsTid.Infrastructure;
 public sealed class ManagerVikarRepository
 {
     private readonly DbConnectionFactory _connectionFactory;
+    private readonly TimeProvider _timeProvider;
 
-    public ManagerVikarRepository(DbConnectionFactory connectionFactory)
+    /// <summary>
+    /// S143 / QUAL-176 — <paramref name="timeProvider"/> backs the <c>created_at</c> fallback in
+    /// <see cref="CreateAsync(NpgsqlConnection, NpgsqlTransaction, ManagerVikar, CancellationToken)"/>.
+    /// It is OPTIONAL and defaults to <see cref="TimeProvider.System"/>, so PRODUCTION BEHAVIOUR IS
+    /// UNCHANGED and the existing direct test constructions keep compiling (the
+    /// <see cref="EmployeeProfileRepository"/> / <see cref="ReportingLineRepository"/> precedent).
+    /// DI fills it from the <c>TimeProvider</c> singleton registered in <c>Program.cs</c>; a
+    /// date-sensitive test host may register a FIXED provider instead.
+    ///
+    /// <para>
+    /// <b>Why a stand-in row's creation instant needs a seam at all.</b> <c>created_at</c> here is
+    /// NOT a private audit detail: <c>GET /api/reporting-lines/delegate</c> derives the delegation's
+    /// DISPLAYED start date from it (ADR-041 calls that a BUSINESS DATE, the Copenhagen calendar
+    /// day). The instant itself stays UTC and is never converted here — only its SOURCE is on the
+    /// seam, so a test can pin the instant and therefore pin the displayed date.
+    /// </para>
+    /// </summary>
+    public ManagerVikarRepository(DbConnectionFactory connectionFactory, TimeProvider? timeProvider = null)
     {
         _connectionFactory = connectionFactory;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -204,7 +223,19 @@ public sealed class ManagerVikarRepository
         NpgsqlConnection conn, NpgsqlTransaction tx, ManagerVikar newVikar, CancellationToken ct = default)
     {
         var newId = newVikar.VikarId == Guid.Empty ? Guid.NewGuid() : newVikar.VikarId;
-        var createdAt = newVikar.CreatedAt == default ? DateTime.UtcNow : newVikar.CreatedAt;
+
+        // S143 / QUAL-176 — the fallback reads the INJECTED clock, not DateTime.UtcNow. The stored
+        // value is still a UTC INSTANT (ADR-041: instants are never routed through a calendar
+        // conversion); only the SOURCE is on the seam, because a reader
+        // (GET /api/reporting-lines/delegate) derives the delegation's displayed start DATE from it.
+        //
+        // HONEST NOTE ON REACHABILITY: this branch is close to dead today, because
+        // ManagerVikar.CreatedAt carries its own `= DateTime.UtcNow` property initializer — an
+        // object-initializer construction therefore never leaves it at `default`, and only a caller
+        // writing `CreatedAt = default` explicitly lands here. It is converted anyway so the
+        // repository cannot become the one place a second clock creeps back in; the SharedKernel
+        // model default is the remaining real-clock read and sits outside this task's scope.
+        var createdAt = newVikar.CreatedAt == default ? _timeProvider.GetUtcNow().UtcDateTime : newVikar.CreatedAt;
         var version = newVikar.Version <= 0 ? 1 : newVikar.Version;
 
         await using var cmd = new NpgsqlCommand(

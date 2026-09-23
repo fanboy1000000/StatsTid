@@ -14,6 +14,68 @@ using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  S143 / QUAL-176 — THE CLOCK-SOURCE RULE FOR THE SIX `created_at` STAMPS IN THIS FILE.
+//  Read this before changing any of them; each site carries a one-line pointer back here.
+//
+//  ADR-041 separates two ideas that share the word "date":
+//    • an INSTANT is a moment in time (created_at, audit timestamps, outbox ordering). It stays
+//      UTC and is NEVER routed through a calendar conversion — turning an instant into a day and
+//      back corrupts audit ordering and the audit chain, which is an inviolable invariant.
+//    • a BUSINESS DATE is which day something takes effect. It is the Europe/Copenhagen calendar
+//      day, derived via CopenhagenBusinessDate.Today(timeProvider) off the injected TimeProvider
+//      seam (PAT-008 / PAT-028).
+//
+//  ALL SIX stamps below are INSTANTS and stay UTC. None is converted to a calendar day at the
+//  write. The only thing that differs between them is the SOURCE of the instant — and there are
+//  TWO criteria, not one. Stating only the first is what produced the six divergent "BY DESIGN"
+//  comments S143 had to reconcile, so both are written out here:
+//
+//    RULE A (MANDATORY) — DOES ANY READER DERIVE A BUSINESS DATE FROM THIS STAMP?
+//      If YES the stamp MUST come off the injected seam, because the displayed date and the date
+//      the write recorded have to trace to one clock. This is not a preference; a stamp whose
+//      reader shows it as a date is part of a business-date computation.
+//      → The two manager_vikar creates (Endpoint 12's self-service delegate, Endpoint 14's admin
+//        vikar). GET /api/reporting-lines/delegate (Endpoint 11) reports the delegation's
+//        `effectiveFrom` by converting THAT created_at to a Copenhagen calendar day.
+//
+//    RULE B (PERMITTED, NOT REQUIRED) — IS THE COMPONENT ALREADY ON THE SEAM, AND WOULD A PINNED
+//      TEST WANT DETERMINISTIC STAMPS?
+//      A component whose business day is already pinned by an injected TimeProvider but whose row
+//      stamps come from the wall clock is running two clocks, and a test can pin only one of them.
+//      Moving such a stamp is allowed even with no date-deriving reader. It buys determinism; it
+//      is never mandatory.
+//      → LocalAgreementProfileMigrator (Infrastructure) moved under B, not A.
+//
+//    The four reporting_lines stamps here (Endpoint 1's assign, Endpoint 2's ACTING assign, the HR
+//    import, the manager-removal re-parenting) stay on DateTime.UtcNow. Rule A does not reach them
+//    — a reporting line carries its own business dates in effective_from/effective_to, and the one
+//    place created_at surfaces (MapLineResponse) passes it through as a raw timestamp. Rule B
+//    WOULD reach them (all four handlers already inject timeProvider), so they stay on the real
+//    clock BY CHOICE, NOT BY NECESSITY: no test needs them pinned today, and an audit timestamp is
+//    worth leaving on the real clock absent a reason. A future task that wants them deterministic
+//    may move them under B without contradicting this file.
+//
+//  QUAL-176 had TWO halves, and both are closed. (1) WRONG SOURCE: both POSTs computed and echoed
+//  `effectiveFrom` from the INJECTED provider while stamping created_at from DateTime.UtcNow — one
+//  displayed date, two clocks — which made the date the user is shown impossible to pin in a test,
+//  the exact unpinnable shape S142 spent a sprint removing. (2) TWO READS: moving the stamp onto the
+//  seam left each handler reading that one clock TWICE, ~180 (and ~135) lines apart across a
+//  BLOCKING advisory lock, so a midnight tick in the gap still filed a row under one Danish day and
+//  displayed it under another. Each handler now takes ONE read — `var now = timeProvider.GetUtcNow()`
+//  — with the day derived from that captured moment via CopenhagenBusinessDate.FromInstant
+//  (TASK-14311), which is PAT-028's "one operation, one date".
+//
+//  The two halves need DIFFERENT tests, and one of them is invisible to the usual instrument: a
+//  frozen clock (FixedTimeProvider) answers the same value on every call, so it can prove the SOURCE
+//  is the injected clock but can never tell one read from two. Both are pinned in
+//  tests/StatsTid.Tests.Regression/ReportingLine/DelegationEffectiveFromClockPinTests.cs — three
+//  frozen-clock facts for the source, one ADVANCING-clock fact for the single read.
+//
+//  DO NOT "fix" any of the six by writing DateOnly.FromDateTime(...) at the write, and never derive
+//  an instant back from a business date. The conversion is ONE-WAY (ADR-041) — that is the rule the
+//  FromInstant direction encodes in its own name.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
 public static class ReportingLineEndpoints
 {
     public static WebApplication MapReportingLineEndpoints(this WebApplication app)
@@ -125,9 +187,13 @@ public static class ReportingLineEndpoints
                         Source = "MANUAL",
                         Version = 1,
                         CreatedBy = actor.ActorId ?? "system",
-                        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
-                        // TASK-14001) — never routed through the injected seam. The line's BUSINESS
-                        // date is request.EffectiveFrom, which the caller supplies.
+                        // REAL CLOCK, deliberately — clock-source rule at the top of this file
+                        // (S143 / QUAL-176 re-checked this site and left it here). An AUDIT/creation
+                        // INSTANT with NO reader deriving a business date from it: the ONE place
+                        // reporting_lines.created_at surfaces is MapLineResponse, which passes it
+                        // through as a raw timestamp — no reader converts it to a calendar day. The
+                        // line's BUSINESS date is request.EffectiveFrom, which the caller supplies.
+                        // (The injected seam itself is S140 / TASK-14001.)
                         CreatedAt = DateTime.UtcNow,
                     };
 
@@ -620,8 +686,10 @@ public static class ReportingLineEndpoints
                         Source = "MANUAL",
                         Version = 1,
                         CreatedBy = actor.ActorId ?? "system",
-                        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
-                        // TASK-14001). The line's BUSINESS date is request.EffectiveFrom.
+                        // REAL CLOCK, deliberately — clock-source rule at the top of this file
+                        // (S143 / QUAL-176 re-checked this site and left it here). An AUDIT/creation
+                        // INSTANT with NO reader deriving a business date from it. The ACTING line's
+                        // BUSINESS date is request.EffectiveFrom. (Seam: S140 / TASK-14001.)
                         CreatedAt = DateTime.UtcNow,
                     };
 
@@ -1073,9 +1141,11 @@ public static class ReportingLineEndpoints
                             Source = "HR_IMPORT",
                             Version = 1,
                             CreatedBy = actor.ActorId ?? "system",
-                            // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
-                            // TASK-14001). The import's BUSINESS date is `effectiveFrom` from the
-                            // request payload, not "today".
+                            // REAL CLOCK, deliberately — clock-source rule at the top of this file
+                            // (S143 / QUAL-176 re-checked this site and left it here). An AUDIT/
+                            // creation INSTANT with NO reader deriving a business date from it. The
+                            // import's BUSINESS date is `effectiveFrom` from the request payload,
+                            // not "today". (Seam: S140 / TASK-14001.)
                             CreatedAt = DateTime.UtcNow,
                         };
 
@@ -1413,8 +1483,11 @@ public static class ReportingLineEndpoints
                             Source = "MANUAL",
                             Version = 1,
                             CreatedBy = actor.ActorId ?? "system",
-                            // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
-                            // TASK-14001). The BUSINESS date is `today` on EffectiveFrom above.
+                            // REAL CLOCK, deliberately — clock-source rule at the top of this file
+                            // (S143 / QUAL-176 re-checked this site and left it here). An AUDIT/
+                            // creation INSTANT with NO reader deriving a business date from it. The
+                            // BUSINESS date is `today` on EffectiveFrom above, which already comes
+                            // off the injected seam. (Seam: S140 / TASK-14001.)
                             CreatedAt = DateTime.UtcNow,
                         };
                         // AssignAsync supersedes the report's current active PRIMARY (held by the
@@ -1763,15 +1836,26 @@ public static class ReportingLineEndpoints
             // delegation created at 00:30 Danish time answers one date from the POST and the
             // PREVIOUS date from this GET — the QUAL-164 disagreement.
             //
-            // Converted through the SHARED DST-correct zone (CopenhagenBusinessDate.Zone), the same
-            // one CopenhagenBusinessDate.Today resolves, following the HrFollowUpSettlementEndpoints
-            // `AgeInDays` precedent. A local fixed +01:00 assumption is the QUAL-005 bug and is not
-            // repeated here. SpecifyKind pins the interpretation of the stored value explicitly so
-            // the conversion cannot silently pick up the host's local offset.
-            var vikarEffectiveFrom = DateOnly.FromDateTime(
-                TimeZoneInfo.ConvertTime(
-                    new DateTimeOffset(DateTime.SpecifyKind(vikar.CreatedAt, DateTimeKind.Utc)),
-                    CopenhagenBusinessDate.Zone).DateTime);
+            // S143 / QUAL-176 — THIS IS THE DATE-DERIVING READER the clock-source rule at the top of
+            // this file names. Because this line exists, the two manager_vikar creates (Endpoints 12
+            // and 14) stamp created_at from the INJECTED TimeProvider rather than DateTime.UtcNow:
+            // the displayed date and the echoed date now trace to ONE clock read, which is also what
+            // makes this value pinnable in a test (see
+            // tests/StatsTid.Tests.Regression/ReportingLine/DelegationEffectiveFromClockPinTests.cs).
+            // If a future change stops deriving a date from created_at here, that rule's YES-branch
+            // loses its only reader and the two creates may go back to the real clock.
+            //
+            // The conversion itself is CopenhagenBusinessDate.FromInstant (TASK-14311) — the one
+            // sanctioned instant→business-date crossing, and the only copy of the DST arithmetic.
+            // This site used to hand-roll it (TimeZoneInfo.ConvertTime through
+            // CopenhagenBusinessDate.Zone, with a SpecifyKind to pin the stored value's
+            // interpretation); that inline copy was individually plausible and therefore exactly the
+            // kind that drifts silently — a local fixed +01:00 assumption is the QUAL-005 bug. The
+            // SpecifyKind is not lost, it moved INTO the argument: Npgsql hands back a TIMESTAMPTZ as
+            // a UTC-kind DateTime, and stating the kind explicitly stops the DateTimeOffset
+            // constructor from silently applying the host's local offset if that ever changes.
+            var vikarEffectiveFrom = CopenhagenBusinessDate.FromInstant(
+                new DateTimeOffset(DateTime.SpecifyKind(vikar.CreatedAt, DateTimeKind.Utc)));
 
             // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the SAME record as the
             // inactive branch above — the stable key set is what makes ONE record possible).
@@ -1832,7 +1916,25 @@ public static class ReportingLineEndpoints
             // echoed back is yesterday's. It moves in the SAME commit as the status read (row 25),
             // the revokes (rows 27/29) and the expiry sweep (row 42), so no stand-in can be created
             // on one calendar and expired on another.
-            var effectiveFrom = CopenhagenBusinessDate.Today(timeProvider);
+            //
+            // S143 / QUAL-176 — ONE CLOCK READ serves this whole operation (PAT-028: "one operation,
+            // one date"). `now` is the single read; the row's created_at INSTANT is `now` itself, and
+            // the BUSINESS DATE is derived from that same captured moment via FromInstant — never by
+            // reading the clock a second time.
+            //
+            // Why one read and not two adjacent ones. Until TASK-14311 this handler read the clock
+            // twice, and the two reads sat ~180 lines apart with a BLOCKING advisory lock (Step 1)
+            // and half a dozen queries between them. If local midnight ticked in that gap the row was
+            // FILED under one Danish day and DISPLAYED under another — the POST echoing today while
+            // the GET (which derives the displayed date from created_at) showed tomorrow — with no
+            // error anywhere to signal it. Moving the reads adjacent shrank that window but did not
+            // close it: two reads of a correct clock still disagree across a tick. One read cannot.
+            //
+            // The conversion is ONE-WAY (ADR-041): the instant becomes a day here; the day is never
+            // converted back into an instant.
+            var now = timeProvider.GetUtcNow();
+            var createdAtInstant = now.UtcDateTime;
+            var effectiveFrom = CopenhagenBusinessDate.FromInstant(now);
             if (effectiveTo <= effectiveFrom)
                 return Results.BadRequest(new { error = "effectiveTo must be after today" });
 
@@ -2002,10 +2104,22 @@ public static class ReportingLineEndpoints
                         OrganisationId = organisationId,
                         Version = 1,
                         CreatedBy = actorId,
-                        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
-                        // TASK-14001). The delegation's BUSINESS dates are `effectiveFrom` (today,
-                        // read once above) and `effectiveTo` (from the request).
-                        CreatedAt = DateTime.UtcNow,
+                        // INJECTED SEAM under RULE A (S143 / QUAL-176) — rules at the top of this
+                        // file. This stamp MUST move: it HAS a date-deriving reader. GET
+                        // /api/reporting-lines/delegate (Endpoint 11) reports this delegation's
+                        // `effectiveFrom` by converting THIS created_at to a Copenhagen calendar day.
+                        // Until S143 the POST echoed `effectiveFrom` off the injected provider while
+                        // the row was stamped from DateTime.UtcNow — one displayed date, two clocks —
+                        // which left the displayed value unpinnable in a test.
+                        //
+                        // REUSES `now`, the handler's ONE clock read (top of this handler); the echoed
+                        // `effectiveFrom` is derived from that same captured moment. One read means
+                        // the filed date and the displayed date cannot straddle a midnight tick.
+                        //
+                        // STILL AN INSTANT, STILL UTC (ADR-041): only the SOURCE moved. It is NOT
+                        // converted to a calendar day here; the GET does that, once, on read. The
+                        // delegation's BUSINESS dates remain `effectiveFrom` and `effectiveTo`.
+                        CreatedAt = createdAtInstant,
                     };
 
                     createdVikar = await vikarRepo.CreateAsync(conn, tx, newVikar, ct);
@@ -2328,7 +2442,16 @@ public static class ReportingLineEndpoints
             // S142 (census row 28) — the COPENHAGEN calendar day, same shape and same reason as the
             // self-service create (row 26): a validator refusal and an echoed business date, both
             // of which must speak the Danish calendar the admin is working in.
-            var effectiveFrom = CopenhagenBusinessDate.Today(timeProvider);
+            //
+            // S143 / QUAL-176 — ONE CLOCK READ for the whole operation, exactly as the self-service
+            // create above (PAT-028). `now` is the single read; created_at is `now`, and the BUSINESS
+            // DATE comes from that same captured moment via FromInstant. Until TASK-14311 this
+            // handler read the clock twice, ~135 lines apart across a BLOCKING advisory lock, so a
+            // midnight tick in that gap filed the row under one Danish day and displayed it under
+            // another. The conversion is ONE-WAY (ADR-041).
+            var now = timeProvider.GetUtcNow();
+            var createdAtInstant = now.UtcDateTime;
+            var effectiveFrom = CopenhagenBusinessDate.FromInstant(now);
             if (effectiveTo <= effectiveFrom)
                 return Results.BadRequest(new { error = "effectiveTo must be after today" });
             // A manager cannot stand in for themselves; the vikar must differ from the manager.
@@ -2452,10 +2575,20 @@ public static class ReportingLineEndpoints
                         OrganisationId = organisationId,
                         Version = 1,
                         CreatedBy = actor.ActorId,                 // the ADMIN created it (audit trail)
-                        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 /
-                        // TASK-14001). The vikar's BUSINESS dates are `effectiveFrom` (today, read
-                        // once above) and `effectiveTo` / UntilDate (from the request).
-                        CreatedAt = DateTime.UtcNow,
+                        // INJECTED SEAM under RULE A (S143 / QUAL-176) — rules at the top of this
+                        // file. Same shape and same reason as the self-service create (Endpoint 12):
+                        // an admin-created stand-in is read back through the SAME
+                        // GET /api/reporting-lines/delegate (Endpoint 11), which derives the
+                        // delegation's displayed `effectiveFrom` from THIS created_at. Writer and
+                        // reader must therefore share one clock; before S143 the echoed date came
+                        // off the injected provider and the stored stamp off DateTime.UtcNow.
+                        //
+                        // REUSES `now`, the handler's ONE clock read (top of this handler); the echoed
+                        // `effectiveFrom` is derived from that same captured moment.
+                        //
+                        // STILL AN INSTANT, STILL UTC (ADR-041): only the SOURCE moved. The vikar's
+                        // BUSINESS dates remain `effectiveFrom` and `effectiveTo` / UntilDate.
+                        CreatedAt = createdAtInstant,
                     };
 
                     // (v) Atomic INSERT — a concurrent second active vikar collides on

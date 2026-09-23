@@ -67,8 +67,11 @@ public sealed class ReportingLineRepository
         TimeProvider? timeProvider = null)
     {
         _connectionFactory = connectionFactory;
-        _vikarRepo = vikarRepo ?? new ManagerVikarRepository(connectionFactory);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        // S143 / QUAL-176 — the DERIVED vikar repo inherits THIS repository's clock. Constructing it
+        // with the factory alone would hand it a fresh TimeProvider.System, so a caller that pinned
+        // one clock here would silently be running two: the finding this task exists to remove.
+        _vikarRepo = vikarRepo ?? new ManagerVikarRepository(connectionFactory, _timeProvider);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -299,9 +302,22 @@ public sealed class ReportingLineRepository
 
         // 5. Insert the new line at the next monotonic version.
         var newId = newLine.ReportingLineId == Guid.Empty ? Guid.NewGuid() : newLine.ReportingLineId;
-        // BY DESIGN: an AUDIT/creation TIMESTAMP stays on the real clock (S140 / TASK-14001).
-        // `created_at` records when the row was actually written; it is not a business date and
-        // must never be routed through a fixed test provider (PAT-028: instants stay real).
+        // REAL CLOCK, deliberately (S140 / TASK-14001, re-checked by S143 / QUAL-176). `created_at`
+        // records when the row was actually written; it is not a business date, and NO reader
+        // derives a calendar day from it — the one place it surfaces is ReportingLineResponse, which
+        // passes it through as a raw timestamp.
+        //
+        // NOTE FOR THE NEXT READER — the sibling ManagerVikarRepository.CreateAsync fallback DOES
+        // read the injected provider, and that is not an inconsistency. Two criteria govern this
+        // (both spelled out at the top of ReportingLineEndpoints.cs): RULE A — a reader derives a
+        // BUSINESS DATE from the stamp, in which case moving it is MANDATORY; and RULE B — the
+        // component is already on the seam and a pinned test wants deterministic stamps, in which
+        // case moving it is PERMITTED but never required. manager_vikar.created_at is a rule-A case
+        // (GET /api/reporting-lines/delegate displays a start date derived from it). This column is
+        // neither: no reader derives a date from it, and nothing needs it pinned today — so it stays
+        // on the real clock BY CHOICE under B, not by necessity. A future task may move it under B
+        // without contradicting this comment. Either way the stored value stays a UTC INSTANT and is
+        // never routed through a calendar conversion (ADR-041) — only the SOURCE differs.
         var createdAt = newLine.CreatedAt == default ? DateTime.UtcNow : newLine.CreatedAt;
 
         try

@@ -306,7 +306,129 @@ public sealed class ProfileMigrationTests : IAsyncLifetime
         Assert.Null(await GetAuditActionForConfigAsync(utcOnlyRowId));
     }
 
+    /// <summary>
+    /// S143 / QUAL-176 — <b>fixture #7: every row one migration writes carries the SAME creation
+    /// instant, and that instant comes from the INJECTED clock.</b>
+    ///
+    /// <para>
+    /// <b>What changed and why it needs a test.</b> S143 moved this migrator's
+    /// <c>local_agreement_profiles.created_at</c> stamp off <c>DateTime.UtcNow</c> and onto the
+    /// injected <see cref="TimeProvider"/>, and moved the read OUT of the per-tuple loop so it
+    /// happens once per run. Both are behavioural claims and neither had any coverage — the S143
+    /// Step-5a review flagged exactly that. This fact pins both.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why an ADVANCING clock rather than a frozen one.</b> A <see cref="FixedTimeProvider"/>
+    /// answers the same instant on every call, so under a frozen clock ONE read per run and ONE read
+    /// per ROW produce identical rows — a frozen-clock test cannot tell the two apart, and asserting
+    /// "all rows equal" against one would be a line that cannot fail. <see cref="SteppingTimeProvider"/>
+    /// advances one second per call, so a per-row implementation would stamp row 1 and row 2 a second
+    /// apart while a once-per-run implementation stamps them identically. The steps are seconds, far
+    /// too small to move the Copenhagen business day off <see cref="PinnedToday"/>, so the migration's
+    /// eligibility behaviour is unchanged by the instrument.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The two RED conditions, each reasoned from the source.</b> (1) Revert the parameter and
+    /// read <c>DateTime.UtcNow</c> inside <c>InsertProfileRowAsync</c>: the stored instants land on
+    /// the real wall-clock day, failing the <see cref="PinnedToday"/> assertion — <see cref="PinnedToday"/>
+    /// is 2026-03-02 and drifts further from the wall clock every day, so this can never pass by
+    /// coincidence. (2) Keep the injected clock but read it per row: the two rows' instants differ by
+    /// one second, failing the equality assertion. Neither was executed on the authoring machine —
+    /// Docker is unavailable there (standing project constraint), so this fact first runs, RED or
+    /// GREEN, in the sprint close's watched CI job.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task OneRun_StampsEveryRowWithTheSameInjectedInstant()
+    {
+        // A SECOND Organisation, so one run writes TWO profile rows — the minimum that can tell a
+        // once-per-run read from a once-per-row read at all.
+        await ProfileTestSchema.SeedOrganizationAsync(_harness.ConnectionString, SecondOrg);
+
+        var effectiveFrom = new DateOnly(2024, 1, 1);
+        await InsertLegacyConfigAsync("STY02", "HK", "OK24", "MaxFlexBalance", "100", effectiveFrom);
+        await InsertLegacyConfigAsync(SecondOrg, "HK", "OK24", "MaxFlexBalance", "120", effectiveFrom);
+
+        var clock = new SteppingTimeProvider(
+            new DateTimeOffset(PinnedToday.Year, PinnedToday.Month, PinnedToday.Day, 0, 0, 0, TimeSpan.Zero),
+            step: TimeSpan.FromSeconds(1));
+
+        var result = await NewMigrator(clock).RebuildAsync();
+        Assert.Equal(2, result.ProfilesCreated);
+
+        var stamps = await GetAllProfileCreatedAtAsync();
+        Assert.Equal(2, stamps.Count);
+
+        // (1) CADENCE — one read for the whole run. Under a per-row read these differ by the
+        //     provider's one-second step.
+        Assert.Equal(stamps[0], stamps[1]);
+
+        // (2) SOURCE — the instant came from the injected clock, not the wall clock. Asserted as the
+        //     LITERAL pinned day; never by asking the provider what it would answer now.
+        Assert.Equal(PinnedToday, DateOnly.FromDateTime(stamps[0].ToUniversalTime()));
+
+        // The clock WAS consumed more than once overall (the business day is one read, the stamp
+        // another) — asserted so a future reader does not mistake claim (1) for "the migrator reads
+        // the clock exactly once", which is not what it does and not what is being pinned.
+        Assert.True(clock.CallCount >= 2,
+            $"Expected the migrator to read the clock at least twice (business day + stamp); saw {clock.CallCount}.");
+    }
+
     // ─── helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>The second Organisation fixture #7 needs so one run produces two profile rows.</summary>
+    private const string SecondOrg = "STY03";
+
+    /// <summary>
+    /// A <see cref="TimeProvider"/> that answers a DIFFERENT instant on every call, advancing by a
+    /// fixed step. It exists because a frozen clock cannot distinguish "read once" from "read once
+    /// per row" — see fixture #7's doc for the reasoning. Deliberately local to this file: it is an
+    /// instrument for a cadence assertion, not a general fixture, and promoting it would invite use
+    /// where <see cref="FixedTimeProvider"/> is the right tool.
+    /// </summary>
+    private sealed class SteppingTimeProvider : TimeProvider
+    {
+        private readonly DateTimeOffset _start;
+        private readonly TimeSpan _step;
+        private int _calls;
+
+        public SteppingTimeProvider(DateTimeOffset start, TimeSpan step)
+        {
+            _start = start;
+            _step = step;
+        }
+
+        /// <summary>How many times the code under test has read this clock.</summary>
+        public int CallCount => _calls;
+
+        // Unsynchronised _calls++ is safe HERE and only here: this provider is handed to a directly
+        // constructed migrator that runs to completion on the test's own thread, with no hosted
+        // service sharing it. The host-wide stepping provider in
+        // DelegationEffectiveFromClockPinTests deliberately uses Interlocked instead, because there
+        // background sweeps read the same instance concurrently.
+        public override DateTimeOffset GetUtcNow() => _start + (_step * _calls++);
+    }
+
+    /// <summary>
+    /// Every active profile row's <c>created_at</c>, ordered by <c>org_id</c> for a stable sequence.
+    /// Read as <see cref="DateTime"/> and not <see cref="DateOnly"/>: the instant's TIME component is
+    /// what the cadence assertion compares, and a day-granularity read would silently pass a per-row
+    /// implementation whose stamps differ only by seconds.
+    /// </summary>
+    private async Task<IReadOnlyList<DateTime>> GetAllProfileCreatedAtAsync()
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT created_at FROM local_agreement_profiles WHERE effective_to IS NULL ORDER BY org_id", conn);
+        var stamps = new List<DateTime>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            stamps.Add(reader.GetDateTime(0));
+        return stamps;
+    }
 
     private async Task<Guid> InsertLegacyConfigAsync(
         string orgId, string agreementCode, string okVersion,
