@@ -1,7 +1,9 @@
 namespace StatsTid.SharedKernel.Calendar;
 
 /// <summary>
-/// The single source of truth for "today, as a Copenhagen calendar date".
+/// The single source of truth for "which Copenhagen calendar date is this?" — asked of the clock
+/// via <see cref="Today(TimeProvider)"/>, or of an instant the caller already holds via
+/// <see cref="FromInstant(DateTimeOffset)"/>. Both share one implementation of the conversion.
 ///
 /// Every BUSINESS DATE in StatsTid keys on the DANISH business day, not on UTC — employment
 /// start/end dates, the §21 stk.2 vacation-transfer deadline (31 Dec of the
@@ -83,12 +85,69 @@ public static class CopenhagenBusinessDate
     /// The current calendar date in Copenhagen, derived from the injected <paramref name="timeProvider"/>.
     /// DST-correct: the UTC instant is converted through the real <see cref="Zone"/>, so a
     /// midnight-adjacent instant is attributed to the correct Copenhagen day in both CET and CEST.
+    ///
+    /// <para><b>Use this overload when the business DAY is the only thing the operation needs.</b>
+    /// It reads the clock itself, which is exactly right for a caller that wants to ask "what
+    /// Danish day is it?" and nothing else.</para>
+    ///
+    /// <para><b>Use <see cref="FromInstant(DateTimeOffset)"/> instead when the operation also needs
+    /// the INSTANT</b> — a <c>created_at</c>, an audit or outbox timestamp — or needs the same
+    /// business day at more than one point. Those callers should read the clock ONCE and pass the
+    /// captured instant here, rather than calling this overload a second time. See PAT-028 and the
+    /// remarks on <see cref="FromInstant(DateTimeOffset)"/> for why a second read is a correctness
+    /// defect and not merely a wasted call.</para>
     /// </summary>
+    /// <param name="timeProvider">The injected clock seam (PAT-008).</param>
+    /// <exception cref="ArgumentNullException"><paramref name="timeProvider"/> is null.</exception>
+    /// <exception cref="InvalidTimeZoneException">The host has no usable Europe/Copenhagen zone.</exception>
     public static DateOnly Today(TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(timeProvider);
-        var copenhagenNow = TimeZoneInfo.ConvertTime(timeProvider.GetUtcNow(), Zone);
-        return DateOnly.FromDateTime(copenhagenNow.DateTime);
+
+        // One clock read, then the SAME conversion FromInstant performs. The DST arithmetic lives
+        // in exactly one place deliberately: a second copy of it is precisely the defect S142 and
+        // S143 keep finding in this codebase, and two copies drift silently because each one is
+        // individually plausible.
+        return FromInstant(timeProvider.GetUtcNow());
+    }
+
+    /// <summary>
+    /// The Copenhagen calendar day that an ALREADY-CAPTURED <paramref name="instant"/> falls on.
+    /// Same DST-correct conversion as <see cref="Today(TimeProvider)"/> — that overload is
+    /// implemented as one clock read followed by this method — but the caller supplies the moment
+    /// instead of this class reading it.
+    ///
+    /// <para><b>Why this exists: reading the clock twice is a bug, not an inefficiency.</b> An
+    /// operation that needs both the business day and the instant (say, a row stamped
+    /// <c>created_at</c> and displayed under a Danish date) has two clock reads if it calls
+    /// <see cref="Today(TimeProvider)"/> separately. Real work happens between those reads — an
+    /// advisory lock, a round trip, a transaction — and if local midnight ticks in that gap the two
+    /// values disagree: the row is FILED under one day and DISPLAYED under another, with no error
+    /// anywhere to signal it. PAT-028 states the rule ("one operation, one date") and instructs
+    /// callers to count the reads before converting a clock read to this seam: two or more for the
+    /// same business date means "compute once and pass", not "convert each". This overload is what
+    /// makes passing possible.</para>
+    ///
+    /// <para><b>This conversion is ONE-WAY (ADR-041).</b> An instant becomes a business date here;
+    /// a business date must never be converted back into an instant. Instants are UTC and carry
+    /// ordering — audit chains, outbox sequencing, <c>created_at</c> — and a round trip through a
+    /// calendar day discards the time of day, so the ordering and the audit chain that depends on
+    /// it are corrupted. Keep the instant you captured; derive the day from it; never re-derive the
+    /// instant from the day.</para>
+    ///
+    /// <para><b>Offset-independent.</b> The answer keys on the absolute moment, not on the offset
+    /// the caller's <see cref="DateTimeOffset"/> happens to carry, so a caller holding the same
+    /// moment as <c>22:30Z</c> or as <c>2026-07-16 03:30+05:00</c> gets the same Copenhagen day.</para>
+    /// </summary>
+    /// <param name="instant">The captured moment, in any offset. Interpreted as an absolute instant.</param>
+    /// <returns>The Copenhagen (CET/CEST) calendar day on which that moment fell.</returns>
+    /// <exception cref="InvalidTimeZoneException">The host has no usable Europe/Copenhagen zone.</exception>
+    public static DateOnly FromInstant(DateTimeOffset instant)
+    {
+        // ConvertTime(DateTimeOffset, TimeZoneInfo) resolves against the absolute instant, so a
+        // non-UTC input offset is handled correctly rather than being read as wall-clock text.
+        var copenhagenLocal = TimeZoneInfo.ConvertTime(instant, Zone);
+        return DateOnly.FromDateTime(copenhagenLocal.DateTime);
     }
 
     /// <summary>
