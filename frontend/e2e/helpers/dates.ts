@@ -1,12 +1,28 @@
+import { copenhagenToday } from '../../src/lib/copenhagenDate'
+
 /**
  * SPRINT-82 task 8202 (R4 + the re-run-tolerance nonce) — the shared date/nonce
  * helper for the mutating journeys (Skema registration + approval).
  *
  * The running stack uses the REAL clock (TimeProvider.System; approval "today" =
- * DateTime.UtcNow) — there is NO FixedTimeProvider here (unlike the vitest tier).
- * Date-fragile flows flaked S77/S78, so the journeys compute every target at
- * RUNTIME in UTC and deliberately AVOID boundary days (month-end, year-end,
- * weekends). Nothing is hardcoded.
+ * `CopenhagenBusinessDate.Today(timeProvider)` — the Europe/Copenhagen calendar day,
+ * not UTC) — there is NO FixedTimeProvider here (unlike the vitest tier). Date-fragile
+ * flows flaked S77/S78, so the journeys compute every target at RUNTIME and
+ * deliberately AVOID boundary days (month-end, year-end, weekends). Nothing is
+ * hardcoded.
+ *
+ * S143 / TASK-14305 — the "current month" these journeys navigate FROM must be the
+ * SAME calendar the app itself opens on. TASK-14303 moved that from the browser's UTC
+ * clock to the server-confirmed Europe/Copenhagen business day
+ * (`useCalendarToday()` / `CopenhagenBusinessDate.Today`); this helper now derives its
+ * base month from `copenhagenToday()` (the frontend's own Copenhagen-day function —
+ * dependency-free, importable straight from `src/lib` past `tsconfig.e2e.json`'s
+ * `include` list, since `tsc` follows imports) rather than `Date#getUTCMonth()`. Near
+ * a month boundary the two calendars can name a different "current month" (Copenhagen
+ * is 1–2 hours ahead of UTC), so this is not cosmetic: a UTC base could pick a target
+ * month the app itself considers one month further along, an INTERMITTENT failure that
+ * only reproduces near midnight UTC and looks exactly like the flake this file's
+ * boundary-avoidance already guards against.
  *
  * Re-run tolerance: each run derives a per-run nonce from Date.now(); the nonce
  * selects a UNIQUE future month within a bounded forward window. Two consecutive
@@ -19,9 +35,11 @@
  *     Postgres volume.
  *
  * The bounded window keeps the month-nav (one "Naeste" click per month, internal
- * state) to a deterministic, small click count on the surfaces that have no month
- * URL param — the leader Teamoversigt. The employee Skema page DOES take
- * `?year=&month=` (the Årsoversigt drill-in), so that side navigates directly.
+ * state) to a deterministic, small click count on the one surface that still has no
+ * month URL param — the leader Teamoversigt (driven to a LABEL, not a click count; see
+ * `stepTeamOversigtTo` in approval.spec.ts). The employee Skema page DOES take
+ * `?year=&month=` (the Årsoversigt drill-in), so both mutating journeys navigate it
+ * directly by URL — neither counts clicks there any more (S143 removed the last one).
  *
  * S127 / TASK-12709 — the nonce is a first line of defence, not the whole story:
  * `slot = (nonce + offset) % 18` recycles, so approval.spec.ts walks forward from
@@ -30,18 +48,17 @@
  */
 
 /** How far ahead the nonce window reaches, in months. A run picks one slot in
- *  [1, MONTH_WINDOW]; MONTH_WINDOW caps the dashboard "Naeste" click count. */
+ *  [1, MONTH_WINDOW]. This is the skema-registration journey's half of the two
+ *  specs' DISJOINT windows — see approval.spec.ts's MONTH_WINDOW_START, which starts
+ *  its own window immediately past this one so the two mutating journeys, run in
+ *  parallel against the same employee, never target the same month. */
 const MONTH_WINDOW = 18
 
 export interface TargetMonth {
-  /** Four-digit calendar year (UTC). */
+  /** Four-digit calendar year (Europe/Copenhagen — the calendar the app itself opens on). */
   year: number
-  /** 1-based calendar month (UTC). */
+  /** 1-based calendar month (Europe/Copenhagen). */
   month: number
-  /** Whole months FORWARD from the current UTC month — the exact number of
-   *  "Naeste" clicks needed to drive the ApprovalDashboard month-nav from "now"
-   *  (which initialises to the current UTC month) onto this target. */
-  forwardClicks: number
 }
 
 /** A per-run nonce derived from the wall clock. Distinct on every run (down to
@@ -52,9 +69,10 @@ export function runNonce(): number {
 
 /**
  * Resolve the journey's UNIQUE target month: a month `slot` (1..MONTH_WINDOW)
- * forward of the current UTC month, where `slot` is the per-run nonce rotated by
- * an optional `offset`. Pure function of (nonce, offset) — deterministic within a
- * single call.
+ * forward of the current Europe/Copenhagen month — the same calendar the app itself
+ * opens on (S143) — where `slot` is the per-run nonce rotated by an optional
+ * `offset`. Pure function of (nonce, offset, "now") — deterministic within a single
+ * call.
  *
  * NOTE on the `offset` param (corrects an earlier over-claim): the two journeys
  * (skema-registration + approval) call `runNonce()` INDEPENDENTLY — each derives
@@ -66,9 +84,9 @@ export function runNonce(): number {
  * nonce is reused to carve out a second distinct slot.
  */
 export function targetMonth(nonce: number, offset = 0): TargetMonth {
-  const now = new Date()
-  const baseYear = now.getUTCFullYear()
-  const baseMonth0 = now.getUTCMonth() // 0-based
+  const today = copenhagenToday() // yyyy-MM-dd, Europe/Copenhagen calendar day
+  const baseYear = Number(today.slice(0, 4))
+  const baseMonth0 = Number(today.slice(5, 7)) - 1 // 0-based
 
   // slot ∈ [1, MONTH_WINDOW] — never 0 (the current month may hold real data
   // or be a partial month near its own boundary).
@@ -77,7 +95,7 @@ export function targetMonth(nonce: number, offset = 0): TargetMonth {
   const totalMonths0 = baseMonth0 + slot
   const year = baseYear + Math.floor(totalMonths0 / 12)
   const month = (totalMonths0 % 12) + 1 // back to 1-based
-  return { year, month, forwardClicks: slot }
+  return { year, month }
 }
 
 /**
