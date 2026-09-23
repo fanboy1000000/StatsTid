@@ -46,5 +46,6 @@ public static class ApiEndpoints
         app.MapVacationSettlementEndpoints(); // S68 ADR-033 slice 1a — §21 agreement + D10 resolve + §24 payout-pending
         app.MapTerminationPayoutRequestEndpoints(); // S71 / TASK-7102 — the §26 anmodning record + event (ADR-033 slice 3b, SPRINT-71 R6)
         app.MapSettlementReversalEndpoints();       // S71 / TASK-7102 — operator-authorized settlement reversal (ADR-033 D4/D5, SPRINT-71 R4)
+        app.MapCalendarEndpoints(); // S143 / TASK-14300 — GET /api/calendar/today: the server's Copenhagen day + the seconds to its rollover (ADR-041; the FE app-shell bootstrap read, owner ruling OQ-1a/1b/1d)
     }
 }
