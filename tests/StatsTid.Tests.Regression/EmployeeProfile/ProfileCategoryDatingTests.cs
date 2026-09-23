@@ -94,13 +94,21 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var yesterday = today.AddDays(-1);
 
-        // Predecessor via the production CreateAsync path (stamps effective_from = today).
+        // Predecessor via the production CreateAsync path, dated TODAY — the date the admin
+        // create-person endpoint passes.
+        // S143 / TASK-14308 (QUAL-177, owner ruling OQ-4): CreateAsync used to read the Copenhagen
+        // clock itself and stamp today. It is now the one write path shared by the two create-a-person
+        // routes — the boot seeder and the admin endpoint both route through it — and since those need
+        // DIFFERENT dates ('0001-01-01' for a historical backfill, today for a steady-state hire),
+        // the date became a stated argument. This call passes today, so the row it writes is
+        // identical to the pre-S143 one and the Case C routing this fact depends on is unchanged.
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
             await _repo.CreateAsync(conn, tx, new EmployeeProfileCreateRequest(
-                EmployeeId: employeeId, PartTimeFraction: 1.000m, Position: null));
+                EmployeeId: employeeId, PartTimeFraction: 1.000m, Position: null,
+                EffectiveFrom: today));
             await tx.CommitAsync();
         }
 
@@ -160,10 +168,27 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
     /// (both serve <c>InsertLiveRowAsync</c>), and the AdminEndpoints 4-way-atomic
     /// user-create — then takes the census: ZERO NULL dated categories, and every row
     /// (history rows included) equals its user's live value.
+    ///
+    /// <para>
+    /// <b>S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — two of those four are now the SAME
+    /// path.</b> The boot seeder and the AdminEndpoints create used to carry their own INSERT
+    /// statements; both now route through <c>CreateAsync</c>, which is what makes the
+    /// copy-from-users subselect a single site instead of three that had to be kept in step. The
+    /// census is kept exactly as it was rather than trimmed: it asserts an OUTCOME over every row
+    /// the product can produce, and an outcome census must not shrink because the implementation
+    /// consolidated — that is precisely when a caller can quietly stop reaching the shared path.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task Census_AfterEveryProductionWritePath_NoNullCategories_DatedEqualsLive()
     {
+        // S142 test-clock sweep: INERT — repository-direct test; today only decides Case A/B/C routing
+        // against the SAME test's other locally-derived dates, never an independently-computed server clock.
+        // S143 / TASK-14308 — hoisted above path 2, which now STATES its effective date rather than
+        // letting CreateAsync read a clock (see that method's doc: the date had to leave it so the
+        // backfill seeder and the admin endpoint, which need different dates, could share it).
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
         // Path 2: CreateAsync (path 1, the seeder, ran at host build in InitializeAsync).
         var createUser = await CreateUserWithoutProfileAsync(NonDefaultCategory);
         await using (var conn = _harness.Factory.Create())
@@ -171,15 +196,13 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
             await _repo.CreateAsync(conn, tx, new EmployeeProfileCreateRequest(
-                EmployeeId: createUser, PartTimeFraction: 1.000m, Position: null));
+                EmployeeId: createUser, PartTimeFraction: 1.000m, Position: null,
+                EffectiveFrom: today));
             await tx.CommitAsync();
         }
 
         // Path 3a: SupersedeAndCreateAsync Case A (net-new via InsertLiveRowAsync).
         var caseAUser = await CreateUserWithoutProfileAsync("Chefkonsulent");
-        // S142 test-clock sweep: INERT — repository-direct test; today only decides Case A/B/C routing
-        // against the SAME test's other locally-derived dates, never an independently-computed server clock.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
         long caseAToken;
         await using (var conn = _harness.Factory.Create())
         {
@@ -281,12 +304,18 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
     public async Task Read_DatedCategoryCell_IsAuthoritative_NullDatedCellRejectedByNotNull()
     {
         var employeeId = await CreateUserWithoutProfileAsync(NonDefaultCategory);
+        // S143 / TASK-14308 — CreateAsync takes its effective date rather than reading a clock (it is
+        // now the single write path shared by the backfill seeder and the admin create, which need
+        // different dates). This fact is about the CATEGORY cell, so the date only has to be a real
+        // one; today keeps the row live and current exactly as before.
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();
             await using var tx = await conn.BeginTransactionAsync();
             await _repo.CreateAsync(conn, tx, new EmployeeProfileCreateRequest(
-                EmployeeId: employeeId, PartTimeFraction: 1.000m, Position: null));
+                EmployeeId: employeeId, PartTimeFraction: 1.000m, Position: null,
+                EffectiveFrom: today));
             await tx.CommitAsync();
         }
 

@@ -498,11 +498,18 @@ using (var scope = app.Services.CreateScope())
 // (ADR-018 D5). Default values (weekly_norm_hours=37.0, part_time_fraction=1.0,
 // position=NULL) — admins re-enter correct values post-S31 via the new
 // /api/admin/employee-profiles/{employeeId} PUT (TASK-3107).
+// S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — the seeder now takes the DI-registered
+// EmployeeProfileRepository because it writes its rows through that repository's CreateAsync, the
+// single write path shared by the two create-a-person routes, this seeder and the admin
+// create-person endpoint (it used to carry its own INSERT statement). Resolved
+// from the container rather than newed up so the seeder shares the one configured TimeProvider with
+// the rest of the app.
 {
     var dbFactory = app.Services.GetRequiredService<DbConnectionFactory>();
     var outbox = app.Services.GetRequiredService<IOutboxEnqueue>();
+    var profileRepository = app.Services.GetRequiredService<EmployeeProfileRepository>();
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    await EmployeeProfileSeeder.SeedAsync(dbFactory, outbox, logger);
+    await EmployeeProfileSeeder.SeedAsync(dbFactory, outbox, profileRepository, logger);
 }
 
 // ── S103 / TASK-10304 / ADR-038 (Enhedsspor Phase 1a): the S97 Enhed backfill seeder is
