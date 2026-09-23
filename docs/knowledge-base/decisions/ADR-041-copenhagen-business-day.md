@@ -76,7 +76,11 @@ browser-local day and the Danish day are the same day there. Force the zone, and
 
 ## What this ADR does not decide
 
-- **Display and navigation dates** — which month a calendar view opens on, for instance — were filed to a follow-up sprint.
-  They are browser-local today, which is *a different wrong calendar*, not a lesser instance of this one.
+- **Display and navigation dates** — which month a calendar view opens on — were filed to a follow-up sprint.
+  **DONE in S143; see [ADR-042](ADR-042-client-today-from-the-server.md).** This entry described them as browser-local,
+  *a different wrong calendar rather than a lesser instance of this one*, which was right about the calendar and wrong
+  about the stakes: they are not display dates at all. The month a screen opens on is sent as the period envelope of the
+  skema save and the approval send, so it decides **which month a person's hours are filed under**. ADR-042 settles it —
+  the client reads the day from the server once at app start and the shell refuses to render without it.
 - **Whether a user outside Denmark should ever see their own calendar.** The premise here is that every user is Danish. If
   that changes, this ADR is the thing to revisit first.

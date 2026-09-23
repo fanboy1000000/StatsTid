@@ -2,7 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | **PLANNED** — Step 0b complete: internal lens APPROVED-WITH-WARNINGS (2 cycles), external lens 3 cycles (the third owner-authorised past the cap). All findings adopted |
+| **Status** | **CODE COMPLETE** — 14 tasks, all merged. Awaiting Step 7a + CI. Step 0b took 2 internal cycles and 3 external (the third owner-authorised past the cap); Step 5a ran on every substantive task, and found a defect in **every single one** |
+| **Result** | **No executable browser clock read remains in frontend production source** — every `new Date()` match is now a comment. Enforced by an AST guard whose allowlist was retired at close, so nothing can be appended to |
+| **Final counts** | build **145 warnings / 0 errors** (S142 baseline, unmoved through 15 merges) · unit **1290** (+26) · demo-seed **170** · regression non-Docker **128** · frontend **973** (+79) |
 | **Opened** | 2026-09-23 |
 | **Predecessor** | S142 (`5408769` close, `0a001b4` post-close) — ADR-041, business dates are the Copenhagen day |
 | **Refinement** | `.claude/refinements/REFINEMENT-s143-the-clients-own-clock.md` rev 5 — READY. Dual-lens reviewed, both lenses used both cycles, internal verdict APPROVED-WITH-WARNINGS |
@@ -201,6 +203,29 @@ ruleset"**; QUAL-165 recorded against S144 by name.
   instruction produced clean commits first time. It costs one line in the prompt and saves a round
   trip per task; more importantly, an agent that reports "done" with an untracked file has told the
   truth as it understands it, so the gap is in the brief, not the work.
+
+  **Recorded twice, because writing the rule down did not prevent the next instance.** This entry was
+  added to the log and then the *very next dispatch* omitted the instruction again — a fourth task
+  finished uncommitted. Which is the actual lesson: a method rule in a sprint log is a note to a
+  future reader, not a control on present behaviour. The durable fix is a prompt template that carries
+  it, or a dispatch checklist — something that has to be passed through rather than remembered.
+  Compare TASK-14309: the worktree teardown was *named* as owed in S141, cost two sprints, and only
+  stopped costing when it became a gate.
+- **An agent must not end a turn with a verification still pending — backgrounded work is reaped at
+  the turn boundary.** *(New, S143; hit three times, by two different agents.)* An agent that launches
+  a test suite in the background and stops to wait will never receive it: the completion notification
+  fires precisely *because* it stopped with no live children. Both agents reported the run as "alive,
+  verified not hung" — true when they looked, false the moment their turn ended. This is not a
+  judgement error, it is how backgrounded work interacts with turn boundaries, and it is invisible
+  from inside.
+
+  Two failure modes compound it. A size or liveness check on the output file can read **before the
+  tool flushes**, producing a confident "it died" about a run that completed fine. And piping through
+  `tail` or any pager buffers the whole stream, so a finished run looks unfinished.
+
+  The instruction that works, and which belongs in the brief rather than in a rescue message: run it
+  in the foreground, or hold the turn open with **one** blocking command — `until grep -q "Test Files"
+  <log>; do sleep 5; done` — writing straight to a file, never through a pager.
 - **An agent's worktree base is not reliably current master — make every dependent task verify it and
   say what to do about it.** *(New, S143.)* Worktrees spawned before a merge sit on the pre-merge
   commit, and the base is not guaranteed to be current HEAD even for a later spawn: this sprint had

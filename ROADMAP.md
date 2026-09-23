@@ -163,8 +163,16 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   *"Why not update the system's clock to the Danish clock? We will only have Danish users."*).
   Twelve tasks, 64 production sites, the frontend included; instants stayed UTC. Recorded as
   **ADR-041**; closes QUAL-156, QUAL-157 and QUAL-172. Detail in `docs/sprints/SPRINT-142.md`.
-  **Not carried over to S143:** display and navigation dates (which month a calendar view opens on)
-  are still **browser-local** — *a different wrong calendar, not a lesser instance of this one*.
+  **✅ COMPLETED IN S143 — the client's own clock is gone too.** This entry previously read "Not carried
+  over to S143: display and navigation dates are still browser-local." They were, and the phrase
+  *"a different wrong calendar, not a lesser instance of this one"* was right about the calendar and
+  **wrong about the stakes**. S143's refinement traced what the value feeds: the month a screen opens
+  on is sent as the period envelope of `POST /api/skema/{id}/save` **and** `POST /api/approval/send`
+  — the second of which *creates* the approval period. They were never display dates; they decide
+  **which month a person's hours are filed under**. Owner ruling 2026-09-23: the client reads the
+  Copenhagen day from the server once at app start, and the app shell refuses to render without it.
+  Recorded as **ADR-042**; fourteen tasks; no executable browser clock read remains in frontend
+  production source, enforced by an AST guard. Detail in `docs/sprints/SPRINT-143.md`.
   The description below is kept as the statement of the problem that was solved.
   **The user-facing defect, which is why this is more than tidiness.** The frontend sends "today" as
   `new Date().toISOString().slice(0, 10)` (`frontend/src/hooks/useEditPerson.ts:44-46`) — the UTC
