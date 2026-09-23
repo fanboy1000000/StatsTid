@@ -495,9 +495,12 @@ using (var scope = app.Services.CreateScope())
 // Runs AFTER agreement/entitlement seeders + AFTER init.sql users seed.
 // Idempotent: NOT EXISTS predicate skips users with existing live profiles.
 // Each new row commits with an EmployeeProfileCreated outbox event atomically
-// (ADR-018 D5). Default values (weekly_norm_hours=37.0, part_time_fraction=1.0,
-// position=NULL) — admins re-enter correct values post-S31 via the new
-// /api/admin/employee-profiles/{employeeId} PUT (TASK-3107).
+// (ADR-018 D5). Default values (part_time_fraction=1.0, position=NULL) — admins re-enter
+// correct values post-S31 via the /api/admin/employee-profiles/{employeeId} PUT (TASK-3107).
+// S143 correction: this line also listed weekly_norm_hours=37.0. `employee_profiles` has no
+// such column — it was dropped in S53, and the weekly norm belongs to `agreement_configs`,
+// where it is a property of the AGREEMENT rather than of the person. The same stale claim
+// sat in EmployeeProfileSeeder's class doc; both are corrected.
 // S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — the seeder now takes the DI-registered
 // EmployeeProfileRepository because it writes its rows through that repository's CreateAsync, the
 // single write path shared by the two create-a-person routes, this seeder and the admin

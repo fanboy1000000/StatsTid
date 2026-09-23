@@ -22,11 +22,19 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// Defaults for the 3 net-new fields:
-/// <c>weekly_norm_hours = 37.0</c>, <c>part_time_fraction = 1.000</c>,
-/// <c>position = NULL</c>. Admins re-enter correct values post-S31 via the new
+/// Defaults for the backfilled fields: <c>part_time_fraction = 1.000</c> and
+/// <c>position = NULL</c>. Admins re-enter correct values post-S31 via the
 /// <c>/api/admin/employee-profiles/{employeeId}</c> PUT (TASK-3107) — pre-launch posture
 /// means no prior intent to preserve (Risk R5 in PLAN-s31.md).
+/// </para>
+///
+/// <para><b>S143 comment correction.</b> This paragraph said "the 3 net-new fields" and listed
+/// <c>weekly_norm_hours = 37.0</c> first. <c>employee_profiles</c> has **no such column** — it was
+/// dropped in S53, and the weekly norm now lives on <c>agreement_configs</c>, where it is a property
+/// of the agreement rather than of the person. The stale line survived because nothing reads a
+/// comment. Found by the TASK-14308 implementer while fixing a different false comment in the same
+/// write path; corrected here rather than left, because a doc naming a column that does not exist is
+/// how the next reader learns the wrong data model.
 /// </para>
 /// </summary>
 public static class EmployeeProfileSeeder
