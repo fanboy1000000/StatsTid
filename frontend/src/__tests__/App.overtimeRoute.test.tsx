@@ -31,8 +31,35 @@ vi.mock('../contexts/AuthContext', () => ({
   }),
 }))
 
+// S143 / TASK-14301: `<App/>` now gates every protected route on
+// `RequireAuth`'s calendar bootstrap read (`GET /api/calendar/today`) BEFORE
+// `AppLayout` (and this page) ever mounts. This test previously ran with NO
+// fetch stub at all — `OvertimePreApprovalManagement`'s own
+// `/api/overtime/pre-approvals` GET hit a real (failing) network call in
+// jsdom and the page tolerated that silently, which is why the test passed
+// unmocked. The calendar gate does NOT tolerate that: an unmocked failure
+// there renders the error screen instead of the route. Stub just enough to
+// answer the calendar read; every other URL is left to reject exactly as a
+// real unmocked `fetch` would in this environment, preserving the page's
+// prior (unmocked) behavior for its own calls.
+const mockFetch = vi.fn(async (url: string) => {
+  if (url.includes('/api/calendar/today')) {
+    const body = { today: '2025-10-15', secondsUntilNextMidnight: 3600 }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    }
+  }
+  throw new Error('network error (unmocked call, test stub)')
+})
+vi.stubGlobal('fetch', mockFetch)
+
 beforeEach(() => {
   auth.role = 'LocalLeader'
+  mockFetch.mockClear()
 })
 
 describe('the overtime pre-approval route (QUAL-162)', () => {
