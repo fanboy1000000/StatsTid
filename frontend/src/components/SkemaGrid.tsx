@@ -32,6 +32,7 @@
 //         null/0 cells, so the 0→null propagation semantics here are kept verbatim
 //         from the shipped grid (do NOT add delete semantics).
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useCalendarToday } from '../contexts/CalendarContext'
 import type { SkemaRow, SkemaRowPreferences } from '../types'
 import { parseDanishNumber, formatDanishNumber } from '../lib/locale'
 import { classifyAllocation, unallocated } from '../lib/allocation'
@@ -121,13 +122,15 @@ function formatDateKey(date: Date): string {
   return `${y}-${m}-${d}`
 }
 
-function isToday(date: Date): boolean {
-  const today = new Date()
-  return (
-    date.getFullYear() === today.getFullYear() &&
-    date.getMonth() === today.getMonth() &&
-    date.getDate() === today.getDate()
-  )
+// S143 / TASK-14303 — `today` is the server-confirmed Europe/Copenhagen business day
+// (`useCalendarToday()`, `contexts/CalendarContext.tsx`), passed in by the caller rather than read
+// here via `new Date()` — the browser's own clock disagrees with Copenhagen for part of every day
+// (ADR-041). Comparing `formatDateKey(date)` (built from the SAME year/month the grid was asked to
+// render, per lines 109-122 above, untouched by this task) against the `today` string directly
+// means no `Date` construction or zone conversion happens in this function at all: two calendar
+// labels are compared as strings, so there is no zone to get wrong.
+function isToday(date: Date, today: string): boolean {
+  return formatDateKey(date) === today
 }
 
 function isWeekend(date: Date): boolean {
@@ -186,6 +189,10 @@ export function SkemaGrid({
   onOpenManager,
   showWorkedHours = false,
 }: SkemaGridProps) {
+  // S143 / TASK-14303 — the shared calendar seam (see `isToday` above): read once per render via
+  // the hook, never via `new Date()`.
+  const today = useCalendarToday()
+
   const days = useMemo(() => getDaysInMonth(year, month), [year, month])
   const dateKeys = useMemo(() => days.map(formatDateKey), [days])
 
@@ -618,7 +625,7 @@ export function SkemaGrid({
             {days.map((day) => {
               const headClasses = [styles.dayHeader]
               if (isWeekend(day)) headClasses.push(styles.weekend)
-              if (isToday(day)) headClasses.push(styles.today)
+              if (isToday(day, today)) headClasses.push(styles.today)
               return (
                 <th key={formatDateKey(day)} className={headClasses.join(' ')}>
                   <div className={styles.dayAbbrev}>{DA_DAY_ABBREV[day.getDay()]}</div>

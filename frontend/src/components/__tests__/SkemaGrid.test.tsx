@@ -6,11 +6,27 @@
 // March 2026 reference: Mar 1 = Sunday, Mar 2 = Monday, Mar 7 = Saturday,
 // Mar 8 = Sunday, Mar 11 = Wednesday. Row tds: [0] = label, [1..31] = days,
 // [32] = trailing Sum cell.
-import { render, fireEvent, screen } from '@testing-library/react'
+import { render as rtlRender, fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
+import { useState, type ReactElement } from 'react'
 import { SkemaGrid } from '../SkemaGrid'
+import { CalendarTestProvider } from '../../test/renderWithCalendar'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../lib/__tests__/testTimeZone'
 import type { SkemaRow, SkemaRowPreferences } from '../../types'
+
+// S143 / TASK-14303 — SkemaGrid now reads "today" via `useCalendarToday()` (the shared calendar
+// seam, `contexts/CalendarContext.tsx`), never `new Date()`, so every render in this file needs a
+// mounted provider or the hook throws (by design — see the context's own throw-outside-provider
+// guard). `render` is shadowed HERE, once, rather than editing each of this file's ~50 call sites:
+// every existing `render(<Foo/>)` call keeps working unchanged, now wrapped in
+// `CalendarTestProvider`. A hand-written literal, unrelated to any fixture arithmetic — most tests
+// in this file don't exercise "today" at all, so any fixed March 2026 day is fine; the one test
+// that DOES care about "today" (the highlight pin below) passes its own value as the second arg.
+const DEFAULT_TODAY = '2026-03-15'
+
+function render(ui: ReactElement, today: string = DEFAULT_TODAY) {
+  return rtlRender(<CalendarTestProvider today={today}>{ui}</CalendarTestProvider>)
+}
 
 const mockRows: SkemaRow[] = [
   { type: 'project', key: 'DRIFT', label: 'Drift' },
@@ -36,7 +52,10 @@ const prefsHideDrift: SkemaRowPreferences = {
   absenceTypes: [{ type: 'VACATION', label: 'Ferie', fullDayOnly: false, sortOrder: 0 }],
 }
 
-function renderGrid(overrides: Partial<Parameters<typeof SkemaGrid>[0]> = {}) {
+function renderGrid(
+  overrides: Partial<Parameters<typeof SkemaGrid>[0]> = {},
+  today: string = DEFAULT_TODAY,
+) {
   return render(
     <SkemaGrid
       year={2026}
@@ -46,7 +65,8 @@ function renderGrid(overrides: Partial<Parameters<typeof SkemaGrid>[0]> = {}) {
       readOnly={false}
       onCellChange={vi.fn()}
       {...overrides}
-    />
+    />,
+    today,
   )
 }
 
@@ -442,13 +462,65 @@ describe('SkemaGrid — weekend band + today (R8)', () => {
     expect(headers[2].className).not.toContain('weekend')
   })
 
-  it("highlights today's day number in the header", () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-03-11T09:00:00'))
-    const { container } = renderGrid()
+})
+
+// S143 / TASK-14303 — `isToday` (SkemaGrid.tsx) used to read `new Date()` — the BROWSER's clock —
+// directly. It now takes `today` from the shared calendar context (`useCalendarToday()`,
+// `contexts/CalendarContext.tsx`) and never touches the clock itself (see the function's own
+// comment). The old version of this test pinned `vi.setSystemTime(new Date('2026-03-11T09:00:00'))`
+// — NO trailing `Z`, unlike its sibling clock-pin literals elsewhere in this suite — which parsed
+// as LOCAL time on whatever machine ran it rather than a fixed UTC instant; carried over
+// unnoticed since S142 flagged the sibling defect shape (`SWEEP-s142-test-clock-census.md`).
+//
+// WHY THE ZONE MUST BE FORCED (mirrors `MondayDatePicker.test.tsx`'s S142 pattern). On a Danish
+// developer machine, browser-local and the injected "today" agree by coincidence — a test that
+// never disagrees with `new Date()` would pass whether or not `isToday` still secretly read the
+// clock. Forcing America/New_York and pinning an instant where the two are DIFFERENT calendar
+// days is what makes the proof real: if `isToday` ever regressed back onto `new Date()`, the
+// device's day (the 10th) would be highlighted instead of the context's (the 11th), and the
+// assertions below would fail.
+describe('SkemaGrid — today highlight reads the calendar context, not the device clock (S143)', () => {
+  let restoreTz: string | undefined
+
+  beforeAll(() => {
+    restoreTz = forceTestTimeZone('America/New_York')
+  })
+
+  afterAll(() => {
+    restoreTestTimeZone(restoreTz)
+  })
+
+  beforeEach(() => {
+    // `toFake: ['Date']` only — nothing else in these two tests depends on real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // 2026-03-11 02:00 UTC is 2026-03-10 22:00 in New York (EDT, UTC-04:00 — US DST started
+    // 2026-03-08, so New York is already in summer time here): a DIFFERENT calendar day from the
+    // '2026-03-11' the test below injects as the context's "today".
+    vi.setSystemTime(new Date('2026-03-11T02:00:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // THE GUARD ON THE GUARD: if the zone forcing ever stopped taking effect, the fact below would
+  // not fail — it would quietly start passing against a device-clock-driven `isToday`, the worst
+  // outcome available. Assert the precondition with LITERALS.
+  it('runs in a zone/instant where the device day disagrees with the injected "today", which is what lets the fact below fail', () => {
+    // The SAME literal `vi.setSystemTime` pinned "now" to, above — checked WITH its argument
+    // (never a bare `new Date()`, which the clock guard forbids outside the approved Copenhagen
+    // helper, this file included) so this assertion is itself guard-clean.
+    const pinned = new Date('2026-03-11T02:00:00Z')
+    expect(pinned.getDate()).toBe(10)
+    expect(pinned.getHours()).toBe(22)
+  })
+
+  it("highlights the CONTEXT's today (the 11th), not the device's (the 10th)", () => {
+    const { container } = renderGrid({}, '2026-03-11')
     const headers = container.querySelectorAll('thead th')
     expect(headers[11].className).toContain('today')
     expect(headers[12].className).not.toContain('today')
+    expect(headers[10].className).not.toContain('today') // the device's own (wrong) day
   })
 })
 
