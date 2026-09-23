@@ -400,6 +400,12 @@ function apiDelete(pathKey: string, arg?: unknown): Promise<ApiResult<unknown>> 
     : request<unknown>('DELETE', pathKey)
 }
 
+// `skipAuthReload` (GET only, `apiGet`'s options — S143/TASK-14301, bug B2): passing it turns a 401
+// into an ORDINARY failed `ApiResult` — `handle401` does not run, so the token is NOT cleared and
+// the page does NOT reload. That means the CALLER inherits the duty to end the session — silently
+// doing nothing with a 401 leaves a dead token sitting in storage indefinitely. The one caller today
+// (`hooks/useCalendarBootstrap.ts`) discharges this via `RequireAuth.tsx`'s `logout()` effect. A
+// future second caller of `skipAuthReload` inherits this same obligation along with the option.
 export const apiClient = {
   get: apiGet,
   post: apiPost,

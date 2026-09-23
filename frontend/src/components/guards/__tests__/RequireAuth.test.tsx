@@ -189,6 +189,13 @@ describe('RequireAuth — the calendar shell gate', () => {
     await waitFor(() => expect(screen.getByTestId('today')).toHaveTextContent('2026-03-15'))
   })
 
+  // KNOWN GAP, confirmed as the correct resolution (pin-coverage audit, second Step-5a pass): this
+  // catches remounting consumers on a day change (the SEAM's own guarantee), but still cannot detect
+  // a real screen REACTIVELY moving its open month — that behavior does not exist in this seam, only
+  // in each sibling screen's own future implementation, so it belongs in that screen's own test, not
+  // here. Renaming away from the "PINS-2" claim (rather than trying to strengthen this test to prove
+  // something it structurally cannot) was judged the right resolution rather than a residual gap to
+  // close.
   it('a refresh updates the live context value WITHOUT remounting the Provider/Outlet subtree — the invariant a screen\'s own "snapshot today once" pattern relies on to keep an already-open month from moving', async () => {
     vi.useFakeTimers()
     mockFetch
@@ -230,6 +237,12 @@ describe('RequireAuth — the calendar shell gate', () => {
     vi.useRealTimers()
   })
 
+  // KNOWN GAP (pin-coverage audit, second Step-5a pass): this drives its refresh failure with a
+  // 500. It does NOT prove a fresh consumer mounted mid-backoff sees a day that keeps advancing
+  // after a 401 SPECIFICALLY (the B2 mutant's failure mode: a 401 that permanently stops
+  // scheduling would not be caught here). That gap is covered instead by
+  // `useCalendarBootstrap.test.ts`'s "B2 regression" test, which asserts the 30s retry and recovery
+  // after a 401 at the hook level. Recorded so the split is explicit rather than assumed.
   it('a mount during retry backoff after a refresh failure sees the last known day — a FRESH consumer, mounted mid-backoff (not present when the gate first opened), reads the identical value an original consumer sees', async () => {
     vi.useFakeTimers()
     mockFetch

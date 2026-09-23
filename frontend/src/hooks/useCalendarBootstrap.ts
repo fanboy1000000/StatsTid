@@ -47,21 +47,51 @@ const REQUEST_TIMEOUT_MS = 10_000
 // regardless of what the server ever actually sends.
 const MAX_TIMEOUT_MS = 2_147_483_647
 
+const ISO_CALENDAR_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
+
+/**
+ * Whether `value` is a real ISO calendar date (`YYYY-MM-DD`) — not merely a non-empty string that
+ * happens to look like one. A prior version of {@link parseCalendarTodayResponse} accepted ANY
+ * non-empty string, which let straight through both `"garbage"` and — the one that will actually
+ * happen — `"2026-02-31"`: syntactically a date, but not a day that exists (found in Step-5a
+ * review; the whole product's notion of "today" flows through this value).
+ *
+ * The check: parse the three components, then reconstruct a `Date` from them and read the
+ * components back. `new Date(year, month - 1, day)` (a THREE-ARGUMENT constructor — not the
+ * zero-argument, ambient-clock-reading form this repo's clock guard forbids) NORMALIZES an
+ * out-of-range day into the following month (`new Date(2026, 1, 31)` becomes 3 March 2026, month
+ * index 2) rather than throwing, so a mismatch between what was asked for and what comes back is
+ * exactly a real-date failure. This reuses `Date`'s own well-tested calendar/leap-year arithmetic
+ * (the same idiom `useSkema.ts`'s `daysInMonth` already relies on) rather than hand-rolling a
+ * days-per-month table here, which would just relocate the risk of an off-by-one bug into new code
+ * written specifically to catch off-by-one bugs.
+ */
+function isValidIsoCalendarDate(value: string): boolean {
+  const match = ISO_CALENDAR_DATE_PATTERN.exec(value)
+  if (!match) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(year, month - 1, day)
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+}
+
 /**
  * Runtime shape-check for the ONE thing this hook receives over the wire: the compile-time type
  * (`CalendarTodayResponse`, generated from the OpenAPI spec) describes what the server is CONTRACTED
- * to send, not what necessarily arrives — a `null`/`204` body, a malformed `{}`, or any other
- * TypeScript-can't-see-it wire surprise would otherwise be destructured blindly (throwing OUTSIDE
- * `apiClient`'s own try/catch, or silently publishing `today: undefined` / scheduling a `NaN`-delay
- * timer that fires immediately in a tight loop). This is the one place that distrust is spent, so
- * every OTHER line in this file can treat a parsed response as trustworthy.
+ * to send, not what necessarily arrives — a `null`/`204` body, a malformed `{}`, a `today` that is a
+ * string but not a real calendar date, or any other TypeScript-can't-see-it wire surprise would
+ * otherwise be destructured blindly (throwing OUTSIDE `apiClient`'s own try/catch, or silently
+ * publishing an invalid "today" / scheduling a `NaN`-delay timer that fires immediately in a tight
+ * loop). This is the one place that distrust is spent, so every OTHER line in this file can treat a
+ * parsed response as trustworthy.
  */
 function parseCalendarTodayResponse(data: unknown): CalendarTodayResponse | null {
   if (data === null || typeof data !== 'object') return null
   const maybe = data as Record<string, unknown>
   const today = maybe.today
   const secondsUntilNextMidnight = maybe.secondsUntilNextMidnight
-  if (typeof today !== 'string' || today.length === 0) return null
+  if (typeof today !== 'string' || !isValidIsoCalendarDate(today)) return null
   if (typeof secondsUntilNextMidnight !== 'number' || !Number.isFinite(secondsUntilNextMidnight)) {
     return null
   }

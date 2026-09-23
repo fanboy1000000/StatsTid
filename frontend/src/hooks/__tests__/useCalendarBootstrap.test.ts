@@ -149,6 +149,61 @@ describe('useCalendarBootstrap — payload validation (Step-5a review W)', () =>
     await waitFor(() => expect(result.current.phase).toEqual({ kind: 'error' }))
   })
 
+  // Second Step-5a review pass, W: a non-empty-string check let ANY string through as `today`,
+  // including one that merely LOOKS like a date. `"2026-02-31"` is the case that will actually
+  // happen — syntactically a date, not a day that exists — not a hypothetical.
+  it('a `today` that is not a real calendar date ("2026-02-31" — February does not have 31 days) is rejected as malformed, NOT published as ready', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ today: '2026-02-31', secondsUntilNextMidnight: 3600 }),
+    )
+    const { result } = renderHook(() => useCalendarBootstrap(true))
+    await waitFor(() => expect(result.current.phase).toEqual({ kind: 'error' }))
+  })
+
+  it('a `today` that is a non-date string ("garbage") is rejected as malformed', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ today: 'garbage', secondsUntilNextMidnight: 3600 }),
+    )
+    const { result } = renderHook(() => useCalendarBootstrap(true))
+    await waitFor(() => expect(result.current.phase).toEqual({ kind: 'error' }))
+  })
+
+  it('a `today` naming an invalid MONTH ("2026-13-01") is rejected as malformed', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ today: '2026-13-01', secondsUntilNextMidnight: 3600 }),
+    )
+    const { result } = renderHook(() => useCalendarBootstrap(true))
+    await waitFor(() => expect(result.current.phase).toEqual({ kind: 'error' }))
+  })
+
+  it('a genuine leap-day `today` ("2024-02-29") IS accepted — the validator must not reject real dates while rejecting fake ones', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ today: '2024-02-29', secondsUntilNextMidnight: 3600 }),
+    )
+    const { result } = renderHook(() => useCalendarBootstrap(true))
+    await waitFor(() => expect(result.current.phase).toEqual({ kind: 'ready', today: '2024-02-29' }))
+  })
+
+  it('the SAME non-existent-date payload arriving on a REFRESH is a refresh failure (quiet retry), not a crash or a published bad day — the validation applies uniformly to both modes', async () => {
+    vi.useFakeTimers()
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ today: '2026-03-15', secondsUntilNextMidnight: 100 }))
+      .mockResolvedValueOnce(jsonResponse({ today: '2026-02-31', secondsUntilNextMidnight: 3600 }))
+    const { result } = renderHook(() => useCalendarBootstrap(true))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.phase).toEqual({ kind: 'ready', today: '2026-03-15' })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100_000)
+    })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    // The malformed refresh response is NOT published — the last known (valid) day is kept.
+    expect(result.current.phase).toEqual({ kind: 'ready', today: '2026-03-15' })
+    vi.useRealTimers()
+  })
+
   it('a huge (implausible-scale) duration is CLAMPED before scheduling, not handed raw to setTimeout — proving the schedule cannot overflow the signed 32-bit delay limit', async () => {
     vi.useFakeTimers()
     // 999,999,999 seconds (~31.7 YEARS) — if this were handed to `setTimeout` unclamped, the next
@@ -227,6 +282,16 @@ describe('useCalendarBootstrap — the transit-staleness correction, measured no
   afterEach(() => {
     vi.useRealTimers()
   })
+
+  // KNOWN GAP (pin-coverage audit, second Step-5a pass): the two "checkpoint" tests below
+  // (the reviewer's exact example, and the larger-delay variant) both drive the STALE response
+  // through `mode: 'bootstrap'` — the mutation-verified fix (holding the corrective read pending
+  // too, checkpointing `phase` in between) is confirmed to fail against a "commit-stale-then-correct"
+  // mutant in that mode. Neither test exercises the identical code path with `mode: 'refresh'` — a
+  // mutant that commits-then-corrects ONLY on a refresh's stale check (leaving bootstrap's check
+  // sound) would pass this file undetected. Recorded rather than left for the next reader to
+  // rediscover; the code path itself is shared (`load()`'s stale-check branch does not read `mode`
+  // at all), so this is a coverage gap in WHICH mode is exercised, not a known-different behavior.
 
   it("the reviewer's exact example: a response reporting 5s that takes 6s of measured transit is caught as stale, and the stale day is never even TRANSIENTLY committed", async () => {
     // BOTH responses are held pending (manually released) — not just the first. A single-flush
@@ -402,6 +467,15 @@ describe('useCalendarBootstrap — a refresh in flight must not corrupt the curr
   // the scheduled timer fires — it never actually started a pending refresh, so an implementation
   // that cleared `today` the moment a refresh fetch LEFT (rather than when it resolves) would have
   // passed it undetected (Step-5a review).
+  //
+  // KNOWN GAP (pin-coverage audit, second Step-5a pass): this test only exercises a refresh started
+  // by the SCHEDULED TIMER. It does not prove the same "never clear early" guarantee for a refresh
+  // started by tab-VISIBILITY regain (`handleVisibility` in the hook) — a mutant that clears `today`
+  // specifically on the visibility-triggered path (but not the timer-triggered one) would pass this
+  // test undetected. Recorded here rather than left for the next reader to rediscover; not closed
+  // because the underlying code path is identical (`handleVisibility` calls the same `load()` this
+  // test already covers) — the gap is in TEST coverage of that shared path from a second trigger, not
+  // a plausible independent mutant surface.
   it('while a refresh fetch has been issued but not yet resolved, `phase` keeps reporting the OLD confirmed day — never cleared, never blanked, never the new (unconfirmed) value early', async () => {
     mockFetch.mockResolvedValueOnce(
       jsonResponse({ today: '2026-03-15', secondsUntilNextMidnight: 100 }),
@@ -462,6 +536,14 @@ describe('useCalendarBootstrap — a REFRESH failure: no lost ready state, the d
   // window). This hook has no multi-consumer surface of its own to mount a second reader against —
   // that claim is what `RequireAuth.test.tsx`'s own "a mount during retry backoff" test now proves,
   // at the level (a shared React context with two independent consumers) where it is actually true.
+  //
+  // KNOWN GAP (pin-coverage audit, second Step-5a pass): `RequireAuth.test.tsx`'s "mount during
+  // backoff" test drives its refresh failure with a 500, same as the test below — neither proves a
+  // fresh consumer mounted mid-backoff sees a day that KEEPS ADVANCING after a 401 specifically (the
+  // failure mode the B2 mutant introduced: a 401 that permanently stops scheduling). That specific
+  // gap is covered instead by the "B2 regression" test further down THIS file, which asserts the 30s
+  // retry and recovery after a 401 — not by either "mount during backoff" test. Recorded so the
+  // separation is explicit rather than assumed.
   beforeEach(() => {
     vi.useFakeTimers()
   })
@@ -513,7 +595,16 @@ describe('useCalendarBootstrap — a REFRESH failure: no lost ready state, the d
   // regaining visibility, the page reloading with no action from the user). This proves BOTH halves
   // together: the asymmetry (last known day kept) AND that it is not secretly overridden by a reload
   // happening beneath this hook.
-  it('B2 regression: a REFRESH 401 does NOT reload the page — the last known day keeps being served, exactly like a 5xx (the asymmetry is REAL, not overridden underneath by apiClient\'s shared handler)', async () => {
+  //
+  // A SECOND Step-5a review pass measured that the version of this test which stopped at "no
+  // reload, day unchanged" was satisfied by a mutant that special-cases a refresh 401 with an early
+  // `return` — skipping `fail()`'s scheduling entirely and so PERMANENTLY disabling the midnight
+  // rollover from that point on. All 33 hook/guard tests stayed green, because none of them asserted
+  // that a retry is actually scheduled and recovers after a 401 specifically — only after a 5xx
+  // (the "no lost ready state" test above). This is the same vacuous-pin shape as PINS-1..4: proving
+  // the bad thing stopped is not proving the good thing continues. Fixed by asserting the retry
+  // fires at the documented 30s cadence and recovers, exactly as the 5xx case already does.
+  it('B2 regression: a REFRESH 401 does NOT reload the page and does NOT stop the midnight rollover — the last known day is kept, the 30s retry fires anyway, and it recovers', async () => {
     mockFetch
       .mockResolvedValueOnce(jsonResponse({ today: '2026-03-15', secondsUntilNextMidnight: 100 }))
       .mockResolvedValueOnce(jsonResponse({}, 401))
@@ -529,6 +620,26 @@ describe('useCalendarBootstrap — a REFRESH failure: no lost ready state, the d
     })
     expect(mockFetch).toHaveBeenCalledTimes(2)
     expect(result.current.phase).toEqual({ kind: 'ready', today: '2026-03-15' })
+    expect(mockReload).not.toHaveBeenCalled()
+
+    // Before the 30s retry cadence elapses, no further fetch yet — proves the assertion below is
+    // actually exercising the SCHEDULED retry, not some other trigger.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(29_000)
+    })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+
+    // The retry fires at exactly the documented 30s cadence and recovers — a mutant that quietly
+    // stops scheduling after a 401 specifically would fail HERE (fetch count stuck at 2, day never
+    // advancing), which is exactly what the earlier version of this test could not detect.
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ today: '2026-03-16', secondsUntilNextMidnight: 86400 }),
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+    expect(result.current.phase).toEqual({ kind: 'ready', today: '2026-03-16' })
     expect(mockReload).not.toHaveBeenCalled()
   })
 })
