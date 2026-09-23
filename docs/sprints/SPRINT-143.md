@@ -193,6 +193,14 @@ ruleset"**; QUAL-165 recorded against S144 by name.
   it red" is only buildable with a shrink-only offenders list, or the sprint runs on a red master.
 - **Never cite a gitignored artifact in a task prompt** — inline it. Violated again in the first
   draft (the guard's hazard list) after being made a standing rule in S142.
+- **"Commit and report the sha" belongs in every task's acceptance criteria, not in a follow-up
+  message.** *(New, S143.)* Three of this sprint's tasks finished with their work uncommitted — and in
+  two cases with a **new test file untracked**, which is FAIL-003 exactly: local build and test glob
+  everything on disk, so local green does not prove the file is in the commit, and CI builds only what
+  was committed. The Orchestrator had to ask afterwards each time. The briefs that *did* carry the
+  instruction produced clean commits first time. It costs one line in the prompt and saves a round
+  trip per task; more importantly, an agent that reports "done" with an untracked file has told the
+  truth as it understands it, so the gap is in the brief, not the work.
 - **An agent's worktree base is not reliably current master — make every dependent task verify it and
   say what to do about it.** *(New, S143.)* Worktrees spawned before a merge sit on the pre-merge
   commit, and the base is not guaranteed to be current HEAD even for a later spawn: this sprint had
@@ -243,7 +251,8 @@ nobody writes `const D = Date` by mistake, while everybody writes `new Date()` b
 **The fixture bug worth remembering.** One of its two new hazard tests did not test what it claimed:
 the explanatory prose *inside* the template literal — "no `${}` hole at all" — was itself a parse
 error, creating the very hole it described the absence of. The words broke the example.
-| TASK-14307 | Step 5a absorbed → **HOLDING for 14311** | Four stamps moved; the other four demonstrably untouched; six "BY DESIGN" comments reconciled into two named rules (A mandatory, B permitted). Window reduced from "spans a blocking lock" to "two adjacent statements" — **explicitly not closed**, carried as a `⚠ KNOWN RESIDUAL` block until the overload lands. 5 Docker-gated facts, **one deliberately RED**: the single-read pin was written now rather than after the fix, so it is honestly RED-first. Build 145 warnings, unmoved |
+| TASK-14307 | **MERGED** `6f18a18` → master `2fa174c` | QUAL-176 closed in both halves. See "the flip nobody witnessed" below |
+| *(14307 history)* | Step 5a absorbed, then held for 14311 | Four stamps moved; the other four demonstrably untouched; six "BY DESIGN" comments reconciled into two named rules (A mandatory, B permitted). Window reduced from "spans a blocking lock" to "two adjacent statements" — **explicitly not closed**, carried as a `⚠ KNOWN RESIDUAL` block until the overload lands. 5 Docker-gated facts, **one deliberately RED**: the single-read pin was written now rather than after the fix, so it is honestly RED-first. Build 145 warnings, unmoved |
 | TASK-14308 | **MERGED** `a16cd3e` → master `41c43bb` | Post-merge verification on master: **145 warnings / 0 errors / 1264 unit tests** — the S142 baseline exactly, unmoved. Worktree torn down after proving the branch merged. |
 | *(14308 detail)* | Step 5a **PASSED**, 2 cycles | Single write path. Cycle 1: 1 BLOCKER (external), APPROVED-WITH-WARNINGS (internal). Cycle 2 on the fix: **no blockers, no warnings**. Build 145 warnings, baseline unmoved; Unit 1264; regression non-Docker 128; net test delta **+3**. Docker-gated CI-verified throughout |
 | TASK-14309 | **DONE** | Orchestrator; gate built and proven — see below |
@@ -280,6 +289,30 @@ planning. **An enumerated count is worth more than a matching one.**
 | **TASK-14311** | DISPATCHED | **Added mid-sprint by a Step-5a finding** — `CopenhagenBusinessDate.ToCopenhagenDay(DateTimeOffset)`, so a caller holding an instant can derive its Copenhagen day without a second clock read. See the QUAL-176 note below |
 | TASK-14301 | DISPATCHED | Unblocked by 14300's merge — the calendar context, the `RequireAuth` shell gate, the refresh, and `renderWithCalendar` for the sibling tasks |
 | TASK-14303, 14304, 14305, 14306b, 14310 | PENDING | gated on 14301 and 14302 |
+
+### TASK-14307 — the flip nobody witnessed, and a regression caught inside a simplification
+
+**The Orchestrator asked for a claim the agent could not support, and the agent declined it.** The
+single-read pin had been written *before* the fix, deliberately, so it was RED by construction. When
+the overload landed, the instruction was: "confirm it flips, and say so." The reply:
+
+> *"I have observed neither the RED nor the GREEN — Docker is unavailable here, so the flip is
+> reasoned from the handler source and CI is where it is actually witnessed. I will not report a flip
+> I did not see."*
+
+That is the correct answer and the instruction was the flawed part. The strongest honest statement is
+the one it gave instead: the fact was authored against the two-read code, its RED condition is stated
+in the test, and the code that condition discriminates against no longer exists. **A red-then-green
+sequence is powerful evidence only when someone watched both halves.** On this machine, where every
+Docker-gated pin is written blind, the temptation to narrate a flip from reasoning is constant — and
+it would make the sprint's own test reports the kind of artifact that says more than it knows.
+
+**And a silent regression caught inside a tidy-up.** Collapsing the GET's hand-inlined conversion onto
+`FromInstant`, the obvious simplification would have dropped a `SpecifyKind` that looks redundant. It
+is not: Npgsql returns `TIMESTAMPTZ` as a UTC-kind `DateTime`, and stating the kind explicitly stops
+the `DateTimeOffset` constructor applying the **host's local offset**. Dropping it while simplifying
+would have silently reintroduced the QUAL-005 class — a wrong offset, no error. The kind moved into
+the argument rather than disappearing, and the reason is recorded at the site.
 
 ### A frozen clock cannot prove a single-read property — three tasks learned this independently
 
