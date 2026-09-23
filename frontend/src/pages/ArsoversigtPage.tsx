@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useCalendarToday } from '../contexts/CalendarContext'
 import { useYearOverview, type YearOverview, type YearOverviewCategory } from '../hooks/useYearOverview'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -113,10 +114,16 @@ export function ArsoversigtPage() {
   const { user } = useAuth()
   const employeeId = user?.employeeId ?? ''
   const navigate = useNavigate()
+  const calendarToday = useCalendarToday()
 
-  // The selected year only seeds from the client clock for the INITIAL view; all
-  // past/current/future + "Nu" classification comes from the server `today`.
-  const [year, setYear] = useState(() => new Date().getFullYear())
+  // S143 / TASK-14304 — the selected year seeds from the SERVER-confirmed day
+  // (`useCalendarToday()`, owner ruling OQ-1a/1b), not the browser clock, for the
+  // INITIAL view. This is a bootstrap read, not a redesign: the server cannot tell
+  // this screen "what year it is" until asked for ONE, so a year has to be chosen
+  // first, from the one clock this app trusts. All past/current/future + "Nu"
+  // classification below still comes from `data.today` (the year-overview response's
+  // OWN server day) exactly as before — that part was already correct and is untouched.
+  const [year, setYear] = useState(() => parseToday(calendarToday).year)
 
   const { data, loading, error } = useYearOverview(employeeId, year)
 

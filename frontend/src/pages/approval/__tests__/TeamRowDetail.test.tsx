@@ -16,10 +16,11 @@
 // mocked at the network boundary; the breakdown + compliance endpoints route by
 // URL.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { TeamOversigt } from '../TeamOversigt'
+import { renderWithCalendar } from '../../../test/renderWithCalendar'
 
 // ── Auth mock (PAT-007: stable role; flip via the module-level holder) ───────
 const authState = { role: 'LocalLeader' as string }
@@ -199,8 +200,13 @@ function mockRoutes(opts: Routes = {}) {
   })
 }
 
+// S143 / TASK-14304 — TeamOversigt now seeds its initial year/month from the server-confirmed day
+// (`useCalendarToday()`) rather than the browser clock, so every render needs the calendar
+// context; `today` is an arbitrary hand-written literal — this file's own tests don't depend on
+// which month the page opens on.
 function renderPage() {
-  return render(
+  return renderWithCalendar(
+    '2026-03-15',
     <MemoryRouter>
       <TeamOversigt />
     </MemoryRouter>,
