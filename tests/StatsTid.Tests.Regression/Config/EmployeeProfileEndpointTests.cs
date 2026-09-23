@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
@@ -50,18 +51,38 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     private const string Emp001 = "emp001";
     private const string Emp001OrgPath = "/MIN01/STY01/";
 
+    /// <summary>S143/TASK-14306 — fixed anchor for <see cref="PutAsync"/>'s <c>effectiveFrom</c>,
+    /// AND for every client this class hands out (via <see cref="_fixedHost"/>). S141/TASK-14104
+    /// removed this endpoint's date-equality validator (see the comment at
+    /// <c>EmployeeProfileEndpoints.cs:337</c>); none of this helper's 7 callers assert on the PUT's
+    /// date's value — all assert ETag/412/428/403/negative-value acceptance. But three of those
+    /// callers first POST a fresh user (<see cref="CreateFreshUserAsync"/>), which stamps its own
+    /// profile/agreement-code history at "today" — so if the PUT's literal predates that POST's
+    /// today, the write stops routing as a same-day edit and becomes a backdate correction
+    /// (case E), which 422s on a fresh user's empty employment-category history
+    /// (S143 Step-5a BLOCKER B). Pinning EVERY client in this class to the SAME fixed host makes
+    /// the POST's "today" and the PUT's F the same instant, so the routing this suite was built to
+    /// exercise (same-day edit) is preserved. Matches the cross-suite S140/S142 anchor.</summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
+
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
 
     public async Task InitializeAsync()
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
+        // PAT-008 — the ONE fixed host for this test instance (one per fact: xunit gives each
+        // [Fact] its own instance under IAsyncLifetime). Every client below comes from THIS host —
+        // never the base _factory — so no second, real-clock host ever races it on this container.
+        _fixedHost = _factory.WithFixedToday(F);
     }
 
     public async Task DisposeAsync()
     {
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
@@ -74,7 +95,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Get_ReturnsProfile_WithEtagHeader()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -95,7 +116,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Get_NotFound_When_NoLiveRow()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -113,7 +134,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Put_Success_RoundTripsAndIncrementsVersion()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -161,7 +182,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Put_StaleIfMatch_Returns412()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -179,7 +200,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Put_MissingIfMatch_Returns428()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -193,7 +214,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Put_MalformedIfMatch_Returns428()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -212,7 +233,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Get_ByHrFromDifferentOrg_Returns403()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         // HR token scoped ORG_ONLY to STY02 (a DIFFERENT Organisation, path /MIN01/STY02/) —
         // does NOT cover emp001's org STY01 (path /MIN01/STY01/).
         client.DefaultRequestHeaders.Authorization =
@@ -226,7 +247,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Put_ByHrFromDifferentOrg_Returns403()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintHrToken(
                 actorId: "hr_sty02_qa", orgId: "STY02", scopeType: "ORG_ONLY"));
@@ -263,7 +284,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Get_AsEmployee_Returns403()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintEmployeeToken(
                 actorId: "emp001", orgId: "STY01"));
@@ -275,7 +296,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Get_AsLocalLeader_Returns403()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         // LocalLeader scoped covering emp001's org — but LocalLeader is NOT in the
         // HROrAbove policy's allowed-role list (HR/LocalAdmin/GlobalAdmin only).
         client.DefaultRequestHeaders.Authorization =
@@ -293,7 +314,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Get_AsHr_SameOrg_Returns200()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         // HR scoped ORG_ONLY to STY01 (emp001's org) → covers emp001 (S93 flat role-scope).
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintHrToken(
@@ -306,7 +327,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Get_AsGlobalAdmin_Returns200()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -327,7 +348,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Put_NegativeWeeklyNormHours_AcceptedToday_DocumentsValidationGap()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -358,7 +379,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     [Fact]
     public async Task Put_PartTimeFractionAboveOne_AcceptedToday_DocumentsValidationGap()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
 
@@ -387,7 +408,7 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
     public async Task Bootstrap_BackfillsAllSeedUsers_AndEmitsCreatedEvents()
     {
         // Force the WAF to boot (and therefore the seeder to run) by creating a client.
-        _ = _factory.CreateClient();
+        _ = _fixedHost.CreateClient();
 
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -515,11 +536,9 @@ public sealed class EmployeeProfileEndpointTests : IAsyncLifetime
         {
             Content = JsonContent.Create(new
             {
-                // S142 test-clock sweep: INERT — S141/TASK-14104 removed this endpoint's date-equality
-                // validator (see the comment at EmployeeProfileEndpoints.cs:337); none of this helper's
-                // 7 callers exercise OQ-6 scheduled-row truncation — all assert ETag/412/428/403/negative-
-                // value acceptance, unrelated to the date's value.
-                effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                // S143/TASK-14306: fixed anchor (see the F doc comment above) — replaces a real-clock
+                // read none of this helper's 7 callers ever asserted on.
+                effectiveFrom = F,
                 weeklyNormHours,
                 partTimeFraction,
                 position,

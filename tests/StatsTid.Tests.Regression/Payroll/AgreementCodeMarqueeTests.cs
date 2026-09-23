@@ -73,14 +73,14 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
     private static readonly DateOnly PeriodStart = new(2026, 4, 1);
     private static readonly DateOnly PeriodEnd = new(2026, 4, 30);
 
-    // Mutation date = today UTC. PeriodEnd is before today so the predecessor's
-    // [predecessor.effective_from='0001-01-01', today) window covers PeriodStart.
-    // S142 test-clock sweep: INERT — Today is fed only into `effectiveFrom:` on a direct
-    // RegressionSeed/repository seed call (no HTTP endpoint), and PeriodEnd (2026-04-30, a fixed
-    // literal) is ~4.5 months (or more) before whenever "Today" actually resolves — a wide margin no
-    // one-day Copenhagen/UTC skew can close.
-    private static readonly DateOnly Today =
-        DateOnly.FromDateTime(DateTime.UtcNow);
+    // Mutation date — the supersession point. PeriodEnd (2026-04-30) must be strictly before it so
+    // the predecessor's [predecessor.effective_from='0001-01-01', Today) window covers PeriodStart.
+    // S143/TASK-14306: fixed anchor — was a real-clock read (S142 test-clock sweep: INERT, since
+    // Today is fed only into `effectiveFrom:` on a direct RegressionSeed/repository seed call, no
+    // HTTP endpoint, and PeriodEnd was always a fixed literal ~4.5 months or more before whenever
+    // "Today" happened to resolve — a margin no one-day Copenhagen/UTC skew could ever close). Kept
+    // as the same ~4.5-month-after-PeriodEnd margin, now a literal instead of a moving target.
+    private static readonly DateOnly Today = new(2026, 9, 15);
 
     private TestFixtures.DockerHarness _harness = null!;
     private EmploymentProfileResolver _resolver = null!;

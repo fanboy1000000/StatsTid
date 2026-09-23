@@ -759,10 +759,11 @@ public sealed class TxContractTests : IAsyncLifetime
         var preMapping = await repo.GetByKeyAsync(mapping.TimeType, mapping.OkVersion, mapping.AgreementCode, mapping.Position);
         Assert.NotNull(preMapping);
         var expectedVersion = preMapping!.Version;
-        // S142 test-clock sweep: INERT — repository-direct SoftDeleteAsync inside a tx that is
-        // ultimately ROLLED BACK; today is only the closeDate to store, and the assertions check
-        // row-open/closed COUNTS across the rollback boundary, never the date value.
-        var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
+        // S143/TASK-14306: literal — was a real-clock read. Self-threaded: repository-direct
+        // SoftDeleteAsync inside a tx that is ultimately ROLLED BACK; today is only the closeDate to
+        // store, and the assertions check row-open/closed COUNTS across the rollback boundary, never
+        // the date value, so there is no oracle to derive it from — a literal is the honest answer.
+        var today = new DateOnly(2025, 3, 12);
 
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();

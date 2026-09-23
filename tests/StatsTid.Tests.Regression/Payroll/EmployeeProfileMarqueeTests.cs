@@ -87,16 +87,15 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     private static readonly DateOnly PeriodStart = new(2026, 4, 1);
     private static readonly DateOnly PeriodEnd = new(2026, 4, 30);
 
-    // Mutation date = today UTC (matches what the PUT endpoint validator
-    // accepts per ADR-023 D8 same-day-only-edit narrowing). PeriodEnd is
-    // before this date so the predecessor's [predecessor.effective_from,
-    // today) window still covers PeriodStart.
-    // S142 test-clock sweep: INERT — Today is fed only into `effectiveFrom:` on a direct
-    // repository seed call (no HTTP endpoint despite the comment above referencing "the PUT endpoint
-    // validator" as intent-documentation only); PeriodEnd (2026-04-30, fixed) is a wide margin behind
-    // whenever "Today" actually resolves.
-    private static readonly DateOnly Today =
-        DateOnly.FromDateTime(DateTime.UtcNow);
+    // Mutation date — the supersession point (the comment on the endpoint validator, ADR-023 D8
+    // same-day-only-edit narrowing, is intent-documentation only: this seed goes through a direct
+    // repository call, no HTTP endpoint). PeriodEnd (2026-04-30) must be strictly before it so the
+    // predecessor's [predecessor.effective_from, Today) window still covers PeriodStart.
+    // S143/TASK-14306: fixed anchor — was a real-clock read (S142 test-clock sweep: INERT, since
+    // PeriodEnd was always a fixed literal a wide margin behind whenever "Today" happened to
+    // resolve). Kept as the same ~4.5-month-after-PeriodEnd margin, now a literal instead of a
+    // moving target (matches AgreementCodeMarqueeTests's sibling anchor).
+    private static readonly DateOnly Today = new(2026, 9, 15);
 
     private TestFixtures.DockerHarness _harness = null!;
     private EmploymentProfileResolver _resolver = null!;

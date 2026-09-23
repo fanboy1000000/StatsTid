@@ -359,9 +359,9 @@ public sealed class AuditProjectionCutoverTests : IAsyncLifetime
                 {
                     ProfileId = Guid.NewGuid(), EmployeeId = userId,
                     PartTimeFraction = 1m, Position = null,
-                    // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only
+                    // S143/TASK-14306: literal - was S142 test-clock sweep INERT — placeholder date on an in-memory event built only
                     // to exercise the audit-projection mapper's shape/row-presence; never asserted.
-                    EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                    EffectiveFrom = new DateOnly(2025, 3, 12),
                 };
                 await throwingOutbox.EnqueueAsync(conn, tx, $"employee-profile-{userId}", secondaryEv); // THROWS
                 await tx.CommitAsync();
@@ -396,9 +396,9 @@ public sealed class AuditProjectionCutoverTests : IAsyncLifetime
                 var secondaryEv = new UserAgreementCodeChanged
                 {
                     UserId = ev.UserId, OldAgreementCode = "AC", NewAgreementCode = "HK",
-                    // S142 test-clock sweep: INERT — placeholder date on an in-memory event built only
+                    // S143/TASK-14306: literal - was S142 test-clock sweep INERT — placeholder date on an in-memory event built only
                     // to exercise the audit-projection mapper's shape/row-presence; never asserted.
-                    EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                    EffectiveFrom = new DateOnly(2025, 3, 12),
                 };
                 await throwingOutbox.EnqueueAsync(conn, tx, $"user-{ev.UserId}", secondaryEv); // THROWS
                 await tx.CommitAsync();

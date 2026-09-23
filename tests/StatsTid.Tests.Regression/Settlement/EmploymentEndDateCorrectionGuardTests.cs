@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
@@ -32,8 +33,15 @@ namespace StatsTid.Tests.Regression.Settlement;
 ///
 /// <para>The FULL S70 lifecycle behavior of the refactored PUT (now delegating to the shared
 /// <c>EmploymentEndDateLifecycleWriter</c>) is re-pinned by the existing
-/// <see cref="EmploymentEndDateLifecycleTests"/> suite — this class adds only the S71 deltas.
-/// Real-clock anchored dates (the S70 convention; ±2-year margins).</para>
+/// <see cref="EmploymentEndDateLifecycleTests"/> suite — this class adds only the S71 deltas.</para>
+///
+/// <para>
+/// <b>S143 / TASK-14306 (test-clock hygiene) — anchored onto <see cref="F"/>.</b> S140/TASK-14002
+/// left this file's real-clock <c>TodayUtc</c> alone as INERT (its ±2-year margins can't be closed
+/// by a one-day Copenhagen/UTC skew) and registered the deferral in the sprint's QUAL-154 evidence
+/// trail (see <see cref="EmploymentEndDateLifecycleTests"/>'s own doc comment) — this is that
+/// deferred conversion. Same shape as the sibling suites: <see cref="TodayUtc"/> now returns the
+/// constant <see cref="F"/> and every fixture uses the ONE fixed host.</para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class EmploymentEndDateCorrectionGuardTests : IAsyncLifetime
@@ -45,10 +53,17 @@ public sealed class EmploymentEndDateCorrectionGuardTests : IAsyncLifetime
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
 
-    // S142 test-clock sweep: INERT — TodayUtc only anchors PastDate/FutureDate at a ±2-YEAR margin;
-    // no one-day Copenhagen/UTC skew can close a two-year gap.
-    private static readonly DateOnly TodayUtc = DateOnly.FromDateTime(DateTime.UtcNow);
+    /// <summary>S143/TASK-14306 — the ONE pinned "today" for every test in this suite, matching
+    /// the sibling suites' anchor (<see cref="EmploymentDateGuardTests"/>,
+    /// <see cref="EmploymentEndDateLifecycleTests"/>) for cross-suite consistency. This suite's
+    /// guard is ferieår-based, not OK-version-based, so the Wednesday/OK24 facts are irrelevant
+    /// here — only the anchor value itself matters.</summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
+
+    // ±2-year margins make the past/future classification immune to the UTC/CET offset.
+    private static readonly DateOnly TodayUtc = F; // S143/TASK-14306: was a raw wall-clock read.
     private static readonly DateOnly PastDate = TodayUtc.AddYears(-2);
     private static readonly DateOnly FutureDate = TodayUtc.AddYears(2);
 
@@ -59,11 +74,15 @@ public sealed class EmploymentEndDateCorrectionGuardTests : IAsyncLifetime
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
-        _ = _factory.CreateClient(); // boot seeders
+        // PAT-008 — the ONE fixed host for this test instance. HrClient() below reuses THIS host —
+        // never the base _factory — so no second, real-clock host ever races it on this container.
+        _fixedHost = _factory.WithFixedToday(F);
+        _ = _fixedHost.CreateClient(); // boot seeders
     }
 
     public async Task DisposeAsync()
     {
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
@@ -210,7 +229,7 @@ public sealed class EmploymentEndDateCorrectionGuardTests : IAsyncLifetime
 
     private HttpClient HrClient()
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient(); // PAT-008: the ONE fixed host for this fact.
         var svc = new JwtTokenService(new JwtSettings
         {
             Issuer = "statstid",
