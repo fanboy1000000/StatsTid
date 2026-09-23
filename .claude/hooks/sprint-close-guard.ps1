@@ -13,6 +13,7 @@
 #   .claude/reviews/SPRINT-{N}-ci-health-WAIVED.md -> bypasses the CI-health gate only
 #   .claude/reviews/SPRINT-{N}-ci-pending-WAIVED.md -> bypasses the consecutive-CI-pending gate only
 #   .claude/reviews/SPRINT-{N}-untracked-WAIVED.md -> bypasses the untracked-source gate only
+#   .claude/reviews/SPRINT-{N}-worktree-WAIVED.md  -> bypasses the worktree-teardown gate only
 #
 # Why this exists: post-S35 governance change (commit a094630) requires
 # Codex + Reviewer dual-lens at every sprint-end. Advisory memory + WORKFLOW.md
@@ -462,6 +463,79 @@ if (Test-Path $untrackedWaiver) {
         [Console]::Error.WriteLine('  2. delete/relocate files that do not belong in the repo, OR')
         [Console]::Error.WriteLine('  3. create an explicit waiver documenting why they legitimately stay uncommitted:')
         [Console]::Error.WriteLine("     $untrackedWaiver")
+        exit 2
+    }
+}
+
+# --- Worktree-teardown gate (S141-owed, built S143 / TASK-14309) -------------
+# WHY THIS EXISTS. S141 named worktree teardown as owed work and did not gate it;
+# S142 then closed with TWENTY-FOUR worktrees standing, found only because
+# `git status` had slowed to 0.47s. The lesson that sprint recorded about its own
+# close guard applies to this line of it: work that is named but not gated does
+# not get done. It has now cost two sprints, which is why it is mechanical rather
+# than a checklist item.
+#
+# What a leftover worktree costs: every one holds a branch ref and a full index,
+# so `git status` degrades repo-wide; a stale worktree can still be edited by a
+# later agent that thinks it is fresh; and a branch that looks merged may be
+# holding commits that never reached master. The gate blocks the close until the
+# sprint's worktrees are provably gone.
+#
+# Fail-OPEN on git errors, per this hook's best-effort convention: a broken git
+# must not make closing impossible. Fail-CLOSED only on a real, enumerated
+# leftover.
+#
+# Test seam: $env:STATSTID_WORKTREE_MOCK (newline-separated paths, or 'clean')
+# skips git — honored ONLY for the harness-reserved S99, the same hardening every
+# other seam in this file carries. A leaked env var must not blind a real close.
+
+$worktreeWaiver = Join-Path $reviewsDir "SPRINT-$sprintNum-worktree-WAIVED.md"
+if (Test-Path $worktreeWaiver) {
+    [Console]::Error.WriteLine("sprint-close-guard: S$sprintNum has a worktree waiver at $worktreeWaiver -- skipping the worktree-teardown gate")
+} else {
+    $leftoverWorktrees = @()
+    if ($env:STATSTID_WORKTREE_MOCK -and $sprintNum -eq '99') {
+        [Console]::Error.WriteLine("sprint-close-guard: worktree-teardown gate using MOCKED list (test seam, S99 only)")
+        if ($env:STATSTID_WORKTREE_MOCK -ne 'clean') {
+            $leftoverWorktrees = @($env:STATSTID_WORKTREE_MOCK -split "`n" | Where-Object { $_.Trim() })
+        }
+    } else {
+        try {
+            # --porcelain emits a `worktree <path>` line per entry, MAIN CHECKOUT FIRST.
+            # Dropping exactly the first is what makes this "extra worktrees", not "any".
+            $wtLines = git worktree list --porcelain 2>$null
+            if ($LASTEXITCODE -eq 0 -and $wtLines) {
+                $paths = @($wtLines | Where-Object { $_ -match '^worktree ' } | ForEach-Object { $_.Substring(9) })
+                if ($paths.Count -gt 1) {
+                    $leftoverWorktrees = @($paths | Select-Object -Skip 1)
+                }
+            }
+        } catch {
+            [Console]::Error.WriteLine("sprint-close-guard: worktree check could not run ($_); allowing (fail-open)")
+        }
+    }
+
+    if ($leftoverWorktrees.Count -gt 0) {
+        [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine("$($leftoverWorktrees.Count) worktree(s) still exist beyond the main checkout:")
+        foreach ($w in $leftoverWorktrees) {
+            [Console]::Error.WriteLine("  $w")
+        }
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('A sprint does not close with its worktrees standing. Each one holds a branch')
+        [Console]::Error.WriteLine('ref and a full index, so `git status` degrades repo-wide; a stale worktree can')
+        [Console]::Error.WriteLine('be picked up by a later agent that believes it is fresh; and a branch that')
+        [Console]::Error.WriteLine('looks merged may still hold commits that never reached master.')
+        [Console]::Error.WriteLine('S142 closed with 24 of them, noticed only because `git status` took 0.47s.')
+        [Console]::Error.WriteLine('')
+        [Console]::Error.WriteLine('Remediation:')
+        [Console]::Error.WriteLine('  1. Confirm each branch is MERGED before removing it:')
+        [Console]::Error.WriteLine('       git branch --merged master')
+        [Console]::Error.WriteLine('  2. git worktree remove <path>   (add --force only for a dirty tree you have read)')
+        [Console]::Error.WriteLine('  3. git worktree prune && git branch -d <branch>')
+        [Console]::Error.WriteLine('  4. Or, if a worktree legitimately outlives this sprint, waive it explicitly:')
+        [Console]::Error.WriteLine("       $worktreeWaiver")
         exit 2
     }
 }

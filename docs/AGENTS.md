@@ -41,6 +41,34 @@ This document defines all agent types in the StatsTid multi-agent architecture. 
 - **Responsibility**: React pages, components, hooks, routing, styling
 - **Constraints**: Secondary priority — must never drive backend decisions. Must consume backend APIs as-is.
 
+### ⚠ Roster drift — this document defines seven agents; twelve exist (recorded S143, decision open)
+
+**Read this before assuming the list above is complete.** `.claude/agents/` contains twelve agent
+definitions. The seven above are documented here; five are not — `backend-infrastructure`, `sweep`,
+`reviewer`, `constraint-validator` and `trace`. The last three are described elsewhere in this file
+(Reviewer Agent, Constraint Validator, and the trace role in WORKFLOW), so their gap is presentational.
+**The first two are dispatched regularly and appear nowhere.**
+
+This was found at S143's Step 0b, when the external review lens correctly called two tasks' agents
+"undefined" — reading this document, which is the artifact of record and the only one an agent receives.
+
+**It is not simple drift, and that is why it is flagged rather than fixed.** The section immediately
+below argues explicitly *against* creating a "Backend Agent" or "Infrastructure Agent": such a
+generalist "would absorb work that legitimately splits across specialists, hide cross-domain coupling
+that should be surfaced for review, and grow unboundedly to swallow whatever doesn't fit elsewhere."
+An agent named exactly that now exists and is the project's most-dispatched implementer, with a mature
+definition citing ADR-019, ADR-018 D3, ADR-026 and ADR-040 D7. Practice moved; this document did not.
+
+**Reversing a documented architectural decision is an owner call, not an Orchestrator one**, so S143
+did not make it. The standing question: adopt the generalist here and record why the original rationale
+was superseded, or retire it in favour of the cross-domain convention it was built to replace.
+
+**Until that is ruled, dispatch is still correctly scoped**, because the rule below already covers it:
+file-scope checks operate on the **explicit scope declared in the sprint plan**, not on the agent
+label. S143 gives every task an explicit authorized file list for exactly this reason. An undefined
+agent name does not mean unscoped work — but it does mean the scope lives only in the sprint plan, so
+the plan must carry it.
+
 ### Cross-Domain Authorization
 
 Some tasks legitimately span multiple agent boundaries — a single endpoint conversion may touch HTTP routing (Backend.Api), repository orchestration (Infrastructure), audit-log emission (Security), and event types (Data Model) all at once. Other tasks sit in scope paths (`src/Backend/**/Endpoints/*.cs`, `src/Infrastructure/**/*Repository.cs`) that no single domain agent above declares as its scope.
