@@ -73,6 +73,11 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
     /// VacationSettlementServiceTests convention).</summary>
     private const int PriorClosedYear = 2021;
 
+    /// <summary>S143/TASK-14306 — fixed anchor for <see cref="FutureEndDate_YearEnd_StillAutoPartitions"/>'s
+    /// derived fixed-clock host (PAT-008), matching the cross-suite S140/S142 anchor. Ferieår 2024 —
+    /// well after <see cref="PriorClosedYear"/> — so nothing here depends on the exact value.</summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
+
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
 
@@ -512,11 +517,16 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
     [Fact]
     public async Task FutureEndDate_YearEnd_StillAutoPartitions()
     {
-        var service = BootService();
+        // S143/TASK-14306: fixed anchor — the +2-year margin on a real-clock read protected
+        // nothing on purpose (no one-day Copenhagen/UTC skew can make a two-years-out date look
+        // like the past), but the service's leaver predicate reads "today" from its own injected
+        // TimeProvider, so a literal end date alone would eventually be overtaken by the real
+        // clock; a derived fixed-clock host (PAT-008) removes the real-clock read entirely.
+        using var fixedHost = _factory.WithFixedToday(F);
+        _ = fixedHost.CreateClient(); // boot seeders on THIS derived host (PAT-008 boot-order rule)
+        var service = fixedHost.Services.GetRequiredService<VacationSettlementService>();
         var employeeId = await SeedEmployeeAsync();
-        // S142 test-clock sweep: INERT — a +2-YEAR margin on a "still active, not yet a leaver" end
-        // date; no one-day Copenhagen/UTC skew can make a two-years-out date look like the past.
-        var futureEndDate = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(2);
+        var futureEndDate = F.AddYears(2);
         await SetEndDateAsync(employeeId, futureEndDate); // stored, is_active stays TRUE (R1b)
 
         var outcome = await SettleAsync(service, employeeId, PriorClosedYear, YearEnd);

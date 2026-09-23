@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
@@ -19,10 +20,12 @@ namespace StatsTid.Tests.Regression.Settlement;
 /// mirror <see cref="Config.EmployeeProfileEndpointTests"/> (same policy + OrgScopeValidator shape).
 ///
 /// <para><b>Today-dependence (no wall-clock EXPECTED values; the Adr032RevaluationTests convention).</b>
-/// The §21 deadline is the Copenhagen business clock (a private endpoint helper, NOT the injectable
-/// TimeProvider), so deadline/future-date guards are real-today-anchored. We use ferieår
-/// <see cref="RecordableYear"/> whose §21 deadline (31 Dec E+1) is in the future relative to the real
-/// clock, and derive agreement dates from <see cref="Today"/> — asserting the guard OUTCOMES
+/// The §21 deadline is the Copenhagen business clock, read from the injectable <c>TimeProvider</c> via
+/// <c>CopenhagenBusinessDate.Today(timeProvider)</c> (<c>VacationSettlementEndpoints.cs:181</c>) — so
+/// unlike this class's doc comment before S143/TASK-14306, the guard is NOT real-today-anchored: it
+/// reads whatever <see cref="F"/> the derived <see cref="_fixedHost"/> pins. We use ferieår
+/// <see cref="RecordableYear"/> whose §21 deadline (31 Dec E+1) is in the future relative to
+/// <see cref="F"/>, and derive agreement dates from <see cref="Today"/> — asserting the guard OUTCOMES
 /// (200/403/409/412/422) and the invariants, never a wall-clock-dependent literal.</para>
 ///
 /// <para>The PENDING_REVIEW fixtures (for the D10 resolve + reconcile tests) are written DIRECTLY into
@@ -39,33 +42,48 @@ public sealed class VacationSettlementEndpointTests : IAsyncLifetime
     private const string CoveringOrg = "STY01";  // S93 flat role-scope: covers STY01 by exact ORG_ONLY match (a MAO no longer covers a child)
     private const string VacationType = "VACATION";
 
-    // A ferieår whose §21 deadline (31 Dec of E+1) is in the FUTURE relative to the real clock
-    // (today 2026), so the §21 write happy-path/guards are recordable. E=2025 ⇒ deadline 31 Dec 2026.
+    // A ferieår whose §21 deadline (31 Dec of E+1) is in the FUTURE relative to F, so the §21 write
+    // happy-path/guards are recordable. E=2025 ⇒ deadline 31 Dec 2026.
     private const int RecordableYear = 2025;
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
+    private WebApplicationFactory<Program> _fixedHost = null!;
+
+    /// <summary>
+    /// S143/TASK-14306 — the ONE pinned "today" for every test in this suite, matching the
+    /// cross-suite S140/S142 anchor. S142 marked this file's real-clock read INERT (never actually
+    /// at risk, since Denmark's UTC offset is never negative so a UTC-day value can never exceed the
+    /// Copenhagen deadline it is compared against) but left the conversion for this task — see
+    /// <see cref="Today"/>.
+    /// </summary>
+    private static readonly DateOnly F = new(2025, 3, 12);
 
     public async Task InitializeAsync()
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
-        _ = _factory.CreateClient(); // boot seeders (VACATION config quota 25 / carryover_max 5)
+        // PAT-008 — the ONE fixed host for this test instance. ClientWith() below reuses THIS host —
+        // never the base _factory — so no second, real-clock host ever races it on this container.
+        _fixedHost = _factory.WithFixedToday(F);
+        _ = _fixedHost.CreateClient(); // boot seeders (VACATION config quota 25 / carryover_max 5)
     }
 
     public async Task DisposeAsync()
     {
+        _fixedHost?.Dispose();
         _factory?.Dispose();
         if (_harness is not null)
             await _harness.DisposeAsync();
     }
 
-    // S142 test-clock sweep: INERT — structurally immune, verified against the actual validator
-    // (VacationSettlementEndpoints.cs:200, `if (body.AgreementDate > copenhagenToday)` 422). Denmark's
-    // offset is never behind UTC, so Copenhagen-today is always >= UTC-today; sending the UTC value can
-    // therefore never exceed the Copenhagen deadline it is compared against.
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
+    /// <summary>S143/TASK-14306: fixed anchor — was a real-clock UTC-day read. Never actually at
+    /// risk (Copenhagen is never behind UTC, so a UTC value can never trip the future-date guard it
+    /// wasn't meant to), but pinned anyway for discipline: it now derives from <see cref="F"/>, the
+    /// same instant the derived <see cref="_fixedHost"/>'s <c>TimeProvider</c> is pinned to, so the
+    /// dates this suite SENDS and the deadline the endpoint CHECKS them against always agree.</summary>
+    private static DateOnly Today => F;
 
     // ════════════════════════════════════════════════════════════════════════
     // §21 transfer-agreement write — happy path + the legal/state guards (scenario 8).
@@ -434,7 +452,7 @@ public sealed class VacationSettlementEndpointTests : IAsyncLifetime
 
     private HttpClient ClientWith(string bearer)
     {
-        var client = _factory.CreateClient();
+        var client = _fixedHost.CreateClient(); // PAT-008: the ONE fixed host for this fact.
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         return client;
     }
