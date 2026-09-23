@@ -5092,6 +5092,25 @@
           }
         }
       }
+    },
+    "/api/calendar/today": {
+      "get": {
+        "tags": [
+          "StatsTid.Backend.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.CalendarTodayResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6563,6 +6582,24 @@
           "version": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StatsTid.Backend.Api.Contracts.CalendarTodayResponse": {
+        "required": [
+          "secondsUntilNextMidnight",
+          "today"
+        ],
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "secondsUntilNextMidnight": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false
