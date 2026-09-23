@@ -36,8 +36,10 @@
 // Diff +2,1. Mar 3 full VACATION 7,4 → Diff 0,0. Mar 4 VACATION 3,7 (feriedage
 // NULL) → Diff −3,7. Diff total = −1,6. I alt total = 20,6.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react'
+import { screen, waitFor, fireEvent, within, act } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { renderWithCalendar } from '../../test/renderWithCalendar'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../lib/__tests__/testTimeZone'
 // The R16/W1 source assertions read modules as text via Vite's ?raw suffix
 // (typed by vite/client; keeps the FE tsconfig free of node types).
 import skemaPageSource from '../SkemaPage.tsx?raw'
@@ -315,16 +317,24 @@ afterEach(() => {
   document.body.style.overflow = ''
 })
 
-function renderPage(url = '/tid/registrering?year=2026&month=3') {
-  return render(
+// S143 / TASK-14303 — SkemaPage (and the REAL SkemaGrid this file renders under it) now read
+// "today" via `useCalendarToday()` (`contexts/CalendarContext.tsx`), never `new Date()`. Every
+// test below already sends an explicit `?year=2026&month=3`, which wins over the default (see
+// `SkemaPageParamInit.test.tsx` for that precedence proof) — so which literal `DEFAULT_TODAY`
+// carries is inert for all of them except the one AC-5 test that renders with NO url params.
+const DEFAULT_TODAY = '2026-03-15'
+
+function renderPage(url = '/tid/registrering?year=2026&month=3', today: string = DEFAULT_TODAY) {
+  return renderWithCalendar(
+    today,
     <MemoryRouter initialEntries={[url]}>
       <SkemaPage />
     </MemoryRouter>,
   )
 }
 
-async function renderLoaded(url?: string) {
-  const result = renderPage(url)
+async function renderLoaded(url?: string, today?: string) {
+  const result = renderPage(url, today)
   await screen.findByText('Drift & support')
   // PASS-2 await (fixes the recurring R2/W1 timing flake). The project-row LABELS
   // render in the first commit (straight from useSkema's `data`), but the diff
@@ -1364,5 +1374,96 @@ describe('SkemaPage — AC-15: the send 422s surface through the real flow', () 
     expect(sendCall).toBeDefined()
     expect(JSON.parse(String((sendCall![1] as RequestInit).body)))
       .toEqual({ employeeId: 'emp001', year: 2026, month: 3 })
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// S143 / TASK-14303 — the month a person's time is FILED UNDER.
+//
+// PLAIN LANGUAGE. Which month the page opens on is not a display default: `useSkema`
+// sends that year/month as the period envelope of BOTH `POST /api/skema/{employeeId}/save`
+// AND `POST /api/approval/send` — the second of which CREATES the approval period. A device
+// in the wrong time zone (or simply with a wrong clock) used to open, save into, and submit
+// for approval, the WRONG month — silently, because the page seeded itself from `new Date()`
+// (the browser's own clock) rather than asking the server what day it is.
+//
+// ONE COMBINED ASSERTION (AC-5), not four separate tests: the month the page opens on = the
+// month sent to /save = the month sent to /approval/send = the day the grid highlights as
+// "today". Splitting these into four tests would let a regression collapsing them back onto
+// the device clock get "fixed" by editing whichever one test went red, one at a time, without
+// ever re-establishing that all four still agree.
+//
+// THE MONTH-BOUNDARY PROOF. The device clock is forced to a zone AND an instant that, locally,
+// falls on the LAST DAY OF FEBRUARY — while the server-confirmed "today" (delivered via the
+// shared calendar context, `useCalendarToday()`) is 1 March. A page still reading the device
+// clock would open on February; this one must open, save and submit under March regardless —
+// the AUTHORITY's month, not the device's.
+describe('SkemaPage — AC-5: opened month = /save month = /approval/send month = highlighted day', () => {
+  let restoreTz: string | undefined
+
+  beforeEach(() => {
+    restoreTz = forceTestTimeZone('America/New_York')
+    // `toFake: ['Date']` only — `setTimeout`/`waitFor` stay real (mirrors
+    // `PersonDrawer.hireDate.test.tsx`'s S142 pattern).
+    vi.useFakeTimers({ toFake: ['Date'] })
+    // 2026-03-01 02:00 UTC is 2026-02-28 21:00 in New York (EST, UTC-05:00 — US DST does not
+    // start until 2026-03-08, so New York is still on winter time here).
+    vi.setSystemTime(new Date('2026-03-01T02:00:00Z'))
+  })
+
+  afterEach(() => {
+    restoreTestTimeZone(restoreTz)
+  })
+
+  it('runs on a device day/month that DISAGREES with the server "today", which is what lets the facts below fail', () => {
+    // THE GUARD ON THE GUARD: the SAME literal `vi.setSystemTime` pinned "now" to, above —
+    // checked WITH its argument (never a bare `new Date()`, which the clock guard forbids
+    // outside the approved Copenhagen helper, this file included). If the zone forcing ever
+    // stopped taking effect, this would not fail — it would quietly start passing against a
+    // device-clock-driven page, the worst outcome available.
+    const pinned = new Date('2026-03-01T02:00:00Z')
+    expect(pinned.getMonth()).toBe(1) // February (Date#getMonth is 0-indexed)
+    expect(pinned.getDate()).toBe(28)
+  })
+
+  it('AC-5: the SERVER month opens, saves, sends and highlights — the device month does none of it', async () => {
+    const { container } = await renderLoaded('/tid/registrering', '2026-03-01')
+
+    // 1) THE MONTH THE PAGE OPENS ON. A device-clock-driven page would show "Februar 2026" (and
+    //    the March fixture below would not even match what it asked the server for).
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Marts 2026')
+
+    // 2) THE HIGHLIGHTED CELL — day 1 (the server's "today"), never day 28 (the device's).
+    const headers = container.querySelectorAll('thead th')
+    expect(headers[1].className).toContain('today')
+    expect(headers[28].className).not.toContain('today')
+
+    // 3) THE MONTH SENT TO /save. Edit a cell, then approve — approving flushes any pending
+    //    debounced cell save IMMEDIATELY (`flushCellSave`, SkemaPage.tsx) rather than waiting
+    //    out the 1s debounce, so no timer advance is needed here.
+    const input = screen.getByLabelText('Udvikling dag 5') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '2' } })
+    fireEvent.blur(input)
+
+    const beforeApprove = fetchLog.length
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' }))
+    await waitFor(() => {
+      expect(
+        fetchLog.some((e, i) => i >= beforeApprove && e.includes('/api/approval/send')),
+      ).toBe(true)
+    })
+
+    expect(saveBodies.length).toBeGreaterThan(0)
+    const lastSave = saveBodies[saveBodies.length - 1]
+    expect(lastSave.year).toBe(2026)
+    expect(lastSave.month).toBe(3)
+
+    // 4) THE MONTH SENT TO /approval/send — the SAME call that CREATES the approval period.
+    const sendCall = mockFetch.mock.calls.find((c: unknown[]) =>
+      typeof c[0] === 'string' && (c[0] as string).includes('/api/approval/send'))
+    expect(sendCall).toBeDefined()
+    const sendBody = JSON.parse(String((sendCall![1] as RequestInit).body))
+    expect(sendBody.year).toBe(2026)
+    expect(sendBody.month).toBe(3)
   })
 })

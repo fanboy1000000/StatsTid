@@ -39,6 +39,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useCalendarToday } from '../contexts/CalendarContext'
 import { useSkema, buildWorkTimePayload, deriveSkemaRowBasis, periodHours } from '../hooks/useSkema'
 import type { QuotaError, AbsenceRuleError, AbsenceCapError, ApprovalValidationError, SkemaRowBasis } from '../hooks/useSkema'
 import {
@@ -214,19 +215,31 @@ export function SkemaPage() {
   // validation; an unclamped year ≥ 10000 throws in DateTime.DaysInMonth server-side
   // (Step-7a cycle-4 Codex) — month clamped 1..12), else today. Only seeds the initial
   // state — subsequent nav uses local setters.
+  //
+  // S143 / TASK-14303 — "today" is the server-confirmed Europe/Copenhagen business day from
+  // `useCalendarToday()` (`contexts/CalendarContext.tsx`), NEVER `new Date()`. The chosen
+  // year/month is not a display default: `useSkema` below sends it as the period envelope of
+  // BOTH `POST /api/skema/{employeeId}/save` and `POST /api/approval/send` — the second of which
+  // CREATES the approval period. A device in the wrong time zone (or with a wrong clock) used to
+  // file a person's hours into, and submit for approval, the wrong month — silently. The
+  // `today` string is already an authoritative `YYYY-MM-DD` calendar day; it is split into
+  // year/month by string position, never re-parsed through a `Date`, so no zone conversion is
+  // introduced here.
   const [searchParams] = useSearchParams()
-  const now = new Date()
+  const today = useCalendarToday()
+  const todayYear = Number(today.slice(0, 4))
+  const todayMonth = Number(today.slice(5, 7))
   const paramYear = Number(searchParams.get('year'))
   const paramMonth = Number(searchParams.get('month'))
   const [year, setYear] = useState(
     Number.isInteger(paramYear) && paramYear >= 2000 && paramYear <= 2100
       ? paramYear
-      : now.getFullYear(),
+      : todayYear,
   )
   const [month, setMonth] = useState(
     Number.isInteger(paramMonth) && paramMonth >= 1 && paramMonth <= 12
       ? paramMonth
-      : now.getMonth() + 1,
+      : todayMonth,
   )
 
   const { data, loading, error, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
