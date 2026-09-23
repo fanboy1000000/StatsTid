@@ -44,7 +44,21 @@ function handle401() {
   window.location.reload()
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
+// S143 / TASK-14301 (Step-5a review, bug B2) — `skipAuthReload` is an OPT-IN escape hatch from
+// `handle401`'s unconditional clear-and-reload. Every EXISTING caller is unaffected (the option is
+// optional and defaults to the original behavior); it exists for callers who run on a background
+// timer that must NOT tear the whole page down on an expired token — the calendar bootstrap/refresh
+// read (`hooks/useCalendarBootstrap.ts`) is the first such caller: a refresh 401 firing mid-session
+// (e.g. the token expired while a laptop slept) must not discard unsaved work via a surprise reload
+// the caller never asked for and has no chance to react to before it happens. The caller is still
+// TOLD about the 401 (`status: 401` in the returned `ApiResult`) and decides for itself how to end
+// the session — `RequireAuth.tsx` does this explicitly via `useAuth().logout()`.
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  options?: { skipAuthReload?: boolean },
+): Promise<ApiResult<T>> {
   const token = getToken()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -61,7 +75,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     })
 
     if (res.status === 401) {
-      handle401()
+      if (!options?.skipAuthReload) {
+        handle401()
+      }
       return { ok: false, error: 'Unauthorized', status: 401 }
     }
 
@@ -142,11 +158,15 @@ type GetQueryParams<P extends GetPath> = GetParameters<P> extends { query?: infe
   : undefined
 
 /** The structured options for a typed GET: `params.path` is REQUIRED for a
-    templated route, FORBIDDEN for a literal one; `query` is optional when present. */
+    templated route, FORBIDDEN for a literal one; `query` is optional when present.
+    `skipAuthReload` (S143/TASK-14301, bug B2) is optional on EVERY typed GET — additive, and a
+    no-op for every existing caller that never passes it. */
 type GetOptions<P extends GetPath> = (GetPathParams<P> extends undefined
   ? { params?: undefined }
   : { params: { path: GetPathParams<P> } }) &
-  (GetQueryParams<P> extends undefined ? { query?: undefined } : { query?: GetQueryParams<P> })
+  (GetQueryParams<P> extends undefined ? { query?: undefined } : { query?: GetQueryParams<P> }) & {
+    skipAuthReload?: boolean
+  }
 
 /** Whether a type has at least one required (non-`undefined`) property — used to
     make the `options` argument required for templated routes, optional otherwise.
@@ -161,6 +181,7 @@ export type HasRequiredKey<T> = {
 type GetCallOptions = {
   params?: { path?: Record<string, unknown> }
   query?: Record<string, unknown>
+  skipAuthReload?: boolean
 }
 
 /** Build the request URL: interpolate `{token}` path params, then append the
@@ -206,7 +227,9 @@ function apiGet<P extends GetPath>(
 // who supply an explicit `T` not assignable to `GetPath`.
 function apiGet<T = unknown>(path: string): Promise<ApiResult<T>>
 function apiGet(pathKey: string, options?: GetCallOptions): Promise<ApiResult<unknown>> {
-  return request<unknown>('GET', buildUrl('apiClient.get', pathKey, options))
+  return request<unknown>('GET', buildUrl('apiClient.get', pathKey, options), undefined, {
+    skipAuthReload: options?.skipAuthReload,
+  })
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -377,6 +400,12 @@ function apiDelete(pathKey: string, arg?: unknown): Promise<ApiResult<unknown>> 
     : request<unknown>('DELETE', pathKey)
 }
 
+// `skipAuthReload` (GET only, `apiGet`'s options — S143/TASK-14301, bug B2): passing it turns a 401
+// into an ORDINARY failed `ApiResult` — `handle401` does not run, so the token is NOT cleared and
+// the page does NOT reload. That means the CALLER inherits the duty to end the session — silently
+// doing nothing with a 401 leaves a dead token sitting in storage indefinitely. The one caller today
+// (`hooks/useCalendarBootstrap.ts`) discharges this via `RequireAuth.tsx`'s `logout()` effect. A
+// future second caller of `skipAuthReload` inherits this same obligation along with the option.
 export const apiClient = {
   get: apiGet,
   post: apiPost,

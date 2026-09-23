@@ -39,16 +39,23 @@ beforeEach(() => {
   // Every GET this page fires resolves to an empty, well-formed 200 so the
   // page settles without a load-error state; this test cares about ROUTING,
   // not tile content (covered by OpfoelgningPage.test.tsx).
+  //
+  // S143 / TASK-14301: `<App/>` now gates every protected route on
+  // `RequireAuth`'s calendar bootstrap read (`GET /api/calendar/today`)
+  // BEFORE `AppLayout` (and this page) ever mounts — without a response here
+  // the gate would show the error screen instead of routing at all.
   mockFetch.mockImplementation(async (url: string) => {
-    const empty = url.includes('transfer-agreements-needed')
-      ? { items: [], count: 0, entitlementYear: 2025, windowOpen: false, windowOpensOn: '2025-11-01', deadline: '2025-12-31', daysToDeadline: 0, cannotCompute: [], cannotComputeCount: 0, today: '2025-10-15', projectionNote: '' }
-      : { items: [], count: 0, today: '2025-10-15' }
+    const body = url.includes('/api/calendar/today')
+      ? { today: '2025-10-15', secondsUntilNextMidnight: 3600 }
+      : url.includes('transfer-agreements-needed')
+        ? { items: [], count: 0, entitlementYear: 2025, windowOpen: false, windowOpensOn: '2025-11-01', deadline: '2025-12-31', daysToDeadline: 0, cannotCompute: [], cannotComputeCount: 0, today: '2025-10-15', projectionNote: '' }
+        : { items: [], count: 0, today: '2025-10-15' }
     return {
       ok: true,
       status: 200,
       headers: new Headers(),
-      json: async () => empty,
-      text: async () => JSON.stringify(empty),
+      json: async () => body,
+      text: async () => JSON.stringify(body),
     }
   })
 })
