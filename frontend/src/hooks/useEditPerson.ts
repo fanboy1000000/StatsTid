@@ -38,32 +38,38 @@ import {
   type EntitlementFields,
   type StamdataFields,
 } from '../pages/admin/editPerson/types'
-import { copenhagenToday } from '../lib/copenhagenDate'
+import { useCalendarToday } from '../contexts/CalendarContext'
 
-// S34 TASK-3409 (ADR-023 D8) introduced this as `todayIsoUtc()`, matching the backend's then-UTC
-// `same-day-only-edit` reference. S142 / TASK-14209 renamed it: the name was a lie after S142 — it
-// now delegates to `copenhagenDate.ts`'s single source of truth, which is the EUROPE/COPENHAGEN
-// calendar day, not UTC (see that module's own header for why UTC was wrong — a Danish user
-// working between local and UTC midnight had their edit silently dated YESTERDAY). Both this
-// function's callers in this codebase (the default below, and the ONE zone-resolve try/catch
-// `PersonDrawer.tsx` runs once per render — see that file's own OQ-12 comment) move to the
-// corrected day in the SAME commit, since they both import this one function.
+// S34 TASK-3409 (ADR-023 D8) introduced this call as `todayIsoUtc()`, matching the backend's
+// then-UTC `same-day-only-edit` reference. S142 / TASK-14209 renamed it `todayIso()` and pointed it
+// at `copenhagenDate.ts`'s Europe/Copenhagen day. S143 / TASK-14313 (Step-7a review) found that
+// `todayIso()` was ITSELF one of the five remaining sites reading the DEVICE's clock for a value
+// that gets STORED (this hook's own headline defect: the `effective_from` on a profile edit) — the
+// zone was right, but the authority was still the browser, not the server (ADR-042). `todayIso()`
+// is deleted; both its callers now read `useCalendarToday()` directly, since that hook already
+// returns exactly the `YYYY-MM-DD` string `todayIso()` used to compute, just sourced from the
+// server-confirmed day (`contexts/CalendarContext.tsx`) instead of a client-side `Intl` call — a
+// wrapper adding nothing of its own would just be another layer of indirection:
+//   - THIS file's own use (three lines below, in `saveEdit`) — the value stamped as the write's
+//     `effective_from` when the caller omits one.
+//   - `PersonDrawer.tsx`'s render-time default (see that file's own S143 comment) — moved in the
+//     SAME commit, since it depended on this file's now-deleted export.
 //
-// `copenhagenToday()` THROWS if the runtime cannot resolve Europe/Copenhagen (deliberately — see
-// its own "NO DEGRADED MODE" note); this wrapper does not catch it. `PersonDrawer.tsx`'s render-
-// time callers apply the OQ-12 UI-boundary catch themselves (a throw during React render must not
-// blank the whole drawer). THIS callsite's own use, three lines below in `saveEdit`, is different:
-// it runs inside an event-handler-triggered async function, not render, and — as of this task —
-// every actual production caller (`PersonDrawer` via `usePlacement`) always supplies its own
-// `effectiveFrom`, so the `?? todayIso()` fallback below is only ever exercised by a caller that
-// omits the field entirely (today, that's test code only). If it ever throws there, `saveEdit`'s
-// returned promise rejects before its own try/catch begins, propagating uncaught to
-// `usePlacement.savePlacement` (which does not wrap this particular call either) — a gap this
-// task found and is recording here rather than silently patching, since closing it means changing
-// `usePlacement`'s broader error architecture, outside this task's 5 census sites.
-export function todayIso(): string {
-  return copenhagenToday()
-}
+// `useCalendarToday()` is a HOOK, unlike the plain function it replaces — it MUST be called during
+// render (top level of a component or another hook), never inside an event-handler callback. That
+// is why `today` below is read once at the TOP of `useEditPerson()` (this hook's own render), not
+// inside `saveEdit`'s body, even though `saveEdit`'s fallback is the only place that consumes it:
+// `saveEdit` is a `useCallback`-wrapped function that RUNS LATER, on a user's Save click — well
+// after this hook's render has finished — so it closes over the already-resolved `today` instead of
+// asking the hook for it itself.
+//
+// This also retires the old "NO DEGRADED MODE" throw for this path: `copenhagenToday()` could throw
+// if the runtime could not resolve Europe/Copenhagen (a client-side `Intl` lookup, per-call).
+// `useCalendarToday()` throws for a DIFFERENT reason — a missing `CalendarContext` provider, i.e. a
+// wiring bug, not a runtime fact about this browser — and by construction (`CalendarContext.tsx`'s
+// own doc comment) it never happens here: `PersonDrawer` (this hook's only production caller, via
+// `usePlacement`) renders only under `RequireAuth`, which does not mount its children until the
+// calendar gate is `ready`.
 
 /** A status-tagged error (the shape thrown by the user/profile PUT helpers). */
 interface StatusError extends Error {
@@ -160,6 +166,11 @@ export function useEditPerson() {
     setBirthDate,
     setEmploymentStartDate,
   } = useEntitlementEligibility()
+  // S143 / TASK-14313 — the server-confirmed Europe/Copenhagen day (ADR-042), read ONCE per render
+  // here (a hook call must happen during render, never inside `saveEdit`'s callback body below,
+  // which runs later on a Save click). `saveEdit` closes over this value as its `effectiveFrom`
+  // fallback — see this file's own header comment for why the old `todayIso()` wrapper is gone.
+  const today = useCalendarToday()
 
   const [sections, setSections] = useState<SectionSaveMap>(makeInitialSectionSaveMap)
   const [saving, setSaving] = useState(false)
@@ -192,8 +203,10 @@ export function useEditPerson() {
       // S141 / TASK-14111 — ONE effective date for the whole save (both
       // dated writes below use this SAME value): the drawer's effective-date
       // picker, or today when the caller omits it (every pre-S141 caller,
-      // and the default the picker itself opens on).
-      const effectiveFrom = input.effectiveFrom ?? todayIso()
+      // and the default the picker itself opens on). S143 / TASK-14313: `today`
+      // is the render-time `useCalendarToday()` read captured above, not a
+      // fresh clock read at save time — see this file's header comment.
+      const effectiveFrom = input.effectiveFrom ?? today
 
       // (1) users PUT — admin-strict If-Match.
       try {
@@ -449,6 +462,7 @@ export function useEditPerson() {
       setChildSick,
       fetchChildSickEligibility,
       resetSections,
+      today,
     ],
   )
 

@@ -112,14 +112,18 @@ export interface EffectiveDatePickerProps {
   onChange: (next: string) => void
   /**
    * ISO yyyy-MM-dd — the SAME "today" the save itself defaults to
-   * (`todayIso()` in `useEditPerson.ts`), passed in rather than
-   * recomputed here so this control's "is this future?" check can never
-   * disagree with the value it was itself defaulted to when the drawer
-   * opened.
+   * (`useCalendarToday()`, read once in `useEditPerson.ts` — S143 /
+   * TASK-14313 replaced that hook's former `todayIso()` wrapper), passed in
+   * rather than recomputed here so this control's "is this future?" check
+   * can never disagree with the value it was itself defaulted to when the
+   * drawer opened.
    *
-   * S142 / TASK-14209 — OQ-12: `null` when the caller's zone-resolve failed
-   * (`copenhagenToday()` threw — the runtime cannot resolve Europe/Copenhagen).
-   * The caller has already shown its OWN message and blocked the save in that
+   * S142 / TASK-14209 — OQ-12: `null` when the caller's read failed
+   * (`PersonDrawer.tsx`'s `useCalendarToday()` call threw). Pre-S143 that
+   * meant the runtime could not resolve Europe/Copenhagen; post-S143 it means
+   * the `CalendarContext` provider was missing (believed unreachable in the
+   * running app — see `PersonDrawer.tsx`'s own comment). Either way, the
+   * caller has already shown its OWN message and blocked the save in that
    * case (`blockedReason`), so this component just skips the future/past
    * classification below rather than guessing against a day it does not have.
    */

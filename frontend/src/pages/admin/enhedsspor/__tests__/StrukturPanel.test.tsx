@@ -17,7 +17,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useState, type ComponentProps } from 'react'
-import { render, screen, fireEvent, within, waitFor, cleanup } from '@testing-library/react'
+import { screen, fireEvent, within, waitFor, cleanup } from '@testing-library/react'
+import { renderWithCalendar } from '../../../../test/renderWithCalendar'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../../../lib/__tests__/testTimeZone'
 
 // SPRINT-108 / TASK-10803 — StrukturPanel now consumes useAuth (the capability
 // spine) + useToast; both THROW outside their providers. A parametrized role mock
@@ -212,7 +214,16 @@ const VEJL_NODE: SelectedNode = { id: VEJL, kind: 'unit', name: 'Vejledning', ty
 // ever loads for it — the tier where the people-visibility toggles cannot function.
 const MIN01_NODE: SelectedNode = { id: 'MIN01', kind: 'mao', name: 'Finansministeriet', type: 'ministeromrade' }
 
-function renderPanel(overrides: Partial<ComponentProps<typeof StrukturPanel>> = {}) {
+// S143 / TASK-14313 — the AUTHORITY value (`useCalendarToday()`, ADR-042) every `renderPanel` call
+// gets unless it asks for a different one. None of the pre-existing tests in this file cared what
+// "today" actually was (the "Ret" tests below asserted `effectiveFrom: expect.any(String)`) — this
+// is just the value StrukturPanel (and any PersonDrawer it opens) now needs to render at all.
+const DEFAULT_TEST_TODAY = '2026-07-16'
+
+function renderPanel(
+  overrides: Partial<ComponentProps<typeof StrukturPanel>> = {},
+  today = DEFAULT_TEST_TODAY,
+) {
   const props: ComponentProps<typeof StrukturPanel> = {
     forest: makeForest(),
     selected: VEJL_NODE,
@@ -230,7 +241,8 @@ function renderPanel(overrides: Partial<ComponentProps<typeof StrukturPanel>> = 
   // A real ToastProvider satisfies the drawer's '/Toast' useToast (the focus
   // happy-path opens the PersonDrawer); it renders no extra buttons when empty, so
   // the S91 allowlist test is unaffected.
-  return { ...render(
+  return { ...renderWithCalendar(
+    today,
     <ToastProvider>
       <StrukturPanel {...props} />
     </ToastProvider>,
@@ -614,7 +626,7 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
         />
       )
     }
-    render(<Harness />)
+    renderWithCalendar(DEFAULT_TEST_TODAY, <Harness />)
     expect(screen.getByTestId('leader-jens')).toBeDefined()
   })
 
@@ -684,7 +696,7 @@ describe('StrukturPanel — the recursive read-only Struktur', () => {
         </ToastProvider>
       )
     }
-    render(<Harness />)
+    renderWithCalendar(DEFAULT_TEST_TODAY, <Harness />)
     // The org-homed row shows at the org level by default…
     expect(screen.getByTestId('employee-omni')).toBeDefined()
     // …collapse the ORG med-section (keyed by the org id) → the row hides…
@@ -742,6 +754,47 @@ describe('StrukturPanel — cross-unit "Ret" + leaderless "Tildel leder" (TASK-1
     expect(screen.queryByTestId('ret-picker-scrim')).toBeNull()
     // Refetch on success.
     await waitFor(() => expect(onMutated).toHaveBeenCalledWith('STY02'))
+  })
+
+  // S143 / TASK-14313 (Step-7a review) — PINS: prove `effectiveFrom` follows the AUTHORITY
+  // (`useCalendarToday()`, ADR-042), not the device's clock. The three "Ret" tests in this
+  // describe block only ever asserted `effectiveFrom: expect.any(String)` — "some string,"
+  // regardless of what it is — which is exactly the gap that let `StrukturPanel.tsx` read the
+  // device clock (right zone, wrong authority) for as long as it did. Force a non-Danish zone AND
+  // pin an instant where the device and the authority disagree, then assert the value SENT is the
+  // authority's.
+  it('S143 / TASK-14313 — "Ret" sends the AUTHORITY day, not the device clock, when the two disagree', async () => {
+    const restoreTz = forceTestTimeZone('America/New_York')
+    try {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        // 2026-07-15 22:30 UTC: Copenhagen (CEST, +02:00) already reads 00:30 on the 16th; New
+        // York (EDT, -04:00) — the forced zone — still reads 18:30 on the 15th. If this ever
+        // regressed to a device-clock read, it would compute '2026-07-15' here.
+        vi.setSystemTime(new Date('2026-07-15T22:30:00Z'))
+        // THE GUARD ON THE GUARD: confirm the forcing actually took effect before trusting the
+        // rest of this test (ADR-041:74-75 — "force the zone, and assert that the forcing
+        // worked").
+        const pinned = new Date('2026-07-15T22:30:00Z')
+        expect(pinned.getDate()).toBe(15)
+        expect(pinned.getHours()).toBe(18)
+
+        // The AUTHORITY, supplied via `renderPanel`'s `CalendarTestProvider` wrap — deliberately
+        // the day AFTER what the device (under the forced zone, at the pinned instant) would read.
+        renderPanel({ rosterByOrg: { STY02: singleLeaderRoster(3) } }, '2026-07-16')
+        fireEvent.click(screen.getByTestId('ret-carl'))
+        await waitFor(() => expect(reportingLines.assignManager).toHaveBeenCalledTimes(1))
+        // LITERAL — the authority's day, never the device's (which would be '2026-07-15').
+        expect(reportingLines.assignManager).toHaveBeenCalledWith(
+          { employeeId: 'carl', managerId: 'jens', effectiveFrom: '2026-07-16' },
+          '"3"',
+        )
+      } finally {
+        vi.useRealTimers()
+      }
+    } finally {
+      restoreTestTimeZone(restoreTz)
+    }
   })
 
   it('"Ret" single own-unit leader → one-click POST with If-None-Match:* (CREATE) when the etag is null', async () => {

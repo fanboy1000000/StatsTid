@@ -344,12 +344,17 @@ export function useOrgUsers(orgId: string) {
    * was REMOVED in S141 (a future-dated change is legal), and since S142 the
    * server's day is the COPENHAGEN business day, not UTC.
    *
-   * If you need "today" here, call `copenhagenToday()` from
-   * `src/lib/copenhagenDate.ts` — never `new Date().toISOString().slice(0,10)`,
-   * and never the browser's own day. Both are different wrong calendars, and a
-   * Danish user working after midnight would have their change recorded as
-   * effective YESTERDAY. That defect is what S142 removed; this comment was
-   * instructing the next author to put it back.
+   * If you need "today" here, call `useCalendarToday()` from
+   * `src/contexts/CalendarContext.tsx` (S143 / TASK-14313 / ADR-042) — never
+   * `new Date().toISOString().slice(0,10)`, never the browser's own day, and
+   * — as of S143 — never `copenhagenToday()` (`src/lib/copenhagenDate.ts`)
+   * either for a value that gets STORED or validated: that helper is the
+   * right CALENDAR (Europe/Copenhagen) but the wrong AUTHORITY (the device's
+   * clock, not the server's). A Danish user working after midnight, or one
+   * whose laptop clock has simply drifted, would have their change recorded
+   * as effective on the WRONG day either way. That defect is what S142 (the
+   * calendar) and S143 (the authority) removed; this comment was instructing
+   * the next author to put a version of it back.
    */
   const updateUser = async (
     userId: string,

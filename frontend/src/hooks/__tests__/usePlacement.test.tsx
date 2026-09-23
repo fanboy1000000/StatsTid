@@ -9,9 +9,10 @@
 // the routing from the HR sub-writes (those have their own S76b coverage).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { usePlacement, type PlacementArgs, type PlacementResult } from '../usePlacement'
 import type { EditLiveState } from '../useEditPerson'
+import { renderWithCalendar } from '../../test/renderWithCalendar'
 
 // ── fetch + localStorage stubs ──────────────────────────────────────────────────
 const mockFetch = vi.fn()
@@ -118,9 +119,12 @@ beforeEach(() => {
   mockFetch.mockReset()
 })
 
+// S143 / TASK-14313 — `usePlacement` routes through `useEditPerson.saveEdit`, which now reads
+// "today" via `useCalendarToday()` (ADR-042); no test in this file asserts a `effectiveFrom` value
+// (it's all routing/version-threading), so a single fixed literal is enough.
 async function run(args: PlacementArgs): Promise<PlacementResult> {
   let captured: PlacementResult | null = null
-  render(<Harness args={args} onResult={(r) => (captured = r)} />)
+  renderWithCalendar('2026-07-16', <Harness args={args} onResult={(r) => (captured = r)} />)
   fireEvent.click(screen.getByText('save'))
   await waitFor(() => expect(captured).not.toBeNull())
   return captured as unknown as PlacementResult

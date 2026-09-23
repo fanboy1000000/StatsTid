@@ -12,7 +12,7 @@
 import { useCallback, useState } from 'react'
 import { useToast } from '../../../components/ui/Toast'
 import { useReportingLines } from '../../../hooks/useReportingLines'
-import { copenhagenToday } from '../../../lib/copenhagenDate'
+import { useCalendarToday } from '../../../contexts/CalendarContext'
 import { PersonPickerDialog } from './PersonPickerDialog'
 import styles from './LifecycleSections.module.css'
 
@@ -84,6 +84,31 @@ export function ApproverSection({
 }: ApproverSectionProps) {
   const { toast } = useToast()
   const { assignManager, removeManager } = useReportingLines()
+  // S143 / TASK-14313 (Step-7a review) — was `copenhagenToday()`, called INSIDE `handlePick` below
+  // (right zone, wrong authority per ADR-042: the device's clock, not the server's). A hook must be
+  // called during render, never inside an event-handler callback that runs later on a user's click,
+  // so `today`/`zoneError` move up here (mirroring `PersonDrawer.tsx`'s own OQ-12 resolution point)
+  // and `handlePick` closes over the already-resolved value instead of asking again at click time.
+  //
+  // The OQ-12 "disable the action, don't blank the page" INTENT survives (the toast below fires
+  // exactly when `zoneError !== null`, same message, same UX) — but the MECHANISM changes from
+  // "attempt the read and catch its throw" to "check the already-resolved flag," because
+  // `useCalendarToday()` cannot be attempted lazily inside the callback the way `copenhagenToday()`
+  // could. In practice this catch is believed unreachable: `ApproverSection` renders only inside
+  // `PersonDrawer`, itself only inside `RequireAuth`'s post-`ready` subtree (`CalendarContext.tsx`'s
+  // own doc comment), so `useCalendarToday()` never throws here. Kept rather than deleted, per the
+  // same reasoning as the `PersonDrawer.tsx` and `MondayDatePicker.tsx` guards this task touches.
+  let today: string | null
+  let zoneError: string | null
+  try {
+    today = useCalendarToday()
+    zoneError = null
+  } catch {
+    today = null
+    zoneError =
+      'Dags dato kan ikke bestemmes: denne browser kan ikke bestemme den danske kalenderdag ' +
+      '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.'
+  }
   const [pickerOpen, setPickerOpen] = useState(autoOpenPicker)
   const [busy, setBusy] = useState(false)
   // Edit-mode local mirror so the row updates immediately after an assign/remove
@@ -110,24 +135,21 @@ export function ApproverSection({
 
       if (!employeeId) return
       setBusy(true)
-      // S142 / TASK-14209 (census rows 60-64) — was a render-body constant
-      // (`new Date().toISOString().slice(0, 10)`, the raw UTC formula this sprint removes),
-      // recomputed on every render of this section whether or not a pick ever happened. Now
-      // computed HERE instead, at the moment HR actually picks an approver: the Copenhagen
-      // calendar day, and — owner ruling OQ-12 — a zone-resolve failure surfaces through this
-      // same "Tildeling mislykkedes" toast this callback already has, rather than a render-time
-      // throw blanking the section (or, since this WAS a render-body call, potentially the whole
-      // drawer/page it sits in).
-      let today: string
-      try {
-        today = copenhagenToday()
-      } catch {
+      // S142 / TASK-14209 (census rows 60-64) — the effective date stamped on a NEW approver
+      // assignment (`reporting_lines.effective_from`). S143 / TASK-14313: `today` is now the
+      // render-time `useCalendarToday()` read captured above this component's `return`, not a fresh
+      // clock read at pick time — see that declaration's own comment for why the mechanism had to
+      // move (a hook cannot be called from inside this callback). The OQ-12 UX is unchanged: an
+      // unresolved day still surfaces through this SAME "Tildeling mislykkedes" toast rather than
+      // attempting the assign with a value that does not exist.
+      if (today === null) {
         setBusy(false)
         toast({
           title: 'Tildeling mislykkedes',
           description:
+            zoneError ??
             'Dags dato kan ikke bestemmes: denne browser kan ikke bestemme den danske kalenderdag ' +
-            '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.',
+              '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.',
           variant: 'error',
         })
         return
@@ -167,6 +189,7 @@ export function ApproverSection({
       onDraftApproverChange,
       onChanged,
       toast,
+      today,
     ],
   )
 

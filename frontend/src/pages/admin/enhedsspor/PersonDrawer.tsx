@@ -27,7 +27,8 @@ import { useToast } from '../../../components/ui/Toast'
 import { useAuth } from '../../../contexts/AuthContext'
 import { useEntitlementEligibility } from '../../../hooks/useEntitlementEligibility'
 import { usePlacement } from '../../../hooks/usePlacement'
-import { todayIso, type EditLiveState } from '../../../hooks/useEditPerson'
+import type { EditLiveState } from '../../../hooks/useEditPerson'
+import { useCalendarToday } from '../../../contexts/CalendarContext'
 import type { Organization, WithEtag, User } from '../../../hooks/useAdmin'
 import type { ForestMaoNode } from '../../../hooks/useForest'
 import { fetchEmployeeProfile } from '../editPerson/employeeProfileApi'
@@ -141,21 +142,37 @@ export function PersonDrawer({
   // every open so a stale choice from a previous edit never survives a reopen.
   const [profileCarryForward, setProfileCarryForward] = useState(false)
   const [agreementCarryForward, setAgreementCarryForward] = useState(false)
-  // S142 / TASK-14209 (census rows 60-64) — owner ruling OQ-12 (2026-09-17). `todayIso()` (the
-  // Europe/Copenhagen calendar day — see `useEditPerson.ts`) throws if the runtime cannot resolve
-  // that zone, deliberately: a fallback to the browser's own zone would silently reinstate the
-  // exact UTC/browser-local defect S142 removes. This drawer reads "today" in FOUR places within
-  // one render — the effective-date default just below, the open-time reset, the create-mode
-  // hire-date pre-fill, and the future/past classification further down — and previously called
-  // the (wrong) raw formula directly in each. An uncaught throw in ANY of them blanks the WHOLE
-  // drawer (Name, e-mail, Organisation, Placering, the approver section — everything), for a fault
-  // that has nothing to do with most of those fields. Resolved ONCE per render, mirroring
-  // `MondayDatePicker.tsx` (the first OQ-12 site), and reused everywhere below so all four agree
-  // with each other within the same render pass, instead of independently risking disagreement.
+  // S142 / TASK-14209 (census rows 60-64) — owner ruling OQ-12 (2026-09-17): `todayIso()` (the
+  // Europe/Copenhagen calendar day) threw if the runtime could not resolve that zone, deliberately
+  // — a fallback to the browser's own zone would silently reinstate the exact UTC/browser-local
+  // defect S142 removes. This drawer reads "today" in FOUR places within one render — the
+  // effective-date default just below, the open-time reset, the create-mode hire-date pre-fill, and
+  // the future/past classification further down — and previously called the (wrong) raw formula
+  // directly in each. An uncaught throw in ANY of them blanks the WHOLE drawer (Name, e-mail,
+  // Organisation, Placering, the approver section — everything), for a fault that has nothing to do
+  // with most of those fields. Resolved ONCE per render, mirroring `MondayDatePicker.tsx` (the first
+  // OQ-12 site), and reused everywhere below so all four agree with each other within the same
+  // render pass, instead of independently risking disagreement.
+  //
+  // S143 / TASK-14313 (Step-7a review) — `todayIso()` read the DEVICE's clock (right zone, wrong
+  // authority per ADR-042) and is deleted; `today` now comes from `useCalendarToday()`, the
+  // server-confirmed day. The try/catch SURVIVES this migration rather than being deleted, but its
+  // failure mode changed: `copenhagenToday()` threw for a runtime fact (no Europe/Copenhagen tz
+  // data), which every browser this product supports actually ships, making that branch already
+  // unreachable in practice. `useCalendarToday()` throws for a DIFFERENT reason — a missing
+  // `CalendarContext` provider, a WIRING BUG, not a runtime fact — and is, if anything, LESS
+  // reachable here: this drawer renders only inside `RequireAuth`'s subtree, which does not mount
+  // its children until the calendar gate reaches `ready` (`CalendarContext.tsx`'s own doc comment).
+  // So this catch is believed unreachable in the running app both before and after this change, for
+  // two different reasons — kept, not deleted, exactly as the OQ-12 "disable the control, don't
+  // blank the page" design intends, on the chance a future wiring change ever violates that
+  // guarantee. The Danish message text below (about tz data) no longer precisely describes the one
+  // failure that could still reach it, but rewriting it is a separate, non-clock-read decision this
+  // task does not make on this drawer's behalf.
   let today: string | null
   let zoneError: string | null
   try {
-    today = todayIso()
+    today = useCalendarToday()
     zoneError = null
   } catch {
     today = null

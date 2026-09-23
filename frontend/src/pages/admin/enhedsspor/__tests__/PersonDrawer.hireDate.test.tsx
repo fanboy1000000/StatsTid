@@ -6,12 +6,18 @@
 // gets wrong (S137: omitted ⇒ "hired today" server-side, blocking any
 // back-filled registration from before the record existed).
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { ToastProvider } from '../../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import { orgsFromForest } from '../personDrawerData'
 import { PersonDrawer } from '../PersonDrawer'
 import { forceTestTimeZone, restoreTestTimeZone } from '../../../../lib/__tests__/testTimeZone'
+import { renderWithCalendar } from '../../../../test/renderWithCalendar'
+
+// S143 / TASK-14313 — the AUTHORITY value (`useCalendarToday()`, ADR-042) supplied to every
+// render in this file, matching the literal this file's own zone-forcing block already asserted
+// pre-S143 — see that block's own comment for why the zone/clock forcing below is kept anyway.
+const DEFAULT_TEST_TODAY = '2026-07-16'
 
 const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
 vi.mock('../../../../contexts/AuthContext', () => ({
@@ -75,9 +81,10 @@ function makeForest(): ForestMaoNode[] {
   ]
 }
 
-function renderCreate() {
+function renderCreate(today = DEFAULT_TEST_TODAY) {
   const forest = makeForest()
-  return render(
+  return renderWithCalendar(
+    today,
     <ToastProvider>
       <PersonDrawer
         open
@@ -116,14 +123,21 @@ function createRequestBody(): Record<string, unknown> {
 // formula) used — the two could never disagree, so this test would have passed whether or not
 // `PersonDrawer.tsx` was ever fixed. That sweep's comment tracked the fix to land together with
 // `PersonDrawer.tsx`'s own migration; TASK-14209 is that migration (census row 62 — the
-// create-mode hire-date pre-fill now reads the Copenhagen day via `useEditPerson.ts`'s
-// `todayIso()` / `copenhagenDate.ts`), so this file updates in the SAME change as promised.
+// create-mode hire-date pre-fill then read the Copenhagen day via `useEditPerson.ts`'s
+// `todayIso()` / `copenhagenDate.ts`).
 //
-// WHY THE ZONE MUST BE FORCED (not just the clock pinned). The developer machine this suite runs
-// on is ALSO on Copenhagen time, so browser-local and Copenhagen would agree here by coincidence —
-// forcing the zone away from Copenhagen is what makes the literals below actually discriminate a
-// regression. See `testTimeZone.ts` and `MondayDatePicker.test.tsx` (the first site this pattern
-// shipped for).
+// S143 / TASK-14313 (Step-7a review) — `todayIso()` was itself found reading the DEVICE's clock
+// (right zone, wrong authority per ADR-042). `PersonDrawer` now reads "today" from
+// `useCalendarToday()`, supplied here via `renderCreate`'s `renderWithCalendar` wrap
+// (`DEFAULT_TEST_TODAY`, matching this block's own literal below).
+//
+// WHY THE ZONE/CLOCK FORCING BELOW IS KEPT ANYWAY, even though `PersonDrawer` no longer reads
+// either: it is now a REGRESSION GUARD per this task's PINS, not a load-bearing input. The pinned
+// instant, read under the forced America/New_York zone, is '2026-07-15' — one day BEHIND the
+// '2026-07-16' authority value `renderCreate()` supplies. If this ever regressed to reading the
+// device clock again, these tests would compute '2026-07-15' and fail against the '2026-07-16'
+// they assert. See `testTimeZone.ts` and `MondayDatePicker.test.tsx` (the first site this pattern
+// shipped for) for the fuller reasoning.
 describe('PersonDrawer — the create-mode hire date (HRP-016)', () => {
   let restoreTz: string | undefined
 
@@ -161,7 +175,8 @@ describe('PersonDrawer — the create-mode hire date (HRP-016)', () => {
   it('pre-fills the field with the Copenhagen today', () => {
     renderCreate()
     // LITERAL, not a call to a formula the component also computes — see this block's header.
-    // Pre-S142 (the raw UTC formula) this would have been '2026-07-15'.
+    // The AUTHORITY's day (`renderCreate`'s default), not the device's — which, under the forced
+    // zone + pinned instant above, would be '2026-07-15' if this ever regressed.
     expect((screen.getByTestId('pd-employment-start') as HTMLInputElement).value).toBe('2026-07-16')
   })
 

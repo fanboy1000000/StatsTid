@@ -404,8 +404,18 @@ function apiDelete(pathKey: string, arg?: unknown): Promise<ApiResult<unknown>> 
 // into an ORDINARY failed `ApiResult` — `handle401` does not run, so the token is NOT cleared and
 // the page does NOT reload. That means the CALLER inherits the duty to end the session — silently
 // doing nothing with a 401 leaves a dead token sitting in storage indefinitely. The one caller today
-// (`hooks/useCalendarBootstrap.ts`) discharges this via `RequireAuth.tsx`'s `logout()` effect. A
-// future second caller of `skipAuthReload` inherits this same obligation along with the option.
+// (`hooks/useCalendarBootstrap.ts`) discharges this duty on ONE of its two request paths, not both:
+//   - a BOOTSTRAP 401 (the app-start read) ends the session — `RequireAuth.tsx`'s `logout()` effect
+//     runs, matching the "dead token" duty this option hands off.
+//   - a REFRESH 401 (a later background re-poll — midnight rollover, tab regaining visibility)
+//     deliberately does NOT: `useCalendarBootstrap.ts`'s `fail()` closure leaves `phase` untouched
+//     and re-polls on a fixed 30s cadence (`REFRESH_RETRY_DELAY_MS`) instead, so a token that is
+//     merely due for a refresh does not log a user out from a background timer. The token sits in
+//     storage, unrefreshed, until the next real request 401s through the NORMAL (non-skipped) path
+//     and triggers the ordinary reload — this is a deliberate, pinned asymmetry (see
+//     `useCalendarBootstrap.ts`'s own "asymmetry" doc), not an unhandled case.
+// A future second caller of `skipAuthReload` inherits the bootstrap-path duty; whether it also wants
+// the refresh-path's "keep retrying, don't end the session" behaviour is its own design decision.
 export const apiClient = {
   get: apiGet,
   post: apiPost,
