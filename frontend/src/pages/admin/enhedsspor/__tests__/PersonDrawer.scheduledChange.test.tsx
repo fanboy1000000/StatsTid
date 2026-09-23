@@ -11,13 +11,20 @@
 // forward choice.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '../../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import type { WithEtag, User } from '../../../../hooks/useAdmin'
 import { orgsFromForest } from '../personDrawerData'
 import { PersonDrawer } from '../PersonDrawer'
+import { renderWithCalendar } from '../../../../test/renderWithCalendar'
+
+// S143 / TASK-14313 — none of this file's assertions depend on the actual VALUE of "today" (they
+// exercise scheduled-change visibility, not the effective-date default), so a single fixed
+// AUTHORITY literal is enough here — unlike the sibling `PersonDrawer.effectiveDate.test.tsx` /
+// `PersonDrawer.hireDate.test.tsx` files, which pin one to match a pre-existing asserted default.
+const TEST_TODAY = '2026-07-16'
 
 const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
 vi.mock('../../../../contexts/AuthContext', () => ({
@@ -166,7 +173,8 @@ function makeForest(): ForestMaoNode[] {
 
 function renderEdit(user: Partial<WithEtag<User>> = {}) {
   const forest = makeForest()
-  return render(
+  return renderWithCalendar(
+    TEST_TODAY,
     // The drawer's edit-mode "Fratrædelse" link (react-router-dom `Link`)
     // needs a Router ancestor.
     <MemoryRouter>
@@ -330,7 +338,8 @@ describe('PersonDrawer — the "Fratrædelse" link to the termination screen (TA
 
   it('does NOT render in create mode (nobody to terminate yet)', () => {
     const forest = makeForest()
-    render(
+    renderWithCalendar(
+      TEST_TODAY,
       <MemoryRouter>
         <ToastProvider>
           <PersonDrawer

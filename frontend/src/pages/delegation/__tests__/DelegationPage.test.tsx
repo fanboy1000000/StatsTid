@@ -2,9 +2,11 @@
 // DelegationPage self-service delegation page. Mirrors ReportingLineTree.test.tsx
 // pattern: mock globalThis.fetch, wrap in ToastProvider, assert DOM state.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import { ToastProvider } from '../../../components/ui/Toast'
 import { DelegationPage } from '../DelegationPage'
+import { renderWithCalendar } from '../../../test/renderWithCalendar'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../../lib/__tests__/testTimeZone'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -43,8 +45,9 @@ const activeStatus = {
   ],
 }
 
-// A return date guaranteed valid against the component's min={todayIso()} constraint
-// (DelegationPage.tsx:216 — backed by copenhagenToday()). Originally computed as "today + 7
+// A return date guaranteed valid against the component's min={today} constraint
+// (DelegationPage.tsx — since S143/TASK-14313 backed by `useCalendarToday()`, ADR-042; previously
+// `todayIso()` / `copenhagenToday()`, a device-clock read). Originally computed as "today + 7
 // days" from a live new Date() so the test would never time-bomb on a date rollover (it had
 // been hardcoded to '2026-06-15', which jsdom's native <input type="date" min=...> constraint
 // validation started rejecting once the wall clock passed it — submit silently blocked).
@@ -54,12 +57,19 @@ const activeStatus = {
 // happened to swamp a one-day Copenhagen/UTC skew, but nothing chose that margin on purpose.
 // This test does not actually need a date "relative to today": the only thing the min=
 // constraint requires is SOME date that is never in the past, forever. A fixed far-future
-// literal satisfies that deterministically, with no clock read at all — simpler than deriving
-// from copenhagenToday() and just as immune to date rollover.
+// literal satisfies that deterministically, with no clock read (device or authority) at all —
+// simpler than deriving from either and just as immune to date rollover. The dedicated
+// authority-vs-device test at the end of this file is the one that DOES pin the value.
 const validReturnDate = '2099-12-31'
 
-function renderPage() {
-  return render(
+// S143 / TASK-14313 — `DelegationPage` now reads "today" via `useCalendarToday()` (ADR-042)
+// instead of a live clock read, so every render needs a mounted `CalendarContext.Provider`. None
+// of the FOUR pre-existing tests below care what "today" actually is (they use the far-future
+// `validReturnDate` precisely to avoid that dependency — see its own comment above), so a fixed
+// default is enough for them; the new authority-vs-device test further down supplies its own.
+function renderPage(today = '2026-07-16') {
+  return renderWithCalendar(
+    today,
     <ToastProvider>
       <DelegationPage />
     </ToastProvider>,
@@ -208,5 +218,45 @@ describe('DelegationPage', () => {
       // URL should contain the delegate endpoint
       expect(deleteCalls[0][0]).toContain('/delegate')
     })
+  })
+
+  // S143 / TASK-14313 (Step-7a review) — PINS: prove the Returdato floor (`min`) follows the
+  // AUTHORITY (`useCalendarToday()`, ADR-042), not the device's clock. None of the tests above
+  // check the `min` attribute's value at all (`validReturnDate` is a far-future literal chosen
+  // specifically to not depend on it) — this is the gap that let `DelegationPage.tsx` read the
+  // device clock (right zone, wrong authority) for as long as it did. Force a non-Danish zone AND
+  // pin an instant where the device and the authority disagree, then assert the value is the
+  // authority's.
+  it('S143 / TASK-14313 — the Returdato floor follows the AUTHORITY day, not the device clock', async () => {
+    const restoreTz = forceTestTimeZone('America/New_York')
+    try {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        // 2026-07-15 22:30 UTC: Copenhagen (CEST, +02:00) already reads 00:30 on the 16th; New
+        // York (EDT, -04:00) — the forced zone — still reads 18:30 on the 15th. If this ever
+        // regressed to a device-clock read, it would compute '2026-07-15' here.
+        vi.setSystemTime(new Date('2026-07-15T22:30:00Z'))
+        // THE GUARD ON THE GUARD: confirm the forcing actually took effect (ADR-041:74-75).
+        const pinned = new Date('2026-07-15T22:30:00Z')
+        expect(pinned.getDate()).toBe(15)
+        expect(pinned.getHours()).toBe(18)
+
+        mockGetDelegation(inactiveStatus)
+        // The AUTHORITY, supplied via `renderPage`'s `renderWithCalendar` wrap — deliberately the
+        // day AFTER what the device (under the forced zone, at the pinned instant) would read.
+        renderPage('2026-07-16')
+
+        await waitFor(() => {
+          expect(screen.getByText('Uddeleger godkendelser')).toBeDefined()
+        })
+        const dateInput = screen.getByLabelText(/Returdato/) as HTMLInputElement
+        // LITERAL — the authority's day, never the device's (which would be '2026-07-15').
+        expect(dateInput.min).toBe('2026-07-16')
+      } finally {
+        vi.useRealTimers()
+      }
+    } finally {
+      restoreTestTimeZone(restoreTz)
+    }
   })
 })

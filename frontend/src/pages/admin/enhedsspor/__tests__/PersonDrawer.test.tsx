@@ -5,11 +5,17 @@
 // ToastProvider satisfies the reused cores' useToast; useAuth is a LocalHR mock.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '../../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import { orgsFromForest } from '../personDrawerData'
+import { renderWithCalendar } from '../../../../test/renderWithCalendar'
+
+// S143 / TASK-14313 — none of this file's assertions depend on the VALUE of "today" (Placering
+// reload, approver-picker org-scoping), just on `PersonDrawer` rendering, which now requires a
+// mounted `CalendarContext` (`useCalendarToday()`, ADR-042).
+const TEST_TODAY = '2026-07-16'
 
 const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
 vi.mock('../../../../contexts/AuthContext', () => ({
@@ -92,7 +98,8 @@ const optionTexts = (testid: string): string[] =>
 
 function renderCreate(defaultUnitId: string | null = VEJL) {
   const forest = makeForest()
-  return render(
+  return renderWithCalendar(
+    TEST_TODAY,
     <ToastProvider>
       <PersonDrawer
         open
@@ -220,7 +227,8 @@ describe('PersonDrawer — the godkender picker is Organisation-scoped', () => {
 
   it('EDIT: keeps searching the PERSISTED organisation while an unsaved transfer is pending', async () => {
     const forest = makeForest()
-    render(
+    renderWithCalendar(
+      TEST_TODAY,
       // S141 / TASK-14107 — the drawer's edit-mode "Fratrædelse" link
       // (react-router-dom `Link`) needs a Router ancestor; CREATE-mode tests
       // in this file don't render it and stay un-wrapped.

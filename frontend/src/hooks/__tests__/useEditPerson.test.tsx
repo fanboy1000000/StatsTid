@@ -30,10 +30,11 @@
 // save reports `ok: false`.
 
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { useEditPerson, type EditSaveInput } from '../useEditPerson'
 import type { EditLiveState, SaveEditResult } from '../useEditPerson'
 import { forceTestTimeZone, restoreTestTimeZone } from '../../lib/__tests__/testTimeZone'
+import { renderWithCalendar } from '../../test/renderWithCalendar'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
@@ -161,9 +162,18 @@ function Harness({
   return <button onClick={async () => onResult(await saveEdit(input, live))}>save</button>
 }
 
-async function run(input: EditSaveInput, live: EditLiveState): Promise<SaveEditResult> {
+// S143 / TASK-14313 — `useEditPerson`'s `saveEdit` now reads its `effectiveFrom` fallback via
+// `useCalendarToday()` (ADR-042) instead of a live clock read, so `Harness` needs a mounted
+// `CalendarContext.Provider`. `'2026-07-16'` matches the literal this file's own "S142 / OQ-3(a)"
+// regression-guard block below already asserted, so every OTHER test in this file (which never
+// cared what "today" was) keeps behaving exactly as before.
+async function run(
+  input: EditSaveInput,
+  live: EditLiveState,
+  today = '2026-07-16',
+): Promise<SaveEditResult> {
   let captured: SaveEditResult | null = null
-  render(<Harness input={input} live={live} onResult={(r) => (captured = r)} />)
+  renderWithCalendar(today, <Harness input={input} live={live} onResult={(r) => (captured = r)} />)
   fireEvent.click(screen.getByText('save'))
   await waitFor(() => expect(captured).not.toBeNull())
   return captured as unknown as SaveEditResult
@@ -359,17 +369,25 @@ describe('useEditPerson.saveEdit — S141 / TASK-14111 the effective-date picker
   })
 
   // S142 / TASK-14209 — this test used to assert `todayIsoUtc()` against a FRESH call to the very
-  // function under test: `saveEdit`'s default is `input.effectiveFrom ?? todayIso()`, and the old
+  // function under test: `saveEdit`'s default was `input.effectiveFrom ?? todayIso()`, and the old
   // assertion called `todayIsoUtc()` a second time and compared the two calls to each other. That
   // passes no matter WHAT `todayIso()` computes — UTC, browser-local, or (correctly) the
   // Copenhagen day — because both sides of the `expect` are the same computation. It is exactly
-  // the shape this sprint exists to delete (see this file's own header).
+  // the shape this sprint exists to delete (see this file's own header). The literal '2026-07-16'
+  // below is a HAND-WRITTEN expectation, not a second call to anything.
   //
-  // The machine this suite runs on is ALSO on Copenhagen time (the project's dev host), so
-  // browser-local and Copenhagen agree here by coincidence — pinning the instant is not enough on
-  // its own; the zone must be forced away from Copenhagen too, or this test would pass against the
-  // very UTC-vs-Copenhagen defect S142 removes. See `testTimeZone.ts` and
-  // `MondayDatePicker.test.tsx` (the first site this pattern shipped for).
+  // S143 / TASK-14313 (Step-7a review) — `todayIso()` was itself found reading the DEVICE's clock
+  // (right zone, wrong authority per ADR-042). `saveEdit`'s fallback now comes from
+  // `useCalendarToday()`, supplied to `Harness` via `run()`'s `renderWithCalendar` wrap (default
+  // '2026-07-16', matching this block's own literal).
+  //
+  // WHY THE ZONE/CLOCK FORCING BELOW IS KEPT ANYWAY, even though `saveEdit` no longer reads either:
+  // it is now a REGRESSION GUARD per this task's PINS, not a load-bearing input. The pinned
+  // instant, read under the forced America/New_York zone, is '2026-07-15' — one day BEHIND the
+  // '2026-07-16' authority value `run()` supplies. If this ever regressed to reading the device
+  // clock again, the fact below would compute '2026-07-15' and fail against the '2026-07-16' it
+  // asserts — exactly the discrimination a same-zone, same-day test cannot provide. See
+  // `testTimeZone.ts` and `MondayDatePicker.test.tsx` (the first site this pattern shipped for).
   describe('the default is the Copenhagen day, not the browser day (S142 regression guard)', () => {
     let restoreTz: string | undefined
 
@@ -383,8 +401,8 @@ describe('useEditPerson.saveEdit — S141 / TASK-14111 the effective-date picker
 
     beforeEach(() => {
       // `toFake: ['Date']` only — `setTimeout` stays REAL, so the `waitFor` inside `run()` below
-      // keeps working normally; only `new Date()` (and therefore `todayIso()`) reads the pinned
-      // instant.
+      // keeps working normally. Since S143 nothing in `saveEdit` reads `Date` any more (see this
+      // block's header) — this pin is a regression guard, not a load-bearing input.
       vi.useFakeTimers({ toFake: ['Date'] })
       // 2026-07-15 22:30 UTC. Copenhagen (CEST, +02:00) already reads 00:30 on the 16th; New York
       // (EDT, -04:00) still reads 18:30 on the 15th — the SAME pinned instant
@@ -412,9 +430,8 @@ describe('useEditPerson.saveEdit — S141 / TASK-14111 the effective-date picker
       const result = await run(minimalDirtyInput(), makeLive())
 
       expect(result.ok).toBe(true)
-      // LITERAL, not a second call to `todayIso()` — see this block's header comment. Pre-S142
-      // (the raw UTC formula) this would have been '2026-07-15': the exact off-by-one the sprint
-      // removes.
+      // LITERAL — the AUTHORITY's day (`run`'s default), not the device's, which (per the pin
+      // above, under the forced zone) would be '2026-07-15' if this ever regressed.
       const usersPut = calls.find((c) => c.url.endsWith('/api/admin/users/EMP1'))!
       expect(usersPut.body?.effectiveFrom).toBe('2026-07-16')
       const profilePut = calls.find((c) => c.url.includes('/employee-profiles/'))!

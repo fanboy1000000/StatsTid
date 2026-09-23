@@ -4,11 +4,22 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import { MondayDatePicker } from '../MondayDatePicker'
 import { forceTestTimeZone, restoreTestTimeZone } from '../../../lib/__tests__/testTimeZone'
+import { renderWithCalendar, CalendarTestProvider } from '../../../test/renderWithCalendar'
+
+// S143 / TASK-14313 — `MondayDatePicker` now reads "today" via `useCalendarToday()` (ADR-042)
+// UNCONDITIONALLY on every render (even when `pastOrTodayOnly` is false and the value goes
+// unused), so every render in this file needs a mounted `CalendarContext.Provider` — EXCEPT the
+// dedicated "unresolvable ... (OQ-12)" block at the end, which deliberately omits it to exercise
+// the no-provider throw. Most tests here don't care what "today" actually is (Monday-only
+// rejection, and the two dates from the S143-TASK-14306b comment below that sit far enough from
+// any plausible "today" to never depend on it) — one fixed literal covers them.
+const TEST_TODAY = '2026-07-16'
 
 describe('MondayDatePicker', () => {
   it('rejects a non-Monday date when mondayOnly is true', () => {
     const onChange = vi.fn()
-    render(
+    renderWithCalendar(
+      TEST_TODAY,
       <MondayDatePicker
         id="dp"
         value="2026-04-27"  // Monday
@@ -27,7 +38,8 @@ describe('MondayDatePicker', () => {
 
   it('accepts a Monday date when mondayOnly is true', () => {
     const onChange = vi.fn()
-    render(
+    renderWithCalendar(
+      TEST_TODAY,
       <MondayDatePicker
         id="dp"
         value=""
@@ -66,7 +78,8 @@ describe('MondayDatePicker', () => {
   // left implicit.
   it('rejects a future date when pastOrTodayOnly is true', () => {
     const onChange = vi.fn()
-    render(
+    renderWithCalendar(
+      TEST_TODAY,
       <MondayDatePicker
         id="dp"
         value=""
@@ -84,7 +97,8 @@ describe('MondayDatePicker', () => {
 
   it('passes through past dates when pastOrTodayOnly is true', () => {
     const onChange = vi.fn()
-    render(
+    renderWithCalendar(
+      TEST_TODAY,
       <MondayDatePicker
         id="dp"
         value=""
@@ -106,12 +120,19 @@ describe('MondayDatePicker', () => {
   // backend half of the same gate (ConfigEndpoints' EFFECTIVE_FROM_NOT_TODAY_OR_PAST check,
   // census row 14) moved in the SAME commit, so the two cannot disagree at any checkout.
   //
-  // WHY THE TIME ZONE IS FORCED. These assertions are worthless on a machine that is already on
-  // Danish time: browser-local and Copenhagen give the same answer there, so the test would pass
-  // against the very defect it exists to catch. (The developer host this was written on is on
-  // Danish time; CI runs UTC. Neither should decide whether a test can fail.) Forcing
-  // America/New_York — UTC-04:00 in July — makes browser-local, UTC and Copenhagen three
-  // distinguishable answers at the instant below, so the test discriminates on every host.
+  // S143 / TASK-14313 (Step-7a review) — right calendar was not the whole story: this "today" was
+  // still read from the DEVICE's clock (`copenhagenToday()`), which is the right ZONE but the
+  // wrong AUTHORITY (ADR-042: the SERVER decides "today," not whichever browser asks). `today` now
+  // comes from `useCalendarToday()`, supplied to every render below via `renderWithCalendar`
+  // (`'2026-07-16'`, matching this block's own pre-existing literal).
+  //
+  // WHY THE ZONE/CLOCK FORCING BELOW IS KEPT ANYWAY, even though the picker no longer reads
+  // either: it is now a REGRESSION GUARD per this task's PINS, not a load-bearing input. The
+  // pinned instant, read under the forced America/New_York zone, is '2026-07-15' — one day BEHIND
+  // the '2026-07-16' authority value supplied below. If this control ever regressed to reading the
+  // device clock again, the facts below would compute '2026-07-15' and fail against the
+  // '2026-07-16' they assert — exactly the discrimination a same-zone, same-day test cannot
+  // provide.
   describe('Copenhagen "today" (S142)', () => {
     let restoreTz: string | undefined
 
@@ -135,9 +156,10 @@ describe('MondayDatePicker', () => {
 
     beforeEach(() => {
       // 2026-07-15 22:30 UTC. In Copenhagen (CEST, UTC+02:00) it is already 00:30 on the 16th.
-      // In New York (EDT, UTC-04:00) it is 18:30 on the 15th. The UTC day is the 15th.
-      // Expected values below are LITERALS — none is derived from copenhagenToday(), because a
-      // test that asks the helper what it thinks proves only that the helper agrees with itself.
+      // In New York (EDT, UTC-04:00) — the forced zone — it is 18:30 on the 15th. Since S143 this
+      // pin no longer drives what the picker sees (`renderWithCalendar`'s '2026-07-16' below does)
+      // — it is a regression guard, not a load-bearing input; see this block's own header.
+      // Expected values below are LITERALS, never derived from a call to the code under test.
       vi.useFakeTimers()
       vi.setSystemTime(new Date('2026-07-15T22:30:00Z'))
     })
@@ -147,7 +169,8 @@ describe('MondayDatePicker', () => {
     })
 
     it('caps the picker at the Danish day, not the browser day', () => {
-      render(
+      renderWithCalendar(
+        '2026-07-16',
         <MondayDatePicker
           id="dp"
           value=""
@@ -157,13 +180,15 @@ describe('MondayDatePicker', () => {
         />,
       )
       const dateInput = document.querySelector('input[type="date"]') as HTMLInputElement
-      // Browser-local would say 2026-07-15 and lock the user out of the Danish today entirely.
+      // The AUTHORITY's day, not the device's — which (per the pin above, under the forced zone)
+      // would be '2026-07-15' if this ever regressed.
       expect(dateInput.max).toBe('2026-07-16')
     })
 
     it('accepts the Danish today even though the browser is still on yesterday', () => {
       const onChange = vi.fn()
-      render(
+      renderWithCalendar(
+        '2026-07-16',
         <MondayDatePicker
           id="dp"
           value=""
@@ -181,7 +206,8 @@ describe('MondayDatePicker', () => {
 
     it('still refuses the day AFTER the Danish today', () => {
       const onChange = vi.fn()
-      render(
+      renderWithCalendar(
+        '2026-07-16',
         <MondayDatePicker
           id="dp"
           value=""
@@ -199,7 +225,11 @@ describe('MondayDatePicker', () => {
 
     it('clears a now-illegal future date when pastOrTodayOnly flips on, against the Danish day', () => {
       const onChange = vi.fn()
-      const { rerender } = render(
+      // `rerender` swaps the ENTIRE rendered tree, not just the element `renderWithCalendar`
+      // wrapped — so the re-rendered element must supply its own `CalendarTestProvider`, matching
+      // the same authority day, or `useCalendarToday()` throws on the second render.
+      const { rerender } = renderWithCalendar(
+        '2026-07-16',
         <MondayDatePicker
           id="dp"
           value="2026-07-17"
@@ -209,20 +239,23 @@ describe('MondayDatePicker', () => {
         />,
       )
       rerender(
-        <MondayDatePicker
-          id="dp"
-          value="2026-07-17"
-          onChange={onChange}
-          mondayOnly={false}
-          pastOrTodayOnly={true}
-        />,
+        <CalendarTestProvider today="2026-07-16">
+          <MondayDatePicker
+            id="dp"
+            value="2026-07-17"
+            onChange={onChange}
+            mondayOnly={false}
+            pastOrTodayOnly={true}
+          />
+        </CalendarTestProvider>,
       )
       expect(onChange).toHaveBeenCalledWith('')
     })
 
     it('does NOT clear the Danish today when pastOrTodayOnly flips on', () => {
       const onChange = vi.fn()
-      const { rerender } = render(
+      const { rerender } = renderWithCalendar(
+        '2026-07-16',
         <MondayDatePicker
           id="dp"
           value="2026-07-16"
@@ -232,13 +265,15 @@ describe('MondayDatePicker', () => {
         />,
       )
       rerender(
-        <MondayDatePicker
-          id="dp"
-          value="2026-07-16"
-          onChange={onChange}
-          mondayOnly={false}
-          pastOrTodayOnly={true}
-        />,
+        <CalendarTestProvider today="2026-07-16">
+          <MondayDatePicker
+            id="dp"
+            value="2026-07-16"
+            onChange={onChange}
+            mondayOnly={false}
+            pastOrTodayOnly={true}
+          />
+        </CalendarTestProvider>,
       )
       // Pre-S142 the browser-local day was 2026-07-15, so the admin's legal choice was silently
       // wiped out of the form by the re-validation effect.
@@ -249,66 +284,55 @@ describe('MondayDatePicker', () => {
 
 // ── S142 / owner ruling OQ-12 (2026-09-17) ────────────────────────────────────────────────
 //
-// If a runtime cannot resolve Europe/Copenhagen, `copenhagenToday()` throws — deliberately, so a
-// business date is never quietly computed from the browser's own zone (that fallback would look
-// like resilience while silently reinstating the exact defect S142 removes).
+// S143 / TASK-14313 (Step-7a review) — the FAILURE MODE this block exercises changed; the UI
+// CONTRACT it proves did not. Pre-S143, a runtime that could not resolve Europe/Copenhagen made
+// `copenhagenToday()` throw (a per-call `Intl` lookup); the two tests below used to mock that
+// module to force it. Post-S143 the picker reads `useCalendarToday()` instead, which throws for a
+// DIFFERENT reason — no mounted `CalendarContext.Provider` — and is, if anything, LESS reachable
+// in the running app: every production caller (`ProfileEditor`, `PersonDrawer`, `DelegationPage`)
+// renders only inside `RequireAuth`'s post-`ready` subtree, which guarantees the provider
+// (`MondayDatePicker.tsx`'s own comment). The STIMULUS that exercises the catch changed —
+// from mocking `copenhagenToday()` to simply omitting `CalendarTestProvider` — but the OBSERVABLE
+// CONTRACT below (disabled control, explanatory message, no guessed `max`) is unchanged, so these
+// two tests keep proving it rather than being deleted as dead weight.
 //
 // The RULING is about where that failure is PRESENTED. An uncaught throw during render blanks the
 // whole config editor: white screen, no explanation, every unrelated field on the page unreachable.
 // OQ-12 requires the picker to catch it and disable THIS control with a message instead — still
 // impossible to enter a wrong date, still loud, but the damage confined to the control that
-// actually depends on the zone.
+// actually depends on the day.
 //
 // These facts fail if anyone "simplifies" the try/catch away (back to a white screen) OR replaces
-// it with a browser-local fallback (silently wrong dates, the thing being removed).
-describe('MondayDatePicker — unresolvable time zone (OQ-12)', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.resetModules()
-  })
-
-  it('renders disabled with an explanation instead of blanking the page', async () => {
-    vi.resetModules()
-    vi.doMock('../../../lib/copenhagenDate', () => ({
-      COPENHAGEN_TIME_ZONE: 'Europe/Copenhagen',
-      copenhagenToday: () => {
-        throw new RangeError('Invalid time zone specified: Europe/Copenhagen')
-      },
-    }))
-    const { MondayDatePicker: Picker } = await import('../MondayDatePicker')
-
+// it with a browser-local fallback (silently wrong dates, the thing S142 removed).
+describe('MondayDatePicker — unresolvable "today" (OQ-12)', () => {
+  it('renders disabled with an explanation instead of blanking the page', () => {
     const onChange = vi.fn()
-    // The assertion is that this RENDERS AT ALL — pre-OQ-12 the throw propagated and React
-    // unmounted the whole tree.
+    // Deliberately NO `CalendarTestProvider` — `useCalendarToday()` throws exactly as it would if
+    // this control were ever rendered outside `RequireAuth`'s post-`ready` subtree. The assertion
+    // is that this RENDERS AT ALL — pre-OQ-12 (and still today) an uncaught throw here would
+    // otherwise unmount the whole tree.
     render(
-      <Picker id="dp" value="" onChange={onChange} mondayOnly={false} pastOrTodayOnly={true} />,
+      <MondayDatePicker id="dp" value="" onChange={onChange} mondayOnly={false} pastOrTodayOnly={true} />,
     )
 
     const input = document.querySelector('input[type="date"]') as HTMLInputElement
     expect(input).not.toBeNull()
     expect(input.disabled).toBe(true)
     // The message must name the cause, not just fail silently: a disabled control with no
-    // explanation is indistinguishable from a bug.
+    // explanation is indistinguishable from a bug. (The text still describes the OLD failure —
+    // unresolvable tz data — because rewriting it is a separate, non-clock-read decision; see
+    // `MondayDatePicker.tsx`'s own comment.)
     expect(screen.getByRole('alert').textContent).toMatch(/dansk kalenderdag|Europe\/Copenhagen/i)
   })
 
-  it('does not fall back to the browser day when the zone is unresolvable', async () => {
-    vi.resetModules()
-    vi.doMock('../../../lib/copenhagenDate', () => ({
-      COPENHAGEN_TIME_ZONE: 'Europe/Copenhagen',
-      copenhagenToday: () => {
-        throw new RangeError('Invalid time zone specified: Europe/Copenhagen')
-      },
-    }))
-    const { MondayDatePicker: Picker } = await import('../MondayDatePicker')
-
+  it('does not guess a day when "today" cannot be resolved', () => {
     render(
-      <Picker id="dp" value="" onChange={vi.fn()} mondayOnly={false} pastOrTodayOnly={true} />,
+      <MondayDatePicker id="dp" value="" onChange={vi.fn()} mondayOnly={false} pastOrTodayOnly={true} />,
     )
 
     // `max` caps the picker at "today". With no resolvable today there is no honest value for it,
-    // so it must be ABSENT rather than filled from the browser's clock — guessing a business date
-    // is the one thing this sprint refuses to do.
+    // so it must be ABSENT rather than filled from a guess — guessing a business date is the one
+    // thing this sprint refuses to do.
     const input = document.querySelector('input[type="date"]') as HTMLInputElement
     expect(input.getAttribute('max')).toBeNull()
   })

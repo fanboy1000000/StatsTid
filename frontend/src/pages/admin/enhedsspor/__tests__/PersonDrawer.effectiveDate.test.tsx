@@ -11,13 +11,14 @@
 // (TASK-14107) rather than contradicting it once a save is no longer "now".
 
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ToastProvider } from '../../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../../hooks/useForest'
 import type { WithEtag, User } from '../../../../hooks/useAdmin'
 import { orgsFromForest } from '../personDrawerData'
 import { PersonDrawer } from '../PersonDrawer'
+import { renderWithCalendar } from '../../../../test/renderWithCalendar'
 import { forceTestTimeZone, restoreTestTimeZone } from '../../../../lib/__tests__/testTimeZone'
 
 const auth = vi.hoisted(() => ({ role: 'LocalHR' as string | null }))
@@ -167,9 +168,19 @@ function makeForest(): ForestMaoNode[] {
   ]
 }
 
-function renderEdit(user: Partial<WithEtag<User>> = {}) {
+// S143 / TASK-14313 — the drawer's "today" is no longer a live clock read; it comes from
+// `useCalendarToday()` (ADR-042), so every render needs a mounted `CalendarContext.Provider`.
+// `DEFAULT_TEST_TODAY` is the AUTHORITY value every test in this file gets unless it asks for a
+// different one — chosen to match the literal ('2026-07-16') the pre-S143 "S142 / TASK-14209"
+// block below already asserted, so tests that don't care what "today" actually is (nearly all of
+// them — they only ever `fireEvent.change` to their OWN explicit dates) keep behaving exactly as
+// before.
+const DEFAULT_TEST_TODAY = '2026-07-16'
+
+function renderEdit(user: Partial<WithEtag<User>> = {}, today = DEFAULT_TEST_TODAY) {
   const forest = makeForest()
-  return render(
+  return renderWithCalendar(
+    today,
     <MemoryRouter>
       <ToastProvider>
         <PersonDrawer
@@ -197,9 +208,10 @@ function renderEdit(user: Partial<WithEtag<User>> = {}) {
   )
 }
 
-function renderCreate() {
+function renderCreate(today = DEFAULT_TEST_TODAY) {
   const forest = makeForest()
-  return render(
+  return renderWithCalendar(
+    today,
     <MemoryRouter>
       <ToastProvider>
         <PersonDrawer
@@ -350,19 +362,31 @@ describe('PersonDrawer — S141 / TASK-14111 requirement 3: composes with the B0
 })
 
 // S142 / TASK-14209 — the effective-date default is the EUROPE/COPENHAGEN day, not the browser's.
+// S143 / TASK-14313 (Step-7a review) — it is also no longer the DEVICE's Copenhagen day: it is the
+// SERVER's (ADR-042), read once via `useCalendarToday()` and supplied here through
+// `renderEdit`/`renderCreate`'s `renderWithCalendar` wrap (default `DEFAULT_TEST_TODAY`,
+// '2026-07-16' — chosen to match this block's own literal, below, so nothing else in this file
+// has to change).
 //
 // The three tests below used to assert `todayIsoUtc()` against a FRESH call to the very function
-// production uses to compute the default: `PersonDrawer.tsx`'s `useState<string>(today ?? '')`
-// (seeded from `todayIso()` in `useEditPerson.ts`). Comparing the code under test's output to
-// another call to the SAME code proves only that it agrees with itself — it passes no matter
-// whether the underlying computation is UTC, browser-local, or (correctly) the Copenhagen day.
-// That is precisely the self-referential shape this sprint exists to delete.
+// production used to compute the default. Comparing the code under test's output to another call
+// to the SAME code proves only that it agrees with itself — it passes no matter whether the
+// underlying computation is UTC, browser-local, or (correctly) the Copenhagen day. That is
+// precisely the self-referential shape this sprint exists to delete; the literal '2026-07-16'
+// below is a HAND-WRITTEN expectation, not a second call to anything.
 //
-// WHY THE ZONE MUST BE FORCED. The developer machine this suite runs on is ALSO on Copenhagen
-// time, so browser-local and Copenhagen agree here by coincidence; pinning the clock without
-// ALSO forcing the zone away from Copenhagen would still let this pass against the exact
-// UTC/browser-local defect S142 removes. See `testTimeZone.ts` and `MondayDatePicker.test.tsx`
-// (the first site this pattern shipped for) for the full reasoning.
+// WHY THE ZONE IS STILL FORCED, EVEN THOUGH THE COMPONENT NO LONGER READS THE CLOCK AT ALL. This
+// describe block predates S143, when `PersonDrawer` really did call `copenhagenToday()` (a live
+// `Intl`/`Date` read) and forcing `America/New_York` + pinning the system clock to
+// `2026-07-15T22:30:00Z` was LOAD-BEARING: without it, this developer machine's own Copenhagen
+// zone would make browser-local and Copenhagen agree by coincidence, hiding the defect. Post-S143
+// that pin no longer drives what the component sees — `renderEdit()`'s `today` argument does — but
+// it is kept as a REGRESSION GUARD per this task's PINS: the pinned instant, read under the forced
+// zone, is '2026-07-15' (America/New_York, EDT), one day BEHIND the '2026-07-16' authority value
+// below. If `PersonDrawer` ever regressed to reading the device clock again (this file's whole
+// reason for existing as a guard), it would compute '2026-07-15' here and this block's own
+// assertions would fail against the '2026-07-16' they expect — exactly the discrimination a
+// same-zone, same-day test cannot provide.
 describe('PersonDrawer — S142 / TASK-14209: the effective-date default is the Copenhagen day', () => {
   let restoreTz: string | undefined
 
@@ -376,8 +400,8 @@ describe('PersonDrawer — S142 / TASK-14209: the effective-date default is the 
 
   beforeEach(() => {
     // `toFake: ['Date']` only — `setTimeout` stays REAL, so `waitForHydrated()`'s `waitFor` below
-    // keeps working normally; only `new Date()` (and therefore `todayIso()`) reads the pinned
-    // instant.
+    // keeps working normally. Since S143 nothing in `PersonDrawer` reads `Date` any more (see this
+    // block's header) — this pin is a regression guard, not a load-bearing input.
     vi.useFakeTimers({ toFake: ['Date'] })
     // 2026-07-15 22:30 UTC — the SAME pinned instant `MondayDatePicker.test.tsx` and
     // `useEditPerson.test.tsx`'s own S142 guard use, for the same reason: Copenhagen (CEST,
@@ -404,8 +428,8 @@ describe('PersonDrawer — S142 / TASK-14209: the effective-date default is the 
     await waitForHydrated()
 
     const input = screen.getByTestId('pd-effective-from') as HTMLInputElement
-    // LITERAL, not a second call to `todayIso()` — see this block's header. Pre-S142 (the raw UTC
-    // formula) this would have been '2026-07-15': the exact off-by-one the sprint removes.
+    // LITERAL — the AUTHORITY's day (`renderEdit`'s `DEFAULT_TEST_TODAY`), not the device's, which
+    // (per the pin above, under the forced zone) would be '2026-07-15' if this regressed.
     expect(input.value).toBe('2026-07-16')
   })
 

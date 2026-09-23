@@ -2,21 +2,12 @@ import { useState, useEffect, useCallback, type FormEvent } from 'react'
 import { useDelegation, type DelegationStatus } from '../../hooks/useDelegation'
 import { useToast } from '../../components/ui/Toast'
 import { Spinner } from '../../components/ui'
-import { copenhagenToday } from '../../lib/copenhagenDate'
+import { useCalendarToday } from '../../contexts/CalendarContext'
 import styles from './DelegationPage.module.css'
 
 // S51 TASK-5107. Self-service delegation page for leaders. Two states:
 // (1) active delegation — card showing details + cancel button
 // (2) no delegation — form to create one (acting manager ID + return date)
-
-// S142 / TASK-14209 (census rows 60-64) — was the raw UTC formula
-// (`new Date().toISOString().slice(0, 10)`); now delegates to the single Europe/Copenhagen source
-// of truth. `copenhagenToday()` throws if the runtime cannot resolve that zone — see
-// `copenhagenDate.ts`'s own "NO DEGRADED MODE" note — so this thin wrapper does not catch it;
-// the render-time caller below does (owner ruling OQ-12).
-function todayIso(): string {
-  return copenhagenToday()
-}
 
 export function DelegationPage() {
   const { fetchStatus, createDelegation, cancelDelegation } = useDelegation()
@@ -36,13 +27,22 @@ export function DelegationPage() {
   const [cancelling, setCancelling] = useState(false)
 
   // S142 / TASK-14209 — owner ruling OQ-12 (2026-09-17). Resolved once per render (mirroring
-  // `MondayDatePicker.tsx`, the first OQ-12 site) so an unresolvable Europe/Copenhagen zone
-  // disables just the Returdato field below with an explicit message, instead of an uncaught
-  // throw blanking this whole page (the active-delegation card included).
+  // `MondayDatePicker.tsx`, the first OQ-12 site) so an unresolvable day disables just the
+  // Returdato field below with an explicit message, instead of an uncaught throw blanking this
+  // whole page (the active-delegation card included).
+  //
+  // S143 / TASK-14313 (Step-7a review) — was `todayIso()` → `copenhagenToday()`, the DEVICE's
+  // clock (right zone, wrong authority per ADR-042). `today` now comes from `useCalendarToday()`,
+  // the server-confirmed day (`contexts/CalendarContext.tsx`). The try/catch SURVIVES this
+  // migration — its failure mode changed from "runtime cannot resolve Europe/Copenhagen" (a
+  // per-call `Intl` lookup) to "missing `CalendarContext` provider" (a wiring bug) — and is
+  // believed unreachable either way: `DelegationPage` renders only inside `RequireAuth`'s
+  // post-`ready` subtree, which guarantees the provider is mounted. Kept rather than deleted, per
+  // this task's "guard must survive" instruction for the sibling `MondayDatePicker.tsx` site.
   let today: string | null
   let zoneError: string | null
   try {
-    today = todayIso()
+    today = useCalendarToday()
     zoneError = null
   } catch {
     today = null

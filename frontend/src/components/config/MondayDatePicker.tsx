@@ -3,8 +3,9 @@
 //   1. `pastOrTodayOnly` — reject future dates. The backend's ConfigEndpoints
 //      PUT rejects `effectiveFrom > today` with `EFFECTIVE_FROM_NOT_TODAY_OR_PAST`
 //      (D2 + cycle-2 fix). Always set true for profile saves. S142: "today" on
-//      BOTH sides is now the Europe/Copenhagen calendar day — see the note at
-//      the `copenhagenToday()` call below.
+//      BOTH sides is the Europe/Copenhagen calendar day; S143 moved WHICH clock
+//      answers that question on this side — see the note at the
+//      `useCalendarToday()` call below.
 //   2. `mondayOnly` — reject non-Mondays. The alignment policy for
 //      `WeeklyNormHours` (LocalAgreementProfileAlignmentPolicies) requires
 //      Monday. Set true only when WeeklyNormHours is in the changed-fields set,
@@ -18,7 +19,7 @@
 // Scope: basic functional. No animation, no min-attr-driven calendar
 // shading, no theming.
 import { useEffect, useState, type ChangeEvent } from 'react'
-import { copenhagenToday } from '../../lib/copenhagenDate'
+import { useCalendarToday } from '../../contexts/CalendarContext'
 
 interface MondayDatePickerProps {
   id: string
@@ -59,25 +60,39 @@ export function MondayDatePicker({
   // S142 / owner ruling OQ-12 (2026-09-17) — WHERE the "no degraded mode" rule is enforced, and
   // where it is PRESENTED, are deliberately two different places.
   //
-  // `copenhagenToday()` still throws on a runtime that cannot resolve Europe/Copenhagen, and that
-  // is right: it is the single source of truth for a business date, and a helper that quietly fell
-  // back to the browser's zone would silently reinstate the exact defect S142 removes (OQ-11 took
-  // the same line on the server, which refuses to boot).
+  // `copenhagenToday()` (this picker's ORIGINAL source, before S143) threw on a runtime that could
+  // not resolve Europe/Copenhagen, and that was right: it was the single source of truth for a
+  // business date, and a helper that quietly fell back to the browser's zone would silently
+  // reinstate the exact defect S142 removes (OQ-11 took the same line on the server, which refuses
+  // to boot).
   //
-  // But a server and a browser fail differently. A server either starts or does not, and an
-  // operator reads the log. An uncaught throw during RENDER blanks the whole config editor: the
-  // admin gets a white screen, no explanation, and every unrelated field on the page becomes
-  // unreachable too — for a fault that has nothing to do with those fields. So the UI boundary
-  // catches it and disables THIS control with an explicit message. A wrong date still cannot be
-  // entered and the failure is still loud; the damage is just confined to the control that
-  // actually depends on the zone.
+  // S143 / TASK-14313 (Step-7a review) — that source was itself wrong in a way OQ-12 was never
+  // about: `copenhagenToday()` read the DEVICE's clock. Right ZONE (Europe/Copenhagen), wrong
+  // AUTHORITY (ADR-042 says the SERVER decides "today," not whichever browser happens to be
+  // asking). `today` now comes from `useCalendarToday()` (`contexts/CalendarContext.tsx`), the
+  // server-confirmed day threaded through the app shell once at start.
   //
-  // Unreachable on any supported runtime — every current browser ships IANA tz data. Settled now
-  // because it is cheap now and awkward once someone is staring at a blank screen.
+  // THIS TRY/CATCH SURVIVES the migration rather than being deleted, but what it guards against
+  // changed. A server and a browser still fail differently, so the REASON to keep a local
+  // UI-boundary catch (an uncaught throw during RENDER blanks the whole config editor — the admin
+  // gets a white screen, no explanation, and every unrelated field becomes unreachable too, for a
+  // fault that has nothing to do with those fields) still holds in principle. But the SPECIFIC
+  // throw this used to catch — "runtime cannot resolve Europe/Copenhagen," a per-call `Intl`
+  // lookup — cannot happen any more: nothing here calls `Intl` at all. `useCalendarToday()` throws
+  // only if `CalendarContext`'s provider is missing (a wiring bug, not a runtime fact), and by
+  // construction it is not missing: every production caller of this component (`ProfileEditor`,
+  // `PersonDrawer`, `DelegationPage`) renders only inside `RequireAuth`'s post-`ready` subtree,
+  // which does not mount its children until that provider is in place
+  // (`CalendarContext.tsx`'s own doc comment). So this branch, believed unreachable BEFORE S143 for
+  // one reason (every supported browser ships IANA tz data), is believed unreachable AFTER S143 for
+  // a DIFFERENT one (the provider is guaranteed) — kept, not deleted, on the chance a future wiring
+  // change ever violates that guarantee. The Danish message below still describes the OLD failure
+  // (missing tz data) rather than the new one (a missing provider); rewriting it is a separate,
+  // non-clock-read decision this task does not make on this control's behalf.
   let today: string | null = null
   let zoneError: string | null = null
   try {
-    today = copenhagenToday()
+    today = useCalendarToday()
   } catch {
     zoneError =
       'Datoen kan ikke vaelges: denne browser kan ikke bestemme den danske kalenderdag ' +
@@ -174,8 +189,11 @@ export function MondayDatePicker({
 // S142 / TASK-14201: the browser-local `formatLocalDate(d)` helper that used to live here
 // (getFullYear/getMonth/getDate) was DELETED rather than left unused. It is not a neutral
 // utility — it answers "what day is it where this laptop is", which is never the right question
-// for a StatsTid business date, and leaving it in the file is an invitation to reuse it. Use
-// `copenhagenToday()` from `src/lib/copenhagenDate.ts`.
+// for a StatsTid business date, and leaving it in the file is an invitation to reuse it. S143 /
+// TASK-14313: nor is `copenhagenToday()` (`src/lib/copenhagenDate.ts`) the right question any
+// more, for the same reason one layer up — it answers "what day is it, in Copenhagen, on THIS
+// device," and ADR-042 makes the server the authority on "today," not the device. Use
+// `useCalendarToday()` from `src/contexts/CalendarContext.tsx`.
 
 function parseIsoDate(iso: string): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)

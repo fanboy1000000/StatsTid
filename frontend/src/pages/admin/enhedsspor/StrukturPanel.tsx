@@ -56,7 +56,7 @@ import { RetLeaderPicker, type RetLeaderOption } from './RetLeaderPicker'
 import { orgsFromForest } from './personDrawerData'
 import { useReportingLines } from '../../../hooks/useReportingLines'
 import { formatVersionAsIfMatch } from '../../../lib/etag'
-import { copenhagenToday } from '../../../lib/copenhagenDate'
+import { useCalendarToday } from '../../../contexts/CalendarContext'
 import type { LifecycleContext } from '../editPerson/LifecycleSections'
 import { InlineApproverControl } from '../editPerson/InlineApproverControl'
 import { CHILD, LABEL, ORD, type UnitType } from './typeMaps'
@@ -346,6 +346,29 @@ export function StrukturPanel({
   >(null)
   const [retBusy, setRetBusy] = useState(false)
   const [retError, setRetError] = useState<string | null>(null)
+  // S143 / TASK-14313 (Step-7a review) — was `copenhagenToday()`, called INSIDE `submitRet` below
+  // (right zone, wrong authority per ADR-042: the device's clock, not the server's). A hook must be
+  // called during render, never inside an event-handler function invoked later on a click, so
+  // `today`/`zoneError` move up here and `submitRet` closes over the already-resolved value instead
+  // of asking again at click time — mirroring the same move in `ApproverSection.tsx`.
+  //
+  // The OQ-12 "disable the action, don't blank the page" INTENT survives (the same
+  // "Handlingen mislykkedes" surface fires when `zoneError !== null`) but the MECHANISM changes from
+  // "attempt the read and catch its throw" to "check the already-resolved flag." In practice this
+  // catch is believed unreachable: `StrukturPanel` renders only inside `RequireAuth`'s post-`ready`
+  // subtree (`CalendarContext.tsx`'s own doc comment), so `useCalendarToday()` never throws here.
+  // Kept rather than deleted, per the same reasoning as this task's other guards.
+  let today: string | null
+  let zoneError: string | null
+  try {
+    today = useCalendarToday()
+    zoneError = null
+  } catch {
+    today = null
+    zoneError =
+      'Dags dato kan ikke bestemmes: denne browser kan ikke bestemme den danske kalenderdag ' +
+      '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.'
+  }
 
   // Lazily ensure the selected node's Organisation roster is loaded.
   useEffect(() => {
@@ -896,25 +919,29 @@ export function StrukturPanel({
   // root/orphan with no active PRIMARY edge). This hits the SAME
   // POST /api/admin/reporting-lines the drawer's ApproverSection uses (P7).
   //
-  // S142 / TASK-14209 (census rows 60-64) — was the raw UTC formula, computed as a RENDER-BODY
-  // constant (`new Date().toISOString().slice(0, 10)` above, evaluated on every render of this
-  // whole Struktur panel). Two fixes at once: (1) the Copenhagen calendar day, not UTC; (2) moved
-  // INTO `submitRet` below, computed only at the moment HR clicks "Ret"/"Tildel leder" — a
-  // render-body call to `copenhagenToday()` would have thrown on EVERY render of this entire admin
-  // page if the zone were ever unresolvable (owner ruling OQ-12), not just on this one action.
+  // S142 / TASK-14209 (census rows 60-64) — the effective date stamped on a "Ret"/"Tildel leder"
+  // reassignment (`reporting_lines.effective_from`). Originally the raw UTC formula, computed as a
+  // RENDER-BODY constant evaluated on every render of this whole Struktur panel; S142 fixed the
+  // calendar (Copenhagen, not UTC) and moved the read INTO this handler, at the moment HR actually
+  // clicks — a render-body call would have thrown on EVERY render of this entire admin page if the
+  // zone were ever unresolvable (owner ruling OQ-12), not just on this one action.
+  //
+  // S143 / TASK-14313 (Step-7a review): that reasoning flips. `useCalendarToday()` (ADR-042's
+  // server-confirmed day, replacing the device-clock `copenhagenToday()`) is a HOOK — it CANNOT be
+  // called from inside this handler at all, so the read moves back OUT to render time (the
+  // `today`/`zoneError` declared near this component's other state, above), and this handler now
+  // just checks the already-resolved flag instead of attempting a fresh read.
   const submitRet = async (row: RosterRow, managerId: string) => {
     setRetBusy(true)
     setRetError(null)
-    let today: string
-    try {
-      today = copenhagenToday()
-    } catch {
-      // OQ-12: confined to this action — reuses the SAME "Handlingen mislykkedes" surface this
-      // handler already has for a rejected reassignment, rather than a page-blanking throw.
+    // OQ-12: confined to this action — reuses the SAME "Handlingen mislykkedes" surface this
+    // handler already has for a rejected reassignment, rather than a page-blanking throw.
+    if (today === null) {
       setRetBusy(false)
       const msg =
+        zoneError ??
         'Dags dato kan ikke bestemmes: denne browser kan ikke bestemme den danske kalenderdag ' +
-        '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.'
+          '(tidszonedata for Europe/Copenhagen mangler). Prøv en anden browser eller opdater den.'
       setRetError(msg)
       if (!retPicker) toast({ title: 'Handlingen mislykkedes', description: msg, variant: 'error' })
       return

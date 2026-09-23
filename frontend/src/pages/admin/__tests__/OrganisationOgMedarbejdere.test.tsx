@@ -8,11 +8,25 @@
 // `/` shortcut + Søg button open the overlay; a search result NAVIGATES the panel
 // (and closes the overlay) — read-only, no mutation affordances (S91).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import type { ReactElement } from 'react'
+import { screen, fireEvent } from '@testing-library/react'
 import { ToastProvider } from '../../../components/ui/Toast'
 import type { ForestMaoNode } from '../../../hooks/useForest'
 import type { RosterResponse } from '../../../hooks/useRoster'
 import type { SearchResponse } from '../../../hooks/useSearch'
+import { renderWithCalendar } from '../../../test/renderWithCalendar'
+
+// S143 / TASK-14313 — most of this file's renders never open `PersonDrawer` and never needed a
+// calendar day at all; only the one S123 T2 test that reveals a search result's row and opens its
+// edit drawer reaches `usePlacement` → `useEditPerson` → `useCalendarToday()` (ADR-042). Wrapping
+// every render uniformly (rather than only that one call site) keeps this file's helper simple and
+// costs nothing for the rest.
+const TEST_TODAY = '2026-07-16'
+
+/** `render`, but with a fixed calendar day — see the module comment above. */
+function render(ui: ReactElement) {
+  return renderWithCalendar(TEST_TODAY, ui)
+}
 
 // ── mocks (mutable holders the mocked hooks read) ──────────────────────────────
 const h = vi.hoisted(() => ({

@@ -8,8 +8,10 @@
 //   • delete dialog: preflight-409 → resubmit → the in-lock-census SECOND 409 →
 //     re-prompt (BOTH 409s), then success
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { ToastProvider } from '../../../components/ui/Toast'
+import { renderWithCalendar } from '../../../test/renderWithCalendar'
+import { forceTestTimeZone, restoreTestTimeZone } from '../../../lib/__tests__/testTimeZone'
 import { ApproverSection } from '../editPerson/ApproverSection'
 import { VikarSection } from '../editPerson/VikarSection'
 import { DangerSection } from '../editPerson/DangerSection'
@@ -78,8 +80,15 @@ const lineEntry = (version: number): ReportingLineEntry => ({
   createdAt: '2026-06-15T00:00:00Z',
 })
 
-function wrap(ui: React.ReactElement) {
-  return render(<ToastProvider>{ui}</ToastProvider>)
+// S143 / TASK-14313 — `ApproverSection` (and its siblings here) now read "today" via
+// `useCalendarToday()` (ADR-042) instead of a live clock read, so every render needs a mounted
+// `CalendarContext.Provider`. None of the pre-existing tests in this file check the VALUE of
+// `effectiveFrom` (the "FIRST assign" test uses `toMatchObject` without it; "REASSIGN" ignores the
+// body entirely) — this default is just what the sections need to render at all.
+const DEFAULT_TEST_TODAY = '2026-07-16'
+
+function wrap(ui: React.ReactElement, today = DEFAULT_TEST_TODAY) {
+  return renderWithCalendar(today, <ToastProvider>{ui}</ToastProvider>)
 }
 
 beforeEach(() => {
@@ -125,6 +134,58 @@ describe('ApproverSection — assign / reassign / remove', () => {
     expect(ifMatch).toBeUndefined() // FIRST assign → no If-Match → hook sends If-None-Match:*
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(screen.getByTestId('approver-assigned').textContent).toContain('Mette Holm')
+  })
+
+  // S143 / TASK-14313 (Step-7a review) — PINS: prove the assign's `effectiveFrom` follows the
+  // AUTHORITY (`useCalendarToday()`, ADR-042), not the device's clock. The test above uses
+  // `toMatchObject` without `effectiveFrom` at all — exactly the gap that let this site read the
+  // device clock (right zone, wrong authority) for as long as it did. Force a non-Danish zone AND
+  // pin an instant where the device and the authority disagree, then assert the value SENT is the
+  // authority's.
+  it('S143 / TASK-14313 — assign sends the AUTHORITY day, not the device clock, when the two disagree', async () => {
+    const restoreTz = forceTestTimeZone('America/New_York')
+    try {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        // 2026-07-15 22:30 UTC: Copenhagen (CEST, +02:00) already reads 00:30 on the 16th; New
+        // York (EDT, -04:00) — the forced zone — still reads 18:30 on the 15th. If this ever
+        // regressed to a device-clock read, it would compute '2026-07-15' here.
+        vi.setSystemTime(new Date('2026-07-15T22:30:00Z'))
+        // THE GUARD ON THE GUARD: confirm the forcing actually took effect (ADR-041:74-75).
+        const pinned = new Date('2026-07-15T22:30:00Z')
+        expect(pinned.getDate()).toBe(15)
+        expect(pinned.getHours()).toBe(18)
+
+        hookMock.assignManager.mockResolvedValue({ ok: true, data: lineEntry(1) })
+        // The AUTHORITY, supplied via `wrap`'s `renderWithCalendar` call — deliberately the day
+        // AFTER what the device (under the forced zone, at the pinned instant) would read.
+        wrap(
+          <ApproverSection
+            organisationId="STY02"
+            mode="edit"
+            personName="Test Bruger"
+            employeeId="EMP001"
+            currentApproverId={null}
+            currentReportingLineEtag={null}
+            onChanged={vi.fn()}
+          />,
+          '2026-07-16',
+        )
+
+        fireEvent.click(screen.getByTestId('approver-assign'))
+        await waitFor(() => expect(screen.getByTestId('picker-row-MGR9')).toBeDefined())
+        fireEvent.click(screen.getByTestId('picker-row-MGR9'))
+
+        await waitFor(() => expect(hookMock.assignManager).toHaveBeenCalled())
+        const [body] = hookMock.assignManager.mock.calls[0]
+        // LITERAL — the authority's day, never the device's (which would be '2026-07-15').
+        expect(body.effectiveFrom).toBe('2026-07-16')
+      } finally {
+        vi.useRealTimers()
+      }
+    } finally {
+      restoreTestTimeZone(restoreTz)
+    }
   })
 
   it('REASSIGN sends the current line ETag as If-Match', async () => {
