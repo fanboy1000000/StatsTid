@@ -73,9 +73,17 @@ for reading. The alternative re-admits the device clock at exactly the moment it
 **Mid-session a refresh failure changes nothing visible.** The last confirmed day keeps serving and a retry runs, because
 there may be unsaved work on screen and discarding it to protect against a day at most hours stale is a bad trade.
 
-**A 401 is neither.** Retrying an expired token cannot succeed, so it ends the session and routes to login. This required
-an opt-out on the shared HTTP client: its global handler reloads the page on any 401, which from a background timer
-destroys exactly the unsaved work the asymmetry exists to protect. **A caller passing that opt-out owns the 401.**
+**A 401 is neither — and it splits the same way the rest does.** A **bootstrap** 401 ends the session and routes to login:
+retrying an expired token cannot succeed, and nothing is at stake yet. A **refresh** 401 does *not* end the session — it
+keeps the confirmed day and the token and retries on the ordinary 30-second cadence, because the user may have unsaved
+work and an expired token mid-session is the login layer's problem, not the calendar's.
+
+Both required an opt-out on the shared HTTP client, whose global handler reloads the page on **any** 401 — which, fired
+from a background timer, destroys exactly the work the asymmetry exists to protect. **A caller passing that opt-out owns
+the 401**, and owning it means deciding *which* of those two cases it is.
+
+*(Step 7a found the first draft of this section implying every calendar 401 ends the session. It does not, and the
+distinction is the whole design rather than a detail of it.)*
 
 That asymmetry reads as an inconsistency to anyone comparing the two paths, which is why it is argued in the code and
 recorded here rather than merely implemented.
@@ -86,8 +94,21 @@ recorded here rather than merely implemented.
   `/login`, and with no token there is no calendar read, no render, and no way to log in. Review measured that class of
   loop at **26 reads and 25 reloads in under five seconds** before it was fixed; it now terminates *by construction*
   rather than by winning a race.
-- **No frontend production source reads the browser clock for a business date.** A vitest AST guard enforces it, with
-  `lib/copenhagenDate.ts` the single exemption — in the scanner's own code, not in a data file.
+- **No frontend production source reads the browser clock to decide which period a screen opens on.** A vitest AST guard
+  enforces it, with `lib/copenhagenDate.ts` the single exemption — in the scanner's own code, not in a data file.
+
+  **Scoped deliberately, because the first draft of this line overstated it** and Step 7a caught the overstatement in an
+  ADR written for a sprint about claims outrunning code. **Three sites still derive a business date from the *device's*
+  clock** via `copenhagenToday()`: `useEditPerson.ts:65` (`todayIso`, the effective date stamped on a profile edit),
+  `DelegationPage.tsx:18`, and `MondayDatePicker.tsx:80`. Those are ADR-041-compliant — right zone, DST-correct — and
+  ADR-042-inconsistent: they trust the device's clock for a date that is **stored**. The guard does not flag them because
+  they go through the approved helper, which is correct: the helper is the approved path for *zone*, and this ADR is about
+  *whose clock*. Registered as **QUAL-180**.
+
+- **The guard is for accidents, not evasion**, and its limits are stated rather than implied. It cannot see aliasing
+  (`const D = Date; new D()`), member access (`new (globalThis.Date)()`), or a spread of an empty argument list
+  (`new Date(...[])` — zero runtime arguments, one syntax argument), the last found by Step 7a. Nobody writes those by
+  mistake; everybody writes `new Date()` by habit.
 - **Testing**: a frozen clock cannot prove a single-read property, and forcing a non-Danish zone is mandatory or the test
   is vacuous on a Danish machine. Both lessons are ADR-041's testing consequence extended; see `SPRINT-143.md`.
 

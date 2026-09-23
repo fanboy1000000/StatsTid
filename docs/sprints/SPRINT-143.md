@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | **CODE COMPLETE** — 14 tasks, all merged. Awaiting Step 7a + CI. Step 0b took 2 internal cycles and 3 external (the third owner-authorised past the cap); Step 5a ran on every substantive task, and found a defect in **every single one** |
-| **Result** | **No executable browser clock read remains in frontend production source** — every `new Date()` match is now a comment. Enforced by an AST guard whose allowlist was retired at close, so nothing can be appended to |
-| **Final counts** | build **145 warnings / 0 errors** (S142 baseline, unmoved through 15 merges) · unit **1290** (+26) · demo-seed **170** · regression non-Docker **128** · frontend **973** (+79) |
+| **Status** | **CODE COMPLETE** — 16 tasks, all DONE. Awaiting Step 7a + CI. Step 0b took 2 internal cycles and 3 external (the third owner-authorised past the cap); Step 5a ran on every substantive task, and found a defect in **every single one** |
+| **Result** | **No frontend production source derives a business date from the device clock** — not the four seeding sites, and (after a Step-7a BLOCKER) not the six that supply STORED dates through the approved helper either. Enforced by an AST guard for the spelling, and by ADR-042 for the authority the guard cannot see |
+| **Final counts** | build **145 warnings / 0 errors** (S142 baseline, unmoved through 15 merges) · unit **1290** (+26) · demo-seed **170** · regression non-Docker **128** · frontend **976** (+82) |
 | **Opened** | 2026-09-23 |
 | **Predecessor** | S142 (`5408769` close, `0a001b4` post-close) — ADR-041, business dates are the Copenhagen day |
 | **Refinement** | `.claude/refinements/REFINEMENT-s143-the-clients-own-clock.md` rev 5 — READY. Dual-lens reviewed, both lenses used both cycles, internal verdict APPROVED-WITH-WARNINGS |
@@ -137,7 +137,7 @@ is empty and the guard green at integration, before Step 7a. The first draft lef
 which is how a sprint ends with a red guard and everyone assuming someone else owned it.
 
 **Close gates, Orchestrator-owned:** full CI green on the close sha; warnings not above the S142
-baseline of 145; all four offender sidecars empty.
+baseline of 145; all four offender sidecars empty -- then the mechanism itself deleted (TASK-14312), so none survives into S144.
 
 ### Cut order (internal-lens N5)
 
@@ -242,10 +242,54 @@ ruleset"**; QUAL-165 recorded against S144 by name.
 
 ## Task ledger
 
+Dispositions: DONE | CUT | DEFERRED | DROPPED. **All sixteen DONE; none cut.** Two were added
+mid-sprint by review findings (14311, 14313) and one at close (14312) — see each row.
+
 | Task | Disposition | Note |
 |---|---|---|
-| TASK-14300 | **MERGED** `a222427` → master `f5d0591` | `GET /api/calendar/today`. **RED demonstrated empirically, not asserted**: each of the two wrong implementations was substituted and run — "add 24 hours" failed 5/14, "reuse today's offset" 3/14, shipped 14/14. Unit 1264 → 1278. Spec + FE types regenerated, idempotent; grandfather manifests untouched. 4 deviations, all accepted |
-| TASK-14302 | **MERGED** `53cc811` → master `b905d48` | Guard + four sidecars, 30 guard tests, frontend 894 → 924. Step 5a took **two cycles, each finding a spelling the previous had not imagined**. RED proof re-recorded each round and produced exactly the same seven sites every time |
+| TASK-14300 | DONE | `GET /api/calendar/today`, born typed. RED demonstrated by substituting each wrong implementation |
+| TASK-14301 | DONE | The calendar context and the `RequireAuth` shell gate. Step 5a found a measured boot loop (26 reads / 25 reloads) and a background reload destroying unsaved work; both fixed and pinned |
+| TASK-14302 | DONE | The frontend's first clock guard, plus the sidecar mechanism that let it land green ahead of the migrations. Three review rounds, each finding a spelling the last had not imagined |
+| TASK-14303 | DONE | Skema: the seed, the highlight, and the AC-5 combined assertion |
+| TASK-14304 | DONE | The approver's team view and the year overview |
+| TASK-14305 | DONE | The e2e cluster — and the click count that was a date bug in disguise |
+| TASK-14306a | DONE | 29 C# hygiene sites (not the census's 30 — one cited location was a *use* of an already-computed field) |
+| TASK-14306b | DONE | The frontend hygiene pair, and a coverage gap left honest rather than papered over |
+| TASK-14307 | DONE | QUAL-176, in two halves: the clock source, then the read *count* that Step 5a found still open |
+| TASK-14308 | DONE | QUAL-177 / OQ-4 — `CreateAsync` the single create path. Step 5a caught an `-infinity` sentinel a `DateOnly` round trip was hiding |
+| TASK-14309 | DONE | The worktree-teardown gate, owed since S141, proven four ways |
+| TASK-14310 | DONE | The two acceptance criteria Step 0b found with no owner; both proofs verified by mutation |
+| TASK-14311 | DONE | **Added mid-sprint by a Step 5a finding.** `CopenhagenBusinessDate.FromInstant(DateTimeOffset)` — named against the Orchestrator's lean, on the implementer's argument that ADR-041's vocabulary belongs in the signature. `Today(TimeProvider)` delegates to it |
+| TASK-14312 | DONE | **Close task.** Retired the guard's allowlist once all four sidecars were empty, keeping every reach assertion and all 21 spelling tests. Proven by mutation, both observed |
+| TASK-14313 | DONE | **Added at close by a Step 7a BLOCKER.** Six sites still took a *stored* business date from the device clock through the approved helper. See "the claim that outran the code" below |
+| *(Orchestrator)* | DONE | Two stale comments citing a column dropped in S53; ADR-042; ADR-041 and ROADMAP corrections; QUAL-178/179/180 |
+
+### The claim that outran the code — S143's own signature defect, committed by S143
+
+This sprint spent itself finding comments that asserted more than the code supported, and corrected five
+in one task alone. **Then it shipped three governance documents claiming no frontend production source
+read the browser clock for a business date, and that was false.**
+
+Six sites called bare `copenhagenToday()`, whose default argument is an executable `new Date()`. Right
+calendar, wrong authority — the device in front of the user rather than the day the product agreed on.
+Every one of them supplied a date that is **stored**: a profile edit's `effective_from` (S142's own
+headline defect site), an approver assignment, an org reassignment, a delegation floor, a validation
+boundary. All six rendered inside the gate, so the seam had been available to them throughout.
+
+**Why no guard caught it, which is worth more than the fix.** They go through the approved helper, and
+the helper *is* the approved answer — **for zone**. The guard enforces a *spelling*; ADR-042 claims a
+*property*. A correctly-spelled call through a sanctioned path still reads the device. **A guard can
+police syntax; it cannot police which clock a call ultimately reaches.**
+
+**And the count was wrong twice on the way to being right.** The external lens said three sites. The
+Orchestrator repeated that three without re-deriving it — the exact "enumerated beats matching" lesson
+recorded in this same log — and the internal lens found five, citing that line back. The implementer
+then found a sixth while migrating. **3 → 5 → 6.** A count arrived at by inspection is a hypothesis.
+
+| Task | Disposition | Note |
+|---|---|---|
+| TASK-14300 | DONE | `GET /api/calendar/today`. **RED demonstrated empirically, not asserted**: each of the two wrong implementations was substituted and run — "add 24 hours" failed 5/14, "reuse today's offset" 3/14, shipped 14/14. Unit 1264 → 1278. Spec + FE types regenerated, idempotent; grandfather manifests untouched. 4 deviations, all accepted |
+| TASK-14302 | DONE | Guard + four sidecars, 30 guard tests, frontend 894 → 924. Step 5a took **two cycles, each finding a spelling the previous had not imagined**. RED proof re-recorded each round and produced exactly the same seven sites every time |
 
 ### TASK-14302 — what three rounds of a syntactic guard actually taught
 
@@ -276,12 +320,12 @@ nobody writes `const D = Date` by mistake, while everybody writes `new Date()` b
 **The fixture bug worth remembering.** One of its two new hazard tests did not test what it claimed:
 the explanatory prose *inside* the template literal — "no `${}` hole at all" — was itself a parse
 error, creating the very hole it described the absence of. The words broke the example.
-| TASK-14307 | **MERGED** `6f18a18` → master `2fa174c` | QUAL-176 closed in both halves. See "the flip nobody witnessed" below |
+| TASK-14307 | DONE | QUAL-176 closed in both halves. See "the flip nobody witnessed" below |
 | *(14307 history)* | Step 5a absorbed, then held for 14311 | Four stamps moved; the other four demonstrably untouched; six "BY DESIGN" comments reconciled into two named rules (A mandatory, B permitted). Window reduced from "spans a blocking lock" to "two adjacent statements" — **explicitly not closed**, carried as a `⚠ KNOWN RESIDUAL` block until the overload lands. 5 Docker-gated facts, **one deliberately RED**: the single-read pin was written now rather than after the fix, so it is honestly RED-first. Build 145 warnings, unmoved |
-| TASK-14308 | **MERGED** `a16cd3e` → master `41c43bb` | Post-merge verification on master: **145 warnings / 0 errors / 1264 unit tests** — the S142 baseline exactly, unmoved. Worktree torn down after proving the branch merged. |
+| TASK-14308 | DONE | Post-merge verification on master: **145 warnings / 0 errors / 1264 unit tests** — the S142 baseline exactly, unmoved. Worktree torn down after proving the branch merged. |
 | *(14308 detail)* | Step 5a **PASSED**, 2 cycles | Single write path. Cycle 1: 1 BLOCKER (external), APPROVED-WITH-WARNINGS (internal). Cycle 2 on the fix: **no blockers, no warnings**. Build 145 warnings, baseline unmoved; Unit 1264; regression non-Docker 128; net test delta **+3**. Docker-gated CI-verified throughout |
-| TASK-14309 | **DONE** | Orchestrator; gate built and proven — see below |
-| TASK-14306a | **MERGED** `e36c571` | **29** sites across 13 files — not the census's 30; see the recount below. Step 5a found one BLOCKER. Unit 1264, DemoSeed 170, regression non-Docker 128 |
+| TASK-14309 | DONE | Orchestrator; gate built and proven — see below |
+| TASK-14306a | DONE | **29** sites across 13 files — not the census's 30; see the recount below. Step 5a found one BLOCKER. Unit 1264, DemoSeed 170, regression non-Docker 128 |
 
 ### TASK-14306a — the blocker nobody could have run, and a recount worth reading
 
@@ -311,9 +355,9 @@ The overclaim mattered more than the site did. "Matching the census exactly" is 
 than a plausible-sounding total, so it is the part a reader leans on — and this project has been bitten
 by a summed-rather-than-enumerated count before, including by the Orchestrator during this sprint's own
 planning. **An enumerated count is worth more than a matching one.**
-| **TASK-14311** | DISPATCHED | **Added mid-sprint by a Step-5a finding** — `CopenhagenBusinessDate.ToCopenhagenDay(DateTimeOffset)`, so a caller holding an instant can derive its Copenhagen day without a second clock read. See the QUAL-176 note below |
-| TASK-14301 | DISPATCHED | Unblocked by 14300's merge — the calendar context, the `RequireAuth` shell gate, the refresh, and `renderWithCalendar` for the sibling tasks |
-| TASK-14303, 14304, 14305, 14306b, 14310 | PENDING | gated on 14301 and 14302 |
+| TASK-14311 | DONE | **Added mid-sprint by a Step-5a finding** — `CopenhagenBusinessDate.FromInstant(DateTimeOffset)`, so a caller holding an instant can derive its Copenhagen day without a second clock read. See the QUAL-176 note below |
+| TASK-14301 | DONE | Unblocked by 14300's merge — the calendar context, the `RequireAuth` shell gate, the refresh, and `renderWithCalendar` for the sibling tasks |
+| TASK-14303, TASK-14304, TASK-14305, TASK-14306b, TASK-14310 | DONE | all merged; see the ledger above |
 
 ### TASK-14307 — the flip nobody witnessed, and a regression caught inside a simplification
 
@@ -529,7 +573,7 @@ of being copied across.
 
 | Already closed — do **not** dispatch | Evidence |
 |---|---|
-| `HrFollowUp/EffectiveDateBoundaryTests.cs:476` (harness hygiene, census Q5) | `HostAtInstant` is now a one-line delegation to the **public** `StatsTidWebApplicationFactory.WithFixedInstant` (`EffectiveDateBoundaryTests.cs:581-582`, factory at `:283`). S142 TASK-14200 promoted it; the census predates that |
+| `HrFollowUp/EffectiveDateBoundaryTests.cs:476` (harness hygiene, census Q5) | `HostAtInstant` is now a one-line delegation to the **public** `StatsTidWebApplicationFactory.WithFixedInstant` (`EffectiveDateBoundaryTests.cs:581-582`, factory at `:283`). S142's harness task (14200) promoted it; the census predates that |
 | `Config/AdminEndpointsAgreementCodeTests.cs:300-339` (census UNRESOLVED-1) | Traced NON-GATING at S142 Step 0b (`SPRINT-142.md:318-320`) — the OQ-6 comparison uses the truncating row's boundary, never the client date |
 | `ReportingLine/ReportingLineWriteLifecycleTests.cs:1499` + `Security/S98OrgStructureTests.cs:560` (census UNRESOLVED-2) | Traced NON-GATING **and misassigned** at S142 Step 0b (`SPRINT-142.md:321-323`) — the org-transfer fan-out only stamps, never compares |
 
