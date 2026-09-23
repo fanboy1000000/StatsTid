@@ -412,44 +412,70 @@ public sealed class EmployeeProfileCopenhagenBoundaryTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════
-    // Census row 47 — EmployeeProfileRepository.CreateAsync's effective_from stamp
+    // Census row 47 — the profile-create effective_from stamp
     // ════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// The repository's profile-create stamps the new row's <c>effective_from</c> on the DANISH day.
+    /// Creating a person after Danish midnight stamps the new profile row's <c>effective_from</c> on
+    /// the DANISH day — and the <c>EmployeeProfileCreated</c> event says the same day.
     ///
-    /// <para>Exercised repository-direct because <c>CreateAsync</c> has no production caller today
-    /// (the boot seeder and the admin user-create POST both INSERT inline) — a fact reported to the
-    /// Orchestrator rather than acted on, since deleting a method is not this task's call. The stamp
-    /// is still the first day a profile is in force, so the calendar has to be right for any future
-    /// caller. <b>RED on the pre-S142 code</b>: <c>2026-01-15</c>.</para>
+    /// <para><b>What changed here in S143 / TASK-14308 (QUAL-177, owner ruling OQ-4), and why.</b>
+    /// This fact used to construct <c>EmployeeProfileRepository</c> directly and call
+    /// <c>CreateAsync</c>, because at the time that method had NO production caller — the boot seeder
+    /// and the admin create-person endpoint each wrote their own inline INSERT. A pin on code nothing
+    /// executes proves nothing about the product: the method could drift from both real write paths
+    /// indefinitely and this test would stay green. S143 made <c>CreateAsync</c> the single write
+    /// path, so the pin now drives the real surface, <c>POST /api/admin/users</c>, end to end. Same
+    /// assertion, same literal, now load-bearing.</para>
     ///
-    /// <para>No host is booted: the repository is constructed directly against the container with a
-    /// <see cref="FixedTimeProvider"/>, which is the same seam DI supplies in production.</para>
+    /// <para><b>The scenario.</b> A Danish HR admin creates a new hire at 00:30 local on 16 January.
+    /// The instant is 2026-01-15 23:30 UTC, so the UTC calendar still says the 15th. The employee's
+    /// profile begins on the day the admin is living in — the 16th.
+    /// <b>RED on the pre-S142 code</b> (which derived the UTC calendar day): <c>2026-01-15</c>.</para>
+    ///
+    /// <para><b>Why the event is asserted too, not just the row.</b> ADR-018 D3 says a state-changing
+    /// write and the event describing it commit together; a row and an event that disagree about the
+    /// date are an audit-trail contradiction, not a rounding detail. It is also the assertion that
+    /// would catch the specific way this consolidation could have gone wrong: had <c>CreateAsync</c>
+    /// kept reading the clock, the handler would have held one date and the repository another, and
+    /// a create straddling midnight would leave these two a day apart.</para>
     /// </summary>
     [Fact]
-    public async Task RepositoryCreate_AfterDanishMidnight_StampsEffectiveFromOnTheDanishDay()
+    public async Task AdminUserCreate_AfterDanishMidnight_StampsProfileEffectiveFromOnTheDanishDay()
     {
+        using var host = _factory.WithFixedInstant(BoundaryInstants.WinterEveningAlreadyTomorrowInCopenhagen);
+        using var client = Client(host, GlobalAdminToken());
+        await SeedOrgAsync();
+
         var employeeId = NextId("cph_create");
-        await SeedUserWithoutProfileAsync(employeeId);
-
-        var repo = new EmployeeProfileRepository(
-            _harness.Factory,
-            new FixedTimeProvider(BoundaryInstants.WinterEveningAlreadyTomorrowInCopenhagen));
-
-        await using (var conn = _harness.Factory.Create())
+        var rsp = await client.PostAsJsonAsync("/api/admin/users", new
         {
-            await conn.OpenAsync();
-            await using var tx = await conn.BeginTransactionAsync();
-            await repo.CreateAsync(conn, tx, new EmployeeProfileCreateRequest(
-                EmployeeId: employeeId, PartTimeFraction: 1.000m, Position: null));
-            await tx.CommitAsync();
-        }
+            userId = employeeId,
+            username = employeeId,
+            password = "TestPassword123!",
+            displayName = "S143 CPH Create",
+            email = (string?)null,
+            primaryOrgId = OrgA,
+            agreementCode = "AC",
+            okVersion = "OK24",
+        });
+        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
 
         Assert.Equal(
             DanishWinterDay,
             await ScalarDateAsync(
                 "SELECT effective_from FROM employee_profiles WHERE employee_id = @p0", employeeId));
+
+        var payload = await ScalarStringAsync(
+            """
+            SELECT event_payload FROM outbox_events
+            WHERE stream_id = @p0 AND event_type = 'EmployeeProfileCreated'
+            ORDER BY outbox_id DESC LIMIT 1
+            """, $"employee-profile-{employeeId}");
+        using var payloadDoc = JsonDocument.Parse(payload);
+        Assert.Equal(
+            DanishWinterDay,
+            DateOnly.Parse(payloadDoc.RootElement.GetProperty("effectiveFrom").GetString()!));
     }
 
     // ─────────────────────────────── fixtures ───────────────────────────────
@@ -480,27 +506,23 @@ public sealed class EmployeeProfileCopenhagenBoundaryTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// A users row (and its org) with NO <c>employee_profiles</c> row — the precondition
-    /// <c>CreateAsync</c> exists for. Seeded directly, and never through a booted host, so the
-    /// startup profile seeder cannot backfill away the absence this fact depends on.
+    /// The org the create-person POST puts the new hire in. It must be an <c>ORGANISATION</c>:
+    /// employees live on Organisations, never on MAOs (S95 / ADR-035 slice 4), and the endpoint
+    /// rejects anything else with a 400 before it reaches the write under test.
+    ///
+    /// <para>S143 / TASK-14308 — this was the org half of <c>SeedUserWithoutProfileAsync</c>, whose
+    /// user half existed so a repository-direct <c>CreateAsync</c> call had a profile-less user to
+    /// write against. That call is gone: the census-row-47 fact now drives the real endpoint, which
+    /// creates its own user.</para>
     /// </summary>
-    private async Task SeedUserWithoutProfileAsync(string employeeId)
-    {
-        await ExecAsync(
+    private async Task SeedOrgAsync()
+        => await ExecAsync(
             """
             INSERT INTO organizations (org_id, org_name, org_type, parent_org_id,
                                        materialized_path, agreement_code, ok_version)
             VALUES (@p0, 'S142 CPH Org', 'ORGANISATION', NULL, '/STY_S142_CPH/', 'AC', 'OK24')
             ON CONFLICT (org_id) DO NOTHING
             """, OrgA);
-        await ExecAsync(
-            """
-            INSERT INTO users (user_id, username, password_hash, display_name, email,
-                               primary_org_id, agreement_code, ok_version)
-            VALUES (@p0, @p0, 'dev-only', @p0, NULL, @p1, 'AC', 'OK24')
-            ON CONFLICT (user_id) DO NOTHING
-            """, employeeId, OrgA);
-    }
 
     // ─────────────────────────────── host + HTTP helpers ───────────────────────────────
 

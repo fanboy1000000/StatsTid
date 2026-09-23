@@ -33,9 +33,50 @@ public static class EmployeeProfileSeeder
 {
     private const decimal DefaultPartTimeFraction = 1.000m;
 
+    /// <summary>
+    /// The backfill anchor — the earliest representable date, which is also the schema DEFAULT for
+    /// <c>employee_profiles.effective_from</c>.
+    ///
+    /// <para>
+    /// <b>Why a backfill must NOT be stamped "today"</b> (S33 Step 7a P1; preserved verbatim in
+    /// intent by S143 / TASK-14308 when this seeder moved onto the shared write path). These rows
+    /// describe employees who already existed, so their HISTORICAL periods have to resolve. The
+    /// profile resolver selects the row whose <c>effective_from &lt;= asOfDate</c>; a row stamped
+    /// today covers nothing before today, so every pre-deployment calculation finds no profile, and
+    /// PCS/Compliance fail closed with a 500. Anchoring at <c>0001-01-01</c> means "as far back as
+    /// anyone can ask", which is the truthful statement for a backfilled row: we do not know when
+    /// this profile began, only that it was already in force.
+    /// </para>
+    ///
+    /// <para>
+    /// One constant, referenced by BOTH the row write and the <see cref="EmployeeProfileCreated"/>
+    /// event below, so row/event date parity (ADR-018 D3) holds by construction rather than by two
+    /// matching literals.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>This value is <c>DateOnly.MinValue</c>, which Npgsql special-cases.</b> Npgsql 8 maps it to
+    /// Postgres <c>DATE '-infinity'</c> by default, so it must NOT be bound as a <c>DateOnly</c>
+    /// parameter or the column stops holding the finite date it held before.
+    /// <see cref="EmployeeProfileRepository.CreateAsync"/> binds it as text with an explicit
+    /// <c>::date</c> cast for exactly this reason — the comment at that binding carries the full
+    /// account, including why the global opt-out is not the answer.
+    /// </para>
+    /// </summary>
+    private static readonly DateOnly BackfillAnchor = new(1, 1, 1);
+
+    /// <param name="profileRepository">
+    /// S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — the seeder no longer writes its own INSERT
+    /// statement; it calls <see cref="EmployeeProfileRepository.CreateAsync"/>, the single write path
+    /// shared by the two create-a-person routes (this seeder and the admin create-person endpoint),
+    /// passing <see cref="BackfillAnchor"/> as the effective date. The
+    /// repository is injected rather than constructed here so this seeder shares the one DI-registered
+    /// instance (and therefore the one configured <c>TimeProvider</c>) with every other caller.
+    /// </param>
     public static async Task SeedAsync(
         DbConnectionFactory dbFactory,
         IOutboxEnqueue outbox,
+        EmployeeProfileRepository profileRepository,
         ILogger logger,
         CancellationToken ct = default)
     {
@@ -82,7 +123,7 @@ public static class EmployeeProfileSeeder
             await using var tx = await conn.BeginTransactionAsync(ct);
             try
             {
-                // S33 Step 7a P1 absorption: backfill MUST use schema DEFAULT '0001-01-01'
+                // S33 Step 7a P1 absorption: backfill MUST use the '0001-01-01' anchor
                 // (NOT today) so existing employees' historical periods resolve via the
                 // resolver's `effective_from <= asOfDate` predicate. Stamping today on
                 // backfill would leave pre-deployment periods uncovered → resolver returns
@@ -92,32 +133,48 @@ public static class EmployeeProfileSeeder
                 // EmployeeProfileRepository.InsertLiveRowAsync now stamps
                 // supersedingVersion = predecessor.Version + 1, so the ETag monotonicity
                 // contract holds across the supersession.
+                //
+                // S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — THIS USED TO BE AN INLINE
+                // INSERT. There were three ways to write an employee_profiles row and the one the
+                // tests described (EmployeeProfileRepository.CreateAsync) had no production caller,
+                // so it could drift from the two real paths forever while its tests stayed green.
+                // The row written here is byte-identical to the pre-S143 one: the columns this
+                // seeder used to leave to schema DEFAULTS (effective_from '0001-01-01', effective_to
+                // NULL, version 1) are now written EXPLICITLY by CreateAsync with the same values,
+                // and the anchor is passed rather than defaulted precisely so the difference from
+                // the admin path's today-stamp is stated at the call site instead of hidden in a
+                // parameter default.
                 // S137 / ADR-040 D4 — employment_category is populated same-tx from the
-                // users value via the scalar subselect (the seeder iterates user_ids read
-                // from users, so the row exists). dated==live is the S137 invariant; users'
-                // category is write-once until Increment 3, so copy-from-users ==
+                // users value via the scalar subselect inside CreateAsync (the seeder iterates
+                // user_ids read from users, so the row exists). dated==live is the S137 invariant;
+                // users' category is write-once until Increment 3, so copy-from-users ==
                 // copy-from-predecessor by construction.
-                var profileId = Guid.NewGuid();
-                await using var insertCmd = new NpgsqlCommand(
-                    """
-                    INSERT INTO employee_profiles
-                        (profile_id, employee_id, part_time_fraction, position, employment_category)
-                    VALUES
-                        (@profileId, @employeeId, @partTimeFraction, NULL,
-                         (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
-                    """, conn, tx);
-                insertCmd.Parameters.AddWithValue("profileId", profileId);
-                insertCmd.Parameters.AddWithValue("employeeId", employeeId);
-                insertCmd.Parameters.AddWithValue("partTimeFraction", DefaultPartTimeFraction);
-                await insertCmd.ExecuteNonQueryAsync(ct);
+                //
+                // Transaction shape UNCHANGED (ADR-018 D5): CreateAsync is a (conn, tx) overload,
+                // so the row INSERT, the audit row and the outbox event below still commit as one
+                // atomic per-row unit, and the 23505 a lost startup race raises still propagates to
+                // this loop's catch.
+                var (profileId, profileVersion) = await profileRepository.CreateAsync(
+                    conn, tx,
+                    new EmployeeProfileCreateRequest(
+                        EmployeeId: employeeId,
+                        PartTimeFraction: DefaultPartTimeFraction,
+                        Position: null,
+                        EffectiveFrom: BackfillAnchor),
+                    ct);
 
                 // Step 7a P2 fix — emit a CREATED audit row in the same per-row tx
                 // so the largest migration scenario this sprint introduces (backfill
                 // of all existing users) doesn't leave the audit table empty. Mirrors
                 // the UPDATED audit shape at EmployeeProfileEndpoints.cs PUT path.
                 // previous_data is NULL (no predecessor), version_before is NULL,
-                // version_after = 1, actor_id = SYSTEM_SEED (matches the event's
-                // ActorId so audit + outbox cross-reference cleanly).
+                // version_after = the version CreateAsync actually wrote (1), actor_id =
+                // SYSTEM_SEED (matches the event's ActorId so audit + outbox cross-reference
+                // cleanly).
+                // S143 / TASK-14308 — version_after was the literal `1`. It is now taken from the
+                // party that performed the write, the one-authority-per-fact rule this codebase
+                // already applies to `createdUsersVersion` in AdminEndpoints. The value is
+                // unchanged; what changes is that it can no longer disagree with the row.
                 var newData = JsonSerializer.Serialize(new
                 {
                     partTimeFraction = DefaultPartTimeFraction,
@@ -133,23 +190,27 @@ public static class EmployeeProfileSeeder
                     VALUES (
                         @profileId, @employeeId, 'CREATED',
                         NULL, @newData::jsonb,
-                        NULL, 1,
+                        NULL, @versionAfter,
                         'SYSTEM_SEED', 'SYSTEM')
                     """, conn, tx))
                 {
                     auditCmd.Parameters.AddWithValue("profileId", profileId);
                     auditCmd.Parameters.AddWithValue("employeeId", employeeId);
                     auditCmd.Parameters.AddWithValue("newData", newData);
+                    auditCmd.Parameters.AddWithValue("versionAfter", profileVersion);
                     await auditCmd.ExecuteNonQueryAsync(ct);
                 }
 
+                // S143 / TASK-14308 — the event's EffectiveFrom is the SAME constant the row was
+                // stamped with (it was an independently-written `new DateOnly(1, 1, 1)` literal).
+                // Row/event date parity, ADR-018 D3, now by construction rather than by inspection.
                 var @event = new EmployeeProfileCreated
                 {
                     ProfileId = profileId,
                     EmployeeId = employeeId,
                     PartTimeFraction = DefaultPartTimeFraction,
                     Position = null,
-                    EffectiveFrom = new DateOnly(1, 1, 1),
+                    EffectiveFrom = BackfillAnchor,
                     ActorId = "SYSTEM_SEED",
                     ActorRole = "SYSTEM",
                     CorrelationId = null,

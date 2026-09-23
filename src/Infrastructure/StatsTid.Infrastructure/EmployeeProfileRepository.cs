@@ -1,3 +1,4 @@
+using System.Globalization;
 using Npgsql;
 using StatsTid.Infrastructure.Temporal;
 using StatsTid.SharedKernel.Calendar;
@@ -515,25 +516,75 @@ public sealed class EmployeeProfileRepository
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// S31 / TASK-3102 — atomic-outbox INSERT overload for a brand-new live profile row.
+    /// S31 / TASK-3102 — atomic-outbox INSERT overload for a brand-new live profile row, and
+    /// since S143 / TASK-14308 the single write path for the two CREATE-A-PERSON routes: the boot
+    /// backfill seeder and the admin create-person endpoint. It is deliberately NOT the only INSERT
+    /// into <c>employee_profiles</c> in the product — <see cref="SupersedeAndCreateAsync"/> Case A
+    /// (and Case T) also produces a net-new live row, via <c>InsertLiveRowAsync</c>, for a
+    /// profile-less employee. That is a separate, intended route: it is the DATED WRITER, which locks
+    /// the whole timeline and routes through <see cref="Temporal.TemporalWriteRouter"/> because it has
+    /// to reason about rows that may already exist; this method is the unconditional first-row insert
+    /// and does neither. Consolidating the two would put timeline routing in front of a create that
+    /// by definition has no timeline.
     /// Used by TASK-3106 EmployeeProfileSeeder during bootstrap (one row per existing user)
     /// and by TASK-3108 AdminEndpoints POST extension (4-way atomicity: users INSERT +
     /// employee_profiles INSERT + UserCreated outbox + EmployeeProfileCreated outbox, all
-    /// in one tx). Writes <c>version = 1</c>, <c>effective_from = '0001-01-01'</c> (schema
-    /// default; pre-baked versioning column is dormant in S31), <c>effective_to = NULL</c>.
+    /// in one tx). Writes <c>version = 1</c>, <c>effective_to = NULL</c>, and
+    /// <c>effective_from = </c><paramref name="req"/><c>.EffectiveFrom</c>.
     /// Caller commits or rolls back the transaction; endpoint emits the audit row + outbox
     /// event in the same tx after this returns.
     ///
     /// <para>
-    /// Returns <c>(profile_id, version=1)</c> for the inserted row. The endpoint sets
-    /// the wire ETag to <c>"1"</c> on the 201 response.
+    /// <b>S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — one create path, and why the
+    /// DATE is an argument.</b> Until S143 there were THREE ways to create a person's first row: this method
+    /// (which had no production caller and therefore could drift from reality indefinitely while
+    /// its tests kept passing), the boot seeder's own inline INSERT, and the admin create-person
+    /// endpoint's own inline INSERT. Consolidating them onto this method required moving the date
+    /// OUT of it, because the two real callers need DIFFERENT dates and one of them needs its date
+    /// read exactly once:
+    /// <list type="bullet">
+    ///   <item><description><b>The seeder must anchor at <c>'0001-01-01'</c>, not today.</b> A
+    ///     backfill covers employees who already existed, so their HISTORICAL periods must resolve;
+    ///     the resolver's predicate is <c>effective_from &lt;= asOfDate</c>, so a today-stamped
+    ///     backfill row leaves every pre-deployment date uncovered and PCS/Compliance fail closed
+    ///     with a 500 on any historical calculation. S33 found and fixed that defect once already.</description></item>
+    ///   <item><description><b>The admin create must stamp today exactly ONCE.</b> The endpoint
+    ///     computes one <c>effectiveFrom</c> above its transaction and feeds it to the users row,
+    ///     this profile row and the <c>EmployeeProfileCreated</c> event — the S137 owner ruling
+    ///     "ONE date for the whole create", made so a midnight straddle between two separate clock
+    ///     reads cannot leave those three a day apart. Had this method kept reading the clock, the
+    ///     admin path would have acquired a SECOND read inside the very create that exists to have
+    ///     one.</description></item>
+    /// </list>
+    /// Hence: no clock read here. <c>Today()</c> remains the class's single business-date source for
+    /// the READS and for the dated writer / soft-delete, which legitimately mean "now".
+    /// </para>
+    ///
+    /// <para>
+    /// Returns <c>(profile_id, version=1)</c> for the inserted row — the row's OWN version, which the
+    /// callers record in their <c>employee_profile_audit</c> CREATED row.
+    /// <b>It is NOT the ETag the 201 hands the client</b> (corrected S143 / TASK-14308; the sentence
+    /// here claimed it was, and had been wrong since S138). Since S138 / TASK-13801 the client's
+    /// concurrency token is <c>users.version</c> — one token per aggregate, not per row — and the
+    /// admin create-person response carries the committed users version, which is 2 rather than 1
+    /// because the agreement-code write in the same transaction bumps it
+    /// (<c>AdminEndpoints.cs</c>, <c>createdUsersVersion</c>). See
+    /// <see cref="SupersedeAndCreateAsync"/>'s "one concurrency token per aggregate" paragraph.
     /// </para>
     /// </summary>
     /// <exception cref="PostgresException">
     /// Thrown on partial-unique-index conflict (<c>idx_employee_profiles_live</c>) when a
-    /// live row already exists for <paramref name="req"/><c>.EmployeeId</c>. The caller
-    /// (endpoint) is expected to translate <c>SqlState = "23505"</c> to 409 Conflict; the
-    /// seeder should never hit this case because it guards on existing rows.
+    /// live row already exists for <paramref name="req"/><c>.EmployeeId</c>. The admin endpoint
+    /// translates <c>SqlState = "23505"</c> to 409 Conflict.
+    /// <para>
+    /// The SEEDER hits this too, and handles it (corrected S143 / TASK-14308 — this said the seeder
+    /// "should never hit this case because it guards on existing rows"). Its guard is a NOT EXISTS
+    /// read taken OUTSIDE the per-row transaction, so two application instances starting at the same
+    /// moment can both pass it for the same employee; the loser's INSERT loses the race on
+    /// <c>idx_employee_profiles_live</c>, and <c>EmployeeProfileSeeder</c> catches the 23505, rolls
+    /// that one row back and carries on (it is logged as a skipped concurrent-startup race, not an
+    /// error — the winner already wrote the row the loser wanted).
+    /// </para>
     /// </exception>
     public async Task<(Guid ProfileId, long Version)> CreateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -541,14 +592,15 @@ public sealed class EmployeeProfileRepository
     {
         // profile_id is generated client-side so the endpoint can include it in the
         // outbox event body (S29 WTM precedent at WageTypeMappingRepository.cs:137).
-        // S33 in-flight defect fix: stamp effective_from = today instead of using
-        // the schema DEFAULT '0001-01-01' (S31 placeholder). Under TASK-3302's new
-        // 3-case routing, the first PUT against a default-seeded row would trigger
-        // Case C cross-day supersession (because '0001-01-01' < today), creating a
-        // brand-new successor row at version=1 instead of UPDATE-in-place at version=2.
-        // Stamping today makes the freshly-created row sit in the same-day window for
-        // any same-day PUT (Case B routing → version bump), matching pre-S33 admin
-        // expectations.
+        // S33 in-flight defect fix, AS AMENDED BY S143 / TASK-14308: effective_from is an
+        // EXPLICIT column value rather than the schema DEFAULT '0001-01-01', because under
+        // TASK-3302's 3-case routing the first PUT against a default-stamped row triggers Case C
+        // cross-day supersession (because '0001-01-01' < today), creating a brand-new successor
+        // row at version=1 instead of UPDATE-in-place at version=2. The admin create therefore
+        // passes TODAY, which puts the fresh row in the same-day window for any same-day PUT
+        // (Case B routing → version bump), matching pre-S33 admin expectations. The BACKFILL
+        // seeder passes the '0001-01-01' anchor DELIBERATELY and accepts that Case C routing,
+        // because covering historical dates matters more there (see the method doc).
         // S137 / ADR-040 D4 — employment_category is populated same-tx from the users value
         // via the scalar subselect below (same conn+tx, so it sees an uncommitted users row
         // in this transaction; the employee_id FK guarantees the row exists). dated==live is
@@ -562,7 +614,7 @@ public sealed class EmployeeProfileRepository
                 effective_from, effective_to, version, employment_category)
             VALUES (
                 @profileId, @employeeId, @partTimeFraction, @position,
-                @effectiveFrom, NULL, 1,
+                @effectiveFrom::date, NULL, 1,
                 (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
             RETURNING profile_id, version
             """, conn, tx);
@@ -571,11 +623,36 @@ public sealed class EmployeeProfileRepository
         cmd.Parameters.AddWithValue("partTimeFraction", req.PartTimeFraction);
         cmd.Parameters.AddWithValue("position", (object?)req.Position ?? DBNull.Value);
         // S142 / TASK-14205 (census row 47) — a STORED STAMP: this value IS the new profile row's
-        // `effective_from`, the first day the employee's profile is in force, so it must be the
-        // COPENHAGEN business day. Creating an employee at 00:30 Danish time used to stamp the
-        // profile as having started YESTERDAY. Routed through the class's single `Today()` so the
-        // create, the dated writer and the soft-delete can never drift onto different calendars.
-        cmd.Parameters.AddWithValue("effectiveFrom", Today());
+        // `effective_from`, the first day the employee's profile is in force. Creating an employee
+        // at 00:30 Danish time used to stamp the profile as having started YESTERDAY, so where the
+        // value MEANS "today" it must be the COPENHAGEN business day.
+        // S143 / TASK-14308 — the value now arrives from the CALLER instead of being read here, so
+        // "must be the Copenhagen day" became the ADMIN endpoint's obligation (it derives its single
+        // `effectiveFrom` from CopenhagenBusinessDate) and NOT the seeder's, whose anchor is a fixed
+        // historical date that no calendar applies to. See the method doc for why the two differ.
+        //
+        // ── BOUND AS TEXT AND CAST (`@effectiveFrom::date`), NOT AS A DateOnly. Read this before
+        // "simplifying" it back. Npgsql 8 enables DateTime infinity conversions BY DEFAULT: it maps
+        // DateOnly.MinValue (0001-01-01) to Postgres `DATE '-infinity'` and DateOnly.MaxValue to
+        // `'infinity'`. The backfill seeder's anchor IS DateOnly.MinValue, so binding it as a
+        // DateOnly would silently persist `-infinity` where the column previously held the finite
+        // `'0001-01-01'` the schema DEFAULT wrote. Two things break when it does:
+        //   (1) ROW/EVENT PARITY — the row would hold `-infinity` while the EmployeeProfileCreated
+        //       event carries "0001-01-01" (System.Text.Json has no such special case). The seeder
+        //       feeds ONE constant to both precisely so they cannot diverge; the sentinel would
+        //       reintroduce the divergence underneath that, which is an auditability defect.
+        //   (2) A SPLIT SENTINEL IN ONE COLUMN — every row seeded before this change is finite, so
+        //       any `effective_from = DATE '0001-01-01'` comparison would match the old rows and
+        //       miss the new ones, and vice versa for `-infinity`.
+        // The round trip HIDES this: Npgsql converts `-infinity` back to DateOnly.MinValue on read,
+        // so a DateOnly read-back assertion passes over changed data. Tests must assert the stored
+        // value in SQL with `isfinite(...)`; see ProfileCreateSingleWritePathTests.
+        // The global opt-out (DisableDateTimeInfinityConversions) is deliberately NOT used: it would
+        // change persisted semantics repo-wide, and the sibling UserAgreementCodeBackfillSeeder
+        // (which writes `-infinity` today) has a test asserting exactly that. The fix stays local to
+        // this one write path. The cast is a no-op for every finite date the admin path passes.
+        cmd.Parameters.AddWithValue(
+            "effectiveFrom", req.EffectiveFrom.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
         {
@@ -1633,15 +1710,29 @@ public sealed class EmployeeProfileRepository
 
 /// <summary>
 /// S31 / TASK-3102 — payload for <see cref="EmployeeProfileRepository.CreateAsync"/>.
-/// All three S31-authoritative fields plus the natural key; <see cref="Position"/> is
+/// The S31-authoritative fields plus the natural key; <see cref="Position"/> is
 /// nullable per the schema definition (TEXT NULL). Kept separate from
-/// <see cref="EmployeeProfileSupersedeRequest"/> because INSERTs here always use the schema
-/// default <c>'0001-01-01'</c> rather than an explicit <c>EffectiveFrom</c>.
+/// <see cref="EmployeeProfileSupersedeRequest"/>, which carries the routing/concurrency fields a
+/// net-new INSERT has no use for.
+///
+/// <para>
+/// <b>S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — <see cref="EffectiveFrom"/> is new, and it
+/// is REQUIRED on purpose.</b> This record used to say the INSERT "always uses the schema default
+/// <c>'0001-01-01'</c>"; the code had stamped TODAY since S33, so the comment had been false for a
+/// hundred sprints — which is exactly what happens to a method nothing in production calls. Now that
+/// both real creators (the boot backfill seeder and the admin create-person endpoint) route through
+/// <see cref="EmployeeProfileRepository.CreateAsync"/>, and they legitimately need DIFFERENT dates,
+/// the date is a stated argument with NO default value. A defaulted parameter would let a future
+/// caller inherit a date silently, and the difference between the two dates is load-bearing: see
+/// <see cref="EmployeeProfileRepository.CreateAsync"/>'s doc for the two defects (the S33 historical
+/// -coverage 500 and the S137 midnight-straddle) that each wrong choice reintroduces.
+/// </para>
 /// </summary>
 public sealed record EmployeeProfileCreateRequest(
     string EmployeeId,
     decimal PartTimeFraction,
-    string? Position);
+    string? Position,
+    DateOnly EffectiveFrom);
 
 /// <summary>
 /// S33 / TASK-3302 — payload for <see cref="EmployeeProfileRepository.SupersedeAndCreateAsync"/>.

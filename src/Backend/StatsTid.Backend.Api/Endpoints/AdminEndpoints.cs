@@ -859,6 +859,12 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             UserAgreementCodeRepository userAgreementCodeRepo,
             ReportingLineRepository reportingLineRepo,
+            // S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — the create-person handler writes the
+            // employee_profiles row through this repository's CreateAsync, the single write path shared
+            // by the two create-a-person routes (this endpoint and the boot backfill seeder); it used
+            // to carry its own INSERT statement (step (2) below). Not the ONLY insert into the table:
+            // the dated writer's Case A also produces a net-new row, by design.
+            EmployeeProfileRepository employeeProfileRepo,
             IAuditProjectionMapper<UserCreated> auditMapper,
             IAuditProjectionMapper<EmployeeProfileCreated> profileCreatedMapper,
             IAuditProjectionMapper<UserAgreementCodeSeeded> uacSeededMapper,
@@ -926,11 +932,20 @@ public static class AdminEndpoints
             // enqueue, (4) EmployeeProfileCreated outbox enqueue — all ride a single
             // explicit transaction on the same connection; commit at end of try,
             // rollback on throw. S31 invariant: every active user has exactly one
-            // live employee_profiles row. Defaults mirror EmployeeProfileSeeder
-            // (TASK-3106): weekly_norm_hours=37.0, part_time_fraction=1.000,
-            // position=NULL. EffectiveFrom uses 0001-01-01 anchor (same as backfill)
-            // for consistent "always here" semantics; HR overrides via TASK-3107
+            // live employee_profiles row. Field defaults mirror EmployeeProfileSeeder
+            // (TASK-3106): part_time_fraction=1.000, position=NULL; HR overrides via TASK-3107
             // PUT /api/admin/employee-profiles/{employeeId}.
+            //
+            // S143 / TASK-14308 — THE DATE DOES **NOT** MIRROR THE SEEDER, and this comment used to
+            // claim it did ("EffectiveFrom uses 0001-01-01 anchor (same as backfill)"). The code has
+            // stamped TODAY here since S33 / TASK-3312b, so the sentence had been false for a hundred
+            // sprints and directly contradicted the S137 ruling twenty lines below it. The two paths
+            // differ ON PURPOSE: a BACKFILL covers employees who already existed and must therefore
+            // resolve for historical dates (hence the 0001-01-01 anchor), while an admin create is a
+            // steady-state event whose profile genuinely begins today — and a today-stamp is what
+            // keeps a same-day PUT on the same-day UPDATE route rather than a cross-day supersession.
+            // Both dates now travel to the same writer, EmployeeProfileRepository.CreateAsync, as a
+            // stated argument.
             // S137 / TASK-13708 (OWNER RULING 2026-09-02) — ONE date for the whole create.
             // `effectiveFrom` (today in Copenhagen) is the profile row's effective_from (S33 today-stamp,
             // step (2) below) AND the EmployeeProfileCreated event's EffectiveFrom (step (4)),
@@ -1081,35 +1096,45 @@ public static class AdminEndpoints
                 // tx: the SAME value the users row stores as employment_start_date when the request
                 // omitted a hire date (row/row parity by construction, see the block above the tx).
                 // S137 / ADR-040 D4 (TASK-13704) — employment_category is populated same-tx
-                // from the users value via the scalar subselect (the users INSERT at (1)
-                // above wrote it in THIS transaction, so the subselect sees it; today that
+                // from the users value via a scalar subselect inside CreateAsync (the users INSERT
+                // at (1) above wrote it in THIS transaction, so the subselect sees it; today that
                 // value is the hardcoded 'Standard', and the subselect keeps this site
                 // correct-by-construction if (1) ever changes). dated==live is the S137
                 // invariant; users' category is write-once until Increment 3, so
                 // copy-from-users == copy-from-predecessor by construction.
-                var profileId = Guid.NewGuid();
-                await using var profileCmd = new NpgsqlCommand(
-                    """
-                    INSERT INTO employee_profiles
-                        (profile_id, employee_id, part_time_fraction, position,
-                         effective_from, employment_category)
-                    VALUES
-                        (@profileId, @employeeId, @partTimeFraction, NULL,
-                         @effectiveFrom,
-                         (SELECT u.employment_category FROM users u WHERE u.user_id = @employeeId))
-                    """, conn, tx);
-                profileCmd.Parameters.AddWithValue("profileId", profileId);
-                profileCmd.Parameters.AddWithValue("employeeId", request.UserId);
-                profileCmd.Parameters.AddWithValue("partTimeFraction", 1.000m);
-                profileCmd.Parameters.AddWithValue("effectiveFrom", effectiveFrom);
-                await profileCmd.ExecuteNonQueryAsync(ct);
+                //
+                // S143 / TASK-14308 (QUAL-177, owner ruling OQ-4) — THIS USED TO BE AN INLINE
+                // INSERT. It now routes through EmployeeProfileRepository.CreateAsync, the single
+                // write path for a net-new profile row, which is a (conn, tx) overload and therefore
+                // rides THIS transaction: the four-way atomic unit below is untouched, and a 23505
+                // on idx_employee_profiles_live still surfaces to this handler's catch as before.
+                //
+                // THE DATE IS PASSED, NOT RE-READ. `effectiveFrom` is the single pre-transaction
+                // value computed above — the S137 owner ruling "ONE date for the whole create".
+                // CreateAsync used to read the Copenhagen clock itself; had it kept doing so, wiring
+                // this path through it would have introduced a SECOND clock read inside the one
+                // create whose entire purpose is that there is exactly one, so a midnight straddle
+                // could again leave the users row, the profile row and the event a day apart. That
+                // is why the consolidation needed a signature change rather than a move.
+                var (profileId, profileVersion) = await employeeProfileRepo.CreateAsync(
+                    conn, tx,
+                    new EmployeeProfileCreateRequest(
+                        EmployeeId: request.UserId,
+                        PartTimeFraction: 1.000m,
+                        Position: null,
+                        EffectiveFrom: effectiveFrom),
+                    ct);
 
                 // (2b) employee_profile_audit CREATED row in-tx (Step 7a P2 fix —
                 // every admin-created profile MUST have an origin audit row to keep
                 // the audit chain complete from day one). Mirrors the UPDATED audit
                 // shape at EmployeeProfileEndpoints.cs PUT path. previous_data is
                 // NULL (no predecessor), version_before is NULL (no prior version),
-                // version_after = 1.
+                // version_after = the version the write actually produced (1).
+                // S143 / TASK-14308 — version_after was the literal `1`; it is now taken from
+                // CreateAsync's return, the party that performed the write. Same value, but it can
+                // no longer disagree with the row — the one-authority-per-fact rule already applied
+                // to `createdUsersVersion` above.
                 var profileNewData = JsonSerializer.Serialize(new
                 {
                     partTimeFraction = 1.000m,
@@ -1125,13 +1150,14 @@ public static class AdminEndpoints
                     VALUES (
                         @profileId, @employeeId, 'CREATED',
                         NULL, @newData::jsonb,
-                        NULL, 1,
+                        NULL, @versionAfter,
                         @actorId, @actorRole)
                     """, conn, tx))
                 {
                     profileAuditCmd.Parameters.AddWithValue("profileId", profileId);
                     profileAuditCmd.Parameters.AddWithValue("employeeId", request.UserId);
                     profileAuditCmd.Parameters.AddWithValue("newData", profileNewData);
+                    profileAuditCmd.Parameters.AddWithValue("versionAfter", profileVersion);
                     profileAuditCmd.Parameters.AddWithValue("actorId", actor.ActorId ?? "unknown");
                     profileAuditCmd.Parameters.AddWithValue("actorRole", actor.ActorRole ?? "unknown");
                     await profileAuditCmd.ExecuteNonQueryAsync(ct);
@@ -1267,9 +1293,13 @@ public static class AdminEndpoints
                 await auditRepo.InsertAsync(conn, tx, @event.EventId, userCreatedOutboxId, @event.EventType, userCreatedAuditRow, userCreatedAuditCtx, ct);
 
                 // (4) EmployeeProfileCreated outbox emit in-tx. Stream
-                // employee-profile-{employeeId} per ADR-018 D6 + S31. EffectiveFrom
-                // matches EmployeeProfileSeeder's 0001-01-01 anchor for consistent
-                // S32 replay semantics.
+                // employee-profile-{employeeId} per ADR-018 D6 + S31.
+                // S143 / TASK-14308 — this used to claim EffectiveFrom "matches EmployeeProfileSeeder's
+                // 0001-01-01 anchor": the third and last copy of a sentence that stopped being true in
+                // S33 (see the corrected block above the tx). It does NOT match the seeder. It matches
+                // THE ROW THIS HANDLER JUST WROTE — today, in Copenhagen — which is the parity that
+                // actually matters (ADR-018 D3), and the next paragraph is the absorption that
+                // established it.
                 // S33 Step 7a cycle 2 convergent BLOCKER absorption: event's EffectiveFrom
                 // must match the row's stamped effective_from (ADR-018 D3 atomic-outbox
                 // row/event parity). After TASK-3312b's admin-POST today-stamp, the row at
