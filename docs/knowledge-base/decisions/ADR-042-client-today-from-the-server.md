@@ -97,13 +97,34 @@ recorded here rather than merely implemented.
 - **No frontend production source reads the browser clock to decide which period a screen opens on.** A vitest AST guard
   enforces it, with `lib/copenhagenDate.ts` the single exemption — in the scanner's own code, not in a data file.
 
-  **Scoped deliberately, because the first draft of this line overstated it** and Step 7a caught the overstatement in an
-  ADR written for a sprint about claims outrunning code. **Three sites still derive a business date from the *device's*
-  clock** via `copenhagenToday()`: `useEditPerson.ts:65` (`todayIso`, the effective date stamped on a profile edit),
-  `DelegationPage.tsx:18`, and `MondayDatePicker.tsx:80`. Those are ADR-041-compliant — right zone, DST-correct — and
-  ADR-042-inconsistent: they trust the device's clock for a date that is **stored**. The guard does not flag them because
-  they go through the approved helper, which is correct: the helper is the approved path for *zone*, and this ADR is about
-  *whose clock*. Registered as **QUAL-180**.
+  **Nor does any site derive a *stored* business date from it.** That took three attempts to state correctly, and the
+  sequence is the most useful thing in this ADR.
+
+  The first draft claimed no frontend source read the browser clock at all. **Step 7a proved that false**: six sites
+  called bare `copenhagenToday()`, whose default argument is an executable `new Date()` — right zone, wrong authority —
+  and every one supplied a date that is *stored* (a profile edit's `effective_from`, an approver assignment, an org
+  reassignment, a delegation floor, a validation boundary). They were migrated in TASK-14313 and the census now passes
+  independently: zero remaining calls in production, explicit or bare.
+
+  **The count was wrong twice before it was right — 3 → 5 → 6** — and the reason is recorded in `SPRINT-143.md`. A count
+  arrived at by inspection is a hypothesis.
+
+  **Why no guard caught them, which outlives this ADR:** they went through the *approved helper*, and the helper is the
+  approved answer — **for zone**. The guard enforces a *spelling*; this ADR claims a *property*. A correctly-spelled call
+  through a sanctioned path still read the device. **A guard can police syntax; it cannot police which clock a call
+  ultimately reaches.** That gap is closed here by migration, not by a cleverer guard, because no syntactic guard could
+  have closed it.
+
+- **ADR-041's OQ-12 guards are now vestigial at the migrated sites, and that is an improvement rather than a loss.**
+  OQ-12 said: if a runtime cannot resolve Europe/Copenhagen, disable the affected control and explain, rather than
+  blanking the page. Five of those `try`/`catch` blocks survive this migration (`MondayDatePicker`, `DelegationPage`,
+  `ApproverSection`, `StrukturPanel`, `PersonDrawer`) — but **none of them tests timezone capability any more**, because
+  no migrated read calls `Intl` at all. The day arrives from the server as a string. A runtime with no timezone data
+  therefore neither disables these controls nor throws from these reads; the failure mode was **removed** rather than
+  handled, which is the stronger outcome. The blocks are kept because they cost nothing and the OQ-12 shape stays right
+  for anything that does still convert locally. One of them (`PersonDrawer`) was found to be unreachable *by
+  construction* — an earlier hook in the same component throws first — and is documented as ineffective at the site
+  rather than left claiming a protection it cannot provide.
 
 - **The guard is for accidents, not evasion**, and its limits are stated rather than implied. It cannot see aliasing
   (`const D = Date; new D()`), member access (`new (globalThis.Date)()`), or a spread of an empty argument list

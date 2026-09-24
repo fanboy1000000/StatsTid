@@ -169,6 +169,16 @@ export function PersonDrawer({
   // guarantee. The Danish message text below (about tz data) no longer precisely describes the one
   // failure that could still reach it, but rewriting it is a separate, non-clock-read decision this
   // task does not make on this drawer's behalf.
+  //
+  // S143 Step-7a CORRECTION — the sentence above claimed more than this code delivers, which is the
+  // defect this whole sprint kept finding. **This catch cannot contain a missing-provider throw at
+  // all.** `usePlacement()` at :114 runs first and reaches `useEditPerson`, which calls
+  // `useCalendarToday()` outside any guard — so a missing provider throws there, before this line is
+  // ever evaluated. The protection is not merely unreachable in practice; it is unreachable by
+  // construction, and the "on the chance a future wiring change violates that guarantee" clause is
+  // therefore false as written. It is kept anyway (it costs nothing and the OQ-12 shape is right),
+  // but it is documented as ineffective rather than defensive. Making it real would mean hoisting
+  // the guard above the hook calls that can throw first — a restructure, not a comment fix.
   let today: string | null
   let zoneError: string | null
   try {
