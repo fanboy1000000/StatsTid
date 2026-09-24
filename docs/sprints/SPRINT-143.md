@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | **CODE COMPLETE** — 16 tasks, all DONE. Awaiting Step 7a + CI. Step 0b took 2 internal cycles and 3 external (the third owner-authorised past the cap); Step 5a ran on every substantive task, and found a defect in **every single one** |
+| **Status** | **CODE COMPLETE** — 15 tasks, all DONE. Awaiting Step 7a + CI. Step 0b took 2 internal cycles and 3 external (the third owner-authorised past the cap); Step 5a ran on every substantive task, and found a defect in **every single one** |
 | **Result** | **No frontend production source derives a business date from the device clock** — not the four seeding sites, and (after a Step-7a BLOCKER) not the six that supply STORED dates through the approved helper either. Enforced by an AST guard for the spelling, and by ADR-042 for the authority the guard cannot see |
-| **Final counts** | build **145 warnings / 0 errors** (S142 baseline, unmoved through 15 merges) · unit **1290** (+26) · demo-seed **170** · regression non-Docker **128** · frontend **976** (+82) |
+| **Final counts** | build **145 warnings / 0 errors** (S142 baseline, unmoved through all 14 merges) · unit **1290** (+26) · demo-seed **170** · regression non-Docker **128** · frontend **976** (+82) |
 | **Opened** | 2026-09-23 |
 | **Predecessor** | S142 (`5408769` close, `0a001b4` post-close) — ADR-041, business dates are the Copenhagen day |
 | **Refinement** | `.claude/refinements/REFINEMENT-s143-the-clients-own-clock.md` rev 5 — READY. Dual-lens reviewed, both lenses used both cycles, internal verdict APPROVED-WITH-WARNINGS |
@@ -253,6 +253,7 @@ mid-sprint by review findings (14311, 14313) and one at close (14312) — see ea
 | TASK-14303 | DONE | Skema: the seed, the highlight, and the AC-5 combined assertion |
 | TASK-14304 | DONE | The approver's team view and the year overview |
 | TASK-14305 | DONE | The e2e cluster — and the click count that was a date bug in disguise |
+| TASK-14306 | DONE | split into 14306a / 14306b, both DONE. **This row exists for the close gate**, which extracts `TASK-14306` from the suffixed ids (its digit class stops at the letter) and then cannot match a row spelled `TASK-14306a` — no word boundary between the digit and the suffix. Found by replicating the gate's regex rather than reading it |
 | TASK-14306a | DONE | 29 C# hygiene sites (not the census's 30 — one cited location was a *use* of an already-computed field) |
 | TASK-14306b | DONE | The frontend hygiene pair, and a coverage gap left honest rather than papered over |
 | TASK-14307 | DONE | QUAL-176, in two halves: the clock source, then the read *count* that Step 5a found still open |

@@ -1,4 +1,24 @@
-// S142 / TASK-14201 — the frontend's single source of truth for "what day is it?"
+// S142 / TASK-14201 — the frontend's Copenhagen calendar conversion.
+//
+// ⚠ S143 STATUS CORRECTION (read this before trusting the prose below). This file used to open
+// "the frontend's single source of truth for what day is it?" — and after S143 that is **false**.
+// It has **no production callers left**. ADR-042 made the SERVER the authority for the client's
+// today: the app reads `GET /api/calendar/today` once at startup, shares it through
+// `contexts/CalendarContext.tsx`, and gates the shell on it. Every screen now takes its day from
+// `useCalendarToday()`.
+//
+// The only importers are `e2e/helpers/dates.ts` and `e2e/approval.spec.ts`, which run against a
+// live stack with a real clock and cannot be handed a server-confirmed day.
+//
+// **Why that distinction matters, and why a guard could not have caught it:** this helper answers
+// the ZONE question correctly — it always has. What it cannot answer is WHOSE CLOCK, because its
+// default argument is `new Date()`. Six sites called it for dates that get *stored*, which is
+// right-calendar-wrong-authority, and the clock guard did not flag them because they went through
+// this approved path. A guard enforces a spelling; ADR-042 claims a property. See QUAL-180.
+//
+// **Candidate for S144:** move this file under `e2e/helpers/`, its only remaining consumer. The
+// clock guard's single exemption exists solely for this file; relocate it and the exemption can go
+// too, leaving the guard with no exceptions at all.
 //
 // WHY THIS EXISTS (the plain-language version). Every date the user picks or is offered as a
 // BUSINESS date — the day an agreement profile, an entitlement rule or a wage-type mapping takes

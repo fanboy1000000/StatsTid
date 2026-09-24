@@ -171,8 +171,12 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   — the second of which *creates* the approval period. They were never display dates; they decide
   **which month a person's hours are filed under**. Owner ruling 2026-09-23: the client reads the
   Copenhagen day from the server once at app start, and the app shell refuses to render without it.
-  Recorded as **ADR-042**; fourteen tasks; no executable browser clock read remains in frontend
-  production source, enforced by an AST guard. Detail in `docs/sprints/SPRINT-143.md`.
+  Recorded as **ADR-042**; fifteen tasks. No frontend production source derives a business date from
+  the device clock — not the four sites that seed a view, and not the six that supply STORED dates
+  through the approved helper, which a Step-7a BLOCKER caught the sprint wrongly claiming it had
+  fixed. An AST guard enforces the *spelling* `new Date()`; the *authority* is enforced by ADR-042
+  and by migration, because no syntactic guard can see which clock a correctly-spelled call reaches.
+  Detail in `docs/sprints/SPRINT-143.md`.
   The description below is kept as the statement of the problem that was solved.
   **The user-facing defect, which is why this is more than tidiness.** The frontend sends "today" as
   `new Date().toISOString().slice(0, 10)` (`frontend/src/hooks/useEditPerson.ts:44-46`) — the UTC
