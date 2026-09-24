@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **CODE COMPLETE** — 15 tasks, all DONE. Awaiting Step 7a + CI. Step 0b took 2 internal cycles and 3 external (the third owner-authorised past the cap); Step 5a ran on every substantive task, and found a defect in **every single one** |
+| **Status** | **COMPLETE** — 15 tasks, all DONE. Step 7a closed on both lenses (external APPROVE-WITH-WARNINGS, internal CLOSE-WITH-WARNINGS); every must-land item fixed. Step 0b took 2 internal cycles and 3 external (the third owner-authorised past the cap); Step 5a ran on every substantive task, and found a defect in **every single one** |
 | **Result** | **No frontend production source derives a business date from the device clock** — not the four seeding sites, and (after a Step-7a BLOCKER) not the six that supply STORED dates through the approved helper either. Enforced by an AST guard for the spelling, and by ADR-042 for the authority the guard cannot see |
 | **Final counts** | build **145 warnings / 0 errors** (S142 baseline, unmoved through all 14 merges) · unit **1290** (+26) · demo-seed **170** · regression non-Docker **128** · frontend **976** (+82) |
 | **Opened** | 2026-09-23 |
@@ -609,3 +609,45 @@ two worktrees in one file is the S142 merge hazard.
 above is a test that reads a real clock where a fixed one would be better. None asserts a date that
 could flip. So the assumption holds — CI stays green if this task were cut — and it is verifiable
 against this table rather than taken on trust.
+
+## Step 7a — what the whole-sprint view caught that per-task review could not
+
+Both lenses ran two cycles. The external approved with warnings; the internal **blocked**, and was
+right to.
+
+**The sprint committed its own signature defect.** S143 spent itself finding comments that asserted
+more than the code supported — five corrected in one task alone — then shipped three governance
+documents claiming no frontend source read the device clock for a business date. **Six did**, through
+the *approved* helper, every one supplying a date that gets **stored**.
+
+**The count was wrong twice before it was right: 3 → 5 → 6.** The external lens said three. The
+Orchestrator repeated that without re-deriving it — the exact "enumerated beats matching" lesson
+recorded in this log — the internal lens found five and cited that line back, and the implementer
+found the sixth while migrating. A count arrived at by inspection is a hypothesis.
+
+**Then the correction went stale in the other direction.** The paragraph written to narrow the
+overclaim described three sites as *still* device-bound, and stayed that way after all six were
+migrated an hour later. A document can outrun its code in either direction; only the mismatch matters.
+
+**And the close gate still blocked after I had "fixed" it.** The reviewer replicated the gate's regex
+under PowerShell instead of reading it: `TASK-14306` is extracted from the suffixed ids (the digit
+class stops at the letter) and cannot match a row spelled `TASK-14306a`. My own check had confirmed
+every task carried a `DONE` row — it had not run the matcher. **Third time in this sprint that the
+distinction between checking and running decided the outcome.**
+
+**The durable technical finding, worth more than any of the fixes:** a guard enforces a **spelling**;
+an ADR claims a **property**. `copenhagenToday()` is correctly spelled, sanctioned, and still read the
+laptop in front of the user. No syntactic guard could have closed that gap — which is why QUAL-180 is
+a design question, not a guard improvement.
+
+## Open follow-ups (routed, not lost)
+
+| Item | Where |
+|---|---|
+| A client can still POST any date; ADR-042 supplies a correct default and nothing validates it. Server-side derivation is the stronger end state | QUAL-180 disposition |
+| Five OQ-12 catches are now untested dead code carrying a message that is no longer true, and turn a designed *loud* failure into a silent one | ADR-042 § Consequences |
+| `copenhagenDate.ts` has no production caller — move it to `e2e/helpers/` and the clock guard's only exemption disappears with it | the file's own header |
+| e2e window disjointness: offsets 19 and 18 can collide across a month rollover | external Step 7a |
+| `ProfileCategoryDatingTests` UTC reads, one Copenhagen day from the routing they drive | internal Step 7a N1 |
+| `local_agreement_profiles.created_at` written from two sources depending on the writer | internal Step 7a N2 |
+| **QUAL-165's build → S144, named and committed** — its third deferral; naming the sprint is what stops a fourth | owner ruling OQ-3 |
