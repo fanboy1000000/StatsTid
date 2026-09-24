@@ -1,11 +1,27 @@
 # StatsTid Quality Grading
 
-<!-- anchor-sprint: 142 -->
+<!-- anchor-sprint: 143 -->
 > **Governance**: Updated by the Orchestrator at sprint end or during entropy scan. See **WORKFLOW.md "Quality Grading"** for grade definitions (the CLAUDE.md section this header used to cite moved there — the stale pointer was itself an S131 finding). Grades below the S131 line are **evidence-cited**: every grade names the QUAL register rows it rests on (`docs/operations/quality-finding-register.md`).
 >
 > **This file is a stack of DATED snapshots, not a living statement.** Each section records the grade *as of that sprint* and
 > is never rewritten — S142's own review proposed editing a line in the S139 section, which would have falsified what was
 > true in September. Supersede by adding a section; leave the old one standing.
+
+
+## S143 re-grade (2026-09-24) — the client stops deciding what day it is
+
+**The sprint that found its own headline claim false, and said so.** S142 moved every business date to the Copenhagen day and filed the remaining four frontend sites as *display and navigation dates*. They were not: `SkemaPage`'s seeded month is the period envelope of the skema save **and** the approval send, so it decides **which month a person's hours are filed under**. The server is now the authority — read once at app start, shared, and the shell refuses to render without it (ADR-042). Then Step 7a proved six further sites still took a *stored* date from the device clock **through the approved helper**, and the count was wrong twice on the way to right: 3 → 5 → 6.
+
+| Domain | Grade | Evidence / what changed |
+|--------|-------|-------------------------|
+| **Domain Correctness** | A− → **A−** (held, ▲) | The last authority gap closed: no frontend source derives a business date from the device clock, seeding or stored. Held rather than raised because the *stronger* property is still absent — a client can post any date it likes; ADR-042 supplies a correct **default** and nothing validates it (QUAL-180 residual). Correct-by-default is not correct-by-construction. |
+| **Auditability** | A → **A** (held) | Untouched again, deliberately. Instants stayed UTC through fifteen tasks; the one instant→day conversion is one-way and at a read. `CreateAsync`'s consolidation preserved both callers' transaction boundaries, outbox enqueues and ADR-026 rows — verified by review rather than asserted. |
+| **Security & Access Control** | A− → **A−** (held) | One change, and it went the careful way: the shared client gained an opt-out from its global 401 page-reload, needed because that reload fired from a background timer destroys unsaved work. Verified additive by probe across every call shape. The footgun is documented at the export: **the caller passing it owns the 401.** |
+| **Test Suite (cross-cutting)** | A− → **A** ▲ | The sprint's strongest result. Per-task review found a defect in **every single task**; three were invisible to that task's own green suite. Agents proved REDs by *mutation* — one introduced a real caching bug into a page to confirm its new test would catch it; another measured that its two safeguards failed **0 of the 14 tests written to cover its brief**. And the general lesson landed three times independently: **a frozen clock cannot prove a single-read property.** |
+| **Frontend** | A− → **A** ▲ | The frontend gained its first real guard — an AST scan, not a pattern match, after three rounds each finding a spelling the last had not imagined. It shipped with a shrink-only allowlist so it could land ahead of the migrations, and the allowlist was **deleted at close** so nothing survives to append to. Discovered on the way: what looked like a lint gate in CI was a 34-file allowlist backed by a config with no general rules (QUAL-178). |
+| **Backend API** | A− → **A−** (held) | One new endpoint, born typed under PAT-012, with its DST arithmetic specified rather than left to the implementer — and RED demonstrated by *substituting each wrong implementation* rather than asserting the pins could fail. |
+| **Documentation (canon)** | materially recovered → **materially recovered** (held) | Held, not raised, and the reason is the sprint's own story: it corrected five false comments in one task, then shipped three governance documents claiming a property it had not delivered, then let the correction go stale in the other direction. **A document can outrun its code in either direction; only the mismatch matters.** |
+| **Governance / review effectiveness** | — | **Three times the difference between *checking* and *running* decided the outcome**: a count taken by inspection (wrong twice), a claim taken by reading (false), and a close gate believed fixed that still blocked — found by replicating its regex under PowerShell rather than reading it. Each was caught by someone who ran the thing. The two lenses also converged independently on the same escaped mutant from different methods, which is the clearest evidence yet for dual-lens review. |
 
 ## S142 re-grade (2026-09-17) — business dates move to the Danish calendar day
 
