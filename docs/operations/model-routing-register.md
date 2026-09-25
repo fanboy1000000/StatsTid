@@ -9,6 +9,14 @@ the routing starts producing errors the trend shows it. It is deliberately small
 no score, no gate. **Read it for direction over three sprints, never for a verdict from one row**: a sprint
 has roughly ten tasks and the numbers cannot carry more than that.
 
+**Refined 2026-09-24 (owner ruling):** *"I want Fable to plan and review and Opus to implement. I want to make
+sure we always use the newest model."* Tiers are fixed by model **family** (they do not move when a lower-tier
+model out-benchmarks a higher one), and each tier runs the **newest version** of its family. Aliases can lag a
+release — on 2026-09-24 `model: opus` resolved to `claude-opus-5`, three days after Opus 5.5 shipped — so from
+S144 on, the *Agent spawns by model* column records the **resolved model id per tier** (e.g. `backend-infrastructure
+→ claude-opus-5-5`), not the alias, taken from the reviewer's `reviewed-by-model:` line and the subagent
+transcripts. The reference list of newest ids lives in `docs/WORKFLOW.md`, "Version check".
+
 **Where the numbers come from.**
 - *Spawns by model* and *guard blocks*: `.claude/telemetry/model-routing.log` (local, gitignored; one line
   per Agent spawn written by `model-routing-guard.ps1`, plus one `close` line per sprint written by
@@ -35,7 +43,10 @@ has roughly ten tasks and the numbers cannot carry more than that.
 on the entropy-scan agenda for the owner's decision (nothing moves automatically):
 1. a defect found AFTER close that traces to a cheaper-tier implementer's output;
 2. CI needing more than two runs to go green;
-3. any reviewer refusal (`verdict: REFUSED`) or any guard BLOCK on a reviewer spawn.
+3. any reviewer refusal (`verdict: REFUSED`) or any guard BLOCK on a reviewer spawn;
+4. *(added 2026-09-24)* any tier found running an older version than the newest of its family — this one is
+   acted on at once (re-dispatch on the full id), not only after three sprints, because the owner's rule is
+   "always the newest".
 
 | Sprint | Orchestrator model by phase | Agent spawns by model (guard blocks) | Review findings — 5a B/W · 7a B/W (internal lens) | CI runs to green | Post-close defects | Notes |
 |--------|-----------------------------|--------------------------------------|---------------------------------------------------|------------------|--------------------|-------|

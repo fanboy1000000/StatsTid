@@ -304,13 +304,27 @@ To prevent documentation from diverging from code:
 
 **Rule:** planning and review run on the most capable model; execution against a reviewed spec runs on
 cheaper ones. The dual-lens review catches implementation defects regardless of who wrote the code, so
-capability is spent where judgment is exercised over someone else's output. Background: S138 measured the
+capability is spent where judgment is exercised over someone else's output.
+
+**Made precise 2026-09-24 (owner ruling, after Opus 5.5 shipped benchmarking above Fable 5.1):** *"I want
+Fable to plan and review and Opus to implement. I want to make sure we always use the newest model."* That
+is two rules:
+
+1. **Tiers are fixed by model family, not by leaderboard.** Fable plans and reviews; Opus implements the
+   high-stakes roles; Sonnet and Haiku keep the cheaper work. When a new model in a lower tier out-benchmarks
+   the tier above, the tiers do **not** swap — the new model simply upgrades its own tier. *Why:* benchmarks
+   move every few months; a routing table that chased them would churn twelve agent definitions, two hooks
+   and the close gate each time. Fixing tiers by family keeps the structure stable while every release's
+   gains still land.
+2. **Within each tier, always run the newest version of that family.** An alias (`opus`, `fable`) is *not*
+   a guarantee of newness: on 2026-09-24 a spawn with `model: opus` ran on `claude-opus-5`, three days after
+   Opus 5.5 was released. So the version is **verified**, not assumed — see "Version check" below. Background: S138 measured the
 Orchestrator seat at 704 tool calls, 65 CI polls and 100 direct edits on the most expensive model, and every
 one of its 19 agents inherited that model because no routing existed.
 
 | Role | Model | Enforced by |
 |------|-------|-------------|
-| Refinement (Steps 1–4), Step 0b plan review, Orchestrator rulings and review absorption | Fable (most capable) | the Orchestrator session model — switch points below, recorded in the sprint log |
+| Refinement (Steps 1–4), Step 0b plan review, Orchestrator rulings and review absorption | Fable (newest version) | the Orchestrator session model — switch points below, recorded in the sprint log |
 | Reviewer Agent (Steps 4, 5a, 7a) | Fable | `.claude/agents/reviewer.md` fixes it · `model-routing-guard.ps1` blocks a cheaper override · the agent's own `reviewed-by-model:` self-check refuses on the wrong model · `sprint-close-guard.ps1` requires that line at close |
 | Rule Engine, Payroll Integration, Backend/Infrastructure implementers | Opus | `.claude/agents/*.md` frontmatter · guard blocks Fable and Haiku |
 | Data Model, API Integration, Security, Test & QA, UX, Constraint Validator, trace | Sonnet | `.claude/agents/*.md` frontmatter · guard blocks Fable |
@@ -331,6 +345,26 @@ one of its 19 agents inherited that model because no routing existed.
    for a review.
 4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-1` in the Step-7a
    reviewer artifact. A sprint cannot close on a review that ran cheap, whatever happened upstream.
+
+**Version check — the newest model in each tier (owner ruling 2026-09-24).** The four layers above check the
+*family*; none of them checks the *version*, because agent definitions name an alias and the alias resolves
+outside the project. So this is a checklist with a record, like the Orchestrator seat:
+
+- **Current newest per tier** (update this line when a release ships; it is the reference the checks below
+  compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5`** ·
+  Haiku **`claude-haiku-4-5-20251001`**.
+- **At the sprint's first spawn of each tier**, confirm the model the agent actually ran on. For the reviewer
+  this is free: its first line is `reviewed-by-model: <id>`. For every other role, read the id from the
+  subagent transcript (`"model":"claude-…"` in the session's `tasks\` folder — the command is in
+  [the routing register](operations/model-routing-register.md)), or ask the agent to print its model id as
+  its first output line.
+- **If an alias resolved to an older version**, re-dispatch with the full model id as an explicit `model`
+  override and record it in the sprint log. Treat it as a routing deviation, not a cosmetic one — the owner's
+  rule is "always the newest", not "the right family".
+- **The close gate's reviewer pin** (`sprint-close-guard.ps1`, layer 4) names the exact Fable id, so it already
+  enforces the newest Fable; when a new Fable ships, bump that pin and the reviewer's self-check in the same
+  commit as the line above.
+- The register row for each sprint records the **resolved** id per tier, not the alias.
 
 **What cannot be hooked: the Orchestrator's own model.** It is the session model, set by the owner with
 `/model`. So it is a checklist with a record, not a gate. Switch points:
