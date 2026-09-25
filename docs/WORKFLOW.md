@@ -429,7 +429,8 @@ this is a checklist with a record, like the Orchestrator seat:
   *temporarily* pinned in a definition file (`trace.md`, `model: claude-sonnet-5`, applied and reverted around
   the spawn, never committed) spawned and self-reported that id. That shows a full id is *accepted* by a
   current client; it does not show that a pin overrides an alias, because the alias resolved to the same
-  model. On the stale client the day before, the same kind of pin fell back silently (see step zero).
+  model. On the stale client the day before, the same kind of pin produced a spawn on a model other than the pinned
+  one, with no error reported (see step zero).
 - **At the sprint's first spawn of each tier**, confirm the model the agent actually ran on. For the reviewer
   this is free: its first line is `reviewed-by-model: <id>`. For every other role, read the id from the
   subagent transcript (`"model":"claude-…"` in `<session-id>\subagents\agent-<id>.jsonl` under
