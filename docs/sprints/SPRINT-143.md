@@ -670,8 +670,8 @@ substance").
 a floor review". The telemetry log shows **both** spawns — `12:15:50Z | spawn | reviewer | inherit | ALLOW`
 and `12:16:21Z | spawn | general-purpose | opus | ALLOW`, thirty seconds apart — but not the owner's
 request; the cycle-1 review overlooked the reviewer entry, and the Orchestrator — who had printed both
-lines that same morning — accepted the finding without checking it against the log or re-reading its own
-transcript from the day before. Auditability applies
+lines that same morning — accepted the finding as-is (by its own account, without checking it against the
+log or re-reading its transcript from the day before). Auditability applies
 to the governance record as much as to the product: a record that asserts a deviation the evidence refutes
 is worse than no record. Corrected here on the cycle-2 reviewer's finding.
 
