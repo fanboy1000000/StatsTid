@@ -649,7 +649,7 @@ a design question, not a guard improvement.
 | Five OQ-12 catches are now untested dead code carrying a message that is no longer true, and turn a designed *loud* failure into a silent one | ADR-042 § Consequences |
 | `copenhagenDate.ts` has no production caller — move it to `e2e/helpers/` and the clock guard's only exemption disappears with it | the file's own header |
 | e2e window disjointness: offsets 19 and 18 can collide across a month rollover | external Step 7a |
-| `ProfileCategoryDatingTests` UTC reads, one Copenhagen day from the routing they drive — the 2026-09-24 floor review of `5e78941` found the comments at `:91-93, 185-186` false about the date's origin but no live failure; re-read at S144 Step 7a (item 7 in the post-close section) | internal Step 7a N1 |
+| `ProfileCategoryDatingTests.cs:91-93, 185-186` — the comments misstate where the date comes from (the 2026-09-24 floor review of `5e78941`: false comment, no live failure); correct the comments. The Step-7a N1 reading that first put this row here — that the UTC reads sit one Copenhagen day from the routing they drive — was not confirmed by that review and is re-checked at S144 Step 7a (item 7 in the post-close section) | internal Step 7a N1; floor review of `5e78941` W3 |
 | `local_agreement_profiles.created_at` written from two sources depending on the writer | internal Step 7a N2 |
 | **QUAL-165's build → S144, named and committed** — its third deferral; naming the sprint is what stops a fourth | owner ruling OQ-3 |
 

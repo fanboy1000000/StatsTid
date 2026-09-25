@@ -383,7 +383,7 @@ the floor review as usual. For the comparison arm spawn `general-purpose` with a
 it the review brief **without** the self-check block and **without** any "authorised floor" clause — ask it
 for findings in the same BLOCKER/WARNING/NOTE format and to state its model in a line that is not
 `reviewed-by-model:` (e.g. `comparison-arm-model: <id>`), so neither the detector nor the close gate mistakes
-it for a floor review. `general-purpose` has write tools where `reviewer` has none, so tell the arm it is read-only and check `git status` is clean when it returns. Keep the comparison arm's output **out of the Step-7a reviewer artifact** under
+it for a floor review. `general-purpose` has editing tools and `reviewer`'s tool list does not (its `Bash` could still write, so this is an instruction, not a guarantee, for both), so tell the arm it is read-only and compare `git status` before and after it returns — the tree must be *unchanged*, which is the right check even when the sprint's own work is sitting uncommitted. Keep the comparison arm's output **out of the Step-7a reviewer artifact** under
 `.claude/reviews/` — the close gate parses that file's `reviewed-by-model:` line, and a comparison arm's
 output there would block the close rather than count as a floor review; put it in the sprint log instead.
 Record there: the owner's words, both agent ids, both verdicts, and what the comparison showed. The register's signal 3 counts a guard BLOCK on the detector alongside blocks on
@@ -415,7 +415,7 @@ this is a checklist with a record, like the Orchestrator seat:
   previous definition — the "silent" first spawn is most simply explained as its pin not yet being loaded,
   rather than as an unknown id falling through to the session model (the documentation's resolution order,
   per-spawn `model` → frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → main conversation's model, does not say
-  what an unknown id does). The `[1m]` suffix on that first spawn's self-report was read at the time as the session model's signature; it is not — a current client's alias-`opus` spawn self-reports `claude-opus-5-5[1m]` too, so the suffix is a client artefact and says nothing about which route chose the model. Either way the lesson is the same: a pin is not known to be in effect until a
+  what an unknown id does). The `[1m]` suffix on that first spawn's self-report was read at the time as the session model's signature; it is not — a current client's alias-`opus` spawn self-reports `claude-opus-5-5[1m]` too, so the suffix cannot establish a session-model fallback; where it comes from is not established. Either way the lesson is the same: a pin is not known to be in effect until a
   spawn's self-report says so; on a stale client the pin that reached the API failed loudly (400), and the
   first spawn ran on a model other than the pinned one with no error at all — which is why the self-report
   comparison after any pin is mandatory. A stale client is a cause a pin does not fix.
