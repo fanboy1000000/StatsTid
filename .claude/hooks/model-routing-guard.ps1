@@ -144,11 +144,7 @@ if ($GenericRoles -contains $type) {
     if ($model -eq $ReviewFloor) {
         Block 'Only review and planning run on this model, and those have their own role.' "use subagent_type 'reviewer' for review work; for anything else pass 'opus' or cheaper."
     }
-    # 2026-09-24: a generic spawn on `opus` carrying a reviewer-shaped brief ("print reviewed-by-model;
-    # the Opus tier is an authorised review floor for this review") passed every layer and reviewed a
-    # post-close fix below the floor, unrecorded. Review work has one role and it has no cheaper mode.
-    $prompt = ''
-    if ($in.PSObject.Properties['prompt'] -and $in.prompt) { $prompt = [string]$in.prompt }
+    # (The reviewer-brief signature check above already ran for this type.)
     Allow 'generic agent with an explicit model'
 }
 

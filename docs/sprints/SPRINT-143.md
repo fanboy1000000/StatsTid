@@ -593,7 +593,8 @@ anchor or a literal; none is wrong today, all are undisciplined.
 | `Settlement/TerminationSettlementTests.cs:517` | 2-year margin | 1 |
 | `Settlement/VacationSettlementEndpointTests.cs:64` | structurally immune (Copenhagen is never behind UTC) — fixed anyway, for discipline | 1 |
 | Payroll Marquee tests ×2 | 4.5-month margin | 2 |
-| `TxContractTests.cs:762`, `TemporalWriteZeroWidthReopenTests.cs:69,126` | self-threaded — no independent recompute, so no oracle | 3 |
+| `TxContractTests.cs:762` | self-threaded — no independent recompute, so no oracle | 1 |
+| `TemporalWriteZeroWidthReopenTests.cs:69,126` | **corrected 2026-09-25** — this row first said "no oracle"; the CI red on the close commit proved the opposite (the repository stamps its own clock, so the literal must agree with it), and `5e78941` pinned the clock. The internal floor review of that fix (2026-09-24) flagged the row as false; it stood unlanded until the cycle-3 review of the governance chain | 2 |
 
 **14306b — frontend tier (2 sites).** `DelegationPage.test.tsx:50-54,144,165` (+7-day buffer) and
 `MondayDatePicker.test.tsx:43-58` (a coverage gap rather than a defect — the test never dates
@@ -648,7 +649,7 @@ a design question, not a guard improvement.
 | Five OQ-12 catches are now untested dead code carrying a message that is no longer true, and turn a designed *loud* failure into a silent one | ADR-042 § Consequences |
 | `copenhagenDate.ts` has no production caller — move it to `e2e/helpers/` and the clock guard's only exemption disappears with it | the file's own header |
 | e2e window disjointness: offsets 19 and 18 can collide across a month rollover | external Step 7a |
-| `ProfileCategoryDatingTests` UTC reads, one Copenhagen day from the routing they drive | internal Step 7a N1 |
+| `ProfileCategoryDatingTests` UTC reads, one Copenhagen day from the routing they drive — the 2026-09-24 floor review of `5e78941` found the comments at `:91-93, 185-186` false about the date's origin but no live failure; re-read at S144 Step 7a (item 7 in the post-close section) | internal Step 7a N1 |
 | `local_agreement_profiles.created_at` written from two sources depending on the writer | internal Step 7a N2 |
 | **QUAL-165's build → S144, named and committed** — its third deferral; naming the sprint is what stops a fourth | owner ruling OQ-3 |
 
@@ -661,9 +662,13 @@ agent with Fable and one with Opus?"* The Orchestrator spawned both: a `reviewer
 `reviewed-against-commit: 5e78941…`) — **that is the floor review of `5e78941`, and it exists** — and thirty
 seconds later a `general-purpose` spawn on `opus` with the same brief plus the line "the Orchestrator
 explicitly names the Opus tier as an authorised review floor for this review, so do not refuse on model
-grounds" (`agent-aefe86dc4358e4f90`, ran on `claude-opus-5`, `APPROVED-WITH-WARNINGS`). The Fable arm's two
-substantive corrections were absorbed the same day (the Orchestrator at 12:25Z: "it corrected me twice on
-substance").
+grounds" (`agent-aefe86dc4358e4f90`, ran on `claude-opus-5`, `APPROVED-WITH-WARNINGS`). The Fable arm
+returned three warnings. The Orchestrator acknowledged them at 12:25Z ("it corrected me twice on substance")
+and then, in its own words, did not act: *"I'm deliberately not acting on any of this yet."* At 12:32Z it
+listed the open items and asked the owner whether to work through them; the owner's next message was the
+model-routing ruling, and **none of the items landed** — the first version of this section (`7c96faf`) said
+they had been "absorbed the same day", which the cycle-3 reviewer refuted from the transcript and the code.
+They are routed below.
 
 **What this record said before, and why it was wrong.** The first version of this section (commit
 `bbf1e3a`) recorded the Opus arm as a self-granted, below-floor review and said `5e78941` "does not count as
@@ -677,8 +682,12 @@ is worse than no record. Corrected here on the cycle-2 reviewer's finding.
 
 **The genuine residuals.** (1) The Opus arm was the owner's call, which `docs/WORKFLOW.md` says is
 "recorded as the owner's call, with their words" — but it was recorded nowhere until 2026-09-25, and the
-comparison's outcome (what the Opus arm found against what the Fable arm found) was never written down
-either; that comparison is lost unless someone re-reads the two transcripts. (2) The device that made the
+comparison's outcome was written down only in the session (12:32Z, transcript line 10923), never in a
+governance document. Recorded here now, from that line: both arms `APPROVED-WITH-WARNINGS`; Fable 49 tool
+calls, 9.5 min, ~261k tokens; Opus 73 tool calls, 14.8 min, ~218k tokens; each arm found things the other did
+not (the Fable arm the counterfactual comment and the false log row; the Opus arm a five-site census of the
+same false comment across two files and a claimed backwards interval at `TxContractTests.cs:766`, neither
+floor-verified). (2) The device that made the
 Opus arm run — a brief that grants itself an "authorised review floor" — is exactly the shape the reviewer
 self-check cannot resist and the spawn guard did not see. The guard now detects that signature on any
 non-reviewer spawn, and the sanctioned way to run a future Fable-vs-Opus comparison is written beside it
@@ -686,13 +695,24 @@ non-reviewer spawn, and the sanctioned way to run a future Fable-vs-Opus compari
 (`TemporalWriteZeroWidthReopenTests`) — no `src/**`.
 
 **Review status of `5e78941`, both lenses.** Internal: Fable, 2026-09-24, APPROVED-WITH-WARNINGS (above).
-External: Codex, 2026-09-25, APPROVED-WITH-WARNINGS on inlined source (verdict file
-`codex-5e78941-verdict.txt` in the session scratchpad). The governing rule is `docs/WORKFLOW.md` step 7a,
+External: Codex, 2026-09-25, APPROVED-WITH-WARNINGS on inlined source — verdict archived, tracked, in
+`docs/reviews/2026-09-25-model-routing-governance-external-lens.md` (the internal lens's three reports on
+the governance chain are beside it in `…-internal-lens.md`). The governing rule is `docs/WORKFLOW.md` step 7a,
 "Post-Step-7a coverage": any code-touching commit after the close triggers a new Step-7a cycle scoped to that
 fix — a `tests/**` change is code-touching, so both lenses were owed, and both have now run. The external
 verdict's residuals are routed to the **S144 Step 7a with base commit `2e7d5b1`** (the S143 close commit, so
-that `5e78941` and this governance chain are inside its diff): (1) the recreation assertions in
-`TemporalWriteZeroWidthReopenTests` are non-vacuous — each can fail; (2) `EmployeeProfileRepository` actually
-consumes the injected `FixedTimeProvider` on the write path the test exercises (the review saw the injection,
-not the consumption); (3) Danish-calendar boundary coverage for this write path exists (cite it) or is added;
-(4) the "the one instant" comment is corrected.
+that `5e78941` and this governance chain are inside its diff; the S144 log header must name this base at
+open, or `docs/WORKFLOW.md` step 7a's generic "HEAD of the previous sprint" would put `5e78941` outside it).
+From the external verdict: (1) the recreation assertions in `TemporalWriteZeroWidthReopenTests` are
+non-vacuous — each can fail; (2) `EmployeeProfileRepository` actually consumes the injected
+`FixedTimeProvider` on the write path the test exercises (the review saw the injection, not the
+consumption); (3) Danish-calendar boundary coverage for this write path exists (cite it) or is added; (4)
+the "the one instant" comment is corrected. From the internal (Fable) floor review of 2026-09-24, unlanded:
+(5) `TemporalWriteZeroWidthReopenTests.cs:144-150` justifies the agreement-code fact by a counterfactual
+about `SoftDeleteAsync` on the agreement-code repository, which has no such method — rewrite the comment;
+(6) this log's row at `:596` classified the same test as "no oracle" — corrected in this commit (see the
+appendix row); (7) `ProfileCategoryDatingTests.cs:91-93, 185-186` carry a false comment about the date's
+origin, with no live failure — correct the comment. From the Opus comparison arm, **not floor-verified**:
+(8) the same false comment at five sites across two files — census, then fix or refute; (9)
+`TxContractTests.cs:766` passes `today = 2025-03-12` as the close date of an interval that opens the same
+day — verify whether that is the zero-width case by design or a backwards interval.
