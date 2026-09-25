@@ -226,7 +226,14 @@ the Orchestrator's. The model-routing register attributes the quality to the ins
 brief is valuable", not to the model tier — yet until 2026-09-25 it lived only in the Orchestrator's memory. It
 is now in every non-reviewer definition under `.claude/agents/` (so it applies even when this template is not
 used) and in the template below. The Orchestrator reads each "Brief contradictions" section before accepting
-output, and rules on each item like a declared deviation.
+output. **A contradiction is a report, not a permission.** The Orchestrator settles *factual* brief errors
+itself (a wrong line number, count or pointer); a contradiction that touches an invariant or asks for an
+architectural exception goes to the owner, as `docs/CONVENTIONS.md` requires; and any departure from the spec
+stays under "Declared deviations" for a ruling even when it is also reported as a contradiction. The block
+distinguishes claims about the *existing* code (verify; the code wins) from claims about *required*
+behaviour (the spec wins; report, do not substitute) — without that split, the test agent would be told to
+take expected values from the code, which is precisely how a test comes to protect a bug instead of catching
+it (Codex blocker, 2026-09-25).
 
 When spawning a domain agent, use this structure:
 ```
@@ -273,10 +280,16 @@ ACCEPTANCE CRITERIA:
 - [criterion 2]
 
 BRIEF CHALLENGE:
-Contradicting this brief is valuable. Every line number, count, failure mode, expected value and
-"copy this sibling" pointer above is a claim, not a fact — verify it against the code. Where the code
-disagrees, follow the code and report it under "Brief contradictions" (claim · what the code shows ·
-file:line). Never bend a test, fixture or metric to make a claim come true.
+Contradicting this brief is valuable — and a contradiction is a report, never a permission.
+(a) Claims about the EXISTING code (line numbers, counts, which function does what, "copy this
+    sibling" pointers, traced failure modes) are claims, not facts: verify each against the code;
+    where the code disagrees, go by the code and report it under "Brief contradictions"
+    (claim · what the code shows · file:line).
+(b) Claims about REQUIRED behaviour (expected values, acceptance criteria) come from the spec and
+    the owner's rulings, not from what the code does today. If you believe one is wrong, do not
+    substitute the code's behaviour for it: report it with your reasoning and stop on that item.
+Never bend a test, fixture or metric to make a claim come true. A contradiction never licenses a
+departure from the spec, an invariant or your scope — those still go under "Declared deviations".
 
 PRE-SUBMISSION CHECKLIST (MANDATORY — verify before returning output):
 - [ ] All new endpoints have RequireAuthorization attributes

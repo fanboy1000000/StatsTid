@@ -3,7 +3,7 @@
 # PreToolUse hook on the `Agent` tool. Enforces the model-routing table in
 # docs/WORKFLOW.md, section "Model Routing" (owner ruling 2026-09-07):
 #
-#   planning and review run on the most capable model; execution against a
+#   planning and review run on the newest Fable (owner rulings 2026-09-07 and 2026-09-24); execution against a
 #   reviewed spec runs on cheaper ones.
 #
 # What it blocks (exit 2, message on stderr):
@@ -92,7 +92,7 @@ if ($type -eq 'fork' -or $ReadOnlyPass -contains $type) { Allow 'read-only built
 
 if ($ReviewRoles -contains $type) {
     if ($model -and $model -ne $ReviewFloor) {
-        Block "Review runs on the most capable model; '$model' is below the floor '$ReviewFloor'." `
+        Block "Review runs on the review floor (newest Fable); '$model' is below the floor '$ReviewFloor'." `
               "drop the model override (the reviewer definition already fixes it) or pass model: '$ReviewFloor'."
     }
     Allow 'review role on the floor model'

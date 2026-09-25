@@ -2,7 +2,7 @@
 
 <!-- anchor-sprint: 141 -->
 
-**Purpose.** Since 2026-09-07 planning and review run on the most capable model and implementation on
+**Purpose.** Since 2026-09-07 planning and review run on the newest Fable and implementation on
 cheaper ones (`docs/WORKFLOW.md`, section "Model Routing"). This register is the thin monitor the owner
 asked for: one row per sprint, filled at close from artifacts the close guard already requires, so that if
 the routing starts producing errors the trend shows it. It is deliberately small — no per-task attribution,

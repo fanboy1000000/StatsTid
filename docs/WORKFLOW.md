@@ -302,9 +302,12 @@ To prevent documentation from diverging from code:
 
 ## Model Routing (owner ruling 2026-09-07)
 
-**Rule:** planning and review run on the most capable model; execution against a reviewed spec runs on
-cheaper ones. The dual-lens review catches implementation defects regardless of who wrote the code, so
-capability is spent where judgment is exercised over someone else's output.
+**Rule:** planning and review run on the newest Fable; execution against a reviewed spec runs on cheaper
+models — Opus for the roles that carry legal logic, money or the audit chain, Sonnet and Haiku below. The
+dual-lens review catches implementation defects regardless of who wrote the code, so capability is spent
+where judgment is exercised over someone else's output. (The 2026-09-07 ruling said "the most capable
+model"; the 2026-09-24 ruling below replaced that with a fixed family, so "most capable" is no longer the
+selection rule anywhere in this project.)
 
 **Made precise 2026-09-24 (owner ruling, after Opus 5.5 shipped benchmarking above Fable 5.1):** *"I want
 Fable to plan and review and Opus to implement. I want to make sure we always use the newest model."* That
@@ -318,8 +321,10 @@ is two rules:
    gains still land.
 2. **Within each tier, always run the newest version of that family.** An alias (`opus`, `fable`) is *not*
    a guarantee of newness: on 2026-09-24 a spawn with `model: opus` ran on `claude-opus-5`, three days after
-   Opus 5.5 was released. So the version is **verified**, not assumed — see "Version check" below. Background: S138 measured the
-Orchestrator seat at 704 tool calls, 65 CI polls and 100 direct edits on the most expensive model, and every
+   Opus 5.5 was released. So the version is **verified**, not assumed — see "Version check" below.
+
+**Background.** S138 measured the Orchestrator seat at 704 tool calls, 65 CI polls and 100 direct edits on
+the most expensive model, and every
 one of its 19 agents inherited that model because no routing existed.
 
 | Role | Model | Enforced by |
@@ -346,9 +351,11 @@ one of its 19 agents inherited that model because no routing existed.
 4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-1` in the Step-7a
    reviewer artifact. A sprint cannot close on a review that ran cheap, whatever happened upstream.
 
-**Version check — the newest model in each tier (owner ruling 2026-09-24).** The four layers above check the
-*family*; none of them checks the *version*, because agent definitions name an alias and the alias resolves
-outside the project. So this is a checklist with a record, like the Orchestrator seat:
+**Version check — the newest model in each tier (owner ruling 2026-09-24).** Layers 3 and 4 pin the
+*reviewer* to an exact Fable id, so the review tier IS version-checked — exactly as well as that pin is
+maintained, and no better. Layers 1 and 2 check the *family* only, through an alias, for every other role;
+the alias resolves outside the project. So for the implementation tiers no layer checks the version, and
+this is a checklist with a record, like the Orchestrator seat:
 
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
   compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5`** ·
@@ -368,11 +375,16 @@ outside the project. So this is a checklist with a record, like the Orchestrator
   role's `.claude/agents/<name>.md` frontmatter, re-dispatch by role name, and record it in the sprint log. (The
   Agent tool's own `model` override accepts only the aliases, so a per-spawn override cannot fix a lagging
   alias — the definition file is the one place a full id can be set.) Unpin back to the alias once the alias
-  catches up, so the next release is picked up automatically. Treat it as a routing deviation, not a cosmetic one — the owner's
-  rule is "always the newest", not "the right family".
-- **The close gate's reviewer pin** (`sprint-close-guard.ps1`, layer 4) names the exact Fable id, so it already
-  enforces the newest Fable; when a new Fable ships, bump that pin and the reviewer's self-check in the same
-  commit as the line above.
+  catches up, so the next release is picked up automatically. Treat it as a routing deviation, not a cosmetic
+  one — the owner's rule is "always the newest", not "the right family". Note that the spawn guard
+  (`model-routing-guard.ps1`) reads only the tool's `model` override, never a definition's frontmatter, so a
+  pinned definition is neither validated nor blocked by it: the self-report check above is the only check on
+  a pin.
+- **The close gate's reviewer pin** (`sprint-close-guard.ps1`, layer 4) enforces the *configured* Fable id
+  (`$reviewFloor`), which is the newest only while someone maintains it. When a new Fable ships, bump three
+  things in ONE commit: the reference list above, `$reviewFloor` in the close guard, and the literal id in the
+  reviewer's self-check (`.claude/agents/reviewer.md`). There is no other route to a new floor — the reviewer
+  accepts no successor named only in a prompt, because the close gate would refuse that review at close.
 - The register row for each sprint records the **resolved** id per tier, not the alias.
 
 **What cannot be hooked: the Orchestrator's own model.** It is the session model, set by the owner with

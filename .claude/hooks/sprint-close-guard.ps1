@@ -228,7 +228,7 @@ foreach ($artifact in @($codex, $reviewer)) {
             [Console]::Error.WriteLine("Step 7a internal review ran on '$reviewedBy'; the review floor is '$reviewFloor'.")
             [Console]::Error.WriteLine("  $artifact")
             [Console]::Error.WriteLine('')
-            [Console]::Error.WriteLine('Planning and review run on the most capable model (owner ruling 2026-09-07).')
+            [Console]::Error.WriteLine('Planning and review run on the newest Fable (owner rulings 2026-09-07 and 2026-09-24).')
             [Console]::Error.WriteLine('Re-run the Reviewer Agent without a cheaper model override and replace the artifact.')
             exit 2
         }
