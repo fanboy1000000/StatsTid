@@ -290,6 +290,33 @@ reviewed-against-commit: 4caea8c
 
 ---
 
+## Cycle 14 — on f74c963, verifying the internal lens's cycle-4 absorption (APPROVED-WITH-WARNINGS)
+
+Review performed on **inlined source only**; no commands run.
+
+| Item | Status | Evidence |
+|---|---|---|
+| W-1 | RESOLVED | `docs/sprints/SPRINT-143.md:688` now credits both arms with the false log row and Fable alone with the counterfactual. |
+| W-2 | RESOLVED | `docs/sprints/SPRINT-143.md:718–723` matches the grep: **9 sites across 5 files** (1 + 1 + 3 + 2 + 2). It identifies `UserAgreementCodeRepositoryTests.cs:131,206` and correctly attributes the **4 false** classification to the arm; the grep alone establishes occurrences, not falsity. |
+| W-3 | RESOLVED | `docs/sprints/SPRINT-143.md:724–727` asks to verify the actual interval and attributes the forward-interval expectation to the reviewer. The empty `EffectiveFrom` grep supports the absence of an explicit assignment in the test file. The model default and repository binding are supplied through the inlined review, not independently reproduced source. |
+| W-4 | RESOLVED | `docs/operations/model-routing-register.md:27–31` supplies explicit dated line ranges to exclude, making the rule usable against that local log. `docs/WORKFLOW.md:379` directs future seam tests to a scratch cwd. The telemetry itself was not supplied for independent verification. |
+| N-1 | NOT RESOLVED | `docs/reviews/2026-09-25-model-routing-governance-internal-lens.md:9`: no editorial clarification is shown. The archive change is supplied only as a stat, so resolution cannot be verified. |
+| N-2 | RESOLVED | `docs/reviews/2026-09-25-model-routing-governance-external-lens.md:3` explicitly records the aborted attempt and explains its exclusion. |
+| N-3 | RESOLVED | `docs/sprints/SPRINT-143.md:581` now agrees with the supplied ledger at `:329`: **29 sites across 13 files**. The underlying table was not supplied for recounting. |
+| N-4 | RESOLVED | `docs/sprints/SPRINT-143.md:652,715–717` identifies the false claim as one about comparison. |
+| N-7 | NOT RESOLVED | `docs/operations/model-routing-register.md:74` explains varying run sizes and cites the workflow, but retains an unattributed **“guard seam 8/8”** in the validation cell. That number still needs a specific run attribution. |
+
+New record defects at `docs/operations/model-routing-register.md:74`:
+
+- **Closure is recorded prematurely:** “was verified by the external lens” asserts verification before this review, which still finds unresolved items. “Absorbed in the commit following this one” also mislocates the absorption supplied in `f74c963`.
+- **The note tally is wrong:** the report has **two** notes already fixed at HEAD (N-5, N-6) and **five** remaining notes (N-1–N-4, N-7), rather than three and four.
+
+The four new warnings are absorbed; the claim that every requested item is absorbed is not established.
+
+verdict: APPROVED-WITH-WARNINGS  
+reviewed-against-commit: f74c963
+---
+
 ## Closure
 
-The external loop was closed after cycle 13 at `4caea8c`: no BLOCKER since cycle 1, the last two cycles at shell-recipe level, and the one standing NOTE an inlined-source evidence limit (the bundle cannot carry the 2026-09-24 transcript or the archive files). The cycle-13 residual (`set -o pipefail`) was applied in `8e0cfab` without a further cycle.
+The external loop ran fourteen cycles on the chain (`fe0bdb1` → `f74c963`) plus one on `5e78941`. No BLOCKER after cycle 1. Cycles 10–14 verified the internal lens's absorptions; cycles 11–13 were at shell-recipe level. Standing residuals at closure: the inlined-source evidence limit (the bundle cannot carry the 2026-09-24 transcript or the archive files themselves) and, from cycle 14, three record nits in one register cell — fixed in the final commit without a further cycle, as was cycle 13's `pipefail` residual. The internal lens closed at its cycle 4 (APPROVED-WITH-WARNINGS at `9c951d0`).
