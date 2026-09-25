@@ -282,6 +282,8 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # (2026-09-25). A self-report can read `claude-opus-5-5[1m]`; the `[1m]` is not
 # part of the id, and a literal compare would block a valid close on it. The
 # strip must not over-accept: a suffixed WRONG model still blocks.
+# T20 is the discriminating test (fails without the strip). T21 is a negative CONTROL, not a test of the
+# strip: an unstripped `claude-opus-5-5[1m]` fails the compare just the same. T22 pins the tightened shape.
 # The ledger gate runs after the model check, so give it a fully accounted log.
 # ---------------------------------------------------------------------------
 $env:STATSTID_SPRINTLOG_MOCK = $mockLog

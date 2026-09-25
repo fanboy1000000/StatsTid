@@ -319,8 +319,8 @@ is two rules:
    move every few months; a routing table that chased them would churn twelve agent definitions, two hooks
    (one of them the close gate) and the guard's test harness each time. Fixing tiers by family keeps the structure stable while every release's
    gains still land.
-2. **Within each tier, always run the newest version of that family.** An alias (`opus`, `fable`) is *not*
-   a guarantee of newness: on 2026-09-24 a spawn with `model: opus` ran on `claude-opus-5`, three days after
+2. **Within each tier, always run the newest version of that family.** An alias — the short model name (`opus`, `fable`) that the client resolves to a specific release — is
+   *not* a guarantee of newness: on 2026-09-24 a spawn with `model: opus` ran on `claude-opus-5`, three days after
    Opus 5.5 was released — because the **Claude Code client was too old to know Opus 5.5 existed** (see
    "Version check" below for the evidence). So the version is **verified**, not assumed.
 
@@ -353,21 +353,38 @@ one of its 19 agents inherited that model because no routing existed.
    reviewer artifact (a trailing context-window suffix such as `[1m]` is ignored in the comparison). A sprint
    cannot close on a review that ran cheap, whatever happened upstream.
 
-**A route the four layers did not cover (found by the Fable reviewer 2026-09-25; its signature is now detected).** On 2026-09-24
-the Orchestrator reviewed the post-close fix `5e78941` by spawning `general-purpose` with `model: opus` and a
-reviewer-shaped brief that told the agent the Opus tier was "an authorised review floor for this review". The
-spawn guard allowed it ("generic agent with an explicit model"), the agent's self-check was satisfied by the
-brief, and the close gate never saw it because it gates only the close commit. That review ran on
-`claude-opus-5` and was recorded nowhere until the reviewer found it in the transcript. It is now recorded as
-a routing deviation in `docs/sprints/SPRINT-143.md` (post-close section), and the guard blocks a generic spawn
-whose prompt contains `reviewed-by-model`. That is **detection of the observed signature, not a closed
-door**: a generic review brief that omits the phrase still passes, so routing discipline — review work spawns
-`reviewer`, which has no cheaper mode — remains the real control. The detector can misfire on a generic
-spawn asked to document or test the field; the remedy is a named implementation role, which is the rule for
-generic spawns anyway, so a false positive costs one re-issue. The register's signal 3 counts a BLOCK on this
-rule alongside blocks on `reviewer` spawns. The guard has no test harness of its own; its four seam cases
-(reviewer-shaped generic brief → BLOCK, plain generic brief → ALLOW, bare `reviewer` → ALLOW, bare generic →
-BLOCK) were exercised by hand on 2026-09-25.
+**A route the four layers did not cover (found 2026-09-25 by reading the 2026-09-24 transcript; its signature
+is now detected).** On 2026-09-24 the owner asked for a head-to-head — *"Could you do it so you spawn one
+reviewer agent with Fable and one with Opus?"* — on the post-close fix `5e78941`. The Orchestrator spawned a
+`reviewer` on the floor (the floor review, `APPROVED-WITH-WARNINGS`) and, as the owner's comparison arm, a
+`general-purpose` agent on `opus` with the same brief plus a self-granted clause: "the Orchestrator explicitly
+names the Opus tier as an authorised review floor for this review, so do not refuse on model grounds". Every
+layer let the second spawn through — the guard saw a generic agent with an explicit model, the self-check
+was satisfied by the clause, the close gate never sees post-close work — and nothing recorded it, nor the
+comparison's outcome. The owner's request made the run legitimate (see "The switch points are honoured"
+below: an owner-directed phase is recorded as their call, with their words); the *clause* and the *silence*
+were the defects. The first record of this event (`bbf1e3a`) got it wrong — it called the Opus run a
+self-granted below-floor review and said no floor review existed — and was corrected in
+`docs/sprints/SPRINT-143.md` the same day.
+
+*What changed.* The guard now blocks **any spawn other than `reviewer`** (and the read-only built-ins) whose
+prompt carries the reviewer-brief signature — the placeholder instruction `reviewed-by-model: <…>`, or a
+self-granted "authorised (review) floor" / "do not refuse on model grounds" clause. Review work spawns
+`reviewer`, which has no cheaper mode. This is **detection of a signature, not a closed door**: a review brief
+that avoids both phrases still passes, so routing discipline remains the real control; and a legitimate
+brief that must quote the placeholder (rare — hook maintenance) is a false positive that costs one re-issue
+with the brief rephrased. The guard has no harness of its own; its seam cases (`general-purpose`, `trace`
+and `backend-infrastructure` with the signature → BLOCK; a literal `reviewed-by-model: claude-fable-5-1`
+fixture edit → ALLOW; bare `reviewer` → ALLOW; bare generic → BLOCK) were exercised by hand on 2026-09-25.
+
+*The sanctioned way to run a Fable-vs-Opus comparison, when the owner asks for one.* Spawn `reviewer` for
+the floor review as usual. For the comparison arm spawn `general-purpose` with an explicit `model`, and give
+it the review brief **without** the self-check block and **without** any "authorised floor" clause — ask it
+for findings in the same BLOCKER/WARNING/NOTE format and to state its model in a line that is not
+`reviewed-by-model:` (e.g. `comparison-arm-model: <id>`), so neither the detector nor the close gate mistakes
+it for a floor review. Record in the sprint log: the owner's words, both agent ids, both verdicts, and what
+the comparison showed. The register's signal 3 counts a guard BLOCK on the detector alongside blocks on
+`reviewer` spawns.
 
 **Version check — the newest model in each tier (owner ruling 2026-09-24).** Layers 3 and 4 pin the
 *reviewer* to an exact Fable id, so the review tier IS version-checked — exactly as well as that pin is
@@ -376,22 +393,27 @@ the alias resolves outside the project. So for the implementation tiers no layer
 this is a checklist with a record, like the Orchestrator seat:
 
 - **Step zero — update the client first.** On 2026-09-24 the older Claude Code could not use the requested
-  model, and pinning did not fix it. *What was observed* (established by the Fable reviewer from the session
-  transcripts, 2026-09-25): the session ran on client **2.1.263**, and Opus 5.5 requires **2.1.280 or newer**
-  — the API's own 400 text says so. The alias `opus` resolved to the newest Opus *that client knew*, which
-  was Opus 5. Two full-id pins were tried in `backend-infrastructure.md` that day and **neither produced the
-  pinned model**: `claude-opus-5-5` spawned and ran silently on `claude-opus-5` (self-report
-  `claude-opus-5[1m]`), and a second attempt returned `HTTP 400 … version 2.1.280 or newer is required`. The
-  next day, on client 2.1.281, the alias resolved to `claude-opus-5-5` with no pin at all. *Inferred
-  mechanism, not separately tested:* the sub-agents documentation the 2026-09-24 session fetched gives the
-  resolution order as per-spawn `model` → definition frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → the main
-  conversation's model, which would explain the silent case as an unknown id falling through to the session
-  model (unless the environment override is set). If that holds, then on a stale client during a Fable phase
-  a pinned implementer *could* run on Fable unnoticed by the guard — the routing the guard exists to prevent
-  — which is why the self-report comparison after any pin is mandatory rather than optional. So: at session
-  start run `claude --version` (the transcript's `"version"` field records it;
-  `grep -o '"version":"2\.[0-9.]*"' <session>.jsonl | sort -u`), and run `claude update` before blaming an
-  alias. A stale client is a cause a pin does not fix.
+  model, and pinning did not fix it. *What was observed* (the 2026-09-24 session transcript, re-read
+  2026-09-25 after both review lenses disagreed about it): the session ran on client **2.1.263**. The alias
+  `opus` resolved to the newest Opus *that client knew*, which was Opus 5. A *pin* — the full model id
+  written into a role's definition file in place of the alias — was tried twice in
+  `backend-infrastructure.md`: at 13:38Z `model: claude-opus-5-5` was written and a spawn **seconds later**
+  ran on `claude-opus-5` (self-report `claude-opus-5[1m]`); at 13:40Z the file was changed to
+  `model: claude-sonnet-5` and a spawn seconds later returned `HTTP 400 … Claude Code 2.1.263 does not
+  support this model; version 2.1.280 or newer is required … model sent to the API: claude-opus-5-5` — the
+  **first** pin's value, not the file's current one. The next day, on client 2.1.281, the alias resolved to
+  `claude-opus-5-5` with no pin at all. Two things follow directly: a pin **does** reach the API (the 400
+  names it), and Opus 5.5 **does** need 2.1.280+ (the 400 says so). *Inferred, not separately tested:* agent
+  definitions are reloaded with a lag, so a spawn made seconds after editing one can still run on the
+  previous definition — the "silent" first spawn is most simply explained as its pin not yet being loaded,
+  rather than as an unknown id falling through to the session model (the documentation's resolution order,
+  per-spawn `model` → frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → main conversation's model, does not say
+  what an unknown id does). Either way the lesson is the same: a pin is not in effect until a spawn's
+  self-report says so, and on a stale client a correct pin fails loudly (400) while a not-yet-loaded one
+  fails silently — which is why the self-report comparison after any pin is mandatory. So: at session start
+  run `claude --version` (the transcript's `"version"` field records the *running* client, which can be one
+  behind the installed one; `grep -o '"version":"2\.[0-9.]*"' <session>.jsonl | sort -u`), and run
+  `claude update` before blaming an alias. A stale client is a cause a pin does not fix.
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
   compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5`** ·
   Haiku **`claude-haiku-4-5-20251001`**. A self-report may carry a context-window suffix (`claude-opus-5-5[1m]`);
@@ -411,11 +433,12 @@ this is a checklist with a record, like the Orchestrator seat:
   its first output line.
 - **If a tier resolved to an older version on a current client**, the documented remedy is to pin the full
   model id (e.g. `model: claude-opus-5-5`) in that role's `.claude/agents/<name>.md` frontmatter, re-dispatch
-  by role name, and record it in the sprint log — **but treat the pin as unproven**: it has been observed to
-  fall back silently on a stale client (2026-09-24) and has never been observed to override a live alias. So a
+  by role name, and record it in the sprint log — **but do not trust the pin until a spawn proves it**: a pin
+  reaches the API (the 2026-09-24 400 names the pinned id), yet a spawn made seconds after the edit ran on the
+  previous definition, and no pin has yet been observed to change the model an alias would have given. So a
   pin is always followed by the self-report or transcript comparison above, against the id that was pinned;
-  a mismatch means the pin did nothing. (The Agent tool's per-spawn `model` field accepts only the four
-  aliases — **tested 2026-09-25 on client 2.1.282**: `model: claude-sonnet-5` on a `trace` spawn was
+  a mismatch means the pin was not in effect for that spawn — re-spawn once before concluding anything. (The Agent tool's per-spawn `model` field accepts only the four
+  aliases — **tested 2026-09-25 on client 2.1.281** — the session's *running* client per its transcript; `claude --version` printed 2.1.282, the *installed* one, because the session started before the update, which is exactly the distinction step zero teaches — `model: claude-sonnet-5` on a `trace` spawn was
   rejected at input validation with the allowed values `sonnet | opus | haiku | fable`; the documentation's
   "or full ID" applies to the definition frontmatter — so the definition file is the one place a full id can
   be set; and the spawn guard reads only that per-spawn field, never a definition's frontmatter, so a pinned

@@ -652,42 +652,45 @@ a design question, not a guard improvement.
 | `local_agreement_profiles.created_at` written from two sources depending on the writer | internal Step 7a N2 |
 | **QUAL-165's build → S144, named and committed** — its third deferral; naming the sprint is what stops a fourth | owner ruling OQ-3 |
 
-## Post-close routing deviation (found by the Fable reviewer 2026-09-25, recorded here because it happened in this sprint's tail)
+## Post-close review of `5e78941` — the record corrected (2026-09-25)
 
-**What happened.** On 2026-09-24 at 12:16 UTC the Orchestrator reviewed the post-close fix `5e78941` (the
-`TemporalWriteZeroWidthReopenTests` clock pin) by spawning `general-purpose` with `model: opus` and a
-reviewer-shaped brief that said the Opus tier was "an authorised review floor for this review". The spawn
-guard allowed it as a generic agent with an explicit model; the agent reported `reviewed-by-model:
-claude-opus-5` and returned `APPROVED-WITH-WARNINGS`. The close gate never saw it, because it gates only
-the close commit. No sprint log, register row or telemetry note recorded it; the reviewer found it in the
-subagent transcript (`agent-aefe86dc4358e4f90`).
+**What actually happened (from the 2026-09-24 session transcript, verified 2026-09-25).** After the S143
+close went red in CI and `5e78941` fixed it, the owner asked: *"Could you do it so you spawn one reviewer
+agent with Fable and one with Opus?"* The Orchestrator spawned both: a `reviewer` on the floor (12:15:48Z,
+`agent-a1996bbf33b633dae`, `reviewed-by-model: claude-fable-5-1`, `verdict: APPROVED-WITH-WARNINGS`,
+`reviewed-against-commit: 5e78941…`) — **that is the floor review of `5e78941`, and it exists** — and thirty
+seconds later a `general-purpose` spawn on `opus` with the same brief plus the line "the Orchestrator
+explicitly names the Opus tier as an authorised review floor for this review, so do not refuse on model
+grounds" (`agent-aefe86dc4358e4f90`, ran on `claude-opus-5`, `APPROVED-WITH-WARNINGS`). The Fable arm's two
+substantive corrections were absorbed the same day (the Orchestrator at 12:25Z: "it corrected me twice on
+substance").
 
-**Why it matters.** Every layer of the routing rule was passed by a brief that granted itself an exception
-— the same shape as the reviewer-definition clause ("a successor the Orchestrator names") that was removed
-on 2026-09-25. A post-close change — tests only, as the 2026-09-25 external review confirmed, but a change
-to the sprint's headline pin — was therefore reviewed below the floor, and the fact was invisible. The review's findings stand (they were absorbed at the time), but it does not count as a
-floor review of `5e78941`.
+**What this record said before, and why it was wrong.** The first version of this section (commit
+`bbf1e3a`) recorded the Opus arm as a self-granted, below-floor review and said `5e78941` "does not count as
+a floor review". That was the cycle-1 reviewer's reading of the telemetry log, which shows the
+`general-purpose | opus` spawn but not the owner's request nor the `reviewer` spawn thirty seconds earlier;
+the Orchestrator absorbed it without re-reading its own transcript from the day before. Auditability applies
+to the governance record as much as to the product: a record that asserts a deviation the evidence refutes
+is worse than no record. Corrected here on the cycle-2 reviewer's finding.
 
-**What changed.** `model-routing-guard.ps1` now blocks a generic spawn whose prompt contains
-`reviewed-by-model` (signature detection, not a closed door — `docs/WORKFLOW.md` states the trade-off); the
-hole is documented beside the four layers there; and the register's S143 row carries the deviation.
+**The genuine residuals.** (1) The Opus arm was the owner's call, which `docs/WORKFLOW.md` says is
+"recorded as the owner's call, with their words" — but it was recorded nowhere until 2026-09-25, and the
+comparison's outcome (what the Opus arm found against what the Fable arm found) was never written down
+either; that comparison is lost unless someone re-reads the two transcripts. (2) The device that made the
+Opus arm run — a brief that grants itself an "authorised review floor" — is exactly the shape the reviewer
+self-check cannot resist and the spawn guard did not see. The guard now detects that signature on any
+non-reviewer spawn, and the sanctioned way to run a future Fable-vs-Opus comparison is written beside it
+(`docs/WORKFLOW.md`, Model Routing). (3) The commit changes only `tests/**`
+(`TemporalWriteZeroWidthReopenTests`) — no `src/**`.
 
-**Disposition (revised the same day, on the external lens's objection that recording is not reviewing).**
-The external lens reviewed `5e78941` on 2026-09-25 (inlined source; verdict file
-`codex-5e78941-verdict.txt` in the session scratchpad): **APPROVED-WITH-WARNINGS**. It confirms the commit
-changes **only `tests/**`** — no `src/**`, no audit, delivery, architecture or access-control code — so the
-WORKFLOW rule "post-close `src/**` commits get the external lens before the next close" did not strictly
-apply; the compliant review was owed only because the 2026-09-24 one ran below the floor. Findings: NOTE, the
-fixed clock restores the intended zero-width interval `[2025-03-12, 2025-03-12)` rather than weakening the
-assertion; WARNING, the diff alone cannot show the *recreation* assertions are non-vacuous (the bundle
-omitted them and the `FixedTimeProvider` implementation) — a limit of inlined-source review, not a defect
-found; NOTE, the fixture's UTC midnight and Copenhagen date coincide, so these tests do not exercise the S142
-Danish-calendar boundary, and the test comment "the one instant" is inaccurate (many instants share the
-date). Routed to the S144 Step 7a scope, named here so they are not lost: (1) the recreation assertions in
-`TemporalWriteZeroWidthReopenTests` are non-vacuous — each can fail; (2) `EmployeeProfileRepository`
-actually consumes the injected `FixedTimeProvider` on the write path the test exercises (the review saw the
-injection, not the consumption); (3) whether any test covers the Danish-calendar boundary for this write
-path, or the S142 pins already do — cite the existing coverage or add one; (4) the "the one instant" comment.
-The governing rule is `docs/WORKFLOW.md` § Model Routing, "Two rules that came out of the same S138
-review": post-close commits that touch `src/**` get the external lens before the next close. It names only
-the external lens, and this commit touches no `src/**`; the S144 Step 7a sweeps the sprint tail regardless.
+**Review status of `5e78941`, both lenses.** Internal: Fable, 2026-09-24, APPROVED-WITH-WARNINGS (above).
+External: Codex, 2026-09-25, APPROVED-WITH-WARNINGS on inlined source (verdict file
+`codex-5e78941-verdict.txt` in the session scratchpad). The governing rule is `docs/WORKFLOW.md` step 7a,
+"Post-Step-7a coverage": any code-touching commit after the close triggers a new Step-7a cycle scoped to that
+fix — a `tests/**` change is code-touching, so both lenses were owed, and both have now run. The external
+verdict's residuals are routed to the **S144 Step 7a with base commit `2e7d5b1`** (the S143 close commit, so
+that `5e78941` and this governance chain are inside its diff): (1) the recreation assertions in
+`TemporalWriteZeroWidthReopenTests` are non-vacuous — each can fail; (2) `EmployeeProfileRepository` actually
+consumes the injected `FixedTimeProvider` on the write path the test exercises (the review saw the injection,
+not the consumption); (3) Danish-calendar boundary coverage for this write path exists (cite it) or is added;
+(4) the "the one instant" comment is corrected.
