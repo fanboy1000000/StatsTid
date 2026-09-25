@@ -51,9 +51,9 @@ alias or `inherit`). The reference list of newest ids lives in `docs/WORKFLOW.md
 on the entropy-scan agenda for the owner's decision (nothing moves automatically):
 1. a defect found AFTER close that traces to a cheaper-tier implementer's output;
 2. CI needing more than two runs to go green;
-3. any reviewer refusal (`verdict: REFUSED`), any guard BLOCK on a reviewer spawn, or a guard BLOCK on a
-   generic spawn carrying a reviewer-shaped brief (the detector added 2026-09-25 after the below-floor review
-   of `5e78941`);
+3. any reviewer refusal (`verdict: REFUSED`), any guard BLOCK on a reviewer spawn, or a guard BLOCK by the
+   reviewer-brief detector on **any** role (added 2026-09-25 after the 2026-09-24 owner-requested comparison
+   arm on `5e78941` carried a self-granted "authorised floor" clause through every layer unrecorded);
 4. *(added 2026-09-24)* any tier found running an older version than the newest of its family — this one is
    acted on at once, not only after three sprints, because the owner's rule is "always the newest". First
    check the client (`claude --version`, `claude update`); only on a current client try the definition-file

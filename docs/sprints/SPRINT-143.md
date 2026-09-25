@@ -667,9 +667,11 @@ substance").
 
 **What this record said before, and why it was wrong.** The first version of this section (commit
 `bbf1e3a`) recorded the Opus arm as a self-granted, below-floor review and said `5e78941` "does not count as
-a floor review". That was the cycle-1 reviewer's reading of the telemetry log, which shows the
-`general-purpose | opus` spawn but not the owner's request nor the `reviewer` spawn thirty seconds earlier;
-the Orchestrator absorbed it without re-reading its own transcript from the day before. Auditability applies
+a floor review". The telemetry log shows **both** spawns — `12:15:50Z | spawn | reviewer | inherit | ALLOW`
+and `12:16:21Z | spawn | general-purpose | opus | ALLOW`, thirty seconds apart — but not the owner's
+request; the cycle-1 reviewer read only the second line, and the Orchestrator, who had printed both lines
+that same morning, absorbed the finding without noticing the first or re-reading its own transcript from
+the day before. Auditability applies
 to the governance record as much as to the product: a record that asserts a deviation the evidence refutes
 is worse than no record. Corrected here on the cycle-2 reviewer's finding.
 
