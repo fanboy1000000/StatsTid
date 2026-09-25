@@ -378,8 +378,9 @@ this is a checklist with a record, like the Orchestrator seat:
   catches up, so the next release is picked up automatically. Treat it as a routing deviation, not a cosmetic
   one — the owner's rule is "always the newest", not "the right family". Note that the spawn guard
   (`model-routing-guard.ps1`) reads only the tool's `model` override, never a definition's frontmatter, so a
-  pinned definition is neither validated nor blocked by it: the self-report check above is the only check on
-  a pin.
+  pinned definition is neither validated nor blocked by it. A pin is verified the same way as an alias — the
+  agent's self-report or the transcript's `"model"` field, as above — and a reviewer pin additionally faces
+  the close gate.
 - **The close gate's reviewer pin** (`sprint-close-guard.ps1`, layer 4) enforces the *configured* Fable id
   (`$reviewFloor`), which is the newest only while someone maintains it. When a new Fable ships, bump three
   things in ONE commit: the reference list above, `$reviewFloor` in the close guard, and the literal id in the

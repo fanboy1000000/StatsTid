@@ -227,8 +227,10 @@ brief is valuable", not to the model tier — yet until 2026-09-25 it lived only
 is now in every non-reviewer definition under `.claude/agents/` (so it applies even when this template is not
 used) and in the template below. The Orchestrator reads each "Brief contradictions" section before accepting
 output. **A contradiction is a report, not a permission.** The Orchestrator settles *factual* brief errors
-itself (a wrong line number, count or pointer); a contradiction that touches an invariant or asks for an
-architectural exception goes to the owner, as `docs/CONVENTIONS.md` requires; and any departure from the spec
+itself (a wrong line number, count or pointer — even in a calculation or an audit write, when the correction
+still satisfies the spec); only a contradiction that cannot be resolved without compromising an invariant,
+granting an architectural exception or changing a requirement goes to the owner, which is exactly the
+escalation `docs/CONVENTIONS.md` reserves for the owner; and any departure from the spec
 stays under "Declared deviations" for a ruling even when it is also reported as a contradiction. The block
 distinguishes claims about the *existing* code (verify; the code wins) from claims about *required*
 behaviour (the spec wins; report, do not substitute) — without that split, the test agent would be told to
