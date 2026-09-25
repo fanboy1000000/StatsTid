@@ -358,8 +358,11 @@ outside the project. So this is a checklist with a record, like the Orchestrator
   subagent transcript (`"model":"claude-…"` in the session's `tasks\` folder — the command is in
   [the routing register](operations/model-routing-register.md)), or ask the agent to print its model id as
   its first output line.
-- **If an alias resolved to an older version**, re-dispatch with the full model id as an explicit `model`
-  override and record it in the sprint log. Treat it as a routing deviation, not a cosmetic one — the owner's
+- **If an alias resolved to an older version**, pin the full model id (e.g. `model: claude-opus-5-5`) in that
+  role's `.claude/agents/<name>.md` frontmatter, re-dispatch by role name, and record it in the sprint log. (The
+  Agent tool's own `model` override accepts only the aliases, so a per-spawn override cannot fix a lagging
+  alias — the definition file is the one place a full id can be set.) Unpin back to the alias once the alias
+  catches up, so the next release is picked up automatically. Treat it as a routing deviation, not a cosmetic one — the owner's
   rule is "always the newest", not "the right family".
 - **The close gate's reviewer pin** (`sprint-close-guard.ps1`, layer 4) names the exact Fable id, so it already
   enforces the newest Fable; when a new Fable ships, bump that pin and the reviewer's self-check in the same

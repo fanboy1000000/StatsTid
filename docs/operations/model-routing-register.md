@@ -45,7 +45,7 @@ on the entropy-scan agenda for the owner's decision (nothing moves automatically
 2. CI needing more than two runs to go green;
 3. any reviewer refusal (`verdict: REFUSED`) or any guard BLOCK on a reviewer spawn;
 4. *(added 2026-09-24)* any tier found running an older version than the newest of its family — this one is
-   acted on at once (re-dispatch on the full id), not only after three sprints, because the owner's rule is
+   acted on at once (pin the full id in the role's definition file and re-dispatch), not only after three sprints, because the owner's rule is
    "always the newest".
 
 | Sprint | Orchestrator model by phase | Agent spawns by model (guard blocks) | Review findings — 5a B/W · 7a B/W (internal lens) | CI runs to green | Post-close defects | Notes |
