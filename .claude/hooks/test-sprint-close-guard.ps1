@@ -277,6 +277,37 @@ Remove-Item $ledgerWaiver -ErrorAction SilentlyContinue
 Remove-Item $mockLog -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 
+# ---------------------------------------------------------------------------
+# T20-T21 — the reviewed-by-model comparison ignores a context-window suffix
+# (2026-09-25). A self-report can read `claude-opus-5-5[1m]`; the `[1m]` is not
+# part of the id, and a literal compare would block a valid close on it. The
+# strip must not over-accept: a suffixed WRONG model still blocks.
+# The ledger gate runs after the model check, so give it a fully accounted log.
+# ---------------------------------------------------------------------------
+$env:STATSTID_SPRINTLOG_MOCK = $mockLog
+Set-Content -Path $mockLog -Encoding UTF8 -Value @"
+# Sprint 99
+Wave 1: TASK-9901.
+## Task ledger
+| Task | Disposition | Note |
+|---|---|---|
+| TASK-9901 | DONE | merged |
+"@
+Set-Content -Path $codex    -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-1[1m]`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 0)
+$results += "T20 (floor + [1m] suffix): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
+if (-not $ok) { $results += $r.Stderr }
+
+Set-Content -Path $reviewer -Value "reviewed-by-model: claude-opus-5-5[1m]`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 2 -and $r.Stderr -match 'claude-opus-5-5')
+$results += "T21 (wrong model + suffix blocks): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
+if (-not $ok) { $results += $r.Stderr }
+Remove-Item $mockLog -ErrorAction SilentlyContinue
+Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
+
 # Cleanup
 Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver,$ledgerWaiver -ErrorAction SilentlyContinue
 Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
@@ -288,4 +319,4 @@ Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 Write-Output ""
-Write-Output "ALL 19 TESTS PASSED"
+Write-Output "ALL 21 TESTS PASSED"

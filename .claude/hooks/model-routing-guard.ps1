@@ -15,7 +15,10 @@
 #   - a sweep on anything above `sonnet` (it is pattern-shaped work);
 #   - a bare `general-purpose` (or unnamed) spawn that names NO model — the
 #     choice must be conscious, so the Orchestrator re-issues with one;
-#   - a `general-purpose` spawn on `fable` — use `reviewer` for review work.
+#   - a `general-purpose` spawn on `fable` — use `reviewer` for review work;
+#   - a `general-purpose` spawn whose prompt contains `reviewed-by-model` — a
+#     reviewer-shaped brief on a generic agent with a cheaper model bypassed the
+#     floor on 2026-09-24 (post-close review of 5e78941 ran on claude-opus-5).
 #
 # What passes untouched: read-only built-ins (Explore, Plan, claude-code-guide,
 # statusline-setup), `fork` (the tool ignores model overrides for forks), and any
@@ -121,6 +124,14 @@ if ($GenericRoles -contains $type) {
     }
     if ($model -eq $ReviewFloor) {
         Block 'Only review and planning run on this model, and those have their own role.' "use subagent_type 'reviewer' for review work; for anything else pass 'opus' or cheaper."
+    }
+    # 2026-09-24: a generic spawn on `opus` carrying a reviewer-shaped brief ("print reviewed-by-model;
+    # the Opus tier is an authorised review floor for this review") passed every layer and reviewed a
+    # post-close fix below the floor, unrecorded. Review work has one role and it has no cheaper mode.
+    $prompt = ''
+    if ($in.PSObject.Properties['prompt'] -and $in.prompt) { $prompt = [string]$in.prompt }
+    if ($prompt -match 'reviewed-by-model') {
+        Block 'A reviewer-shaped brief on a generic agent bypasses the review floor.' "use subagent_type 'reviewer' (its definition fixes the floor); a generic agent never reviews."
     }
     Allow 'generic agent with an explicit model'
 }

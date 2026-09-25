@@ -221,7 +221,8 @@ foreach ($artifact in @($codex, $reviewer)) {
             [Console]::Error.WriteLine('The reviewer agent (.claude/agents/reviewer.md) prints this as its first line; copy it into the artifact.')
             exit 2
         }
-        $reviewedBy = $matches[1]
+        # A self-report may carry a context-window suffix (`claude-fable-5-1[1m]`); it is not part of the id.
+        $reviewedBy = $matches[1] -replace '\[[^\]]*\]$', ''
         if ($reviewedBy -ne $reviewFloor) {
             [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
             [Console]::Error.WriteLine('')

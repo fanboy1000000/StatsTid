@@ -651,3 +651,24 @@ a design question, not a guard improvement.
 | `ProfileCategoryDatingTests` UTC reads, one Copenhagen day from the routing they drive | internal Step 7a N1 |
 | `local_agreement_profiles.created_at` written from two sources depending on the writer | internal Step 7a N2 |
 | **QUAL-165's build → S144, named and committed** — its third deferral; naming the sprint is what stops a fourth | owner ruling OQ-3 |
+
+## Post-close routing deviation (found by the Fable reviewer 2026-09-25, recorded here because it happened in this sprint's tail)
+
+**What happened.** On 2026-09-24 at 12:16 UTC the Orchestrator reviewed the post-close fix `5e78941` (the
+`TemporalWriteZeroWidthReopenTests` clock pin) by spawning `general-purpose` with `model: opus` and a
+reviewer-shaped brief that said the Opus tier was "an authorised review floor for this review". The spawn
+guard allowed it as a generic agent with an explicit model; the agent reported `reviewed-by-model:
+claude-opus-5` and returned `APPROVED-WITH-WARNINGS`. The close gate never saw it, because it gates only
+the close commit. No sprint log, register row or telemetry note recorded it; the reviewer found it in the
+subagent transcript (`agent-aefe86dc4358e4f90`).
+
+**Why it matters.** Every layer of the routing rule was passed by a brief that granted itself an exception
+— the same shape as the reviewer-definition clause ("a successor the Orchestrator names") that was removed
+on 2026-09-25. A post-close `src/**` change was therefore reviewed below the floor, and the fact was
+invisible. The review's findings stand (they were absorbed at the time), but it does not count as a
+floor review of `5e78941`.
+
+**What changed.** `model-routing-guard.ps1` now blocks a generic spawn whose prompt contains
+`reviewed-by-model`; the hole is documented beside the four layers in `docs/WORKFLOW.md`; and the
+register's S143 row carries the deviation. Disposition: recorded, not re-reviewed — the code has since
+passed the S143 CI-green backfill, and the next Step 7a covers it.

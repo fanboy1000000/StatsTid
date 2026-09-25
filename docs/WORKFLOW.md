@@ -317,11 +317,12 @@ is two rules:
    high-stakes roles; Sonnet and Haiku keep the cheaper work. When a new model in a lower tier out-benchmarks
    the tier above, the tiers do **not** swap — the new model simply upgrades its own tier. *Why:* benchmarks
    move every few months; a routing table that chased them would churn twelve agent definitions, two hooks
-   and the close gate each time. Fixing tiers by family keeps the structure stable while every release's
+   (one of them the close gate) and the guard's test harness each time. Fixing tiers by family keeps the structure stable while every release's
    gains still land.
 2. **Within each tier, always run the newest version of that family.** An alias (`opus`, `fable`) is *not*
    a guarantee of newness: on 2026-09-24 a spawn with `model: opus` ran on `claude-opus-5`, three days after
-   Opus 5.5 was released. So the version is **verified**, not assumed — see "Version check" below.
+   Opus 5.5 was released — because the **Claude Code client was too old to know Opus 5.5 existed** (see
+   "Version check" below for the evidence). So the version is **verified**, not assumed.
 
 **Background.** S138 measured the Orchestrator seat at 704 tool calls, 65 CI polls and 100 direct edits on
 the most expensive model, and every
@@ -349,7 +350,18 @@ one of its 19 agents inherited that model because no routing existed.
    not the floor it writes `verdict: REFUSED — wrong model for review` and stops. A refusal cannot be mistaken
    for a review.
 4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-1` in the Step-7a
-   reviewer artifact. A sprint cannot close on a review that ran cheap, whatever happened upstream.
+   reviewer artifact (a trailing context-window suffix such as `[1m]` is ignored in the comparison). A sprint
+   cannot close on a review that ran cheap, whatever happened upstream.
+
+**A route the four layers did not cover (found by the Fable reviewer 2026-09-25, now closed).** On 2026-09-24
+the Orchestrator reviewed the post-close fix `5e78941` by spawning `general-purpose` with `model: opus` and a
+reviewer-shaped brief that told the agent the Opus tier was "an authorised review floor for this review". The
+spawn guard allowed it ("generic agent with an explicit model"), the agent's self-check was satisfied by the
+brief, and the close gate never saw it because it gates only the close commit. That review ran on
+`claude-opus-5` and was recorded nowhere until the reviewer found it in the transcript. It is now recorded as
+a routing deviation in `docs/sprints/SPRINT-143.md` (post-close section), and the guard blocks a generic spawn
+whose prompt contains `reviewed-by-model` — review work spawns `reviewer`, which has no cheaper mode. The
+register's signal 3 watches `reviewer` spawns only; a guard BLOCK on this new rule counts under it too.
 
 **Version check — the newest model in each tier (owner ruling 2026-09-24).** Layers 3 and 4 pin the
 *reviewer* to an exact Fable id, so the review tier IS version-checked — exactly as well as that pin is
@@ -357,36 +369,60 @@ maintained, and no better. Layers 1 and 2 check the *family* only, through an al
 the alias resolves outside the project. So for the implementation tiers no layer checks the version, and
 this is a checklist with a record, like the Orchestrator seat:
 
+- **Step zero — the Claude Code client, not the alias, decides which models exist.** What the 2026-09-24
+  "alias lag" really was (established by the Fable reviewer from the session transcripts, 2026-09-25): the
+  session ran on client **2.1.263**, and Opus 5.5 requires **2.1.280 or newer** — the API's own 400 text says
+  so. The alias `opus` resolved to the newest Opus *that client knew*, which was Opus 5. Two full-id pins were
+  tried in `backend-infrastructure.md` that day and **neither produced the pinned model**: `claude-opus-5-5`
+  spawned and ran silently on `claude-opus-5` (self-report `claude-opus-5[1m]`), and a second attempt returned
+  `HTTP 400 … version 2.1.280 or newer is required`. The silent case is the documented behaviour, not a
+  fluke: the sub-agents documentation the 2026-09-24 session fetched gives the resolution order as
+  per-spawn `model` → definition frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → **the main conversation's
+  model**. An unknown pinned id falls through to the session model with no error. Under the switch-point
+  rule the session model is Fable during planning, so on a stale client a pinned implementer would run on
+  Fable, invisible to the guard — exactly the routing the guard exists to prevent. The next day, on client 2.1.281, the alias resolved to
+  `claude-opus-5-5` with no pin at all. So: at session start run `claude --version` (the transcript's
+  `"version"` field records it; `grep -o '"version":"2\.[0-9.]*"' <session>.jsonl | sort -u`), and run
+  `claude update` before blaming an alias. A stale client is the one cause a pin cannot fix.
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
   compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5`** ·
-  Haiku **`claude-haiku-4-5-20251001`**.
-- **Last verified 2026-09-25:** a `backend-infrastructure` spawn (alias `opus`) ran on `claude-opus-5-5`,
-  confirmed both by self-report and by the subagent transcript's `"model"` field — the lag seen on
-  2026-09-24 had cleared, so no pin was needed. The same day a full id pinned in a definition file
-  (`trace.md`, `model: claude-sonnet-5`) spawned cleanly and self-reported that id. That proves a full id is
-  *accepted*, but not that it *overrides* the alias, because the alias resolves to the same model today. The
-  first real pin should be confirmed from the agent's self-report against the id it pinned.
+  Haiku **`claude-haiku-4-5-20251001`**. A self-report may carry a context-window suffix (`claude-opus-5-5[1m]`);
+  the suffix is ignored when comparing.
+- **Last verified 2026-09-25 (client 2.1.281):** a `backend-infrastructure` spawn (alias `opus`) ran on
+  `claude-opus-5-5`, confirmed both by self-report and by the subagent transcript's `"model"` field — the
+  client had been updated 2.1.263 → 2.1.281 between the sessions, so no pin was needed. The same day a full id
+  *temporarily* pinned in a definition file (`trace.md`, `model: claude-sonnet-5`, applied and reverted around
+  the spawn, never committed) spawned and self-reported that id. That shows a full id is *accepted* by a
+  current client; it does not show that a pin overrides an alias, because the alias resolved to the same
+  model. On the stale client the day before, the same kind of pin fell back silently (see step zero).
 - **At the sprint's first spawn of each tier**, confirm the model the agent actually ran on. For the reviewer
   this is free: its first line is `reviewed-by-model: <id>`. For every other role, read the id from the
-  subagent transcript (`"model":"claude-…"` in the session's `tasks\` folder — the command is in
+  subagent transcript (`"model":"claude-…"` in `<session-id>\subagents\agent-<id>.jsonl` under
+  `%USERPROFILE%\.claude\projects\C--Users-b200895-source-repos-StatsTid\` — the command is in
   [the routing register](operations/model-routing-register.md)), or ask the agent to print its model id as
   its first output line.
-- **If an alias resolved to an older version**, pin the full model id (e.g. `model: claude-opus-5-5`) in that
-  role's `.claude/agents/<name>.md` frontmatter, re-dispatch by role name, and record it in the sprint log. (The
-  Agent tool's own `model` override accepts only the aliases, so a per-spawn override cannot fix a lagging
-  alias — the definition file is the one place a full id can be set.) Unpin back to the alias once the alias
-  catches up, so the next release is picked up automatically. Treat it as a routing deviation, not a cosmetic
-  one — the owner's rule is "always the newest", not "the right family". Note that the spawn guard
-  (`model-routing-guard.ps1`) reads only the tool's `model` override, never a definition's frontmatter, so a
-  pinned definition is neither validated nor blocked by it. A pin is verified the same way as an alias — the
-  agent's self-report or the transcript's `"model"` field, as above — and a reviewer pin additionally faces
-  the close gate.
+- **If a tier resolved to an older version on a current client**, the documented remedy is to pin the full
+  model id (e.g. `model: claude-opus-5-5`) in that role's `.claude/agents/<name>.md` frontmatter, re-dispatch
+  by role name, and record it in the sprint log — **but treat the pin as unproven**: it has been observed to
+  fall back silently on a stale client (2026-09-24) and has never been observed to override a live alias. So a
+  pin is always followed by the self-report or transcript comparison above, against the id that was pinned;
+  a mismatch means the pin did nothing. (The Agent tool's per-spawn `model` field accepts only the four
+  aliases — **tested 2026-09-25 on client 2.1.282**: `model: claude-sonnet-5` on a `trace` spawn was
+  rejected at input validation with the allowed values `sonnet | opus | haiku | fable`; the documentation's
+  "or full ID" applies to the definition frontmatter — so the definition file is the one place a full id can
+  be set; and the spawn guard reads only that per-spawn field, never a definition's frontmatter, so a pinned
+  definition is neither validated nor blocked by it.) Unpin back to the alias once the alias catches
+  up. Treat the whole event as a routing deviation, not a cosmetic one — the owner's rule is "always the
+  newest", not "the right family".
 - **The close gate's reviewer pin** (`sprint-close-guard.ps1`, layer 4) enforces the *configured* Fable id
-  (`$reviewFloor`), which is the newest only while someone maintains it. When a new Fable ships, bump three
-  things in ONE commit: the reference list above, `$reviewFloor` in the close guard, and the literal id in the
-  reviewer's self-check (`.claude/agents/reviewer.md`). There is no other route to a new floor — the reviewer
-  accepts no successor named only in a prompt, because the close gate would refuse that review at close.
-- The register row for each sprint records the **resolved** id per tier, not the alias.
+  (`$reviewFloor`), which is the newest only while someone maintains it. When a new Fable ships, bump **four**
+  things in ONE commit: the reference list above, `$reviewFloor` in the close guard, the literal id in the
+  reviewer's self-check (`.claude/agents/reviewer.md`), and the fixtures in the guard's own test harness
+  (`.claude/hooks/test-sprint-close-guard.ps1`, which hard-codes the id — the omission that cost five harness
+  tests in S141). There is no other route to a new floor — the reviewer accepts no successor named only in a
+  prompt, because the close gate would refuse that review at close.
+- The register row for each sprint records the **resolved** id per tier, not the alias, and the client
+  version the session ran on.
 
 **What cannot be hooked: the Orchestrator's own model.** It is the session model, set by the owner with
 `/model`. So it is a checklist with a record, not a gate. Switch points:
@@ -401,8 +437,11 @@ this is a checklist with a record, like the Orchestrator seat:
 **The switch points are honoured, not logged around (owner ruling 2026-09-25).** S141–S143 ran every phase on
 Opus and each log recorded a "disclosed deviation" instead; S141 found ten of its thirty wrong planning claims
 in the Orchestrator's own drafts. Offered three options — follow the rule, change it so Opus drafts and Fable
-reviews, or split by stakes — the owner chose **follow the rule**, i.e. prevention at the source over catching
-the error in review, at the Fable-token cost. So at each switch point the Orchestrator **stops and asks the
+reviews, or split by stakes — the owner selected the option labelled **"Follow the rule: Fable"** (a selection
+from three cards, not typed text; the option read "You switch the session to Fable (/model) for refinement,
+plan approval and rulings, then back to Opus for dispatch and close. Mistakes are prevented at the source;
+costs Fable tokens on the heaviest phase"). That is prevention at the source over catching the error in
+review, at the Fable-token cost. So at each switch point the Orchestrator **stops and asks the
 owner to run `/model`** before starting the phase. It does not begin refinement, plan approval, review
 absorption or a ruling on Opus and record the gap afterwards. A phase the owner explicitly tells it to run on
 the other model is recorded as the owner's call, with their words.
