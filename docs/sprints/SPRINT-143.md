@@ -664,8 +664,8 @@ subagent transcript (`agent-aefe86dc4358e4f90`).
 
 **Why it matters.** Every layer of the routing rule was passed by a brief that granted itself an exception
 — the same shape as the reviewer-definition clause ("a successor the Orchestrator names") that was removed
-on 2026-09-25. A post-close `src/**` change was therefore reviewed below the floor, and the fact was
-invisible. The review's findings stand (they were absorbed at the time), but it does not count as a
+on 2026-09-25. A post-close change — tests only, as the 2026-09-25 external review confirmed, but a change
+to the sprint's headline pin — was therefore reviewed below the floor, and the fact was invisible. The review's findings stand (they were absorbed at the time), but it does not count as a
 floor review of `5e78941`.
 
 **What changed.** `model-routing-guard.ps1` now blocks a generic spawn whose prompt contains
@@ -683,6 +683,11 @@ assertion; WARNING, the diff alone cannot show the *recreation* assertions are n
 omitted them and the `FixedTimeProvider` implementation) — a limit of inlined-source review, not a defect
 found; NOTE, the fixture's UTC midnight and Copenhagen date coincide, so these tests do not exercise the S142
 Danish-calendar boundary, and the test comment "the one instant" is inaccurate (many instants share the
-date). Routed: the non-vacuity check and the comment fix go to the S144 Step 7a scope, named here so they
-are not lost. No internal floor review is owed for a tests-only post-close commit; the S144 Step 7a sweeps
-the sprint tail regardless.
+date). Routed to the S144 Step 7a scope, named here so they are not lost: (1) the recreation assertions in
+`TemporalWriteZeroWidthReopenTests` are non-vacuous — each can fail; (2) `EmployeeProfileRepository`
+actually consumes the injected `FixedTimeProvider` on the write path the test exercises (the review saw the
+injection, not the consumption); (3) whether any test covers the Danish-calendar boundary for this write
+path, or the S142 pins already do — cite the existing coverage or add one; (4) the "the one instant" comment.
+The governing rule is `docs/WORKFLOW.md` § Model Routing, "Two rules that came out of the same S138
+review": post-close commits that touch `src/**` get the external lens before the next close. It names only
+the external lens, and this commit touches no `src/**`; the S144 Step 7a sweeps the sprint tail regardless.
