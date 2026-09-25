@@ -535,6 +535,16 @@ External Review:
 > Also useful: `--output-last-message <file>` writes just the verdict, so a 400 KB transcript containing the reviewed diff stays in
 > the sibling `.log` instead of being read into the Orchestrator's context.
 >
+> **When the Codex sandbox blocks its own shell — review by INLINED SOURCE (S142; again twice on 2026-09-25).** Codex's policy can
+> reject even `Get-Content`, and it then returns `verdict: BLOCKED` having read nothing — that is an environment failure, not a
+> finding, and it must not be recorded as one. The fallback: build one bundle file (CONVENTIONS.md, the diff, numbered excerpts of
+> every file the prompt cites) and pipe it as stdin — `codex exec "$PROMPT" < bundle.txt` — telling Codex in the prompt that its shell
+> is blocked and all source is inlined. The verdict then says "performed on inlined source"; record that phrase. Two traps: Codex
+> echoes stdin into its log, so any earlier verdict inlined in the bundle reappears verbatim in the transcript — extract the answer
+> with `--output-last-message`, never by searching the log for the first `codex` marker (on 2026-09-25 that returned cycle 1's
+> verdict as cycle 2's). And a bundle can only carry what the Orchestrator chose to include, so a clean verdict on inlined source is
+> a verdict on the bundle, not on the repository — say so when reporting it.
+>
 > **Reading exit statuses (S140, same class of trap).** When a review or test command is piped into `tee`/`tail`/`grep`, `$?`
 > reports the **pipe's** status, not the command's. In S140 a frontend type check with ten real errors printed "exit 0" because the
 > compiler was piped into `tail` before its status was read, and the failure was reported to the owner as a pass. Read the status
