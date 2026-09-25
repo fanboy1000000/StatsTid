@@ -223,3 +223,73 @@ No new defect identified.
 verdict: APPROVED-WITH-WARNINGS  
 reviewed-against-commit: bf98e30
 
+
+---
+
+## Cycle 10 — on 9c951d0 (APPROVED-WITH-WARNINGS)
+
+Review performed on **inlined source only**; no commands or tests were run.
+
+The central correction is supported: acknowledgement is no longer presented as completed work. Items 5–7 are attributed to the floor review; items 8–9 appropriately remain comparison-arm findings requiring verification. The appendix correction and guard cleanup match the supplied evidence.
+
+- **WARNING — The new summary still says the review is pending even though this commit addresses its blocking verdict.** `docs/operations/model-routing-register.md:70` lists internal cycle 3 as “pending” and discusses only the earlier blockers. Record cycle 3’s BLOCKED verdict against `7c96faf`, distinguishing this commit’s corrections from their subsequent verification.
+
+- **WARNING — The older summary retains the explanation the reviewer challenged.** `docs/sprints/SPRINT-143.md:652` still describes the UTC reads as “one Copenhagen day from the routing they drive,” then appends the finding that their date-origin comments are false. Replace the challenged explanation with the verified finding and its outstanding comment correction; appending a qualification leaves the PM with competing accounts.
+
+- **WARNING — The comparison check assumes a clean workspace, but the workflow normally reviews uncommitted work.** `docs/WORKFLOW.md:386` requires clean `git status`, while step 7a at `:38` defaults to uncommitted sprint changes. Require comparison against a recorded pre-review working-tree baseline instead. Also avoid claiming `reviewer` has no write capability: the supplied role description includes `Bash`; absence of dedicated editing tools does not establish filesystem write prevention.
+
+- **NOTE — The suffix evidence rules out a unique routing signature, but does not establish its origin.** `docs/WORKFLOW.md:418` supports saying `[1m]` also appears on an alias-selected model and therefore cannot establish session-model fallback. Calling it a “client artefact” states a causal conclusion the supplied observations alone do not prove.
+
+- **NOTE — The archived evidence remains only partly inspectable in this review.** `docs/sprints/SPRINT-143.md:698–700` cites tracked archive files, whose additions appear in the supplied stat. Their contents were omitted, so faithful preservation of the verdicts remains unverified. The head-to-head figures at `:686–690` likewise have support from the supplied internal report, rather than a directly inlined transcript line 10923.
+
+verdict: APPROVED-WITH-WARNINGS  
+reviewed-against-commit: 9c951d0
+
+---
+
+## Cycle 11 — on e0eb34e (APPROVED-WITH-WARNINGS)
+
+Review performed on **inlined source only**; no commands or tests were run.
+
+- **WARNING 1 — RESOLVED.** `docs/operations/model-routing-register.md:70` now records cycle 3’s BLOCKED verdict against `7c96faf`, corrections in `9c951d0`, and verification pending separately.
+- **WARNING 2 — RESOLVED.** `docs/sprints/SPRINT-143.md:652` leads with the false-comment finding and required correction. The earlier date-routing explanation is explicitly unconfirmed.
+- **WARNING 3 — NOT RESOLVED.** `docs/WORKFLOW.md:386` correctly allows an initially dirty workspace and acknowledges that `Bash` can write. However, identical before/after `git status` output does **not** establish unchanged contents: an already-modified file can be edited again without changing its status. Require a recorded content baseline covering tracked and untracked files, then compare against it.
+- **NOTE 1 — RESOLVED.** `docs/WORKFLOW.md:418` limits the suffix conclusion to what the observations support and leaves its origin unknown.
+- **NOTE 2 — NOT RESOLVED (evidence limit).** `docs/sprints/SPRINT-143.md:686–690, 698–700` (cycle-10 references): the archive contents and underlying transcript remain absent, so preservation and figures cannot be independently verified.
+
+No additional defect identified in the supplied diff beyond the incomplete workspace-check correction above.
+
+verdict: APPROVED-WITH-WARNINGS  
+reviewed-against-commit: e0eb34e
+
+---
+
+## Cycle 12 — on 9936e99 (APPROVED-WITH-WARNINGS)
+
+Review performed on **inlined source only**; no commands or tests were run.
+
+- **WARNING 3 — NOT RESOLVED.** `docs/WORKFLOW.md:386`: the content baseline fixes the already-modified text-file case, but default `git diff HEAD` does not capture binary contents. Different edits to an already-modified binary can produce the same “Binary files … differ” output. Use `git diff --binary HEAD` or checksum tracked files as well.
+- **New defect — WARNING.** `docs/WORKFLOW.md:386`: the untracked-file pipeline mishandles filenames containing spaces, quotes, or newlines. Use `git ls-files --others --exclude-standard -z | xargs -0 …`, check command failures, and store baseline artifacts outside the inspected workspace.
+- **NOTE 2 — NOT RESOLVED (evidence limit).** `docs/sprints/SPRINT-143.md:686–690, 698–700` (previously cited locations): archive contents and the underlying transcript remain absent, so preservation and figures cannot be independently verified.
+
+verdict: APPROVED-WITH-WARNINGS  
+reviewed-against-commit: 9936e99
+
+---
+
+## Cycle 13 — on 4caea8c (APPROVED-WITH-WARNINGS)
+
+Review performed on **inlined source only**; no commands or tests were run.
+
+- **WARNING 3 — RESOLVED.** `docs/WORKFLOW.md:386`: `git diff --binary HEAD` captures binary changes.
+- **Untracked-file WARNING — NOT RESOLVED (partially fixed).** `docs/WORKFLOW.md:386`: `-z/-0` fixes filename handling, and `$TEMP` moves baseline artifacts outside the workspace as instructed. However, checking the pipeline’s exit status can miss a failed `git ls-files` because Bash normally reports only the final command’s status. Require `set -o pipefail` or explicitly check each pipeline stage before accepting the baseline.
+- **NOTE 2 — NOT RESOLVED (evidence limit).** `docs/sprints/SPRINT-143.md:686–690, 698–700` (previously cited locations): archive contents and the underlying transcript remain absent.
+
+verdict: APPROVED-WITH-WARNINGS  
+reviewed-against-commit: 4caea8c
+
+---
+
+## Closure
+
+The external loop was closed after cycle 13 at `4caea8c`: no BLOCKER since cycle 1, the last two cycles at shell-recipe level, and the one standing NOTE an inlined-source evidence limit (the bundle cannot carry the 2026-09-24 transcript or the archive files). The cycle-13 residual (`set -o pipefail`) was applied in `8e0cfab` without a further cycle.
