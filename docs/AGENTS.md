@@ -220,6 +220,14 @@ errors got caught. That is the mitigation, not an accident to rely on.
 agent that trusts it without checking will silently work from whatever it can find instead.
 
 ## Agent Prompt Template
+**Why the BRIEF CHALLENGE block exists (standing rule since 2026-09-25).** In S142 every one of fourteen agents
+contradicted its brief and every contradiction was correct; S141 found thirty planning claims wrong, ten of them
+the Orchestrator's. The model-routing register attributes the quality to the instruction "contradicting this
+brief is valuable", not to the model tier — yet until 2026-09-25 it lived only in the Orchestrator's memory. It
+is now in every non-reviewer definition under `.claude/agents/` (so it applies even when this template is not
+used) and in the template below. The Orchestrator reads each "Brief contradictions" section before accepting
+output, and rules on each item like a declared deviation.
+
 When spawning a domain agent, use this structure:
 ```
 You are the [Agent Name] for the StatsTid project.
@@ -263,6 +271,12 @@ KNOWLEDGE BASE INSTRUCTIONS:
 ACCEPTANCE CRITERIA:
 - [criterion 1]
 - [criterion 2]
+
+BRIEF CHALLENGE:
+Contradicting this brief is valuable. Every line number, count, failure mode, expected value and
+"copy this sibling" pointer above is a claim, not a fact — verify it against the code. Where the code
+disagrees, follow the code and report it under "Brief contradictions" (claim · what the code shows ·
+file:line). Never bend a test, fixture or metric to make a claim come true.
 
 PRE-SUBMISSION CHECKLIST (MANDATORY — verify before returning output):
 - [ ] All new endpoints have RequireAuthorization attributes

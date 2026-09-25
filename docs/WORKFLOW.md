@@ -353,6 +353,12 @@ outside the project. So this is a checklist with a record, like the Orchestrator
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
   compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5`** ·
   Haiku **`claude-haiku-4-5-20251001`**.
+- **Last verified 2026-09-25:** a `backend-infrastructure` spawn (alias `opus`) ran on `claude-opus-5-5`,
+  confirmed both by self-report and by the subagent transcript's `"model"` field — the lag seen on
+  2026-09-24 had cleared, so no pin was needed. The same day a full id pinned in a definition file
+  (`trace.md`, `model: claude-sonnet-5`) spawned cleanly and self-reported that id. That proves a full id is
+  *accepted*, but not that it *overrides* the alias, because the alias resolves to the same model today. The
+  first real pin should be confirmed from the agent's self-report against the id it pinned.
 - **At the sprint's first spawn of each tier**, confirm the model the agent actually ran on. For the reviewer
   this is free: its first line is `reviewed-by-model: <id>`. For every other role, read the id from the
   subagent transcript (`"model":"claude-…"` in the session's `tasks\` folder — the command is in
@@ -378,6 +384,15 @@ outside the project. So this is a checklist with a record, like the Orchestrator
 | Dispatch, monitoring, acceptance bookkeeping, CI watch (Steps 2–4, 6) | Opus | coordination; agents do the work |
 | Step 5a / 7a absorption, every ruling on an agent's declared deviation | Fable | judgment over someone else's output |
 | Close bookkeeping and CI backfill | Opus | mechanical |
+
+**The switch points are honoured, not logged around (owner ruling 2026-09-25).** S141–S143 ran every phase on
+Opus and each log recorded a "disclosed deviation" instead; S141 found ten of its thirty wrong planning claims
+in the Orchestrator's own drafts. Offered three options — follow the rule, change it so Opus drafts and Fable
+reviews, or split by stakes — the owner chose **follow the rule**, i.e. prevention at the source over catching
+the error in review, at the Fable-token cost. So at each switch point the Orchestrator **stops and asks the
+owner to run `/model`** before starting the phase. It does not begin refinement, plan approval, review
+absorption or a ruling on Opus and record the gap afterwards. A phase the owner explicitly tells it to run on
+the other model is recorded as the owner's call, with their words.
 
 The sprint log header gains an `**Orchestrator model**` row listing the model per phase, so the retrospective
 can see whether the switch points were honoured. Direct Orchestrator edits under `src/**` or `tests/**` beyond
