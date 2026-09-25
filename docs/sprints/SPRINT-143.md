@@ -578,7 +578,7 @@ of being copied across.
 | `Config/AdminEndpointsAgreementCodeTests.cs:300-339` (census UNRESOLVED-1) | Traced NON-GATING at S142 Step 0b (`SPRINT-142.md:318-320`) — the OQ-6 comparison uses the truncating row's boundary, never the client date |
 | `ReportingLine/ReportingLineWriteLifecycleTests.cs:1499` + `Security/S98OrgStructureTests.cs:560` (census UNRESOLVED-2) | Traced NON-GATING **and misassigned** at S142 Step 0b (`SPRINT-142.md:321-323`) — the org-transfer fan-out only stamps, never compares |
 
-**14306a — C# tier (30 sites across 11 files).** Every row: replace the real-clock read with a fixed
+**14306a — C# tier (the census said 30 sites across 11 files; the ledger row's recount is 29 across 13, and the table below follows the recount — heading corrected 2026-09-25).** Every row: replace the real-clock read with a fixed
 anchor or a literal; none is wrong today, all are undisciplined.
 
 | File:line | Shape | Sites |
@@ -649,7 +649,7 @@ a design question, not a guard improvement.
 | Five OQ-12 catches are now untested dead code carrying a message that is no longer true, and turn a designed *loud* failure into a silent one | ADR-042 § Consequences |
 | `copenhagenDate.ts` has no production caller — move it to `e2e/helpers/` and the clock guard's only exemption disappears with it | the file's own header |
 | e2e window disjointness: offsets 19 and 18 can collide across a month rollover | external Step 7a |
-| `ProfileCategoryDatingTests.cs:91-93, 185-186` — the comments misstate where the date comes from (the 2026-09-24 floor review of `5e78941`: false comment, no live failure); correct the comments. The Step-7a N1 reading that first put this row here — that the UTC reads sit one Copenhagen day from the routing they drive — was not confirmed by that review and is re-checked at S144 Step 7a (item 7 in the post-close section) | internal Step 7a N1; floor review of `5e78941` W3 |
+| `ProfileCategoryDatingTests.cs:91-93, 185-186` — the comments claim the date is "never compared against an independently-computed server clock", which is false: the comparison exists (the 2026-09-24 floor review of `5e78941`: false comment, no live failure); correct the comments. The Step-7a N1 reading that first put this row here — that the UTC reads sit one Copenhagen day from the routing they drive — was not confirmed by that review and is re-checked at S144 Step 7a (item 7 in the post-close section) | internal Step 7a N1; floor review of `5e78941` W3 |
 | `local_agreement_profiles.created_at` written from two sources depending on the writer | internal Step 7a N2 |
 | **QUAL-165's build → S144, named and committed** — its third deferral; naming the sprint is what stops a fourth | owner ruling OQ-3 |
 
@@ -685,9 +685,10 @@ is worse than no record. Corrected here on the cycle-2 reviewer's finding.
 comparison's outcome was written down only in the session (12:32Z, transcript line 10923), never in a
 governance document. Recorded here now, from that line: both arms `APPROVED-WITH-WARNINGS`; Fable 49 tool
 calls, 9.5 min, ~261k tokens; Opus 73 tool calls, 14.8 min, ~218k tokens; each arm found things the other did
-not (the Fable arm the counterfactual comment and the false log row; the Opus arm a five-site census of the
-same false comment across two files and a claimed backwards interval at `TxContractTests.cs:766`, neither
-floor-verified). (2) The device that made the
+not (the Fable arm alone the `SoftDeleteAsync` counterfactual; **both** the false log row; the Opus arm
+alone a census of the "never compared against an independently-computed server clock" comment — nine
+sites in five files, four of them false — and a claimed backwards interval at `TxContractTests.cs:766`,
+neither floor-verified). (2) The device that made the
 Opus arm run — a brief that grants itself an "authorised review floor" — is exactly the shape the reviewer
 self-check cannot resist and the spawn guard did not see. The guard now detects that signature on any
 non-reviewer spawn, and the sanctioned way to run a future Fable-vs-Opus comparison is written beside it
@@ -711,8 +712,16 @@ the "the one instant" comment is corrected. From the internal (Fable) floor revi
 (5) `TemporalWriteZeroWidthReopenTests.cs:144-150` justifies the agreement-code fact by a counterfactual
 about `SoftDeleteAsync` on the agreement-code repository, which has no such method — rewrite the comment;
 (6) this log's row at `:596` classified the same test as "no oracle" — corrected in this commit (see the
-appendix row); (7) `ProfileCategoryDatingTests.cs:91-93, 185-186` carry a false comment about the date's
-origin, with no live failure — correct the comment. From the Opus comparison arm, **not floor-verified**:
-(8) the same false comment at five sites across two files — census, then fix or refute; (9)
-`TxContractTests.cs:766` passes `today = 2025-03-12` as the close date of an interval that opens the same
-day — verify whether that is the zero-width case by design or a backwards interval.
+appendix row); (7) `ProfileCategoryDatingTests.cs:91-93, 185-186` claim the date is "never compared against an
+independently-computed server clock"; the claim is false — the comparison exists — with no live failure;
+correct the comment (the false clause is about *comparison*, not where the date comes from). From the Opus comparison arm, **not floor-verified**:
+(8) the same "never compared against an independently-computed server clock" comment stands at nine sites
+in five files (re-counted 2026-09-25: `ProfileUniquenessTests.cs:93`, `WageTypeMappingIdempotencyTests.cs:105`,
+`WageTypeMappingRaceTests.cs:103,221,306`, `ProfileCategoryDatingTests.cs:93,186`,
+`UserAgreementCodeRepositoryTests.cs:131,206`); the arm's census — not floor-verified — calls four of them
+false: the two in item 7 and `UserAgreementCodeRepositoryTests.cs:131,206`, which is the only new file name
+here; verify the four, fix or refute; (9)
+`TxContractTests.cs:766` passes `today = 2025-03-12` as the close date; the Opus arm read the resulting
+interval as backwards. Verify the interval the soft-delete actually produces — the mapping comes from
+`NewWageTypeMapping`, which never sets `EffectiveFrom`, so the cycle-4 reviewer expects
+`[0001-01-01, 2025-03-12)`, forward, and the item is likely closable as "no defect".

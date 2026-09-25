@@ -376,7 +376,7 @@ remains the real control; and a legitimate brief that must quote the placeholder
 (rare — hook maintenance, or a brief that cites this very paragraph) is a false positive that costs one
 re-issue with the brief rephrased. The guard has no harness of its own; its seam cases (`general-purpose`, `trace`
 and `backend-infrastructure` with the signature → BLOCK; a literal `reviewed-by-model: claude-fable-5-1`
-fixture edit → ALLOW; bare `reviewer` → ALLOW; bare generic → BLOCK) were exercised by hand on 2026-09-25.
+fixture edit → ALLOW; bare `reviewer` → ALLOW; bare generic → BLOCK) were exercised by hand on 2026-09-25 — from the repo cwd, which was a mistake: the guard writes telemetry to `<cwd>/.claude/telemetry`, so those runs sit in the live log as fake BLOCKs (excluded by line range in the register's method note). Run seam cases from a scratch cwd.
 
 *The sanctioned way to run a Fable-vs-Opus comparison, when the owner asks for one.* Spawn `reviewer` for
 the floor review as usual. For the comparison arm spawn `general-purpose` with an explicit `model`, and give

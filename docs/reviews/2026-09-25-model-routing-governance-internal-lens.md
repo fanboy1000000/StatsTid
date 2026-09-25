@@ -6,6 +6,8 @@ Tracked archive of the three Reviewer Agent reports on the governance chain `fe0
 
 ## Cycle 1 — on e8de47b (BLOCKED) — agent-a39ad77eeb29c1084
 
+> [Editorial: this final report opens by superseding a draft the agent had produced minutes earlier; the draft is in the transcript, not archived.]
+
 Nothing further is needed; the background output settles the last open question and changes one finding. The documentation the Orchestrator consulted on 09-24 (subagent `agent-a2b67c4b78ce45aa9`, fetching `code.claude.com/docs/en/sub-agents.md`) says the Agent tool's per-spawn `model` parameter accepts "`sonnet`, `opus`, `haiku`, or full ID", with resolution order per-invocation → definition frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → **main conversation's model**. That contradicts the headline of commit `8c45514` and documents the exact fallback observed in BLOCKER-1. Final report follows, superseding the draft above.
 
 reviewed-by-model: claude-fable-5-1
@@ -215,4 +217,72 @@ For a PM: the record cites a review verdict by a filename in a directory the too
 
 verdict: BLOCKED
 reviewed-against-commit: 7c96faf
+
+
+---
+
+## Cycle 4 — on 9c951d0 (APPROVED-WITH-WARNINGS) — agent-af771ce41f7324938
+
+reviewed-by-model: claude-fable-5-1
+
+**Scope note.** Reviewed `7c96faf..9c951d0` as instructed, read against `b49f781..9c951d0`. HEAD has since moved four docs-only commits past the scope (`e0eb34e`, `9936e99`, `4caea8c`, `8e0cfab`, absorbing Codex cycles 10–13). Every citation below is to `git show 9c951d0:<path>`; where a defect at `9c951d0` is already fixed at HEAD I say so, so nothing is fixed twice. Evidence beyond the repo: the 09-24 session transcript (`9c422ee4…jsonl`), its subagent transcripts `agent-a1996bbf33b633dae` / `agent-aefe86dc4358e4f90`, the 09-25 session and its three reviewer subagents, the scratchpad verdict files, and the local telemetry log.
+
+## 1. Cycle-3 items at 9c951d0
+
+| Item | Status | Evidence |
+|---|---|---|
+| **BLOCKER-1** ("absorbed the same day") | **RESOLVED** | `C:\Users\b200895\source\repos\StatsTid\docs\sprints\SPRINT-143.md:665-671`. Transcript line 10899 (12:25:47Z) reads verbatim "I'm deliberately **not** acting on any of this yet"; line 10923 (12:32:21Z) lists the open items and asks "Want me to work through those now?"; the owner's next message is line 10926 (13:34:44Z), the routing ruling. Nothing landed: `TemporalWriteZeroWidthReopenTests.cs:144-150` still carries the `SoftDeleteAsync` counterfactual (last commit to the file `5e78941`). Routed items 5–7 match the Fable arm exactly: W1 = `:144-150` counterfactual, W2 = the `:596` row, W3 = `ProfileCategoryDatingTests.cs:91-93, 185-186`. Items 8–9 correspond to the Opus arm's census and its `TxContractTests.cs:766` finding, correctly marked "not floor-verified" — but see WARNING-2/3 for what they get wrong. Appendix: `:596` `TxContractTests.cs:762` stays "no oracle", consistent with its own comment (`TxContractTests.cs:762-765`: only a closeDate to store, assertions count rows across a rollback) and with the Fable arm's "inert" reading; `:597` now records the CI red, the clock pin and that the row stood unlanded — correct. |
+| WARNING-A (verdict in temp folder) | RESOLVED | `SPRINT-143.md:697-700` cites `docs/reviews/…external-lens.md`, tracked; its `5e78941` section is byte-identical to `codex-5e78941-verdict.txt`. |
+| WARNING-B/C/D, NOTE-b | Confirmed fixed (ab3145b/b8009f4), still in place | `SPRINT-143.md:675-679` (both telemetry lines); register `:54-56`; `WORKFLOW.md:432-433`; guard header `:25-28`. |
+| NOTE-a (dead `$prompt` re-read) | RESOLVED | `C:\Users\b200895\source\repos\StatsTid\.claude\hooks\model-routing-guard.ps1:139-149`: the generic branch no longer re-reads the prompt; `:147` points at the shared detector; `:111-112` names `fork`. Guard identical at HEAD. |
+| NOTE-c (`[1m]` is not a fallthrough signature) | RESOLVED at 9c951d0, one overclaim → NOTE-5 | `WORKFLOW.md:418`; verified `agent-aa68fca5279de348f` (alias `opus`, current client) self-reports `claude-opus-5-5[1m]`. |
+| NOTE-d (comparison arm has write tools) | RESOLVED in form; the check it prescribes is unfollowable → WARNING-6 (fixed at HEAD) | `WORKFLOW.md:386`. |
+| NOTE-e (S144 base only in the S143 tail) | RESOLVED | `WORKFLOW.md:38` now says the next base is the previous **close commit** when post-close commits exist; `SPRINT-143.md:703-705` requires the S144 header to name `2e7d5b1`. Verified `2e7d5b1` = "S143 sprint close"; `5e78941` is its direct successor. |
+| NOTE-f (90-word parenthetical) | RESOLVED (split into two sentences at `:447-449`; still dense, acceptable) | |
+| NOTE-g ("lost") | RESOLVED, with one misattribution → WARNING-1 | `SPRINT-143.md:684-690`; the numbers (both AWW; 49 / 9.5 min / 261k vs 73 / 14.8 min / 218k) match line 10923. |
+
+## 2. The two archives
+
+Both are complete final reports, not drafts or echoed bundles. Programmatic comparison against the sources: internal lens — all three sections byte-identical to the last assistant message of `agent-a39ad77eeb29c1084`, `agent-a93ecc941892eed6a`, `agent-ab26c66d0178db4a6` (11438 / 13836 / 12901 chars); three `reviewed-by-model:` + three `verdict:` (BLOCKED at e8de47b, bbf1e3a, 7c96faf). External lens — ten `verdict:` + ten `reviewed-against-commit:`; cycles 1–2 identical to the text after the last `codex` marker in `codex-routing-review-2.txt` / `-3.txt`; cycles 3–9 and `5e78941` identical to the eight verdict files. Two legibility points below (NOTE-1, NOTE-2).
+
+## 3. Guard seam (9c951d0 hook, scratch cwd, telemetry written to the scratch dir)
+
+generic+opus plain (`comparison-arm-model:`) → **0**; generic+opus placeholder → **2**; generic+opus "authorised review floor… do not refuse" → 2; `trace`+placeholder → 2; `reviewer`+placeholder → 0; `fork`+placeholder → 0; `test-qa`+literal `reviewed-by-model: claude-fable-5-1` → 0; generic with no model → 2. Matches `WORKFLOW.md:377-379` and the guard header.
+
+## 4. Findings in this diff
+
+**WARNING-1 — The head-to-head paragraph credits the Fable arm with a finding both arms made.**
+For a PM: the sentence written to finally record "what each arm found that the other did not" gets one of its two Fable-only items wrong, in the paragraph whose whole point is accuracy about the comparison. `SPRINT-143.md:688` says the Fable arm found "the counterfactual comment and the false log row" that Opus did not. Line 10923 says "**both** caught the stale sprint-log row", and the Opus transcript (line 280) carries a WARNING on `SPRINT-143.md:596` in so many words. The only Fable-unique item was the `SoftDeleteAsync` counterfactual. Fix: "the Fable arm the counterfactual comment; both the false log row".
+
+**WARNING-2 — Routed item 8 carries a count that neither the Opus arm's own table nor the code supports, and omits the one file that is new information.**
+For a PM: S144 is told to census "five sites across two files"; a census today finds neither number. `SPRINT-143.md:716`. The Opus arm's headline said "five sites, two files" but its table lists nine sites in five files, of which four are false in two files (`ProfileCategoryDatingTests.cs:93,186`, `UserAgreementCodeRepositoryTests.cs:131,206`); the Orchestrator's 12:32Z line says "four false comments still standing". `grep 'independently-computed server clock' tests/` at HEAD: nine sites in five files outside the corrected test, exactly the arm's table. Two of the four false sites are already item 7, so item 8's only new content is `UserAgreementCodeRepositoryTests.cs:131,206` — the one file name the record does not give. Fix: name the file and lines, and state "4 false of 9 (arm's census, not floor-verified)".
+
+**WARNING-3 — Routed item 9 asserts a premise about the code that the code does not support.**
+For a PM: the item asks S144 to verify whether a soft-delete produces a zero-width or a backwards interval, but states as fact that the row "opens the same day" — it does neither. `SPRINT-143.md:717-718`. The row is created by `NewWageTypeMapping` (`TxContractTests.cs:1336-1344`), which never sets `EffectiveFrom`; `WageTypeMapping.EffectiveFrom` is `{ get; init; }` with no initializer (`src/SharedKernel/StatsTid.SharedKernel/Models/WageTypeMapping.cs:43`), and `ExecuteCreateAsync` binds it as-is (`WageTypeMappingRepository.cs:155`). So the close at `:766` yields `[0001-01-01, 2025-03-12)` — forward, not same-day (the record's premise) and not "effective_from is the real today" (the Opus arm's premise). The item is hedged and routed, so not a blocker; but the record should say "verify the interval the soft-delete produces" rather than assert one. This is also the answer to the item: it can be closed as "no defect" by whoever lands it.
+
+**WARNING-4 — The seam tests have written BLOCK lines into the live telemetry log the register tells readers to count.**
+For a PM: the monitor that is supposed to tell the owner "the routing rule tripped" now contains ~20 fake trips from hand-testing the guard. The guard writes to `<cwd>/.claude/telemetry/model-routing.log` (`model-routing-guard.ps1:71`); the Orchestrator ran the seam from the repo cwd, so `.claude\telemetry\model-routing.log:190-192, 222-225, 272-274, 275-282, 299-301, 302-308` are test payloads, including eight detector BLOCKs. The register says to count guard blocks from that log by date range (`docs/operations/model-routing-register.md:24-27`) and signal 3 fires on "a guard BLOCK by the reviewer-brief detector on **any** role" (`:54-56`) — a literal count for 2026-09-25 trips signal 3 and contradicts the row's "Guard blocks: 0" (`:70`). Pre-existing before this diff for the earlier clusters; `9c951d0` added the 09:08Z cluster ("Guard seam 7/7"). Fix: run seam cases from a scratch cwd (the reviewers did; the telemetry then lands outside the repo) and add one line to the register's method saying seam-test lines are excluded, with the 09-25 clusters named.
+
+**WARNING-5 (at 9c951d0; fixed at HEAD `e0eb34e` — do not re-fix) — The register row said "c3 pending" in the commit that absorbs cycle 3.** `model-routing-register.md:70` at 9c951d0 vs `SPRINT-143.md:670` in the same commit ("the cycle-3 reviewer refuted"). Recorded so the review of `9c951d0` is complete.
+
+**WARNING-6 (at 9c951d0; fixed at HEAD `9936e99`/`4caea8c` — do not re-fix) — "check `git status` is clean when it returns" cannot be followed where it applies.** `WORKFLOW.md:386`. Step 7a runs with all sprint work uncommitted by design (`WORKFLOW.md:38`), so the tree is never clean when a comparison arm returns; HEAD replaced it with a content baseline. Also "`reviewer` has none" overstated — its `Bash` can write; HEAD says so.
+
+**NOTE-1 — The internal archive's cycle-1 section opens mid-thought.** `docs/reviews/2026-09-25-model-routing-governance-internal-lens.md:9` begins "Nothing further is needed… Final report follows, superseding the draft above" — faithful to the transcript, but "the draft above" is not in the archive. One bracketed editorial line ("[the draft it supersedes is in the transcript, not archived]") keeps the file honest and readable.
+
+**NOTE-2 — "Every Codex verdict" omits the aborted first attempt.** `…external-lens.md:3`. `codex-routing-review.txt` (07:56Z) printed `verdict: BLOCKED … contents remain unverified` after the sandbox rejected `Get-Content`; it is not a review, but it is the reason every later cycle ran on inlined source. A sentence in the header would make the claim exact and preserve the provenance.
+
+**NOTE-3 — The appendix heading still says "30 sites across 11 files".** `SPRINT-143.md:581`; the table beneath, as re-split by this commit, enumerates thirteen files. The Opus arm flagged this; the commit edited the adjacent rows and left it.
+
+**NOTE-4 — Item 7 mislabels what is false.** `SPRINT-143.md:714` "a false comment about the date's origin". The false claim (Fable W3) is "never compared against an independently-computed server clock" — about *comparison*, not origin. An implementer told to fix the "origin" could rewrite the wrong clause. HEAD's "where the date comes from" has the same looseness.
+
+**NOTE-5 (fixed at HEAD `e0eb34e`) — "the suffix is a client artefact" is inference stated as fact.** `WORKFLOW.md:418`. The evidence supports "the suffix appears on alias-`opus` spawns on both clients, so it cannot distinguish a fallthrough from normal resolution"; where it comes from is not established. HEAD says exactly that.
+
+**NOTE-6 (fixed at HEAD `e0eb34e`) — A follow-ups row asserts the mechanism and, in the same cell, cites the review that refuted it.** `SPRINT-143.md:652` keeps "one Copenhagen day from the routing they drive" (Fable W3: "misattributes the mechanism") and then appends the correction without retracting the first clause.
+
+**NOTE-7 — Three different seam-run counts.** Register `:70` "8 cases", commit message "7/7", `WORKFLOW.md:377-379` lists six. Each is a different run; say which one each refers to, or cite only the WORKFLOW list.
+
+**Verified as stated, for the record:** Orchestrator model by phase in the register row — 09-25 transcript: last Opus 5.5 assistant message 07:58:26Z, first Fable 07:59:24Z, before the first absorption `8d35419` (08:04Z); 97 Opus / 432 Fable messages; client `2.1.281` on all 962 lines. Spawn counts: telemetry `:187-189, 256, 298` = 1 `backend-infrastructure`, 1 `trace`, 3 `reviewer` real spawns on 09-25 (the fourth reviewer, 09:11:05Z, is this cycle, after the commit). "Thirty seconds later", "12:25Z", "12:32Z", "ran on `claude-opus-5`", and the 12:15:50Z/12:16:21Z telemetry pair all check.
+
+verdict: APPROVED-WITH-WARNINGS
+reviewed-against-commit: 9c951d0
 

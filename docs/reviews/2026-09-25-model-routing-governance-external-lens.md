@@ -1,6 +1,6 @@
 ﻿# Model-routing governance interlude, 2026-09-24/25 — external lens (Codex) verdicts
 
-Tracked archive of every Codex verdict on the governance chain `fe0bdb1..bf98e30` and on the post-close commit `5e78941`. All were performed on INLINED SOURCE (the Codex sandbox rejected even `Get-Content`); each verdict says so. Log files with the echoed bundles stay in the session scratchpad; the verdicts are the evidence.
+Tracked archive of every Codex verdict on the governance chain `fe0bdb1..bf98e30` and on the post-close commit `5e78941`. All were performed on INLINED SOURCE (the Codex sandbox rejected even `Get-Content`); each verdict says so. An earlier attempt at 07:56Z (`codex-routing-review.txt`) returned `verdict: BLOCKED … contents remain unverified` after the sandbox rejected `Get-Content`; it is not a review and is not archived, but it is why every cycle below ran on inlined source. Log files with the echoed bundles stay in the session scratchpad; the verdicts are the evidence.
 
 ---
 
