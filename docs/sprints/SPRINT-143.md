@@ -669,6 +669,20 @@ invisible. The review's findings stand (they were absorbed at the time), but it 
 floor review of `5e78941`.
 
 **What changed.** `model-routing-guard.ps1` now blocks a generic spawn whose prompt contains
-`reviewed-by-model`; the hole is documented beside the four layers in `docs/WORKFLOW.md`; and the
-register's S143 row carries the deviation. Disposition: recorded, not re-reviewed — the code has since
-passed the S143 CI-green backfill, and the next Step 7a covers it.
+`reviewed-by-model` (signature detection, not a closed door — `docs/WORKFLOW.md` states the trade-off); the
+hole is documented beside the four layers there; and the register's S143 row carries the deviation.
+
+**Disposition (revised the same day, on the external lens's objection that recording is not reviewing).**
+The external lens reviewed `5e78941` on 2026-09-25 (inlined source; verdict file
+`codex-5e78941-verdict.txt` in the session scratchpad): **APPROVED-WITH-WARNINGS**. It confirms the commit
+changes **only `tests/**`** — no `src/**`, no audit, delivery, architecture or access-control code — so the
+WORKFLOW rule "post-close `src/**` commits get the external lens before the next close" did not strictly
+apply; the compliant review was owed only because the 2026-09-24 one ran below the floor. Findings: NOTE, the
+fixed clock restores the intended zero-width interval `[2025-03-12, 2025-03-12)` rather than weakening the
+assertion; WARNING, the diff alone cannot show the *recreation* assertions are non-vacuous (the bundle
+omitted them and the `FixedTimeProvider` implementation) — a limit of inlined-source review, not a defect
+found; NOTE, the fixture's UTC midnight and Copenhagen date coincide, so these tests do not exercise the S142
+Danish-calendar boundary, and the test comment "the one instant" is inaccurate (many instants share the
+date). Routed: the non-vacuity check and the comment fix go to the S144 Step 7a scope, named here so they
+are not lost. No internal floor review is owed for a tests-only post-close commit; the S144 Step 7a sweeps
+the sprint tail regardless.

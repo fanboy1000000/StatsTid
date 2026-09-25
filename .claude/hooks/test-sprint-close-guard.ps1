@@ -305,6 +305,13 @@ $r = Invoke-Hook $mock
 $ok = ($r.Exit -eq 2 -and $r.Stderr -match 'claude-opus-5-5')
 $results += "T21 (wrong model + suffix blocks): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
 if (-not $ok) { $results += $r.Stderr }
+
+# T22: only the context-window shape is stripped; an arbitrary bracket suffix on the floor id still blocks
+Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-1[garbage]`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+$r = Invoke-Hook $mock
+$ok = ($r.Exit -eq 2 -and $r.Stderr -match '\[garbage\]')
+$results += "T22 (floor + invalid suffix blocks): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
+if (-not $ok) { $results += $r.Stderr }
 Remove-Item $mockLog -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 
@@ -319,4 +326,4 @@ Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 Write-Output ""
-Write-Output "ALL 21 TESTS PASSED"
+Write-Output "ALL 22 TESTS PASSED"

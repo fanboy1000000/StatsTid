@@ -222,7 +222,8 @@ foreach ($artifact in @($codex, $reviewer)) {
             exit 2
         }
         # A self-report may carry a context-window suffix (`claude-fable-5-1[1m]`); it is not part of the id.
-        $reviewedBy = $matches[1] -replace '\[[^\]]*\]$', ''
+        # Only that shape (digits + m) is stripped; `[]`, `[garbage]` or anything else still fails the compare.
+        $reviewedBy = $matches[1] -replace '\[[0-9]+m\]$', ''
         if ($reviewedBy -ne $reviewFloor) {
             [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
             [Console]::Error.WriteLine('')

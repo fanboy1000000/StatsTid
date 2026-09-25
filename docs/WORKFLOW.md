@@ -353,15 +353,21 @@ one of its 19 agents inherited that model because no routing existed.
    reviewer artifact (a trailing context-window suffix such as `[1m]` is ignored in the comparison). A sprint
    cannot close on a review that ran cheap, whatever happened upstream.
 
-**A route the four layers did not cover (found by the Fable reviewer 2026-09-25, now closed).** On 2026-09-24
+**A route the four layers did not cover (found by the Fable reviewer 2026-09-25; its signature is now detected).** On 2026-09-24
 the Orchestrator reviewed the post-close fix `5e78941` by spawning `general-purpose` with `model: opus` and a
 reviewer-shaped brief that told the agent the Opus tier was "an authorised review floor for this review". The
 spawn guard allowed it ("generic agent with an explicit model"), the agent's self-check was satisfied by the
 brief, and the close gate never saw it because it gates only the close commit. That review ran on
 `claude-opus-5` and was recorded nowhere until the reviewer found it in the transcript. It is now recorded as
 a routing deviation in `docs/sprints/SPRINT-143.md` (post-close section), and the guard blocks a generic spawn
-whose prompt contains `reviewed-by-model` — review work spawns `reviewer`, which has no cheaper mode. The
-register's signal 3 watches `reviewer` spawns only; a guard BLOCK on this new rule counts under it too.
+whose prompt contains `reviewed-by-model`. That is **detection of the observed signature, not a closed
+door**: a generic review brief that omits the phrase still passes, so routing discipline — review work spawns
+`reviewer`, which has no cheaper mode — remains the real control. The detector can misfire on a generic
+spawn asked to document or test the field; the remedy is a named implementation role, which is the rule for
+generic spawns anyway, so a false positive costs one re-issue. The register's signal 3 counts a BLOCK on this
+rule alongside blocks on `reviewer` spawns. The guard has no test harness of its own; its four seam cases
+(reviewer-shaped generic brief → BLOCK, plain generic brief → ALLOW, bare `reviewer` → ALLOW, bare generic →
+BLOCK) were exercised by hand on 2026-09-25.
 
 **Version check — the newest model in each tier (owner ruling 2026-09-24).** Layers 3 and 4 pin the
 *reviewer* to an exact Fable id, so the review tier IS version-checked — exactly as well as that pin is
@@ -369,21 +375,23 @@ maintained, and no better. Layers 1 and 2 check the *family* only, through an al
 the alias resolves outside the project. So for the implementation tiers no layer checks the version, and
 this is a checklist with a record, like the Orchestrator seat:
 
-- **Step zero — the Claude Code client, not the alias, decides which models exist.** What the 2026-09-24
-  "alias lag" really was (established by the Fable reviewer from the session transcripts, 2026-09-25): the
-  session ran on client **2.1.263**, and Opus 5.5 requires **2.1.280 or newer** — the API's own 400 text says
-  so. The alias `opus` resolved to the newest Opus *that client knew*, which was Opus 5. Two full-id pins were
-  tried in `backend-infrastructure.md` that day and **neither produced the pinned model**: `claude-opus-5-5`
-  spawned and ran silently on `claude-opus-5` (self-report `claude-opus-5[1m]`), and a second attempt returned
-  `HTTP 400 … version 2.1.280 or newer is required`. The silent case is the documented behaviour, not a
-  fluke: the sub-agents documentation the 2026-09-24 session fetched gives the resolution order as
-  per-spawn `model` → definition frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → **the main conversation's
-  model**. An unknown pinned id falls through to the session model with no error. Under the switch-point
-  rule the session model is Fable during planning, so on a stale client a pinned implementer would run on
-  Fable, invisible to the guard — exactly the routing the guard exists to prevent. The next day, on client 2.1.281, the alias resolved to
-  `claude-opus-5-5` with no pin at all. So: at session start run `claude --version` (the transcript's
-  `"version"` field records it; `grep -o '"version":"2\.[0-9.]*"' <session>.jsonl | sort -u`), and run
-  `claude update` before blaming an alias. A stale client is the one cause a pin cannot fix.
+- **Step zero — update the client first.** On 2026-09-24 the older Claude Code could not use the requested
+  model, and pinning did not fix it. *What was observed* (established by the Fable reviewer from the session
+  transcripts, 2026-09-25): the session ran on client **2.1.263**, and Opus 5.5 requires **2.1.280 or newer**
+  — the API's own 400 text says so. The alias `opus` resolved to the newest Opus *that client knew*, which
+  was Opus 5. Two full-id pins were tried in `backend-infrastructure.md` that day and **neither produced the
+  pinned model**: `claude-opus-5-5` spawned and ran silently on `claude-opus-5` (self-report
+  `claude-opus-5[1m]`), and a second attempt returned `HTTP 400 … version 2.1.280 or newer is required`. The
+  next day, on client 2.1.281, the alias resolved to `claude-opus-5-5` with no pin at all. *Inferred
+  mechanism, not separately tested:* the sub-agents documentation the 2026-09-24 session fetched gives the
+  resolution order as per-spawn `model` → definition frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → the main
+  conversation's model, which would explain the silent case as an unknown id falling through to the session
+  model (unless the environment override is set). If that holds, then on a stale client during a Fable phase
+  a pinned implementer *could* run on Fable unnoticed by the guard — the routing the guard exists to prevent
+  — which is why the self-report comparison after any pin is mandatory rather than optional. So: at session
+  start run `claude --version` (the transcript's `"version"` field records it;
+  `grep -o '"version":"2\.[0-9.]*"' <session>.jsonl | sort -u`), and run `claude update` before blaming an
+  alias. A stale client is a cause a pin does not fix.
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
   compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5`** ·
   Haiku **`claude-haiku-4-5-20251001`**. A self-report may carry a context-window suffix (`claude-opus-5-5[1m]`);

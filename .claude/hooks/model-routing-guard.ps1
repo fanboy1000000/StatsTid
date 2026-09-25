@@ -130,8 +130,12 @@ if ($GenericRoles -contains $type) {
     # post-close fix below the floor, unrecorded. Review work has one role and it has no cheaper mode.
     $prompt = ''
     if ($in.PSObject.Properties['prompt'] -and $in.prompt) { $prompt = [string]$in.prompt }
+    # This is signature detection, not a closed door: a generic review brief that omits the phrase still
+    # passes, and a generic brief that merely documents or tests the field is a false positive. Either way
+    # the remedy is the same - spawn a named role - so the false positive costs one re-issue.
     if ($prompt -match 'reviewed-by-model') {
-        Block 'A reviewer-shaped brief on a generic agent bypasses the review floor.' "use subagent_type 'reviewer' (its definition fixes the floor); a generic agent never reviews."
+        Block 'This brief mentions `reviewed-by-model` - the signature of the 2026-09-24 below-floor review on a generic agent.' `
+              "for review work spawn 'reviewer' (its definition fixes the floor); for implementation, tests or docs that merely touch the field spawn a named implementation role (backend-infrastructure, test-qa, sweep). A generic agent is the right vehicle for neither."
     }
     Allow 'generic agent with an explicit model'
 }
