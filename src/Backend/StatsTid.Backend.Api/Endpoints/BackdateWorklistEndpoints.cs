@@ -39,9 +39,13 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///     <b>POST /api/hr/backdate-worklist/{worklistId}/resolve</b> — body
 ///     <see cref="ResolveBackdateWorklistRequest"/>; admin-strict If-Match (ADR-019 D2: 428 when
 ///     missing / malformed, 412 when stale); 404 unknown id; 403 out of scope; 403 when a
-///     NON-GlobalAdmin resolves an <c>EXPORTED_MONTH</c> row as <c>RECALCULATED</c> (S140 /
-///     TASK-14010, owner ruling OQ-7 (a) — see the in-handler gate); 409 already
-///     resolved; 422 bad verb / blank reason. The resolve writes the row, emits
+///     NON-GlobalAdmin resolves an <c>EXPORTED_MONTH</c> row as <c>RECALCULATED</c> or (S144)
+///     <c>HANDLED_MANUALLY</c> (S140 / TASK-14010, owner ruling OQ-7 (a) — see the in-handler
+///     gate); 409 already resolved; 409 <c>worklist-recalc-blocked</c> (S144) when
+///     <c>RECALCULATED</c> is asked of a row whose re-plan is blocked on the locked snapshot (a
+///     stale If-Match still answers 412 first); 422 bad verb (verbs: <c>RECALCULATED</c>,
+///     <c>DISMISSED</c>, <c>HANDLED_MANUALLY</c>) / blank reason. Every resolution stamps the
+///     block set in force (<c>resolutionBlockedBy</c>). The resolve writes the row, emits
 ///     <c>BackdateWorklistRowResolved</c> + its ADR-026 row in ONE tx (that pair IS the audit record
 ///     — no <c>*_audit</c> table by design) and returns 200 with the new ETag.
 ///   </description></item>
@@ -124,7 +128,8 @@ public static class BackdateWorklistEndpoints
             {
                 return Results.UnprocessableEntity(new
                 {
-                    error = $"resolution must be '{WorklistResolutions.Recalculated}' or '{WorklistResolutions.Dismissed}'.",
+                    error = $"resolution must be '{WorklistResolutions.Recalculated}', '{WorklistResolutions.Dismissed}' "
+                          + $"or '{WorklistResolutions.HandledManually}'.",
                 });
             }
             if (string.IsNullOrWhiteSpace(body.Reason) || body.Reason.Length > MaxReasonLength)
@@ -171,7 +176,15 @@ public static class BackdateWorklistEndpoints
             // Reading Kind from the pre-read row is safe: `kind` is written once at INSERT and
             // never updated, and any concurrent write to the row bumps `version`, which the in-tx
             // If-Match guard then rejects with a 412.
-            if (string.Equals(body.Resolution, WorklistResolutions.Recalculated, StringComparison.Ordinal)
+            //
+            // S144: HANDLED_MANUALLY is gated the SAME way. On an EXPORTED_MONTH row it asserts that
+            // the payroll correction was carried out by hand outside the tool — again an act on the
+            // Global-Admin-only payroll remedy, so an HR user must not be able to close the row by
+            // claiming it either. On a SETTLED_YEAR row it stays HR-open, like RECALCULATED.
+            var assertsPayrollAct =
+                string.Equals(body.Resolution, WorklistResolutions.Recalculated, StringComparison.Ordinal)
+                || string.Equals(body.Resolution, WorklistResolutions.HandledManually, StringComparison.Ordinal);
+            if (assertsPayrollAct
                 && string.Equals(existing.Kind, WorklistKinds.ExportedMonth, StringComparison.Ordinal)
                 && !IsGlobalAdmin(actor))
             {
@@ -179,8 +192,8 @@ public static class BackdateWorklistEndpoints
                 {
                     error = "Access denied",
                     reason = $"Only GlobalAdmin can resolve a {WorklistKinds.ExportedMonth} row as "
-                           + $"{WorklistResolutions.Recalculated} — its remedy is the Global-Admin-only "
-                           + "payroll recalculation. HR may resolve it as "
+                           + $"{WorklistResolutions.Recalculated} or {WorklistResolutions.HandledManually} — "
+                           + "its remedy is the Global-Admin-only payroll recalculation. HR may resolve it as "
                            + $"{WorklistResolutions.Dismissed}.",
                 }, statusCode: 403);
             }
@@ -231,6 +244,22 @@ public static class BackdateWorklistEndpoints
                     await tx.RollbackAsync(ct);
                     return Results.Json(new { error = "Worklist row is already resolved" }, statusCode: 409);
                 }
+                catch (BackdateWorklistRecalcBlockedException ex)
+                {
+                    // S144: the row's month cannot be re-planned today (QUAL-149 / QUAL-150), so
+                    // "recalculated" would record something that could not have happened. The
+                    // repository decided this on the LOCKED row, after the version guard (a stale
+                    // If-Match is still 412 above), and wrote nothing.
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(new
+                    {
+                        error = "This month cannot be recalculated in the system today because of a known "
+                              + "limitation (see blockedBy). If the correction was made by hand, resolve the "
+                              + $"row as {WorklistResolutions.HandledManually} instead.",
+                        kind = "worklist-recalc-blocked",
+                        blockedBy = ex.BlockedBy,
+                    }, statusCode: 409);
+                }
 
                 await tx.CommitAsync(ct);
 
@@ -240,6 +269,7 @@ public static class BackdateWorklistEndpoints
                     EmployeeId: result.EmployeeId,
                     Resolution: result.Resolution,
                     ResolvedAt: result.ResolvedAt,
+                    ResolutionBlockedBy: result.BlockedBy,
                     Version: result.NewVersion));
             }
             catch
@@ -334,6 +364,7 @@ public static class BackdateWorklistEndpoints
             ResolvedBy: row.ResolvedBy,
             Resolution: row.Resolution,
             ResolutionReason: row.ResolutionReason,
+            ResolutionBlockedBy: row.ResolutionBlockedBy,
             Version: row.Version);
     }
 }
