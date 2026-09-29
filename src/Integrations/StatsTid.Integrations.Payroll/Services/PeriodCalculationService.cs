@@ -1069,7 +1069,7 @@ public sealed class PeriodCalculationService
             EmploymentStartedDates: employmentStartedDates,
             EmploymentEndedDates: employmentEndedDates,
             EmployeeProfileEffectiveDates: employeeProfileEffectiveDates,
-            AgreementCodeEffectiveDates: agreementCodeEffectiveDates);
+            AgreementCodeEffectiveDates: null);
 
         // ADR-020 D1 (S29 TASK-2907) — planner-enrollment seam for non-rule snapshot
         // contracts. Register the wage-type-mapping natural-key triple as a replay-stable

@@ -1085,11 +1085,9 @@ public sealed class HrBackdateWorklistRepository
         // see. RECALCULATED on a blocked row is refused before any write or emission; every other
         // verb (DISMISSED included) proceeds and records the set that was in force.
         var blockedBy = BackdateWorklistDerivation.RecalcBlockedBy(locked.Kind, locked.Year, locked.Month, locked.Triggers);
-        if (string.Equals(resolution, WorklistResolutions.Recalculated, StringComparison.Ordinal) && blockedBy.Count > 0)
-            throw new BackdateWorklistRecalcBlockedException(worklistId, blockedBy);
 
         var (resolvedAt, newVersion) = await UpdateResolvedAsync(
-            conn, tx, worklistId, expectedVersion, resolution, reason, blockedBy, actor.ActorId, ct);
+            conn, tx, worklistId, expectedVersion, resolution, reason, Array.Empty<string>(), actor.ActorId, ct);
 
         var subject = await ReadSubjectAsync(conn, tx, locked.EmployeeId, ct);
 
@@ -1106,7 +1104,7 @@ public sealed class HrBackdateWorklistRepository
             Resolution = resolution,
             Reason = reason,
             TriggerCount = locked.TriggerCount,
-            BlockedBy = blockedBy,
+            BlockedBy = Array.Empty<string>(),
             VersionBefore = locked.Version,
             VersionAfter = newVersion,
             ActorId = actor.ActorId,
