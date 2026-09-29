@@ -36,9 +36,16 @@ public sealed class BackdateWorklistRowResolved : DomainEventBase
     public string? EntitlementType { get; init; }
     public int? EntitlementYear { get; init; }
 
-    /// <summary><c>RECALCULATED</c> | <c>DISMISSED</c> — the operator's assertion.</summary>
+    /// <summary><c>RECALCULATED</c> | <c>DISMISSED</c> | <c>HANDLED_MANUALLY</c> — the operator's assertion.</summary>
     public required string Resolution { get; init; }
     public string? Reason { get; init; }
+
+    /// <summary>
+    /// S144: the lock-time derived block set — the register ids (e.g. <c>QUAL-149</c>) that blocked the
+    /// month at the moment the row was claimed. <c>[]</c> when nothing blocked; <c>null</c> ONLY on
+    /// events emitted before S144 (deliberately not <c>required</c>, so old events still deserialize).
+    /// </summary>
+    public IReadOnlyList<string>? BlockedBy { get; init; }
 
     /// <summary>How many correction triggers the row had accumulated when it was resolved.</summary>
     public required int TriggerCount { get; init; }
