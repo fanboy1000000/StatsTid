@@ -215,7 +215,12 @@ latent 500 path the moment real windows exist, without touching the profile reso
   period, the EMPLOYED-segment count and the interior boundary CAUSE names (e.g. `EmploymentStarted`) — never
   a segment date. On a ≥ 2-EMPLOYED refusal that message can reveal that an employment edge EXISTS inside the
   period, via the Payroll host's unhandled-exception path only (audience: payroll operators; no client-facing
-  handler echoes it). Acceptable under D7 as written — recorded so a later sweep does not re-find it. **Two further
+  handler echoes it). Acceptable under D7 as written — recorded so a later sweep does not re-find it. **Superseded in
+  part by S144:** `/api/payroll/recalculate` and `/api/payroll/calculate-and-export` now DO echo the cause names, as the
+  structured `interiorBoundaryCauses` of a redacted 422 (`kind: "payroll-recalc-blocked"`, `PayrollPlanRefusalProblem`).
+  That list can include `EmploymentStarted`/`EmploymentEnded` when an employment edge coincides with a real split. The
+  audience is still Global-Admin-only payroll operators, and the body carries no date and no employee id, so it stays
+  within D7. The message itself is not forwarded. Since S144 its period renders culture-invariant ISO. **Two further
   precisions (S137 Step-7a close):** export-line `PeriodStart/PeriodEnd` stamps that equal a hire or leave date are the
   payroll boundary's LEGITIMATE content — the payroll system must know the paid period; D7's word "export" does not bar
   them. The remaining segment-date-bearing Payroll-host diagnostics (incl. the resolver's own fail-loud throw on a
