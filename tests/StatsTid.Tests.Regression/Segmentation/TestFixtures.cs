@@ -194,6 +194,10 @@ internal static class TestFixtures
         return enrollment;
     }
 
+    // effective_from is passed EXPLICITLY (S144 post-close): the real init.sql column is
+    // NOT NULL with no default. The value equals the DockerHarness DDL default below, so
+    // harness-built databases see exactly the rows they always did; a class that builds its
+    // schema from init.sql alone (PayrollHostRecalcBlockedTests) no longer fails in setup.
     public static async Task SeedWageTypeMappingsAsync(DbConnectionFactory factory)
     {
         var rows = new (string TimeType, string WageType, string Ok)[]
@@ -213,8 +217,8 @@ internal static class TestFixtures
         {
             await using var cmd = new NpgsqlCommand(
                 """
-                INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description)
-                VALUES (@t, @w, @ok, 'HK', '', NULL)
+                INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description, effective_from)
+                VALUES (@t, @w, @ok, 'HK', '', NULL, DATE '2020-01-01')
                 ON CONFLICT (time_type, ok_version, agreement_code, position) WHERE effective_to IS NULL DO NOTHING
                 """, conn);
             cmd.Parameters.AddWithValue("t", r.TimeType);
