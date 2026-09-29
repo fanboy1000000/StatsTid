@@ -1072,6 +1072,15 @@ public sealed class HrBackdateWorklistRepository
         if (locked.ResolvedAt is not null)
             throw new BackdateWorklistAlreadyResolvedException(worklistId);
 
+        // S144 — the block, derived from the LOCKED snapshot by the same function the read path
+        // uses. Deliberately AFTER the version guard: a stale token means the caller holds an
+        // outdated row, so they get 412 (re-read) rather than a verdict about data they no longer
+        // see. RECALCULATED on a blocked row is refused before any write or emission; every other
+        // verb (DISMISSED included) proceeds and records the set that was in force.
+        var blockedBy = BackdateWorklistDerivation.RecalcBlockedBy(locked.Kind, locked.Year, locked.Month, locked.Triggers);
+        if (string.Equals(resolution, WorklistResolutions.Recalculated, StringComparison.Ordinal) && blockedBy.Count > 0)
+            throw new BackdateWorklistRecalcBlockedException(worklistId, blockedBy);
+
         if (locked.Version != expectedVersion)
         {
             throw new OptimisticConcurrencyException(
@@ -1079,15 +1088,8 @@ public sealed class HrBackdateWorklistRepository
                 expectedVersion, locked.Version);
         }
 
-        // S144 — the block, derived from the LOCKED snapshot by the same function the read path
-        // uses. Deliberately AFTER the version guard: a stale token means the caller holds an
-        // outdated row, so they get 412 (re-read) rather than a verdict about data they no longer
-        // see. RECALCULATED on a blocked row is refused before any write or emission; every other
-        // verb (DISMISSED included) proceeds and records the set that was in force.
-        var blockedBy = BackdateWorklistDerivation.RecalcBlockedBy(locked.Kind, locked.Year, locked.Month, locked.Triggers);
-
         var (resolvedAt, newVersion) = await UpdateResolvedAsync(
-            conn, tx, worklistId, expectedVersion, resolution, reason, Array.Empty<string>(), actor.ActorId, ct);
+            conn, tx, worklistId, expectedVersion, resolution, reason, blockedBy, actor.ActorId, ct);
 
         var subject = await ReadSubjectAsync(conn, tx, locked.EmployeeId, ct);
 
@@ -1104,7 +1106,7 @@ public sealed class HrBackdateWorklistRepository
             Resolution = resolution,
             Reason = reason,
             TriggerCount = locked.TriggerCount,
-            BlockedBy = Array.Empty<string>(),
+            BlockedBy = blockedBy,
             VersionBefore = locked.Version,
             VersionAfter = newVersion,
             ActorId = actor.ActorId,
