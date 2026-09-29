@@ -6,7 +6,8 @@ namespace StatsTid.SharedKernel.Segmentation;
 ///
 /// A "boundary" here is the date on which a new segment starts (i.e., the first day
 /// the rules see a new OK version / agreement-config / position-override / EU WTD
-/// ruleset / employment state / employee-profile row — the last two per ADR-040 D5).
+/// ruleset / employment state / employee-profile row — the last two per ADR-040 D5 —
+/// or per-employee agreement-code row, <c>user_agreement_codes.effective_from</c>, S144).
 /// Boundaries are sorted ascending and deduped; if multiple causes coincide
 /// on the same date, the first one encountered (in iteration order over the sources)
 /// wins for that segment's <see cref="BoundaryCause"/>. The deterministic order documented
