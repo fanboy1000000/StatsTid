@@ -44,6 +44,13 @@ internal static class BoundaryDetector
     ///     agreement-level promotions but above per-position overrides.</item>
     ///   <item><see cref="BoundaryCause.PositionOverrideEffective"/> — per-position
     ///     scope; affects fewer rules.</item>
+    ///   <item><see cref="BoundaryCause.AgreementCodeChange"/> — per-employee agreement-code
+    ///     change (<c>user_agreement_codes.effective_from</c>, S144). Ranks immediately
+    ///     BEFORE <see cref="BoundaryCause.EmployeeProfileChange"/> (ruled R1, S144): only
+    ///     one cause survives per date, and the agreement code is the fact that changes the
+    ///     wage-type key (QUAL-150). If the profile-change cause won a shared date, a
+    ///     same-day agreement-code change would be invisible in the segment manifest and in
+    ///     the payroll refusal — the very invisibility QUAL-150 is about.</item>
     ///   <item><see cref="BoundaryCause.EmployeeProfileChange"/> — per-employee scope
     ///     (position / part-time-fraction effective dates, ADR-040 D5 activation of the
     ///     ADR-016 D5b reservation); slots after per-position overrides per the D5
@@ -60,6 +67,7 @@ internal static class BoundaryDetector
         BoundaryCause.AgreementConfigPromotion,
         BoundaryCause.LocalProfileActivation,
         BoundaryCause.PositionOverrideEffective,
+        BoundaryCause.AgreementCodeChange,
         BoundaryCause.EmployeeProfileChange,
         BoundaryCause.EuWtdRulesetVersion,
     };
@@ -143,6 +151,20 @@ internal static class BoundaryDetector
         {
             if (IsInsidePeriod(t.Date, periodStart, periodEnd))
                 AddIfAbsent(byDate, t.Date, BoundaryCause.PositionOverrideEffective);
+        }
+
+        // AgreementCodeEffectiveDates (S144, QUAL-150 groundwork): user_agreement_codes
+        // effective_from dates. Placed IMMEDIATELY BEFORE the EmployeeProfileChange loop
+        // (ruled R1): on a shared date the agreement-code cause must survive, because it is
+        // the one that changes the wage-type key. Nullable for backward compatibility with
+        // pre-S144 callers; null is treated as the empty list.
+        if (sources.AgreementCodeEffectiveDates is { } agreementCodeDates)
+        {
+            foreach (var d in agreementCodeDates)
+            {
+                if (IsInsidePeriod(d, periodStart, periodEnd))
+                    AddIfAbsent(byDate, d, BoundaryCause.AgreementCodeChange);
+            }
         }
 
         // EmployeeProfileEffectiveDates (ADR-040 D5 activation of the ADR-016 D5b-reserved
