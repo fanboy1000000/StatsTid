@@ -248,6 +248,75 @@ public sealed class UserAgreementCodeRepository
     }
 
     /// <summary>
+    /// S144 / TASK-14403 (QUAL-150 groundwork) — every <c>effective_from</c> of
+    /// <paramref name="employeeId"/>'s <c>user_agreement_codes</c> rows strictly after
+    /// <paramref name="afterExclusive"/> and on or before <paramref name="toInclusive"/>, distinct,
+    /// ascending. It is the payroll planner's <c>AgreementCodeChange</c> segment-boundary feed: a
+    /// boundary date is the FIRST day of the NEW segment, which is exactly a row's
+    /// <c>effective_from</c>. The sibling of
+    /// <see cref="EmployeeProfileRepository.GetEffectiveFromDatesAsync"/> — same predicate, same
+    /// fencepost, same reason. (<c>user_id</c> IS the employee id; the table just names it that.)
+    ///
+    /// <para>
+    /// <b>Why this read exists (plain language).</b> Before S144 the calculation never asked "did
+    /// this employee's agreement change during the month?", so a mid-month change from, say, HK to
+    /// AC was paid as one month under one agreement — wrong lines for half the month, silently.
+    /// Feeding these dates to the planner makes the change a boundary; under today's live rule set
+    /// the planner then REFUSES the month (it goes to the manual path) instead of paying it wrong.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Range semantics (the recurring fencepost hazard):</b> <paramref name="afterExclusive"/>
+    /// is EXCLUDED — the planner passes the period start because a row taking effect ON the period
+    /// start creates no INTERIOR boundary (the segment already starts there);
+    /// <paramref name="toInclusive"/> is INCLUDED.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Deliberately NO <c>effective_to</c> filter and NO other exclusion</b> (not even the
+    /// zero-width-row exclusion <see cref="GetAsOfTodayWithScheduledAsync"/> applies). The live
+    /// row's <c>effective_from</c> is a change date exactly like a closed predecessor's; and this
+    /// table has no soft-delete column — a "deletion" is a zero-width close, after which no row
+    /// covers the date — so a closed row's start date is STILL a date on which the agreement
+    /// changed. The asymmetry decides it: over-detecting a boundary makes the planner refuse or
+    /// split (safe — at worst the month goes to manual handling); under-detecting one pays the
+    /// month under the wrong agreement, which is the defect this read exists to close.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Self-managed connection, LIVE + HISTORY rows, read-only, outside locks</b> — planning is
+    /// a pure read that never rides a write transaction. <c>idx_user_agreement_codes_history</c>
+    /// already allows at most one row per <c>(user_id, effective_from)</c>; the <c>DISTINCT</c>
+    /// states the contract rather than leaning on the index.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<DateOnly>> GetEffectiveFromDatesAsync(
+        string employeeId, DateOnly afterExclusive, DateOnly toInclusive,
+        CancellationToken ct = default)
+    {
+        const string sql =
+            """
+            SELECT DISTINCT effective_from
+            FROM user_agreement_codes
+            WHERE user_id = @userId
+              AND effective_from > @afterExclusive
+              AND effective_from <= @toInclusive
+            ORDER BY effective_from
+            """;
+        await using var conn = _dbFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("userId", employeeId);
+        cmd.Parameters.AddWithValue("afterExclusive", afterExclusive);
+        cmd.Parameters.AddWithValue("toInclusive", toInclusive);
+        var dates = new List<DateOnly>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            dates.Add(reader.GetFieldValue<DateOnly>(0));
+        return dates;
+    }
+
+    /// <summary>
     /// The writers' "today": the Europe/Copenhagen calendar day off the injected clock
     /// (QUAL-157 / S139 seam for the SOURCE; S142 / TASK-14202, census row 52, for the DAY).
     ///
