@@ -222,22 +222,144 @@ describe('WorklistList — OQ-7 (a): the Recalculate gate tracks the remedy, not
     expect(screen.getByTestId('worklist-dismiss-wl-1')).toBeDefined()
   })
 
-  it('a blocked SETTLED_YEAR row still suppresses the Recalculated affordance for an HR actor — the override is kind-independent', async () => {
+  // S144 / TASK-14406: this test used to seed a BLOCKED SETTLED_YEAR row (`recalcBlockedBy:
+  // ['QUAL-150']`). The backend can never produce that — `BackdateWorklistDerivation.RecalcBlockedBy`
+  // is empty for every kind but EXPORTED_MONTH — so it pinned an impossible premise. The fixture
+  // below is one the backend CAN produce: a blocked EXPORTED_MONTH row seen by a non-Global-Admin HR
+  // actor (no Recalculated, no Håndteret manuelt — both remedies are GlobalAdmin-only there).
+  it('a blocked EXPORTED_MONTH row for a non-Global-Admin HR actor offers only Dismiss', async () => {
     const user = userEvent.setup()
     auth.role = 'LocalHR'
     mockFetch.mockImplementationOnce(async () =>
-      jsonResponse([settledYearRow({ worklistId: 'wl-4', recalcBlockedBy: ['QUAL-150'] })]),
+      jsonResponse([exportedMonthRow({ worklistId: 'wl-4', recalcBlockedBy: ['QUAL-150'] })]),
     )
 
     render(<WorklistList onResolved={vi.fn()} />)
     await waitFor(() => expect(screen.getByTestId('worklist-blocked-wl-4')).toBeDefined())
-    // The OQ-4 reversal-route text is unconditional — the blocked check is an
-    // EXPORTED_MONTH re-plan concept and must not hide it.
-    expect(screen.getByTestId('worklist-reversal-wl-4')).toBeDefined()
 
     await user.click(screen.getByTestId('worklist-resolve-open-wl-4'))
     expect(screen.queryByTestId('worklist-mark-recalculated-wl-4')).toBeNull()
+    expect(screen.queryByTestId('worklist-handled-manually-wl-4')).toBeNull()
     expect(screen.getByTestId('worklist-dismiss-wl-4')).toBeDefined()
+  })
+})
+
+describe('WorklistList — "Håndteret manuelt" button visibility (role x kind x blocked)', () => {
+  const cases: Array<{ role: string; kind: 'EXPORTED_MONTH' | 'SETTLED_YEAR'; blocked: boolean; visible: boolean }> = [
+    { role: 'GlobalAdmin', kind: 'EXPORTED_MONTH', blocked: false, visible: true },
+    { role: 'GlobalAdmin', kind: 'EXPORTED_MONTH', blocked: true, visible: true },
+    { role: 'LocalHR', kind: 'EXPORTED_MONTH', blocked: false, visible: false },
+    { role: 'LocalHR', kind: 'EXPORTED_MONTH', blocked: true, visible: false },
+    { role: 'GlobalAdmin', kind: 'SETTLED_YEAR', blocked: false, visible: true },
+    { role: 'LocalHR', kind: 'SETTLED_YEAR', blocked: false, visible: true },
+  ]
+  it.each(cases)('$role on $kind (blocked=$blocked) -> visible=$visible', async ({ role, kind, blocked, visible }) => {
+    const user = userEvent.setup()
+    auth.role = role
+    const over = { worklistId: 'wl-x', ...(blocked ? { recalcBlockedBy: ['QUAL-149'] } : {}) }
+    const row = kind === 'EXPORTED_MONTH' ? exportedMonthRow(over) : settledYearRow(over)
+    mockFetch.mockImplementationOnce(async () => jsonResponse([row]))
+
+    render(<WorklistList onResolved={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('worklist-resolve-open-wl-x')).toBeDefined())
+    await user.click(screen.getByTestId('worklist-resolve-open-wl-x'))
+
+    expect(screen.getByTestId('worklist-dismiss-wl-x')).toBeDefined()
+    expect(!!screen.queryByTestId('worklist-handled-manually-wl-x')).toBe(visible)
+  })
+})
+
+describe('WorklistList — resolving with each verb', () => {
+  async function resolveWith(testId: string, role = 'GlobalAdmin') {
+    const user = userEvent.setup()
+    auth.role = role
+    mockFetch
+      .mockImplementationOnce(async () => jsonResponse([exportedMonthRow()])) // initial GET
+      .mockImplementationOnce(async () => jsonResponse({ worklistId: 'wl-1', resolution: 'X', resolutionBlockedBy: [] })) // POST
+      .mockImplementationOnce(async () => jsonResponse([])) // refetch
+    render(<WorklistList onResolved={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('worklist-resolve-open-wl-1')).toBeDefined())
+    await user.click(screen.getByTestId('worklist-resolve-open-wl-1'))
+    await user.type(screen.getByTestId('worklist-reason-wl-1'), 'Testbegrundelse')
+    await user.click(screen.getByTestId(testId))
+    await waitFor(() => expect(toastSpy).toHaveBeenCalled())
+    const posted = JSON.parse(mockFetch.mock.calls[1][1].body as string)
+    return { posted, toast: toastSpy.mock.calls[0][0] }
+  }
+
+  it('Håndteret manuelt posts HANDLED_MANUALLY and toasts its own text (not "Afvist")', async () => {
+    const { posted, toast } = await resolveWith('worklist-handled-manually-wl-1')
+    expect(posted.resolution).toBe('HANDLED_MANUALLY')
+    expect(toast.description).toBe('Markeret som håndteret manuelt.')
+  })
+
+  it('Afvis still toasts "Afvist."', async () => {
+    const { posted, toast } = await resolveWith('worklist-dismiss-wl-1')
+    expect(posted.resolution).toBe('DISMISSED')
+    expect(toast.description).toBe('Afvist.')
+  })
+
+  it('a resolved manual row is labelled "Håndteret manuelt", never the raw wire value', async () => {
+    mockFetch.mockImplementationOnce(async () =>
+      jsonResponse([
+        exportedMonthRow({
+          resolvedAt: '2026-04-01T09:00:00Z',
+          resolvedBy: 'ADMIN01',
+          resolution: 'HANDLED_MANUALLY',
+          resolutionReason: 'Rettet i SLS',
+        }),
+      ]),
+    )
+    render(<WorklistList onResolved={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('worklist-resolved-wl-1')).toBeDefined())
+    expect(screen.getByTestId('worklist-resolved-wl-1').textContent).toContain('Løst som Håndteret manuelt')
+    expect(screen.getByTestId('worklist-resolved-wl-1').textContent).not.toContain('HANDLED_MANUALLY')
+  })
+})
+
+describe('WorklistList — 409 / 403 messages, fed the real server JSON through fetch -> apiFetchWithEtag -> hook -> component', () => {
+  /** A genuine fetch Response, so the whole transport path parses the body. */
+  function realResponse(body: unknown, status: number) {
+    return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  }
+
+  async function submitFailing(status: number, body: unknown, buttonId = 'worklist-mark-recalculated-wl-1') {
+    const user = userEvent.setup()
+    auth.role = 'GlobalAdmin'
+    mockFetch
+      .mockImplementationOnce(async () => jsonResponse([exportedMonthRow()])) // initial GET
+      .mockImplementationOnce(async () => realResponse(body, status)) // the resolve POST
+      .mockImplementation(async () => jsonResponse([exportedMonthRow()])) // any refetch
+    render(<WorklistList onResolved={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('worklist-resolve-open-wl-1')).toBeDefined())
+    await user.click(screen.getByTestId('worklist-resolve-open-wl-1'))
+    await user.type(screen.getByTestId('worklist-reason-wl-1'), 'Testbegrundelse')
+    await user.click(screen.getByTestId(buttonId))
+    await waitFor(() => expect(screen.getByTestId('worklist-notice-wl-1')).toBeDefined())
+    return screen.getByTestId('worklist-notice-wl-1').textContent ?? ''
+  }
+
+  it('409 worklist-recalc-blocked: names the blocking ids and points at "Håndteret manuelt"', async () => {
+    const text = await submitFailing(409, {
+      error: 'Recalculation is blocked for this row',
+      kind: 'worklist-recalc-blocked',
+      blockedBy: ['QUAL-149', 'QUAL-150'],
+    })
+    expect(text).toContain('QUAL-149, QUAL-150')
+    expect(text).toContain('Håndteret manuelt')
+    expect(text).not.toContain('allerede løst')
+  })
+
+  it('409 already-resolved ({ error } only): the already-resolved message', async () => {
+    const text = await submitFailing(409, { error: 'Worklist item is already resolved' })
+    expect(text).toContain('allerede løst af en anden')
+    expect(text).not.toContain('blokeret')
+  })
+
+  it('403: its own permission message, not the generic "Kunne ikke gemme"', async () => {
+    const text = await submitFailing(403, { error: 'Access denied', reason: 'requires GlobalAdmin' }, 'worklist-handled-manually-wl-1')
+    expect(text).toContain('ikke tilladelse')
+    expect(text).not.toContain('Kunne ikke gemme')
   })
 })
 

@@ -18,7 +18,7 @@
 // (a deliberate omission of the underlying process, not a bug), so this screen
 // never shows a "days old" number for it.
 //
-// THE ONE WRITE: Resolve (RECALCULATED | DISMISSED + a reason), admin-strict
+// THE ONE WRITE: Resolve (RECALCULATED | DISMISSED | HANDLED_MANUALLY + a reason), admin-strict
 // If-Match on the row's `version`. 412 = someone else changed the row since
 // this list was fetched → refetch + tell the user. 428 = this client failed to
 // send a usable precondition header — a BUG (the hook always composes one from
@@ -106,6 +106,7 @@ function triggerKindLabel(kind: string): string {
 function resolutionLabel(resolution: string | null): string {
   if (resolution === WorklistResolutions.Recalculated) return 'Genberegnet/reverseret'
   if (resolution === WorklistResolutions.Dismissed) return 'Afvist'
+  if (resolution === WorklistResolutions.HandledManually) return 'Håndteret manuelt'
   return resolution ?? '–'
 }
 
@@ -130,6 +131,29 @@ function movedSinceLabel(value: boolean | null): string {
  */
 function reversalEndpointFor(employeeId: string): string {
   return `/api/admin/employees/${employeeId}/settlement-reversal`
+}
+
+/** The success-toast text per verb (the same three verbs `resolutionLabel` maps). */
+function resolvedToastText(resolution: WorklistResolution): string {
+  switch (resolution) {
+    case WorklistResolutions.Recalculated: return 'Markeret som genberegnet/reverseret.'
+    case WorklistResolutions.HandledManually: return 'Markeret som håndteret manuelt.'
+    default: return 'Afvist.'
+  }
+}
+
+/**
+ * The 409 body of a refused RECALCULATED on a blocked row is
+ * `{ error, kind: 'worklist-recalc-blocked', blockedBy: string[] }`; the
+ * already-resolved 409 is `{ error }` only. `ApiResult.body` is `unknown`, so it
+ * is narrowed here — never by parsing the error text. Returns the blocking ids
+ * for the blocked kind, or null for anything else.
+ */
+function recalcBlockedIds(body: unknown): string[] | null {
+  if (typeof body !== 'object' || body === null) return null
+  const b = body as { kind?: unknown; blockedBy?: unknown }
+  if (b.kind !== 'worklist-recalc-blocked') return null
+  return Array.isArray(b.blockedBy) ? b.blockedBy.filter((x): x is string => typeof x === 'string') : []
 }
 
 function periodLabel(row: BackdateWorklistRow): string {
@@ -199,7 +223,7 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
     if (result.ok) {
       toast({
         title: 'Løst',
-        description: resolution === WorklistResolutions.Recalculated ? 'Markeret som genberegnet/reverseret.' : 'Afvist.',
+        description: resolvedToastText(resolution),
         variant: 'success',
       })
       setOpenReasonFor(null)
@@ -218,11 +242,33 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
       return
     }
     if (result.status === 409) {
+      const blockedIds = recalcBlockedIds(result.body)
+      if (blockedIds !== null) {
+        // Refused, not resolved: the row is still open and the server's block set is newer than
+        // this list's. Name the blockers and point at the honest alternative; reload so the row
+        // shows its current blocked state.
+        setRowNotice((prev) => ({
+          ...prev,
+          [row.worklistId]: {
+            kind: 'warning',
+            message: `Genberegning er blokeret${blockedIds.length ? ` (${blockedIds.join(', ')})` : ''} og kan ikke markeres som løst. Brug "Håndteret manuelt", hvis sagen er rettet på anden vis.`,
+          },
+        }))
+        await load()
+        return
+      }
       setRowNotice((prev) => ({
         ...prev,
         [row.worklistId]: { kind: 'warning', message: 'Sagen er allerede løst af en anden. Listen genindlæses.' },
       }))
       await load()
+      return
+    }
+    if (result.status === 403) {
+      setRowNotice((prev) => ({
+        ...prev,
+        [row.worklistId]: { kind: 'warning', message: 'Du har ikke tilladelse til at løse denne sag på denne måde.' },
+      }))
       return
     }
     if (result.status === 428) {
@@ -281,6 +327,10 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
             // it. A blocked row (wrong wage codes if recalculated) overrides BOTH,
             // for every role and every kind.
             const canMarkRecalculated = !blocked && (isSettledYear || isGlobalAdmin)
+            // "Håndteret manuelt" (S144): the fix was made outside the system. Same remedy-tracking
+            // gate as the server (EXPORTED_MONTH GlobalAdmin-only, SETTLED_YEAR any HR) but, unlike
+            // Recalculated, allowed on blocked AND unblocked rows — it claims no recalculation.
+            const canHandleManually = isSettledYear || isGlobalAdmin
             const notice = rowNotice[row.worklistId]
             const resolving = resolvingId === row.worklistId
 
@@ -399,6 +449,17 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
                                 data-testid={`worklist-mark-recalculated-${row.worklistId}`}
                               >
                                 {resolving ? '...' : isSettledYear ? 'Marker som reverseret' : 'Marker som genberegnet'}
+                              </Button>
+                            )}
+                            {canHandleManually && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => void submitResolve(row, WorklistResolutions.HandledManually)}
+                                disabled={resolving}
+                                data-testid={`worklist-handled-manually-${row.worklistId}`}
+                              >
+                                {resolving ? '...' : 'Håndteret manuelt'}
                               </Button>
                             )}
                             <Button
