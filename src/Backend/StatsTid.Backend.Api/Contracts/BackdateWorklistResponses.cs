@@ -35,6 +35,11 @@ public sealed record BackdateWorklistTriggerDto(
 /// ids over all triggers (empty when the re-plan is not blocked, or for SETTLED_YEAR rows).
 /// <paramref name="RecalculatedSince"/> / <paramref name="ReversedSince"/> are the row-level flags
 /// (true only when EVERY trigger's baseline has been superseded); the other kind's flag is null.
+/// <paramref name="Resolution"/> is <c>RECALCULATED</c>, <c>DISMISSED</c> or
+/// <c>HANDLED_MANUALLY</c> once resolved (null while open). <paramref name="ResolutionBlockedBy"/>
+/// (S144) is the block set RECORDED at resolution — the register ids that were in force on the row
+/// when HR resolved it (<c>[]</c> when nothing blocked) — and is null while the row is open; unlike
+/// <paramref name="RecalcBlockedBy"/> it is a stamped fact, not re-derived.
 /// <paramref name="Version"/> also rides the ETag the resolve endpoint expects as If-Match.
 /// </summary>
 public sealed record BackdateWorklistRow(
@@ -56,20 +61,29 @@ public sealed record BackdateWorklistRow(
     string? ResolvedBy,
     string? Resolution,
     string? ResolutionReason,
+    IReadOnlyList<string>? ResolutionBlockedBy,
     long Version);
 
 /// <summary>
 /// POST /api/hr/backdate-worklist/{worklistId}/resolve body. <paramref name="Resolution"/> is
-/// <c>RECALCULATED</c> or <c>DISMISSED</c> — HR's assertion, recorded alongside the derived flags,
-/// never replacing them. <paramref name="Reason"/> is required (a dismissal without a reason is not
-/// an audit trail).
+/// <c>RECALCULATED</c>, <c>DISMISSED</c> or <c>HANDLED_MANUALLY</c> — HR's assertion, recorded
+/// alongside the derived flags, never replacing them. RECALCULATED is refused (409
+/// <c>worklist-recalc-blocked</c>) on a row whose re-plan is blocked; HANDLED_MANUALLY ("fixed
+/// outside the system") is the verb for such a row. On an EXPORTED_MONTH row both RECALCULATED and
+/// HANDLED_MANUALLY are Global-Admin-only. <paramref name="Reason"/> is required (a resolution
+/// without a reason is not an audit trail).
 /// </summary>
 public sealed record ResolveBackdateWorklistRequest(string Resolution, string Reason);
 
-/// <summary>The resolve 200 body — the post-write state; <paramref name="Version"/> also rides the ETag header.</summary>
+/// <summary>
+/// The resolve 200 body — the post-write state; <paramref name="Version"/> also rides the ETag
+/// header. <paramref name="ResolutionBlockedBy"/> (S144) is the block set this resolution stamped on
+/// the row (<c>[]</c> when nothing blocked; never null on this body).
+/// </summary>
 public sealed record BackdateWorklistResolveResponse(
     Guid WorklistId,
     string EmployeeId,
     string Resolution,
     DateTimeOffset ResolvedAt,
+    IReadOnlyList<string> ResolutionBlockedBy,
     long Version);

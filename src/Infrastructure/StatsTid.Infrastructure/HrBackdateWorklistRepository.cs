@@ -56,15 +56,21 @@ public static class WorklistKinds
     public const string SettledYear = "SETTLED_YEAR";
 }
 
-/// <summary>The operator's resolution verbs (the <c>resolution</c> CHECK).</summary>
+/// <summary>
+/// The operator's resolution verbs (the <c>resolution</c> CHECK). S144: <see cref="HandledManually"/>
+/// records "HR fixed this month outside the system" — the honest verb for a row whose payroll
+/// re-plan is BLOCKED (QUAL-149 / QUAL-150), where <see cref="Recalculated"/> is refused.
+/// </summary>
 public static class WorklistResolutions
 {
     public const string Recalculated = "RECALCULATED";
     public const string Dismissed = "DISMISSED";
+    public const string HandledManually = "HANDLED_MANUALLY";
 
     public static bool IsKnown(string? resolution) =>
         string.Equals(resolution, Recalculated, StringComparison.Ordinal)
-        || string.Equals(resolution, Dismissed, StringComparison.Ordinal);
+        || string.Equals(resolution, Dismissed, StringComparison.Ordinal)
+        || string.Equals(resolution, HandledManually, StringComparison.Ordinal);
 }
 
 /// <summary>
@@ -98,7 +104,14 @@ public sealed record WorklistCurrentState(
     public static readonly WorklistCurrentState Empty = new(null, null, Array.Empty<int>());
 }
 
-/// <summary>A stored <c>hr_backdate_worklist</c> row + its current-state companion.</summary>
+/// <summary>
+/// A stored <c>hr_backdate_worklist</c> row + its current-state companion.
+/// <paramref name="ResolutionBlockedBy"/> (S144) is the block set STAMPED at resolution — the
+/// register ids that were in force on the locked row when HR resolved it (<c>[]</c> when nothing
+/// blocked); <c>null</c> while the row is open. It is a recorded fact, distinct from the derived,
+/// live <see cref="BackdateWorklistDerivation.RecalcBlockedBy(HrBackdateWorklistRow)"/>. Trailing
+/// and optional so DB-free callers that build open rows need not name it.
+/// </summary>
 public sealed record HrBackdateWorklistRow(
     Guid WorklistId,
     string EmployeeId,
@@ -116,19 +129,25 @@ public sealed record HrBackdateWorklistRow(
     string? Resolution,
     string? ResolutionReason,
     long Version,
-    WorklistCurrentState Current);
+    WorklistCurrentState Current,
+    IReadOnlyList<string>? ResolutionBlockedBy = null);
 
 /// <summary>The resolver's identity for <see cref="HrBackdateWorklistRepository.ResolveAsync"/>.</summary>
 public sealed record WorklistActor(string ActorId, string? ActorRole, Guid? CorrelationId);
 
-/// <summary>Outcome of <see cref="HrBackdateWorklistRepository.ResolveAsync"/> — the post-write state the endpoint echoes (ETag = <see cref="NewVersion"/>).</summary>
+/// <summary>
+/// Outcome of <see cref="HrBackdateWorklistRepository.ResolveAsync"/> — the post-write state the
+/// endpoint echoes (ETag = <see cref="NewVersion"/>). <see cref="BlockedBy"/> is the block set
+/// stamped on the row and carried in the event (S144; <c>[]</c> when nothing blocked).
+/// </summary>
 public sealed record WorklistResolveResult(
     Guid WorklistId,
     string EmployeeId,
     string Resolution,
     DateTimeOffset ResolvedAt,
     long VersionBefore,
-    long NewVersion);
+    long NewVersion,
+    IReadOnlyList<string> BlockedBy);
 
 /// <summary>Thrown by <see cref="HrBackdateWorklistRepository.ResolveAsync"/> when the row was already resolved (the endpoint maps it to 409).</summary>
 public sealed class BackdateWorklistAlreadyResolvedException : Exception
@@ -139,6 +158,28 @@ public sealed class BackdateWorklistAlreadyResolvedException : Exception
         : base($"Backdate worklist row {worklistId} is already resolved.")
     {
         WorklistId = worklistId;
+    }
+}
+
+/// <summary>
+/// S144 — thrown by <see cref="HrBackdateWorklistRepository.ResolveAsync"/> when HR asks to record
+/// <see cref="WorklistResolutions.Recalculated"/> on a row whose payroll re-plan is BLOCKED on the
+/// locked snapshot (<see cref="BlockedBy"/> = the register ids, e.g. <c>["QUAL-149"]</c>). Nothing
+/// has been written when it is thrown. The endpoint maps it to 409 <c>worklist-recalc-blocked</c>;
+/// the honest verb for such a row is <see cref="WorklistResolutions.HandledManually"/>.
+/// </summary>
+public sealed class BackdateWorklistRecalcBlockedException : Exception
+{
+    public Guid WorklistId { get; }
+
+    public IReadOnlyList<string> BlockedBy { get; }
+
+    public BackdateWorklistRecalcBlockedException(Guid worklistId, IReadOnlyList<string> blockedBy)
+        : base($"Backdate worklist row {worklistId} cannot be resolved as {WorklistResolutions.Recalculated}: "
+             + $"the payroll re-plan is blocked by {string.Join(", ", blockedBy)}.")
+    {
+        WorklistId = worklistId;
+        BlockedBy = blockedBy;
     }
 }
 
@@ -220,16 +261,27 @@ public static class BackdateWorklistDerivation
     }
 
     /// <summary>The SET (distinct, stable order) of blocking register ids over all triggers of the row; empty for SETTLED_YEAR rows.</summary>
-    public static IReadOnlyList<string> RecalcBlockedBy(HrBackdateWorklistRow row)
+    public static IReadOnlyList<string> RecalcBlockedBy(HrBackdateWorklistRow row) =>
+        RecalcBlockedBy(row.Kind, row.Year, row.Month, row.Triggers);
+
+    /// <summary>
+    /// The derivation CORE (S144): the SET (distinct, ordinal-sorted) of blocking register ids over
+    /// <paramref name="triggers"/> for a row of <paramref name="kind"/> keyed (year, month); empty
+    /// unless the kind is EXPORTED_MONTH with both keys present. The row overload (the read path)
+    /// and <see cref="HrBackdateWorklistRepository.ResolveAsync"/> (the locked snapshot) both call
+    /// THIS, so what HR is shown as blocked and what the resolve refuses cannot drift apart (PAT-026).
+    /// </summary>
+    public static IReadOnlyList<string> RecalcBlockedBy(
+        string kind, int? year, int? month, IReadOnlyList<StoredWorklistTrigger> triggers)
     {
-        if (!string.Equals(row.Kind, WorklistKinds.ExportedMonth, StringComparison.Ordinal)
-            || row.Year is not int year || row.Month is not int month)
+        if (!string.Equals(kind, WorklistKinds.ExportedMonth, StringComparison.Ordinal)
+            || year is not int y || month is not int m)
             return Array.Empty<string>();
 
         var set = new List<string>(2);
-        foreach (var t in row.Triggers)
+        foreach (var t in triggers)
         {
-            var id = RecalcBlockedByForTrigger(t.Kind, t.EffectiveFrom, year, month);
+            var id = RecalcBlockedByForTrigger(t.Kind, t.EffectiveFrom, y, m);
             if (id is not null && !set.Contains(id, StringComparer.Ordinal))
                 set.Add(id);
         }
@@ -602,7 +654,7 @@ public sealed class HrBackdateWorklistRepository
         SELECT w.worklist_id, w.employee_id, w.kind, w.year, w.month, w.export_id,
                w.entitlement_type, w.entitlement_year, w.triggers::text AS triggers_text,
                w.created_at, w.created_by, w.resolved_at, w.resolved_by, w.resolution,
-               w.resolution_reason, w.version,
+               w.resolution_reason, w.resolution_blocked_by, w.version,
                per.content_hash AS current_content_hash,
                vs.highest_sequence,
                vs.reversed_sequences
@@ -635,17 +687,22 @@ public sealed class HrBackdateWorklistRepository
                  w.worklist_id
         """;
 
-    // Resolve, step 1: lock the row (FOR UPDATE) — the canonical snapshot for the If-Match check.
+    // Resolve, step 1: lock the row (FOR UPDATE) — the canonical snapshot for the If-Match check
+    // AND (S144) for the block derivation: the triggers are read UNDER the lock, as text, and
+    // parsed by the same WorklistTriggerJson codec the read path uses (SelectRowsSql).
     private const string LockRowSql =
         """
         SELECT employee_id, kind, year, month, export_id, entitlement_type, entitlement_year,
-               jsonb_array_length(triggers) AS trigger_count, resolved_at, version
+               jsonb_array_length(triggers) AS trigger_count, triggers::text AS triggers_text,
+               resolved_at, version
         FROM hr_backdate_worklist
         WHERE worklist_id = @worklistId
         FOR UPDATE
         """;
 
     // Resolve, step 2: the guarded versioned write (ADR-019 D2 — WHERE version = expected).
+    // S144: every resolution stamps the lock-time block set (@blockedBy, '{}' when none — never
+    // NULL on a resolved row; hr_backdate_worklist_resolution_paired enforces it).
     private const string ResolveRowSql =
         """
         UPDATE hr_backdate_worklist
@@ -653,6 +710,7 @@ public sealed class HrBackdateWorklistRepository
             resolved_by = @actorId,
             resolution = @resolution,
             resolution_reason = @reason,
+            resolution_blocked_by = @blockedBy,
             version = version + 1
         WHERE worklist_id = @worklistId
           AND resolved_at IS NULL
@@ -985,8 +1043,11 @@ public sealed class HrBackdateWorklistRepository
     /// Records HR's resolution on an OPEN row under the ADR-019 D2 precondition: locks the row,
     /// compares <paramref name="expectedVersion"/> (throws <see cref="OptimisticConcurrencyException"/>
     /// on a stale token, <see cref="KeyNotFoundException"/> when the id is unknown,
-    /// <see cref="BackdateWorklistAlreadyResolvedException"/> when already resolved), writes
-    /// <c>resolved_at/by/resolution/reason</c> + bumps <c>version</c>, and emits
+    /// <see cref="BackdateWorklistAlreadyResolvedException"/> when already resolved), derives the
+    /// block set from the locked snapshot (S144 — throws <see cref="BackdateWorklistRecalcBlockedException"/>,
+    /// writing nothing, when <paramref name="resolution"/> is RECALCULATED and the set is non-empty),
+    /// writes <c>resolved_at/by/resolution/reason</c> + the stamp <c>resolution_blocked_by</c>
+    /// (for EVERY verb — RECALCULATED, DISMISSED, HANDLED_MANUALLY) + bumps <c>version</c>, and emits
     /// <see cref="BackdateWorklistRowResolved"/> (+ its ADR-026 row) in the caller's tx. The event
     /// is the audit record of the resolution (no <c>*_audit</c> table by design).
     /// </summary>
@@ -1002,7 +1063,8 @@ public sealed class HrBackdateWorklistRepository
     {
         if (!WorklistResolutions.IsKnown(resolution))
             throw new ArgumentOutOfRangeException(nameof(resolution), resolution,
-                $"Resolution must be {WorklistResolutions.Recalculated} or {WorklistResolutions.Dismissed}.");
+                $"Resolution must be {WorklistResolutions.Recalculated}, {WorklistResolutions.Dismissed} "
+                + $"or {WorklistResolutions.HandledManually}.");
 
         var locked = await LockRowAsync(conn, tx, worklistId, ct)
             ?? throw new KeyNotFoundException($"Backdate worklist row {worklistId} not found.");
@@ -1017,8 +1079,17 @@ public sealed class HrBackdateWorklistRepository
                 expectedVersion, locked.Version);
         }
 
+        // S144 — the block, derived from the LOCKED snapshot by the same function the read path
+        // uses. Deliberately AFTER the version guard: a stale token means the caller holds an
+        // outdated row, so they get 412 (re-read) rather than a verdict about data they no longer
+        // see. RECALCULATED on a blocked row is refused before any write or emission; every other
+        // verb (DISMISSED included) proceeds and records the set that was in force.
+        var blockedBy = BackdateWorklistDerivation.RecalcBlockedBy(locked.Kind, locked.Year, locked.Month, locked.Triggers);
+        if (string.Equals(resolution, WorklistResolutions.Recalculated, StringComparison.Ordinal) && blockedBy.Count > 0)
+            throw new BackdateWorklistRecalcBlockedException(worklistId, blockedBy);
+
         var (resolvedAt, newVersion) = await UpdateResolvedAsync(
-            conn, tx, worklistId, expectedVersion, resolution, reason, actor.ActorId, ct);
+            conn, tx, worklistId, expectedVersion, resolution, reason, blockedBy, actor.ActorId, ct);
 
         var subject = await ReadSubjectAsync(conn, tx, locked.EmployeeId, ct);
 
@@ -1035,6 +1106,7 @@ public sealed class HrBackdateWorklistRepository
             Resolution = resolution,
             Reason = reason,
             TriggerCount = locked.TriggerCount,
+            BlockedBy = blockedBy,
             VersionBefore = locked.Version,
             VersionAfter = newVersion,
             ActorId = actor.ActorId,
@@ -1043,7 +1115,7 @@ public sealed class HrBackdateWorklistRepository
         };
         await EmitAsync(conn, tx, locked.EmployeeId, subject.PrimaryOrgId, resolved, _resolvedAuditMapper, ct);
 
-        return new WorklistResolveResult(worklistId, locked.EmployeeId, resolution, resolvedAt, locked.Version, newVersion);
+        return new WorklistResolveResult(worklistId, locked.EmployeeId, resolution, resolvedAt, locked.Version, newVersion, blockedBy);
     }
 
     // ── internals ───────────────────────────────────────────────────────────────────────────
@@ -1068,7 +1140,8 @@ public sealed class HrBackdateWorklistRepository
 
     private sealed record LockedRow(
         string EmployeeId, string Kind, int? Year, int? Month, Guid? ExportId,
-        string? EntitlementType, int? EntitlementYear, int TriggerCount, DateTimeOffset? ResolvedAt, long Version);
+        string? EntitlementType, int? EntitlementYear, int TriggerCount,
+        IReadOnlyList<StoredWorklistTrigger> Triggers, DateTimeOffset? ResolvedAt, long Version);
 
     private static void ValidateTrigger(WorklistTrigger trigger)
     {
@@ -1280,6 +1353,12 @@ public sealed class HrBackdateWorklistRepository
             ? Array.Empty<int>()
             : reader.GetFieldValue<int[]>(reversedOrdinal);
 
+        // S144: NULL while open; the stamped set ('{}' → empty) once resolved.
+        var blockedByOrdinal = reader.GetOrdinal("resolution_blocked_by");
+        IReadOnlyList<string>? resolutionBlockedBy = reader.IsDBNull(blockedByOrdinal)
+            ? null
+            : reader.GetFieldValue<string[]>(blockedByOrdinal);
+
         return new HrBackdateWorklistRow(
             WorklistId: reader.GetGuid(reader.GetOrdinal("worklist_id")),
             EmployeeId: reader.GetString(reader.GetOrdinal("employee_id")),
@@ -1300,7 +1379,8 @@ public sealed class HrBackdateWorklistRepository
             Current: new WorklistCurrentState(
                 CurrentContentHash: GetNullableString(reader, "current_content_hash"),
                 HighestSettlementSequence: GetNullableInt32(reader, "highest_sequence"),
-                ReversedSettlementSequences: reversed));
+                ReversedSettlementSequences: reversed),
+            ResolutionBlockedBy: resolutionBlockedBy);
     }
 
     private static async Task<LockedRow?> LockRowAsync(
@@ -1320,19 +1400,25 @@ public sealed class HrBackdateWorklistRepository
             EntitlementType: GetNullableString(reader, "entitlement_type"),
             EntitlementYear: GetNullableInt32(reader, "entitlement_year"),
             TriggerCount: reader.GetInt32(reader.GetOrdinal("trigger_count")),
+            Triggers: WorklistTriggerJson.Deserialize(reader.GetString(reader.GetOrdinal("triggers_text"))),
             ResolvedAt: GetNullableTimestamp(reader, "resolved_at"),
             Version: reader.GetInt64(reader.GetOrdinal("version")));
     }
 
     private static async Task<(DateTimeOffset ResolvedAt, long NewVersion)> UpdateResolvedAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, Guid worklistId, long expectedVersion,
-        string resolution, string reason, string actorId, CancellationToken ct)
+        string resolution, string reason, IReadOnlyList<string> blockedBy, string actorId, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(ResolveRowSql, conn, tx);
         cmd.Parameters.AddWithValue("worklistId", worklistId);
         cmd.Parameters.AddWithValue("expectedVersion", expectedVersion);
         cmd.Parameters.AddWithValue("resolution", resolution);
         cmd.Parameters.AddWithValue("reason", reason);
+        // Typed text[] so an EMPTY set lands as '{}' (never NULL, never an untyped-array error).
+        cmd.Parameters.Add(new NpgsqlParameter("blockedBy", NpgsqlDbType.Array | NpgsqlDbType.Text)
+        {
+            Value = blockedBy.ToArray(),
+        });
         cmd.Parameters.AddWithValue("actorId", actorId);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
