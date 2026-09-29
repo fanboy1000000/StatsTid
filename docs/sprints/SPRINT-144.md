@@ -20,7 +20,7 @@ The HR "backdate worklist" lists months that were already sent to payroll and th
 
 The owner ruled (2026-09-22) not just to block that but to **split the verb**: a third outcome, **"Håndteret manuelt"**, for when a person really did sort the month out by hand. With that available, refusing the false "recalculated" costs nobody anything, so the server refuses it — on the locked row, for every actor the role gate admits. Each resolution's audit event now carries the set of reasons the month was blocked at the moment of the claim; the row projects it. There is no migration of history: no database anywhere holds a pre-S144 row (CI rebuilds from `init.sql` every run; tests seed their own; the owner's machine runs no Docker), so the reseed *is* the migration, and the "ambiguous history" apparatus three review cycles had designed was removed entirely.
 
-While tracing this, the refinement found a live payroll defect: when an employee's **agreement code changes mid-month**, the recalculation and the everyday export compute the days after the change under the old agreement and write the result as if nothing happened — the audit manifest shows an empty cause list. S144 makes the calculation *see* that change and refuse with a 422 that says how many segments and which causes (counts and causes, never dates) instead of today's bare 500. **Operational change HR and payroll must know:** until QUAL-149/150 land, a month with a mid-month agreement-code change cannot be exported at all; it goes to the manual path. A refusal beats a wrong payslip. Today's "blocked" badge was correct advice, unenforced; S144 enforces it.
+While tracing this, the refinement found a live payroll defect: when an employee's **agreement code changes mid-month**, the recalculation and the everyday export compute the days after the change under the old agreement and write the result as if nothing happened — the audit manifest shows an empty cause list. S144 makes the calculation *see* that change and refuse with a 422 that says how many segments and which causes (counts and causes, never dates) instead of today's bare 500. **Operational change HR and payroll must know:** until QUAL-149/150 land, a month with a mid-month agreement-code change cannot be exported through any payroll route: the two calculating endpoints (`/api/payroll/calculate-and-export`, `/api/payroll/recalculate`) refuse it, and so do the two low-level routes that take caller-calculated lines (`/api/payroll/export`, `/export-period`), which re-plan the period since TASK-14410 (owner ruling Q1 = A at the Step-7a close; QUAL-183). The month goes to the manual path. A refusal beats a wrong payslip. Today's "blocked" badge was correct advice, unenforced; S144 enforces it.
 
 ## Step 0b — plan review (both lenses)
 
@@ -99,7 +99,7 @@ From the external verdict:
 
 From the internal (Fable) floor review of 2026-09-24, unlanded:
 - [ ] (5) `TemporalWriteZeroWidthReopenTests.cs:144-150` justifies the agreement-code fact by a counterfactual about `SoftDeleteAsync` on the agreement-code repository, which has no such method — rewrite the comment; *(TASK-14407)*
-- [ ] (6) this log's row at `:596` classified the same test as "no oracle" — corrected in this commit (see the appendix row);
+- [ ] (6) this log's row at `:596` classified the same test as "no oracle" — corrected in this commit (see the appendix row); *[Orchestrator gloss: "this log" is S143's wording, carried verbatim — the row is `SPRINT-143.md:597` ("corrected 2026-09-25"); `:596` is the `TxContractTests` row above it.]*
 - [ ] (7) `ProfileCategoryDatingTests.cs:91-93, 185-186` claim the date is "never compared against an independently-computed server clock"; the claim is false — the comparison exists — with no live failure; correct the comment (the false clause is about *comparison*, not where the date comes from). *(TASK-14407)*
 
 From the Opus comparison arm, **not floor-verified**:
@@ -125,7 +125,7 @@ Plus the S144 scope itself (the diff from `2e7d5b1`): the worklist refusal and v
 
 ## Model switch — ruled at dispatch time (2026-09-29)
 
-At the first dispatch the owner raised that switching the session model clears their context, and ruled: *"I want a setup so I dont have to switch models."* The seat therefore never switches: future sessions start on Opus; the Fable work is done by agents — the `reviewer` (unchanged) and the new `adjudicator` (judgment: rulings and the owner's questions, read-only, floor-enforced by the guard). The `planner` (Opus) drafts. `docs/WORKFLOW.md` § Model Routing, "the seat never switches"; `docs/AGENTS.md` roster. This session stays on Fable to its end. The `**Orchestrator model**` row above is read accordingly: no switch happened or will happen in this session.
+At the first dispatch the owner raised that switching the session model clears their context, and ruled: *"I want a setup so I dont have to switch models."* The seat therefore never switches: future sessions start on Opus; the Fable work is done by agents — the `reviewer` (unchanged) and the new `adjudicator` (judgment: rulings and the owner's questions, read-only, floor-enforced by the guard). The `planner` (Opus) drafts. `docs/WORKFLOW.md` § Model Routing, "the seat never switches"; `docs/AGENTS.md` roster. This session stays on Fable to its end. *It did: that Fable session ended after the plan reached READY at Step 0b and the handoff block was written. A new session on Opus 5.5 (client 2.1.284) ran from the first wave-1 dispatch through the close, per the ruling. Every section below marked "(Opus seat)" is that session; its Fable judgment came from the `reviewer` and `adjudicator` agents (C-1, Step 5a, Step 7a).* The `**Orchestrator model**` row above is read accordingly: no switch happened or will happen in this session.
 
 ## Wave-1 gate (2026-09-29, Opus seat)
 
@@ -204,7 +204,7 @@ Applied as: M-11 `EmployedSegmentCount = 0;` in the message-only ctor body; M-13
 
 **In plain language.** The two close-time evidence runs are a controlled experiment: break the code in a known way and check that exactly the tests meant to notice do notice, and nothing else moves. The adjudicator read every listed test end to end against master and traced each run's breakage through it. Every red trips at a reachable assertion, and every listed green survives. No unlisted test can be reached. The payroll breakage only bites where the agreement-code repository is wired in, and the only places that happens are the two S144 payroll classes. The worklist breakages live in one repository method called only by the two worklist test classes. There was one correction: "the DISMISSED ladder" in the plan (`PLAN-s144.md:156, :367`) is `Resolve_MissingIfMatch_428_Stale_412_…`, not the two facts with "Dismiss" in their names. It is added to run 2's greens, where it proves the moved block check never touches the verb it must not refuse.
 
-Rulings: **R9-1** Run1-RED frozen as given · **R9-2** Run1-GREEN frozen as given · **R9-3** Run2-RED frozen as given · **R9-4** Run2-GREEN frozen **with the DISMISSED ladder added** (the two "Dismiss" facts stay; the wildcards are expanded to six FQNs) · **R9-5** completeness: no additions (only `RecalcBlockedLiveRulesetTests.cs:490` passes `userAgreementCodeRepo:`; the compose employee's agreement row starts `0001-01-01`, so the Smoke job adds no red) · **R9-6** mutation precision for re-spawn 3:
+Rulings: **R9-1** Run1-RED frozen as given · **R9-2** Run1-GREEN frozen as given · **R9-3** Run2-RED frozen as given · **R9-4** Run2-GREEN frozen **with the DISMISSED ladder added** (the two "Dismiss" facts stay; the wildcards are expanded to six FQNs) · **R9-5** completeness: no additions (only `RecalcBlockedLiveRulesetTests.cs:492` passes `userAgreementCodeRepo:`; the compose employee's agreement row starts `0001-01-01`, so the Smoke job adds no red) · **R9-6** mutation precision for re-spawn 3:
 - **M-1:** delete `HrBackdateWorklistRepository.cs:1088-1089` only.
 - **M-2:** replace `blockedBy` with `Array.Empty<string>()` at `:1092` and `:1109`.
 - **M-3:** move `:1082-1089` to immediately after `:1073`, a pure swap with the version guard.
@@ -300,9 +300,58 @@ Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeCh
 | Regression, discovered | 1988 | 2009 | +21 (CI runs them) |
 | Frontend (vitest) | 976 | 988 | +12 (TASK-14406) |
 
-## Step 7a (C-4) — PLACEHOLDER, filled before the close commit
+## Step 7a (C-4)
 
-*Both lenses, base `2e7d5b1`, `reviewed-against-commit: <K>`; carried checklist above; inputs: the frozen C-1 lists, the wave-2b mutation table, the E1/E2 diffs against K (C-3).*
+### Cycle 1 — on K = `c586944`, base `2e7d5b1`
+
+| Lens | Verdict | Artifact |
+|---|---|---|
+| External (Codex, **performed on inlined source**: the S144 code diff, this log, E1/E2 and five full files; its sandbox blocked its shell) | **REQUEST-CHANGES** | `.claude/reviews/SPRINT-144-step7a-codex.md` |
+| Internal (Fable `reviewer`, `claude-fable-5-1`, full repository) | **CLOSE-WITH-WARNINGS** | `.claude/reviews/SPRINT-144-step7a-reviewer.md` |
+
+**In plain language.** Both lenses agree that the sprint's two deliverables are correct and that no invariant is broken. They disagreed on one thing, and a Fable `adjudicator` (`claude-fable-5-1`) ruled on it.
+
+The external lens rated the two **old low-level payroll export routes** (`/api/payroll/export`, `/export-period`) a BLOCKER. They accept lines someone has already calculated and never ran the planner. S144 never touched those routes and never promised to, so they are outside its scope. But this log had claimed that a mid-month agreement-code month "cannot be exported at all", which overstated the sprint. The adjudicator declined the finding as a reason to hold the close, corrected the record, registered it (QUAL-183), and put the design question to the owner. **The owner ruled "A — Guard now in S144"** (2026-09-29), so the routes now run the same check (TASK-14410).
+
+The internal lens's warnings were all in comments or in this record:
+- the ADR note's audience claim;
+- the clock comment's midnight ordering, which was backwards, inherited from the fixture's own doc;
+- a "only methods" list that went stale when this sprint added a method;
+- a stale handoff block.
+
+The adjudicator ruled every fix **in now, in a new candidate commit K′**, rather than carried to S145, and overruled the reviewer's carry recommendation. Its reason: the S143 checklist item should not survive a fourth review pass.
+
+**Adjudication (A1–A5):**
+- **A1.** Raw export: declined as a close blocker, the record corrected, QUAL-183 registered, owner Q1 asked. Ruled A, and built as TASK-14410.
+- **A2.** Checklist item (3) is DONE, cited: `EmployeeProfileCopenhagenBoundaryTests.cs:286-317, :334-355` drive the product's only soft-delete path at disagreeing instants (CET and CEST) and assert stored literals. Residual: the `closeDate ?? Today()` fallback at `EmployeeProfileRepository.cs:1213` has no production caller and is pinned only at an agreeing instant. The follow-up is to make `closeDate` required, so the fallback disappears.
+- **A3.** W2 and W3 fixed now: TASK-14411, four comment sites.
+- **A4.** W1 (ADR-040 audience), W4 (handoff), N2 (the session switch), the item-(6) gloss and N6 (`:490` → `:492`) all land in K′, so cycle 2 verifies them.
+- **A5.** K′ is code-touching, so cycle 2 runs on both lenses before the close commit. **Frozen-list amendment, pre-ruled by the adjudicator for Q1 = A:** TASK-14410's two raw-route facts join **Run-1 RED under M-14** (the re-plan goes blind when the hydration is nulled) and **Run-2 GREEN**. Its no-regression fact, if added, joins both runs' GREEN.
+
+**Carried checklist, final dispositions:**
+
+| Item | Disposition |
+|---|---|
+| (1) | DONE |
+| (2) | DONE |
+| (3) | DONE, cited (A2) |
+| (4) | DONE after TASK-14411 (the S144 fix had inherited the fixture doc's inversion) |
+| (5) | DONE after TASK-14411 |
+| (6) | DONE (`SPRINT-143.md:597`) |
+| (7) | DONE |
+| (8) | DONE |
+| (9) | DONE on the full-repository lens (Codex's NOT DONE was a bundle limitation) |
+
+**Evidence confirmation (both lenses).** E1 `54f8fc1` = K + M-1 + M-2 + M-14, exactly. E2 `bd4bf75` = K + M-3, exactly, realised by moving the version guard below the block check rather than the reverse. The resulting order is the same, so the trees are equivalent (reviewer N1). Every RED entry trips, every GREEN entry holds, and no unlisted test goes red. The evidence is re-cut on K′ (C-3 repeated).
+
+### Cycle 2 — on K′ (PLACEHOLDER — the verdict lines are filled by the close commit)
+
+*Scope, per A5:*
+- the K → K′ diff (TASK-14410's guard and pins; TASK-14411's comments; the record corrections);
+- the E1′/E2′ diffs against K′;
+- the amended frozen lists;
+- the declined-BLOCKER record and the owner's ruling.
+
 
 ## Evidence runs (C-6, C-7) — PLACEHOLDER, filled by the docs-only follow-up commit (C-9)
 
@@ -310,23 +359,26 @@ Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeCh
 
 ## Open follow-ups (routed, not lost)
 
-- **Payroll host DI:** `ConfigResolutionService` is registered without its repositories (`Program.cs:112`). Remove it or complete it, then run `PayrollHostFactory` in Development so `ValidateOnBuild` guards the host. A quality-register candidate.
-- **Raw export routes bypass the planner:** `/api/payroll/export` and `/export-period` take caller-computed lines. Decide whether they should refuse split months too. A quality-register candidate.
+- **Payroll host DI — QUAL-184 (registered).** `ConfigResolutionService` is registered without its repositories (`Program.cs:112`). Delete the registration, then run `PayrollHostFactory` in Development so `ValidateOnBuild` guards the host.
+- **Raw export routes bypassed the planner — QUAL-183, FIXED in S144 (TASK-14410).** Rated WARNING at 5a and BLOCKER by the Step-7a external lens; the adjudicator declined it as a close blocker and put the design to the owner, who ruled **A — guard now** (2026-09-29). `/api/payroll/export` and `/export-period` now re-plan each period through the same builder as the calculating endpoints and refuse with the same redacted 422.
 - **The lock-time stamp is correct by inspection, not by a pin:** nothing proves the block set is derived after the lock (it would take a coordinated concurrent append). A backlog candidate.
 - **The 403 reason names both verbs:** echoing the refused verb would make the refusal (and its pin) precise. A small UX and API follow-up.
 - **Unpinned clock in four Regression tests** and the `FixedTimeProvider` doc wording (wave-1 observations).
 - **The S144 segment's upgrade path** is exercised by no test: a known unpinned path, acceptable under the reseed ruling.
+- **The `closeDate ?? Today()` fallback** (`EmployeeProfileRepository.cs:1213`) has no production caller and is pinned only at an agreeing instant (Step 7a A2). The premise is removable: make `closeDate` required. Same shape as QUAL-177 (a branch only tests execute).
+- **`EmploymentWindowLiveRulesetTests.cs:235-237`** has the same vacuous date-absence shape that Step 5a W 14405-1 fixed; it is pre-existing from S137 and a register candidate (Step 7a reviewer N4).
+- **Do the raw export routes need to exist at all?** They have no caller, and `/recalculate` has superseded their correction use. They are now guarded (QUAL-183); retiring them is its own refinement.
 - **QUAL-149 / QUAL-150** remain the route to making mid-month agreement-code months exportable again.
 
 ## Handoff block (written at every wave gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-09-29, master `0ec35d3` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
-| **Phase** | All code merged (`a7426c4`); final local gate green; O-4 written. **C-2: candidate commit K = the commit that carries this line.** Next: C-3 (TASK-14405 re-spawn 3 prepares E1/E2 from K) → C-4 Step 7a on K, both lenses |
-| **Dispatched tasks / worktrees** | TASK-14403 and TASK-14406 in harness worktrees. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`, rebased on `bffc469`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
-| **Merged** | 14400 (`5e2f50b`), 14407 (`52d577d`), 14401 (`bffc469`), 14402 (`0bdd5a5`), 14404 (`01e5bea`), 14406 (`24fa0d2`), 14403 (`807f75f`); O-3 `4611fd6`; O-2 `0ec35d3` |
-| **Pending gates** | C-3 → C-4 (Step 7a) → C-5 close commit + push + CI watch → C-6/C-7 evidence runs → C-8 PR closed, branch deleted → C-9 docs-only follow-up (CI line, evidence record, O-7 routing row, INDEX CI line) → teardown of the 10 agent worktrees |
-| **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above. For Step 7a: two wave-1 observations; TASK-14404's resolve-response addition |
-| **Next action** | on each return: merge; run the gate for that wave as above |
+| **As of** | 2026-09-29, master at K′ (the commit carrying this line, once TASK-14410 is merged); session on Opus 5.5 (client 2.1.284) |
+| **Phase** | Step 7a cycle 1 done on K `c586944`: external REQUEST-CHANGES, internal CLOSE-WITH-WARNINGS. Adjudicated A1–A5; **owner Q1 answered "A — Guard now in S144"**. TASK-14411 merged (`f413e9c`); **TASK-14410 (`payroll-integration`) running**: the raw-export guard. Record corrections written |
+| **Dispatched tasks / worktrees** | TASK-14410 in a harness worktree. Evidence branch `s144-red-mutations` holds E1 `54f8fc1` / E2 `bd4bf75` on K, local only, and must be re-cut on K′ (C-3 repeated: delete the branch, then re-spawn TASK-14405's `test-qa` with the new K′). 13 agent worktrees are retained for teardown at C-9 |
+| **Merged** | 14400 `5e2f50b`, 14407 `52d577d`, 14401 `bffc469`, 14402 `0bdd5a5`, 14404 `01e5bea`, 14406 `24fa0d2`, 14403 `807f75f`, 14405 `bd4df92`, 14408 `756e050`, 14409 `a7426c4`, 14411 `f413e9c`; O-3 `4611fd6`; O-2 `0ec35d3`; small fixes `bff063b`, `1de5f96`; K `c586944` |
+| **Pending gates** | 14410 returns → merge → O-1 (full non-Docker suites; the CA2100 count must stay ≤ 115; OpenAPI unchanged) → K′ commit → C-3 on K′ (E1′ = K′ + M-1 + M-2 + M-14; E2′ = K′ + M-3; E1′/E2′ diffs expected byte-identical to E1/E2) → Step 7a cycle 2, both lenses, `reviewed-against-commit: <K′>` → C-5 close commit + push + CI watch → C-6/C-7 evidence runs against the AMENDED lists → C-8 → C-9 → teardown |
+| **Open rulings** | none. Q1 = A executed as TASK-14410; the frozen-list amendment for its facts was pre-ruled (A5) |
+| **Next action** | on 14410's return: merge, run the O-1 gate, add the new fact names to the C-1 lists per A5, commit K′, then re-spawn TASK-14405 for C-3 on K′ |
 | **Step zero** | `planner` → `claude-opus-5-5`; `reviewer` → `claude-fable-5-1`; Sonnet tier → `claude-sonnet-5-5`; Opus implementer tier → `claude-opus-5-5` (all verified from self-reports) |
