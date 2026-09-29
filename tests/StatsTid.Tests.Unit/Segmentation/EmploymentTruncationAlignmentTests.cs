@@ -281,9 +281,9 @@ public sealed class EmploymentTruncationAlignmentTests
         // The reader learns the rule from the error.
         Assert.Contains("employment edge alone", ex.Message);
 
-        // The period itself is named (the caller's own input) …
-        Assert.Contains(Mar01.ToString(), ex.Message);
-        Assert.Contains(Mar31.ToString(), ex.Message);
+        // The period itself is named (the caller's own input), culture-invariant ISO since S144 …
+        Assert.Contains(Mar01.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), ex.Message);
+        Assert.Contains(Mar31.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), ex.Message);
         // … but no segment date: the change date, the last employed day, the first
         // NOT-employed day and the day before the change are all employment-revealing.
         AssertNoDateLeak(ex.Message, change, change.AddDays(-1), lastDay, lastDay.AddDays(1));
