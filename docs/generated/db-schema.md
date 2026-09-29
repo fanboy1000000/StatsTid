@@ -1415,13 +1415,15 @@
 | resolved_by | TEXT | Yes |  |  |
 | resolution | TEXT | Yes |  |  |
 | resolution_reason | TEXT | Yes |  |  |
+| resolution_blocked_by | TEXT[] | Yes |  |  |
 | version | BIGINT | No |  | 1 |
 
 **Table constraints:**
 - CONSTRAINT hr_backdate_worklist_kind_keys CHECK ( (kind = 'EXPORTED_MONTH' AND year IS NOT NULL AND month IS NOT NULL AND export_id IS NOT NULL AND entitlement_type IS NULL AND entitlement_year IS NULL) OR (kind = 'SETTLED_YEAR' AND entitlement_type IS NOT NULL AND entitlement_year IS NOT NULL AND year IS NULL AND month IS NULL AND export_id IS NULL) )
 - CONSTRAINT hr_backdate_worklist_month_range CHECK (month IS NULL OR month BETWEEN 1 AND 12)
 - CONSTRAINT hr_backdate_worklist_triggers_array CHECK ( jsonb_typeof(triggers) = 'array' AND jsonb_array_length(triggers) >= 1 )
-- CONSTRAINT hr_backdate_worklist_resolution_paired CHECK ( (resolved_at IS NULL AND resolved_by IS NULL AND resolution IS NULL) OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution IS NOT NULL) )
+- CONSTRAINT hr_backdate_worklist_resolution_check CHECK ( resolution IN ('RECALCULATED', 'DISMISSED', 'HANDLED_MANUALLY') )
+- CONSTRAINT hr_backdate_worklist_resolution_paired CHECK ( (resolved_at IS NULL AND resolved_by IS NULL AND resolution IS NULL AND resolution_blocked_by IS NULL) OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution IS NOT NULL AND resolution_blocked_by IS NOT NULL) )
 
 **Indexes:**
 - `idx_hr_backdate_worklist_open_month` (UNIQUE) on (employee_id, year, month) WHERE resolved_at IS NULL AND kind = 'EXPORTED_MONTH'
