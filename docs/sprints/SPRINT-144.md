@@ -41,8 +41,8 @@ Transcribed from the plan (draft 4). Dispositions are updated at each wave gate;
 |---|---|---|
 | TASK-14400 | MERGED (`5e2f50b`) | wave 1 · `data-model` (Sonnet) · the S144 schema (named CHECK with `HANDLED_MANUALLY`, `resolution_blocked_by`, widened paired constraint, base CREATE + segment) and the event's `BlockedBy` member |
 | TASK-14401 | MERGED (`bffc469`) | wave 1 · `test-qa` (Sonnet) · the pins that compile today (endpoint, repository re-fixture to the 1st, schema facts, the S138 migration line) |
-| TASK-14402 | DISPATCHED (wave 2a) | wave 2a · `rule-engine` (Opus, cross-domain authorized: `SharedKernel/**/Segmentation/**`) · `AgreementCodeChange` boundary, tie-break (R1), structured members on the planner's refusal at both sites |
-| TASK-14403 | PLANNED | wave 2b · `payroll-integration` (Opus, cross-domain: Infrastructure repository + tests) · dates-in-period read (no `effective_to` filter), hydration + ctor param (R2), pure 422 mapping, both handlers, Payroll host factory (marker type) |
+| TASK-14402 | MERGED (`0bdd5a5`) | wave 2a · `rule-engine` (Opus, cross-domain authorized: `SharedKernel/**/Segmentation/**`) · `AgreementCodeChange` boundary, tie-break (R1), structured members on the planner's refusal at both sites |
+| TASK-14403 | DISPATCHED (from `0bdd5a5`) | wave 2b · `payroll-integration` (Opus, cross-domain: Infrastructure repository + tests) · dates-in-period read (no `effective_to` filter), hydration + ctor param (R2), pure 422 mapping, both handlers, Payroll host factory (marker type) |
 | TASK-14404 | DISPATCHED (wave 2a) | wave 2a · `backend-infrastructure` (Opus, Infrastructure + Backend) · the verb, the refusal on the locked snapshot, the stamp, 409 mapping, gate for both verbs |
 | TASK-14405 | AUTHORED (`6f9676d`, rebased; merges at 2b) | authored wave 1, merged at the 2b gate, re-spawned at close · `test-qa` (Sonnet) · the pins that need the new API, mutations M-1…M-14, the expected-red lists, the evidence commits E1/E2 |
 | TASK-14406 | PLANNED | wave 3 · `ux` (Sonnet) · the screen (third verb, label/toast, 409-blocked and 403 branches reading the parsed error body, fixture aligned) |
@@ -148,7 +148,7 @@ At the first dispatch the owner raised that switching the session model clears t
 | | |
 |---|---|
 | **As of** | 2026-09-29, master `bffc469` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
-| **Phase** | Wave-1 gate PASSED; **wave 2a dispatched** (2026-09-29) |
+| **Phase** | Wave-1 gate PASSED; TASK-14402 MERGED (`0bdd5a5`, build 0/145, Unit 1290); TASK-14404 running; **TASK-14403 dispatched early** from `0bdd5a5` — sequencing note: the plan puts 2b after the full 2a gate, but 14403 depends only on 14402 (ledger "Depends on: 14402 merged") and shares no file with 14404, so it was not held behind 14404; the 2a O-1 gate still runs when 14404 merges |
 | **Dispatched tasks / worktrees** | TASK-14402 (`rule-engine`) and TASK-14404 (`backend-infrastructure`), each in a harness worktree from `bffc469`; both may read TASK-14405's pins read-only via `git show worktree-agent-ae5104627ddf4b53d:<path>`. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
 | **Merged** | TASK-14400 (`5e2f50b`), TASK-14407 (`52d577d`), TASK-14401 (`bffc469`); O-3 `4611fd6` |
 | **Pending gates** | wave-2a gate: merge 14402 + 14404 → O-1 → O-2 contract regeneration |
