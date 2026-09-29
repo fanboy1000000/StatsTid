@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using StatsTid.Integrations.Payroll.Services;
@@ -105,9 +106,14 @@ public sealed class PayrollPlanRefusalProblemTests
     }
 
     /// <summary>
-    /// The problem, SERIALIZED, contains no calendar date (<c>\d{4}-\d{2}-\d{2}</c>) and not the
-    /// employee id that the exception's own message names. The precondition asserts the message
-    /// really does carry both — otherwise the redaction assertions could not fail.
+    /// The problem, SERIALIZED, contains no calendar date (<c>\d{4}-\d{2}-\d{2}</c>), neither of
+    /// the refusal's own period dates (ISO form or the machine-culture <c>DateOnly.ToString()</c>
+    /// form) and not the employee id that the exception's own message names. The precondition
+    /// asserts the message really carries the period's start and end in ISO form (the actual
+    /// period dates, not merely SOME date — the planner message also holds the literal
+    /// "as ruled 2026-09-02", which alone satisfied the old regex precondition) and the employee
+    /// id — otherwise the redaction assertions could not fail. The ISO precondition depends on
+    /// TASK-14408 (culture-invariant period rendering) and is red until it merges.
     ///
     /// Red conditions: mutation M-13 — <c>TryCreate</c> sets <c>error = ex.Message</c>. The JSON
     /// then contains the period dates and <c>EMP-REDACT-88213</c>, tripping
@@ -117,14 +123,21 @@ public sealed class PayrollPlanRefusalProblemTests
     public void TryCreate_SplitRefusal_SerializedProblem_ContainsNoDateAndNoEmployeeId()
     {
         var ex = SplitRefusal();
+        var isoStart = Mar01.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var isoEnd = Mar31.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         Assert.Contains(EmployeeId, ex.Message);
-        Assert.Matches(@"\d{4}-\d{2}-\d{2}", ex.Message);
+        Assert.Contains(isoStart, ex.Message);
+        Assert.Contains(isoEnd, ex.Message);
 
         var problem = PayrollPlanRefusalProblem.TryCreate(ex);
         Assert.NotNull(problem);
         var json = ToWireJson(problem!);
 
         Assert.DoesNotMatch(@"\d{4}-\d{2}-\d{2}", json);
+        Assert.DoesNotContain(isoStart, json);
+        Assert.DoesNotContain(isoEnd, json);
+        Assert.DoesNotContain(Mar01.ToString(), json);
+        Assert.DoesNotContain(Mar31.ToString(), json);
         Assert.DoesNotContain(EmployeeId, json);
         Assert.DoesNotContain("88213", json);
     }

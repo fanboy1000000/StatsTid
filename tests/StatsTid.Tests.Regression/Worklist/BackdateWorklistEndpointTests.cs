@@ -610,6 +610,12 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         var handled = await SendResolveAsync(mixed, url, "\"1\"",
             new { resolution = "HANDLED_MANUALLY", reason = "Claiming a manual handling I may not record" });
         Assert.Equal(HttpStatusCode.Forbidden, handled.StatusCode);
+        using (var handledDoc = JsonDocument.Parse(await handled.Content.ReadAsStringAsync()))
+        {
+            var handledReason = handledDoc.RootElement.GetProperty("reason").GetString() ?? string.Empty;
+            Assert.Contains("GlobalAdmin", handledReason, StringComparison.Ordinal);
+            Assert.Contains("HANDLED_MANUALLY", handledReason, StringComparison.Ordinal);
+        }
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolved_at IS NULL AND resolution_blocked_by IS NULL AND version = 1", _openRowId));
         Assert.Equal(0, await CountAsync(

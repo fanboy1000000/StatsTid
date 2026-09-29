@@ -189,8 +189,9 @@ public sealed class BackdateWorklistSerializationTests
     ///
     /// Red conditions: mutation M-5 — <c>[JsonIgnore]</c> on
     /// <c>BackdateWorklistRowResolved.BlockedBy</c>. The two non-null cases then come back
-    /// <c>null</c>, tripping <c>Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, …)</c> (the set
-    /// case runs first, so this is the assertion that fails).
+    /// <c>null</c>, tripping <c>Assert.NotNull(set.BlockedBy)</c> — the first assertion of the set
+    /// case, which runs first, so it is the one that fails (as observed in the wave-2b mutation
+    /// run); the <c>Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, …)</c> after it is never reached.
     /// </summary>
     [Fact]
     public void EventSerializer_RoundTrip_BackdateWorklistRowResolved_BlockedBy_SetEmptyAndNull()

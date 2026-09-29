@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -119,14 +120,19 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified):
     /// (1) mutation M-14 — <c>BuildPlanForLegacyCallersAsync</c> skips the
-    /// <c>AgreementCodeEffectiveDates</c> hydration (passes null), OR the host stops injecting
-    /// <c>UserAgreementCodeRepository</c> into the service: the month plans as ONE segment, the
-    /// stubbed rule engine answers, the correction commits, and the endpoint returns <b>200</b> —
-    /// <c>Assert.Equal(422, status)</c> trips (and the baseline changes).
+    /// <c>AgreementCodeEffectiveDates</c> hydration (passes null): the month plans as ONE segment,
+    /// the stubbed rule engine answers, the correction commits, and the endpoint returns <b>200</b> —
+    /// <c>Assert.Equal(422, status)</c> trips (and the baseline changes). If instead the host stops
+    /// registering <c>UserAgreementCodeRepository</c> in DI, the request FAILS — <b>200</b> or
+    /// <b>500</b> (<c>EmploymentProfileResolver</c> needs the same repository, Program.cs:58, so
+    /// resolution itself may throw) — and either way the 422 assertion goes red.
     /// (2) the <c>/recalculate</c> <c>PlannerInvariantViolation</c> catch is removed → <b>500</b>,
     /// same assertion trips.
-    /// (3) mutation M-13 (<c>error = ex.Message</c>) → the body carries the period dates and the
-    /// employee id; the redaction assertions trip.
+    /// (3) mutation M-13 (<c>error = ex.Message</c>) → the body carries the period start
+    /// (2026-03-01) and end (2026-03-31) — in ISO, and in machine-culture form where the message
+    /// renders them so — and the employee id; <c>AssertRedactedProblem</c> asserts the body
+    /// contains neither date in ISO, machine-culture or invariant-culture form, nor the employee id,
+    /// so those assertions trip.
     /// </summary>
     [Fact]
     public async Task Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged()
@@ -221,6 +227,15 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("ruleId").GetString()));
 
         Assert.DoesNotMatch(IsoDatePattern, json);
+        // The refusal's OWN period dates, in every rendering the exception message could use
+        // (ISO, the machine-culture form, the invariant-culture form) — a bare "no ISO date"
+        // regex would pass a message that rendered them culture-formatted.
+        foreach (var date in new[] { Mar01, Mar31 })
+        {
+            Assert.DoesNotContain(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), json);
+            Assert.DoesNotContain(date.ToString(), json);
+            Assert.DoesNotContain(date.ToString(CultureInfo.InvariantCulture), json);
+        }
         Assert.DoesNotContain(employeeId, json);
     }
 
