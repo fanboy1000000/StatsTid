@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using StatsTid.Auth;
@@ -183,9 +184,11 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// (1) the export handler's <c>PlannerInvariantViolation</c> catch around
     /// <c>CalculateWithOutcomeAsync</c> is removed → the refusal escapes as <b>500</b>;
     /// <c>Assert.Equal(422, status)</c> trips.
-    /// (2) mutation M-14 (hydration skipped / repository not injected) → one segment, the month
-    /// calculates and exports: <b>200</b>, plus an export record and a manifest — the status and
-    /// both row-count assertions trip.
+    /// (2) mutation M-14 → one segment; the month calculates and the export record and manifest are
+    /// committed; on this shared factory the post-commit delivery stub answers 404, so the handler
+    /// returns 422 with an <c>ExportResult</c> body that carries no <c>kind</c> —
+    /// <c>AssertRedactedProblem</c> fails on the missing property (and both row counts are 1). Red,
+    /// but not the 200 that (a) sees.
     /// </summary>
     [Fact]
     public async Task CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest()
@@ -319,9 +322,9 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// the months the planner refuses; it does not turn every raw export into a 422.
     ///
     /// Green before AND after the guard (no mutation targets it); in neither frozen RED list — it is
-    /// a GREEN spot check for both runs. It would go red if the guard over-refused (e.g. planned the
-    /// whole request span, or a fixed wider window, instead of the calendar month) or failed to
-    /// resolve its dependencies in the host (a 500).
+    /// a GREEN spot check for both runs. It would go red if the guard over-refused (e.g. planned a
+    /// fixed wider window reaching 16 March instead of the calendar month) or failed to resolve its
+    /// dependencies in the host (a 500).
     /// </summary>
     [Fact]
     public async Task Export_MonthWithoutInteriorChange_StillExports_200()
@@ -342,6 +345,203 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         Assert.True(response.StatusCode == HttpStatusCode.OK,
             $"expected 200, got {(int)response.StatusCode}: {json}");
         Assert.Equal(1, await CountExportRecordsAsync(employeeId, Year, 2));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // (d) Rule Engine outage — S144 TASK-14412 (Step 7a cycle 2, ruling B1)
+    // ═════════════════════════════════════════════════════════════════════
+    //
+    // The planner refuses a split month only when the rule classification set it is given contains a
+    // Reject / AlignedWindow rule. Before TASK-14412 the HTTP provider answered a Rule Engine outage
+    // with an EMPTY set, so every route planned blind and the (c) months exported. Now the provider
+    // throws RuleClassificationsUnavailableException and every planning route answers a fixed 503
+    // before anything is written.
+    //
+    // These facts run on UnavailableRulesFactory(): the REAL HttpRuleClassificationProvider over a
+    // client whose every call answers 503 (so the real provider throws inside the real host, and the
+    // real handler maps it), plus the (c) delivering handler — so that a provider reverted to "empty"
+    // lets the export complete as a clean 200 rather than a look-alike 422.
+
+    /// <summary>
+    /// (d1) <c>POST /api/payroll/export</c> with the (c1) seed and body, while the Rule Engine's
+    /// classifications endpoint answers 503 → <b>503</b>, <c>kind = payroll-rules-unavailable</c>,
+    /// <c>success = false</c>, no ISO date and no employee id in the body; NO March export record.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
+    /// (1) the provider reverts to returning an empty set on failure → the guard is blind, the route
+    /// maps and exports → <b>200</b> plus a March record; the 503 assertion trips.
+    /// (2) the <c>RuleClassificationsUnavailableException</c> catch in
+    /// <c>RefuseUnplannableMonthsAsync</c> is removed → <b>500</b>; the 503 assertion trips.
+    /// </summary>
+    [Fact]
+    public async Task Export_RulesUnavailable_Returns503_NoExportRecord()
+    {
+        const string employeeId = "EMP-S144-HOST-RULES-RAW";
+        await SeedEmployeeAsync(employeeId);
+        await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
+
+        var body = new PayrollExportRequest
+        {
+            CalculationResult = RawResult(employeeId, new DateOnly(2026, 3, 2), new DateOnly(2026, 3, 20)),
+            Profile = Profile(employeeId),
+        };
+
+        var response = await PostAsGlobalAdminAsync(UnavailableRulesFactory(), "/api/payroll/export", body);
+        var json = await response.Content.ReadAsStringAsync();
+
+        AssertRulesUnavailable(response, json, employeeId);
+        Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, Month));
+    }
+
+    /// <summary>
+    /// (d2) <c>POST /api/payroll/export-period</c> with the (c2) seed and body (February + March),
+    /// while the Rule Engine's classifications endpoint answers 503 → <b>503</b> with the fixed body;
+    /// NO February and NO March export record.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
+    /// (1) the provider reverts to returning an empty set on failure → both months export →
+    /// <b>200</b> plus two records; the 503 assertion trips.
+    /// (2) the catch in <c>RefuseUnplannableMonthsAsync</c> is removed → <b>500</b>; same trip.
+    /// </summary>
+    [Fact]
+    public async Task ExportPeriod_RulesUnavailable_Returns503_NoExportRecord()
+    {
+        const string employeeId = "EMP-S144-HOST-RULES-PERIOD";
+        await SeedEmployeeAsync(employeeId);
+        await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
+
+        var body = new PayrollPeriodExportRequest
+        {
+            CalculationResults = new List<CalculationResult>
+            {
+                RawResult(employeeId, new DateOnly(2026, 2, 2), new DateOnly(2026, 2, 16)),
+                RawResult(employeeId, new DateOnly(2026, 3, 2), new DateOnly(2026, 3, 20)),
+            },
+            Profile = Profile(employeeId),
+        };
+
+        var response = await PostAsGlobalAdminAsync(UnavailableRulesFactory(), "/api/payroll/export-period", body);
+        var json = await response.Content.ReadAsStringAsync();
+
+        AssertRulesUnavailable(response, json, employeeId);
+        Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, 2));
+        Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, Month));
+    }
+
+    /// <summary>
+    /// (d3) <c>POST /api/payroll/calculate-and-export</c> with the (b) seed and body (APPROVED
+    /// March, agreement-code change on 16 March), while the Rule Engine's classifications endpoint
+    /// answers 503 → <b>503</b> with the fixed body; zero <c>payroll_export_records</c> and zero
+    /// <c>segment_manifests</c> rows (the plan is built before anything is calculated or persisted).
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
+    /// (1) the provider reverts to returning an empty set on failure → the planner does not refuse,
+    /// the month calculates and exports, delivery answers → <b>200</b> plus a record and a manifest;
+    /// the 503 assertion trips.
+    /// (2) the <c>RuleClassificationsUnavailableException</c> catch around
+    /// <c>CalculateWithOutcomeAsync</c> is removed → <b>500</b>; same trip.
+    /// </summary>
+    [Fact]
+    public async Task CalculateAndExport_RulesUnavailable_Returns503_NoExportRecord_NoManifest()
+    {
+        const string employeeId = "EMP-S144-HOST-RULES-CALC";
+        await SeedEmployeeAsync(employeeId);
+        await SeedApprovedPeriodAsync(employeeId);
+        await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
+
+        var body = new
+        {
+            profile = Profile(employeeId),
+            entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31),
+            absences = Array.Empty<AbsenceEntry>(),
+            periodStart = Mar01,
+            periodEnd = Mar31,
+            previousFlexBalance = 0m,
+        };
+
+        var response = await PostAsGlobalAdminAsync(UnavailableRulesFactory(), "/api/payroll/calculate-and-export", body);
+        var json = await response.Content.ReadAsStringAsync();
+
+        AssertRulesUnavailable(response, json, employeeId);
+        Assert.Equal(0, await CountAsync("payroll_export_records", employeeId));
+        Assert.Equal(0, await CountAsync("segment_manifests", employeeId));
+    }
+
+    /// <summary>
+    /// (d4) <c>POST /api/payroll/recalculate</c> with the (a) seed and body (exported March,
+    /// agreement-code change recorded on 16 March), while the Rule Engine's classifications endpoint
+    /// answers 503 → <b>503</b> with the fixed body; <c>current_effective_lines</c> is unchanged
+    /// (the correction service plans before it opens its transaction).
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
+    /// (1) the provider reverts to returning an empty set on failure → the planner does not refuse,
+    /// the correction commits → <b>200</b> and the baseline changes; the 503 and baseline assertions
+    /// trip.
+    /// (2) the <c>RuleClassificationsUnavailableException</c> catch in the <c>/recalculate</c>
+    /// handler is removed → <b>500</b>; the 503 assertion trips.
+    /// </summary>
+    [Fact]
+    public async Task Recalculate_RulesUnavailable_Returns503_LinesUnchanged()
+    {
+        const string employeeId = "EMP-S144-HOST-RULES-RECALC";
+        await SeedEmployeeAsync(employeeId);
+        await PersistFirstExportRecordAsync(employeeId);
+        await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
+        var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId);
+
+        var body = new
+        {
+            profile = Profile(employeeId),
+            entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31),
+            absences = Array.Empty<AbsenceEntry>(),
+            periodStart = Mar01,
+            periodEnd = Mar31,
+            previousFlexBalance = 0m,
+            reason = "S144 host pin — Rule Engine outage during a correction",
+            idempotencyToken = Guid.NewGuid(),
+        };
+
+        var response = await PostAsGlobalAdminAsync(UnavailableRulesFactory(), "/api/payroll/recalculate", body);
+        var json = await response.Content.ReadAsStringAsync();
+
+        AssertRulesUnavailable(response, json, employeeId);
+        Assert.Equal(linesBefore, await ReadCurrentEffectiveLinesAsync(employeeId));
+    }
+
+    /// <summary>The shared host with TWO swaps on top: (1) the (c) delivering handler for every
+    /// outbound client (POST <c>/api/payroll/receive</c> answers 200, everything else goes to the
+    /// shared Rule Engine stub); (2) the REAL <see cref="HttpRuleClassificationProvider"/> in place
+    /// of the in-memory set, over its own client whose every response is 503, with
+    /// <see cref="JwtTokenService"/> and the logger taken from the host's own container. Derived
+    /// factories are disposed with <see cref="_factory"/>.</summary>
+    private WebApplicationFactory<RetroactiveCorrectionService> UnavailableRulesFactory() =>
+        _factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IHttpClientFactory>();
+            services.AddSingleton<IHttpClientFactory>(new DeliveringClientFactory());
+
+            services.RemoveAll<IRuleClassificationProvider>();
+            services.AddSingleton<IRuleClassificationProvider>(sp => new HttpRuleClassificationProvider(
+                new HttpClient(new TestFixtures.StubHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)))
+                {
+                    BaseAddress = new Uri("http://rule-engine.test"),
+                },
+                sp.GetRequiredService<JwtTokenService>(),
+                sp.GetRequiredService<ILogger<HttpRuleClassificationProvider>>()));
+        }));
+
+    private static void AssertRulesUnavailable(HttpResponseMessage response, string json, string employeeId)
+    {
+        Assert.True(response.StatusCode == HttpStatusCode.ServiceUnavailable,
+            $"expected 503, got {(int)response.StatusCode}: {json}");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal("payroll-rules-unavailable", root.GetProperty("kind").GetString());
+        Assert.False(root.GetProperty("success").GetBoolean());
+
+        Assert.DoesNotMatch(IsoDatePattern, json);
+        Assert.DoesNotContain(employeeId, json);
     }
 
     /// <summary>A caller-calculated result: one NORMAL_HOURS line (7.4 h) on each given date —
@@ -368,8 +568,11 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
     private sealed class DeliveringClientFactory : IHttpClientFactory
     {
+        // Exactly POST /api/payroll/receive — the path PayrollExportService posts delivery to
+        // ({ServiceUrls:MockPayroll}/api/payroll/receive, via PostAsJsonAsync).
         private readonly HttpMessageHandler _handler = new TestFixtures.StubHandler(request =>
-            (request.RequestUri?.AbsolutePath ?? string.Empty).EndsWith("/api/payroll/receive", StringComparison.Ordinal)
+            request.Method == HttpMethod.Post
+            && string.Equals(request.RequestUri?.AbsolutePath, "/api/payroll/receive", StringComparison.Ordinal)
                 ? new HttpResponseMessage(HttpStatusCode.OK)
                 : TestFixtures.DefaultRuleEngineHandler(request));
 

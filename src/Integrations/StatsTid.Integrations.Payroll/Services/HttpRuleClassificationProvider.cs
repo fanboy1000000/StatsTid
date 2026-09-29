@@ -39,13 +39,25 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
-/// <strong>Failure mode</strong>: if the first fetch fails (Rule Engine unreachable, 5xx,
-/// JSON parse error), the provider logs a warning and returns
-/// <see cref="Array.Empty{RuleClassification}"/> WITHOUT caching the empty result —
-/// subsequent calls retry the fetch. This matches the documented contract: returning empty
-/// silences D9 invariants and routes per-rule MergeStrategy lookup through the "default to
-/// Concatenate with warning" fallback in PCS, which is degraded-but-correct rather than
-/// fatally aborted.
+/// <strong>Failure mode</strong> (TASK-14412, S144 Step 7a cycle 2, ruling B1): if the fetch
+/// fails (Rule Engine unreachable, non-success status, null or unreadable body), the provider
+/// logs a warning — the upstream status and body go to the log only — and throws
+/// <see cref="RuleClassificationsUnavailableException"/>. Nothing is cached on failure, so the
+/// next call fetches again and a transient outage recovers on its own.
+/// </para>
+///
+/// <para>
+/// <strong>Why "unavailable" and "empty" must never be the same value.</strong> Sprint 20 returned
+/// an empty list on failure and called it "degraded but correct": at that time the classifications
+/// only chose how per-segment results were merged, so a missing set cost precision, not
+/// correctness. That premise is retired. Since S137/S144 the planner uses the same set to decide
+/// whether a month with a mid-month change (for example an agreement-code change) may be
+/// calculated at all — it refuses the month only when it can see a Reject or AlignedWindow rule.
+/// An empty list reads as "there is nothing to refuse", so an outage used to make every payroll
+/// route plan blind and export a split month with wrong lines. "I could not find out" is now a
+/// distinct signal, and the routes answer it with a 503 before anything is calculated, written or
+/// exported. An empty list is legitimate only from <see cref="EmptyRuleClassificationProvider"/>
+/// (the test fallback), meaning a genuinely empty registry.
 /// </para>
 ///
 /// <para>
@@ -101,10 +113,10 @@ public sealed class HttpRuleClassificationProvider : IRuleClassificationProvider
                 return fetched;
             }
 
-            // Fetch failed: return an empty list WITHOUT caching it. The empty result silences
-            // D9 invariants in PCS (warning-logged at the merge step) but the next call will
-            // retry the fetch, so transient Rule Engine outages auto-recover.
-            return Array.Empty<RuleClassification>();
+            // Fetch failed (TASK-14412): signal "unavailable" distinctly — never an empty list,
+            // which the planner would read as "no rule forbids a split". Nothing is cached, so
+            // the next call retries and a transient Rule Engine outage auto-recovers.
+            throw new RuleClassificationsUnavailableException();
         }
     }
 
@@ -158,7 +170,7 @@ public sealed class HttpRuleClassificationProvider : IRuleClassificationProvider
         {
             _logger.LogWarning(ex,
                 "Failed to fetch rule classifications from Rule Engine. " +
-                "D9 rule-side invariants will be silenced until the next call recovers.");
+                "Payroll planning is refused (503) until the next call recovers.");
             return null;
         }
     }

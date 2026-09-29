@@ -895,7 +895,9 @@ public sealed class PeriodCalculationService
     /// There is no second copy of the boundary logic to drift, and no caller-supplied "already
     /// checked" flag. The day the planner learns to split such a month instead of refusing it
     /// (QUAL-149), this guard stops refusing on its own. It writes nothing: no manifest, no event,
-    /// no row — the plan is built in memory and dropped.
+    /// no row — the plan is built in memory and dropped. When the rule classification set cannot
+    /// be obtained, it throws <see cref="RuleClassificationsUnavailableException"/> rather than
+    /// planning blind (the routes map that to a 503; S144 TASK-14412).
     /// </para>
     /// </summary>
     public async Task EnsurePeriodPlannableAsync(
@@ -2057,23 +2059,33 @@ public interface IRuleClassificationProvider
 {
     /// <summary>
     /// Returns the resolved rule-classification set for the current process. Implementations
-    /// may cache the response across calls (the Rule Engine's registry is immutable per
-    /// process startup), and MUST return a non-null list (use <see cref="Array.Empty{T}"/>
-    /// when there is genuinely nothing to return — that disables D9 invariants and produces
-    /// a warning at the merge step, but does not throw).
+    /// may cache a SUCCESSFUL response across calls (the Rule Engine's registry is immutable per
+    /// process startup) and never return null.
+    ///
+    /// <para>
+    /// <strong>Unavailable is not empty</strong> (S144 TASK-14412, ruling B1). An implementation
+    /// that resolves the set at runtime (e.g. <see cref="HttpRuleClassificationProvider"/>) THROWS
+    /// <see cref="RuleClassificationsUnavailableException"/> when it cannot obtain it, and caches
+    /// nothing so the next call retries. An empty list means a genuinely empty registry, never an
+    /// unknown one: the planner refuses a split month only when it can see a Reject or
+    /// AlignedWindow rule, so an "empty because I could not find out" would silently let a wrong
+    /// month through. The S20 "empty on failure is degraded but correct" contract is retired.
+    /// </para>
     /// </summary>
     IReadOnlyList<RuleClassification> GetClassifications();
 }
 
 /// <summary>
-/// Empty fallback used when no <see cref="IRuleClassificationProvider"/> is registered
-/// in DI. Returns an empty list, which silences D9 invariants and routes every per-rule
-/// MergeStrategy lookup through the "default to Concatenate with warning" fallback in
-/// <see cref="PeriodCalculationService"/>.
+/// Empty fallback used when no <see cref="IRuleClassificationProvider"/> is passed to the
+/// <see cref="PeriodCalculationService"/> constructor — i.e. in TESTS. It models a genuinely
+/// empty registry: no D9 invariants fire, no split refusal fires, and every per-rule
+/// MergeStrategy lookup goes through the "default to Concatenate with warning" fallback.
 ///
 /// <para>
-/// <strong>Not for production use</strong>: install a real (HTTP-backed or in-process)
-/// implementation in <c>Program.cs</c> as part of TASK-2010 wiring.
+/// <strong>Tests only; never a stand-in for an outage.</strong> Production always registers
+/// <see cref="HttpRuleClassificationProvider"/> in <c>Program.cs</c>, which throws
+/// <see cref="RuleClassificationsUnavailableException"/> (a 503 at the routes) when the Rule
+/// Engine is unreachable — it never degrades to this empty set (S144 TASK-14412, ruling B1).
 /// </para>
 /// </summary>
 public sealed class EmptyRuleClassificationProvider : IRuleClassificationProvider

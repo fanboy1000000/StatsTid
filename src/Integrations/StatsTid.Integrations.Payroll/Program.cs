@@ -123,9 +123,12 @@ builder.Services.AddSingleton<JwtTokenService>();
 // registration is in place, D9 rule-side invariants fire on every calculation against
 // the live RuleRegistry contents fetched from /api/rules/classifications.
 //
-// EmptyRuleClassificationProvider (defined in PeriodCalculationService.cs) is retained
-// for tests and for any environment where the Rule Engine is unreachable; it remains
-// the documented fallback when this DI registration is absent.
+// EmptyRuleClassificationProvider (defined in PeriodCalculationService.cs) is retained for
+// TESTS ONLY — the constructor fallback when no provider is registered. It is never a stand-in
+// for an unreachable Rule Engine: since S144 (TASK-14412, ruling B1) this provider throws
+// RuleClassificationsUnavailableException when it cannot fetch the set, and every route that
+// plans answers that with a 503 (RulesUnavailable below) — never a silent empty set, which the
+// planner would read as "no rule forbids a split".
 builder.Services.AddHttpClient<IRuleClassificationProvider, HttpRuleClassificationProvider>(client =>
 {
     var ruleEngineUrl = builder.Configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
@@ -349,6 +352,13 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         // violation is a bug and falls through as a 500.
         return Results.Json(problem, statusCode: 422);
     }
+    catch (RuleClassificationsUnavailableException)
+    {
+        // S144 TASK-14412 (ruling B1): the rule set could not be fetched, so the month could not be
+        // checked. The plan is built before anything is calculated or written → nothing exists to
+        // undo. Fixed 503; the upstream detail stays in the provider's log.
+        return RulesUnavailable();
+    }
 
     // Thread the manifest id (and degraded audit state, when applicable) into HttpContext.Items
     // BEFORE returning, so the AuditLoggingMiddleware — which reads Items AFTER the endpoint runs
@@ -504,6 +514,13 @@ app.MapPost("/api/payroll/recalculate", async (
         // planner violation is a bug and falls through as a 500.
         return Results.Json(problem, statusCode: 422);
     }
+    catch (RuleClassificationsUnavailableException)
+    {
+        // S144 TASK-14412 (ruling B1): the rule set could not be fetched. The correction service
+        // plans (inside CalculateAsync) BEFORE it opens its transaction, so the export baseline, the
+        // correction event and the idempotency marker are all untouched. Fixed 503.
+        return RulesUnavailable();
+    }
 
     if (!result.Success)
         return Results.UnprocessableEntity(result);
@@ -581,10 +598,30 @@ static async Task<IResult?> RefuseUnplannableMonthsAsync(
             // causes, never dates or the employee id). Any other violation falls through as a 500.
             return Results.Json(problem, statusCode: 422);
         }
+        catch (RuleClassificationsUnavailableException)
+        {
+            // S144 TASK-14412 (ruling B1): the rule set could not be fetched, so the month could
+            // not be checked — refuse the whole call before anything is mapped or written.
+            return RulesUnavailable();
+        }
     }
 
     return null;
 }
+
+// S144 TASK-14412 (Step 7a cycle 2, ruling B1) — the ONE response for "the Rule Engine's rule
+// classification set could not be obtained, so the period could not be planned". 503 because the
+// cause is a dependency outage and the caller should retry. The body is FIXED: no employee id, no
+// dates, and never the upstream status or body (the provider logs those; the route never echoes
+// them). Shared by RefuseUnplannableMonthsAsync (both raw routes), /calculate-and-export and
+// /recalculate.
+static IResult RulesUnavailable() =>
+    Results.Json(new
+    {
+        success = false,
+        error = "The rule set could not be obtained from the Rule Engine, so the period could not be checked. Nothing was calculated, written or exported. Retry when the Rule Engine is reachable.",
+        kind = "payroll-rules-unavailable"
+    }, statusCode: 503);
 
 // S90 / TASK-9002 — builds the PayrollExportContext for the raw /export + /export-period
 // endpoints (the calculate-and-export path builds its own context inline because it already

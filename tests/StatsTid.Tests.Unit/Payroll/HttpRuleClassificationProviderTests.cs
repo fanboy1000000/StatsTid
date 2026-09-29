@@ -97,24 +97,39 @@ public sealed class HttpRuleClassificationProviderTests
     }
 
     [Fact]
-    public void GetClassifications_ReturnsEmpty_OnHttpFailure()
+    public void GetClassifications_Throws_OnHttpFailure()
     {
-        // Rule Engine 5xx -> empty list (D9 silenced, warning logged).
+        // TASK-14412 (S144 Step 7a cycle 2, B1): a Rule Engine 5xx must surface as
+        // RuleClassificationsUnavailableException, never as an empty list. Since S137/S144 the
+        // classification set gates payroll correctness (the planner refuses a split month only
+        // when it sees a Reject/AlignedWindow rule), so "empty" and "unknown" must never be the
+        // same value. Red on K' (the provider returned Array.Empty).
         var provider = BuildProviderWithHandler(new StubHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.InternalServerError)
             {
                 Content = new StringContent("oops")
             }));
 
-        var result = provider.GetClassifications();
-
-        Assert.Empty(result);
+        Assert.Throws<RuleClassificationsUnavailableException>(() => provider.GetClassifications());
     }
 
     [Fact]
-    public void GetClassifications_DoesNotCacheEmptyFallback()
+    public void GetClassifications_Throws_OnTransportFailure()
     {
-        // Failure path: empty result should NOT be cached so a transient outage auto-recovers.
+        // TASK-14412: the real outage shape - the Rule Engine is unreachable, so the handler
+        // throws HttpRequestException. This exercises the provider's catch-all branch, which
+        // must also end in RuleClassificationsUnavailableException rather than an empty list.
+        var provider = BuildProviderWithHandler(new StubHandler(_ =>
+            throw new HttpRequestException("connection refused")));
+
+        Assert.Throws<RuleClassificationsUnavailableException>(() => provider.GetClassifications());
+    }
+
+    [Fact]
+    public void GetClassifications_DoesNotCacheFailure_NextCallRefetches()
+    {
+        // TASK-14412: a failure is still NOT cached, so a transient outage auto-recovers - the
+        // first call throws, the second fetches again and returns the real set.
         var callCount = 0;
         var handler = new StubHandler(req =>
         {
@@ -136,10 +151,9 @@ public sealed class HttpRuleClassificationProviderTests
 
         var provider = BuildProviderWithHandler(handler);
 
-        var first = provider.GetClassifications();
+        Assert.Throws<RuleClassificationsUnavailableException>(() => provider.GetClassifications());
         var second = provider.GetClassifications();
 
-        Assert.Empty(first);
         Assert.Single(second);
         Assert.Equal(2, callCount);
     }
