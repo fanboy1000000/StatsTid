@@ -5585,6 +5585,7 @@ export interface components {
             resolution: string;
             /** Format: date-time */
             resolvedAt: string;
+            resolutionBlockedBy: string[];
             /** Format: int64 */
             version: number;
         };
@@ -5614,6 +5615,7 @@ export interface components {
             resolvedBy: string | null;
             resolution: string | null;
             resolutionReason: string | null;
+            resolutionBlockedBy: string[] | null;
             /** Format: int64 */
             version: number;
         };

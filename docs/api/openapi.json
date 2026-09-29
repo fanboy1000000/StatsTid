@@ -6099,6 +6099,7 @@
         "required": [
           "employeeId",
           "resolution",
+          "resolutionBlockedBy",
           "resolvedAt",
           "version",
           "worklistId"
@@ -6118,6 +6119,12 @@
           "resolvedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "resolutionBlockedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "version": {
             "type": "integer",
@@ -6139,6 +6146,7 @@
           "recalcBlockedBy",
           "recalculatedSince",
           "resolution",
+          "resolutionBlockedBy",
           "resolutionReason",
           "resolvedAt",
           "resolvedBy",
@@ -6226,6 +6234,13 @@
           },
           "resolutionReason": {
             "type": "string",
+            "nullable": true
+          },
+          "resolutionBlockedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
             "nullable": true
           },
           "version": {
