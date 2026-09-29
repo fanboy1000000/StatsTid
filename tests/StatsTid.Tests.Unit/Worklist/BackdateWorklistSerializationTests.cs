@@ -159,4 +159,79 @@ public sealed class BackdateWorklistSerializationTests
         Assert.Equal(1L, result.VersionBefore);
         Assert.Equal(2L, result.VersionAfter);
     }
+
+    // ── S144 / TASK-14405 — BlockedBy on BackdateWorklistRowResolved ─────────────────────────
+    //
+    // Three states are distinct and must survive the wire: null (a PRE-S144 event, never stamped),
+    // [] (resolved with nothing blocked), and a non-empty set. Collapsing null and [] would make
+    // history say "nothing was blocked" about events that never recorded it.
+
+    private static BackdateWorklistRowResolved ResolvedEvent(IReadOnlyList<string>? blockedBy) => new()
+    {
+        EventId = Guid.NewGuid(),
+        ActorId = "hr01",
+        WorklistId = Guid.NewGuid(),
+        EmployeeId = "emp1",
+        Kind = "EXPORTED_MONTH",
+        Year = 2026,
+        Month = 8,
+        Resolution = "HANDLED_MANUALLY",
+        Reason = "Paid by hand",
+        TriggerCount = 1,
+        VersionBefore = 1,
+        VersionAfter = 2,
+        BlockedBy = blockedBy,
+    };
+
+    /// <summary>
+    /// <c>BlockedBy</c> round-trips through the production <see cref="EventSerializer"/> as
+    /// <c>null</c>, <c>[]</c> and <c>["QUAL-149","QUAL-150"]</c> (order preserved).
+    ///
+    /// Red conditions: mutation M-5 — <c>[JsonIgnore]</c> on
+    /// <c>BackdateWorklistRowResolved.BlockedBy</c>. The two non-null cases then come back
+    /// <c>null</c>, tripping <c>Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, …)</c> (the set
+    /// case runs first, so this is the assertion that fails).
+    /// </summary>
+    [Fact]
+    public void EventSerializer_RoundTrip_BackdateWorklistRowResolved_BlockedBy_SetEmptyAndNull()
+    {
+        var set = Assert.IsType<BackdateWorklistRowResolved>(EventSerializer.Deserialize(
+            "BackdateWorklistRowResolved", EventSerializer.Serialize(ResolvedEvent(new[] { "QUAL-149", "QUAL-150" }))));
+        Assert.NotNull(set.BlockedBy);
+        Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, set.BlockedBy);
+
+        var empty = Assert.IsType<BackdateWorklistRowResolved>(EventSerializer.Deserialize(
+            "BackdateWorklistRowResolved", EventSerializer.Serialize(ResolvedEvent(Array.Empty<string>()))));
+        Assert.NotNull(empty.BlockedBy);
+        Assert.Empty(empty.BlockedBy!);
+
+        var none = Assert.IsType<BackdateWorklistRowResolved>(EventSerializer.Deserialize(
+            "BackdateWorklistRowResolved", EventSerializer.Serialize(ResolvedEvent(null))));
+        Assert.Null(none.BlockedBy);
+    }
+
+    /// <summary>
+    /// A PRE-S144 payload — the event JSON with no <c>blockedBy</c> key at all — deserializes to
+    /// <c>null</c> (not <c>[]</c>, not an error). Built by serializing a stamped event and
+    /// removing the key, so every other required member is real.
+    ///
+    /// Red conditions: no named mutation (a compatibility pin: it holds while <c>BlockedBy</c> is a
+    /// nullable, non-required member). Goes red if the member becomes <c>required</c> (the
+    /// deserialize throws) or defaults to an empty list (<c>Assert.Null</c> trips).
+    /// </summary>
+    [Fact]
+    public void EventSerializer_Deserialize_BackdateWorklistRowResolved_JsonWithoutBlockedBy_YieldsNull()
+    {
+        var json = EventSerializer.Serialize(ResolvedEvent(new[] { "QUAL-149" }));
+        var node = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+        var key = node.Select(kv => kv.Key).Single(k => string.Equals(k, "blockedBy", StringComparison.OrdinalIgnoreCase));
+        node.Remove(key);
+        Assert.DoesNotContain("blockedBy", node.ToJsonString(), StringComparison.OrdinalIgnoreCase);
+
+        var result = Assert.IsType<BackdateWorklistRowResolved>(
+            EventSerializer.Deserialize("BackdateWorklistRowResolved", node.ToJsonString()));
+
+        Assert.Null(result.BlockedBy);
+        Assert.Equal("HANDLED_MANUALLY", result.Resolution);
+    }
 }

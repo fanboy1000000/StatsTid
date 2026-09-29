@@ -366,6 +366,81 @@ public sealed class BackdateWorklistDerivationTests
         Assert.False(BackdateWorklistDerivation.SettledYearThreatened("VACATION", 9, 2030, from, to, null));
     }
 
+    // ── S144 / TASK-14405 — the factored derivation core (kind, year, month, triggers) ───────
+    //
+    // Spec: the "blocked" set is ONE function of (row kind, year, month, triggers). The read path
+    // calls it with a fully-read row; the resolve path calls it with the LOCKED row's own triggers
+    // (so the verdict binds at the moment of the write, PAT-026). Both must give the same answer.
+
+    /// <summary>
+    /// The factored overload and the row overload are the same function over the same data (the
+    /// read path and the locked-snapshot path cannot drift apart).
+    ///
+    /// Red conditions: no named mutation — this is an equality pin between two entry points; it
+    /// goes red if either overload diverges from the other (e.g. the row overload stops
+    /// delegating), tripping <c>Assert.Equal(viaRow, viaCore)</c>.
+    /// </summary>
+    [Fact]
+    public void RecalcBlockedBy_FactoredOverload_EqualsRowOverload_OnTheSameData()
+    {
+        var triggers = new[]
+        {
+            Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 4, 20), baselineHash: "h1"),
+            Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 4, 10), baselineHash: "h1"),
+            Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 4, 1), baselineHash: "h1"),
+        };
+        var row = ExportedMonthRow(2026, 4, "h1", triggers);
+
+        var viaRow = BackdateWorklistDerivation.RecalcBlockedBy(row);
+        var viaCore = BackdateWorklistDerivation.RecalcBlockedBy(WorklistKinds.ExportedMonth, 2026, 4, triggers);
+
+        Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, viaCore);
+        Assert.Equal(viaRow, viaCore);
+    }
+
+    /// <summary>
+    /// The month fenceposts through the factored core, with a PROFILE_CHANGE trigger in August
+    /// 2026: the 1st coincides with the period start (one segment, nothing blocked); the 2nd and
+    /// the LAST day split the month (QUAL-149).
+    ///
+    /// Red conditions: no named mutation (the fencepost predicate <c>IsStrictlyInsideMonth</c> is
+    /// already pinned; this pins that the factored core applies it). Goes red if the core stops
+    /// calling it or shifts the fencepost, tripping the <c>Assert.Empty</c> on the 1st or the
+    /// <c>Assert.Equal(["QUAL-149"], …)</c> on the 2nd / 31st.
+    /// </summary>
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(2, true)]
+    [InlineData(31, true)]
+    public void RecalcBlockedBy_FactoredOverload_AugustFenceposts_ProfileChange(int day, bool blocked)
+    {
+        var triggers = new[] { Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 8, day), baselineHash: "h1") };
+
+        var result = BackdateWorklistDerivation.RecalcBlockedBy(WorklistKinds.ExportedMonth, 2026, 8, triggers);
+
+        if (blocked)
+            Assert.Equal(new[] { "QUAL-149" }, result);
+        else
+            Assert.Empty(result);
+    }
+
+    /// <summary>
+    /// A SETTLED_YEAR row is never blocked this way (its fix is reverse-then-re-settle, not a
+    /// re-plan) — pinned through the factored core with year AND month supplied and a trigger
+    /// strictly inside that month, so the KIND check is the only thing that can make the answer empty.
+    ///
+    /// Red conditions: mutation M-4 — factored <c>RecalcBlockedBy</c> drops the EXPORTED_MONTH
+    /// kind check. The trigger is then evaluated against 2026-08 and the call returns
+    /// <c>["QUAL-149"]</c>, tripping <c>Assert.Empty</c>.
+    /// </summary>
+    [Fact]
+    public void RecalcBlockedBy_FactoredOverload_SettledYearKind_Empty_EvenWithYearMonthAndInteriorTrigger()
+    {
+        var triggers = new[] { Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 8, 15), baselineSequence: 1) };
+
+        Assert.Empty(BackdateWorklistDerivation.RecalcBlockedBy(WorklistKinds.SettledYear, 2026, 8, triggers));
+    }
+
     // ── builders ─────────────────────────────────────────────────────────────────────────────
 
     private static readonly DateTimeOffset AppendedAt = new(2026, 9, 3, 8, 0, 0, TimeSpan.Zero);
