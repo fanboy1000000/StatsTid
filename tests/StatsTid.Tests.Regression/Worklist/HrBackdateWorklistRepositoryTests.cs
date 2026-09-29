@@ -812,8 +812,12 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
 
     /// <summary>
     /// (1a) RECALCULATED on a blocked row, matching version → <see cref="BackdateWorklistRecalcBlockedException"/>
-    /// carrying the worklist id and <c>BlockedBy = ["QUAL-149"]</c>; NOTHING is written: the row is
-    /// still open at version 1, no <c>BackdateWorklistRowResolved</c> event, no audit row.
+    /// carrying the worklist id and <c>BlockedBy = ["QUAL-149"]</c>; the fact observes NOTHING
+    /// COMMITTED: the row is still open at version 1, no <c>BackdateWorklistRowResolved</c> event,
+    /// no audit row. Stated plainly, this does NOT prove the refusal precedes any write: the
+    /// helper's transaction is disposed (rolled back) when the exception propagates, so a write
+    /// made before the throw would be undone and the assertions would still pass. It pins the
+    /// outcome (nothing persisted), not the order of the throw relative to the write.
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): mutation M-1 — in
     /// <c>HrBackdateWorklistRepository.ResolveAsync</c> remove the

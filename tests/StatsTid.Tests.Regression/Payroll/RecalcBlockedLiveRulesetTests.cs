@@ -247,8 +247,10 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
     {
         const string employeeId = "EMP-S144-STRADDLE-AGR";
         await SeedEmployeeAsync(employeeId);
-        // The seeded wage-type mappings cover HK only; the successor agreement needs its own row
-        // so the second segment's export lines can be mapped.
+        // The seeded wage-type mappings cover HK only. This AC row is seeded for when QUAL-150
+        // lands (per-segment agreement in the mapping) and is UNUSED today: mapping reads the
+        // agreement key hydrated ONCE from the caller's profile (PeriodCalculationService.cs
+        // :1049-1053, :1696-1698) — which is QUAL-150 itself — not the second segment's code.
         await SeedSuccessorWageTypeMappingAsync();
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31);
