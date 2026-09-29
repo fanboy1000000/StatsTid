@@ -123,7 +123,7 @@ if ($prompt -match 'reviewed-by-model:?\s*<' -or $prompt -match 'authori[sz]ed\s
 if ($OpusRoles -contains $type) {
     if ($model -eq $ReviewFloor) { Block 'Implementation never runs on the planning-and-review model.' "pass model: 'opus' (this role handles legal logic, money or the audit chain) or omit it." }
     if ($model -eq 'haiku')      { Block 'This role handles legal logic, money or the audit chain; haiku is below its floor.' "pass model: 'opus' (or 'sonnet' for a narrowly specified task) or omit it." }
-    Allow 'opus-tier implementer'
+    Allow 'opus-tier role'
 }
 
 if ($SonnetRoles -contains $type) {

@@ -159,6 +159,26 @@ behind, and say in your report what you found.
 **"Compare against master" means the LOCAL branch.** An agent that compares against the remote will find itself
 apparently up to date while missing the entire sprint — which is exactly how this went unnoticed for nine dispatches.
 
+## ★ RED evidence for a pin that cannot compile before the implementation exists (S144 Step 0b)
+
+"RED first" has two mechanics, and the second one had never been written down. A pin that speaks only HTTP or
+SQL compiles against today's code, so its RED is observed by running it before the implementation exists. A
+pin that **names a type or member the sprint creates** cannot compile until the implementation has merged —
+and once it has, there is no "before" to revert to: `git checkout -- <files>` restores the implemented HEAD,
+and reverting to pre-sprint code removes the very type the pin compiles against. Both lenses caught the S144
+plan asking for exactly that, which would have produced a compile error and called it proof.
+
+**The method for that class of pin is MUTATION at the wave gate.** With the implementation on master, in an
+isolated checkout (`git worktree add` from master — never the shared tree, never `git stash`), apply ONE
+named mutation that keeps the API but breaks the one behaviour the pin guards (stamp `{}` on a blocked row;
+skip a hydration; reverse a tie-break; leave a structured member unset), run the named pin, capture the
+assertion failure, remove the worktree. The plan lists the mutation beside each such pin, with the assertion
+it must trip; the pin's docstring names it under "Red conditions". The gate runner is a re-spawned `test-qa`
+on the pins' worktree; the Orchestrator reads the captured output, it does not run the mutation itself. A
+compile failure on revert is evidence that the API was absent, not that the behaviour was — it never counts
+as RED. (The S141 convention — author early, merge at the gate — got the ordering right and stopped one step
+short of this.)
+
 ## ★ `git stash` is REPOSITORY-GLOBAL — forbidden while any other agent is running (S142)
 
 **A worktree isolates the working tree. It does NOT isolate the stash.** All worktrees of one repository share a
