@@ -1,3 +1,4 @@
+using System.Globalization;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.SharedKernel.Segmentation;
@@ -101,8 +102,8 @@ public static class PeriodPlanner
 
         if (periodEnd < periodStart)
             throw new PlannerInvariantViolation(
-                $"PeriodPlanner.Plan invariant violated: periodEnd ({periodEnd}) is before " +
-                $"periodStart ({periodStart}). EmployeeId={employeeId}.");
+                $"PeriodPlanner.Plan invariant violated: periodEnd ({Iso(periodEnd)}) is before " +
+                $"periodStart ({Iso(periodStart)}). EmployeeId={employeeId}.");
 
         // --- 1. Detect boundaries ---
         var boundaries = BoundaryDetector.Detect(periodStart, periodEnd, sources);
@@ -363,7 +364,7 @@ public static class PeriodPlanner
         {
             throw new PlannerInvariantViolation(
                 $"PeriodPlanner.Plan invariant violated: rule '{rejectRule.RuleId}' has " +
-                $"SplitBehavior=Reject, but the calculation period [{periodStart}..{periodEnd}] " +
+                $"SplitBehavior=Reject, but the calculation period [{Iso(periodStart)}..{Iso(periodEnd)}] " +
                 $"would evaluate it in {employedCount} EMPLOYED segments (interior boundary " +
                 $"causes: {causes}). A Reject rule cannot be evaluated in pieces, and " +
                 $"PlannerOptions.AllowUpstreamAlignment never overrides Reject (ADR-016 D4, as " +
@@ -383,7 +384,7 @@ public static class PeriodPlanner
                 throw new PlannerInvariantViolation(
                     $"PeriodPlanner.Plan invariant violated: rule '{alignedRule.RuleId}' has " +
                     $"SplitBehavior=AlignedWindow and PlannerOptions.AllowUpstreamAlignment is " +
-                    $"false, but the calculation period [{periodStart}..{periodEnd}] would " +
+                    $"false, but the calculation period [{Iso(periodStart)}..{Iso(periodEnd)}] would " +
                     $"evaluate it in {employedCount} EMPLOYED segments (interior boundary " +
                     $"causes: {causes}). A whole-window rule cannot be evaluated in two pieces " +
                     $"and merged (ADR-016 D4, as ruled 2026-09-02). An employment edge alone (a " +
@@ -485,6 +486,16 @@ public static class PeriodPlanner
             return true;
         return false;
     }
+
+    /// <summary>
+    /// Culture-invariant ISO-8601 rendering (<c>yyyy-MM-dd</c>) for dates in planner
+    /// messages. An unformatted or culture-formatted <see cref="DateOnly"/> renders as
+    /// <c>01-03-2026</c> on da-DK and <c>03/01/2026</c> on the invariant culture, so the
+    /// messages would differ by machine; the invariant culture also fixes the Gregorian
+    /// calendar (S144 TASK-14408).
+    /// </summary>
+    private static string Iso(DateOnly date) =>
+        date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     private static RuleClassification? FindFirst(
         IReadOnlyList<RuleClassification> ruleSet,
