@@ -1045,7 +1045,7 @@ public sealed class HrBackdateWorklistRepository
     /// on a stale token, <see cref="KeyNotFoundException"/> when the id is unknown,
     /// <see cref="BackdateWorklistAlreadyResolvedException"/> when already resolved), derives the
     /// block set from the locked snapshot (S144 — throws <see cref="BackdateWorklistRecalcBlockedException"/>,
-    /// writing nothing, when <paramref name="resolution"/> is RECALCULATED and the set is non-empty),
+    /// before any write, when <paramref name="resolution"/> is RECALCULATED and the set is non-empty),
     /// writes <c>resolved_at/by/resolution/reason</c> + the stamp <c>resolution_blocked_by</c>
     /// (for EVERY verb — RECALCULATED, DISMISSED, HANDLED_MANUALLY) + bumps <c>version</c>, and emits
     /// <see cref="BackdateWorklistRowResolved"/> (+ its ADR-026 row) in the caller's tx. The event

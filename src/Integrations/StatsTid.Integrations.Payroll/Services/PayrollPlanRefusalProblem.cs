@@ -21,10 +21,11 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <para>
 /// <b>What it deliberately leaves out.</b> The planner's exception message is free text for
 /// diagnosis (logs, tests); it names the employee id and the period dates. A response body is a
-/// client contract and must carry neither (ADR-040 D7: employment dates stay out of anything that
-/// reaches a client), so this body is built ONLY from the exception's structured members plus a
-/// fixed sentence — never from <see cref="Exception.Message"/>. The shape is QUAL-149's register
-/// sub-item: counts and causes, no dates.
+/// client contract, and a stable one needs a fixed shape rather than forwarded free text, so this
+/// body is built ONLY from the exception's structured members plus a fixed sentence — never from
+/// <see cref="Exception.Message"/>. (The period and employee id are the caller's own input, but
+/// the message is not a contract; ADR-040 D7 separately keeps employment and change dates out of
+/// client bodies.) The shape is QUAL-149's register sub-item: counts and causes, no dates.
 /// </para>
 ///
 /// <para>
