@@ -39,14 +39,14 @@ Transcribed from the plan (draft 4). Dispositions are updated at each wave gate;
 
 | Task | Disposition | Note |
 |---|---|---|
-| TASK-14400 | PLANNED | wave 1 · `data-model` (Sonnet) · the S144 schema (named CHECK with `HANDLED_MANUALLY`, `resolution_blocked_by`, widened paired constraint, base CREATE + segment) and the event's `BlockedBy` member |
-| TASK-14401 | PLANNED | wave 1 · `test-qa` (Sonnet) · the pins that compile today (endpoint, repository re-fixture to the 1st, schema facts, the S138 migration line) |
-| TASK-14402 | PLANNED | wave 2a · `rule-engine` (Opus, cross-domain authorized: `SharedKernel/**/Segmentation/**`) · `AgreementCodeChange` boundary, tie-break (R1), structured members on the planner's refusal at both sites |
+| TASK-14400 | MERGED (`5e2f50b`) | wave 1 · `data-model` (Sonnet) · the S144 schema (named CHECK with `HANDLED_MANUALLY`, `resolution_blocked_by`, widened paired constraint, base CREATE + segment) and the event's `BlockedBy` member |
+| TASK-14401 | MERGED (`bffc469`) | wave 1 · `test-qa` (Sonnet) · the pins that compile today (endpoint, repository re-fixture to the 1st, schema facts, the S138 migration line) |
+| TASK-14402 | DISPATCHED (wave 2a) | wave 2a · `rule-engine` (Opus, cross-domain authorized: `SharedKernel/**/Segmentation/**`) · `AgreementCodeChange` boundary, tie-break (R1), structured members on the planner's refusal at both sites |
 | TASK-14403 | PLANNED | wave 2b · `payroll-integration` (Opus, cross-domain: Infrastructure repository + tests) · dates-in-period read (no `effective_to` filter), hydration + ctor param (R2), pure 422 mapping, both handlers, Payroll host factory (marker type) |
-| TASK-14404 | PLANNED | wave 2a · `backend-infrastructure` (Opus, Infrastructure + Backend) · the verb, the refusal on the locked snapshot, the stamp, 409 mapping, gate for both verbs |
-| TASK-14405 | PLANNED | authored wave 1, merged at the 2b gate, re-spawned at close · `test-qa` (Sonnet) · the pins that need the new API, mutations M-1…M-14, the expected-red lists, the evidence commits E1/E2 |
+| TASK-14404 | DISPATCHED (wave 2a) | wave 2a · `backend-infrastructure` (Opus, Infrastructure + Backend) · the verb, the refusal on the locked snapshot, the stamp, 409 mapping, gate for both verbs |
+| TASK-14405 | AUTHORED (`6f9676d`, rebased; merges at 2b) | authored wave 1, merged at the 2b gate, re-spawned at close · `test-qa` (Sonnet) · the pins that need the new API, mutations M-1…M-14, the expected-red lists, the evidence commits E1/E2 |
 | TASK-14406 | PLANNED | wave 3 · `ux` (Sonnet) · the screen (third verb, label/toast, 409-blocked and 403 branches reading the parsed error body, fixture aligned) |
-| TASK-14407 | PLANNED | wave 1 · `test-qa` (Sonnet) · S143 carry-over comment fixes (items 4, 5, 7, 8) and item 9 verified (R4) |
+| TASK-14407 | MERGED (`52d577d`) | wave 1 · `test-qa` (Sonnet) · S143 carry-over comment fixes (items 4, 5, 7, 8) and item 9 verified (R4) |
 
 ### The plan's ledger, verbatim
 
@@ -126,15 +126,32 @@ Plus the S144 scope itself (the diff from `2e7d5b1`): the worklist refusal and v
 
 At the first dispatch the owner raised that switching the session model clears their context, and ruled: *"I want a setup so I dont have to switch models."* The seat therefore never switches: future sessions start on Opus; the Fable work is done by agents — the `reviewer` (unchanged) and the new `adjudicator` (judgment: rulings and the owner's questions, read-only, floor-enforced by the guard). The `planner` (Opus) drafts. `docs/WORKFLOW.md` § Model Routing, "the seat never switches"; `docs/AGENTS.md` roster. This session stays on Fable to its end. The `**Orchestrator model**` row above is read accordingly: no switch happened or will happen in this session.
 
+## Wave-1 gate (2026-09-29, Opus seat)
+
+**In plain language.** The database now accepts the third outcome and requires every resolution to record its block set; the tests that define "done" for the worklist half are on master (they fail against today's code by design, and can only run in CI because they need a database); four false comments from S143's review are corrected; the tests that need wave 2's new code are written and waiting in their own branch. Nothing is broken on master: it builds, and every test that can run on this machine passes at exactly S143's counts.
+
+| Task | Merged | Result |
+|---|---|---|
+| TASK-14400 | `2629098` via `5e2f50b` | Base CREATE + S144 segment as briefed; event `BlockedBy`. Reported the CREATE body verbatim → O-3 transcribed at `4611fd6`. No brief contradictions |
+| TASK-14407 | `581c762` via `52d577d` | Items 4, 5 and the four false site-comments of 7/8 fixed (`ProfileCategoryDatingTests.cs:93,186`, `UserAgreementCodeRepositoryTests.cs:131,206`); five sites true, left; item 9 no defect (`[0001-01-01, 2025-03-12)`, forward). Also corrected an adjacent false clause: `TemporalWriteRouter.Decide` takes `today` but no branch reads it (`TemporalWriteRouter.cs:160`) |
+| TASK-14401 | `c74a6f0` + `16bd382` (step 3b, re-spawned — the first return left it undone) via `bffc469` | All seven steps; fact names exactly as briefed (one rename, as briefed). Orchestrator addition: the migration test's unknown-verb `UPDATE` (`:185`) also stamps `'{}'`, so only the verb CHECK can refuse it — without it the widened paired CHECK would also fire and the 23514 would no longer isolate the verb check. Four schema facts in `BackdateWorklistS144SchemaTests` |
+| TASK-14405 | not merged (by design) | 24 pins authored at `8565842`; rebased onto `bffc469` cleanly (now `6f9676d`); remaining compile errors (Unit 35, Regression 16) all attributed to missing S144 members. Derivation facts use `PROFILE_CHANGE` triggers because `AGREEMENT_CODE_CHANGE` maps to `QUAL-150`, not `QUAL-149` |
+
+**O-1:** `dotnet build` 0 errors / **145** warnings (ceiling 145) · Unit **1290** · DemoSeed **170** · Regression non-Docker **128** — all green, identical to S143 final (the new pins are all Docker-gated) · frontend 976 (not re-run; no frontend change yet). Step zero: the Sonnet tier resolved **`claude-sonnet-5-5`** (all three wave-1 agents' self-reports).
+
+**Observations for Step 7a (raised by TASK-14407, outside its scope — not fixed):**
+- The four re-worded tests do not pin the test date and the repository's clock together: the repository uses the real Copenhagen "today", the test the UTC day, and they differ in the last 1–2 hours of every UTC day — a latent CI flake window, now stated honestly in the comments but not closed.
+- `tests/StatsTid.Tests.Regression/Hosting/FixedTimeProvider.cs:18-27` says UTC midnight keeps the derivations in agreement "for every hour of the calendar day" — true of the pinned instant, imprecise as written.
+
 ## Handoff block (written at every wave gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-09-29, master `a08a3d0`; a new session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
-| **Phase** | **Wave 1 dispatched** (2026-09-29) |
-| **Dispatched tasks / worktrees** | TASK-14400 (`data-model`), TASK-14401 (`test-qa`), TASK-14407 (`test-qa`), TASK-14405 wave-1 authoring (`test-qa`) — each in its own harness worktree branched from local master `a08a3d0`; each commits on its branch and reports the sha. Note: `python` is not on this machine's PATH, so the O-3 `db-schema.md` sync stays a hand transcription and CI's `--check` arbitrates |
-| **Merged** | nothing of S144's code; docs only (`docs/sprints/SPRINT-144.md`, `.claude/plans/PLAN-s144.md`, registers, ROADMAP) |
-| **Pending gates** | none yet — the wave-1 gate (O-1) runs after TASK-14400/14401/14407 merge; the baseline test counts are measured at that gate |
-| **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above |
-| **Next action** | on return: merge 14400, 14401, 14407 → O-1 gate (build + non-Docker suites; baseline counts via `sprint-test-validation`) → O-3 `db-schema.md` hand-sync from 14400's reported CREATE body → first rebase of 14405's worktree onto master → dispatch wave 2a (14402 `rule-engine`, 14404 `backend-infrastructure`) |
-| **Step zero** | first spawn of each tier this sprint: `planner` → `claude-opus-5-5` (verified); `reviewer` → `claude-fable-5-1` (verified); Sonnet tier not yet spawned this sprint — confirm from the first `data-model`/`test-qa` self-report |
+| **As of** | 2026-09-29, master `bffc469` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
+| **Phase** | Wave-1 gate PASSED; **wave 2a dispatched** (2026-09-29) |
+| **Dispatched tasks / worktrees** | TASK-14402 (`rule-engine`) and TASK-14404 (`backend-infrastructure`), each in a harness worktree from `bffc469`; both may read TASK-14405's pins read-only via `git show worktree-agent-ae5104627ddf4b53d:<path>`. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
+| **Merged** | TASK-14400 (`5e2f50b`), TASK-14407 (`52d577d`), TASK-14401 (`bffc469`); O-3 `4611fd6` |
+| **Pending gates** | wave-2a gate: merge 14402 + 14404 → O-1 → O-2 contract regeneration |
+| **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above. Two Step-7a observations recorded in the wave-1 gate section |
+| **Next action** | on return: merge 14402, 14404 → O-1 (build ≤ 145 warnings, Unit/DemoSeed/Regression non-Docker) → O-2 (`dotnet run --project src/Backend/StatsTid.Backend.Api -- --openapi`; `npm run gen:api`) → dispatch 14403 (`payroll-integration`, branched after 14402) and 14406 (`ux`, after O-2) |
+| **Step zero** | `planner` → `claude-opus-5-5`; `reviewer` → `claude-fable-5-1`; Sonnet tier → `claude-sonnet-5-5` (wave-1 self-reports, all verified); Opus implementer tier — confirm from 14402/14404 self-reports |
