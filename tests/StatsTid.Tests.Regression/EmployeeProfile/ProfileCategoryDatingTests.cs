@@ -88,9 +88,14 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
     public async Task SupersedeAndCreate_CaseC_SuccessorCarriesDatedCategory_DatedEqualsLiveAcrossSupersession()
     {
         var employeeId = await CreateUserWithoutProfileAsync(NonDefaultCategory);
-        // S142 test-clock sweep: INERT — repository-direct test (CreateAsync/SupersedeAndCreateAsync);
-        // today only decides Case A/B/C routing against the SAME test's other locally-derived dates,
-        // never an independently-computed server clock.
+        // S142 test-clock sweep: repository-direct test (CreateAsync/SupersedeAndCreateAsync).
+        // `today` is the UTC calendar day read here, and it IS compared against a server-side clock:
+        // `_repo` is built without a TimeProvider (see InitializeAsync), so SupersedeAndCreateAsync's own
+        // `Today()` is the real Copenhagen day, which it compares to the covering rows (`coveringToday`)
+        // and uses to anchor the employment-category cache refresh. The two days can differ in the
+        // nightly window (UTC yesterday, Copenhagen today); this test does not pin them together.
+        // Case A/B/C routing is NOT decided by `today` — the router decides from the request date and
+        // the locked timeline.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var yesterday = today.AddDays(-1);
 
@@ -182,8 +187,12 @@ public sealed class ProfileCategoryDatingTests : IAsyncLifetime
     [Fact]
     public async Task Census_AfterEveryProductionWritePath_NoNullCategories_DatedEqualsLive()
     {
-        // S142 test-clock sweep: INERT — repository-direct test; today only decides Case A/B/C routing
-        // against the SAME test's other locally-derived dates, never an independently-computed server clock.
+        // S142 test-clock sweep: repository-direct test. `today` is the UTC calendar day read here and it
+        // IS compared against a server-side clock: `_repo` has no TimeProvider, so SupersedeAndCreateAsync's
+        // own `Today()` (the real Copenhagen day) is compared to the covering rows and anchors the
+        // employment-category cache refresh; the two days can differ in the nightly window and this
+        // test does not pin them together. Routing is decided by the request date and the locked
+        // timeline, not by `today`.
         // S143 / TASK-14308 — hoisted above path 2, which now STATES its effective date rather than
         // letting CreateAsync read a clock (see that method's doc: the date had to leave it so the
         // backfill seeder and the admin endpoint, which need different dates, could share it).

@@ -127,8 +127,11 @@ public sealed class UserAgreementCodeRepositoryTests : IAsyncLifetime
     public async Task SupersedeAndCreate_CaseB_SameDayEdit_UpdatesInPlace_BumpsVersion()
     {
         var userId = await CreateUserWithoutAgreementRowAsync();
-        // S142 test-clock sweep: INERT — repository-direct test; today only decides Case B routing
-        // against the SAME test's own seeded row, never an independently-computed server clock.
+        // S142 test-clock sweep: repository-direct test. `today` is the UTC calendar day read here; Case B
+        // routing is decided by the request date against the test's own seeded row (the router does not
+        // read `today`), but the repository's own `Today()` — the real Copenhagen day, since `_repo` has
+        // no TimeProvider — IS a server-side clock the write consults (it anchors the `users` cache
+        // refresh). The two days can differ in the nightly window; this test does not pin them together.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         // Build a Case A row at effective_from = today (so the next call routes
@@ -202,8 +205,11 @@ public sealed class UserAgreementCodeRepositoryTests : IAsyncLifetime
         // the TASK-3403 backfill seeder ran at WAF startup). Today is strictly
         // greater than '0001-01-01' so a today-effective edit routes to Case C.
         const string userId = "emp001";
-        // S142 test-clock sweep: INERT — repository-direct test; today only decides Case C routing
-        // against the seeded '0001-01-01' predecessor, never an independently-computed server clock.
+        // S142 test-clock sweep: repository-direct test. `today` is the UTC calendar day read here; Case C
+        // routing is decided by the request date against the seeded '0001-01-01' predecessor (the router
+        // does not read `today`), but the repository's own `Today()` — the real Copenhagen day, since
+        // `_repo` has no TimeProvider — IS a server-side clock the write consults (it anchors the
+        // `users` cache refresh). The two days can differ in the nightly window; not pinned together here.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         Guid predecessorAssignmentId;
