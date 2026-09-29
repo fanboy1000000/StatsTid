@@ -2,7 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | OPEN — plan READY at Step 0b (2026-09-29); wave 1 not yet dispatched |
+| **Status** | **CLOSING** — 10 tasks (8 planned + 2 Step-5a fix-ups), all merged. Close sequence at C-2 (candidate commit K). Step 7a, the evidence runs and the CI line are recorded below as they happen |
+| **Test Verified** | CI-pending — local: build 0 errors / 145 warnings · Unit 1308 · DemoSeed 170 · Regression non-Docker 128 (2009 facts discovered, the rest Docker-gated) · Smoke 7 discovered · frontend 988 · `tsc --noEmit` clean. The Docker-gated facts are watched in CI at C-5 and the result backfilled here at C-9 |
 | **Theme** | A worklist row the system says cannot be recalculated can no longer be *recorded* as recalculated — and an operator who fixed it by hand can now say so truthfully ("Håndteret manuelt"). The real payroll recalculation stops writing wrong wage-type lines after a mid-month agreement-code change, and refuses with a readable reason instead of a bare 500 |
 | **Predecessor** | S143 — close `2e7d5b1`; post-close fix `5e78941`; CI backfill `b49f781`; governance chain `fe0bdb1`..`4348731` (model routing refined, the `planner` role, registers QUAL-181/182, the RED-by-mutation method) |
 | **Base commit (Step 7a)** | **`2e7d5b1`** — the S143 close commit, not HEAD, so `5e78941` and the whole governance chain fall inside the S144 Step-7a diff (`docs/WORKFLOW.md` step 7a) |
@@ -280,15 +281,52 @@ Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeCh
 
 **Recorded, not fixed (quality-register candidates for a ruling):** the Payroll host's dormant `ConfigResolutionService` registration (see the wave-3 section); the raw export routes bypass the planner; ADR-040 D7's precision note is stale (S144's handlers now echo cause names, possibly including `EmploymentStarted`/`EmploymentEnded`, with no dates) → updated at O-4.
 
+## Fix-ups merged (TASK-14408, TASK-14409) and the final local gate
+
+| Task | Merged | Result |
+|---|---|---|
+| TASK-14408 (`rule-engine`, `claude-opus-5-5`) | `bfa9ee5` via `756e050` | All three planner messages render the period culture-invariant ISO through a private `Iso(DateOnly)` helper using `InvariantCulture`. The house `{x:yyyy-MM-dd}` idiom was **not** copied, because it still uses the current culture's calendar. The `BoundaryDetector` summary names the agreement-code source. **Brief contradiction:** one test did assert the old culture format (`EmploymentTruncationAlignmentTests.cs:285-286`, `Mar01.ToString()`), which the brief's grep could not find. Fixed as a small task at `1de5f96`: it now asserts ISO. Not fixed, one word: the summary also omits local-profile activation |
+| TASK-14409 (`test-qa`, `claude-sonnet-5-5`) | `e9a59c9` via `a7426c4` | Four Docker facts for `GetEffectiveFromDatesAsync` (1st excluded, 2nd and last day included, closed and zero-width rows returned, ascending and scoped; DISTINCT is not independently falsifiable, because a unique index already forbids duplicates). Redaction pins now assert the actual ISO and culture period strings. The 403 reason asserts `HANDLED_MANUALLY`. Four docstrings corrected. **No test renamed**, so the C-1 lists stand. **Limit, recorded:** the 403 reason always names both verbs, so the new assertion catches the verb being dropped from the text, not which verb was refused |
+
+**Final local gate (O-1, on `a7426c4`):** build 0 / **145** · Unit **1308** · DemoSeed **170** · Regression non-Docker **128** of 2009 discovered · Smoke 7 discovered · frontend **988** · `tsc --noEmit` clean.
+
+## Test summary (sprint-test-validation: previous + delta = current)
+
+| Suite | S143 | S144 | Delta |
+|---|---|---|---|
+| Unit | 1290 | 1308 | +18 (TASK-14405's unit pins) |
+| DemoSeed | 170 | 170 | 0 |
+| Regression, non-Docker (local) | 128 | 128 | 0 (every new Regression fact is Docker-gated) |
+| Regression, discovered | 1988 | 2009 | +21 (CI runs them) |
+| Frontend (vitest) | 976 | 988 | +12 (TASK-14406) |
+
+## Step 7a (C-4) — PLACEHOLDER, filled before the close commit
+
+*Both lenses, base `2e7d5b1`, `reviewed-against-commit: <K>`; carried checklist above; inputs: the frozen C-1 lists, the wave-2b mutation table, the E1/E2 diffs against K (C-3).*
+
+## Evidence runs (C-6, C-7) — PLACEHOLDER, filled by the docs-only follow-up commit (C-9)
+
+*Per run: run id, head sha (E1 / E2), each red test with its assertion message against the frozen list, "matched"; the PR number, "closed unmerged, branch deleted"; whether `claude-code-review.yml` fired on the draft PR, with its output ignored.*
+
+## Open follow-ups (routed, not lost)
+
+- **Payroll host DI:** `ConfigResolutionService` is registered without its repositories (`Program.cs:112`). Remove it or complete it, then run `PayrollHostFactory` in Development so `ValidateOnBuild` guards the host. A quality-register candidate.
+- **Raw export routes bypass the planner:** `/api/payroll/export` and `/export-period` take caller-computed lines. Decide whether they should refuse split months too. A quality-register candidate.
+- **The lock-time stamp is correct by inspection, not by a pin:** nothing proves the block set is derived after the lock (it would take a coordinated concurrent append). A backlog candidate.
+- **The 403 reason names both verbs:** echoing the refused verb would make the refusal (and its pin) precise. A small UX and API follow-up.
+- **Unpinned clock in four Regression tests** and the `FixedTimeProvider` doc wording (wave-1 observations).
+- **The S144 segment's upgrade path** is exercised by no test: a known unpinned path, acceptable under the reseed ruling.
+- **QUAL-149 / QUAL-150** remain the route to making mid-month agreement-code months exportable again.
+
 ## Handoff block (written at every wave gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-09-29, master `0ec35d3` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
-| **Phase** | C-1 FROZEN (Fable `adjudicator`). Step 5α/5a run after merge (miss corrected): 5α 0 violations; Fable ×2 APPROVED / APPROVED-WITH-WARNINGS; Codex ×2 (inlined source) no BLOCKER. **Fix-ups running:** TASK-14408 (`rule-engine`), TASK-14409 (`test-qa`). Next: merge them → O-1 → finish O-4 → K (C-2) |
+| **Phase** | All code merged (`a7426c4`); final local gate green; O-4 written. **C-2: candidate commit K = the commit that carries this line.** Next: C-3 (TASK-14405 re-spawn 3 prepares E1/E2 from K) → C-4 Step 7a on K, both lenses |
 | **Dispatched tasks / worktrees** | TASK-14403 and TASK-14406 in harness worktrees. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`, rebased on `bffc469`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
 | **Merged** | 14400 (`5e2f50b`), 14407 (`52d577d`), 14401 (`bffc469`), 14402 (`0bdd5a5`), 14404 (`01e5bea`), 14406 (`24fa0d2`), 14403 (`807f75f`); O-3 `4611fd6`; O-2 `0ec35d3` |
-| **Pending gates** | wave-2b: re-spawn 1 returns → merge 14405 → O-1 (Unit count rises by its pins) → re-spawn 2 (unit mutations M-4..M-13 in a detached worktree + expected-list resolution to FullyQualifiedNames) → **C-1: a Fable `adjudicator` freezes the lists**. Then close sequence C-2.. (O-4 docs → K → re-spawn 3 E1/E2 → Step 7a both lenses) |
+| **Pending gates** | C-3 → C-4 (Step 7a) → C-5 close commit + push + CI watch → C-6/C-7 evidence runs → C-8 PR closed, branch deleted → C-9 docs-only follow-up (CI line, evidence record, O-7 routing row, INDEX CI line) → teardown of the 10 agent worktrees |
 | **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above. For Step 7a: two wave-1 observations; TASK-14404's resolve-response addition |
 | **Next action** | on each return: merge; run the gate for that wave as above |
 | **Step zero** | `planner` → `claude-opus-5-5`; `reviewer` → `claude-fable-5-1`; Sonnet tier → `claude-sonnet-5-5`; Opus implementer tier → `claude-opus-5-5` (all verified from self-reports) |
