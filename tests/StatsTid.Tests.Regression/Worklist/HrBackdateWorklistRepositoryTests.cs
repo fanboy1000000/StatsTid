@@ -709,14 +709,32 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     // Resolve
     // ════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// S144 / TASK-14401 — the resolve version guard, and (S144) the FENCEPOST pin for the
+    /// recalculation-blocked refusal.
+    ///
+    /// <para><b>Plain language.</b> The trigger is effective on the FIRST day of August, so the
+    /// correction does NOT reach into an already-exported month (QUAL-149 only blocks a trigger
+    /// strictly inside the month: <c>date &gt; first &amp;&amp; date &lt;= last</c>). A RECALCULATED
+    /// resolution on this row must therefore succeed and record an EMPTY block set — this is the pin
+    /// that the new refusal does not fire on an unblocked row.</para>
+    ///
+    /// <para><b>Red conditions.</b> (1) Use <c>&gt;=</c> instead of <c>&gt;</c> in
+    /// <c>IsStrictlyInsideMonth</c> (the fencepost) → the row counts as blocked, the fresh
+    /// RECALCULATED call throws the blocked exception and the fact fails at the resolve. (2) Stamp a
+    /// non-empty or NULL set for an unblocked row → the event's <c>blockedBy</c> is not an empty array
+    /// / <c>resolution_blocked_by = '{}'</c> counts 0. (3) Run the already-resolved check AFTER the
+    /// version guard → the stale-version-1 repeat throws <see cref="OptimisticConcurrencyException"/>
+    /// instead of <see cref="BackdateWorklistAlreadyResolvedException"/>.</para>
+    /// </summary>
     [Fact]
     public async Task Resolve_VersionGuard_StaleThrows_FreshBumpsVersion_EmitsResolvedEvent_RepeatRefused_UnknownNotFound()
     {
         const string emp = "wl_emp_resolve";
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, emp, "STY_WL_A");
         await SeedExportAsync(emp, 2026, 8, "h1");
-        var id = Assert.Single(await RunExportedAsync(emp, Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 8, 3)),
-            new DateOnly(2026, 8, 3), new DateOnly(2026, 9, 1)));
+        var id = Assert.Single(await RunExportedAsync(emp, Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 8, 1)),
+            new DateOnly(2026, 8, 1), new DateOnly(2026, 9, 1)));
 
         // Stale token → OptimisticConcurrencyException carrying expected/actual (the endpoint's 412 body).
         var stale = await Assert.ThrowsAsync<OptimisticConcurrencyException>(
@@ -747,12 +765,22 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         Assert.Equal(1L, resolved.GetProperty("versionBefore").GetInt64());
         Assert.Equal(2L, resolved.GetProperty("versionAfter").GetInt64());
         Assert.Equal(1, resolved.GetProperty("triggerCount").GetInt32());
+        // S144: nothing blocked (trigger on the 1st) → the event carries an EMPTY array and the row
+        // is stamped with the EMPTY set (not NULL — NULL means "still open").
+        var blockedBy = resolved.GetProperty("blockedBy");
+        Assert.Equal(JsonValueKind.Array, blockedBy.ValueKind);
+        Assert.Empty(blockedBy.EnumerateArray());
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution_blocked_by = '{}'", id));
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0 AND target_org_id = 'STY_WL_A'", emp));
 
         // Already resolved → refused even with the fresh token; unknown id → KeyNotFound.
         await Assert.ThrowsAsync<BackdateWorklistAlreadyResolvedException>(
             () => RunResolveAsync(id, expectedVersion: 2, WorklistResolutions.Dismissed, "again"));
+        // S144: ...and refused with a STALE version too (already-resolved outranks the version guard).
+        await Assert.ThrowsAsync<BackdateWorklistAlreadyResolvedException>(
+            () => RunResolveAsync(id, expectedVersion: 1, WorklistResolutions.Dismissed, "again-stale"));
         await Assert.ThrowsAsync<KeyNotFoundException>(
             () => RunResolveAsync(Guid.NewGuid(), expectedVersion: 1, WorklistResolutions.Dismissed, "ghost"));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(

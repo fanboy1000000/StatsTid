@@ -179,11 +179,12 @@ public sealed class BackdateWorklistMigrationTests : IAsyncLifetime
             VALUES (@p0, 'emp_s138_mig', 'EXPORTED_MONTH', 2026, 5, @p1, @p2::jsonb, 'hr01', 'DISMISSED')
             """, Guid.NewGuid(), Guid.NewGuid(), OneTriggerJson));
 
-        // resolution CHECK: an unknown verb → 23514.
+        // resolution CHECK: an unknown verb → 23514. (S144: the stamp is set so the widened paired
+        // CHECK is satisfied — only the verb CHECK can refuse this UPDATE.)
         await AssertSqlStateAsync("23514", () => ExecAsync(
             """
             UPDATE hr_backdate_worklist
-            SET resolved_at = NOW(), resolved_by = 'hr01', resolution = 'IGNORED'
+            SET resolved_at = NOW(), resolved_by = 'hr01', resolution = 'IGNORED', resolution_blocked_by = '{}'
             WHERE worklist_id = @p0
             """, openMonthId));
 
@@ -215,7 +216,7 @@ public sealed class BackdateWorklistMigrationTests : IAsyncLifetime
             """
             UPDATE hr_backdate_worklist
             SET resolved_at = NOW(), resolved_by = 'hr01', resolution = 'RECALCULATED',
-                resolution_reason = 'S138 migration pin', version = version + 1
+                resolution_reason = 'S138 migration pin', resolution_blocked_by = '{}', version = version + 1
             WHERE worklist_id = @p0
             """, openMonthId);
         await ExecAsync(
