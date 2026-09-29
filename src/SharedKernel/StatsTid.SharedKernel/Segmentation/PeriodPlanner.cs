@@ -354,7 +354,8 @@ public static class PeriodPlanner
         if (employedCount < 2)
             return;
 
-        var causes = DescribeInteriorBoundaryCauses(boundaries);
+        var causeList = InteriorBoundaryCauses(boundaries);
+        var causes = causeList.Count == 0 ? "(none)" : string.Join(", ", causeList);
 
         // Reject rules: a genuine split is fatal regardless of AllowUpstreamAlignment.
         var rejectRule = FindFirst(ruleSet, r => r.SplitBehavior == SplitBehavior.Reject);
@@ -368,7 +369,10 @@ public static class PeriodPlanner
                 $"PlannerOptions.AllowUpstreamAlignment never overrides Reject (ADR-016 D4, as " +
                 $"ruled 2026-09-02). An employment edge alone (a hire or a leave date) would " +
                 $"NOT have refused: it truncates evaluation to one EMPLOYED segment instead of " +
-                $"splitting it. EmployeeId={employeeId}.");
+                $"splitting it. EmployeeId={employeeId}.",
+                splitRefusalRuleId: rejectRule.RuleId,
+                employedSegmentCount: employedCount,
+                interiorBoundaryCauses: causeList);
         }
 
         if (!options.AllowUpstreamAlignment)
@@ -384,7 +388,10 @@ public static class PeriodPlanner
                     $"causes: {causes}). A whole-window rule cannot be evaluated in two pieces " +
                     $"and merged (ADR-016 D4, as ruled 2026-09-02). An employment edge alone (a " +
                     $"hire or a leave date) would NOT have refused: it truncates evaluation to " +
-                    $"one EMPLOYED segment instead of splitting it. EmployeeId={employeeId}.");
+                    $"one EMPLOYED segment instead of splitting it. EmployeeId={employeeId}.",
+                    splitRefusalRuleId: alignedRule.RuleId,
+                    employedSegmentCount: employedCount,
+                    interiorBoundaryCauses: causeList);
             }
         }
         // AllowUpstreamAlignment=true with AlignedWindow rules: shrink-to-natural-edge
@@ -396,21 +403,23 @@ public static class PeriodPlanner
     }
 
     /// <summary>
-    /// Distinct <see cref="BoundaryCause"/> names of the detected interior boundaries, in
-    /// date order — the "what typed this plan" part of the D4 refusal message. Causes only,
-    /// never the boundary dates (ADR-040 D7).
+    /// Distinct <see cref="BoundaryCause"/> values of the detected interior boundaries, in
+    /// date order (first occurrence) — the "what typed this plan" part of the D4 refusal,
+    /// carried both in the message text and as
+    /// <see cref="PlannerInvariantViolation.InteriorBoundaryCauses"/>. Causes only, never the
+    /// boundary dates (ADR-040 D7).
     /// </summary>
-    private static string DescribeInteriorBoundaryCauses(
+    private static IReadOnlyList<BoundaryCause> InteriorBoundaryCauses(
         IReadOnlyList<(DateOnly Date, BoundaryCause Cause)> boundaries)
     {
-        var names = new List<string>(boundaries.Count);
+        var distinct = new List<BoundaryCause>(boundaries.Count);
         for (int i = 0; i < boundaries.Count; i++)
         {
-            var name = boundaries[i].Cause.ToString();
-            if (!names.Contains(name))
-                names.Add(name);
+            var cause = boundaries[i].Cause;
+            if (!distinct.Contains(cause))
+                distinct.Add(cause);
         }
-        return names.Count == 0 ? "(none)" : string.Join(", ", names);
+        return distinct;
     }
 
     /// <summary>
@@ -598,6 +607,12 @@ public static class PeriodPlanner
 /// cause (tie-break slot: after <see cref="BoundaryCause.PositionOverrideEffective"/>,
 /// before <see cref="BoundaryCause.EuWtdRulesetVersion"/>). Hydrated by the caller from
 /// the profile-history read. Optional trailing param, <c>null</c> = empty.</param>
+/// <param name="AgreementCodeEffectiveDates">S144 (QUAL-150 groundwork):
+/// <c>user_agreement_codes</c> <c>effective_from</c> dates — each introduces a boundary with
+/// cause <see cref="BoundaryCause.AgreementCodeChange"/> (tie-break slot, ruled R1: after
+/// <see cref="BoundaryCause.PositionOverrideEffective"/>, immediately before
+/// <see cref="BoundaryCause.EmployeeProfileChange"/>). Hydrated by the caller from the
+/// agreement-code history read. Optional trailing param, <c>null</c> = empty.</param>
 public sealed record BoundarySources(
     IReadOnlyList<(DateOnly Date, string FromVersion, string ToVersion)> OkTransitions,
     IReadOnlyList<(DateOnly Date, string AgreementCode)> AgreementConfigPromotions,
@@ -607,7 +622,8 @@ public sealed record BoundarySources(
     IReadOnlyList<(DateOnly EffectiveFrom, Guid ProfileId)>? LocalProfileActivations = null,
     IReadOnlyList<DateOnly>? EmploymentStartedDates = null,
     IReadOnlyList<DateOnly>? EmploymentEndedDates = null,
-    IReadOnlyList<DateOnly>? EmployeeProfileEffectiveDates = null)
+    IReadOnlyList<DateOnly>? EmployeeProfileEffectiveDates = null,
+    IReadOnlyList<DateOnly>? AgreementCodeEffectiveDates = null)
 {
     /// <summary>
     /// Convenience empty instance — useful for tests and for the common
@@ -620,6 +636,7 @@ public sealed record BoundarySources(
         Array.Empty<(DateOnly, int, int)>(),
         new Dictionary<string, object?>(),
         Array.Empty<(DateOnly, Guid)>(),
+        Array.Empty<DateOnly>(),
         Array.Empty<DateOnly>(),
         Array.Empty<DateOnly>(),
         Array.Empty<DateOnly>());

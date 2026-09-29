@@ -89,4 +89,20 @@ public enum BoundaryCause
     /// segment. Second-highest tie-break rank, after <see cref="EmploymentStarted"/>.
     /// </summary>
     EmploymentEnded,
+
+    // --- S144 (QUAL-150 groundwork). APPENDED at the end for the same QUAL-002 ordinal-
+    //     stability reason as the ADR-040 D5 block above; its tie-break rank (immediately
+    //     before EmployeeProfileChange) is set by BoundaryDetector's iteration order. ---
+
+    /// <summary>
+    /// The employee's agreement code changes inside the calculation period: a
+    /// <c>user_agreement_codes</c> row whose <c>effective_from</c> falls strictly inside
+    /// <c>(periodStart, periodEnd]</c>. The agreement code selects the rule set and the
+    /// wage-type key, so a month straddling a change cannot be evaluated as one piece under
+    /// the day-1 agreement. Under the live (AlignedWindow) rule set such a month is REFUSED by
+    /// the planner's existing ADR-016 D4 split refusal rather than calculated wrongly.
+    /// Tie-break slot (ruled R1, S144): after <see cref="PositionOverrideEffective"/>,
+    /// immediately before <see cref="EmployeeProfileChange"/>.
+    /// </summary>
+    AgreementCodeChange,
 }
