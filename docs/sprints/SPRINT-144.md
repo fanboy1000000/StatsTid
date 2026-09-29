@@ -130,11 +130,11 @@ At the first dispatch the owner raised that switching the session model clears t
 
 | | |
 |---|---|
-| **As of** | 2026-09-29, master `a2785c7` + the governance commit that follows it |
-| **Phase** | Step 0b closed (plan READY, both lenses). **Wave 1 not dispatched.** |
-| **Dispatched tasks / worktrees** | none |
+| **As of** | 2026-09-29, master `a08a3d0`; a new session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
+| **Phase** | **Wave 1 dispatched** (2026-09-29) |
+| **Dispatched tasks / worktrees** | TASK-14400 (`data-model`), TASK-14401 (`test-qa`), TASK-14407 (`test-qa`), TASK-14405 wave-1 authoring (`test-qa`) — each in its own harness worktree branched from local master `a08a3d0`; each commits on its branch and reports the sha. Note: `python` is not on this machine's PATH, so the O-3 `db-schema.md` sync stays a hand transcription and CI's `--check` arbitrates |
 | **Merged** | nothing of S144's code; docs only (`docs/sprints/SPRINT-144.md`, `.claude/plans/PLAN-s144.md`, registers, ROADMAP) |
 | **Pending gates** | none yet — the wave-1 gate (O-1) runs after TASK-14400/14401/14407 merge; the baseline test counts are measured at that gate |
 | **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above |
-| **Next action** | dispatch wave 1 from `.claude/plans/PLAN-s144.md` § Task briefs: TASK-14400 (`data-model`), TASK-14401 (`test-qa`), TASK-14407 (`test-qa`), TASK-14405 authoring (`test-qa`) — four worktrees branched from LOCAL master; paste each brief whole with the standing constraints block and `docs/CONVENTIONS.md` verbatim; restart the client first if the session is new (2.1.282 installed) |
+| **Next action** | on return: merge 14400, 14401, 14407 → O-1 gate (build + non-Docker suites; baseline counts via `sprint-test-validation`) → O-3 `db-schema.md` hand-sync from 14400's reported CREATE body → first rebase of 14405's worktree onto master → dispatch wave 2a (14402 `rule-engine`, 14404 `backend-infrastructure`) |
 | **Step zero** | first spawn of each tier this sprint: `planner` → `claude-opus-5-5` (verified); `reviewer` → `claude-fable-5-1` (verified); Sonnet tier not yet spawned this sprint — confirm from the first `data-model`/`test-qa` self-report |
