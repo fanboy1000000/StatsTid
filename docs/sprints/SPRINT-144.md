@@ -42,10 +42,10 @@ Transcribed from the plan (draft 4). Dispositions are updated at each wave gate;
 | TASK-14400 | MERGED (`5e2f50b`) | wave 1 · `data-model` (Sonnet) · the S144 schema (named CHECK with `HANDLED_MANUALLY`, `resolution_blocked_by`, widened paired constraint, base CREATE + segment) and the event's `BlockedBy` member |
 | TASK-14401 | MERGED (`bffc469`) | wave 1 · `test-qa` (Sonnet) · the pins that compile today (endpoint, repository re-fixture to the 1st, schema facts, the S138 migration line) |
 | TASK-14402 | MERGED (`0bdd5a5`) | wave 2a · `rule-engine` (Opus, cross-domain authorized: `SharedKernel/**/Segmentation/**`) · `AgreementCodeChange` boundary, tie-break (R1), structured members on the planner's refusal at both sites |
-| TASK-14403 | DISPATCHED (from `0bdd5a5`) | wave 2b · `payroll-integration` (Opus, cross-domain: Infrastructure repository + tests) · dates-in-period read (no `effective_to` filter), hydration + ctor param (R2), pure 422 mapping, both handlers, Payroll host factory (marker type) |
+| TASK-14403 | MERGED (`807f75f`) | wave 2b · `payroll-integration` (Opus, cross-domain: Infrastructure repository + tests) · dates-in-period read (no `effective_to` filter), hydration + ctor param (R2), pure 422 mapping, both handlers, Payroll host factory (marker type) |
 | TASK-14404 | MERGED (`01e5bea`) | wave 2a · `backend-infrastructure` (Opus, Infrastructure + Backend) · the verb, the refusal on the locked snapshot, the stamp, 409 mapping, gate for both verbs |
 | TASK-14405 | AUTHORED (`6f9676d`, rebased; merges at 2b) | authored wave 1, merged at the 2b gate, re-spawned at close · `test-qa` (Sonnet) · the pins that need the new API, mutations M-1…M-14, the expected-red lists, the evidence commits E1/E2 |
-| TASK-14406 | DISPATCHED (from `0ec35d3`) | wave 3 · `ux` (Sonnet) · the screen (third verb, label/toast, 409-blocked and 403 branches reading the parsed error body, fixture aligned) |
+| TASK-14406 | MERGED (`24fa0d2`) | wave 3 · `ux` (Sonnet) · the screen (third verb, label/toast, 409-blocked and 403 branches reading the parsed error body, fixture aligned) |
 | TASK-14407 | MERGED (`52d577d`) | wave 1 · `test-qa` (Sonnet) · S143 carry-over comment fixes (items 4, 5, 7, 8) and item 9 verified (R4) |
 
 ### The plan's ledger, verbatim
@@ -155,15 +155,35 @@ At the first dispatch the owner raised that switching the session model clears t
 
 **O-1:** build 0 errors / **145** warnings · Unit **1290** · DemoSeed **170** · Regression non-Docker **128** — all green. Step zero: the Opus implementer tier resolved **`claude-opus-5-5`** (14402 and 14404 self-reports).
 
+## Wave-3 gate and TASK-14403 merge (2026-09-29, Opus seat)
+
+**In plain language.** HR's screen now offers "Håndteret manuelt" where the server allows it, labels and toasts all three outcomes, and tells the truth when the server refuses — naming the blocking register ids on a 409-blocked, and giving a permissions message on a 403 instead of a raw error. The payroll recalculation and the everyday export now load agreement-code change dates into the plan, so a mid-month change is refused with a readable 422 rather than paid under the wrong agreement or failed with a bare 500.
+
+| Task | Merged | Result |
+|---|---|---|
+| TASK-14406 | `dcddfdc` via `24fa0d2` | As briefed. `WorklistList.test.tsx` 8 → 20 (one impossible fixture replaced, 12 added); the 409/403 tests drive the real server body through the stubbed `fetch`. **Red condition observed**, not only argued: the hook returning `{ ok, error, status }` without `body` failed the 409-blocked test at `WorklistList.test.tsx:348` (`expected 'Sagen er allerede løst af en anden. L…' to contain 'QUAL-149, QUAL-150'`), 19/20 green. Choices beyond the brief: a 409-blocked reloads the list; the 403 message is fixed text (does not show `body.reason`) |
+| TASK-14403 | `c54da00` via `807f75f` | As briefed; the Regression host factory landed (no Smoke fallback) — the host boots in-process, confirmed by a local probe (`/health` 200 with an unreachable DB; since deleted). TASK-14405's `PayrollPlanRefusalProblemTests` ran 3/3 against it (copied in temporarily, not committed) |
+
+**The 422 body (both endpoints) — for HRP-003 and the register:**
+```json
+{"success":false,"error":"This period cannot be calculated automatically: a change inside the period splits it into segments, and a whole-period rule cannot be evaluated in separate segments. The period must be handled manually.","kind":"payroll-recalc-blocked","employedSegmentCount":2,"interiorBoundaryCauses":["AgreementCodeChange"],"ruleId":"OVERTIME_CALC"}
+```
+
+**O-1 (wave 3, after both merges):** build 0 / **145** · Unit **1290** · DemoSeed **170** · Regression non-Docker **128** · `npx tsc --noEmit` exit 0 · vitest **988** (976 → +12), 81 files — all green.
+
+**Observations for Step 7a (from TASK-14403, not fixed):**
+- **Payroll host DI gap (pre-existing):** `src/Integrations/StatsTid.Integrations.Payroll/Program.cs:112` registers `ConfigResolutionService` without `AgreementConfigRepository` / `PositionOverrideRepository`, which its constructors need. Nothing in the host resolves it, so Production hides it; Development-mode startup validation refuses to build the host. `PayrollHostFactory` therefore runs the host in `Environments.Production` (which is also what compose runs). Needs a ruling: remove the unused registration, or register the two repositories — a quality-register candidate.
+- **Zero-width agreement-code closes count as boundaries** (the "no exclusion" contract): a month holding one is refused — the safe direction, but visible behaviour.
+
 ## Handoff block (written at every wave gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-09-29, master `0ec35d3` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
-| **Phase** | Wave-1 and wave-2a gates PASSED; O-2 done. **Running:** TASK-14403 (`payroll-integration`, dispatched early from `0bdd5a5` — it depends only on 14402 and shares no file with 14404) and TASK-14406 (`ux`, from `0ec35d3`) |
+| **Phase** | All implementation merged (master `807f75f`); wave-1, 2a and 3 gates PASSED; **wave-2b gate in progress**: TASK-14405 re-spawn 1 (second rebase, name reconciliation, unit pins) running on its worktree |
 | **Dispatched tasks / worktrees** | TASK-14403 and TASK-14406 in harness worktrees. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`, rebased on `bffc469`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
-| **Merged** | 14400 (`5e2f50b`), 14407 (`52d577d`), 14401 (`bffc469`), 14402 (`0bdd5a5`), 14404 (`01e5bea`); O-3 `4611fd6`; O-2 `0ec35d3` |
-| **Pending gates** | wave-2b gate: merge 14403 → O-1 (if 14403 branched before 14404, rebuild after merge) → re-spawn `test-qa` on 14405's worktree (second rebase, name reconciliation, unit pins) → merge 14405 → O-1 → re-spawn 2 (unit mutations M-4..M-13 + expected-list resolution) → **C-1: the lists are frozen by a Fable `adjudicator`** (the seat is Opus). Wave-3 gate: merge 14406 → O-1 incl. `tsc --noEmit` + vitest |
+| **Merged** | 14400 (`5e2f50b`), 14407 (`52d577d`), 14401 (`bffc469`), 14402 (`0bdd5a5`), 14404 (`01e5bea`), 14406 (`24fa0d2`), 14403 (`807f75f`); O-3 `4611fd6`; O-2 `0ec35d3` |
+| **Pending gates** | wave-2b: re-spawn 1 returns → merge 14405 → O-1 (Unit count rises by its pins) → re-spawn 2 (unit mutations M-4..M-13 in a detached worktree + expected-list resolution to FullyQualifiedNames) → **C-1: a Fable `adjudicator` freezes the lists**. Then close sequence C-2.. (O-4 docs → K → re-spawn 3 E1/E2 → Step 7a both lenses) |
 | **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above. For Step 7a: two wave-1 observations; TASK-14404's resolve-response addition |
 | **Next action** | on each return: merge; run the gate for that wave as above |
 | **Step zero** | `planner` → `claude-opus-5-5`; `reviewer` → `claude-fable-5-1`; Sonnet tier → `claude-sonnet-5-5`; Opus implementer tier → `claude-opus-5-5` (all verified from self-reports) |
