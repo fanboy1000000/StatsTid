@@ -4728,8 +4728,11 @@ CREATE TABLE IF NOT EXISTS hr_backdate_worklist (
     created_by          TEXT         NOT NULL,
     resolved_at         TIMESTAMPTZ  NULL,
     resolved_by         TEXT         NULL,
-    resolution          TEXT         NULL CHECK (resolution IN ('RECALCULATED', 'DISMISSED')),
+    resolution          TEXT         NULL,
     resolution_reason   TEXT         NULL,
+    -- S144: the lock-time block set (register ids such as QUAL-149) recorded at the
+    -- moment the row was claimed; '{}' when nothing blocked. NULL only while open.
+    resolution_blocked_by TEXT[]     NULL,
     version             BIGINT       NOT NULL DEFAULT 1,
     CONSTRAINT hr_backdate_worklist_kind_keys CHECK (
         (kind = 'EXPORTED_MONTH'
@@ -4743,9 +4746,21 @@ CREATE TABLE IF NOT EXISTS hr_backdate_worklist (
     CONSTRAINT hr_backdate_worklist_triggers_array CHECK (
         jsonb_typeof(triggers) = 'array' AND jsonb_array_length(triggers) >= 1
     ),
+    -- S144 (plain language): the worklist gains a third outcome, HANDLED_MANUALLY (HR fixed
+    -- the month outside the system), so the allowed-outcome list is widened. It is now a
+    -- NAMED table constraint (was an inline column CHECK) so it can be dropped and re-added
+    -- on an existing database - the S122 idiom. The name is deliberately
+    -- hr_backdate_worklist_resolution_check: Postgres auto-named the old inline CHECK exactly
+    -- that, so the S144 segment's DROP CONSTRAINT IF EXISTS removes the old one instead of
+    -- leaving two CHECKs (the old one would reject HANDLED_MANUALLY).
+    CONSTRAINT hr_backdate_worklist_resolution_check CHECK (
+        resolution IN ('RECALCULATED', 'DISMISSED', 'HANDLED_MANUALLY')
+    ),
+    -- S144: every resolution now records its block set, so "a resolved row without a
+    -- stamp" is impossible: the four resolution columns are all NULL or all NOT NULL.
     CONSTRAINT hr_backdate_worklist_resolution_paired CHECK (
-        (resolved_at IS NULL AND resolved_by IS NULL AND resolution IS NULL)
-        OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution IS NOT NULL)
+        (resolved_at IS NULL AND resolved_by IS NULL AND resolution IS NULL AND resolution_blocked_by IS NULL)
+        OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution IS NOT NULL AND resolution_blocked_by IS NOT NULL)
     )
 );
 
@@ -4771,6 +4786,61 @@ BEGIN
 END
 $$;
 -- S138-BACKDATE-WORKLIST-SEGMENT-END
+
+-- =========================================================================
+-- S144 (TASK-14400) - hr_backdate_worklist: the HANDLED_MANUALLY outcome and the
+-- lock-time block stamp
+--
+-- WHY (plain language): the worklist gains a third way to close a row -
+-- HANDLED_MANUALLY, "HR fixed the month outside the system" - and every
+-- resolution from now on records the set of reasons the month was blocked at the
+-- moment of the claim (resolution_blocked_by, e.g. {QUAL-149}; '{}' when nothing
+-- blocked). The database therefore must (1) accept the new outcome, (2) store the
+-- stamp, and (3) make a resolved row without a stamp impossible.
+--
+-- The base CREATE inside the S138 segment above already carries the final shape
+-- (generate_db_schema.py renders constraints only from CREATE TABLE bodies, ruled
+-- R3), so a greenfield database is correct from that CREATE alone. This segment
+-- lands the same shape on a rerun/legacy database, where CREATE TABLE IF NOT
+-- EXISTS is a no-op: the S122 guarded DROP-then-ADD idiom. The constraint name
+-- hr_backdate_worklist_resolution_check is the name Postgres auto-gave the old
+-- inline column CHECK, so the DROP removes it rather than leaving two CHECKs.
+--
+-- CAVEAT: the paired ADD CONSTRAINT would FAIL on a database that already holds a
+-- resolved pre-S144 row (its stamp is NULL). By the reseed ruling (2026-09-28,
+-- ADR-038 D9) no such database exists: pre-S144 databases are reseeded, not
+-- upgraded. No backfill is written on purpose.
+--
+-- No CREATE TABLE here or in the DO block (generate_db_schema.py would
+-- double-count the table). The segment is outside every other marker pair.
+-- =========================================================================
+-- S144-WORKLIST-HANDLED-MANUALLY-SEGMENT-BEGIN
+ALTER TABLE hr_backdate_worklist
+    ADD COLUMN IF NOT EXISTS resolution_blocked_by TEXT[] NULL;
+
+ALTER TABLE hr_backdate_worklist
+    DROP CONSTRAINT IF EXISTS hr_backdate_worklist_resolution_check;
+ALTER TABLE hr_backdate_worklist
+    ADD CONSTRAINT hr_backdate_worklist_resolution_check
+    CHECK (resolution IN ('RECALCULATED', 'DISMISSED', 'HANDLED_MANUALLY'));
+
+ALTER TABLE hr_backdate_worklist
+    DROP CONSTRAINT IF EXISTS hr_backdate_worklist_resolution_paired;
+ALTER TABLE hr_backdate_worklist
+    ADD CONSTRAINT hr_backdate_worklist_resolution_paired
+    CHECK (
+        (resolved_at IS NULL AND resolved_by IS NULL AND resolution IS NULL AND resolution_blocked_by IS NULL)
+        OR (resolved_at IS NOT NULL AND resolved_by IS NOT NULL AND resolution IS NOT NULL AND resolution_blocked_by IS NOT NULL)
+    );
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s144-worklist-handled-manually', 'S144/TASK-14400: hr_backdate_worklist gains the HANDLED_MANUALLY outcome (HR fixed the month outside the system) and resolution_blocked_by TEXT[] - the lock-time block set stamped on every resolution. Named CHECK hr_backdate_worklist_resolution_check widened to three outcomes; hr_backdate_worklist_resolution_paired widened so a resolved row cannot lack its stamp. Pre-S144 databases are reseeded, not upgraded (ADR-038 D9): the paired ADD would fail on a database holding a resolved pre-S144 row, and none exists.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+-- S144-WORKLIST-HANDLED-MANUALLY-SEGMENT-END
 
 -- =========================================================================
 -- S138 / TASK-13804 (ADR-040 D4 · Increment 3) — employee_profiles.
