@@ -44,7 +44,7 @@ Transcribed from the plan (draft 4). Dispositions are updated at each wave gate;
 | TASK-14402 | MERGED (`0bdd5a5`) | wave 2a · `rule-engine` (Opus, cross-domain authorized: `SharedKernel/**/Segmentation/**`) · `AgreementCodeChange` boundary, tie-break (R1), structured members on the planner's refusal at both sites |
 | TASK-14403 | MERGED (`807f75f`) | wave 2b · `payroll-integration` (Opus, cross-domain: Infrastructure repository + tests) · dates-in-period read (no `effective_to` filter), hydration + ctor param (R2), pure 422 mapping, both handlers, Payroll host factory (marker type) |
 | TASK-14404 | MERGED (`01e5bea`) | wave 2a · `backend-infrastructure` (Opus, Infrastructure + Backend) · the verb, the refusal on the locked snapshot, the stamp, 409 mapping, gate for both verbs |
-| TASK-14405 | AUTHORED (`6f9676d`, rebased; merges at 2b) | authored wave 1, merged at the 2b gate, re-spawned at close · `test-qa` (Sonnet) · the pins that need the new API, mutations M-1…M-14, the expected-red lists, the evidence commits E1/E2 |
+| TASK-14405 | MERGED (`bd4df92`); re-spawn 2 done; re-spawn 3 at close | authored wave 1, merged at the 2b gate, re-spawned at close · `test-qa` (Sonnet) · the pins that need the new API, mutations M-1…M-14, the expected-red lists, the evidence commits E1/E2 |
 | TASK-14406 | MERGED (`24fa0d2`) | wave 3 · `ux` (Sonnet) · the screen (third verb, label/toast, 409-blocked and 403 branches reading the parsed error body, fixture aligned) |
 | TASK-14407 | MERGED (`52d577d`) | wave 1 · `test-qa` (Sonnet) · S143 carry-over comment fixes (items 4, 5, 7, 8) and item 9 verified (R4) |
 
@@ -175,12 +175,36 @@ At the first dispatch the owner raised that switching the session model clears t
 - **Payroll host DI gap (pre-existing):** `src/Integrations/StatsTid.Integrations.Payroll/Program.cs:112` registers `ConfigResolutionService` without `AgreementConfigRepository` / `PositionOverrideRepository`, which its constructors need. Nothing in the host resolves it, so Production hides it; Development-mode startup validation refuses to build the host. `PayrollHostFactory` therefore runs the host in `Environments.Production` (which is also what compose runs). Needs a ruling: remove the unused registration, or register the two repositories — a quality-register candidate.
 - **Zero-width agreement-code closes count as boundaries** (the "no exclusion" contract): a month holding one is refused — the safe direction, but visible behaviour.
 
+## Wave-2b gate — TASK-14405 merged, unit mutations observed (2026-09-29, Opus seat)
+
+**In plain language.** The tests that describe S144's new behaviour are merged, and each one was proved able to fail. For every test that runs without a database, a tester broke exactly the one behaviour it guards — in a throwaway copy, never committed — and watched it turn red. All ten did. The four database-backed breakages can only be watched in CI; they wait for the close.
+
+- **Re-spawn 1:** rebased onto `807f75f` with no conflicts and **no name reconciliation needed** (empty marker commit `53c07f4` on authoring `ec46741`); merged `bd4df92`. O-1: build 0 / **145** · Unit **1308** (1290 + 18 pins) · DemoSeed **170** · Regression non-Docker **128**.
+- **Re-spawn 2 — unit mutation table** (detached worktree from master, each mutation alone, restored, removed; un-mutated Unit 1308/1308 in that checkout). **Every mutation tripped its named pin.** The "also red" column is the whole-project run, so the reader can judge minimality:
+
+| Id | Pin | Captured failure | Also red (whole Unit run) |
+|---|---|---|---|
+| M-4 | `RecalcBlockedBy_FactoredOverload_SettledYearKind_Empty_EvenWithYearMonthAndInteriorTrigger` | `Assert.Empty() Failure: Collection was not empty` | — |
+| M-5 | `EventSerializer_RoundTrip_BackdateWorklistRowResolved_BlockedBy_SetEmptyAndNull` | `Assert.NotNull() Failure: Value is null` | `…_JsonWithoutBlockedBy_YieldsNull` (sibling pin) |
+| M-6 | `RowResolved_DetailsCarryBlockedBy_EqualToTheEventsSet` | `Assert.True() Failure` (`TryGetProperty("blockedBy")` false) | `…_EmptySetIsAnEmptyArray` (sibling pin) |
+| M-7 | `Detect_AgreementCodeDate_OnPeriodStart_IsNotABoundary` | `Assert.Empty() Failure: Collection was not empty` | — |
+| M-8 | `Detect_AgreementCodeAndProfileChangeShareADate_RecordsAgreementCodeChange` | `Assert.Equal() Failure — Expected: AgreementCodeChange, Actual: EmployeeProfileChange` | — |
+| M-9 | `Plan_MidPeriodAgreementCodeDate_AlignedWindowRule_ThrowsWithStructuredSplitRefusalMembers` | `Assert.True() Failure` (`IsSplitRefusal`) | — |
+| M-10 | `Plan_MidPeriodAgreementCodeDate_RejectRule_ThrowsWithStructuredSplitRefusalMembers` | `Assert.True() Failure` (`IsSplitRefusal`) | two `PayrollPlanRefusalProblemTests` split pins (they build their exception at the same Reject site) |
+| M-11 | `Plan_GeometricViolation_LeavesStructuredMembersNullOrEmpty_NotASplitRefusal` | `Assert.False() Failure` (`IsSplitRefusal`) | `TryCreate_NonSplitViolation_ReturnsNull` (same behaviour) |
+| M-12 | `TryCreate_SplitRefusal_MapsCountCausesAndRuleId` | `Assert.NotNull() Failure: Value is null` | `…_ContainsNoDateAndNoEmployeeId` (its own NotNull precondition) |
+| M-13 | `TryCreate_SplitRefusal_SerializedProblem_ContainsNoDateAndNoEmployeeId` | `Assert.DoesNotMatch() Failure: Match found` | — |
+
+Applied as: M-11 `EmployedSegmentCount = 0;` in the message-only ctor body; M-13 `Error` made `init` and set to `ex.Message` in `TryCreate`.
+
+- **Expected lists (C-1):** every entry resolved to a `FullyQualifiedName` on `bd4df92`. The resolver mapped the plan's run-2 spot check "the DISMISSED ladder" to the two facts with "Dismiss" in their names. The Orchestrator reads TASK-14401 step 3a as naming `Resolve_MissingIfMatch_428_Stale_412_…` instead, and put that question to the Fable `adjudicator`. **The frozen lists: see "C-1 — expected lists frozen" below.**
+
 ## Handoff block (written at every wave gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-09-29, master `0ec35d3` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
-| **Phase** | All implementation merged (master `807f75f`); wave-1, 2a and 3 gates PASSED; **wave-2b gate in progress**: TASK-14405 re-spawn 1 (second rebase, name reconciliation, unit pins) running on its worktree |
+| **Phase** | Wave-2b gate: TASK-14405 merged (`bd4df92`), unit mutations M-4..M-13 all tripped, lists resolved; **C-1 in progress** (Fable `adjudicator` freezing the lists). O-4 registers + INDEX row committed (`ebf5d22`, `ae6634f`) |
 | **Dispatched tasks / worktrees** | TASK-14403 and TASK-14406 in harness worktrees. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`, rebased on `bffc469`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
 | **Merged** | 14400 (`5e2f50b`), 14407 (`52d577d`), 14401 (`bffc469`), 14402 (`0bdd5a5`), 14404 (`01e5bea`), 14406 (`24fa0d2`), 14403 (`807f75f`); O-3 `4611fd6`; O-2 `0ec35d3` |
 | **Pending gates** | wave-2b: re-spawn 1 returns → merge 14405 → O-1 (Unit count rises by its pins) → re-spawn 2 (unit mutations M-4..M-13 in a detached worktree + expected-list resolution to FullyQualifiedNames) → **C-1: a Fable `adjudicator` freezes the lists**. Then close sequence C-2.. (O-4 docs → K → re-spawn 3 E1/E2 → Step 7a both lenses) |
