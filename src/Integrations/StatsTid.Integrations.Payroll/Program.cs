@@ -6,6 +6,7 @@ using StatsTid.Infrastructure.Security;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Segmentation;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -301,16 +302,29 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // outcome.Result is bit-identical to what CalculateAsync(profile, …) returned here before:
     // the export payload / SLS lines are unchanged BY CONSTRUCTION. The outcome additionally
     // exposes the ManifestId + AuditState.
-    var outcome = await calculator.CalculateWithOutcomeAsync(
-        request.Profile,
-        request.Entries,
-        request.Absences,
-        request.PeriodStart,
-        request.PeriodEnd,
-        request.PreviousFlexBalance,
-        authHeader,
-        correlationId,
-        ct);
+    PeriodCalculationService.PeriodCalculationOutcome outcome;
+    try
+    {
+        outcome = await calculator.CalculateWithOutcomeAsync(
+            request.Profile,
+            request.Entries,
+            request.Absences,
+            request.PeriodStart,
+            request.PeriodEnd,
+            request.PreviousFlexBalance,
+            authHeader,
+            correlationId,
+            ct);
+    }
+    catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
+    {
+        // S144 TASK-14403: the planner REFUSED the month (a whole-period rule would be evaluated in
+        // 2+ segments — e.g. a mid-month agreement-code change). The plan is built before anything
+        // is calculated or written, so no manifest and no export record exist. 422 with the
+        // redacted problem (counts + causes, never dates or the employee id); any OTHER planner
+        // violation is a bug and falls through as a 500.
+        return Results.Json(problem, statusCode: 422);
+    }
 
     // Thread the manifest id (and degraded audit state, when applicable) into HttpContext.Items
     // BEFORE returning, so the AuditLoggingMiddleware — which reads Items AFTER the endpoint runs
@@ -455,6 +469,16 @@ app.MapPost("/api/payroll/recalculate", async (
             periodStart = request.PeriodStart,
             periodEnd = request.PeriodEnd
         }, statusCode: 422);
+    }
+    catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
+    {
+        // S144 TASK-14403: the planner REFUSED the month (a whole-period rule would be evaluated in
+        // 2+ segments — e.g. an agreement-code change recorded mid-month after the export). The
+        // correction service plans BEFORE it opens its transaction, so nothing was written: the
+        // export baseline, the correction event and the idempotency marker are all untouched. 422
+        // with the redacted problem (counts + causes, never dates or the employee id); any OTHER
+        // planner violation is a bug and falls through as a 500.
+        return Results.Json(problem, statusCode: 422);
     }
 
     if (!result.Success)

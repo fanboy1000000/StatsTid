@@ -107,6 +107,13 @@ public sealed class PeriodCalculationService
     // now splits the calculation so each span resolves its own dated profile). Same
     // null-tolerance as the two optional dependencies above.
     private readonly EmployeeProfileRepository? _employeeProfileRepo;
+    // S144 TASK-14403 (QUAL-150 groundwork): optional repository for the user_agreement_codes
+    // effective_from dates inside the period — feeds the AgreementCodeChange boundary, so a
+    // mid-period agreement-code change splits (and, under the live rule set, REFUSES) the
+    // calculation instead of paying the whole month under one agreement. Null-tolerant like
+    // _employeeProfileRepo (ruled R2, S144); the host-level /recalculate pin
+    // (PayrollHostRecalcBlockedTests) is what catches a dropped registration.
+    private readonly UserAgreementCodeRepository? _userAgreementCodeRepo;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
 
@@ -184,7 +191,8 @@ public sealed class PeriodCalculationService
         LocalAgreementProfileRepository? localAgreementProfileRepo = null,
         IEmploymentProfileResolver? profileResolver = null,
         IEmploymentWindowResolver? employmentWindowResolver = null,
-        EmployeeProfileRepository? employeeProfileRepo = null)
+        EmployeeProfileRepository? employeeProfileRepo = null,
+        UserAgreementCodeRepository? userAgreementCodeRepo = null)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
@@ -246,6 +254,13 @@ public sealed class PeriodCalculationService
         // S137 TASK-13702 (ADR-040 D5): null-tolerant — when unregistered, no
         // EmployeeProfileChange boundaries are hydrated (pre-S137 behavior).
         _employeeProfileRepo = employeeProfileRepo;
+        // S144 TASK-14403 (ruled R2): null-tolerant — when unregistered, no AgreementCodeChange
+        // boundaries are hydrated (pre-S144 behavior). NOT coupled to the profile resolver with a
+        // constructor throw like the window resolver above: that would need a new interface for a
+        // repository the host already registers (Program.cs, for EmploymentProfileResolver). The
+        // accepted cost — a dropped registration fails silently HERE — is covered at host level by
+        // PayrollHostRecalcBlockedTests (a null repository → one segment → 200 instead of 422).
+        _userAgreementCodeRepo = userAgreementCodeRepo;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
 
@@ -758,8 +773,8 @@ public sealed class PeriodCalculationService
     // -------------------------------------------------------------------
     [Obsolete(
         "Use CalculateAsync(PlannedCalculation, …) or CalculateWithOutcomeAsync(PlannedCalculation, …). " +
-        "Boundary sources are limited to OK-transitions, LocalProfileActivations (S21), employment-window " +
-        "and employee-profile-change dates (S137) in this path; full segmentation requires explicit " +
+        "Boundary sources are limited to OK-transitions, LocalProfileActivations (S21), employment-window, " +
+        "employee-profile-change dates (S137) and agreement-code dates (S144) in this path; full segmentation requires explicit " +
         "PlannedCalculation construction. The single surviving caller is the /calculate-and-export " +
         "endpoint; full retirement is deferred per S20 Step 0b W2.",
         error: false)]
@@ -822,8 +837,8 @@ public sealed class PeriodCalculationService
     /// </summary>
     [Obsolete(
         "Use CalculateWithOutcomeAsync(PlannedCalculation, …). Boundary sources are limited to " +
-        "OK-transitions, LocalProfileActivations (S21), employment-window and employee-profile-change " +
-        "dates (S137) in this path; full segmentation requires explicit PlannedCalculation construction. " +
+        "OK-transitions, LocalProfileActivations (S21), employment-window, employee-profile-change " +
+        "dates (S137) and agreement-code dates (S144) in this path; full segmentation requires explicit PlannedCalculation construction. " +
         "The single surviving caller is the /calculate-and-export endpoint (S134 QUAL-003); full " +
         "retirement is deferred per S20 Step 0b W2.",
         error: false)]
@@ -859,7 +874,9 @@ public sealed class PeriodCalculationService
     /// ADR-017 D9c) local-agreement-profile activation boundaries from
     /// <see cref="LocalAgreementProfileRepository"/>, and (S137 TASK-13702, ADR-040 D5/D7)
     /// the employee's employment window(s) from <see cref="IEmploymentWindowResolver"/> plus
-    /// <c>employee_profiles</c> effective-from dates from <see cref="EmployeeProfileRepository"/>.
+    /// <c>employee_profiles</c> effective-from dates from <see cref="EmployeeProfileRepository"/>,
+    /// and (S144 TASK-14403) <c>user_agreement_codes</c> effective-from dates from
+    /// <see cref="UserAgreementCodeRepository"/> (the <c>AgreementCodeChange</c> boundary).
     /// Agreement-config / position-override / EU WTD boundary hydration remain extension
     /// points that TASK-2009/TASK-2010 callers will populate when they construct plans directly.
     ///
@@ -986,6 +1003,19 @@ public sealed class PeriodCalculationService
                 profile.EmployeeId, afterExclusive: periodStart, toInclusive: periodEnd, ct);
         }
 
+        // user_agreement_codes effective_from dates STRICTLY inside (periodStart, periodEnd]
+        // — S144 (QUAL-150 groundwork) feeds the AgreementCodeChange cause. Same fencepost as the
+        // profile read above and for the same reason: a code taking effect ON periodStart is not
+        // an interior boundary (the segment already starts there), hence afterExclusive =
+        // periodStart. The read applies no effective_to filter and no exclusion (see its XML doc):
+        // over-detecting only refuses a month, under-detecting pays it under the wrong agreement.
+        IReadOnlyList<DateOnly>? agreementCodeEffectiveDates = null;
+        if (_userAgreementCodeRepo is not null)
+        {
+            agreementCodeEffectiveDates = await _userAgreementCodeRepo.GetEffectiveFromDatesAsync(
+                profile.EmployeeId, afterExclusive: periodStart, toInclusive: periodEnd, ct);
+        }
+
         var sources = new BoundarySources(
             OkTransitions: okTransitions,
             AgreementConfigPromotions: Array.Empty<(DateOnly, string)>(),
@@ -995,7 +1025,8 @@ public sealed class PeriodCalculationService
             LocalProfileActivations: localProfileActivations,
             EmploymentStartedDates: employmentStartedDates,
             EmploymentEndedDates: employmentEndedDates,
-            EmployeeProfileEffectiveDates: employeeProfileEffectiveDates);
+            EmployeeProfileEffectiveDates: employeeProfileEffectiveDates,
+            AgreementCodeEffectiveDates: agreementCodeEffectiveDates);
 
         // ADR-020 D1 (S29 TASK-2907) — planner-enrollment seam for non-rule snapshot
         // contracts. Register the wage-type-mapping natural-key triple as a replay-stable
