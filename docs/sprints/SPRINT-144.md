@@ -199,12 +199,93 @@ Applied as: M-11 `EmployedSegmentCount = 0;` in the message-only ctor body; M-13
 
 - **Expected lists (C-1):** every entry resolved to a `FullyQualifiedName` on `bd4df92`. The resolver mapped the plan's run-2 spot check "the DISMISSED ladder" to the two facts with "Dismiss" in their names. The Orchestrator reads TASK-14401 step 3a as naming `Resolve_MissingIfMatch_428_Stale_412_…` instead, and put that question to the Fable `adjudicator`. **The frozen lists: see "C-1 — expected lists frozen" below.**
 
+## C-1 — expected lists frozen (Fable `adjudicator`, `claude-fable-5-1`, 2026-09-29)
+
+**In plain language.** The two close-time evidence runs are a controlled experiment: break the code in a known way and check that exactly the tests meant to notice do notice, and nothing else moves. The adjudicator read every listed test end to end against master and traced each run's breakage through it. Every red trips at a reachable assertion, and every listed green survives. No unlisted test can be reached. The payroll breakage only bites where the agreement-code repository is wired in, and the only places that happens are the two S144 payroll classes. The worklist breakages live in one repository method called only by the two worklist test classes. There was one correction: "the DISMISSED ladder" in the plan (`PLAN-s144.md:156, :367`) is `Resolve_MissingIfMatch_428_Stale_412_…`, not the two facts with "Dismiss" in their names. It is added to run 2's greens, where it proves the moved block check never touches the verb it must not refuse.
+
+Rulings: **R9-1** Run1-RED frozen as given · **R9-2** Run1-GREEN frozen as given · **R9-3** Run2-RED frozen as given · **R9-4** Run2-GREEN frozen **with the DISMISSED ladder added** (the two "Dismiss" facts stay; the wildcards are expanded to six FQNs) · **R9-5** completeness: no additions (only `RecalcBlockedLiveRulesetTests.cs:490` passes `userAgreementCodeRepo:`; the compose employee's agreement row starts `0001-01-01`, so the Smoke job adds no red) · **R9-6** mutation precision for re-spawn 3:
+- **M-1:** delete `HrBackdateWorklistRepository.cs:1088-1089` only.
+- **M-2:** replace `blockedBy` with `Array.Empty<string>()` at `:1092` and `:1109`.
+- **M-3:** move `:1082-1089` to immediately after `:1073`, a pure swap with the version guard.
+- **M-14:** pass `AgreementCodeEffectiveDates: null` at `PeriodCalculationService.cs:1029`.
+
+No owner questions. **Any change to these lists from here on is a Fable ruling.**
+
+All names are prefixed `StatsTid.Tests.Regression.`.
+
+**Run 1 — E1 (M-1 + M-2 + M-14) — RED, exactly these:**
+```
+Worklist.HrBackdateWorklistRepositoryTests.Resolve_Recalculated_OnBlockedRow_ThrowsRecalcBlocked_WritesNothing  [M-1]
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsRecalculated_Hr403_LocalAdmin403_GlobalAdmin409Blocked_ForeignHrStillScope403  [M-1]
+Worklist.HrBackdateWorklistRepositoryTests.Resolve_HandledManually_OnBlockedRow_StampsBlockSetOnRowAndEvent  [M-2]
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsHandledManually_Hr403_LocalAdmin403_GlobalAdmin200_StampsBlockSet  [M-2]
+Worklist.BackdateWorklistEndpointTests.Resolve_MissingIfMatch_428_Stale_412_Fresh_200WithNewEtag_Repeat_409_OpenFilterHonoured  [M-2]
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsRecalculated_MixedRoleHrWithGlobalAdminScope_Is403_ButMayStillDismiss  [M-2]
+Payroll.RecalcBlockedLiveRulesetTests.Recalculate_MidMonthAgreementCodeChange_LiveSet_RefusesWithAgreementCodeCause_WritesNothing  [M-14]
+Payroll.RecalcBlockedLiveRulesetTests.CalculateWithOutcome_Planless_MidMonthAgreementCodeChange_LiveSet_Refuses_NoManifest  [M-14]
+Payroll.RecalcBlockedLiveRulesetTests.Calculate_MidMonthAgreementCodeChange_StraddleSafe_ManifestRecordsAgreementCodeChange  [M-14]
+Payroll.PayrollHostRecalcBlockedTests.Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged  [M-14]
+Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest  [M-14]
+```
+**Run 1 — GREEN spot checks** (everything not on RED must pass; these are read deliberately):
+```
+Worklist.HrBackdateWorklistRepositoryTests.Resolve_Recalculated_OnBlockedRow_StaleVersion_ThrowsConcurrencyBeforeBlock
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_Blocked_AsRecalculated_StaleIfMatch_Is412_Not409
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_TriggerOnFirstOfMonth_AsRecalculated_GlobalAdmin200_StampsEmptySet
+Worklist.BackdateWorklistEndpointTests.Resolve_SettledYear_AsHandledManually_Hr200_StampsEmptySet
+Worklist.HrBackdateWorklistRepositoryTests.Resolve_VersionGuard_StaleThrows_FreshBumpsVersion_EmitsResolvedEvent_RepeatRefused_UnknownNotFound
+Worklist.BackdateWorklistEndpointTests.Get_WithEmployeeId_GlobalAdmin_ReturnsTypedRow_WithKeysTriggersDerivedFieldsAndVersion
+Payroll.RecalcBlockedLiveRulesetTests.Recalculate_MidMonthProfileChange_LiveSet_StillRefuses_NoRegression
+Migrations.BackdateWorklistS144SchemaTests.OpenRow_WithAStamp_IsRefused_23514_NonEmptyAndEmpty
+Migrations.BackdateWorklistS144SchemaTests.ResolvedRow_HandledManually_WithStamp_IsAccepted_NonEmptyAndEmpty
+Migrations.BackdateWorklistS144SchemaTests.ResolvedRow_UnknownVerb_IsRefused_23514_ByTheNamedVerbCheck
+Migrations.BackdateWorklistS144SchemaTests.ResolvedRow_WithNullStamp_IsRefused_23514_OnEveryVerb
+```
+**Run 2 — E2 (M-3 alone) — RED, exactly these:**
+```
+Worklist.HrBackdateWorklistRepositoryTests.Resolve_Recalculated_OnBlockedRow_StaleVersion_ThrowsConcurrencyBeforeBlock  [M-3]
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_Blocked_AsRecalculated_StaleIfMatch_Is412_Not409  [M-3]
+```
+**Run 2 — GREEN spot checks:**
+```
+Worklist.HrBackdateWorklistRepositoryTests.Resolve_Recalculated_OnBlockedRow_ThrowsRecalcBlocked_WritesNothing
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsRecalculated_Hr403_LocalAdmin403_GlobalAdmin409Blocked_ForeignHrStillScope403
+Worklist.HrBackdateWorklistRepositoryTests.Resolve_HandledManually_OnBlockedRow_StampsBlockSetOnRowAndEvent
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsHandledManually_Hr403_LocalAdmin403_GlobalAdmin200_StampsBlockSet
+Worklist.BackdateWorklistEndpointTests.Resolve_MissingIfMatch_428_Stale_412_Fresh_200WithNewEtag_Repeat_409_OpenFilterHonoured   [ADDED at C-1 — the DISMISSED ladder]
+Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsRecalculated_MixedRoleHrWithGlobalAdminScope_Is403_ButMayStillDismiss
+Worklist.BackdateWorklistEndpointTests.Resolve_Hr_MayDismissExportedMonth_AndMayRecalculateSettledYear
+Worklist.HrBackdateWorklistRepositoryTests.Resolve_VersionGuard_StaleThrows_FreshBumpsVersion_EmitsResolvedEvent_RepeatRefused_UnknownNotFound
+Payroll.RecalcBlockedLiveRulesetTests.Recalculate_MidMonthAgreementCodeChange_LiveSet_RefusesWithAgreementCodeCause_WritesNothing
+Payroll.RecalcBlockedLiveRulesetTests.Recalculate_MidMonthProfileChange_LiveSet_StillRefuses_NoRegression
+Payroll.RecalcBlockedLiveRulesetTests.CalculateWithOutcome_Planless_MidMonthAgreementCodeChange_LiveSet_Refuses_NoManifest
+Payroll.RecalcBlockedLiveRulesetTests.Calculate_MidMonthAgreementCodeChange_StraddleSafe_ManifestRecordsAgreementCodeChange
+Payroll.PayrollHostRecalcBlockedTests.Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged
+Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest
+```
+
+## Step 5α / 5a — run after merge (a process miss, corrected before the candidate commit)
+
+**What happened, plainly.** `docs/WORKFLOW.md` requires two checks on each agent's output before it is accepted. Step 5α runs the Constraint Validator on every output. Step 5a runs a Fable Reviewer on every task touching an invariant, plus Codex on the high-risk ones: schema, payroll export, rule logic and access control. The Opus seat merged all seven S144 tasks on build and test green alone, and ran neither step. The miss was found while preparing the close, before anything was pushed. Both steps were then run on each task's merge diff, and every fix they asked for landed before the candidate commit K. Step 7a reviews the whole sprint again on K, and that includes the fixes.
+
+| Check | Scope | Outcome |
+|---|---|---|
+| **5α Constraint Validator** | all 8 tasks, per merge diff | **0 violations.** One unverifiable item: the hand-synced `db-schema.md`; the CI `docs` job arbitrates |
+| **5a Reviewer (Fable `claude-fable-5-1`), worklist half** | 14400, 14404, 14401, 14405 (worklist), 14406 contract check | **APPROVED, no BLOCKER or WARNING.** The stamp is lock-time and comes from a single source; the gate for both verbs runs after scope; no 403 names an employee; UI and server bodies agree. NOTEs are fixed by TASK-14409 and the small fixes below. One NOTE is recorded rather than fixed: the S144 segment's **upgrade path** (the DROP of the auto-named old CHECK) is exercised by no test, because every migration test builds the table fresh. It is a **known unpinned path**, acceptable under the reseed ruling |
+| **5a Reviewer (Fable), planner/payroll half** | 14402, 14403, 14405 (segmentation/payroll) | **APPROVED-WITH-WARNINGS.** W 14403-1: the new date read had no test of its own edges (1st excluded, last day included) → TASK-14409. W 14405-1: the "no date leaks" pins passed only because the planner message quotes a ruling date. The period rendered in machine culture (`01-03-2026` here, `03/01/2026` on CI), which the ISO regex never saw → TASK-14408 (ISO, culture-invariant period in the refusal text; adopts the reviewer's recommendation) + TASK-14409 (the pins assert the actual period dates) |
+| **5a Codex, worklist (14400, 14404)** | **performed on inlined source.** The first attempt read nothing (`-s read-only` blocked its shell), so it was re-run on a bundle per `docs/AGENTS.md`; a clean verdict covers the bundle, not the whole repository | **No BLOCKER or WARNING.** Two NOTEs on test evidence: nothing pins that the stamp is derived *after* the lock (the code is correct by inspection); "nothing written" is observed as "nothing committed" (wording fixed) |
+| **5a Codex, planner/payroll (14402, 14403)** | performed on inlined source | **No BLOCKER.** W: the raw `/export` and `/export-period` routes take caller-computed lines and never plan, so the refusal covers `/recalculate` and `/calculate-and-export` only. The docs name only those two, and this is registered as a follow-up. W: the straddle-safe fact proves the boundary is recorded, not that the second segment is mapped under the new agreement — that is QUAL-150 itself (comment corrected). The culture concern was checked, and it is not a CI flake (the ruling-date literal satisfies the regex in every culture), but it is the same vacuity the Fable reviewer found |
+
+**Fix-ups dispatched:** TASK-14408 (`rule-engine`: ISO period in the three planner messages; `BoundaryDetector` summary). TASK-14409 (`test-qa`: fencepost facts for `GetEffectiveFromDatesAsync`; real redaction pins; the 403 reason names `HANDLED_MANUALLY`; four docstring corrections; **no test renamed**, so the frozen C-1 lists stand). Orchestrator small fixes, comments only, at `bff063b`: `EventSerializer.cs` lists three verbs; the `PayrollPlanRefusalProblem` redaction rationale is corrected (ADR-040 D7 concerns employment and change dates); the `ResolveAsync` doc now says "before any write".
+
+**Recorded, not fixed (quality-register candidates for a ruling):** the Payroll host's dormant `ConfigResolutionService` registration (see the wave-3 section); the raw export routes bypass the planner; ADR-040 D7's precision note is stale (S144's handlers now echo cause names, possibly including `EmploymentStarted`/`EmploymentEnded`, with no dates) → updated at O-4.
+
 ## Handoff block (written at every wave gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-09-29, master `0ec35d3` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
-| **Phase** | Wave-2b gate: TASK-14405 merged (`bd4df92`), unit mutations M-4..M-13 all tripped, lists resolved; **C-1 in progress** (Fable `adjudicator` freezing the lists). O-4 registers + INDEX row committed (`ebf5d22`, `ae6634f`) |
+| **Phase** | C-1 FROZEN (Fable `adjudicator`). Step 5α/5a run after merge (miss corrected): 5α 0 violations; Fable ×2 APPROVED / APPROVED-WITH-WARNINGS; Codex ×2 (inlined source) no BLOCKER. **Fix-ups running:** TASK-14408 (`rule-engine`), TASK-14409 (`test-qa`). Next: merge them → O-1 → finish O-4 → K (C-2) |
 | **Dispatched tasks / worktrees** | TASK-14403 and TASK-14406 in harness worktrees. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`, rebased on `bffc469`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
 | **Merged** | 14400 (`5e2f50b`), 14407 (`52d577d`), 14401 (`bffc469`), 14402 (`0bdd5a5`), 14404 (`01e5bea`), 14406 (`24fa0d2`), 14403 (`807f75f`); O-3 `4611fd6`; O-2 `0ec35d3` |
 | **Pending gates** | wave-2b: re-spawn 1 returns → merge 14405 → O-1 (Unit count rises by its pins) → re-spawn 2 (unit mutations M-4..M-13 in a detached worktree + expected-list resolution to FullyQualifiedNames) → **C-1: a Fable `adjudicator` freezes the lists**. Then close sequence C-2.. (O-4 docs → K → re-spawn 3 E1/E2 → Step 7a both lenses) |
