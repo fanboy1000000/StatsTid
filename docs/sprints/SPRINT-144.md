@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | **CLOSING** — 10 tasks (8 planned + 2 Step-5a fix-ups), all merged. Close sequence at C-2 (candidate commit K). Step 7a, the evidence runs and the CI line are recorded below as they happen |
-| **Test Verified** | CI-pending — local: build 0 errors / 145 warnings · Unit 1308 · DemoSeed 170 · Regression non-Docker 128 (2009 facts discovered, the rest Docker-gated) · Smoke 7 discovered · frontend 988 · `tsc --noEmit` clean. The Docker-gated facts are watched in CI at C-5 and the result backfilled here at C-9 |
+| **Test Verified** | CI-pending — local: build 0 errors / 145 warnings · Unit 1308 · DemoSeed 170 · Regression non-Docker 128 (2012 facts discovered, the rest Docker-gated) · Smoke 7 discovered · frontend 988 · `tsc --noEmit` clean. The Docker-gated facts are watched in CI at C-5 and the result backfilled here at C-9 |
 | **Theme** | A worklist row the system says cannot be recalculated can no longer be *recorded* as recalculated — and an operator who fixed it by hand can now say so truthfully ("Håndteret manuelt"). The real payroll recalculation stops writing wrong wage-type lines after a mid-month agreement-code change, and refuses with a readable reason instead of a bare 500 |
 | **Predecessor** | S143 — close `2e7d5b1`; post-close fix `5e78941`; CI backfill `b49f781`; governance chain `fe0bdb1`..`4348731` (model routing refined, the `planner` role, registers QUAL-181/182, the RED-by-mutation method) |
 | **Base commit (Step 7a)** | **`2e7d5b1`** — the S143 close commit, not HEAD, so `5e78941` and the whole governance chain fall inside the S144 Step-7a diff (`docs/WORKFLOW.md` step 7a) |
@@ -227,6 +227,8 @@ Payroll.RecalcBlockedLiveRulesetTests.CalculateWithOutcome_Planless_MidMonthAgre
 Payroll.RecalcBlockedLiveRulesetTests.Calculate_MidMonthAgreementCodeChange_StraddleSafe_ManifestRecordsAgreementCodeChange  [M-14]
 Payroll.PayrollHostRecalcBlockedTests.Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged  [M-14]
 Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest  [M-14]
+Payroll.PayrollHostRecalcBlockedTests.Export_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord  [M-14; ADDED at Step 7a, A5 — TASK-14410]
+Payroll.PayrollHostRecalcBlockedTests.ExportPeriod_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord  [M-14; ADDED at Step 7a, A5 — TASK-14410]
 ```
 **Run 1 — GREEN spot checks** (everything not on RED must pass; these are read deliberately):
 ```
@@ -241,6 +243,7 @@ Migrations.BackdateWorklistS144SchemaTests.OpenRow_WithAStamp_IsRefused_23514_No
 Migrations.BackdateWorklistS144SchemaTests.ResolvedRow_HandledManually_WithStamp_IsAccepted_NonEmptyAndEmpty
 Migrations.BackdateWorklistS144SchemaTests.ResolvedRow_UnknownVerb_IsRefused_23514_ByTheNamedVerbCheck
 Migrations.BackdateWorklistS144SchemaTests.ResolvedRow_WithNullStamp_IsRefused_23514_OnEveryVerb
+Payroll.PayrollHostRecalcBlockedTests.Export_MonthWithoutInteriorChange_StillExports_200   [ADDED at Step 7a, A5 — TASK-14410 no-regression]
 ```
 **Run 2 — E2 (M-3 alone) — RED, exactly these:**
 ```
@@ -263,6 +266,9 @@ Payroll.RecalcBlockedLiveRulesetTests.CalculateWithOutcome_Planless_MidMonthAgre
 Payroll.RecalcBlockedLiveRulesetTests.Calculate_MidMonthAgreementCodeChange_StraddleSafe_ManifestRecordsAgreementCodeChange
 Payroll.PayrollHostRecalcBlockedTests.Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged
 Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest
+Payroll.PayrollHostRecalcBlockedTests.Export_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord   [ADDED at Step 7a, A5 — TASK-14410]
+Payroll.PayrollHostRecalcBlockedTests.ExportPeriod_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord   [ADDED at Step 7a, A5 — TASK-14410]
+Payroll.PayrollHostRecalcBlockedTests.Export_MonthWithoutInteriorChange_StillExports_200   [ADDED at Step 7a, A5 — TASK-14410 no-regression]
 ```
 
 ## Step 5α / 5a — run after merge (a process miss, corrected before the candidate commit)
@@ -290,6 +296,15 @@ Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeCh
 
 **Final local gate (O-1, on `a7426c4`):** build 0 / **145** · Unit **1308** · DemoSeed **170** · Regression non-Docker **128** of 2009 discovered · Smoke 7 discovered · frontend **988** · `tsc --noEmit` clean.
 
+
+## Step-7a fixes merged (TASK-14411, TASK-14410) — the K′ gate
+
+| Task | Merged | Result |
+|---|---|---|
+| TASK-14411 (`test-qa`, `claude-sonnet-5-5`) | `a61136a` via `f413e9c` | The four comment sites, in the adjudicator's A3 wording. The diff is comments only (filtered line by line). No test name changed |
+| TASK-14410 (`payroll-integration`, `claude-opus-5-5`) | `267d5e7` via `577afd7` | **Owner ruling Q1 = A, built.** `PeriodCalculationService.EnsurePeriodPlannableAsync` runs the unchanged builder and discards the plan. There is no second copy of the boundary logic, so M-14 blinds this guard as well. Both raw routes plan **every calendar month their lines fall in** before anything is mapped, written, locked or recorded. `CalculationResult` has no period fields, and the export locks per calendar month, so whole months are planned: a change on the 16th refuses March even when the lines stop on the 15th. `/export-period` is all-or-nothing. Three Docker facts are added, **added to the frozen lists per A5**: two 422 facts (Run-1 RED under M-14, Run-2 GREEN) and one no-regression 200 (GREEN in both runs). **Census:** nothing in the product or the tests calls either route over HTTP. **Behaviour change, recorded:** an employee with no `users` row now gets a 500 from the raw routes instead of an export, the same as `/calculate-and-export`. **Brief contradiction:** the shared host factory's stub answered the post-commit delivery call with 404, which makes any raw export report `Success=false` (422) even though the record is committed. The fix is a `DeliveringFactory()` local to the test file; `PayrollHostFactory.cs` is not modified. **Residual, pre-existing:** if the Rule Engine is unreachable, the classification fetch returns an empty set and the guard lets the export through, the same as the calculating endpoints |
+
+**O-1 on `577afd7`:** a clean Release build gives 0 errors and **145** warnings. The **CA2100 ratchet is at 115** (baseline 115). Unit **1308**, DemoSeed **170** and Regression non-Docker **128** all pass, with 2012 facts discovered. `openapi.json` shows no drift when regenerated. Frontend is unchanged at 988.
 ## Test summary (sprint-test-validation: previous + delta = current)
 
 | Suite | S143 | S144 | Delta |
@@ -297,7 +312,7 @@ Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeCh
 | Unit | 1290 | 1308 | +18 (TASK-14405's unit pins) |
 | DemoSeed | 170 | 170 | 0 |
 | Regression, non-Docker (local) | 128 | 128 | 0 (every new Regression fact is Docker-gated) |
-| Regression, discovered | 1988 | 2009 | +21 (CI runs them) |
+| Regression, discovered | 1988 | 2012 | +24 (CI runs them; +3 from TASK-14410) |
 | Frontend (vitest) | 976 | 988 | +12 (TASK-14406) |
 
 ## Step 7a (C-4)
@@ -374,11 +389,11 @@ The adjudicator ruled every fix **in now, in a new candidate commit K′**, rath
 
 | | |
 |---|---|
-| **As of** | 2026-09-29, master at K′ (the commit carrying this line, once TASK-14410 is merged); session on Opus 5.5 (client 2.1.284) |
-| **Phase** | Step 7a cycle 1 done on K `c586944`: external REQUEST-CHANGES, internal CLOSE-WITH-WARNINGS. Adjudicated A1–A5; **owner Q1 answered "A — Guard now in S144"**. TASK-14411 merged (`f413e9c`); **TASK-14410 (`payroll-integration`) running**: the raw-export guard. Record corrections written |
+| **As of** | 2026-09-29, master at **K′ = the commit carrying this line** (all code merged at `577afd7`); session on Opus 5.5 (client 2.1.284) |
+| **Phase** | Step 7a cycle 1 done on K `c586944` and adjudicated; owner Q1 = A built (TASK-14410, `577afd7`); TASK-14411 merged; the frozen lists are amended per A5; the K′ gate is green. **K′ cut.** Next: C-3 on K′, then cycle 2 |
 | **Dispatched tasks / worktrees** | TASK-14410 in a harness worktree. Evidence branch `s144-red-mutations` holds E1 `54f8fc1` / E2 `bd4bf75` on K, local only, and must be re-cut on K′ (C-3 repeated: delete the branch, then re-spawn TASK-14405's `test-qa` with the new K′). 13 agent worktrees are retained for teardown at C-9 |
 | **Merged** | 14400 `5e2f50b`, 14407 `52d577d`, 14401 `bffc469`, 14402 `0bdd5a5`, 14404 `01e5bea`, 14406 `24fa0d2`, 14403 `807f75f`, 14405 `bd4df92`, 14408 `756e050`, 14409 `a7426c4`, 14411 `f413e9c`; O-3 `4611fd6`; O-2 `0ec35d3`; small fixes `bff063b`, `1de5f96`; K `c586944` |
 | **Pending gates** | 14410 returns → merge → O-1 (full non-Docker suites; the CA2100 count must stay ≤ 115; OpenAPI unchanged) → K′ commit → C-3 on K′ (E1′ = K′ + M-1 + M-2 + M-14; E2′ = K′ + M-3; E1′/E2′ diffs expected byte-identical to E1/E2) → Step 7a cycle 2, both lenses, `reviewed-against-commit: <K′>` → C-5 close commit + push + CI watch → C-6/C-7 evidence runs against the AMENDED lists → C-8 → C-9 → teardown |
 | **Open rulings** | none. Q1 = A executed as TASK-14410; the frozen-list amendment for its facts was pre-ruled (A5) |
-| **Next action** | on 14410's return: merge, run the O-1 gate, add the new fact names to the C-1 lists per A5, commit K′, then re-spawn TASK-14405 for C-3 on K′ |
+| **Next action** | re-spawn TASK-14405 `test-qa` for C-3 on K′ (E1′, E2′), then Step 7a cycle 2 on both lenses against K′ |
 | **Step zero** | `planner` → `claude-opus-5-5`; `reviewer` → `claude-fable-5-1`; Sonnet tier → `claude-sonnet-5-5`; Opus implementer tier → `claude-opus-5-5` (all verified from self-reports) |
