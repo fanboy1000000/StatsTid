@@ -136,9 +136,9 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// <c>AgreementCodeEffectiveDates</c> hydration (passes null): the month plans as ONE segment,
     /// the stubbed rule engine answers, the correction commits, and the endpoint returns <b>200</b> —
     /// <c>Assert.Equal(422, status)</c> trips (and the baseline changes). If instead the host stops
-    /// registering <c>UserAgreementCodeRepository</c> in DI, the request FAILS — <b>200</b> or
-    /// <b>500</b> (<c>EmploymentProfileResolver</c> needs the same repository, Program.cs:58, so
-    /// resolution itself may throw) — and either way the 422 assertion goes red.
+    /// registering <c>UserAgreementCodeRepository</c> in DI, the request FAILS — <b>200</b>, or the
+    /// resolution error escapes (500 on Kestrel), because <c>EmploymentProfileResolver</c> needs the
+    /// same repository (Program.cs:58) — and either way the fact fails before or at the 422 assertion.
     /// (2) the <c>/recalculate</c> <c>PlannerInvariantViolation</c> catch is removed → escapes (500 on Kestrel),
     /// the fact fails before or at the 422 assertion.
     /// (3) mutation M-13 (<c>error = ex.Message</c>) → the body carries the period start
