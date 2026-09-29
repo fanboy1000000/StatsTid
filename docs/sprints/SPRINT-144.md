@@ -43,9 +43,9 @@ Transcribed from the plan (draft 4). Dispositions are updated at each wave gate;
 | TASK-14401 | MERGED (`bffc469`) | wave 1 · `test-qa` (Sonnet) · the pins that compile today (endpoint, repository re-fixture to the 1st, schema facts, the S138 migration line) |
 | TASK-14402 | MERGED (`0bdd5a5`) | wave 2a · `rule-engine` (Opus, cross-domain authorized: `SharedKernel/**/Segmentation/**`) · `AgreementCodeChange` boundary, tie-break (R1), structured members on the planner's refusal at both sites |
 | TASK-14403 | DISPATCHED (from `0bdd5a5`) | wave 2b · `payroll-integration` (Opus, cross-domain: Infrastructure repository + tests) · dates-in-period read (no `effective_to` filter), hydration + ctor param (R2), pure 422 mapping, both handlers, Payroll host factory (marker type) |
-| TASK-14404 | DISPATCHED (wave 2a) | wave 2a · `backend-infrastructure` (Opus, Infrastructure + Backend) · the verb, the refusal on the locked snapshot, the stamp, 409 mapping, gate for both verbs |
+| TASK-14404 | MERGED (`01e5bea`) | wave 2a · `backend-infrastructure` (Opus, Infrastructure + Backend) · the verb, the refusal on the locked snapshot, the stamp, 409 mapping, gate for both verbs |
 | TASK-14405 | AUTHORED (`6f9676d`, rebased; merges at 2b) | authored wave 1, merged at the 2b gate, re-spawned at close · `test-qa` (Sonnet) · the pins that need the new API, mutations M-1…M-14, the expected-red lists, the evidence commits E1/E2 |
-| TASK-14406 | PLANNED | wave 3 · `ux` (Sonnet) · the screen (third verb, label/toast, 409-blocked and 403 branches reading the parsed error body, fixture aligned) |
+| TASK-14406 | DISPATCHED (from `0ec35d3`) | wave 3 · `ux` (Sonnet) · the screen (third verb, label/toast, 409-blocked and 403 branches reading the parsed error body, fixture aligned) |
 | TASK-14407 | MERGED (`52d577d`) | wave 1 · `test-qa` (Sonnet) · S143 carry-over comment fixes (items 4, 5, 7, 8) and item 9 verified (R4) |
 
 ### The plan's ledger, verbatim
@@ -143,15 +143,27 @@ At the first dispatch the owner raised that switching the session model clears t
 - The four re-worded tests do not pin the test date and the repository's clock together: the repository uses the real Copenhagen "today", the test the UTC day, and they differ in the last 1–2 hours of every UTC day — a latent CI flake window, now stated honestly in the comments but not closed.
 - `tests/StatsTid.Tests.Regression/Hosting/FixedTimeProvider.cs:18-27` says UTC midnight keeps the derivations in agreement "for every hour of the calendar day" — true of the pinned instant, imprecise as written.
 
+## Wave-2a gate (2026-09-29, Opus seat)
+
+**In plain language.** The planner now treats a mid-month agreement-code change as a place where the month would have to be split — which, for the live rules, means it refuses rather than paying the month under the wrong agreement — and its refusal carries machine-readable facts (which rule, how many pieces, which kinds of change) instead of only a sentence. The worklist server now refuses "recalculated" on a month it knows it cannot recalculate, accepts the honest "handled manually", and records the block set on every resolution. The API contract the screen is built against was regenerated.
+
+| Task | Merged | Result |
+|---|---|---|
+| TASK-14402 | `c433f35` via `0bdd5a5` | As briefed; `DescribeInteriorBoundaryCauses` (string) replaced by `InteriorBoundaryCauses` (list) with the message text unchanged. TASK-14405's six `AgreementCodeBoundaryTests` ran green against it (copied in temporarily, not committed). Not-named site, no change needed: `init.sql:2064-2066` comment lists example cause values (could mention `AgreementCodeChange`) |
+| TASK-14404 | `ff95d7e` via `01e5bea` | As briefed. **Brief contradiction 1, resolved by the pin:** the resolve 200 response also carries `resolutionBlockedBy` (`string[]`), because TASK-14401's `Resolve_SettledYear_AsHandledManually_Hr200_StampsEmptySet` reads it from the POST body — an additive contract change beyond step 6, flagged for Step 7a. **Contradiction 2:** `ResolutionBlockedBy` is a trailing optional parameter on `HrBackdateWorklistRow` so TASK-14405's positional builders compile. Verb-list enumerations reported, not edited: the frontend (TASK-14406's scope), `api-typed-overloads.test.ts:463-464` and `EventSerializer.cs:218` (comments). TASK-14405's worklist unit pins ran 75/75 against it in a throwaway worktree |
+| O-2 | `0ec35d3` | `openapi.json` + `api-types.ts` regenerated: `BackdateWorklistRow.resolutionBlockedBy: string[] \| null`, resolve response `resolutionBlockedBy: string[]`. `npx tsc --noEmit` exit 0 |
+
+**O-1:** build 0 errors / **145** warnings · Unit **1290** · DemoSeed **170** · Regression non-Docker **128** — all green. Step zero: the Opus implementer tier resolved **`claude-opus-5-5`** (14402 and 14404 self-reports).
+
 ## Handoff block (written at every wave gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-09-29, master `bffc469` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
-| **Phase** | Wave-1 gate PASSED; TASK-14402 MERGED (`0bdd5a5`, build 0/145, Unit 1290); TASK-14404 running; **TASK-14403 dispatched early** from `0bdd5a5` — sequencing note: the plan puts 2b after the full 2a gate, but 14403 depends only on 14402 (ledger "Depends on: 14402 merged") and shares no file with 14404, so it was not held behind 14404; the 2a O-1 gate still runs when 14404 merges |
-| **Dispatched tasks / worktrees** | TASK-14402 (`rule-engine`) and TASK-14404 (`backend-infrastructure`), each in a harness worktree from `bffc469`; both may read TASK-14405's pins read-only via `git show worktree-agent-ae5104627ddf4b53d:<path>`. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
-| **Merged** | TASK-14400 (`5e2f50b`), TASK-14407 (`52d577d`), TASK-14401 (`bffc469`); O-3 `4611fd6` |
-| **Pending gates** | wave-2a gate: merge 14402 + 14404 → O-1 → O-2 contract regeneration |
-| **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above. Two Step-7a observations recorded in the wave-1 gate section |
-| **Next action** | on return: merge 14402, 14404 → O-1 (build ≤ 145 warnings, Unit/DemoSeed/Regression non-Docker) → O-2 (`dotnet run --project src/Backend/StatsTid.Backend.Api -- --openapi`; `npm run gen:api`) → dispatch 14403 (`payroll-integration`, branched after 14402) and 14406 (`ux`, after O-2) |
-| **Step zero** | `planner` → `claude-opus-5-5`; `reviewer` → `claude-fable-5-1`; Sonnet tier → `claude-sonnet-5-5` (wave-1 self-reports, all verified); Opus implementer tier — confirm from 14402/14404 self-reports |
+| **As of** | 2026-09-29, master `0ec35d3` (+ this docs commit); session on Opus 5.5 (client 2.1.284), per the seat-never-switches ruling |
+| **Phase** | Wave-1 and wave-2a gates PASSED; O-2 done. **Running:** TASK-14403 (`payroll-integration`, dispatched early from `0bdd5a5` — it depends only on 14402 and shares no file with 14404) and TASK-14406 (`ux`, from `0ec35d3`) |
+| **Dispatched tasks / worktrees** | TASK-14403 and TASK-14406 in harness worktrees. TASK-14405's worktree `.claude/worktrees/agent-ae5104627ddf4b53d` (branch `worktree-agent-ae5104627ddf4b53d`, tip `6f9676d`, rebased on `bffc469`) waits for the 2b gate. `python` is not on this machine's PATH — O-3 stays a hand transcription, CI's `--check` arbitrates |
+| **Merged** | 14400 (`5e2f50b`), 14407 (`52d577d`), 14401 (`bffc469`), 14402 (`0bdd5a5`), 14404 (`01e5bea`); O-3 `4611fd6`; O-2 `0ec35d3` |
+| **Pending gates** | wave-2b gate: merge 14403 → O-1 (if 14403 branched before 14404, rebuild after merge) → re-spawn `test-qa` on 14405's worktree (second rebase, name reconciliation, unit pins) → merge 14405 → O-1 → re-spawn 2 (unit mutations M-4..M-13 + expected-list resolution) → **C-1: the lists are frozen by a Fable `adjudicator`** (the seat is Opus). Wave-3 gate: merge 14406 → O-1 incl. `tsc --noEmit` + vitest |
+| **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above. For Step 7a: two wave-1 observations; TASK-14404's resolve-response addition |
+| **Next action** | on each return: merge; run the gate for that wave as above |
+| **Step zero** | `planner` → `claude-opus-5-5`; `reviewer` → `claude-fable-5-1`; Sonnet tier → `claude-sonnet-5-5`; Opus implementer tier → `claude-opus-5-5` (all verified from self-reports) |
