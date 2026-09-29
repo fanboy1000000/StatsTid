@@ -19,12 +19,14 @@ namespace StatsTid.Tests.Regression.Hosting;
 /// <b>Two constructors, two callers.</b> <see cref="FixedTimeProvider(DateOnly)"/> is the everyday
 /// entry point — pin a calendar date and get UTC midnight of that date, matching how the product's
 /// today-dependent endpoints derive "today" (<c>DateOnly.FromDateTime</c> over the wall clock's
-/// UtcNow instant, once they read this seam instead of reading that wall clock directly). Pinning at
-/// UTC MIDNIGHT (not noon, not local midnight)
-/// matters: it keeps a UTC-day derivation and a Copenhagen-day derivation in agreement for every hour
-/// of the calendar day, because Denmark's UTC offset (+1 winter / +2 summer DST) is never negative —
-/// Copenhagen local midnight always falls AT OR AFTER UTC midnight of the same date, so both
-/// derivations read back the same <see cref="DateOnly"/>. <see cref="FixedTimeProvider(DateTimeOffset)"/>
+/// UtcNow instant, once they read this seam instead of reading that wall clock directly).
+/// Pinning at UTC MIDNIGHT matters: at that instant a UTC-day derivation and a Copenhagen-day
+/// derivation read back the same <see cref="DateOnly"/>, because Denmark's offset (+1 winter / +2
+/// summer DST) puts Copenhagen at 01:00 or 02:00 of the same date. The two derivations disagree only
+/// in the last one or two hours of each UTC day — from 22:00Z or 23:00Z, when Copenhagen has already
+/// turned over to the next date (Copenhagen midnight falls BEFORE UTC midnight of the same date). UTC
+/// midnight is always outside that window; it is an instant of agreement, not the only one.
+/// <see cref="FixedTimeProvider(DateTimeOffset)"/>
 /// is PAT-008's original sample constructor (carried over verbatim) for a caller that needs to pin an
 /// exact instant, offset and all, rather than a bare date.
 /// </para>

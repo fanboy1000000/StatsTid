@@ -31,9 +31,10 @@ namespace StatsTid.Tests.Regression.EmployeeProfile;
 ///
 /// <para>
 /// <b>★ WHY THESE FACTS USE <c>WithFixedInstant</c> AND NOT <c>WithFixedToday</c>.</b>
-/// <c>WithFixedToday(DateOnly)</c> pins UTC MIDNIGHT, which is the one instant of every day where
-/// the two calendars are guaranteed to AGREE (Denmark's offset is never negative, so Copenhagen's
-/// local midnight never falls before UTC midnight of the same date). A pin built on it therefore
+/// <c>WithFixedToday(DateOnly)</c> pins UTC MIDNIGHT, an instant at which the two calendars are
+/// guaranteed to AGREE (Copenhagen is then 01:00 or 02:00 of the same date; they disagree only in the
+/// last one or two hours of the UTC day, because Copenhagen midnight falls BEFORE UTC midnight of the
+/// same date). A pin built on it therefore
 /// passes under BOTH the old and the new implementation — it cannot fail, which makes it worthless
 /// as evidence of this particular change. Every fact below pins an exact INSTANT from
 /// <see cref="BoundaryInstants"/>, chosen so the UTC day and the Copenhagen day DISAGREE, and asserts
