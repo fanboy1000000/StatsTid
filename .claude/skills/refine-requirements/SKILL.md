@@ -139,7 +139,7 @@ Be terse.
 
 **Cycle cap**
 
-2 BLOCKER-fix cycles per lens. After the second cycle on the same lens, halt and prompt the user to choose: (a) continue iterating, (b) accept remaining findings and proceed, (c) defer findings as a follow-up task. Mirrors WORKFLOW.md Step 0b / Step 7a discipline (see `feedback_step7a_cycle_cap_discipline.md`).
+5 review cycles per lens (owner ruling 2026-09-29; it was 3). Every fix gets a verification review; if the fifth review on the same lens still surfaces new BLOCKERs, halt and prompt the user to choose: (a) continue iterating, (b) accept remaining findings and proceed, (c) defer findings as a follow-up task. Mirrors WORKFLOW.md Step 0b / Step 7a discipline (see `feedback_step7a_cycle_cap_discipline.md`).
 
 **Skip conditions** (Step 4 only — Steps 1–3 still run)
 

@@ -517,7 +517,7 @@ Plan Review findings are recorded in the sprint log under "## Plan Review (Step 
 
 ### Cycle Cap
 
-Same as External Review (Step 7a): every plan-edit gets a verification review, so cycle 2 always runs to verify the cycle-1 edit and cycle 3 always runs to verify the cycle-2 edit. Halt-and-prompt fires AFTER cycle 3 verification IF that verification surfaces new BLOCKERs, before any cycle-4 plan edit begins. At the halt-prompt the user chooses: (a) continue iterating, (b) accept findings and proceed to Step 1, (c) defer findings as a new sprint task. This ensures every plan edit is reviewed at least once before any decision to stop iterating.
+Same as External Review (Step 7a): every plan-edit gets a verification review, so every cycle from 2 through 5 runs to verify the previous cycle's edit. Halt-and-prompt fires AFTER cycle 5 verification IF that verification surfaces new BLOCKERs, before any cycle-6 plan edit begins (cap raised from 3 to 5 by owner ruling 2026-09-29). At the halt-prompt the user chooses: (a) continue iterating, (b) accept findings and proceed to Step 1, (c) defer findings as a new sprint task. This ensures every plan edit is reviewed at least once before any decision to stop iterating.
 
 ### Constraints
 
@@ -618,12 +618,14 @@ Codex's native output may not use these exact labels. The Orchestrator maps Code
 
 To prevent sprint-commit delays without leaving any absorption unreviewed, the Orchestrator tracks Codex review cycles within a single sprint. A **cycle** = one `codex review` invocation. Re-invocation after fixing Codex's own BLOCKERs counts as an additional cycle.
 
-**Core rule: every fix gets a verification review.** The halt fires AFTER the verification cycle, not before — so the cycle-2 fix is always reviewed by cycle 3, and only if cycle 3 itself finds new BLOCKERs does the Orchestrator halt before cycle-4 fix.
+**Core rule: every fix gets a verification review.** The halt fires AFTER the verification cycle, not before — so the cycle-4 fix is always reviewed by cycle 5, and only if cycle 5 itself finds new BLOCKERs does the Orchestrator halt before a cycle-6 fix.
+
+**The cap is 5 cycles** (owner ruling 2026-09-29: *"I want to change our 3 review limit to 5. We often need 5 reviews."*). It was 3 until then. The reason for raising it: in practice a sprint often needed a fourth and fifth pass to close. Under a cap of 3, that meant a halt-and-prompt nearly every time, which turned the halt into routine rather than a signal.
 
 - **Cycle 1**: Run Codex on the sprint diff. Act on findings.
-- **Cycle 2**: Re-run Codex to verify the cycle-1 fix. Act on any new findings.
-- **Cycle 3**: Re-run Codex to verify the cycle-2 fix. If clean, sprint proceeds to commit. If new BLOCKERs surface, **halt and prompt the human operator** before cycle-4 fix begins. The user chooses:
-  - (a) continue iterating (cycle-4 fix + cycle-5 verification);
+- **Cycles 2–4**: Re-run Codex to verify the previous cycle's fix. Act on any new findings.
+- **Cycle 5**: Re-run Codex to verify the cycle-4 fix. If clean, sprint proceeds to commit. If new BLOCKERs surface, **halt and prompt the human operator** before a cycle-6 fix begins. The user chooses:
+  - (a) continue iterating (cycle-6 fix + cycle-7 verification);
   - (b) accept remaining findings and proceed to commit;
   - (c) split remaining findings off as a new sprint task.
 

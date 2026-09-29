@@ -313,9 +313,18 @@ if (Test-Path $ciHealthWaiver) {
         $ciUrl = '(mocked)'
     } else {
         try {
-            $ghJson = gh run list --branch master --event push --status completed --limit 1 --json conclusion,displayTitle,url 2>$null | Out-String
+            # S144 close (2026-09-29): do NOT pass `--status completed`. With that filter GitHub's
+            # run-listing API served a stale answer (the S138 red run from 2026-09-03) while the
+            # newest completed push run on master was green — from PowerShell every time, from
+            # Bash once in two — and the gate blocked a close over a green master
+            # (.claude/reviews/SPRINT-144-ci-health-WAIVED.md). The unfiltered listing is
+            # consistent, so list a few runs and take the newest COMPLETED one on the client side.
+            $ghJson = gh run list --branch master --event push --limit 10 --json status,conclusion,displayTitle,url,createdAt 2>$null | Out-String
             if ($LASTEXITCODE -eq 0 -and $ghJson.Trim()) {
-                $ghRuns = @($ghJson | ConvertFrom-Json)
+                # Capture the array FIRST: in Windows PowerShell 5.1, ConvertFrom-Json emits a JSON
+                # array as ONE pipeline object, so filtering it directly would compare the whole list.
+                $allRuns = ($ghJson | ConvertFrom-Json)
+                $ghRuns = @($allRuns | Where-Object { $_.status -eq 'completed' } | Sort-Object createdAt -Descending)
                 if ($ghRuns.Count -ge 1) {
                     $ciConclusion = $ghRuns[0].conclusion
                     $ciTitle = $ghRuns[0].displayTitle
