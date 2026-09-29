@@ -58,7 +58,7 @@ if ($in.PSObject.Properties['model']         -and $in.model)         { $model = 
 # ---- the routing table (keep in step with docs/WORKFLOW.md, section "Model Routing") ----
 $ReviewFloor    = 'fable'
 $ReviewRoles    = @('reviewer')
-$OpusRoles      = @('rule-engine', 'payroll-integration', 'backend-infrastructure')
+$OpusRoles      = @('rule-engine', 'payroll-integration', 'backend-infrastructure', 'planner')   # planner: drafts plans/refinements (owner ruling 2026-09-29); judgment stays on the floor
 $SonnetRoles    = @('data-model', 'api-integration', 'security', 'test-qa', 'ux', 'constraint-validator', 'trace')
 $SweepRoles     = @('sweep')
 $ReadOnlyPass   = @('explore', 'plan', 'claude-code-guide', 'statusline-setup')

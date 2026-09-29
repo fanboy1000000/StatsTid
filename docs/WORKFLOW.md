@@ -333,6 +333,7 @@ one of its 19 agents inherited that model because no routing existed.
 | Refinement (Steps 1–4), Step 0b plan review, Orchestrator rulings and review absorption | Fable (newest version) | the Orchestrator session model — switch points below, recorded in the sprint log |
 | Reviewer Agent (Steps 4, 5a, 7a) | Fable | `.claude/agents/reviewer.md` fixes it · `model-routing-guard.ps1` blocks a cheaper override · the agent's own `reviewed-by-model:` self-check refuses on the wrong model · `sprint-close-guard.ps1` requires that line at close |
 | Rule Engine, Payroll Integration, Backend/Infrastructure implementers | Opus | `.claude/agents/*.md` frontmatter · guard blocks Fable and Haiku |
+| **Planner** — drafts refinements, sprint plans and the revisions that absorb review findings (owner ruling 2026-09-29) | Opus | `.claude/agents/planner.md` · guard blocks Fable and Haiku · writes only under `.claude/refinements/**` and `.claude/plans/**`; the Fable seat reviews every draft and rules |
 | Data Model, API Integration, Security, Test & QA, UX, Constraint Validator, trace | Sonnet | `.claude/agents/*.md` frontmatter · guard blocks Fable |
 | Mechanical sweeps | Haiku | `.claude/agents/sweep.md` · guard blocks Opus and Fable |
 | Generic `general-purpose` spawn | must name a model | guard blocks a bare spawn and a Fable spawn |
@@ -467,9 +468,9 @@ this is a checklist with a record, like the Orchestrator seat:
 
 | Sprint phase | Orchestrator model | Why |
 |--------------|--------------------|-----|
-| Open → plan approved (Steps 0a, 0b, 1; refinement) | Fable | scope and architecture decisions |
+| Open → plan approved (Steps 0a, 0b, 1; refinement) | Fable **judges**; `planner` (Opus) **drafts** | scope and architecture decisions are Fable's; the drafts they are made over are not. Owner ruling 2026-09-29, after asking "Why is it we don't delegate the tasks to separate agents running on Opus?" and seeing 634 Fable messages to 97 Opus in one session, most of them the Orchestrator drafting and re-drafting a refinement: **"Yes, from Step 0a on"** — the Fable seat reviews each draft, rules on the forks and runs the Reviewer; it does not write the drafts. Cost accepted: a thicker brief per draft, since the drafter does not hold the session's rulings and history |
 | Dispatch, monitoring, acceptance bookkeeping, CI watch (Steps 2–4, 6) | Opus | coordination; agents do the work |
-| Step 5a / 7a absorption, every ruling on an agent's declared deviation | Fable | judgment over someone else's output |
+| Step 5a / 7a absorption, every ruling on an agent's declared deviation | Fable judges; where absorption produces a *document revision* (a plan, a refinement), `planner` drafts it | judgment over someone else's output; the drafting of the revised document is not judgment |
 | Close bookkeeping and CI backfill | Opus | mechanical |
 
 **The switch points are honoured, not logged around (owner ruling 2026-09-25).** S141–S143 ran every phase on
