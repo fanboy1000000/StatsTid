@@ -38,6 +38,14 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// </para>
 ///
 /// <para>
+/// <b>How "the catch is removed" reads in this harness.</b> The host runs in-process on TestServer,
+/// in the Production environment, with no exception-handler middleware, so an exception that escapes
+/// a handler is rethrown from the test's request call and the fact fails BEFORE its status
+/// assertion. A Kestrel host would answer 500. The red conditions below write this case as
+/// "escapes (500 on Kestrel)".
+/// </para>
+///
+/// <para>
 /// <b>Why at host level.</b> The service-level pins (TASK-14405's
 /// <c>RecalcBlockedLiveRulesetTests</c>) build <see cref="PeriodCalculationService"/> by hand, WITH
 /// the agreement-code repository, so they cannot see whether the HOST injects it. The repository
@@ -131,8 +139,8 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// registering <c>UserAgreementCodeRepository</c> in DI, the request FAILS — <b>200</b> or
     /// <b>500</b> (<c>EmploymentProfileResolver</c> needs the same repository, Program.cs:58, so
     /// resolution itself may throw) — and either way the 422 assertion goes red.
-    /// (2) the <c>/recalculate</c> <c>PlannerInvariantViolation</c> catch is removed → <b>500</b>,
-    /// same assertion trips.
+    /// (2) the <c>/recalculate</c> <c>PlannerInvariantViolation</c> catch is removed → escapes (500 on Kestrel),
+    /// the fact fails before or at the 422 assertion.
     /// (3) mutation M-13 (<c>error = ex.Message</c>) → the body carries the period start
     /// (2026-03-01) and end (2026-03-31) — in ISO, and in machine-culture form where the message
     /// renders them so — and the employee id; <c>AssertRedactedProblem</c> asserts the body
@@ -182,11 +190,12 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified):
     /// (1) the export handler's <c>PlannerInvariantViolation</c> catch around
-    /// <c>CalculateWithOutcomeAsync</c> is removed → the refusal escapes as <b>500</b>;
-    /// <c>Assert.Equal(422, status)</c> trips.
+    /// <c>CalculateWithOutcomeAsync</c> is removed → the refusal escapes (500 on Kestrel);
+    /// the fact fails before or at the 422 assertion.
     /// (2) mutation M-14 → one segment; the month calculates and the export record and manifest are
     /// committed; on this shared factory the post-commit delivery stub answers 404, so the handler
-    /// returns 422 with an <c>ExportResult</c> body that carries no <c>kind</c> —
+    /// returns 422 with an anonymous body (the calculation's fields plus <c>Success = false</c>,
+    /// <c>ErrorMessage</c> and <c>ExportId</c>, Program.cs:414-426) that carries no <c>kind</c> —
     /// <c>AssertRedactedProblem</c> fails on the missing property (and both row counts are 1). Red,
     /// but not the 200 that (a) sees.
     /// </summary>
@@ -324,7 +333,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// Green before AND after the guard (no mutation targets it); in neither frozen RED list — it is
     /// a GREEN spot check for both runs. It would go red if the guard over-refused (e.g. planned a
     /// fixed wider window reaching 16 March instead of the calendar month) or failed to resolve its
-    /// dependencies in the host (a 500).
+    /// dependencies in the host (the request fails).
     /// </summary>
     [Fact]
     public async Task Export_MonthWithoutInteriorChange_StillExports_200()
@@ -371,7 +380,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// (1) the provider reverts to returning an empty set on failure → the guard is blind, the route
     /// maps and exports → <b>200</b> plus a March record; the 503 assertion trips.
     /// (2) the <c>RuleClassificationsUnavailableException</c> catch in
-    /// <c>RefuseUnplannableMonthsAsync</c> is removed → <b>500</b>; the 503 assertion trips.
+    /// <c>RefuseUnplannableMonthsAsync</c> is removed → escapes (500 on Kestrel); the fact fails before or at the 503 assertion.
     /// </summary>
     [Fact]
     public async Task Export_RulesUnavailable_Returns503_NoExportRecord()
@@ -401,7 +410,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// Red conditions (Docker-gated — cannot run locally; CI-verified):
     /// (1) the provider reverts to returning an empty set on failure → both months export →
     /// <b>200</b> plus two records; the 503 assertion trips.
-    /// (2) the catch in <c>RefuseUnplannableMonthsAsync</c> is removed → <b>500</b>; same trip.
+    /// (2) the catch in <c>RefuseUnplannableMonthsAsync</c> is removed → escapes (500 on Kestrel); the fact fails before or at the 503 assertion.
     /// </summary>
     [Fact]
     public async Task ExportPeriod_RulesUnavailable_Returns503_NoExportRecord()
@@ -439,7 +448,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// the month calculates and exports, delivery answers → <b>200</b> plus a record and a manifest;
     /// the 503 assertion trips.
     /// (2) the <c>RuleClassificationsUnavailableException</c> catch around
-    /// <c>CalculateWithOutcomeAsync</c> is removed → <b>500</b>; same trip.
+    /// <c>CalculateWithOutcomeAsync</c> is removed → escapes (500 on Kestrel); the fact fails before or at the 503 assertion.
     /// </summary>
     [Fact]
     public async Task CalculateAndExport_RulesUnavailable_Returns503_NoExportRecord_NoManifest()
@@ -478,7 +487,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// the correction commits → <b>200</b> and the baseline changes; the 503 and baseline assertions
     /// trip.
     /// (2) the <c>RuleClassificationsUnavailableException</c> catch in the <c>/recalculate</c>
-    /// handler is removed → <b>500</b>; the 503 assertion trips.
+    /// handler is removed → escapes (500 on Kestrel); the fact fails before or at the 503 assertion.
     /// </summary>
     [Fact]
     public async Task Recalculate_RulesUnavailable_Returns503_LinesUnchanged()
@@ -539,6 +548,11 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         var root = doc.RootElement;
         Assert.Equal("payroll-rules-unavailable", root.GetProperty("kind").GetString());
         Assert.False(root.GetProperty("success").GetBoolean());
+        // The body is FIXED (Program.cs:618): exactly these three properties, so an added
+        // upstream-detail field cannot slip past the pin (Step 7a cycle 3, C2).
+        Assert.Equal(
+            new[] { "error", "kind", "success" },
+            root.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
 
         Assert.DoesNotMatch(IsoDatePattern, json);
         Assert.DoesNotContain(employeeId, json);
