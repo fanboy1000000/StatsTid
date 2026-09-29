@@ -787,6 +787,122 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
             () => RunResolveAsync(id, expectedVersion: 2, "IGNORED", "bad verb"));
     }
 
+    // ── S144 / TASK-14405 — the block is binding for RECALCULATED where the row is LOCKED ───
+    //
+    // Plain language: a worklist row whose month contains a mid-month profile change is "blocked"
+    // (QUAL-149: the live rule set refuses to re-plan such a month). Until S144 the endpoint only
+    // showed that as a flag, and the verb RECALCULATED could still be recorded — an HR "I
+    // recalculated it" assertion for a month that could not have been. Now the repository
+    // (which holds the row lock) refuses RECALCULATED on a blocked row, and the new verb
+    // HANDLED_MANUALLY records "paid by hand" together with WHICH blocks were in force.
+    //
+    // Three SEPARATE facts (one mutation each, attributable in the evidence runs): a fact stops
+    // at its first failed assertion, so folding them together would let one mutation mask another.
+    // The blocked row is seeded via a PROFILE_CHANGE trigger on 2026-08-15 (strictly inside August,
+    // so QUAL-149 applies; the 1st would not — that is the derivation fencepost, pinned in unit).
+
+    private async Task<Guid> SeedBlockedAugustRowAsync(string employeeId)
+    {
+        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, "STY_WL_A");
+        await SeedExportAsync(employeeId, 2026, 8, "h1");
+        return Assert.Single(await RunExportedAsync(employeeId,
+            Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 8, 15)),
+            new DateOnly(2026, 8, 15), new DateOnly(2026, 9, 1)));
+    }
+
+    /// <summary>
+    /// (1a) RECALCULATED on a blocked row, matching version → <see cref="BackdateWorklistRecalcBlockedException"/>
+    /// carrying the worklist id and <c>BlockedBy = ["QUAL-149"]</c>; NOTHING is written: the row is
+    /// still open at version 1, no <c>BackdateWorklistRowResolved</c> event, no audit row.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified): mutation M-1 — in
+    /// <c>HrBackdateWorklistRepository.ResolveAsync</c> remove the
+    /// <c>throw new BackdateWorklistRecalcBlockedException(…)</c> branch. The row then resolves
+    /// normally and <c>Assert.ThrowsAsync&lt;BackdateWorklistRecalcBlockedException&gt;</c> trips
+    /// (no exception thrown). Observed in evidence run 1 (E1) at close.
+    /// </summary>
+    [Fact]
+    public async Task Resolve_Recalculated_OnBlockedRow_ThrowsRecalcBlocked_WritesNothing()
+    {
+        const string emp = "wl_emp_blocked_recalc";
+        var id = await SeedBlockedAugustRowAsync(emp);
+
+        var ex = await Assert.ThrowsAsync<BackdateWorklistRecalcBlockedException>(
+            () => RunResolveAsync(id, expectedVersion: 1, WorklistResolutions.Recalculated, "Re-planned"));
+
+        Assert.Equal(id, ex.WorklistId);
+        Assert.Equal(new[] { "QUAL-149" }, ex.BlockedBy);
+
+        var row = await _repo.GetByIdWithVersionAsync(id);
+        Assert.Null(row!.ResolvedAt);
+        Assert.Null(row.Resolution);
+        Assert.Equal(1L, row.Version);
+        Assert.Single(await _repo.GetOpenAsync(emp));
+        Assert.Empty(await OutboxEventsAsync(emp, "BackdateWorklistRowResolved"));
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0", emp));
+    }
+
+    /// <summary>
+    /// (1b) PRECEDENCE: RECALCULATED with a STALE version on a blocked row → the version guard
+    /// answers first (<see cref="OptimisticConcurrencyException"/>, expected 99 / actual 1), not the
+    /// block. A stale token means the caller is looking at an outdated row — telling them "blocked"
+    /// about data they no longer hold would be a verdict on a snapshot the lock has not confirmed.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified): mutation M-3 — in
+    /// <c>ResolveAsync</c> move the block check BEFORE the version guard. The call then throws
+    /// <see cref="BackdateWorklistRecalcBlockedException"/> and
+    /// <c>Assert.ThrowsAsync&lt;OptimisticConcurrencyException&gt;</c> trips. Observed in evidence
+    /// run 2 (E2, M-3 alone — M-1 and M-3 cancel each other in one build) at close.
+    /// </summary>
+    [Fact]
+    public async Task Resolve_Recalculated_OnBlockedRow_StaleVersion_ThrowsConcurrencyBeforeBlock()
+    {
+        const string emp = "wl_emp_blocked_stale";
+        var id = await SeedBlockedAugustRowAsync(emp);
+
+        var stale = await Assert.ThrowsAsync<OptimisticConcurrencyException>(
+            () => RunResolveAsync(id, expectedVersion: 99, WorklistResolutions.Recalculated, "stale"));
+
+        Assert.Equal(99L, stale.ExpectedVersion);
+        Assert.Equal(1L, stale.ActualVersion);
+        Assert.Null((await _repo.GetByIdWithVersionAsync(id))!.ResolvedAt);
+        Assert.Empty(await OutboxEventsAsync(emp, "BackdateWorklistRowResolved"));
+    }
+
+    /// <summary>
+    /// (1c) HANDLED_MANUALLY on the same blocked row SUCCEEDS (that is the point of the verb) and
+    /// records the block set that was in force — on the ROW (<c>ResolutionBlockedBy</c>) and in the
+    /// EVENT (<c>blockedBy</c>, the audit record) — both exactly <c>["QUAL-149"]</c>.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified): mutation M-2 — in
+    /// <c>ResolveAsync</c> stamp <c>Array.Empty&lt;string&gt;()</c> (<c>{}</c>) on the write and the
+    /// event instead of the derived <c>blockedBy</c>. <c>ResolutionBlockedBy</c> then reads <c>[]</c>
+    /// and <c>Assert.Equal(new[] { "QUAL-149" }, row.ResolutionBlockedBy)</c> trips. Observed in
+    /// evidence run 1 (E1) at close; it also trips TASK-14401's endpoint stamp facts.
+    /// </summary>
+    [Fact]
+    public async Task Resolve_HandledManually_OnBlockedRow_StampsBlockSetOnRowAndEvent()
+    {
+        const string emp = "wl_emp_blocked_manual";
+        var id = await SeedBlockedAugustRowAsync(emp);
+
+        var result = await RunResolveAsync(id, expectedVersion: 1, WorklistResolutions.HandledManually, "Paid by hand");
+
+        Assert.Equal(1L, result.VersionBefore);
+        Assert.Equal(2L, result.NewVersion);
+        var row = await _repo.GetByIdWithVersionAsync(id);
+        Assert.NotNull(row!.ResolvedAt);
+        Assert.Equal("HANDLED_MANUALLY", row.Resolution);
+        Assert.NotNull(row.ResolutionBlockedBy);
+        Assert.Equal(new[] { "QUAL-149" }, row.ResolutionBlockedBy);
+
+        var resolved = Assert.Single(await OutboxEventsAsync(emp, "BackdateWorklistRowResolved"));
+        Assert.Equal("HANDLED_MANUALLY", resolved.GetProperty("resolution").GetString());
+        Assert.Equal(new[] { "QUAL-149" },
+            resolved.GetProperty("blockedBy").EnumerateArray().Select(e => e.GetString()).ToArray());
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // Org-subtree listing
     // ════════════════════════════════════════════════════════════════════════

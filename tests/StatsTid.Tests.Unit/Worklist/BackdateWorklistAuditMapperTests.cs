@@ -138,6 +138,76 @@ public sealed class BackdateWorklistAuditMapperTests
         Assert.Equal(3L, root.GetProperty("versionAfter").GetInt64());
     }
 
+    /// <summary>
+    /// S144 / TASK-14405 — the audit projection carries the block set that was in force at
+    /// resolution: <c>details.blockedBy</c> is present and equals the event's <c>BlockedBy</c>,
+    /// element for element, in order. (The event is the audit record; the projection must not drop
+    /// what HR was told was blocked when they handled it manually.)
+    ///
+    /// Red conditions: mutation M-6 — <c>BackdateWorklistRowResolvedAuditMapper</c> omits
+    /// <c>blockedBy</c> from <c>details</c>. <c>TryGetProperty("blockedBy")</c> is then false,
+    /// tripping <c>Assert.True(found)</c>.
+    /// </summary>
+    [Fact]
+    public void RowResolved_DetailsCarryBlockedBy_EqualToTheEventsSet()
+    {
+        var mapper = new BackdateWorklistRowResolvedAuditMapper();
+        var @event = new BackdateWorklistRowResolved
+        {
+            WorklistId = Guid.NewGuid(),
+            EmployeeId = "emp1",
+            Kind = "EXPORTED_MONTH",
+            Year = 2026,
+            Month = 8,
+            ExportId = Guid.NewGuid(),
+            Resolution = "HANDLED_MANUALLY",
+            Reason = "Paid by hand",
+            TriggerCount = 2,
+            VersionBefore = 1,
+            VersionAfter = 2,
+            BlockedBy = new[] { "QUAL-149", "QUAL-150" },
+        };
+
+        var row = mapper.Map(@event, Context);
+
+        using var details = JsonDocument.Parse(row.DetailsJson);
+        var found = details.RootElement.TryGetProperty("blockedBy", out var blockedBy);
+        Assert.True(found);
+        Assert.Equal(JsonValueKind.Array, blockedBy.ValueKind);
+        Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, blockedBy.EnumerateArray().Select(e => e.GetString()).ToArray());
+    }
+
+    /// <summary>
+    /// An empty block set is recorded as an empty array (resolved, nothing blocked) — distinct
+    /// from a pre-S144 event, which has nothing to project.
+    ///
+    /// Red conditions: mutation M-6 (same as above) — the property is absent, tripping
+    /// <c>Assert.True(found)</c>.
+    /// </summary>
+    [Fact]
+    public void RowResolved_DetailsCarryBlockedBy_EmptySetIsAnEmptyArray()
+    {
+        var @event = new BackdateWorklistRowResolved
+        {
+            WorklistId = Guid.NewGuid(),
+            EmployeeId = "emp1",
+            Kind = "EXPORTED_MONTH",
+            Resolution = "DISMISSED",
+            TriggerCount = 1,
+            VersionBefore = 1,
+            VersionAfter = 2,
+            BlockedBy = Array.Empty<string>(),
+        };
+
+        var row = new BackdateWorklistRowResolvedAuditMapper().Map(@event, Context);
+
+        using var details = JsonDocument.Parse(row.DetailsJson);
+        var found = details.RootElement.TryGetProperty("blockedBy", out var blockedBy);
+        Assert.True(found);
+        Assert.Equal(JsonValueKind.Array, blockedBy.ValueKind);
+        Assert.Equal(0, blockedBy.GetArrayLength());
+    }
+
     [Fact]
     public void BothMappers_NullTolerant_OnActivatorBuiltEvents()
     {
