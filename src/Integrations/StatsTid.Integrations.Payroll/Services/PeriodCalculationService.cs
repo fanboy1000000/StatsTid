@@ -2035,13 +2035,13 @@ public sealed class PeriodCalculationService
 /// every calculation code path.
 ///
 /// <para>
-/// <strong>Cross-domain wiring</strong>: the production implementation is HTTP-backed
-/// against the Rule Engine's RuleRegistry (cross-domain dep — TASK-2010 wires a
-/// <c>GET /api/rules/classifications</c> endpoint on the Rule Engine and the matching
-/// HTTP client provider in <c>StatsTid.Integrations.Payroll.Program.cs</c>). Until that
-/// lands, <see cref="EmptyRuleClassificationProvider"/> is the default fallback so the
-/// service still constructs successfully — at the cost of D9 invariants being silenced
-/// (logged on each fallback merge in <see cref="PeriodCalculationService"/>).
+/// <strong>Cross-domain wiring</strong>: the production implementation is
+/// <see cref="HttpRuleClassificationProvider"/>, registered in
+/// <c>StatsTid.Integrations.Payroll.Program.cs</c> against the Rule Engine's
+/// <c>GET /api/rules/classifications</c> (TASK-2010, S20).
+/// <see cref="EmptyRuleClassificationProvider"/> is the constructor fallback for TESTS only
+/// (see its doc); since S144 (TASK-14412) an unreachable registry throws rather than
+/// degrading to it.
 /// </para>
 ///
 /// <para>

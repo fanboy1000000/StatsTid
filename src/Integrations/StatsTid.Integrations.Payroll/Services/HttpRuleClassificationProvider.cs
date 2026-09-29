@@ -56,8 +56,15 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// An empty list reads as "there is nothing to refuse", so an outage used to make every payroll
 /// route plan blind and export a split month with wrong lines. "I could not find out" is now a
 /// distinct signal, and the routes answer it with a 503 before anything is calculated, written or
-/// exported. An empty list is legitimate only from <see cref="EmptyRuleClassificationProvider"/>
-/// (the test fallback), meaning a genuinely empty registry.
+/// exported. An empty list means a genuinely empty registry, and a successful 200 <c>[]</c> is
+/// accepted and cached like any other success (so is <see cref="EmptyRuleClassificationProvider"/>,
+/// the test-only fallback). The live registry cannot answer <c>[]</c>: <c>RuleRegistry</c>
+/// registers its 16 classifications in its constructor, and
+/// <c>RuleClassificationsLeastPrivilegeAcceptTests</c> pins the real endpoint non-empty. The
+/// provider deliberately does not reject an empty set — a count check would guard a state the
+/// code cannot produce and would not catch the case that matters (a set missing the
+/// Reject/AlignedWindow rules), which is the registry's contract with the planner, not a
+/// transport property (S144 Step 7a cycle 3, ruling C1).
 /// </para>
 ///
 /// <para>
