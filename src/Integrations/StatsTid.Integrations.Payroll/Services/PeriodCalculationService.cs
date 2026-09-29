@@ -867,6 +867,47 @@ public sealed class PeriodCalculationService
             previousFlexBalance, authorizationHeader, correlationId, ct: ct);
     }
 
+    // -------------------------------------------------------------------
+    // Plan-only guard for the raw export routes — S144 TASK-14410 (QUAL-183)
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Plans <paramref name="periodStart"/>..<paramref name="periodEnd"/> for
+    /// <paramref name="profile"/> exactly as the calculating endpoints do, and discards the plan.
+    /// Returns normally when the period is plannable; throws the planner's
+    /// <see cref="PlannerInvariantViolation"/> when it is not (a split refusal — e.g. a mid-month
+    /// agreement-code change — or a geometric defect).
+    ///
+    /// <para>
+    /// <b>Why it exists (plain language).</b> The raw <c>/api/payroll/export</c> and
+    /// <c>/api/payroll/export-period</c> routes take lines the caller has ALREADY calculated and
+    /// export them; they never plan. So a month the calculating endpoints refuse (because it would
+    /// pay the days after an agreement change under the old agreement) could still be exported
+    /// through them with wrong wage-type lines. The owner ruled (S144, 2026-09-29) that those
+    /// routes must refuse the same months, with the same 422.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Same builder, by design.</b> This goes through the SAME private
+    /// <see cref="BuildPlanForLegacyCallersAsync"/> as
+    /// <see cref="CalculateWithOutcomeAsync(EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
+    /// — same boundary sources, same rule classifications, same <see cref="PeriodPlanner.Plan"/>.
+    /// There is no second copy of the boundary logic to drift, and no caller-supplied "already
+    /// checked" flag. The day the planner learns to split such a month instead of refusing it
+    /// (QUAL-149), this guard stops refusing on its own. It writes nothing: no manifest, no event,
+    /// no row — the plan is built in memory and dropped.
+    /// </para>
+    /// </summary>
+    public async Task EnsurePeriodPlannableAsync(
+        EmploymentProfile profile,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        _ = await BuildPlanForLegacyCallersAsync(profile, periodStart, periodEnd, ct);
+    }
+
     /// <summary>
     /// Build a <see cref="PlannedCalculation"/> for callers that haven't migrated to the
     /// PlannedCalculation-first signature yet. Hydrates an OK-version boundary source from

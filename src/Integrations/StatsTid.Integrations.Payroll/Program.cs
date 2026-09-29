@@ -173,9 +173,21 @@ app.MapPost("/api/payroll/export", async (
     PayrollExportRequest request,
     PayrollMappingService mapping,
     PayrollExportService export,
+    PeriodCalculationService calculator,
     HttpContext httpContext,
     CancellationToken ct) =>
 {
+    // S144 TASK-14410 (owner ruling 2026-09-29, QUAL-183): this route now PLANS every calendar
+    // month its lines fall in, through the SAME builder the calculating endpoints use, BEFORE
+    // anything is mapped or written. A month the planner refuses (e.g. a mid-month agreement-code
+    // change: the caller's lines would pay the days after the change under the old agreement) gets
+    // the same redacted 422 as /calculate-and-export and /recalculate; nothing is mapped, written,
+    // locked or recorded. Any other planner violation is a bug and propagates as a 500. The route
+    // still bypasses APPROVAL by design (admin retroactive / internal calls) — planning is a
+    // correctness check, not an approval gate.
+    if (await RefuseUnplannableMonthsAsync(calculator, request.Profile, new[] { request.CalculationResult }, ct) is { } refusal)
+        return refusal;
+
     // TASK-2010 (S20): per-line OK-version stamping inside the mapper supersedes the
     // pre-S20 OkVersionBoundary.ResolveProfile collapse. The mapping service resolves
     // OK per-line from each CalculationLineItem.Date, so straddling exports stay correct
@@ -210,9 +222,21 @@ app.MapPost("/api/payroll/export-period", async (
     PayrollPeriodExportRequest request,
     PayrollMappingService mapping,
     PayrollExportService export,
+    PeriodCalculationService calculator,
     HttpContext httpContext,
     CancellationToken ct) =>
 {
+    // S144 TASK-14410 (owner ruling 2026-09-29, QUAL-183): this route now PLANS every calendar
+    // month touched by ANY of request.CalculationResults, through the SAME builder the calculating
+    // endpoints use, BEFORE the first result is mapped. All-or-nothing, like the export itself: one
+    // refused month (e.g. a mid-month agreement-code change) refuses the whole call with the same
+    // redacted 422 as /calculate-and-export and /recalculate, and no month is mapped, written,
+    // locked or recorded. Any other planner violation is a bug and propagates as a 500. The route
+    // still bypasses APPROVAL by design (admin retroactive / internal calls) — planning is a
+    // correctness check, not an approval gate.
+    if (await RefuseUnplannableMonthsAsync(calculator, request.Profile, request.CalculationResults, ct) is { } refusal)
+        return refusal;
+
     var allLines = new List<PayrollExportLine>();
 
     foreach (var calcResult in request.CalculationResults)
@@ -521,6 +545,46 @@ app.MapPost("/api/payroll/export-corrections", (CorrectionExportRequest request)
 }).RequireAuthorization("GlobalAdminOnly");
 
 app.Run();
+
+// S144 TASK-14410 (owner ruling 2026-09-29, QUAL-183) — the plan-only guard for the raw /export and
+// /export-period routes. CalculationResult carries no period of its own, so the period is derived
+// from what the export will LOCK: PayrollExportService writes one payroll_export_records row per
+// (employee, calendar month of each line's date), and the mapper stamps each line with its
+// CalculationLineItem.Date and the request profile's EmployeeId. So every distinct calendar month
+// of the results' line-item dates is planned as [1st..last day] for request.Profile — the same
+// month-shaped period /calculate-and-export plans. Whole calendar months (not the min..max span of
+// the dates) because the lock is per month: a change on the 16th refuses March even when the lines
+// happen to stop on the 15th, and a result that crosses a month edge is never mistaken for a split
+// (the 2026-04-01 OK transition is a month START, so it is never interior to a planned month).
+// Months are checked in date order; the first refusal wins and nothing downstream runs.
+static async Task<IResult?> RefuseUnplannableMonthsAsync(
+    PeriodCalculationService calculator,
+    EmploymentProfile profile,
+    IEnumerable<CalculationResult> results,
+    CancellationToken ct)
+{
+    var monthStarts = results
+        .SelectMany(r => r.LineItems)
+        .Select(li => new DateOnly(li.Date.Year, li.Date.Month, 1))
+        .Distinct()
+        .OrderBy(d => d);
+
+    foreach (var monthStart in monthStarts)
+    {
+        try
+        {
+            await calculator.EnsurePeriodPlannableAsync(profile, monthStart, monthStart.AddMonths(1).AddDays(-1), ct);
+        }
+        catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
+        {
+            // Same mapping as the calculating handlers: a split refusal → redacted 422 (counts +
+            // causes, never dates or the employee id). Any other violation falls through as a 500.
+            return Results.Json(problem, statusCode: 422);
+        }
+    }
+
+    return null;
+}
 
 // S90 / TASK-9002 — builds the PayrollExportContext for the raw /export + /export-period
 // endpoints (the calculate-and-export path builds its own context inline because it already

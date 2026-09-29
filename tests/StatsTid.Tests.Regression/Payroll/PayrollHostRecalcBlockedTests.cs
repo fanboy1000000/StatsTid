@@ -3,6 +3,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using NpgsqlTypes;
 using StatsTid.Auth;
@@ -210,6 +214,193 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
         Assert.Equal(0, await CountAsync("payroll_export_records", employeeId));
         Assert.Equal(0, await CountAsync("segment_manifests", employeeId));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // (c) raw /export + /export-period — S144 TASK-14410 (owner ruling 2026-09-29, QUAL-183)
+    // ═════════════════════════════════════════════════════════════════════
+    //
+    // The two raw routes take lines the caller ALREADY calculated and never ran the planner, so a
+    // Global Admin could export a month the calculating endpoints refuse. They now plan every
+    // calendar month their lines fall in (through the same PCS builder) before anything is mapped.
+    //
+    // These facts run on DeliveringFactory(): the shared PayrollHostFactory stub answers the export
+    // service's post-commit delivery POST (/api/payroll/receive) with 404, which turns a SUCCESSFUL,
+    // committed export into a 422 ExportResult. Answering that one path with 200 makes "the route
+    // exported" a clean 200, so a blinded guard is a status flip and not a look-alike 422.
+
+    /// <summary>
+    /// (c1) <c>POST /api/payroll/export</c> as Global Admin, with a caller-calculated March-2026
+    /// <c>CalculationResult</c> (NORMAL_HOURS lines on 2 March and 20 March, either side of the
+    /// agreement-code change on 16 March) and the employee's profile → <b>422</b>,
+    /// <c>kind = payroll-recalc-blocked</c>, <c>employedSegmentCount = 2</c>, causes
+    /// <c>["AgreementCodeChange"]</c>, redacted (no date, no employee id); NO
+    /// <c>payroll_export_records</c> row for the employee's March.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
+    /// (1) mutation M-14 — <c>BuildPlanForLegacyCallersAsync</c> passes null
+    /// <c>AgreementCodeEffectiveDates</c>: the guard plans ONE segment and is blind, the route maps
+    /// and exports, the delivery stub answers, and the endpoint returns <b>200</b> —
+    /// the 422 assertion trips (and a March record exists).
+    /// (2) the guard call is removed from the <c>/export</c> handler → the route exports → <b>200</b>,
+    /// same assertion trips.
+    /// (3) the guard is moved AFTER <c>ExportAsync</c> → the 422 may still come back, but the March
+    /// record has already been committed — the zero-row assertion trips.
+    /// </summary>
+    [Fact]
+    public async Task Export_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord()
+    {
+        const string employeeId = "EMP-S144-HOST-RAWEXPORT";
+        await SeedEmployeeAsync(employeeId);
+        await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
+
+        var body = new PayrollExportRequest
+        {
+            CalculationResult = RawResult(employeeId, new DateOnly(2026, 3, 2), new DateOnly(2026, 3, 20)),
+            Profile = Profile(employeeId),
+        };
+
+        var response = await PostAsGlobalAdminAsync(DeliveringFactory(), "/api/payroll/export", body);
+        var json = await response.Content.ReadAsStringAsync();
+
+        Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
+            $"expected 422, got {(int)response.StatusCode}: {json}");
+        AssertRedactedProblem(json, employeeId);
+
+        Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, Month));
+    }
+
+    /// <summary>
+    /// (c2) <c>POST /api/payroll/export-period</c> as Global Admin, with TWO caller-calculated
+    /// results: February 2026 (no change inside it — it would export on its own, see (c3)) and
+    /// March 2026 (the agreement-code change on 16 March) → <b>422</b> with the same redacted
+    /// problem, and NO export record for EITHER month. All-or-nothing: the guard runs over every
+    /// result's months before the first one is mapped, so the clean February is not written either.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
+    /// (1) mutation M-14 (hydration nulled) → the guard is blind to March → both months export →
+    /// <b>200</b>; the 422 assertion trips (and both records exist).
+    /// (2) the guard call is removed from the <c>/export-period</c> handler → <b>200</b>, same trip.
+    /// (3) the guard is moved AFTER <c>ExportAsync</c> → February and March records are already
+    /// committed — the zero-row assertions trip.
+    /// </summary>
+    [Fact]
+    public async Task ExportPeriod_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord()
+    {
+        const string employeeId = "EMP-S144-HOST-RAWPERIOD";
+        await SeedEmployeeAsync(employeeId);
+        await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
+
+        var body = new PayrollPeriodExportRequest
+        {
+            CalculationResults = new List<CalculationResult>
+            {
+                RawResult(employeeId, new DateOnly(2026, 2, 2), new DateOnly(2026, 2, 16)),
+                RawResult(employeeId, new DateOnly(2026, 3, 2), new DateOnly(2026, 3, 20)),
+            },
+            Profile = Profile(employeeId),
+        };
+
+        var response = await PostAsGlobalAdminAsync(DeliveringFactory(), "/api/payroll/export-period", body);
+        var json = await response.Content.ReadAsStringAsync();
+
+        Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
+            $"expected 422, got {(int)response.StatusCode}: {json}");
+        AssertRedactedProblem(json, employeeId);
+
+        Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, 2));
+        Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, Month));
+    }
+
+    /// <summary>
+    /// (c3) No-regression: the SAME seed (agreement-code change on 16 March), but a February-2026
+    /// result — no interior change in February — through <c>POST /api/payroll/export</c> →
+    /// <b>200</b> and exactly one February <c>payroll_export_records</c> row. The guard refuses only
+    /// the months the planner refuses; it does not turn every raw export into a 422.
+    ///
+    /// Green before AND after the guard (no mutation targets it); in neither frozen RED list — it is
+    /// a GREEN spot check for both runs. It would go red if the guard over-refused (e.g. planned the
+    /// whole request span, or a fixed wider window, instead of the calendar month) or failed to
+    /// resolve its dependencies in the host (a 500).
+    /// </summary>
+    [Fact]
+    public async Task Export_MonthWithoutInteriorChange_StillExports_200()
+    {
+        const string employeeId = "EMP-S144-HOST-RAWFEB";
+        await SeedEmployeeAsync(employeeId);
+        await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
+
+        var body = new PayrollExportRequest
+        {
+            CalculationResult = RawResult(employeeId, new DateOnly(2026, 2, 2), new DateOnly(2026, 2, 16)),
+            Profile = Profile(employeeId),
+        };
+
+        var response = await PostAsGlobalAdminAsync(DeliveringFactory(), "/api/payroll/export", body);
+        var json = await response.Content.ReadAsStringAsync();
+
+        Assert.True(response.StatusCode == HttpStatusCode.OK,
+            $"expected 200, got {(int)response.StatusCode}: {json}");
+        Assert.Equal(1, await CountExportRecordsAsync(employeeId, Year, 2));
+    }
+
+    /// <summary>A caller-calculated result: one NORMAL_HOURS line (7.4 h) on each given date —
+    /// the shape the raw routes receive (lines already computed; the route only maps them).</summary>
+    private static CalculationResult RawResult(string employeeId, params DateOnly[] dates) => new()
+    {
+        RuleId = "NORM_CHECK_37H",
+        EmployeeId = employeeId,
+        Success = true,
+        LineItems = dates
+            .Select(d => new CalculationLineItem { TimeType = "NORMAL_HOURS", Hours = 7.4m, Rate = 0m, Date = d })
+            .ToList(),
+    };
+
+    /// <summary>The shared host with ONE swap on top: the post-commit delivery POST to mock payroll
+    /// (<c>/api/payroll/receive</c>) answers 200; every other outbound call still goes to the shared
+    /// Rule Engine stub. Derived factories are disposed with <see cref="_factory"/>.</summary>
+    private WebApplicationFactory<RetroactiveCorrectionService> DeliveringFactory() =>
+        _factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IHttpClientFactory>();
+            services.AddSingleton<IHttpClientFactory>(new DeliveringClientFactory());
+        }));
+
+    private sealed class DeliveringClientFactory : IHttpClientFactory
+    {
+        private readonly HttpMessageHandler _handler = new TestFixtures.StubHandler(request =>
+            (request.RequestUri?.AbsolutePath ?? string.Empty).EndsWith("/api/payroll/receive", StringComparison.Ordinal)
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                : TestFixtures.DefaultRuleEngineHandler(request));
+
+        public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+    }
+
+    private async Task<int> CountExportRecordsAsync(string employeeId, int year, int month)
+    {
+        await using var conn = _db.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FROM payroll_export_records
+            WHERE employee_id = @e AND year = @y AND month = @m
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("y", year);
+        cmd.Parameters.AddWithValue("m", month);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    private static async Task<HttpResponseMessage> PostAsGlobalAdminAsync(
+        WebApplicationFactory<RetroactiveCorrectionService> factory, string path, object body)
+    {
+        var client = factory.CreateClient();
+        var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = JsonContent.Create(body, body.GetType()),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MintGlobalAdminToken());
+        return await client.SendAsync(request);
     }
 
     // ─── Assertions ──────────────────────────────────────────────────────
