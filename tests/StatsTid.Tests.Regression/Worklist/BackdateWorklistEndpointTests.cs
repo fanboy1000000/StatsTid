@@ -571,6 +571,11 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     /// this fact goes RED. That is precisely the point: it is the fact the earlier pins could not
     /// express. Secondary: make the gate decide on the SCOPE role instead of the primary role and
     /// leg (a) goes 200 as well.</para>
+    ///
+    /// <para><b>S144 red conditions.</b> Let HANDLED_MANUALLY on an EXPORTED_MONTH row through for a
+    /// non-GlobalAdmin → leg (a2) returns 200 instead of 403. Stamp <c>{}</c> instead of the derived
+    /// set on the DISMISSED → the <c>'{QUAL-149}'</c> row assertion and the event <c>blockedBy</c>
+    /// assertion in leg (b) trip.</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_AsRecalculated_MixedRoleHrWithGlobalAdminScope_Is403_ButMayStillDismiss()
@@ -600,6 +605,16 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(0, await CountAsync(
             "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0", Employee));
 
+        // (a2) S144 / TASK-14401 (3b): HANDLED_MANUALLY is gated like RECALCULATED on an
+        // EXPORTED_MONTH row — the same mixed-role token is refused, and the row is untouched.
+        var handled = await SendResolveAsync(mixed, url, "\"1\"",
+            new { resolution = "HANDLED_MANUALLY", reason = "Claiming a manual handling I may not record" });
+        Assert.Equal(HttpStatusCode.Forbidden, handled.StatusCode);
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolved_at IS NULL AND resolution_blocked_by IS NULL AND version = 1", _openRowId));
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved'", $"employee-{Employee}"));
+
         // (b) The SAME token DISMISSES the SAME row successfully — so leg (a)'s 403 is the gate
         // biting on the VERB, not a token that could never touch this row at all.
         var dismiss = await SendResolveAsync(mixed, url, "\"1\"",
@@ -607,6 +622,11 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, dismiss.StatusCode);
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'DISMISSED' AND resolved_by = 'wl_ep_hr_globalscope' AND version = 2", _openRowId));
+        // S144: the DISMISSED is stamped with the derived block set (the row is blocked by QUAL-149).
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution_blocked_by = '{QUAL-149}'", _openRowId));
+        Assert.Equal(1, await CountAsync(
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved' AND event_payload -> 'blockedBy' = '[\"QUAL-149\"]'::jsonb", $"employee-{Employee}"));
     }
 
     /// <summary>
