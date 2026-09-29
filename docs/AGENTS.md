@@ -675,7 +675,7 @@ If no issues found: "No findings."
 
 ## Model routing
 
-A thirteenth definition, `planner` (Opus), drafts refinements, sprint plans and finding-absorbing revisions under `.claude/refinements/**` / `.claude/plans/**` only — it never touches code or `docs/`, never spawns, never decides; the Fable seat reviews every draft and rules (owner ruling 2026-09-29, `WORKFLOW.md` § Model Routing). Each agent above has a definition under `.claude/agents/<name>.md` whose frontmatter fixes its model
+A thirteenth definition, `planner` (Opus), drafts refinements, sprint plans and finding-absorbing revisions under `.claude/refinements/**` / `.claude/plans/**` only — it never touches code or `docs/`, never spawns, never decides. A fourteenth, `adjudicator` (Fable, read-only), is the judgment lens: it reads a draft or a set of findings with the rulings in force and returns the rulings and the owner questions the Orchestrator then executes and asks. Together they let the Orchestrator seat stay on Opus for a whole session and **never switch models** (owner ruling 2026-09-29, `WORKFLOW.md` § Model Routing, "the seat never switches"). Each agent above has a definition under `.claude/agents/<name>.md` whose frontmatter fixes its model
 (`reviewer` = Fable; `rule-engine`, `payroll-integration`, `backend-infrastructure` = Opus; `data-model`,
 `api-integration`, `security`, `test-qa`, `ux`, `constraint-validator`, `trace` = Sonnet; `sweep` = Haiku).
 Spawn by `subagent_type` name. The routing table, the four enforcement layers and the Orchestrator's own

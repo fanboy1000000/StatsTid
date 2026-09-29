@@ -121,3 +121,20 @@ Plus the S144 scope itself (the diff from `2e7d5b1`): the worklist refusal and v
 ## Routing note (for the register row)
 
 `planner` spawns: the first as `general-purpose` on `opus` with the definition inlined (registry not yet loaded), resolved `claude-opus-5-5`; drafts 2–4 by role name, guard `ALLOW opus-tier role`. Reviewer spawns on `claude-fable-5-1` throughout. The refinement's five revisions before the planner existed were drafted on Fable (634 Fable messages to 97 Opus in that stretch) — the number that prompted the owner's question and the ruling.
+
+## Model switch — ruled at dispatch time (2026-09-29)
+
+At the first dispatch the owner raised that switching the session model clears their context, and ruled: *"I want a setup so I dont have to switch models."* The seat therefore never switches: future sessions start on Opus; the Fable work is done by agents — the `reviewer` (unchanged) and the new `adjudicator` (judgment: rulings and the owner's questions, read-only, floor-enforced by the guard). The `planner` (Opus) drafts. `docs/WORKFLOW.md` § Model Routing, "the seat never switches"; `docs/AGENTS.md` roster. This session stays on Fable to its end. The `**Orchestrator model**` row above is read accordingly: no switch happened or will happen in this session.
+
+## Handoff block (written at every wave gate — the state lives here, not in the conversation)
+
+| | |
+|---|---|
+| **As of** | 2026-09-29, master `a2785c7` + the governance commit that follows it |
+| **Phase** | Step 0b closed (plan READY, both lenses). **Wave 1 not dispatched.** |
+| **Dispatched tasks / worktrees** | none |
+| **Merged** | nothing of S144's code; docs only (`docs/sprints/SPRINT-144.md`, `.claude/plans/PLAN-s144.md`, registers, ROADMAP) |
+| **Pending gates** | none yet — the wave-1 gate (O-1) runs after TASK-14400/14401/14407 merge; the baseline test counts are measured at that gate |
+| **Open rulings** | none — R1–R10 in the plan; the model-switch ruling above |
+| **Next action** | dispatch wave 1 from `.claude/plans/PLAN-s144.md` § Task briefs: TASK-14400 (`data-model`), TASK-14401 (`test-qa`), TASK-14407 (`test-qa`), TASK-14405 authoring (`test-qa`) — four worktrees branched from LOCAL master; paste each brief whole with the standing constraints block and `docs/CONVENTIONS.md` verbatim; restart the client first if the session is new (2.1.282 installed) |
+| **Step zero** | first spawn of each tier this sprint: `planner` → `claude-opus-5-5` (verified); `reviewer` → `claude-fable-5-1` (verified); Sonnet tier not yet spawned this sprint — confirm from the first `data-model`/`test-qa` self-report |

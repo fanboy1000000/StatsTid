@@ -57,7 +57,7 @@ if ($in.PSObject.Properties['model']         -and $in.model)         { $model = 
 
 # ---- the routing table (keep in step with docs/WORKFLOW.md, section "Model Routing") ----
 $ReviewFloor    = 'fable'
-$ReviewRoles    = @('reviewer')
+$ReviewRoles    = @('reviewer', 'adjudicator')   # both on the floor; the adjudicator exists so the seat never switches (owner ruling 2026-09-29)
 $OpusRoles      = @('rule-engine', 'payroll-integration', 'backend-infrastructure', 'planner')   # planner: drafts plans/refinements (owner ruling 2026-09-29); judgment stays on the floor
 $SonnetRoles    = @('data-model', 'api-integration', 'security', 'test-qa', 'ux', 'constraint-validator', 'trace')
 $SweepRoles     = @('sweep')
@@ -115,7 +115,7 @@ if ($ReviewRoles -contains $type) {
 # Detection of a signature, not a closed door: a brief avoiding both phrases still passes.
 $prompt = ''
 if ($in.PSObject.Properties['prompt'] -and $in.prompt) { $prompt = [string]$in.prompt }
-if ($prompt -match 'reviewed-by-model:?\s*<' -or $prompt -match 'authori[sz]ed\s+(review\s+)?floor' -or $prompt -match 'do not refuse on model grounds') {
+if ($prompt -match '(reviewed|adjudicated)-by-model:?\s*<' -or $prompt -match 'authori[sz]ed\s+(review\s+)?floor' -or $prompt -match 'do not refuse on model grounds') {
     Block "This brief carries the reviewer-brief signature (a 'reviewed-by-model: <...>' instruction or a self-granted floor clause) on subagent_type '$type'." `
           "review work spawns 'reviewer' (its definition fixes the floor; there is no cheaper mode). For an owner-requested Fable-vs-Opus comparison see docs/WORKFLOW.md, Model Routing. If this is hook maintenance that must quote the placeholder, rephrase the brief."
 }

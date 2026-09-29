@@ -332,6 +332,7 @@ one of its 19 agents inherited that model because no routing existed.
 |------|-------|-------------|
 | Refinement (Steps 1–4), Step 0b plan review, Orchestrator rulings and review absorption | Fable (newest version) | the Orchestrator session model — switch points below, recorded in the sprint log |
 | Reviewer Agent (Steps 4, 5a, 7a) | Fable | `.claude/agents/reviewer.md` fixes it · `model-routing-guard.ps1` blocks a cheaper override · the agent's own `reviewed-by-model:` self-check refuses on the wrong model · `sprint-close-guard.ps1` requires that line at close |
+| **Adjudicator** — rulings on drafts, briefs, declared deviations and review findings; the proposals for the owner's questions (owner ruling 2026-09-29: the seat never switches) | Fable | `.claude/agents/adjudicator.md` fixes it · guard blocks a cheaper override · the agent's own `adjudicated-by-model:` self-check refuses on the wrong model · read-only, returns rulings the Opus seat executes |
 | Rule Engine, Payroll Integration, Backend/Infrastructure implementers | Opus | `.claude/agents/*.md` frontmatter · guard blocks Fable and Haiku |
 | **Planner** — drafts refinements, sprint plans and the revisions that absorb review findings (owner ruling 2026-09-29) | Opus | `.claude/agents/planner.md` · guard blocks Fable and Haiku · writes only under `.claude/refinements/**` and `.claude/plans/**`; the Fable seat reviews every draft and rules |
 | Data Model, API Integration, Security, Test & QA, UX, Constraint Validator, trace | Sonnet | `.claude/agents/*.md` frontmatter · guard blocks Fable |
@@ -463,31 +464,38 @@ this is a checklist with a record, like the Orchestrator seat:
 - The register row for each sprint records the **resolved** id per tier, not the alias, and the client
   version the session ran on.
 
-**What cannot be hooked: the Orchestrator's own model.** It is the session model, set by the owner with
-`/model`. So it is a checklist with a record, not a gate. Switch points:
+**The Orchestrator's own model cannot be hooked — so the seat never switches (owner ruling 2026-09-29).** The
+session model is set by the owner at launch. Switching it mid-session was the switch-point rule below (2026-09-07,
+made binding 2026-09-25); on 2026-09-29, at the first dispatch of S144, the owner said switching clears their
+context and ruled, in their words: **"I want a setup so I dont have to switch models."** The setup:
 
-| Sprint phase | Orchestrator model | Why |
-|--------------|--------------------|-----|
-| Open → plan approved (Steps 0a, 0b, 1; refinement) | Fable **judges**; `planner` (Opus) **drafts** | scope and architecture decisions are Fable's; the drafts they are made over are not. Owner ruling 2026-09-29, after asking "Why is it we don't delegate the tasks to separate agents running on Opus?" and seeing 634 Fable messages to 97 Opus in one session, most of them the Orchestrator drafting and re-drafting a refinement: **"Yes, from Step 0a on"** — the Fable seat reviews each draft, rules on the forks and runs the Reviewer; it does not write the drafts. Cost accepted: a thicker brief per draft, since the drafter does not hold the session's rulings and history |
-| Dispatch, monitoring, acceptance bookkeeping, CI watch (Steps 2–4, 6) | Opus | coordination; agents do the work |
-| Step 5a / 7a absorption, every ruling on an agent's declared deviation | Fable judges; where absorption produces a *document revision* (a plan, a refinement), `planner` drafts it | judgment over someone else's output; the drafting of the revised document is not judgment |
-| Close bookkeeping and CI backfill | Opus | mechanical |
+| Concern | Who does it | Model | Why |
+|---|---|---|---|
+| The seat — decomposes, briefs, dispatches, merges, runs gates, regenerates contracts, watches CI, relays rulings and asks the owner's questions | the Orchestrator session, **started on Opus and never switched** | Opus (a session that happens to be on Fable finishes on Fable) | coordination is the tool-call-heavy stretch (S138: 704 calls, 100 direct edits); it needs continuity of context more than it needs the floor model |
+| Drafting — refinements, sprint plans, the revisions that absorb findings | `planner` | Opus | synthesis against a brief (ruling of the same day, above) |
+| Judgment — rulings on drafts, briefs, declared deviations and review findings; the proposals for the owner's questions | `adjudicator` (read-only; returns rulings and questions the seat executes and asks) | Fable, guard-enforced | prevention at the source is kept: the proposal is still drafted on the floor; only the seat that relays it is not |
+| Review — Steps 4, 0b, 5a, 7a | `reviewer` | Fable, guard-enforced, close-gate-checked | unchanged |
+| Implementation, tests, screens, sweeps | the domain roles | per definition | unchanged |
 
-**The switch points are honoured, not logged around (owner ruling 2026-09-25).** S141–S143 ran every phase on
-Opus and each log recorded a "disclosed deviation" instead; S141 found ten of its thirty wrong planning claims
-in the Orchestrator's own drafts. Offered three options — follow the rule, change it so Opus drafts and Fable
-reviews, or split by stakes — the owner selected the option labelled **"Follow the rule: Fable"** (a selection
-from three cards, not typed text; the option read "You switch the session to Fable (/model) for refinement,
-plan approval and rulings, then back to Opus for dispatch and close. Mistakes are prevented at the source;
-costs Fable tokens on the heaviest phase"). That is prevention at the source over catching the error in
-review, at the Fable-token cost. So at each switch point the Orchestrator **stops and asks the
-owner to run `/model`** before starting the phase. It does not begin refinement, plan approval, review
-absorption or a ruling on Opus and record the gap afterwards. A phase the owner explicitly tells it to run on
-the other model is recorded as the owner's call, with their words.
+**Handoff by design.** Because a restart, a crash or a forced compaction can strike any long session, the seat
+writes a short **handoff block** into the sprint log at every wave gate — dispatched tasks and their worktrees,
+merged shas, pending gates, open rulings, the next action — and any session, new or resumed (`claude
+--continue` reopens the last session with its context), starts by reading it. The plan (`.claude/plans/`, tracked)
+and the sprint log are the state; the conversation is not.
 
-The sprint log header gains an `**Orchestrator model**` row listing the model per phase, so the retrospective
-can see whether the switch points were honoured. Direct Orchestrator edits under `src/**` or `tests/**` beyond
-the Small Tasks Exception are delegated (to `backend-infrastructure`, `test-qa`, `sweep`…), not typed.
+**The former switch-point rule, kept as history.** From 2026-09-07 the seat was meant to run Fable for
+refinement, plan approval, review absorption and rulings, and Opus for dispatch and close; S141–S143 ran every
+phase on Opus and logged a "disclosed deviation" each time; on 2026-09-25 the owner chose to make the switch
+points binding ("Follow the rule: Fable" — prevention at the source over catching the error in review, at the
+Fable-token cost); on 2026-09-29 the same intent was re-housed in agents so that the seat need never switch.
+The facts established that day: Fable 5.1, Opus 5.5 and Sonnet 5 all have 1M context windows, so a switch
+cannot force compaction for lack of room; `/model`'s context behaviour is undocumented; the Orchestrator's own
+context survived the owner's in-session switch on the 25th. The owner's experience is the ruling's basis.
+
+The sprint log header keeps its `**Orchestrator model**` row — now one model per session, with the
+`planner`/`adjudicator`/`reviewer` spawns listed — so the retrospective can see the routing held. Direct
+Orchestrator edits under `src/**` or `tests/**` beyond the Small Tasks Exception are delegated (to
+`backend-infrastructure`, `test-qa`, `sweep`…), not typed.
 
 **Two rules that came out of the same S138 review.** Post-close commits that touch `src/**` get the external
 lens before the next close (two remediation commits changed a production query unreviewed; the close guard
