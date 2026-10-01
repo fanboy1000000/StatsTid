@@ -261,6 +261,20 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   profile (ADR-020 D1.5), so the moment profile-change splits become plannable, a mid-period POSITION change
   would map the second segment with the old position's lønart; the per-segment dated key must land FIRST
   (Step-5a Codex, S137). [S64 F4-1(b) · S137 TASK-13707 · QUAL-149/150]
+  **→ S145 (owner ruling 2026-10-01: "both stages, gated").** The S145 refinement found that every month is
+  wrong, not only split ones (**QUAL-186**: payroll judges a month against one week's norm), so S145 first makes
+  payroll work week by week (Stage A, with QUAL-150) and only then opens split months (Stage B, QUAL-149). This
+  entry is retired at S145's close.
+- **Overtime and norm design questions the S145 refinement surfaced (domain questions, not defects; none is S145
+  scope).** (1) **Part-time overtime band:** should a part-timer's hours between their own norm and the full-time
+  37 h be plain merarbejde rather than 50% overtime? Today the thresholds scale with the fraction
+  (`OvertimeRule.cs:58-59`). (2) **Multi-week norm periods:** overtime ignores `NormPeriodWeeks` (`OvertimeRule.cs:29`),
+  and anchoring 4-week blocks needs the unmodelled "planning start day" (`SYSTEM_TARGET.md:163`). (3) **Absences
+  and overtime:** overtime reads only time entries while flex credits absences (`AbsenceRule.cs:72-84`), so a
+  week of 4 × 9.25 h with a Monday sick day shows no overtime. (4) **The absence credit is a hard-coded
+  7.4 × fraction** (`AbsenceRule.cs:13`), not weekly norm ÷ 5, so the two differ if a position override changes
+  `WeeklyNormHours`. The defects found alongside these are registered as QUAL-187..191. [S145 refinement rev 3,
+  Fable `adjudicator` item 10]
 - **Gap-fill corrections record the new history but do not re-record the consumption inside it** —
   S138 RULED DEFERRAL, surfaced by the Step-5a Reviewer and recorded here so it is not left living only as a
   code comment (the S125/F4 lesson: a deferral that exists at the point of occurrence is one nobody sweeps
