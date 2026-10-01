@@ -2,12 +2,12 @@
 
 | | |
 |---|---|
-| **Status** | **CLOSED (C-5)** — 15 tasks (8 planned, 2 Step-5a fix-ups, 5 Step-7a fixes), all merged. Step 7a closed at **cycle 4 of 5** on K‴ `4936998`: external **APPROVE**, internal **CLOSE-WITH-WARNINGS**. The two evidence runs and the CI line are recorded by the C-9 follow-up commit. Step 7a, the evidence runs and the CI line are recorded below as they happen |
-| **Test Verified** | CI-pending — local: build 0 errors / 145 warnings · Unit 1309 · DemoSeed 170 · Regression non-Docker 128 (2016 facts discovered, the rest Docker-gated) · Smoke 7 discovered · frontend 988 · `tsc --noEmit` clean. The Docker-gated facts are watched in CI at C-5 and the result backfilled here at C-9 |
+| **Status** | **CLOSED and sealed (C-9, 2026-10-01)** — 15 tasks (8 planned, 2 Step-5a fix-ups, 5 Step-7a fixes), all merged. Step 7a closed at **cycle 4 of 5** on K‴ `4936998`: external **APPROVE**, internal **CLOSE-WITH-WARNINGS**. The close commit `cbaa5e0` went red in CI on a test-setup defect. It was fixed post-close at `8a87d16`, with a scoped Step 7a on both lenses, and CI then went green. **Both evidence runs matched their frozen lists** (§ C-5; § Evidence runs) |
+| **Test Verified** | **CI GREEN `36610948637`** on `8a87d16`, all 7 jobs: Unit 1309 · DemoSeed 170 · **Regression 2016/2016**, the Docker-gated facts included · Smoke 7 · frontend build green (vitest 988 locally). Local: build 0 errors / 145 warnings · Regression non-Docker 128 · `tsc --noEmit` clean. The close commit itself ran red (`36588183971`, nine setup failures; § C-5) |
 | **Theme** | A worklist row the system says cannot be recalculated can no longer be *recorded* as recalculated — and an operator who fixed it by hand can now say so truthfully ("Håndteret manuelt"). The real payroll recalculation stops writing wrong wage-type lines after a mid-month agreement-code change, and refuses with a readable reason instead of a bare 500 |
 | **Predecessor** | S143 — close `2e7d5b1`; post-close fix `5e78941`; CI backfill `b49f781`; governance chain `fe0bdb1`..`4348731` (model routing refined, the `planner` role, registers QUAL-181/182, the RED-by-mutation method) |
 | **Base commit (Step 7a)** | **`2e7d5b1`** — the S143 close commit, not HEAD, so `5e78941` and the whole governance chain fall inside the S144 Step-7a diff (`docs/WORKFLOW.md` step 7a) |
-| **Orchestrator model** | Refinement Steps 1–4 and Steps 0a/0b on **Fable 5.1** — from rev 6 of the refinement and draft 1 of the plan, an Opus `planner` DRAFTED and the Fable seat judged (owner ruling 2026-09-29); dispatch, wave merges, contract regeneration and the CI watch planned on **Opus 5.5**; review absorption, Step-5a/7a and every ruling on **Fable**. Running client 2.1.281 (installed 2.1.282; restart due before the first implementer dispatch — step zero). **Open question raised by the owner at dispatch time (2026-09-29): switching the session model clears context in the owner's experience; the switch-point rule is under review — see the sprint log's "Model switch" section once ruled** |
+| **Orchestrator model** | Refinement Steps 1–4 and Steps 0a/0b on **Fable 5.1** — from rev 6 of the refinement and draft 1 of the plan, an Opus `planner` DRAFTED and the Fable seat judged (owner ruling 2026-09-29); dispatch, wave merges, contract regeneration and the CI watch planned on **Opus 5.5**; review absorption, Step-5a/7a and every ruling on **Fable**. Running client 2.1.281 (installed 2.1.282; restart due before the first implementer dispatch — step zero). **Open question raised by the owner at dispatch time (2026-09-29): switching the session model clears context in the owner's experience; the switch-point rule is under review — see the sprint log's "Model switch" section once ruled** · *As run (recorded at C-9):* the Fable seat ran refinement and Steps 0a/0b (session `7b2d3d74`, client 2.1.281). From the first wave-1 dispatch on, an **Opus 5.5 seat** ran everything (clients 2.1.284 and 2.1.285), and every Step-5a/7a review and ruling ran in Fable `reviewer` and `adjudicator` agents, not in the seat ("Model switch" below; the S144 row of `docs/operations/model-routing-register.md`) |
 | **Plan** | `.claude/plans/PLAN-s144.md` draft 4 (+ rulings R1–R10) — READY: external lens cycle 3; internal lens cycle 1 APPROVED-WITH-WARNINGS, its warnings absorbed in draft 2 and verified by the external lens (a token-conscious close, stated) |
 | **Refinement** | `.claude/refinements/REFINEMENT-s144-qual165-split-the-verb.md` rev 6.1 — READY after two external cycles to NOT READY, a third to READY, an internal pass and confirmation |
 | **Owner rulings in force** | QUAL-165 (c) split the verb (2026-09-22) · migration → **"Reseed, keep the cheap segment"** (2026-09-28: *"There is no actual data. The system is not live and we have only test data."*) · OQ-1 `HANDLED_MANUALLY` GlobalAdmin-only on EXPORTED_MONTH (2026-09-29) · OQ-2 *"Defer it, register the follow-up"* → QUAL-181 (2026-09-29) · OQ-4b withdrawn → QUAL-182 · **"Fable judges — Opus drafts"** (2026-09-29): the `planner` role |
@@ -463,9 +463,71 @@ The only WARNING is the one carried from cycle 3: the CI smoke job now depends o
 - N-c4-4: the response sentence "Nothing was calculated, written or exported" is true of payroll data, and the refused request is still audited. This is a wording question only.
 - Codex's cycle-3 NOTEs on the exact 503 property set, the "ExportResult" wording and the "→ 500" mechanism were fixed in K‴.
 
-## Evidence runs (C-6, C-7) — PLACEHOLDER, filled by the docs-only follow-up commit (C-9)
+## C-5 — the close went red in CI; the post-close fix `8a87d16` (recorded at C-9)
 
-*Per run: run id, head sha (E1 / E2), each red test with its assertion message against the frozen list, "matched"; the PR number, "closed unmerged, branch deleted"; whether `claude-code-review.yml` fired on the draft PR, with its output ignored.*
+**In plain language.** The close commit's CI run failed, but not because of anything S144 built. Nine of the new payroll tests never got as far as running: their setup inserted wage-type mappings without a start date. The real database schema requires one. The test harness's private copy of that table supplies a default, so every other test class that uses the same helper never noticed. The fix passes the date explicitly, the same value the harness default gives. CI then went green on every job, and all 2,016 database-backed tests ran and passed. That was the first time the nine facts had run to completion anywhere.
+
+- **Close commit `cbaa5e0`, push run `36588183971`: RED.**
+  - `build-and-test` failed with Regression at 2007/2016. All nine `PayrollHostRecalcBlockedTests` facts failed in `InitializeAsync` with 23502: `effective_from` is `NOT NULL` with no default (`init.sql:149`), while the harness copy declares `DEFAULT '2020-01-01'` (`TestFixtures.cs:456`). The class builds its schema from `init.sql` alone.
+  - Every other job was green, Smoke included. So W-c3-1 (the smoke job now depends on a live rule-list fetch) settled green, and the C4 pre-ruling never fired.
+- **Post-close fix `8a87d16`.** It touches `tests/**` only (`Segmentation/TestFixtures.cs`): `SeedWageTypeMappingsAsync` now passes `effective_from` explicitly. It got a scoped Step-7a review, cycle 1, on both lenses, `reviewed-against-commit: 8a87d16` (`.claude/reviews/SPRINT-144-postclose-8a87d16-*.md`):
+  - **Internal (Fable `claude-fable-5-1`): CLOSE-WITH-WARNINGS.** No blocker. W: the nine facts had never run to completion, so this fix's scope closes only on a green CI run. W, follow-up: the comment at `TestFixtures.cs:406-407` says the harness tables match `init.sql` "byte-for-byte". That is false: the harness adds a DEFAULT and a `version` column, and that claim is what made the seed look safe. NOTE: the commit message's "ten harness-built classes" is really 15 other classes.
+  - **External (Codex, on inlined source): APPROVE-WITH-WARNINGS.** W: an evidence gap, not an observed defect. The excerpts could not prove that every other setup step succeeds.
+  - The next item discharged both "has it actually run" warnings.
+- **Push run `36610948637` on `8a87d16`: GREEN, all 7 jobs.** Unit 1309/1309, DemoSeed 170/170, **Regression 2016/2016** (executed = total, none skipped) and Smoke 7/7, read from the run's TRX artifacts; frontend build green. **This is S144's CI line.**
+- **C-3 repeated on `8a87d16`.** The fix sha took K's role, per the post-close reviewer's NOTE. Re-spawn 3 (`test-qa`, `claude-sonnet-5-5`) re-made the evidence commits, each with the same edits as every earlier cut:
+  - **E1 `3a09e1c`**: a child of `8a87d16`, carrying M-1 + M-2 + M-14.
+  - **E2 `aaec52d`**: a child of E1, whose tree is `8a87d16` + M-3.
+  - Both built with 0 errors. Unit 1309, DemoSeed 170 and Regression non-Docker 128 were green at each.
+- **Governance commit `6b0d982`**, between the close and the fix: the owner's review-cycle cap 3 → 5 (`docs/WORKFLOW.md`, `docs/AGENTS.md`, the refinement skill), plus the close guard's CI-health query fix promised by `.claude/reviews/SPRINT-144-ci-health-WAIVED.md`. It touches `.claude/hooks/sprint-close-guard.ps1`, which is not `docs/**`, and it has had no review of its own. It falls inside S145's Step-7a diff, because that diff's base is this close commit, `cbaa5e0` (`docs/WORKFLOW.md` step 7a). The waiver incident itself is recorded in the S145 log, as the waiver directs.
+
+## Evidence runs (C-6, C-7) — both matched (recorded at C-9)
+
+**In plain language.** These two runs were a controlled experiment. Deliberate, minimal breakages were pushed to a throwaway branch to prove that the new database-backed tests notice what they guard. Each run had to turn exactly the tests on its list (frozen in advance) red, with nothing else moving. Two runs were needed because two of the breakages cancel each other out if made together (ruling R8). In both runs, the red set equalled the frozen list exactly, every "must still pass" check passed, and the unit and seed suites did not move. The Fable seat compared each run itself, as ruling R10 requires.
+
+### Run 1 — E1 `3a09e1c` (M-1 + M-2 + M-14): MATCHED
+
+- **CI run `36674031308`**, a `pull_request` run on draft PR #36, 2026-09-30. Its `headSha` equals E1. origin/master was `8a87d16`, so the tested merge tree was E1's tree.
+- `build-and-test` was red, and every other job was green (Smoke, E2E, frontend, lizard, check_docs, gitleaks).
+- Unit 1309/1309 and DemoSeed 170/170. Regression: 2003 of 2016 passed, and the **13 that failed are exactly the frozen Run-1 RED list**. All 16 Run-1 GREEN spot checks passed.
+- **Fable seat (R10): `adjudicator`, `claude-fable-5-1` — RUN-1: MATCHED.** It parsed the TRX itself and re-read the mutation lines at `8a87d16`.
+
+| Red test (prefix `StatsTid.Tests.Regression.`) | Mutation | The failing assertion |
+|---|---|---|
+| `Worklist.HrBackdateWorklistRepositoryTests.Resolve_Recalculated_OnBlockedRow_ThrowsRecalcBlocked_WritesNothing` | M-1 | `Assert.Throws()`: no exception was thrown (expected `BackdateWorklistRecalcBlockedException`) |
+| `Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsRecalculated_Hr403_LocalAdmin403_GlobalAdmin409Blocked_ForeignHrStillScope403` | M-1 | `Assert.Equal()`: expected `Conflict` |
+| `Worklist.HrBackdateWorklistRepositoryTests.Resolve_HandledManually_OnBlockedRow_StampsBlockSetOnRowAndEvent` | M-2 | `Assert.Equal()`: expected `["QUAL-149"]`, actual empty |
+| `Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsHandledManually_Hr403_LocalAdmin403_GlobalAdmin200_StampsBlockSet` | M-2 | `Assert.Equal()`: expected 1 (stamp count) |
+| `Worklist.BackdateWorklistEndpointTests.Resolve_MissingIfMatch_428_Stale_412_Fresh_200WithNewEtag_Repeat_409_OpenFilterHonoured` | M-2 | `Assert.Equal()`: expected 1 |
+| `Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_AsRecalculated_MixedRoleHrWithGlobalAdminScope_Is403_ButMayStillDismiss` | M-2 | `Assert.Equal()`: expected 1 |
+| `Payroll.RecalcBlockedLiveRulesetTests.Recalculate_MidMonthAgreementCodeChange_LiveSet_RefusesWithAgreementCodeCause_WritesNothing` | M-14 | `Assert.Throws()`: no exception was thrown (expected `PlannerInvariantViolation…`) |
+| `Payroll.RecalcBlockedLiveRulesetTests.CalculateWithOutcome_Planless_MidMonthAgreementCodeChange_LiveSet_Refuses_NoManifest` | M-14 | `Assert.Throws()`: no exception was thrown |
+| `Payroll.RecalcBlockedLiveRulesetTests.Calculate_MidMonthAgreementCodeChange_StraddleSafe_ManifestRecordsAgreementCodeChange` | M-14 | `Assert.Contains()`: `"AgreementCodeChange"` not in `["OkTransition"]` |
+| `Payroll.PayrollHostRecalcBlockedTests.Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged` | M-14 | "expected 422, got 200" (whole-month correction lines under `SLS_0110`) |
+| `Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest` | M-14 | `KeyNotFoundException` in `AssertRedactedProblem` (see below) |
+| `Payroll.PayrollHostRecalcBlockedTests.Export_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord` | M-14 | "expected 422, got 200" (`success: true`) |
+| `Payroll.PayrollHostRecalcBlockedTests.ExportPeriod_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord` | M-14 | "expected 422, got 200" (`success: true`) |
+
+**The one red that was not an assertion message.** `CalculateAndExport_…_NoManifest` passed its status assertion (`PayrollHostRecalcBlockedTests.cs:223`, a 422). It then failed at `AssertRedactedProblem` (`:629`), because the route's 422 under M-14 is an `ExportResult` body (`Payroll/Program.cs:414-426`) with no `kind`. The fact's own doc comment predicts exactly this red under M-14 (`:195-200`), so the adjudicator ruled it detection: R9 is about which tests fail, not about the shape of the message. A NOTE is carried to the follow-ups: `TryGetProperty` would make this red legible.
+
+### Run 2 — E2 `aaec52d` (M-3 alone): MATCHED
+
+- **CI run `36831504837`**, a `pull_request` run fired by fast-forwarding the branch from E1 to E2 on 2026-10-01. Its `headSha` equals E2. origin/master was still `8a87d16`, so the tested merge tree was E2's tree.
+- `build-and-test` was red, and every other job was green.
+- Unit 1309/1309 and DemoSeed 170/170. Regression: 2014 of 2016 passed, and the **2 that failed are exactly the frozen Run-2 RED list**. All 21 Run-2 GREEN spot checks passed. Those include all thirteen of run 1's reds, which proves E2 reverted M-1, M-2 and M-14, and the DISMISSED ladder added at C-1.
+- **Fable seat (R10): `adjudicator`, `claude-fable-5-1` — RUN-2: MATCHED.** It parsed the TRX and the mutation diff itself.
+
+| Red test (prefix `StatsTid.Tests.Regression.`) | Mutation | The failing assertion |
+|---|---|---|
+| `Worklist.HrBackdateWorklistRepositoryTests.Resolve_Recalculated_OnBlockedRow_StaleVersion_ThrowsConcurrencyBeforeBlock` | M-3 | `Assert.Throws()`: the exception type was not an exact match. Expected `OptimisticConcurrencyException`, actual `BackdateWorklistRecalcBlockedException` |
+| `Worklist.BackdateWorklistEndpointTests.Resolve_ExportedMonth_Blocked_AsRecalculated_StaleIfMatch_Is412_Not409` | M-3 | `Assert.Equal()`: expected `PreconditionFailed`, actual `Conflict` |
+
+**In plain language.** Run 2 moved the block check ahead of the stale-version check. Exactly the two tests written to notice that noticed it: a caller holding an outdated row must be told to re-read (412) before being told anything about a block (409).
+
+### C-8 and the review bot
+
+- **`claude-code-review.yml` fired on the draft PR once,** for E1 (run `36674031270`). Its output was ignored, as C-6 requires. It did not fire on E2's `synchronize` push.
+- **C-8:** PR #36 was closed unmerged on 2026-10-01 at 09:26Z. A closing comment cites both runs. The branch `s144-red-mutations` was deleted on origin and locally (`git ls-remote --heads origin s144-red-mutations` returns nothing).
 
 ## Open follow-ups (routed, not lost)
 
@@ -483,17 +545,19 @@ The only WARNING is the one carried from cycle 3: the CI smoke job now depends o
 - **(d4) does not observe that the same idempotency token can be retried after a 503.** That is true by construction, because the plan runs before the token is marked (`RetroactiveCorrectionService.cs:210` vs `:343-353`). Strengthening the test is optional.
 - **The 503 `error` sentence is not pinned word for word** (Step 7a cycle 4, N-c4-1). Assert the exact sentence, or give `UnavailableRulesFactory()`'s 503 a sentinel body and assert that the sentinel is absent from the response.
 - **Two wording tidy-ups carried from cycle 4:** the (a) DI hedge in `PayrollHostRecalcBlockedTests.cs:139-141` (N-c4-2), and the 503 sentence's "nothing … written", which is true of payroll data while the refused request is still audited (N-c4-4).
-- **QUAL-149 / QUAL-150** remain the route to making mid-month agreement-code months exportable again.
+- **QUAL-149 / QUAL-150** remain the route to making mid-month agreement-code months exportable again. *Since the close:* the S145 planner found that payroll judges a whole month against one week's norm, which makes every month's overtime, merarbejde and flex wrong (**QUAL-186**, registered at `018ef2a`). Splits depend on that fix, so S145's refinement is built around it.
+- **The harness's "byte-for-byte" claim is false** (`TestFixtures.cs:406-407`; post-close internal lens, W). The harness tables add a `DEFAULT` and a `version` column that `init.sql` lacks. That claim made the post-close seed defect look safe. Correct the comment, or make classes that apply `init.sql` alone fail loudly on a seed that relies on harness-only defaults.
+- **`AssertRedactedProblem` turns a missing property into a `KeyNotFoundException`** (evidence run 1, adjudicator NOTE). Using `TryGetProperty` plus an assertion would make the red legible ("no `kind` in a 422 `ExportResult`") instead of a bare exception.
 
 ## Handoff block (written at every wave gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-09-29, the S144 close commit, a docs-only child of K‴ `4936998`; session on Opus 5.5 (client 2.1.284) |
-| **Phase** | **Step 7a closed at cycle 4 of 5** (external APPROVE, internal CLOSE-WITH-WARNINGS, both `reviewed-against-commit: 4936998`). Close commit made; C-5 push and CI watch next |
-| **Dispatched tasks / worktrees** | None in flight. The evidence branch `s144-red-mutations` is local only: **E1‴ `0b898d2`**, **E2‴ `f33252f`**. There are 18 agent worktrees, kept for teardown at C-9. **Still uncommitted, deliberately:** the owner's review-cap change (3 → 5) in `docs/WORKFLOW.md`, `docs/AGENTS.md` and `.claude/skills/refine-requirements/SKILL.md`. It lands as its own commit after the close push, because C-5 requires that only `docs/**` changes between K‴ and the close commit, and the skill file is outside `docs/**` |
+| **As of** | 2026-10-01, the C-9 docs-only record commit; session on Opus 5.5 (client 2.1.285) |
+| **Phase** | **Sealed.** C-5 (close pushed; CI red on a setup defect → post-close fix `8a87d16`, scoped Step 7a both lenses, CI green `36610948637`), C-6 (run 1 matched), C-7 (run 2 matched), C-8 (PR #36 closed unmerged, branch deleted on both sides), C-9 (this record) are done |
+| **Dispatched tasks / worktrees** | None. No agent worktrees remain (`git worktree list` shows only the main checkout) |
 | **Merged** | 14400 `5e2f50b`, 14407 `52d577d`, 14401 `bffc469`, 14402 `0bdd5a5`, 14404 `01e5bea`, 14406 `24fa0d2`, 14403 `807f75f`, 14405 `bd4df92`, 14408 `756e050`, 14409 `a7426c4`, 14411 `f413e9c`, 14410 `577afd7`, 14412 `f34a353`, 14413 `ca966c8`, 14414 `52179b5`, small task `4936998` (= K‴) |
-| **Pending gates** | **C-5:** push master and watch CI on the close sha, reading the `smoke-tests` job in particular (W-c3-1; a red there is handled per C4). **C-6:** push E1‴ as `s144-red-mutations`, open the draft PR, watch run 1, and compare it with the frozen Run-1 lists. **C-7:** fast-forward the branch to E2‴, watch run 2, and compare. **C-8:** close the PR unmerged and delete the branch on both sides. **C-9:** a docs-only follow-up recording the CI line, the evidence runs, the O-7 routing row and the INDEX CI line. Then teardown, and the governance commit for the review cap |
-| **Open rulings** | None. A red Smoke job at C-5 is pre-ruled (C4). A red set in either evidence run that does not match its frozen list is handled per C-6: repair and repeat, never interpret |
-| **Next action** | Push master (C-5) and start the watched CI run |
+| **Pending gates** | None for S144. The CI run on this record commit is watched to green and noted in S145's log, because this commit is docs-only on a green code tree. `6b0d982` (governance, touches `.claude/hooks/`) falls inside S145's Step-7a diff (base `cbaa5e0`) |
+| **Open rulings** | None |
+| **Next action** | S145: refinement rev 3.x through Step-4 review, then the plan (`.claude/refinements/REFINEMENT-s145-qual149-150-genuine-splits.md`) |
 | **Step zero** | `planner` → `claude-opus-5-5`; `reviewer` → `claude-fable-5-1`; Sonnet tier → `claude-sonnet-5-5`; Opus implementer tier → `claude-opus-5-5` (all verified from self-reports) |

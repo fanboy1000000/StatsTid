@@ -422,9 +422,10 @@ this is a checklist with a record, like the Orchestrator seat:
   first spawn ran on a model other than the pinned one with no error at all — which is why the self-report
   comparison after any pin is mandatory. A stale client is a cause a pin does not fix.
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
-  compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5`** ·
+  compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5-5`** ·
   Haiku **`claude-haiku-4-5-20251001`**. A self-report may carry a context-window suffix (`claude-opus-5-5[1m]`);
-  the suffix is ignored when comparing.
+  the suffix is ignored when comparing. *(Sonnet corrected from `claude-sonnet-5` at the S144 close: from client
+  2.1.284 on, all ten S144 Sonnet-tier spawns resolved to `claude-sonnet-5-5`, read from the subagent transcripts.)*
 - **Last verified 2026-09-25 (client 2.1.281):** a `backend-infrastructure` spawn (alias `opus`) ran on
   `claude-opus-5-5`, confirmed both by self-report and by the subagent transcript's `"model"` field — the
   client had been updated 2.1.263 → 2.1.281 between the sessions, so no pin was needed. The same day a full id
