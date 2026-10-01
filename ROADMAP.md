@@ -341,6 +341,15 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 ### Usability / accessibility
 
 - **Backdate worklist: a "show resolved rows" toggle** (S144 Step-0b ruling R7, 2026-09-29). From S144 every resolution records the block set that was in force when the claim was made (event `BlockedBy`, row `resolution_blocked_by`, GET `resolutionBlockedBy`) — but the screen lists open rows only and re-fetches after each resolve, so HR never sees a resolved row and the display of that audit fact was cut as unreachable UI. The honest way to surface it is a toggle that lists resolved rows too (a query flag the API already accepts, `BackdateWorklistEndpoints.cs:71` defaults to open). Small UX task; source: `.claude/plans/PLAN-s144.md` R7.
+- **Clearing a Skema cell (S72 R17 — still open; kept out of S145 by the Fable seat's ruling R24, owner informed
+  2026-10-01).** Today an emptied cell is never sent (`useSkema.ts:203`), so a booked hour or absence cannot be
+  taken back from the timesheet. S145 makes a re-save replace the cell (QUAL-192..194) and refuses a save of
+  0 hours with a 400, so a cell can be corrected but not emptied. The right design is a *retraction*: mark the
+  current row superseded and insert nothing. A 0-hour booking would be wrong, for three reasons. The strand
+  check would count it (`EmploymentWindowStrandCheck.cs:64-70`). `GET /api/time-entries` would return it. And
+  the norm rule would emit a 0-hour `NORMAL_HOURS` line (`NormCheckRule.cs:179-186`). Full-day-only absence
+  types also need their clear rule stated. S145's storage design leaves room for this. A small UX + backend
+  task; source: the S145 refinement, ruling R24.
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
   production; not enforced today. [CONVENTIONS.md]
 
