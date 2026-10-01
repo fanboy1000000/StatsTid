@@ -373,6 +373,33 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **`SkemaPage` 7203-pin vitest flake** — one absorbed CI flake; graduates to a finding on recurrence. [S128 FU-D]
 
 ### Governance / docs
+- **★ A thorough governance review: is the process getting bloated?** (owner, 2026-10-01: *"I have a
+  feeling our governance is getting bloated. We need to do a thorough review."*). A follow-up, raised during
+  S145 planning. Evidence measured the day it was raised, so the review starts from numbers, not from the feeling:
+  - **S145 before any code.** The refinement needed 5 Step-4 cycles (rev 1 → 3.4, ~16k words). The plan is at
+    draft 4 after Step-0b cycle 2 (draft 3 was ~27k words, 1631 lines). There are **59 Fable-seat rulings so far**
+    (R1–R59), produced from roughly a dozen reviewer, a dozen adjudicator and seven Codex runs. The evidence design
+    plans 52 deliberate mutations across 4 CI evidence runs, plus a mid-sprint throwaway CI push. Step-0b
+    cycles 1–2 turned mostly on that evidence machinery, not on the product design.
+  - **S144's close** (C-1..C-9) took three days. It needed two evidence runs, a close-guard waiver (a false
+    positive in the guard's own query) and a post-close fix.
+  - **Standing text agents and the seat must carry:** `docs/WORKFLOW.md` ~7.7k words, `docs/AGENTS.md` ~7.2k,
+    `CLAUDE.md` ~1.6k, `docs/CONVENTIONS.md` ~0.9k. The quality register is ~24k words. Recent sprint logs run
+    13–23k words each.
+  - **Every agent tier inherits the session's effort level** (xhigh), because the agent definitions pin only the
+    model. Mechanical and Sonnet-tier work therefore runs at the same effort as review.
+
+  Questions for the review (to answer, not presumed):
+  - What does each checkpoint (refinement Step 4, Step 0b, 5α/5a, 7a, post-close) actually catch, against what it
+    costs? Mine the routing register and the review-finding history for this.
+  - Which checkpoints duplicate each other?
+  - Is mutation-at-the-gate evidence proportionate to the risk it covers?
+  - Do the sprint logs and registers serve their reader at their current size?
+  - Is the cycle cap of 5 being used as a ceiling or as a budget?
+  - How many decisions per sprint land on the owner?
+
+  Outcome: a ruled, smaller governance set, with the reasoning recorded the same way the 2026-08 invariant-model
+  rewrite was. Not S145 scope.
 - **KB Tag & Domain indexes** — frozen ~S17, omit newer entries (completeness of the main INDEX is
   CI-checked; these secondary indexes are not). [WS3 / C4] *S131 additive facts: the gate gap is
   structural — `check_docs.py:59-76` checks link-PRESENCE only, so table placement/completeness is
