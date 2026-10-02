@@ -108,8 +108,10 @@ public sealed class TimelineInputException : ArgumentException
 ///   cap in force that day: <c>delta = worked + credits − (per-day norm − reductions)</c> over
 ///   the period's own covered days; one <c>FLEX_PAYOUT</c> dated that day.</description></item>
 ///   <item><description><b>Days no piece covers are not evaluated</b>, nor days after the
-///   cutoff. That is how a starter's opening week counts norm only from the first day, and how a
-///   legacy call's opening partial week counts only in-period days.</description></item>
+///   cutoff or after <c>PeriodEnd</c>. That is how a starter's opening week counts norm only from
+///   the first day, and how a legacy call's opening partial week counts only in-period days. A day
+///   past the period never decides the closing week's mode or reported <c>NormPeriodWeeks</c>:
+///   under F1 that week settles in the next period's run anyway.</description></item>
 /// </list>
 ///
 /// <para>
@@ -459,6 +461,8 @@ public static class WeeklyTimelineCore
         private int PieceIndexOn(DateOnly day)
         {
             if (_cutoff is { } cutoff && day > cutoff)
+                return -1;
+            if (day > _periodEnd)
                 return -1;
 
             for (var i = 0; i < _pieces.Length; i++)
