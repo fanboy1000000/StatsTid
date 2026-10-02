@@ -1097,4 +1097,81 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
             cmd.Parameters.AddWithValue("p" + i, args[i]);
         return await cmd.ExecuteNonQueryAsync();
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // S145 / TASK-14504 — A6: a backdate reaches the month that SETTLES it (R5(a))
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// S145 / TASK-14504 (refinement A6, R5(a); plan fact W1) — a backdate that ends inside a week
+    /// must also flag the month that SETTLES that week.
+    ///
+    /// <para><b>Plain language.</b> A payroll month is paid for whole Monday-to-Sunday weeks, and the
+    /// week that straddles two months is paid with the LATER month. 1 October 2026 is a Thursday, so
+    /// the week Monday 28 September to Sunday 4 October is settled by the October run (the 28th to
+    /// 30th are September days, paid late). A correction effective Tuesday 29 September, written on a
+    /// row that ends at 1 October (a later row already starts there), therefore changes what October
+    /// was paid — but the writer clips at the written row's OWN end, and 1 October is not before
+    /// 1 October, so October was never flagged and HR was never told to re-plan it. R5(a) extends the
+    /// upper bound to the Monday after the week containing the last corrected day (<c>hi − 1</c>), so
+    /// here <c>hi</c> becomes Monday 5 October and October's month start (1 October) falls inside.</para>
+    ///
+    /// <para><b>Fixture.</b> August, September, October and November are all exported. The call is
+    /// <c>[29 Sep, 1 Oct)</c> — the exact shape the profile and agreement-code endpoints hand the writer.
+    /// Expected, derived from the spec and not from the code: exactly September and October, in that
+    /// order, one row each. August lies before the interval's first month and stays unflagged;
+    /// November's month start (1 November) lies beyond the Monday the widening stops at (5 October).
+    /// The trigger keeps the REAL backdate (29 September) on both rows — only the SELECTION is widened,
+    /// the recorded cause is not rewritten. No clock is read (the interval is bounded).</para>
+    ///
+    /// <para><b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). Mutation
+    /// <b>MD-47</b>: the R5(a) widening removed from
+    /// <c>HrBackdateWorklistRepository.WriteForExportedMonthsAsync</c> (<c>hi</c> stays the written
+    /// row's own bound). This is also TODAY's code, so the fact is red before the implementation
+    /// exists. October's month start is then not below <c>hi</c>, the writer returns one id, and the
+    /// first assertion trips: expected months <c>[(2026, 9), (2026, 10)]</c>, actual
+    /// <c>[(2026, 9)]</c>. A widening that overshoots the settling week (for example to the end of
+    /// October) would instead trip the same assertion from the other side, with November present.</para>
+    /// </summary>
+    [Fact]
+    public async Task WriteForExportedMonths_BackdateTue29Sep_BoundedAt1Oct_FlagsSeptemberAndOctober()
+    {
+        // The calendar premise the whole fact stands on — stated, so a wrong year cannot hide it.
+        var backdate = new DateOnly(2026, 9, 29);
+        var rowEnd = new DateOnly(2026, 10, 1);
+        Assert.Equal(DayOfWeek.Tuesday, backdate.DayOfWeek);
+        Assert.Equal(DayOfWeek.Thursday, rowEnd.DayOfWeek); // so 28 Sep – 4 Oct is ONE week, settled in October
+
+        const string emp = "wl_emp_exp_settle";
+        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, emp, "STY_WL_A");
+        await SeedExportAsync(emp, 2026, 8, "h-2026-08");              // before the interval's first month
+        var sepId = await SeedExportAsync(emp, 2026, 9, "h-2026-09");  // the month the backdate sits in
+        var octId = await SeedExportAsync(emp, 2026, 10, "h-2026-10"); // the month that settles the week
+        await SeedExportAsync(emp, 2026, 11, "h-2026-11");             // past the settling week
+
+        var trigger = Trigger(WorklistTriggerKinds.ProfileChange, backdate);
+        var ids = await RunExportedAsync(emp, trigger, from: backdate, toExclusive: rowEnd);
+
+        var rows = (await _repo.GetOpenAsync(emp)).OrderBy(r => r.Year).ThenBy(r => r.Month).ToList();
+        Assert.Equal(new[] { (2026, 9), (2026, 10) }, rows.Select(r => (r.Year!.Value, r.Month!.Value)).ToArray());
+
+        // The writer's own contract: the returned ids are the affected rows, in month order.
+        Assert.Equal(rows.Select(r => r.WorklistId).ToArray(), ids.ToArray());
+        Assert.Equal(new[] { sepId, octId }, rows.Select(r => r.ExportId!.Value).ToArray());
+        Assert.Equal(new[] { "h-2026-09", "h-2026-10" }, rows.Select(r => r.Triggers.Single().BaselineContentHash).ToArray());
+        Assert.All(rows, r =>
+        {
+            Assert.Equal(WorklistKinds.ExportedMonth, r.Kind);
+            Assert.Equal(1L, r.Version);
+            var t = r.Triggers.Single();
+            Assert.Equal(WorklistTriggerKinds.ProfileChange, t.Kind);
+            Assert.Equal(trigger.EventId, t.EventId);
+            Assert.Equal(backdate, t.EffectiveFrom); // the real backdate, not the widened bound
+        });
+
+        // ADR-018 D3: one Created event per NEW row (none appended) — an unaudited row is not a result.
+        var events = await OutboxEventsAsync(emp, "BackdateWorklistRowCreated");
+        Assert.Equal(new[] { 9, 10 }, events.Select(e => e.GetProperty("month").GetInt32()).OrderBy(m => m).ToArray());
+        Assert.All(events, e => Assert.False(e.GetProperty("appended").GetBoolean()));
+    }
 }
