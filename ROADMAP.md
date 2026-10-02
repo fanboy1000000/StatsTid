@@ -398,8 +398,22 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   - Is the cycle cap of 5 being used as a ceiling or as a budget?
   - How many decisions per sprint land on the owner?
 
-  Outcome: a ruled, smaller governance set, with the reasoning recorded the same way the 2026-08 invariant-model
-  rewrite was. Not S145 scope.
+  Outcome: open. The review may find the current governance right-sized, or recommend changes; the owner decides.
+  Not S145 scope; nothing about governance has been decided.
+
+  **Observations to feed the review (from S145 planning, 2026-10-02; recorded as data, not conclusions).**
+  - **Where Step 0b's cycles went.** Step-0b cycles 1–3 all turned on the evidence machinery rather than on the
+    design: first the partition of 51 Docker mutations into four CI runs, then a stub too simple to observe the
+    replay claims, then a mutation placed where it reached the raw routes.
+  - **A lighter alternative exists.** The Fable seat identified one (R66). For tests that can be written against
+    today's code, a single CI run *before* the fix lands would show them red for the right reason; that is the
+    RED-first method `docs/AGENTS.md:164-165` already describes. Mutations would then be needed only for tests that
+    depend on new code: about 22 instead of 51. Whether to use it in future is a question for this review.
+  - **S145 only:** the owner chose to keep the current design for this sprint (OQ1, 2026-10-02). That answer
+    applies to S145's evidence method and to nothing else.
+  - **The plan's size.** S145's plan reached 1913 lines, about two thirds of it per-task briefs plus history and
+    bookkeeping. For S145, the Fable seat moved that material into per-task brief files and the sprint log (R66b).
+    Whether this should become the norm is for the review.
 - **KB Tag & Domain indexes** — frozen ~S17, omit newer entries (completeness of the main INDEX is
   CI-checked; these secondary indexes are not). [WS3 / C4] *S131 additive facts: the gate gap is
   structural — `check_docs.py:59-76` checks link-PRESENCE only, so table placement/completeness is
