@@ -736,6 +736,56 @@ public static class SkemaEndpoints
             if (ApprovalPeriodSaveLock.IsPeriodLockedForSave(period))
                 return ApprovalPeriodSaveLock.PeriodLockedForSaveConflict(period!);
 
+            // ── S145 / TASK-14507 (A0, R24 + the Step-5a ProjectCode finding) — cell shape ──
+            // A Skema save REPLACES each posted cell (see the insert loops below), so every cell
+            // must carry a real value. Two shapes are refused with a plain 400, for EVERY cell of
+            // the save BEFORE anything else happens (before the rule-engine call, the advisory lock
+            // and the transaction), so one bad cell fails the whole save and nothing is written:
+            //   (1) hours <= 0, for an entry or an absence. Mirrors the `hours <= 0` half of
+            //       RequestValidator.ValidateTimeEntry (the additive route's rule). Why: clearing a
+            //       cell is out of S145 (SPRINT-72 R17 stays open), and a 0-hour CURRENT row would be
+            //       counted by the strand check, served by the GETs and emitted as a 0-hour
+            //       NORMAL_HOURS line. The grid already drops empty and zero cells before posting
+            //       (useSkema.ts), so this refuses only a hand-built request. The storage design still
+            //       allows a later retraction (mark the current row superseded, insert nothing).
+            //   (2) an entry whose projectCode is null, empty or whitespace (IsNullOrWhiteSpace, the
+            //       RequestValidator idiom). `required string` only demands that the property is
+            //       PRESENT, so an explicit JSON null passes model binding and would become a NULL
+            //       task_id, i.e. a cell keyed by no task at all.
+            // The cell date echoed back is the request's own registration date, never an
+            // employment date (ADR-040 D7).
+            foreach (var entry in request.Entries ?? Array.Empty<SkemaEntry>())
+            {
+                if (string.IsNullOrWhiteSpace(entry.ProjectCode))
+                    return Results.BadRequest(new
+                    {
+                        error = "skema_entry_project_code_missing",
+                        date = entry.Date,
+                        message = $"Registreringen for {entry.Date:dd-MM-yyyy} mangler en projektkode."
+                    });
+                if (entry.Hours <= 0m)
+                    return Results.BadRequest(new
+                    {
+                        error = "skema_cell_hours_not_positive",
+                        date = entry.Date,
+                        projectCode = entry.ProjectCode,
+                        hours = entry.Hours,
+                        message = $"Timer for {entry.Date:dd-MM-yyyy} skal være større end 0."
+                    });
+            }
+            foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
+            {
+                if (absence.Hours <= 0m)
+                    return Results.BadRequest(new
+                    {
+                        error = "skema_cell_hours_not_positive",
+                        date = absence.Date,
+                        absenceType = absence.AbsenceType,
+                        hours = absence.Hours,
+                        message = $"Timer for {absence.Date:dd-MM-yyyy} skal være større end 0."
+                    });
+            }
+
             // ── Work-time date-range validation (S56 / Step 7a BLOCKER fix) ──
             // The approval-lock check above is scoped to the REQUESTED month. Reject any
             // work-time day outside [monthStart, monthEnd] up front (before the tx) so that
@@ -1141,6 +1191,44 @@ public static class SkemaEndpoints
                 return indices;
             }
 
+            // ── S145 / TASK-14507 (A0, R23 as amended by W1) — the replaced cells' stored feriedage ──
+            // A Skema save REPLACES each posted absence cell (employee, date, absence type): the
+            // cell's CURRENT Skema row, if there is one, is marked superseded by the insert below.
+            // So the quota must move by the SIGNED change, per entitlement type:
+            //     delta = Σ new feriedage − Σ stored feriedage of the current rows this save replaces.
+            // "Stored" is absences_projection.feriedage, i.e. after any ADR-032 D4 revaluation: exactly
+            // what entitlement_balances.used holds for those rows. An unchanged re-save therefore
+            // moves nothing, and a reduction gives days back. Read twice, like the valuation, and
+            // both times on the caller's transaction: first in phase 2 of the pre-check, on its short
+            // read-only REPEATABLE READ snapshot, which the pre-check's balance reads share, so the
+            // advisory subtraction is over one real state; then the AUTHORITATIVE re-read under the
+            // consumption lock, which drives the balance write. A null stored feriedage counts 0,
+            // mirroring the `?? 0m` with which the replaced save added it to `used`. Additive
+            // (TIME_POST) rows are never replaced, so the repository read returns Skema rows only.
+            async Task<Dictionary<string, decimal>> ReadReplacedFeriedageByTypeAsync(
+                NpgsqlConnection conn, NpgsqlTransaction tx)
+            {
+                var byType = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                if (request.Absences is not { Length: > 0 }
+                    || !request.Absences.Any(a => GetEntitlementType(a.AbsenceType) is not null))
+                    return byType; // nothing posted consumes quota: no replaced quota to read.
+                var postedCells = new HashSet<(DateOnly Date, string AbsenceType)>(
+                    request.Absences.Select(a => (a.Date, a.AbsenceType)));
+                var from = request.Absences.Min(a => a.Date);
+                var to = request.Absences.Max(a => a.Date);
+                var currentRows = await absenceProjectionRepo.GetCurrentSkemaRowsAsync(
+                    conn, tx, employeeId, from, to, ct);
+                foreach (var row in currentRows)
+                {
+                    if (!postedCells.Contains((row.Date, row.AbsenceType)))
+                        continue; // a current cell this save does not post stays exactly as it is.
+                    if (!AbsenceToEntitlementType.TryGetValue(row.AbsenceType, out var replacedType) || replacedType is null)
+                        continue; // non-entitlement absence types consume no quota.
+                    byType[replacedType] = byType.GetValueOrDefault(replacedType) + (row.Feriedage ?? 0m);
+                }
+                return byType;
+            }
+
             if (request.Absences is not null && request.Absences.Length > 0)
             {
                 // ── S66 / TASK-6603 — ADR-032 D2 PROVISIONAL per-row feriedage (pre-lock) ──
@@ -1190,10 +1278,32 @@ public static class SkemaEndpoints
                 var httpClient = httpClientFactory.CreateClient(Http.RuleEngineClient.Name);
                 var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+                // ── S145 / TASK-14507 (Step-5a cycles 1-2) — the quota pre-check runs in THREE phases ──
+                // In plain terms: the pre-check needs two numbers that must agree with each other (the
+                // balance, and the feriedage of the cells this save replaces), plus a call to the rule
+                // engine. Reading the two numbers on separate connections at separate moments could pair
+                // values that were never true at once (cycle-1 BLOCKER); holding one transaction open
+                // across the rule-engine HTTP call would pin a pooled connection while waiting on another
+                // service (cycle-2 WARNING). So:
+                //   Phase 1 — per entitlement type, in the dictionary's order, every read and derivation
+                //             that needs no balance, on pooled connections as before. It returns NOTHING:
+                //             where the single loop used to `continue` (no live config) or answer the
+                //             profile-missing 422, it RECORDS that outcome on the type's plan. It stops at
+                //             the first recorded refusal, because the single loop never reached a later
+                //             type either.
+                //   Phase 2 — one short read-only REPEATABLE READ snapshot: the replaced-cells read and
+                //             the balance of every type phase 1 planned (all but the no-config skips).
+                //             Nothing else runs inside it: no config read, no profile read, no HTTP.
+                //   Phase 3 — per type, in the same order, the single loop's decisions replayed with no
+                //             connection held: the recorded skip, the recorded 422, the signed delta, the
+                //             rule-engine call for delta > 0 (503 / 502 / 422 unchanged), entitlementData.
+                // The refusal order is the single loop's: for type k, the profile-missing 422 answers only
+                // if no earlier type's rule-engine call refused first, and before type k's own call.
+                var preCheckPlans = new List<QuotaPreCheckPlan>();
+
+                // ── Phase 1 ──────────────────────────────────────────────────────────────────────────
                 foreach (var (entitlementType, totalRequestedDays) in requestedByEntitlementType)
                 {
-                    var requestedDays = totalRequestedDays;
-
                     var firstAbsenceDate = request.Absences
                         .Where(a => AbsenceToEntitlementType.TryGetValue(a.AbsenceType, out var et) && et == entitlementType)
                         .Select(a => a.Date)
@@ -1227,7 +1337,11 @@ public static class SkemaEndpoints
                     var liveConfig = await entitlementConfigRepo.GetCurrentOpenAsync(
                         entitlementType, opDateAgreement, opDateOkVersion, ct);
                     if (liveConfig is null)
+                    {
+                        // Recorded: the single loop's `continue` (no pre-check, no entitlementData).
+                        preCheckPlans.Add(QuotaPreCheckPlan.WithoutLiveConfig(entitlementType));
                         continue;
+                    }
 
                     // S80 / TASK-8001 (R2/R10) — the entitlement (accrual) year + its accrual-window
                     // start come from the SHARED EntitlementPeriodResolver. VACATION + every other
@@ -1257,8 +1371,7 @@ public static class SkemaEndpoints
                         entitlementType, entitlementYearStart,
                         OkVersionResolver.ResolveVersion(entitlementYearStart), liveConfig, ct);
 
-                    var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
-                        employeeId, entitlementType, entitlementYear, ct);
+                    // (The type's balance is read in phase 2, on the snapshot.)
 
                     // ── S60 / TASK-6005 — dated part-time fraction at the per-type batch anchor ──
                     // Source the part_time_fraction from the dated employment profile AS-OF
@@ -1296,17 +1409,22 @@ public static class SkemaEndpoints
                             datedProfile = null;
                         }
                         if (datedProfile is null)
-                            return Results.Json(new
-                            {
-                                error = "employment_profile_missing",
-                                absenceType = entitlementType,
-                                date = firstAbsenceDate,
-                                message = $"Kan ikke validere Ferie/særlige feriedage for {firstAbsenceDate:dd-MM-yyyy}: ansættelsesprofil mangler."
-                            }, statusCode: 422);
+                        {
+                            // Recorded, not returned: phase 3 answers it at this type's turn, after any
+                            // earlier type's rule-engine refusal, exactly as the single loop did. No
+                            // later type was ever reached, so phase 1 stops here.
+                            preCheckPlans.Add(QuotaPreCheckPlan.Refused(entitlementType, entitlementYear,
+                                Results.Json(new
+                                {
+                                    error = "employment_profile_missing",
+                                    absenceType = entitlementType,
+                                    date = firstAbsenceDate,
+                                    message = $"Kan ikke validere Ferie/særlige feriedage for {firstAbsenceDate:dd-MM-yyyy}: ansættelsesprofil mangler."
+                                }, statusCode: 422)));
+                            break;
+                        }
                     }
                     var partTimeFraction = datedProfile?.PartTimeFraction ?? 1.0m;
-
-                    var carryoverIn = balance?.CarryoverIn ?? 0m;
 
                     var effectiveQuota = config.ProRateByPartTime
                         ? config.AnnualQuota * partTimeFraction
@@ -1331,8 +1449,9 @@ public static class SkemaEndpoints
                     // The repo guardCap is carryover-EXCLUDED (CheckAndAdjustAsync re-adds carryover
                     // once); the rule-engine BookableLimit below is the carryover-INCLUSIVE business cap.
                     // (isMonthlyAccrual computed above with the profile-missing guard.)
-
-                    decimal? bookableLimit;
+                    // S145 / TASK-14507 (cycle 2) — the accruable cap is computed here; the carryover it
+                    // is added to comes from the balance, so bookableLimit is formed in phase 3.
+                    decimal accruableCap = 0m;
                     decimal guardCap;
                     if (isMonthlyAccrual)
                     {
@@ -1349,7 +1468,6 @@ public static class SkemaEndpoints
                         // an accrual-window guard, not a fraction guard (ADR-031 D4; ADR-023 D3 Skema
                         // fail-closed polarity). The window/D6 logic is unchanged; only the fraction
                         // drops out.
-                        decimal accruableCap;
                         if (string.Equals(entitlementType, "VACATION", StringComparison.Ordinal))
                         {
                             // earned + stillAccruable == accruable over the whole ferieår ==
@@ -1376,62 +1494,154 @@ public static class SkemaEndpoints
                         }
 
                         guardCap = accruableCap;                       // carryover-EXCLUDED
-                        bookableLimit = accruableCap + carryoverIn;    // carryover-INCLUSIVE business cap
                     }
                     else
                     {
                         // IMMEDIATE types: cap unchanged (annual effectiveQuota). No BookableLimit
                         // override — the rule keys off (effectiveQuota + carryover) as before.
                         guardCap = effectiveQuota;
-                        bookableLimit = null;
                     }
 
-                    // Call Rule Engine via HTTP (PAT-005 compliance). Accrual inputs are carried so
-                    // the rule applies the per-type cap; the warning-threshold + per-episode branches
-                    // stay on the ANNUAL quota (no spurious early-ferieår warnings).
-                    var validationRequest = new
+                    preCheckPlans.Add(new QuotaPreCheckPlan
                     {
-                        annualQuota = config.AnnualQuota,
-                        used = balance?.Used ?? 0m,
-                        planned = balance?.Planned ?? 0m,
-                        carryoverIn,
-                        requestedDays,
-                        partTimeFraction,
-                        proRateByPartTime = config.ProRateByPartTime,
-                        isPerEpisode = config.IsPerEpisode,
-                        perEpisodeLimit = (decimal?)null,
-                        accrualModel = config.AccrualModel,
-                        ferieaarStart = (DateOnly?)entitlementYearStart,
-                        employmentStart = user.EmploymentStartDate,
-                        asOfDate = (DateOnly?)firstAbsenceDate,
-                        bookableLimit
-                    };
+                        EntitlementType = entitlementType,
+                        RequestedDays = totalRequestedDays,
+                        FirstAbsenceDate = firstAbsenceDate,
+                        EntitlementYear = entitlementYear,
+                        EntitlementYearStart = entitlementYearStart,
+                        Config = config,
+                        PartTimeFraction = partTimeFraction,
+                        EffectiveQuota = effectiveQuota,
+                        IsMonthlyAccrual = isMonthlyAccrual,
+                        AccruableCap = accruableCap,
+                        GuardCap = guardCap,
+                    });
+                }
 
-                    var response = await httpClient.PostAsJsonAsync(
-                        "/api/rules/validate-entitlement", validationRequest, jsonOptions, ct);
+                // ── Phase 2: one short read-only snapshot ─────────────────────────────────────────────
+                // S145 / TASK-14507 (R23; Step-5a cycles 1-2). The advisory read of what this save
+                // replaces and EVERY balance read of the pre-check share this one REPEATABLE READ
+                // snapshot, so `balance.Used − Σ replaced` is a subtraction over one real state of the
+                // database. Read on separate connections, a concurrent save of the same cell landing
+                // between the two reads would pair numbers that were never true at once, and since S145
+                // that can make the pre-check STRICTER than the truth (a stale refusal), not only more
+                // lenient. Explicitly READ ONLY (SET TRANSACTION READ ONLY as its first statement; it
+                // takes no snapshot, so the first SELECT still does). It takes no advisory lock and no
+                // row lock: only the ACCESS SHARE table lock that any read takes, which conflicts only
+                // with ACCESS EXCLUSIVE (most DDL, TRUNCATE, VACUUM FULL, an explicit LOCK TABLE) and
+                // never with a save. Only these reads run inside it, and it is
+                // disposed at the end of this scope: no config read, no profile read and no HTTP call
+                // happens while it is open. Skipped when no type was planned (nothing to read).
+                var provisionalReplacedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                var preCheckBalances = new Dictionary<(string EntitlementType, int EntitlementYear), EntitlementBalance?>();
+                if (preCheckPlans.Any(p => !p.HasNoLiveConfig))
+                {
+                    await using var preCheckConn = connectionFactory.Create();
+                    await preCheckConn.OpenAsync(ct);
+                    await using var preCheckTx = await preCheckConn.BeginTransactionAsync(
+                        System.Data.IsolationLevel.RepeatableRead, ct);
+                    await using (var readOnlyCmd = new NpgsqlCommand("SET TRANSACTION READ ONLY", preCheckConn, preCheckTx))
+                        await readOnlyCmd.ExecuteNonQueryAsync(ct);
 
-                    if (!response.IsSuccessStatusCode)
-                        return Results.Json(new { error = "Entitlement validation service unavailable" }, statusCode: 503);
-
-                    var validationResult = await response.Content.ReadFromJsonAsync<EntitlementValidationResult>(jsonOptions, ct);
-                    if (validationResult is null)
-                        return Results.Json(new { error = "Invalid entitlement validation response" }, statusCode: 502);
-
-                    if (!validationResult.Allowed)
+                    provisionalReplacedByEntitlementType = await ReadReplacedFeriedageByTypeAsync(preCheckConn, preCheckTx);
+                    foreach (var plan in preCheckPlans)
                     {
-                        return Results.Json(new
+                        if (plan.HasNoLiveConfig)
+                            continue;
+                        preCheckBalances[(plan.EntitlementType, plan.EntitlementYear)] =
+                            await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
+                                preCheckConn, preCheckTx, employeeId, plan.EntitlementType, plan.EntitlementYear, ct);
+                    }
+                }
+
+                // ── Phase 3: the decisions, in the single loop's order, no connection held ───────────
+                foreach (var plan in preCheckPlans)
+                {
+                    if (plan.HasNoLiveConfig)
+                        continue; // the single loop's `continue`: no pre-check, no entitlementData.
+                    if (plan.Refusal is not null)
+                        return plan.Refusal; // the single loop's profile-missing 422, at the same turn.
+
+                    var entitlementType = plan.EntitlementType;
+                    var requestedDays = plan.RequestedDays;
+                    var config = plan.Config!;
+
+                    // S145 / TASK-14507 (R23, W1 ruling) — the signed change this save makes to the
+                    // type's quota: new feriedage minus the stored feriedage of the replaced cells.
+                    var replacedDays = provisionalReplacedByEntitlementType.GetValueOrDefault(entitlementType);
+                    var signedDelta = requestedDays - replacedDays;
+
+                    var balance = preCheckBalances[(entitlementType, plan.EntitlementYear)];
+                    var carryoverIn = balance?.CarryoverIn ?? 0m;
+                    // carryover-INCLUSIVE business cap for MONTHLY_ACCRUAL types (see phase 1); IMMEDIATE
+                    // types carry no BookableLimit override.
+                    decimal? bookableLimit = plan.IsMonthlyAccrual ? plan.AccruableCap + carryoverIn : null;
+
+                    // ── S145 / TASK-14507 (R23 as amended by W1; cycle-5 ruling) — the quota pre-check
+                    // runs ONLY for a type whose signed delta is > 0 ─────────────────────────────────
+                    // Why: an unchanged re-save (delta 0) or a reduction (delta < 0) cannot overdraw the
+                    // quota, and must never be refused: not at an exhausted quota, and not when an
+                    // ADR-032 D4 revaluation left `used` above the cap. Asking the rule anyway would
+                    // refuse it, because the rule rejects whenever remainingAfter < 0, which is already
+                    // true with `used` above the cap and nothing requested. Nothing else is lost by the
+                    // skip: this call carries no age gate or per-episode limit (perEpisodeLimit is null;
+                    // the SENIOR_DAY age gate is its own call above). The other validation of the
+                    // pre-check (the dated config, the profile-missing 422) and the AUTHORITATIVE in-lock
+                    // check still run for every type.
+                    //
+                    // For delta > 0 the mirror: `used` excludes the replaced cells
+                    // (balance.Used − Σ replaced) and requestedDays is the full Σ new, so the rule sees
+                    // exactly "does the CHANGE fit" (identical to used = balance.Used with
+                    // requestedDays = delta).
+                    if (signedDelta > 0m)
+                    {
+                        // Call Rule Engine via HTTP (PAT-005 compliance). Accrual inputs are carried so
+                        // the rule applies the per-type cap; the warning-threshold + per-episode branches
+                        // stay on the ANNUAL quota (no spurious early-ferieår warnings).
+                        var validationRequest = new
                         {
-                            error = "Entitlement quota exceeded",
-                            absenceType = entitlementType,
-                            remaining = Math.Round(validationResult.RemainingAfter + requestedDays, 2),
-                            requested = Math.Round(requestedDays, 2),
-                            message = validationResult.Message
-                        }, statusCode: 422);
+                            annualQuota = config.AnnualQuota,
+                            used = (balance?.Used ?? 0m) - replacedDays,
+                            planned = balance?.Planned ?? 0m,
+                            carryoverIn,
+                            requestedDays,
+                            partTimeFraction = plan.PartTimeFraction,
+                            proRateByPartTime = config.ProRateByPartTime,
+                            isPerEpisode = config.IsPerEpisode,
+                            perEpisodeLimit = (decimal?)null,
+                            accrualModel = config.AccrualModel,
+                            ferieaarStart = (DateOnly?)plan.EntitlementYearStart,
+                            employmentStart = user.EmploymentStartDate,
+                            asOfDate = (DateOnly?)plan.FirstAbsenceDate,
+                            bookableLimit
+                        };
+
+                        var response = await httpClient.PostAsJsonAsync(
+                            "/api/rules/validate-entitlement", validationRequest, jsonOptions, ct);
+
+                        if (!response.IsSuccessStatusCode)
+                            return Results.Json(new { error = "Entitlement validation service unavailable" }, statusCode: 503);
+
+                        var validationResult = await response.Content.ReadFromJsonAsync<EntitlementValidationResult>(jsonOptions, ct);
+                        if (validationResult is null)
+                            return Results.Json(new { error = "Invalid entitlement validation response" }, statusCode: 502);
+
+                        if (!validationResult.Allowed)
+                        {
+                            return Results.Json(new
+                            {
+                                error = "Entitlement quota exceeded",
+                                absenceType = entitlementType,
+                                remaining = Math.Round(validationResult.RemainingAfter + requestedDays, 2),
+                                requested = Math.Round(requestedDays, 2),
+                                message = validationResult.Message
+                            }, statusCode: 422);
+                        }
                     }
 
                     // GuardCap is carryover-EXCLUDED (CheckAndAdjustAsync re-adds carryover once);
                     // SeedQuota = annual effectiveQuota (seeds total_quota on a first-INSERT only).
-                    entitlementData[entitlementType] = (requestedDays, entitlementYear, guardCap, effectiveQuota);
+                    entitlementData[entitlementType] = (requestedDays, plan.EntitlementYear, plan.GuardCap, plan.EffectiveQuota);
                 }
             }
 
@@ -1472,7 +1682,12 @@ public static class SkemaEndpoints
             // committed before our lock is visible). The authoritative values stamp
             // AbsenceRegistered.Feriedage AND drive the CheckAndAdjustAsync delta (one valuation,
             // reused — Σ event Feriedage == guard delta). A stale PROVISIONAL advisory result is
-            // benign: the in-lock guard re-enforces against the fresh values.
+            // benign for the WRITE, because the in-lock guard re-enforces the cap against the fresh
+            // values. S145 / TASK-14507: the pre-check's phase-2 snapshot is closed before its
+            // rule-engine calls (phase 3) and before this transaction opens, and since a re-save can
+            // now REDUCE `used`, a reduction can land between that snapshot and our lock. So a stale
+            // advisory result can also be a refusal the fresh state would not make: a spurious 422
+            // the client may retry, never a wrong write.
             try
             {
                 await using var conn = connectionFactory.Create();
@@ -1787,6 +2002,13 @@ public static class SkemaEndpoints
                     }
 
                     // Save time entries (outbox enqueue + projection INSERT inside outer tx).
+                    //
+                    // S145 / TASK-14507 (A0) — a Skema save REPLACES the cell. Each posted entry still
+                    // appends its own TimeEntryRegistered (events stay append-only), now stamped
+                    // Source = SKEMA; the projection insert then retires the cell's current Skema row
+                    // (mark, then insert) so exactly one current row remains per (date, task). Cells
+                    // are processed in posted order, so a cell posted twice in one save ends at the
+                    // later value.
                     if (request.Entries is not null)
                     {
                         foreach (var entry in request.Entries)
@@ -1804,6 +2026,7 @@ public static class SkemaEndpoints
                                 // D2 scope (D2 covers absence consumption only). Only
                                 // AbsenceRegistered.OkVersion was moved to OkVersionResolver(entry-date).
                                 OkVersion = user.OkVersion,
+                                Source = HoursSource.Skema,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
                                 CorrelationId = actor.CorrelationId
@@ -1851,6 +2074,11 @@ public static class SkemaEndpoints
                     // Save absences and atomically adjust entitlement balances.
                     if (request.Absences is not null)
                     {
+                        // S145 / TASK-14507 (R23) — the AUTHORITATIVE read of what this save replaces:
+                        // under the consumption lock (taken above, so no concurrent save or revaluation
+                        // of this employee can interleave) and BEFORE the inserts below, which mark these
+                        // very rows superseded. It drives the signed balance delta.
+                        var replacedByEntitlementType = await ReadReplacedFeriedageByTypeAsync(conn, tx);
                         var savedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
 
                         for (var i = 0; i < request.Absences.Length; i++)
@@ -1882,6 +2110,9 @@ public static class SkemaEndpoints
                                 // version that was in force on that day deterministically.
                                 OkVersion = OkVersionResolver.ResolveVersion(absence.Date),
                                 Feriedage = rowFeriedage,
+                                // S145 / TASK-14507 (A0) — a Skema save replaces the cell: the insert
+                                // below retires the cell's current Skema row before adding this one.
+                                Source = HoursSource.Skema,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
                                 CorrelationId = actor.CorrelationId
@@ -1911,17 +2142,42 @@ public static class SkemaEndpoints
                             if (!entitlementData.TryGetValue(entitlementType, out var data))
                                 continue;
 
-                            // S66 / TASK-6603 — the guard delta IS the Σ authoritative per-row
+                            // S66 / TASK-6603 — the new side of the delta IS the Σ authoritative per-row
                             // feriedage (already day-equivalents from the in-lock valuation). NO
                             // re-division by StandardDayHours (ADR-032 D2 single valuation): this is
                             // the same value Σ'd into the emitted AbsenceRegistered.Feriedage above.
-                            var deltaDays = totalFeriedage;
-                            // S60 / TASK-6005 — split guard: GuardCap (carryover-EXCLUDED per-type
-                            // bookable cap; the WHERE-clause re-adds carryover once) + SeedQuota
-                            // (= annual entitlement, seeds total_quota on a first-INSERT only).
-                            var (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
-                                conn, tx, employeeId, entitlementType, data.EntitlementYear,
-                                deltaDays, data.GuardCap, data.SeedQuota, ct);
+                            //
+                            // S145 / TASK-14507 (R23) — the delta is SIGNED: new minus the stored
+                            // feriedage of the current rows this save just replaced (read above, under
+                            // the lock). Re-saving a cell unchanged moves `used` by 0; a reduction moves
+                            // it down. A first booking replaces nothing, so it is the full new value,
+                            // exactly as before.
+                            var replacedDays = replacedByEntitlementType.GetValueOrDefault(entitlementType);
+                            var deltaDays = totalFeriedage - replacedDays;
+
+                            bool success;
+                            decimal newUsed;
+                            if (deltaDays > 0m)
+                            {
+                                // An INCREASE (or a first booking) is held to the cap exactly as before.
+                                // S60 / TASK-6005 — split guard: GuardCap (carryover-EXCLUDED per-type
+                                // bookable cap; the WHERE-clause re-adds carryover once) + SeedQuota
+                                // (= annual entitlement, seeds total_quota on a first-INSERT only).
+                                (success, newUsed) = await entitlementBalanceRepo.CheckAndAdjustAsync(
+                                    conn, tx, employeeId, entitlementType, data.EntitlementYear,
+                                    deltaDays, data.GuardCap, data.SeedQuota, ct);
+                            }
+                            else
+                            {
+                                // Zero or a REDUCTION: ungated, in this transaction. A reduction gives
+                                // days back and is never refused, not even when an ADR-032 D4
+                                // revaluation already left `used` above the cap (the guard would refuse
+                                // `used + delta <= cap` there although the save lowers `used`).
+                                newUsed = await entitlementBalanceRepo.AdjustUsedAsync(
+                                    conn, tx, employeeId, entitlementType, data.EntitlementYear,
+                                    deltaDays, data.SeedQuota, ct);
+                                success = true;
+                            }
 
                             if (!success)
                             {
@@ -2390,6 +2646,39 @@ public static class SkemaEndpoints
         public required DateOnly Date { get; init; }
         public required string AbsenceType { get; init; }
         public required decimal Hours { get; init; }
+    }
+
+    /// <summary>
+    /// S145 / TASK-14507 (Step-5a cycle 2) — one entitlement type's quota pre-check as phase 1 of the
+    /// save handler planned it: everything the per-type decision needs that does not depend on the
+    /// balance, or the outcome phase 1 recorded instead of returning (phase 3 replays it in order).
+    /// <see cref="HasNoLiveConfig"/> is the old loop's <c>continue</c> (no pre-check, no
+    /// entitlementData); <see cref="Refusal"/> is the profile-missing 422, answered at this type's
+    /// turn. Exactly one of the two, or neither for a fully planned type.
+    /// </summary>
+    private sealed class QuotaPreCheckPlan
+    {
+        public required string EntitlementType { get; init; }
+        public decimal RequestedDays { get; init; }
+        public DateOnly FirstAbsenceDate { get; init; }
+        public int EntitlementYear { get; init; }
+        public DateOnly EntitlementYearStart { get; init; }
+        public EntitlementConfig? Config { get; init; }
+        public decimal PartTimeFraction { get; init; }
+        public decimal EffectiveQuota { get; init; }
+        public bool IsMonthlyAccrual { get; init; }
+        /// <summary>The carryover-EXCLUDED accruable cap of a MONTHLY_ACCRUAL type (0 otherwise);
+        /// phase 3 adds the snapshot's carryover to form the rule-engine BookableLimit.</summary>
+        public decimal AccruableCap { get; init; }
+        public decimal GuardCap { get; init; }
+        public bool HasNoLiveConfig { get; init; }
+        public IResult? Refusal { get; init; }
+
+        public static QuotaPreCheckPlan WithoutLiveConfig(string entitlementType) =>
+            new() { EntitlementType = entitlementType, HasNoLiveConfig = true };
+
+        public static QuotaPreCheckPlan Refused(string entitlementType, int entitlementYear, IResult refusal) =>
+            new() { EntitlementType = entitlementType, EntitlementYear = entitlementYear, Refusal = refusal };
     }
 
     private sealed class EntitlementValidationResult
