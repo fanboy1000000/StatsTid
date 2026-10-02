@@ -1527,8 +1527,9 @@ public static class SkemaEndpoints
                 // that can make the pre-check STRICTER than the truth (a stale refusal), not only more
                 // lenient. Explicitly READ ONLY (SET TRANSACTION READ ONLY as its first statement; it
                 // takes no snapshot, so the first SELECT still does). It takes no advisory lock and no
-                // row lock: only the ACCESS SHARE table lock that any read takes, which conflicts with
-                // DDL / TRUNCATE alone, never with a save. Only these reads run inside it, and it is
+                // row lock: only the ACCESS SHARE table lock that any read takes, which conflicts only
+                // with ACCESS EXCLUSIVE (most DDL, TRUNCATE, VACUUM FULL, an explicit LOCK TABLE) and
+                // never with a save. Only these reads run inside it, and it is
                 // disposed at the end of this scope: no config read, no profile read and no HTTP call
                 // happens while it is open. Skipped when no type was planned (nothing to read).
                 var provisionalReplacedByEntitlementType = new Dictionary<string, decimal>(StringComparer.Ordinal);
