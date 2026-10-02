@@ -18,4 +18,14 @@ public sealed class AbsenceRegistered : DomainEventBase
     /// ProjectionBackfillService.
     /// </summary>
     public decimal? Feriedage { get; init; }
+
+    /// <summary>
+    /// Which kind of write produced this absence (S145 / A0, QUAL-192/193): <c>SKEMA</c> for a
+    /// Skema save, which REPLACES the cell's earlier row; null means <c>TIME_POST</c>, an
+    /// additive registration. Nullable and NOT required, so every pre-S145 serialized event
+    /// keeps deserializing to null, which is exactly <c>TIME_POST</c>: events stay append-only
+    /// and the old ones stay additive. Resolve with
+    /// <see cref="Models.HoursSource.Resolve(string?)"/>; the projection stores the resolved value.
+    /// </summary>
+    public string? Source { get; init; }
 }

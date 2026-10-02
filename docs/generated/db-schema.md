@@ -865,10 +865,16 @@
 | actor_role | TEXT | Yes |  |  |
 | correlation_id | UUID | Yes |  |  |
 | outbox_id | BIGINT | No |  |  |
+| source | TEXT | No |  | 'TIME_POST' |
+| superseded_by_outbox_id | BIGINT | Yes |  |  |
+
+**Table constraints:**
+- CONSTRAINT time_entries_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 
 **Indexes:**
 - `idx_time_entries_proj_emp_date_outbox` on (employee_id, date, outbox_id)
 - `idx_time_entries_proj_emp_outbox` on (employee_id, outbox_id)
+- `ux_time_entries_proj_current_skema_cell` (UNIQUE) on (employee_id, date, task_id) WHERE source = 'SKEMA' AND superseded_by_outbox_id IS NULL
 
 ## absences_projection
 
@@ -887,10 +893,16 @@
 | actor_role | TEXT | Yes |  |  |
 | correlation_id | UUID | Yes |  |  |
 | outbox_id | BIGINT | No |  |  |
+| source | TEXT | No |  | 'TIME_POST' |
+| superseded_by_outbox_id | BIGINT | Yes |  |  |
+
+**Table constraints:**
+- CONSTRAINT absences_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 
 **Indexes:**
 - `idx_absences_proj_emp_date_outbox` on (employee_id, date, outbox_id)
 - `idx_absences_proj_emp_outbox` on (employee_id, outbox_id)
+- `ux_absences_proj_current_skema_cell` (UNIQUE) on (employee_id, date, absence_type) WHERE source = 'SKEMA' AND superseded_by_outbox_id IS NULL
 
 ## work_time_projection
 
@@ -965,6 +977,7 @@
 | boundary_cause_summary | TEXT[] | No |  |  |
 | created_at | TIMESTAMPTZ | No |  | now() |
 | segments_jsonb | JSONB | No |  |  |
+| plan_inputs_jsonb | JSONB | Yes |  |  |
 
 **Indexes:**
 - `idx_segment_manifests_employee_period` on (employee_id, period_start)

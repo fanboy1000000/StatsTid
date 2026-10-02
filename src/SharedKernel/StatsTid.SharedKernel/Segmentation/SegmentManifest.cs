@@ -17,6 +17,8 @@ namespace StatsTid.SharedKernel.Segmentation;
 ///   <item><c>calculation_kind</c> — one of <c>forward-calc</c> / <c>retroactive-correction</c> / <c>replay</c>.</item>
 ///   <item><c>boundary_cause_summary</c> — deduped list of <see cref="BoundaryCause"/> names.</item>
 ///   <item><c>segments_jsonb</c> — the full segment list serialised into the DB JSONB column.</item>
+///   <item><c>plan_inputs_jsonb</c> — the frozen <see cref="PlanInputs"/> of the calculation
+///     (S145 / A7), nullable; the trailing optional <see cref="PlanInputs"/> parameter.</item>
 /// </list>
 /// </summary>
 public sealed record SegmentManifest(
@@ -46,4 +48,12 @@ public sealed record SegmentManifest(
     /// <summary>
     /// Full segment list — serialised into <c>segments_jsonb JSONB</c> in the projection table.
     /// </summary>
-    IReadOnlyList<PlannedSegment> Segments);
+    IReadOnlyList<PlannedSegment> Segments,
+
+    /// <summary>
+    /// The frozen inputs of the calculation (S145 / A7) — serialised into
+    /// <c>plan_inputs_jsonb JSONB NULL</c> in the projection table. Trailing and optional
+    /// (default <c>null</c>) so every existing construction site compiles unchanged; a manifest
+    /// without it (every pre-S145 manifest) is refused at replay rather than recomputed.
+    /// </summary>
+    PlanInputs? PlanInputs = null);
