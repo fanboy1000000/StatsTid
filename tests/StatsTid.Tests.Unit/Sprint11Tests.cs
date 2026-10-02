@@ -73,6 +73,29 @@ public class Sprint11Tests
             NormPeriodWeeks = normPeriodWeeks,
         };
 
+    // S145 TASK-14505-T: the config-aware NormCheckRule.Evaluate was retired by R8/R34. The norm check
+    // is now the Norm result of the weekly core, run as a legacy call: a one-piece timeline
+    // [periodStart, periodEnd] at the profile's fraction and the given config, settlement cutoff on
+    // the period's last day, no forced mode (so it dispatches on the config's NormModel, as
+    // NORM_CHECK_37H did). ANNUAL_ACTIVITY is still AnnualNormHours x fraction x days / 365 over the
+    // period's covered days; WEEKLY_HOURS with a 1-week period is the per-day norm sum (37.00 for a
+    // full-time Monday-Sunday week), so no expected value in the norm tests below changes.
+    private static CalculationResult EvaluateNorm(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config) =>
+        WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
+            profile.EmployeeId,
+            periodStart,
+            periodEnd,
+            periodEnd,
+            [new ResolvedPiece(periodStart, periodEnd, profile.PartTimeFraction, config)],
+            entries,
+            [],
+            0m)).Norm;
+
     // ---------------------------------------------------------------
     // 1. EmploymentProfile Position field (TASK-1104)
     // ---------------------------------------------------------------
@@ -217,7 +240,7 @@ public class Sprint11Tests
         // Create entries covering the full year with enough hours
         var entries = CreateEntries(periodStart, totalDays, 6.0m);
 
-        var result = NormCheckRule.Evaluate(profile, entries, periodStart, periodEnd, config);
+        var result = EvaluateNorm(profile, entries, periodStart, periodEnd, config);
 
         Assert.True(result.Success);
         // For full year: norm = AnnualNormHours * PartTimeFraction * (days / 365)
@@ -240,7 +263,7 @@ public class Sprint11Tests
 
         var entries = CreateEntries(periodStart, totalDays, 8.0m);
 
-        var result = NormCheckRule.Evaluate(profile, entries, periodStart, periodEnd, config);
+        var result = EvaluateNorm(profile, entries, periodStart, periodEnd, config);
 
         Assert.True(result.Success);
         // Pro-rated norm for ~31 days: 1924 * 1.0 * 31/365 ≈ 163.4
@@ -273,14 +296,14 @@ public class Sprint11Tests
         var totalDays = periodEnd.DayNumber - periodStart.DayNumber + 1;
         var entries = CreateEntries(periodStart, totalDays, 3.0m);
 
-        var result = NormCheckRule.Evaluate(profile, entries, periodStart, periodEnd, config);
+        var result = EvaluateNorm(profile, entries, periodStart, periodEnd, config);
 
         Assert.True(result.Success);
         Assert.NotNull(result.NormHoursTotal);
 
         // Full-time norm for the same period
         var fullTimeProfile = CreateProfile(agreement: "AC_RESEARCH");
-        var fullResult = NormCheckRule.Evaluate(fullTimeProfile, entries, periodStart, periodEnd, config);
+        var fullResult = EvaluateNorm(fullTimeProfile, entries, periodStart, periodEnd, config);
 
         // Part-time norm should be approximately half of full-time
         Assert.True(result.NormHoursTotal!.Value < fullResult.NormHoursTotal!.Value);
@@ -311,7 +334,7 @@ public class Sprint11Tests
             });
         }
 
-        var result = NormCheckRule.Evaluate(profile, entries, monday, monday.AddDays(6), config);
+        var result = EvaluateNorm(profile, entries, monday, monday.AddDays(6), config);
 
         Assert.True(result.Success);
         Assert.Equal(37.0m, result.NormHoursTotal);
@@ -332,7 +355,7 @@ public class Sprint11Tests
         var end = new DateOnly(2024, 4, 7);
         var entries = CreateEntries(start, 7, 6.0m); // 42 hours > ~36.9
 
-        var result = NormCheckRule.Evaluate(profile, entries, start, end, config);
+        var result = EvaluateNorm(profile, entries, start, end, config);
 
         Assert.True(result.Success);
         Assert.True(result.NormFulfilled);
@@ -351,7 +374,7 @@ public class Sprint11Tests
         var end = new DateOnly(2024, 4, 7);
         var entries = CreateEntries(start, 5, 4.0m); // 20 hours < ~36.9
 
-        var result = NormCheckRule.Evaluate(profile, entries, start, end, config);
+        var result = EvaluateNorm(profile, entries, start, end, config);
 
         Assert.True(result.Success);
         Assert.False(result.NormFulfilled);
@@ -667,8 +690,8 @@ public class Sprint11Tests
         var end = new DateOnly(2024, 4, 30);
         var entries = CreateEntries(start, 30, 7.0m);
 
-        var result1 = NormCheckRule.Evaluate(profile, entries, start, end, config);
-        var result2 = NormCheckRule.Evaluate(profile, entries, start, end, config);
+        var result1 = EvaluateNorm(profile, entries, start, end, config);
+        var result2 = EvaluateNorm(profile, entries, start, end, config);
 
         Assert.Equal(result1.NormHoursTotal, result2.NormHoursTotal);
         Assert.Equal(result1.ActualHoursTotal, result2.ActualHoursTotal);
@@ -699,8 +722,8 @@ public class Sprint11Tests
         var monday = new DateOnly(2024, 4, 1);
         var entries = CreateEntries(monday, 5, 7.4m);
 
-        var result1 = NormCheckRule.Evaluate(profile, entries, monday, monday.AddDays(6), config);
-        var result2 = NormCheckRule.Evaluate(profile, entries, monday, monday.AddDays(6), config);
+        var result1 = EvaluateNorm(profile, entries, monday, monday.AddDays(6), config);
+        var result2 = EvaluateNorm(profile, entries, monday, monday.AddDays(6), config);
 
         Assert.Equal(result1.NormHoursTotal, result2.NormHoursTotal);
         Assert.Equal(result1.ActualHoursTotal, result2.ActualHoursTotal);

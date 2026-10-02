@@ -38,6 +38,30 @@ public class NormPeriodWeeksConstantTests
         NormPeriodWeeks = normPeriodWeeks,
     };
 
+    // S145 TASK-14505-T: NormCheckRule.EvaluateMultiWeek was retired by R8/R34. Its equivalent is the
+    // weekly core's Norm result with the multi-week mode forced and the result tagged with the
+    // NORM_CHECK_MULTIWEEK id: a one-piece timeline [periodStart, periodEnd] under the given config,
+    // cutoff on the period's last day. The core reports the config's NormPeriodWeeks through
+    // NormCheckRule.EffectiveNormPeriodWeeks (in the valid set: honoured; outside it: 1), so the
+    // fallback these tests pin is unchanged. The expected values below do not change.
+    private static CalculationResult EvaluateMultiWeek(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config) =>
+        WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
+            profile.EmployeeId,
+            periodStart,
+            periodEnd,
+            periodEnd,
+            [new ResolvedPiece(periodStart, periodEnd, profile.PartTimeFraction, config)],
+            entries,
+            [],
+            0m,
+            TimelineNormMode.MultiWeek,
+            NormCheckRule.MultiWeekRuleId)).Norm;
+
     [Fact]
     public void ValidNormPeriodWeeks_IsExactlyTheDomainSet()
     {
@@ -52,7 +76,7 @@ public class NormPeriodWeeksConstantTests
     [InlineData(12)]
     public void InSetValues_AreHonoured(int weeks)
     {
-        var result = NormCheckRule.EvaluateMultiWeek(
+        var result = EvaluateMultiWeek(
             Profile(), new List<TimeEntry>(), new DateOnly(2026, 1, 5), new DateOnly(2026, 1, 11),
             ConfigWithNormWeeks(weeks));
 
@@ -69,7 +93,7 @@ public class NormPeriodWeeksConstantTests
     [InlineData(-4)]
     public void OutOfSetValues_FallBackToOneWeek_BehaviourPreserved(int weeks)
     {
-        var result = NormCheckRule.EvaluateMultiWeek(
+        var result = EvaluateMultiWeek(
             Profile(), new List<TimeEntry>(), new DateOnly(2026, 1, 5), new DateOnly(2026, 1, 11),
             ConfigWithNormWeeks(weeks));
 

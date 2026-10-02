@@ -28,6 +28,28 @@ public class OvertimeRuleTests
     private static readonly DateOnly Friday = Monday.AddDays(4);
     private static readonly DateOnly Sunday = Monday.AddDays(6);
 
+    // S145 TASK-14505-T: OvertimeRule.Evaluate (one period judged against ONE week's norm) was
+    // retired by R8. The same question is now put to the weekly core as a legacy call: a one-piece
+    // timeline [periodStart, periodEnd] at the profile's fraction, with the settlement cutoff on the
+    // period's last day. Every period in this class is exactly one Monday-Sunday week, so the per-day
+    // norm and thresholds sum to the old weekly figures (full-time: 37.00 / 37.00 / 40.00) and no
+    // expected value below changes.
+    private static CalculationResult EvaluateOvertime(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config) =>
+        WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
+            profile.EmployeeId,
+            periodStart,
+            periodEnd,
+            periodEnd,
+            [new ResolvedPiece(periodStart, periodEnd, profile.PartTimeFraction, config)],
+            entries,
+            [],
+            0m)).Overtime;
+
     [Fact]
     public void AC_ExcessHours_ProducesMerarbejde_NotOvertime()
     {
@@ -43,7 +65,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 8m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.True(result.Success);
         Assert.Single(result.LineItems);
@@ -66,7 +88,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 10m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.DoesNotContain(result.LineItems, li => li.TimeType == OvertimeTypes.Overtime50);
         Assert.DoesNotContain(result.LineItems, li => li.TimeType == OvertimeTypes.Overtime100);
@@ -86,7 +108,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 7.6m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.True(result.Success);
         Assert.Single(result.LineItems);
@@ -109,7 +131,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 8.4m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.True(result.Success);
         Assert.Equal(2, result.LineItems.Count);
@@ -135,7 +157,7 @@ public class OvertimeRuleTests
             CreateEntry(Monday.AddDays(2), 7.0m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.True(result.Success);
         Assert.Empty(result.LineItems);
@@ -155,7 +177,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 7.8m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.True(result.Success);
         Assert.Contains(result.LineItems, li => li.TimeType == OvertimeTypes.Overtime50);
@@ -177,7 +199,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 4m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.True(result.Success);
         Assert.Contains(result.LineItems, li => li.TimeType == OvertimeTypes.Overtime50);
@@ -197,7 +219,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 7.4m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.True(result.Success);
         Assert.Empty(result.LineItems);
@@ -217,7 +239,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 10m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.DoesNotContain(result.LineItems, li => li.TimeType == OvertimeTypes.Merarbejde);
     }
@@ -236,7 +258,7 @@ public class OvertimeRuleTests
             CreateEntry(Friday, 7.4m),
         };
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.True(result.Success);
         Assert.Empty(result.LineItems);
