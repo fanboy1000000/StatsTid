@@ -1914,7 +1914,7 @@ CREATE TABLE IF NOT EXISTS time_entries_projection (
     -- Set to the outbox_id of the re-save that REPLACED this row; NULL while the row is the
     -- current value of its cell. A replaced row is KEPT, not deleted, so the audit trail and
     -- a replay by event id can still read exactly what a calculation was fed (ADR-028 D6,
-    -- recorded at O-4). Every read that totals hours counts current rows only.
+    -- to be recorded at the S145 close). Every read that totals hours counts current rows only.
     superseded_by_outbox_id     BIGINT          NULL,
     CONSTRAINT time_entries_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 );
@@ -1957,7 +1957,7 @@ CREATE TABLE IF NOT EXISTS absences_projection (
     -- DEFAULT 'TIME_POST' for the reasons given on the sibling table (R28/N4).
     source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
     -- outbox_id of the re-save that REPLACED this row; NULL while it is the current value.
-    -- Replaced rows are kept for replay and audit (ADR-028 D6, recorded at O-4). The vacation
+    -- Replaced rows are kept for replay and audit (ADR-028 D6, to be recorded at the S145 close). The vacation
     -- settlement and every quota total count current rows only.
     superseded_by_outbox_id     BIGINT          NULL,
     CONSTRAINT absences_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
@@ -1985,7 +1985,7 @@ CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
 -- (superseded_by_outbox_id), so the replaced rows are RETAINED for replay and audit rather
 -- than overwritten. Rows written by POST /api/time-entries stay ADDITIVE (one row per
 -- event, never superseded). The same holds for absences_projection. See ADR-028 D6
--- (recorded at O-4) and the S145 segment further down.
+-- (to be recorded at the S145 close) and the S145 segment further down.
 CREATE TABLE IF NOT EXISTS work_time_projection (
     employee_id     TEXT            NOT NULL,
     date            DATE            NOT NULL,
@@ -3135,20 +3135,33 @@ $$;
 -- once (not twice) in docs/generated/db-schema.md.
 --
 -- WHY THE INDEXES CAN NOT FAIL TO BUILD: every pre-existing row takes the DEFAULT
--- 'TIME_POST' (R28/N4), so the index condition selects no legacy row. A Skema entry cell
--- always carries a task id (the request's ProjectCode is `required`, and it becomes
--- TaskId), so a NULL task_id (which a unique index treats as distinct) never applies to a
--- SKEMA row. Postgres is 16.
+-- 'TIME_POST' (R28/N4), so the index condition selects no legacy row.
+--
+-- WHY THE TIME-ENTRIES INDEX IS "NULLS NOT DISTINCT": a Skema entry cell is meant to carry a
+-- task id (the request's ProjectCode is `required`, and it becomes TaskId), but `required`
+-- only demands that the key is present, so an explicit JSON null still arrives as a NULL
+-- task_id, and a plain unique index treats NULLs as distinct (it would allow two current rows
+-- for one day). NULLS NOT DISTINCT makes them collide. The Skema save is also to refuse a
+-- null or empty project code (S145 TASK-14507); this index is the schema backstop. The
+-- absence index needs no such clause: absence_type is NOT NULL. Postgres is 16, which
+-- supports the clause (15+).
 --
 -- By the reseed ruling (2026-09-28, ADR-038 D9) no pre-S145 database holding real rows
 -- exists: pre-S145 databases are reseeded, not upgraded, and no backfill is written on
 -- purpose.
 --
--- The S145-HOURS-SUPERSESSION-AND-PLAN-INPUTS-SEGMENT markers are extracted VERBATIM by
--- the migration / harness-DDL tests (the S71/S72/S73/S136/S137/S138 pattern: the test
--- replays this exact segment against a reconstructed pre-S145 schema) — keep the marker
--- lines intact and keep all S145 DDL between them. The segment sits after the S66 block and
--- outside every other marker pair.
+-- The S145-HOURS-SUPERSESSION-AND-PLAN-INPUTS-SEGMENT markers bound everything S145 adds
+-- here, so the segment can be read and diffed as one unit — keep the marker lines intact and
+-- keep all S145 DDL between them. Unlike the earlier segments (S71-S73, S136-S138), no S145
+-- test replays this segment alone against a reconstructed pre-S145 schema. What exercises it:
+--   * the greenfield double-apply (BackdateWorklistMigrationTests.
+--     Migration_S138_Greenfield_FullInitSql_DoubleApply_TablePresent applies the full
+--     init.sql twice, so every statement here must be idempotent);
+--   * the Docker suites that apply the full init.sql over a harness that already holds some
+--     of these tables (for example EmployeeProfileMarqueeTests, whose 4-table harness already
+--     has segment_manifests): there the base CREATE TABLE is a no-op and this segment is the
+--     only thing that reaches the table.
+-- The segment sits after the S66 block and outside every other marker pair.
 -- =========================================================================
 -- S145-HOURS-SUPERSESSION-AND-PLAN-INPUTS-SEGMENT-BEGIN
 ALTER TABLE time_entries_projection
@@ -3181,8 +3194,11 @@ ALTER TABLE absences_projection
 -- Exactly one CURRENT row per Skema cell, enforced by the schema. Writes are already
 -- serialized per employee (EmployeeConsumptionLock) and a save marks the old row superseded
 -- before inserting the new one, so this index is the backstop, not the mechanism.
+-- NULLS NOT DISTINCT (Postgres 15+; this project runs 16): a plain unique index treats NULLs as
+-- distinct, and a request with an explicit JSON "projectCode": null passes `required string` and
+-- becomes a NULL task_id, so two current rows for one day would otherwise both be allowed.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_time_entries_proj_current_skema_cell
-    ON time_entries_projection (employee_id, date, task_id)
+    ON time_entries_projection (employee_id, date, task_id) NULLS NOT DISTINCT
     WHERE source = 'SKEMA' AND superseded_by_outbox_id IS NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_absences_proj_current_skema_cell

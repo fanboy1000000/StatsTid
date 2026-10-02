@@ -18,7 +18,9 @@ namespace StatsTid.SharedKernel.Models;
 /// <para>
 /// Plain string constants, not an enum: the value is stored as TEXT guarded by a named CHECK
 /// constraint, and a string keeps old and new events readable by the generic JSON serializer
-/// without a converter (ADR-002 string-vocabulary convention).
+/// without a converter. The closed vocabulary is enforced by that CHECK, the house
+/// CHECK-as-vocabulary-authority pattern of S122 (init.sql, the guarded named CHECK
+/// <c>agreement_configs_default_compensation_model_check</c>).
 /// </para>
 /// </summary>
 public static class HoursSource
