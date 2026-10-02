@@ -251,6 +251,209 @@ public sealed class ProjectionParityTests : IAsyncLifetime
         Assert.Equal(eventDates, projectionDates);
     }
 
+    // ════════════════════════════════════════════════════════════════════════════════════
+    // S145 / TASK-14501 (A0, refinement R22) — the live current set equals the fold of the events.
+    // ════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Plain language.</b> The projection table is a read-model kept in step with the event log. After
+    /// S145 it must hold, for a Skema cell that was saved twice, only the LATER save as current, while a
+    /// <c>POST /api/time-entries</c> for the same day and task stays additive. This fact proves the live
+    /// write path and the event log tell the same story: it writes through the real endpoints (two Skema
+    /// saves of one cell, then one time-entry POST for the same day and task), lets the publisher drain,
+    /// folds the drained events in <c>outbox_id</c> order under the ruled semantics, and requires the fold
+    /// to equal the rows the live path left current. This suite never runs the rebuild; the rebuild is
+    /// pinned in <see cref="ProjectionBackfillTests"/>.
+    ///
+    /// <para><b>The ruled semantics (refinement A0).</b> A <c>source</c> of <c>SKEMA</c> replaces the cell's
+    /// earlier SKEMA event (same employee, date, task). Anything else is <c>TIME_POST</c> and is additive,
+    /// and an event with no <c>source</c> at all is <c>TIME_POST</c>: that is every pre-S145 event.</para>
+    ///
+    /// <para><b>Guard: passes today.</b> Today no event carries <c>source</c>, so the fold keeps all three
+    /// events, and the live table holds all three rows with no supersession column to filter on (the
+    /// column is read only when it exists). After S145 the events carry <c>source</c>, the fold keeps two
+    /// and the live current rows are the same two. The fold reads the payload, so it is not decided by
+    /// the live path under test.</para>
+    ///
+    /// <para><b>Red conditions (after S145; <b>MD-12</b>, <b>MD-13</b>).</b> MD-12 (the save handler updates a
+    /// cell with a current SKEMA row in place and emits no second event): the log holds the 7.4 h save
+    /// and the Time-POST event only, so the fold's Skema row says 7.4 h while the live row says 8.0 h, and
+    /// the set comparison fails on the hours. MD-13 (both repositories' <c>InsertAsync</c> mark for every
+    /// insert, dropping the <c>source = 'SKEMA'</c> restriction): the Time-POST insert, which comes last,
+    /// supersedes the current Skema row, so the live current set is missing the 8.0 h Skema row that the
+    /// fold keeps. Both are compared on (event id, date, task, hours), so neither can hide behind a
+    /// matching count.</para>
+    /// </summary>
+    [Fact]
+    public async Task Parity_AfterSkemaResaveAndTimePost_LiveCurrentSetEqualsFoldOfEvents()
+    {
+        var client = _factory.CreateClient();
+        var employeeId = "EMP_PARITY_S145_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var streamId = $"employee-{employeeId}";
+        await SeedFullTimeEmployeeAsync(employeeId, "HK");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintEmployeeToken(employeeId));
+
+        // A WEEKDAY (Monday 4 May 2026); the same cell for all three writes.
+        var cellDate = new DateOnly(2026, 5, 4);
+        Assert.Equal(DayOfWeek.Monday, cellDate.DayOfWeek);
+        const string task = "PROJ-PAR-S145-CELL";
+
+        // Two Skema saves of one cell: 7.4 h, then the re-save at 8.0 h.
+        foreach (var hours in new[] { 7.4m, 8.0m })
+        {
+            var save = await client.PostAsJsonAsync($"/api/skema/{employeeId}/save", new
+            {
+                year = cellDate.Year,
+                month = cellDate.Month,
+                entries = new[] { new { date = cellDate.ToString("yyyy-MM-dd"), projectCode = task, hours } },
+            });
+            Assert.True(save.StatusCode == HttpStatusCode.OK,
+                $"Skema save at {hours} h: expected 200, got {(int)save.StatusCode} {await save.Content.ReadAsStringAsync()}");
+        }
+
+        // One additive registration for the same day and task.
+        var post = await client.PostAsJsonAsync("/api/time-entries", new
+        {
+            employeeId,
+            date = cellDate.ToString("yyyy-MM-dd"),
+            hours = 2.0m,
+            taskId = task,
+            activityType = "NORMAL",
+            agreementCode = "HK",
+        });
+        Assert.True(post.StatusCode == HttpStatusCode.Created,
+            $"POST /api/time-entries: expected 201, got {(int)post.StatusCode} {await post.Content.ReadAsStringAsync()}");
+
+        // Let the publisher drain EVERY TimeEntryRegistered row of the stream into `events` (the count
+        // is deliberately not fixed: under MD-12 the log legitimately holds one event fewer).
+        await WaitForStreamFullyDrainedAsync(streamId, "TimeEntryRegistered", timeoutMs: 15_000);
+
+        var fold = await FoldCurrentSetFromEventsAsync(streamId);
+        var live = await ReadLiveCurrentSetAsync(employeeId);
+
+        Assert.Equal(fold, live);
+    }
+
+    /// <summary>
+    /// Folds the drained <c>TimeEntryRegistered</c> events of the stream in <c>outbox_id</c> order under
+    /// the ruled semantics and returns the current set as sorted, comparable lines
+    /// (<c>eventId|date|task|hours</c>). The order key is <c>outbox_events.outbox_id</c>, the global
+    /// write order; the payload is the canonical <c>events.data</c>.
+    /// </summary>
+    private async Task<List<string>> FoldCurrentSetFromEventsAsync(string streamId)
+    {
+        var current = new List<(Guid EventId, string Date, string Task, decimal Hours, string Source)>();
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT e.event_id, e.data::text
+            FROM events e
+            JOIN outbox_events o ON o.event_id = e.event_id
+            WHERE e.stream_id = @s AND e.event_type = 'TimeEntryRegistered'
+            ORDER BY o.outbox_id ASC
+            """, conn);
+        cmd.Parameters.AddWithValue("s", streamId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var eventId = reader.GetGuid(0);
+            using var doc = JsonDocument.Parse(reader.GetString(1));
+            var root = doc.RootElement;
+            var date = root.GetProperty("date").GetString()!;
+            var task = root.TryGetProperty("taskId", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString()! : "";
+            var hours = root.GetProperty("hours").GetDecimal();
+            // The ruled semantics: SKEMA is the only value that replaces; absent or anything else is TIME_POST.
+            var source = root.TryGetProperty("source", out var s) && s.ValueKind == JsonValueKind.String
+                         && string.Equals(s.GetString(), "SKEMA", StringComparison.Ordinal)
+                ? "SKEMA"
+                : "TIME_POST";
+
+            if (source == "SKEMA")
+                current.RemoveAll(r => r.Source == "SKEMA" && r.Date == date && r.Task == task);
+            current.Add((eventId, date, task, hours, source));
+        }
+
+        return current
+            .Select(r => $"{r.EventId}|{r.Date}|{r.Task}|{r.Hours.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}")
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>
+    /// The rows the live path left CURRENT, in the same line shape as the fold. "Current" means
+    /// <c>superseded_by_outbox_id IS NULL</c>; until S145 adds that column every row is current, so
+    /// the filter is applied only when the column exists (this fact is a guard that passes today).
+    /// </summary>
+    private async Task<List<string>> ReadLiveCurrentSetAsync(string employeeId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+
+        bool hasSupersessionColumn;
+        await using (var colCmd = new NpgsqlCommand(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'time_entries_projection' AND column_name = 'superseded_by_outbox_id')
+            """, conn))
+        {
+            hasSupersessionColumn = (bool)(await colCmd.ExecuteScalarAsync())!;
+        }
+
+        // Two constant statements (no interpolation): the only difference is the current-row predicate.
+        const string AllRows =
+            """
+            SELECT event_id, date, task_id, hours FROM time_entries_projection
+            WHERE employee_id = @e
+            """;
+        const string CurrentRows =
+            """
+            SELECT event_id, date, task_id, hours FROM time_entries_projection
+            WHERE employee_id = @e AND superseded_by_outbox_id IS NULL
+            """;
+
+        var lines = new List<string>();
+        // Each constructor call gets a literal (a conditional over the two constants would be a CA2100 warning).
+        await using var cmd = hasSupersessionColumn
+            ? new NpgsqlCommand(CurrentRows, conn)
+            : new NpgsqlCommand(AllRows, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var date = DateOnly.FromDateTime(reader.GetDateTime(1)).ToString("yyyy-MM-dd");
+            var task = reader.IsDBNull(2) ? "" : reader.GetString(2);
+            var hours = reader.GetDecimal(3).ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+            lines.Add($"{reader.GetGuid(0)}|{date}|{task}|{hours}");
+        }
+        return lines.OrderBy(x => x, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Waits until the stream has at least one <paramref name="eventType"/> outbox row and none unpublished.</summary>
+    private async Task WaitForStreamFullyDrainedAsync(string streamId, string eventType, int timeoutMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                """
+                SELECT COUNT(*), COUNT(*) FILTER (WHERE published_at IS NULL)
+                FROM outbox_events WHERE stream_id = @s AND event_type = @t
+                """, conn);
+            cmd.Parameters.AddWithValue("s", streamId);
+            cmd.Parameters.AddWithValue("t", eventType);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            await reader.ReadAsync();
+            if (reader.GetInt64(0) > 0 && reader.GetInt64(1) == 0) return;
+            await Task.Delay(100);
+        }
+        throw new TimeoutException(
+            $"OutboxPublisher did not drain every {eventType} row on stream {streamId} within {timeoutMs}ms.");
+    }
+
     private async Task<List<DateOnly>> ReadProjectionDatesAsync(string tableName, string employeeId)
     {
         var dates = new List<DateOnly>();

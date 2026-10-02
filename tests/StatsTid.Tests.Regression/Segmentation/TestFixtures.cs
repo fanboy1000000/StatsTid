@@ -396,15 +396,27 @@ internal static class TestFixtures
     /// source of truth for the post-S20 cleanup that absorbed five separate copies.
     ///
     /// <para>
-    /// Compatible-with-<c>init.sql</c> shape covering <c>segment_manifests</c> +
-    /// <c>events</c> + <c>event_streams</c> + <c>wage_type_mappings</c>. The
-    /// <c>events</c> shape is hand-synthesised: production <c>init.sql</c> creates the
-    /// base table and adds <c>actor_id</c> / <c>actor_role</c> / <c>correlation_id</c>
-    /// via subsequent <c>ALTER TABLE</c> statements (S3 / S4); we collapse them inline
-    /// here. Schema drift in those columns will NOT auto-surface — when adding columns
-    /// to <c>events</c> in production, mirror them here. <c>segment_manifests</c> and
-    /// <c>wage_type_mappings</c> are single-block <c>CREATE TABLE</c> in production;
-    /// those rows match init.sql byte-for-byte.
+    /// <c>init.sql</c>-<i>compatible</i> shape covering <c>segment_manifests</c> +
+    /// <c>events</c> + <c>event_streams</c> + <c>wage_type_mappings</c>. It is NOT a byte copy
+    /// (S145 / TASK-14501 corrected an earlier "byte-for-byte" claim that was false). The named
+    /// differences:
+    /// <list type="bullet">
+    ///   <item><description><c>events</c> is hand-synthesised: production <c>init.sql</c> creates
+    ///   the base table and adds <c>actor_id</c> / <c>actor_role</c> / <c>correlation_id</c> via
+    ///   subsequent <c>ALTER TABLE</c> statements (S3 / S4); we collapse them inline here, and
+    ///   the three <c>idx_events_*</c> indexes are not created. Schema drift in those columns will
+    ///   NOT auto-surface — when adding columns to <c>events</c> in production, mirror them here.</description></item>
+    ///   <item><description><c>wage_type_mappings</c> is the base <c>CREATE</c> already carrying the
+    ///   S29 additions: it has a <c>version BIGINT NOT NULL DEFAULT 1</c> column and a
+    ///   <c>DEFAULT '2020-01-01'</c> on <c>effective_from</c> that production's final table does
+    ///   not have, and it omits <c>idx_wtm_natural_key_history</c> (S144 post-close W). Nothing
+    ///   checks this table against <c>init.sql</c>.</description></item>
+    ///   <item><description><c>segment_manifests</c> — and the two hours projection tables copied in
+    ///   <c>Outbox.ProjectionSchemaTestFixture</c> and <c>Infrastructure.TxContractTests</c> — are
+    ///   checked column-by-column, index-by-index against a database built from <c>init.sql</c>
+    ///   alone by <c>Migrations.HarnessDdlMatchesInitSqlTests</c>, so drift there fails CI with a
+    ///   name.</description></item>
+    /// </list>
     /// </para>
     /// </summary>
     public sealed class DockerHarness : IAsyncDisposable
@@ -440,8 +452,17 @@ internal static class TestFixtures
                 calculation_kind        TEXT        NOT NULL,
                 boundary_cause_summary  TEXT[]      NOT NULL,
                 created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-                segments_jsonb          JSONB       NOT NULL
+                segments_jsonb          JSONB       NOT NULL,
+                -- S145 / TASK-14500 (A7): what a calculation consumed, frozen so a replay
+                -- reproduces it. NULL on a manifest written before S145.
+                plan_inputs_jsonb       JSONB       NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_segment_manifests_employee_period
+                ON segment_manifests (employee_id, period_start);
+
+            CREATE INDEX IF NOT EXISTS idx_segment_manifests_boundary_cause
+                ON segment_manifests USING GIN (boundary_cause_summary);
 
             CREATE TABLE IF NOT EXISTS wage_type_mappings (
                 mapping_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),

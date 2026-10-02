@@ -229,6 +229,35 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
     // divergence from the slice-1a balance.Used scalar).
     // ════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// <b>S145 / TASK-14501 (A0, R20, R57) — this fact also pins "a re-saved cell counts once".</b>
+    ///
+    /// <para><b>Plain language.</b> A TERMINATION settlement works out how many holiday days a leaver
+    /// used up to the end date by adding up the recorded absence rows. Correcting a Skema cell
+    /// (saving it again) used to leave TWO rows for the same day, so the day was counted twice and
+    /// the leaver's crystallized balance came out one day too low. The ruled meaning (refinement A0)
+    /// is that a Skema save replaces the cell, so the settlement must count the cell once. The leg
+    /// below saves one VACATION cell through the real Skema endpoint, then saves it again with the
+    /// same hours, BEFORE the employee is marked a leaver and before the one settlement.</para>
+    ///
+    /// <para><b>Expected (derived from the spec, not from the code).</b> Recorded days on or before the
+    /// end date: the two raw days (6 and 7 October 2025) plus the Skema cell once (Wednesday 5 November
+    /// 2025, one full day) = <b>3</b>. The three raw days after the end date (9-11 March 2026) do not
+    /// consume. Crystallized = 12.5 earned + 0 carryover − 3 used = <b>9.5</b>. An unfiltered settlement
+    /// read that counted both Skema rows would give 4 and 8.5.</para>
+    ///
+    /// <para><b>Why that date.</b> A weekday (the product rejects entitlement absences on a zero-norm
+    /// day), inside ferieår 2025 and before the end date (28 February 2026), and not a raw-seeded date
+    /// (fixture condition C-A1: a raw TIME_POST row is never superseded, so a raw row on the same date
+    /// would only add). The balance row is seeded first (used 5, headroom to the 25-day cap, C-A2).</para>
+    ///
+    /// <para><b>Red conditions (Docker; compiles today, so its RED is argued here).</b> TODAY the re-save
+    /// stores a second row and the settlement sums every row, so the fact fails on <c>used</c> with 4
+    /// instead of 3. <b>MD-05</b> (<c>VacationSettlementService.ReadRecordedFeriedageAsync</c>, the
+    /// current-row predicate removed) restores exactly that: the superseded row is summed again, <c>used</c>
+    /// is 4 and crystallized 8.5. It is not reached by MD-06 (the guarded quota step stays inside the cap
+    /// and the TERMINATION snapshot uses the recorded rows, not the balance row's <c>used</c>).</para>
+    /// </summary>
     [Fact]
     public async Task Termination_PostEndDateBooking_DoesNotConsume()
     {
@@ -241,6 +270,26 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
             await SeedAbsenceAsync(employeeId, new DateOnly(2026, 3, 9 + i), feriedage: 1.0m);
         // The balance scalar counts ALL 5 (the booking guard wrote them) — TERMINATION must not read it.
         await SeedBalanceAsync(employeeId, EndDateFerieaar, used: 5m, planned: 0m, carryoverIn: 0m);
+
+        // S145 R57 — the re-save leg. The employee is still ACTIVE and the year is NOT yet settled.
+        // One full VACATION day on a WEEKDAY inside ferieår 2025 and before the end date, saved through
+        // the real Skema endpoint, then saved again with the same hours (a correction / a retried save).
+        var skemaCell = new DateOnly(2025, 11, 5);
+        Assert.Equal(DayOfWeek.Wednesday, skemaCell.DayOfWeek);   // fixture: a zero-norm day would be refused
+        Assert.True(skemaCell < EndDate && skemaCell >= new DateOnly(EndDateFerieaar, 9, 1)); // inside [ferieår start, end date]
+        var skemaClient = EmployeeSkemaClient(employeeId);
+        foreach (var attempt in new[] { "first save", "re-save with the same hours" })
+        {
+            var save = await skemaClient.PostAsJsonAsync($"/api/skema/{employeeId}/save", new
+            {
+                year = skemaCell.Year,
+                month = skemaCell.Month,
+                absences = new[] { new { date = skemaCell.ToString("yyyy-MM-dd"), absenceType = VacationType, hours = 7.4m } },
+            });
+            Assert.True(save.StatusCode == HttpStatusCode.OK,
+                $"Skema {attempt}: expected 200, got {(int)save.StatusCode} {await save.Content.ReadAsStringAsync()}");
+        }
+
         await MarkLeaverAsync(employeeId, EndDate);
 
         await SettleAsync(service, employeeId, EndDateFerieaar, Termination);
@@ -248,10 +297,12 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
         var row = await ReadActiveSettlementAsync(employeeId, EndDateFerieaar);
         Assert.Equal("SETTLED", row!.Value.State);
         using var snap = JsonDocument.Parse(row.Value.SnapshotJson);
-        // used = the recorded sum ≤ end date (2), NOT balance.Used (5).
-        Assert.Equal(2m, snap.RootElement.GetProperty("used").GetDecimal());
-        // crystallized = max(0, 12.5 + 0 − 2) = 10.5 (with balance.Used it would wrongly be 7.5).
-        Assert.Equal(10.5m, snap.RootElement.GetProperty("crystallizedDays").GetDecimal());
+        // used = the recorded sum ≤ end date: the two raw days + the re-saved Skema cell ONCE = 3
+        // (S145 R57; was 2 before the leg), NOT balance.Used (the seeded 5, moved by the Skema saves).
+        Assert.Equal(3m, snap.RootElement.GetProperty("used").GetDecimal());
+        // crystallized = max(0, 12.5 + 0 − 3) = 9.5 (S145 R57; was 10.5). With balance.Used it would be
+        // wrongly lower: the balance scalar also counts the three post-end-date days.
+        Assert.Equal(9.5m, snap.RootElement.GetProperty("crystallizedDays").GetDecimal());
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -988,6 +1039,69 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;
+    }
+
+    /// <summary>
+    /// S145 / TASK-14501 (R57, R62) — a client for the employee's OWN Skema saves, on a host derived
+    /// from the suite's factory with the rule-engine seam stubbed. A Skema absence save posts to
+    /// <c>/api/rules/validate-entitlement</c> and fails closed without an answer; this suite boots the
+    /// plain factory, which has no rule engine behind it, so the derived host answers that one route
+    /// with the real <c>EntitlementValidationRule.Evaluate</c> (the pattern of
+    /// <c>Adr032RevaluationTests</c>). The token is built the way <see cref="HrClient"/> builds HR's,
+    /// for the Employee role (an employee may save only their own data).
+    /// </summary>
+    private HttpClient EmployeeSkemaClient(string employeeId)
+    {
+        var svc = new JwtTokenService(new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        });
+        var token = svc.GenerateToken(
+            employeeId: employeeId, name: employeeId, role: StatsTidRoles.Employee,
+            agreementCode: "AC", orgId: OrgId,
+            scopes: new[] { new RoleScope(StatsTidRoles.Employee, OrgId, "ORG_ONLY") });
+        var client = _factory
+            .WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+                services.AddSingleton<IHttpClientFactory>(new EntitlementValidationStubFactory())))
+            .CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
+    /// <summary>Replaces the whole <see cref="IHttpClientFactory"/>, so it supplies the BaseAddress the
+    /// production registration sets (the named RuleEngine client uses relative URIs).</summary>
+    private sealed class EntitlementValidationStubFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new EntitlementValidationStubHandler(), disposeHandler: false)
+        {
+            BaseAddress = new Uri("http://rule-engine:8080"),
+        };
+    }
+
+    /// <summary>Answers <c>/api/rules/validate-entitlement</c> with the real rule; everything else is 404.</summary>
+    private sealed class EntitlementValidationStubHandler : HttpMessageHandler
+    {
+        private static readonly JsonSerializerOptions Camel = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (!path.EndsWith("/api/rules/validate-entitlement", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            var json = await request.Content!.ReadAsStringAsync(cancellationToken);
+            var req = JsonSerializer.Deserialize<StatsTid.RuleEngine.Api.Contracts.ValidateEntitlementRequest>(json, Camel)!;
+            var result = StatsTid.RuleEngine.Api.Rules.EntitlementValidationRule.Evaluate(req);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(result, Camel), System.Text.Encoding.UTF8, "application/json"),
+            };
+        }
     }
 
     private static async Task<HttpResponseMessage> ResolveAsync(
