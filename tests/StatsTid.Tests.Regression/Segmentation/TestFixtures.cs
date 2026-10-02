@@ -404,13 +404,16 @@ internal static class TestFixtures
     ///   <item><description><c>events</c> is hand-synthesised: production <c>init.sql</c> creates
     ///   the base table and adds <c>actor_id</c> / <c>actor_role</c> / <c>correlation_id</c> via
     ///   subsequent <c>ALTER TABLE</c> statements (S3 / S4); we collapse them inline here, and
-    ///   the three <c>idx_events_*</c> indexes are not created. Schema drift in those columns will
-    ///   NOT auto-surface — when adding columns to <c>events</c> in production, mirror them here.</description></item>
+    ///   none of production's six <c>idx_events_*</c> indexes is created. Schema drift in those
+    ///   columns will NOT auto-surface — when adding columns to <c>events</c> in production,
+    ///   mirror them here.</description></item>
     ///   <item><description><c>wage_type_mappings</c> is the base <c>CREATE</c> already carrying the
-    ///   S29 additions: it has a <c>version BIGINT NOT NULL DEFAULT 1</c> column and a
-    ///   <c>DEFAULT '2020-01-01'</c> on <c>effective_from</c> that production's final table does
-    ///   not have, and it omits <c>idx_wtm_natural_key_history</c> (S144 post-close W). Nothing
-    ///   checks this table against <c>init.sql</c>.</description></item>
+    ///   S29 additions (S144 post-close W). Against production's final table it has a
+    ///   <c>DEFAULT '2020-01-01'</c> on <c>effective_from</c> that production lacks, and it omits
+    ///   <c>idx_wtm_natural_key_history</c>. (Its <c>version BIGINT NOT NULL DEFAULT 1</c> column
+    ///   matches production's final table: <c>init.sql</c> adds it in an S29 block, so it differs
+    ///   from the base <c>CREATE</c> only.) Nothing checks this table against
+    ///   <c>init.sql</c>.</description></item>
     ///   <item><description><c>segment_manifests</c> — and the two hours projection tables copied in
     ///   <c>Outbox.ProjectionSchemaTestFixture</c> and <c>Infrastructure.TxContractTests</c> — are
     ///   checked column-by-column, index-by-index against a database built from <c>init.sql</c>

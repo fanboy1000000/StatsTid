@@ -40,7 +40,8 @@ namespace StatsTid.Tests.Regression.Migrations;
 ///
 /// <para><b>Red conditions (guard, no MD: it passes once the copies and <c>init.sql</c> agree).</b>
 /// Dropping <c>plan_inputs_jsonb</c> from the <c>segment_manifests</c> copy, a <c>source</c> default
-/// that is not <c>'TIME_POST'</c>, a nullable <c>source</c>, a missing partial unique index, a
+/// that is not <c>'TIME_POST'</c>, a nullable <c>source</c>, a missing partial unique index (or one
+/// without the time-entry index's <c>NULLS NOT DISTINCT</c> clause, which <c>pg_indexes.indexdef</c> prints), a
 /// <c>hours</c> that is not <c>NUMERIC(8,4)</c>, or a renamed CHECK each put one named line on one
 /// side of the diff and fail the row. Until TASK-14500's <c>init.sql</c> change is on the same branch
 /// the copies are AHEAD of <c>init.sql</c> and the rows fail on the five new columns and two indexes:
@@ -49,11 +50,10 @@ namespace StatsTid.Tests.Regression.Migrations;
 [Trait("Category", "Docker")]
 public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
 {
-    // Constant statements, no interpolation (CA2100 stays at its ratchet): the two database names are fixed.
-    private const string CreateCopyDatabase = "CREATE DATABASE hdl_copy";
-    private const string CreateInitSqlDatabase = "CREATE DATABASE hdl_initsql";
-    private const string CopyDatabase = "hdl_copy";
-    private const string InitSqlDatabase = "hdl_initsql";
+    // Fresh per row: a database name that already exists (a retried row, a shared server) must not
+    // fail the guard. The names are test-generated hex, never user input.
+    private readonly string _copyDatabase = "hdl_copy_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+    private readonly string _initSqlDatabase = "hdl_init_" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
     private const string ColumnsSql =
         """
@@ -112,7 +112,7 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
     {
         var (ddl, tables) = ResolveCopy(copy);
 
-        var copyConnection = await CreateFreshDatabaseAsync(CreateCopyDatabase, CopyDatabase);
+        var copyConnection = await CreateFreshDatabaseAsync(_copyDatabase);
         await using (var conn = new NpgsqlConnection(copyConnection))
         {
             await conn.OpenAsync();
@@ -123,7 +123,7 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
             await cmd.ExecuteNonQueryAsync();
         }
 
-        var initSqlConnection = await CreateFreshDatabaseAsync(CreateInitSqlDatabase, InitSqlDatabase);
+        var initSqlConnection = await CreateFreshDatabaseAsync(_initSqlDatabase);
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(initSqlConnection);
 
         var problems = new List<string>();
@@ -153,6 +153,66 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
             string.Join("\n  ", problems));
     }
 
+    // Two literal statements (no interpolation, so CA2100 is not touched): the same cell, a NULL task_id,
+    // both rows CURRENT Skema rows. Every other NOT NULL column is filled; event_id and outbox_id differ.
+    private const string InsertNullTaskSkemaRowFirst =
+        """
+        INSERT INTO time_entries_projection
+            (event_id, employee_id, date, hours, task_id, agreement_code, ok_version, occurred_at, outbox_id,
+             source, superseded_by_outbox_id)
+        VALUES
+            (gen_random_uuid(), 'emp_hdl_null_task', DATE '2026-05-04', 7.4, NULL, 'HK', 'OK24', NOW(), 1,
+             'SKEMA', NULL)
+        """;
+
+    private const string InsertNullTaskSkemaRowSecond =
+        """
+        INSERT INTO time_entries_projection
+            (event_id, employee_id, date, hours, task_id, agreement_code, ok_version, occurred_at, outbox_id,
+             source, superseded_by_outbox_id)
+        VALUES
+            (gen_random_uuid(), 'emp_hdl_null_task', DATE '2026-05-04', 8.0, NULL, 'HK', 'OK24', NOW(), 2,
+             'SKEMA', NULL)
+        """;
+
+    /// <summary>
+    /// <b>(guard)</b> The production index that makes "one current Skema row per cell" true must also
+    /// hold for a cell with NO task id. <b>Plain language:</b> a database treats two NULLs as different
+    /// values, so a plain unique index would let two current Skema rows for the same employee and day
+    /// coexist whenever the task is empty, and a re-save would then be counted twice. The time-entry
+    /// index is created <c>NULLS NOT DISTINCT</c> to close that; this fact proves it on a database built
+    /// from <c>init.sql</c> alone: the first row goes in, the second current Skema row for the same
+    /// employee, day and (NULL) task is refused with a unique violation on
+    /// <c>ux_time_entries_proj_current_skema_cell</c>. (The Skema endpoint always sends a task id
+    /// today, <c>SkemaEndpoints.cs:2367</c>; this pins the schema, not the endpoint.)
+    ///
+    /// <para><b>Guard, no MD: passes once TASK-14500's schema is on the branch.</b> Before it, the
+    /// <c>source</c> and <c>superseded_by_outbox_id</c> columns do not exist and the insert fails on the
+    /// missing column (42703) at the first statement. <b>Red condition:</b> drop <c>NULLS NOT
+    /// DISTINCT</c> from the index (in <c>init.sql</c>): the two NULLs are then distinct, the second
+    /// insert is accepted, no exception is thrown and <c>ThrowsAsync</c> fails with "no exception".</para>
+    /// </summary>
+    [Fact]
+    public async Task CurrentSkemaCellIndex_NullTaskId_TwoCurrentRows_Collide23505()
+    {
+        var connectionString = await CreateFreshDatabaseAsync("hdl_null_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(connectionString);
+
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+
+        await using (var first = new NpgsqlCommand(InsertNullTaskSkemaRowFirst, conn))
+            Assert.Equal(1, await first.ExecuteNonQueryAsync());
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(async () =>
+        {
+            await using var second = new NpgsqlCommand(InsertNullTaskSkemaRowSecond, conn);
+            await second.ExecuteNonQueryAsync();
+        });
+        Assert.Equal("23505", ex.SqlState);
+        Assert.Equal("ux_time_entries_proj_current_skema_cell", ex.ConstraintName);
+    }
+
     /// <summary>The DDL to apply and the tables to compare, for one harness copy.</summary>
     private static (string Ddl, string[] Tables) ResolveCopy(string copy) => copy switch
     {
@@ -179,14 +239,15 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
     }
 
     /// <summary>Creates an empty database in the container and returns its connection string.</summary>
-    private async Task<string> CreateFreshDatabaseAsync(string createStatement, string databaseName)
+    private async Task<string> CreateFreshDatabaseAsync(string databaseName)
     {
         await using (var admin = new NpgsqlConnection(_host.ConnectionString))
         {
             await admin.OpenAsync();
-            // CA2100-justified (QUAL-073 ratchet): one of the two constant CREATE DATABASE statements above.
+            // CA2100-justified (QUAL-073 ratchet): `databaseName` is one of the two test-generated hex
+            // names above; DDL cannot take a parameter for an identifier.
 #pragma warning disable CA2100
-            await using var cmd = new NpgsqlCommand(createStatement, admin);
+            await using var cmd = new NpgsqlCommand("CREATE DATABASE " + databaseName, admin);
 #pragma warning restore CA2100
             await cmd.ExecuteNonQueryAsync();
         }

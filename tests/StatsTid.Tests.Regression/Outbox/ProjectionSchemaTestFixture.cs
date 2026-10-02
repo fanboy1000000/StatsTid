@@ -65,8 +65,11 @@ internal static class ProjectionSchemaTestFixture
         CREATE INDEX IF NOT EXISTS idx_time_entries_proj_emp_outbox
             ON time_entries_projection(employee_id, outbox_id);
         -- One CURRENT Skema row per (employee, date, task) cell; TIME_POST rows are never in it.
+        -- NULLS NOT DISTINCT (PostgreSQL 15+; the test image and production are 16) so a NULL task_id
+        -- cannot slip two current Skema rows past the index: the harness must refuse what production
+        -- refuses. Same clause as init.sql's S145 segment.
         CREATE UNIQUE INDEX IF NOT EXISTS ux_time_entries_proj_current_skema_cell
-            ON time_entries_projection (employee_id, date, task_id)
+            ON time_entries_projection (employee_id, date, task_id) NULLS NOT DISTINCT
             WHERE source = 'SKEMA' AND superseded_by_outbox_id IS NULL;
 
         CREATE TABLE IF NOT EXISTS absences_projection (
