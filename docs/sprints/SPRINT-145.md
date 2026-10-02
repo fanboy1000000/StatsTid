@@ -535,6 +535,38 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 - **Its brief contradictions are accepted:** harness `hours NUMERIC(6,2)` corrected to production's `(8,4)`, and the "byte-for-byte" claims corrected. `TxContractTests.SchemaDdl` may become `internal`, removing the reflection.
 - **5α of 14502, 14503a and 14504: PASS.** The checklist's "no hard-coded service URLs" item is read as applying to `src/**`. The rule-engine stub's base address in two test files follows eleven existing test files.
 
+**Known-red on master (Docker facts merged ahead of their production task).**
+
+*Plain language:* RED-first pins merge before the code that makes them pass. Until that code lands, CI on master is red on exactly the facts below, and on nothing else. The batched Fable 5a required the list before the merges (WARNING 1). It lets an expected red be told apart from a regression in this window.
+
+| Pinned by | Facts red on master | Turned green by |
+|---|---|---|
+| TASK-14501 | B1, B2, B3, TRM, SHO | TASK-14507 |
+| TASK-14502 | S1–S4, S6, S7, S8 (4 rows), S11, S12, S13, Q1–Q4, Q6, Q7 | TASK-14507 |
+| TASK-14503a | RE1, RE2, RE3 | TASK-14511 (A.3) |
+| TASK-14503b | H1, H2 | TASK-14508 (A.2) |
+| TASK-14503b | H3, H4, H5, H10, H12, AR1–AR8 | TASK-14512 (A.4) |
+| existing | X1–X4 (go red at 14512 by design) | re-expected by TASK-14512-T |
+| TASK-14504 | W1, RO1, RO3 | TASK-14509 (A.2) |
+
+Green today and expected to stay green:
+- PAR, HDL (3 rows) and the null-task collision guard (14501);
+- S5, S9, S10, Q5 (14502);
+- H6–H9, H11, H13, H14, AR9, AR10 (14503b);
+- RO2, RO4 (14504).
+
+**At the batched Fable 5a of 14501–14504.**
+- **Verdicts.** 14501, 14502, 14503b and 14504: APPROVED-WITH-WARNINGS. 14503a: APPROVED.
+- **What the reviewer did.** It recomputed every hours and quota figure. It checked each "red today" claim against master's code, and confirmed each guard is green today and each fixture condition is present.
+- **The reopen hook's `EffectiveFrom` ruling is confirmed.** It is the Monday of M+1's opening week, the R5(a) widening read in the other direction. Condition: TASK-14509 widens the field's documented meaning (`HrBackdateWorklistRepository.cs:35` and `BackdateWorklistRowCreated.TriggerEffectiveFrom`) for `PRIOR_MONTH_REOPENED`.
+- **WARNING 2, a rebuild/live `feriedage` drift.** The backfill stamps hours ÷ 7.4 on any absence event that has none, where the live save writes NULL for a non-entitlement type. Registered as **QUAL-197**. TASK-14513's brief now says the lossless digest must not trip on it.
+- **Notes taken.**
+  - Two stale "this compiles against today's code" sentences in 14501's files, the `ok_version` label on 14503b's approval rows, the missing weekday-premise assert in the new AR facts, and RE3's docstring on the 26 Oct–1 Nov week: a later comment pass, O-9.
+  - The 14501 5α's "S29 block" is actually S25. Fixed at merge.
+  - The entitlement-validation stub now has four copies (the price of R50). Consolidate after A.1.
+  - Stale "byte-for-byte" claims in `OutboxTestSchema.cs:11` and `AuditProjectionTestSchema.cs:17` are added to QUAL-195's pointers.
+- **No Codex lens for these five.** Pin tasks are not high-risk under the plan's merge checklist.
+
 **Wave A.1a dispositions so far.** These are adjudicator rulings, recorded for the A.1 gate:
 - **TASK-14505's March value change** (`OkVersionRuntimeRegressionTests`: one `OVERTIME_50 1.20` dated 2026-03-31) is labelled change 4.
 - **The A.1→A.3 intermediate state:**
