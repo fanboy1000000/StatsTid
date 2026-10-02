@@ -1911,6 +1911,9 @@ public sealed class VacationSettlementService
             _ => entitlementType, // VACATION/CARE_DAY/SENIOR_DAY are identity; CHILD_SICK has 3 variants (not settled in 1a)
         };
 
+        // S145 / TASK-14507 (R20) — CURRENT rows only: a re-saved Skema cell is counted once. This
+        // sum is money (SPECIAL_HOLIDAY `used`, a TERMINATION's usedForSnapshot), so a replaced row
+        // must never reach it.
         await using var cmd = new NpgsqlCommand(
             """
             SELECT event_id, feriedage
@@ -1919,6 +1922,7 @@ public sealed class VacationSettlementService
               AND absence_type = @absenceType
               AND date >= @start AND date <= @end
               AND feriedage IS NOT NULL
+              AND superseded_by_outbox_id IS NULL
             ORDER BY outbox_id ASC
             """, conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);

@@ -1,4 +1,5 @@
 using Npgsql;
+using NpgsqlTypes;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 
@@ -14,9 +15,47 @@ namespace StatsTid.Infrastructure;
 /// Read methods serve the migrated GET endpoints (Skema month, Time
 /// absences, Balance summary, Compliance period) and satisfy
 /// read-your-write because the projection commits in the same tx as the event.
+///
+/// <para><b>S145 / TASK-14507 (A0, QUAL-192/193) — a Skema save replaces the cell.</b> A Skema
+/// absence cell is one employee, one day, one absence type. Saving it again appends a new event and
+/// a new row and marks the earlier Skema row of the cell <c>superseded_by_outbox_id</c> = the new
+/// row's <c>outbox_id</c>. Superseded rows are kept for replay (<see cref="GetByEventIdsAsync"/>);
+/// every total, including the vacation settlement and the quota, counts CURRENT rows only. An
+/// additive row (source <c>TIME_POST</c>) is never marked and never marks.</para>
 /// </summary>
 public sealed class AbsenceProjectionRepository
 {
+    /// <summary>
+    /// S145 / TASK-14507 — the ONE supersession mark for an absence cell, shared verbatim by the
+    /// live <see cref="InsertAsync"/> and the from-events rebuild (<c>ProjectionBackfillService</c>).
+    /// It runs BEFORE the new row's INSERT (the partial unique index
+    /// <c>ux_absences_proj_current_skema_cell</c> admits one current Skema row per cell). The
+    /// clauses mirror the time-entry mark: the cell; Skema rows only; not already retired
+    /// (idempotent re-run); only by a LATER write (<c>outbox_id &lt; @outboxId</c>).
+    /// <c>absence_type</c> is NOT NULL, so plain equality matches the index exactly.
+    /// </summary>
+    internal const string MarkSupersededSkemaCellSql = @"
+        UPDATE absences_projection
+           SET superseded_by_outbox_id = @outboxId
+         WHERE employee_id = @employeeId
+           AND date = @date
+           AND absence_type = @absenceType
+           AND source = 'SKEMA'
+           AND superseded_by_outbox_id IS NULL
+           AND outbox_id < @outboxId";
+
+    // S145 / TASK-14507 — the current Skema rows in a date range: the predecessors a save is about
+    // to replace. Shared by the pooled and the (conn, tx) overloads below.
+    private const string SelectCurrentSkemaRowsSql = @"
+        SELECT event_id, employee_id, date, absence_type, hours, feriedage,
+               agreement_code, ok_version, occurred_at, actor_id, actor_role,
+               correlation_id, outbox_id, source, superseded_by_outbox_id
+          FROM absences_projection
+         WHERE employee_id = @employeeId AND date >= @start AND date <= @end
+           AND source = 'SKEMA'
+           AND superseded_by_outbox_id IS NULL
+         ORDER BY outbox_id ASC";
+
     private readonly DbConnectionFactory _connectionFactory;
 
     public AbsenceProjectionRepository(DbConnectionFactory connectionFactory)
@@ -30,20 +69,38 @@ public sealed class AbsenceProjectionRepository
     /// by <c>IOutboxEnqueue.EnqueueAndReturnIdAsync</c> (TASK-2703); this
     /// keeps per-employee monotonic ordering aligned with the global outbox
     /// sequence. The caller commits or rolls back; this method does NOT.
+    ///
+    /// <para>S145 / TASK-14507 — the row's <c>source</c> is <see cref="HoursSource.Resolve"/> of the
+    /// event's <c>Source</c> (null is <c>TIME_POST</c>). For a <c>SKEMA</c> row the cell's current
+    /// Skema row is marked superseded FIRST (<see cref="MarkSupersededSkemaCellSql"/>), then the new
+    /// row is inserted, both in the caller's transaction. A <c>TIME_POST</c> row skips the mark.
+    /// The balance consequence of a replacement (the signed quota delta) is the caller's: this
+    /// method writes the projection only.</para>
     /// </summary>
     public async Task InsertAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         AbsenceRegistered @event, long outboxId, CancellationToken ct = default)
     {
+        var source = HoursSource.Resolve(@event.Source);
+        if (string.Equals(source, HoursSource.Skema, StringComparison.Ordinal))
+        {
+            await using var markCmd = new NpgsqlCommand(MarkSupersededSkemaCellSql, conn, tx);
+            markCmd.Parameters.AddWithValue("outboxId", outboxId);
+            markCmd.Parameters.AddWithValue("employeeId", @event.EmployeeId);
+            markCmd.Parameters.AddWithValue("date", @event.Date);
+            markCmd.Parameters.AddWithValue("absenceType", @event.AbsenceType);
+            await markCmd.ExecuteNonQueryAsync(ct);
+        }
+
         await using var cmd = new NpgsqlCommand(
             @"INSERT INTO absences_projection (
                   event_id, employee_id, date, absence_type, hours, feriedage,
                   agreement_code, ok_version, occurred_at, actor_id, actor_role,
-                  correlation_id, outbox_id
+                  correlation_id, outbox_id, source
               ) VALUES (
                   @eventId, @employeeId, @date, @absenceType, @hours, @feriedage,
                   @agreementCode, @okVersion, @occurredAt, @actorId, @actorRole,
-                  @correlationId, @outboxId
+                  @correlationId, @outboxId, @source
               )",
             conn, tx);
         cmd.Parameters.AddWithValue("eventId", @event.EventId);
@@ -64,6 +121,7 @@ public sealed class AbsenceProjectionRepository
         cmd.Parameters.AddWithValue("actorRole", (object?)@event.ActorRole ?? DBNull.Value);
         cmd.Parameters.AddWithValue("correlationId", (object?)@event.CorrelationId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("outboxId", outboxId);
+        cmd.Parameters.AddWithValue("source", source);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -72,6 +130,11 @@ public sealed class AbsenceProjectionRepository
     /// period endpoints. Uses <c>idx_absences_proj_emp_date_outbox</c>
     /// (init.sql:1218-1219). <c>ORDER BY outbox_id ASC</c> preserves
     /// per-employee monotonic ordering across rows on the same date.
+    ///
+    /// <para>S145 / TASK-14507 (R20) — CURRENT rows only (<c>superseded_by_outbox_id IS NULL</c>):
+    /// a re-saved Skema cell is counted once, at its latest value. This also scopes the ADR-032 D4
+    /// revaluation enumeration (<c>EmployeeProfileEndpoints</c>) to current rows, which is the set
+    /// <c>entitlement_balances.used</c> counts.</para>
     /// </summary>
     public async Task<IReadOnlyList<AbsenceProjectionRow>> GetByEmployeeAndDateRangeAsync(
         string employeeId, DateOnly start, DateOnly end, CancellationToken ct = default)
@@ -81,9 +144,10 @@ public sealed class AbsenceProjectionRepository
         await using var cmd = new NpgsqlCommand(
             @"SELECT event_id, employee_id, date, absence_type, hours, feriedage,
                      agreement_code, ok_version, occurred_at, actor_id, actor_role,
-                     correlation_id, outbox_id
+                     correlation_id, outbox_id, source, superseded_by_outbox_id
               FROM absences_projection
               WHERE employee_id = @employeeId AND date >= @start AND date <= @end
+                AND superseded_by_outbox_id IS NULL
               ORDER BY outbox_id ASC",
             conn);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
@@ -97,6 +161,9 @@ public sealed class AbsenceProjectionRepository
     /// Uses <c>idx_absences_proj_emp_outbox</c> (init.sql:1220-1221),
     /// the no-date-filter index. <c>ORDER BY outbox_id ASC</c> preserves
     /// per-employee monotonic ordering.
+    ///
+    /// <para>S145 / TASK-14507 (R20) — CURRENT rows only, like
+    /// <see cref="GetByEmployeeAndDateRangeAsync"/>.</para>
     /// </summary>
     public async Task<IReadOnlyList<AbsenceProjectionRow>> GetByEmployeeAsync(
         string employeeId, CancellationToken ct = default)
@@ -106,12 +173,81 @@ public sealed class AbsenceProjectionRepository
         await using var cmd = new NpgsqlCommand(
             @"SELECT event_id, employee_id, date, absence_type, hours, feriedage,
                      agreement_code, ok_version, occurred_at, actor_id, actor_role,
-                     correlation_id, outbox_id
+                     correlation_id, outbox_id, source, superseded_by_outbox_id
               FROM absences_projection
               WHERE employee_id = @employeeId
+                AND superseded_by_outbox_id IS NULL
               ORDER BY outbox_id ASC",
             conn);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
+        return await ReadRowsAsync(cmd, ct);
+    }
+
+    /// <summary>
+    /// S145 / TASK-14507 (A0 constraint 5) — the rows with exactly these event ids, current OR
+    /// superseded, ordered by <c>outbox_id</c>. The ONLY unfiltered read of the table; it exists so
+    /// a calculation can be replayed from the rows it recorded even after a later re-save of the
+    /// cell. An id with no row is simply absent from the result. Never use this read to total
+    /// hours or feriedage.
+    /// </summary>
+    public async Task<IReadOnlyList<AbsenceProjectionRow>> GetByEventIdsAsync(
+        string employeeId, IReadOnlyList<Guid> eventIds, CancellationToken ct = default)
+    {
+        if (eventIds.Count == 0)
+            return Array.Empty<AbsenceProjectionRow>();
+
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            @"SELECT event_id, employee_id, date, absence_type, hours, feriedage,
+                     agreement_code, ok_version, occurred_at, actor_id, actor_role,
+                     correlation_id, outbox_id, source, superseded_by_outbox_id
+              FROM absences_projection
+              WHERE employee_id = @employeeId AND event_id = ANY(@eventIds)
+              ORDER BY outbox_id ASC",
+            conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.Add(new NpgsqlParameter("eventIds", NpgsqlDbType.Array | NpgsqlDbType.Uuid)
+        {
+            Value = eventIds.ToArray(),
+        });
+        return await ReadRowsAsync(cmd, ct);
+    }
+
+    /// <summary>
+    /// S145 / TASK-14507 (R23) — the CURRENT Skema rows of the employee dated in
+    /// <c>[start, end]</c>: the rows a Skema save is about to replace, read so the save can move the
+    /// quota by the SIGNED difference (new feriedage minus the stored feriedage of the replaced row)
+    /// instead of adding the full new value again. Pooled-connection overload, for the advisory
+    /// pre-transaction quota check; the authoritative re-read under the employee's lock uses the
+    /// (conn, tx) overload. Additive (<c>TIME_POST</c>) rows are never replaced, so they are not
+    /// returned.
+    /// </summary>
+    public async Task<IReadOnlyList<AbsenceProjectionRow>> GetCurrentSkemaRowsAsync(
+        string employeeId, DateOnly start, DateOnly end, CancellationToken ct = default)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(SelectCurrentSkemaRowsSql, conn);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("start", start);
+        cmd.Parameters.AddWithValue("end", end);
+        return await ReadRowsAsync(cmd, ct);
+    }
+
+    /// <summary>
+    /// In-transaction sibling of <see cref="GetCurrentSkemaRowsAsync(string, DateOnly, DateOnly, CancellationToken)"/>:
+    /// reads on the caller's <paramref name="conn"/> + <paramref name="tx"/> so the predecessors are
+    /// read AFTER the caller took the employee's consumption lock (the authoritative read).
+    /// </summary>
+    public async Task<IReadOnlyList<AbsenceProjectionRow>> GetCurrentSkemaRowsAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, DateOnly start, DateOnly end, CancellationToken ct = default)
+    {
+        await using var cmd = new NpgsqlCommand(SelectCurrentSkemaRowsSql, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("start", start);
+        cmd.Parameters.AddWithValue("end", end);
         return await ReadRowsAsync(cmd, ct);
     }
 
@@ -148,6 +284,10 @@ public sealed class AbsenceProjectionRepository
         CorrelationId = reader.IsDBNull(reader.GetOrdinal("correlation_id"))
             ? null
             : reader.GetGuid(reader.GetOrdinal("correlation_id")),
-        OutboxId = reader.GetInt64(reader.GetOrdinal("outbox_id"))
+        OutboxId = reader.GetInt64(reader.GetOrdinal("outbox_id")),
+        Source = reader.GetString(reader.GetOrdinal("source")),
+        SupersededByOutboxId = reader.IsDBNull(reader.GetOrdinal("superseded_by_outbox_id"))
+            ? null
+            : reader.GetInt64(reader.GetOrdinal("superseded_by_outbox_id"))
     };
 }

@@ -105,6 +105,59 @@ public sealed class EntitlementBalanceRepository
     }
 
     /// <summary>
+    /// S145 / TASK-14507 (A0, R23) — the UNGATED in-transaction adjust a Skema save uses when it
+    /// REPLACES absence cells and the signed change for the entitlement type is zero or negative
+    /// (an unchanged re-save, or a reduction). In plain terms: a reduction gives days back, so it
+    /// must never be refused, not even when <c>used</c> already sits above the cap (an ADR-032 D4
+    /// revaluation may legitimately leave it there, <see cref="ApplyRevaluationAsync"/>). Increases
+    /// keep going through the guarded
+    /// <see cref="CheckAndAdjustAsync(NpgsqlConnection, NpgsqlTransaction, string, string, int, decimal, decimal, decimal, CancellationToken)"/>.
+    ///
+    /// <para>Shape: the guarded path's two statements without the quota WHERE. Statement 1 is the
+    /// same ensure-row INSERT (seeding <c>total_quota</c> with <paramref name="seedQuota"/>, the annual
+    /// entitlement, so a row first created here keeps that invariant exactly as a first booking would);
+    /// statement 2 is <c>used = used + delta</c> with no guard, RETURNING the new <c>used</c> for the
+    /// <c>EntitlementBalanceAdjusted</c> event. Participates in the caller's transaction (ADR-018 D3);
+    /// the caller commits or rolls back, this method does NOT. The caller must hold the employee's
+    /// consumption lock, as for every balance write of the save path.</para>
+    /// </summary>
+    public async Task<decimal> AdjustUsedAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, string entitlementType, int entitlementYear,
+        decimal deltaDays, decimal seedQuota, CancellationToken ct = default)
+    {
+        await using (var ensureCmd = new NpgsqlCommand(
+            @"INSERT INTO entitlement_balances (
+                  balance_id, employee_id, entitlement_type, entitlement_year,
+                  total_quota, used, planned, carryover_in, updated_at)
+              VALUES (
+                  gen_random_uuid(), @employeeId, @entitlementType, @entitlementYear,
+                  @seedQuota, 0, 0, 0, NOW())
+              ON CONFLICT (employee_id, entitlement_type, entitlement_year) DO NOTHING",
+            conn, tx))
+        {
+            ensureCmd.Parameters.AddWithValue("employeeId", employeeId);
+            ensureCmd.Parameters.AddWithValue("entitlementType", entitlementType);
+            ensureCmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+            ensureCmd.Parameters.AddWithValue("seedQuota", seedQuota);
+            await ensureCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await using var cmd = new NpgsqlCommand(
+            @"UPDATE entitlement_balances
+              SET used = entitlement_balances.used + @deltaDays, updated_at = NOW()
+              WHERE employee_id = @employeeId AND entitlement_type = @entitlementType AND entitlement_year = @entitlementYear
+              RETURNING used",
+            conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("entitlementType", entitlementType);
+        cmd.Parameters.AddWithValue("entitlementYear", entitlementYear);
+        cmd.Parameters.AddWithValue("deltaDays", deltaDays);
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return (decimal)result!;
+    }
+
+    /// <summary>
     /// ADR-032 D4 — apply a profile-change revaluation in the caller's transaction:
     /// (1) adjust <c>entitlement_balances.used</c> by <paramref name="usedDelta"/> via the
     /// SAME <b>ungated</b> upsert shape as <see cref="AdjustUsedAsync"/> (used += delta, NO

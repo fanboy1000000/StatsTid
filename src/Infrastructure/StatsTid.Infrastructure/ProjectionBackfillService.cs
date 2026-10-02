@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Infrastructure;
 
@@ -45,6 +46,27 @@ namespace StatsTid.Infrastructure;
 //      EndTime, TaskId, ActivityType, ActorId, ActorRole, CorrelationId) and
 //      pure-SQL extraction would be brittle. EventSerializer handles the
 //      camelCase + nullable-DateTime / TimeOnly / Guid edge cases for us.
+//
+// S145 / TASK-14507 (A0, R22, R48) — SKEMA SUPERSESSION ON REBUILD.
+//   A Skema save REPLACES its cell (time entry: employee + date + task; absence:
+//   employee + date + absence type): the live write marks the cell's earlier Skema
+//   row `superseded_by_outbox_id = <new outbox_id>` and inserts the new row. A
+//   rebuild must reach the identical current set, so each event is replayed the
+//   same way, in stream order:
+//     * an event whose Source resolves to SKEMA: MARK FIRST (the repository's
+//       shared MarkSupersededSkemaCellSql: same cell, Skema rows only, not yet
+//       marked, and only rows with a SMALLER outbox_id), THEN insert. Never insert
+//       first: the partial unique index admits one current Skema row per cell, so
+//       inserting the replacement before retiring its predecessor would collide.
+//     * an event with no Source (every POST /api/time-entries event and every
+//       pre-S145 event) is TIME_POST: inserted only, never marks, never marked.
+//   Why stream order is outbox order for a cell: Skema and POST /api/time-entries
+//   both write to `employee-{id}` and both take the employee's consumption lock
+//   before enqueueing, so one employee's cell events sit in one stream in the
+//   order their outbox ids were allocated.
+//   Idempotent: on a re-run every INSERT conflicts on event_id, and every mark
+//   finds its predecessor already marked (superseded_by_outbox_id IS NULL fails),
+//   so nothing changes. No TRUNCATE, as before.
 
 /// <summary>
 /// Counters returned by <see cref="ProjectionBackfillService.RunAsync"/>.
@@ -65,7 +87,12 @@ public sealed record ProjectionBackfillResult(
     // so "Applied" = upsert affected a row; "Skipped" = the outbox_id<=guard blocked
     // a stale-event overwrite (a no-op, not an error).
     int AppliedWorkTime = 0,
-    int SkippedWorkTime = 0);
+    int SkippedWorkTime = 0,
+    // S145 / TASK-14507: rows the rebuild marked superseded (a Skema re-save replaying over its
+    // predecessor). Optional (defaulted) for the same positional-caller reason as above. A re-run
+    // against a populated table marks nothing, so both are 0 on a second pass.
+    int SupersededTime = 0,
+    int SupersededAbsences = 0);
 
 /// <summary>
 /// Replays <c>TimeEntryRegistered</c> + <c>AbsenceRegistered</c> events from
@@ -96,8 +123,9 @@ public sealed class ProjectionBackfillService
     // determinism is preserved per ADR-016 D10.
     //
     // S59 / TASK-5905 — DELIBERATELY EXCLUDES EmployeeEntitlementEligibilitySet.
-    // This backfill replays only the event_id-keyed APPEND projections (time /
-    // absence) + the (employee,date) latest-wins worktime projection. The
+    // This backfill replays only the event_id-keyed projections (time / absence:
+    // one row per event; since S145 a Skema cell's earlier rows are retained but
+    // marked superseded) + the (employee,date) latest-wins worktime projection. The
     // employee_entitlement_eligibility table is a DATED, version-guarded
     // supersession lineage (mirrors employee_profiles / wage_type_mappings) that
     // is the AUTHORITATIVE store written directly by the admin endpoint inside the
@@ -128,17 +156,18 @@ public sealed class ProjectionBackfillService
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    // S145 / TASK-14507 — `source` is HoursSource.Resolve(event.Source), exactly as the live insert.
     private const string InsertTimeSql = @"
         INSERT INTO time_entries_projection (
             event_id, employee_id, date, hours, start_time, end_time,
             task_id, activity_type, agreement_code, ok_version,
             voluntary_unsocial_hours, occurred_at, actor_id, actor_role,
-            correlation_id, outbox_id
+            correlation_id, outbox_id, source
         ) VALUES (
             @eventId, @employeeId, @date, @hours, @startTime, @endTime,
             @taskId, @activityType, @agreementCode, @okVersion,
             @voluntaryUnsocialHours, @occurredAt, @actorId, @actorRole,
-            @correlationId, @outboxId
+            @correlationId, @outboxId, @source
         )
         ON CONFLICT (event_id) DO NOTHING
     ";
@@ -147,11 +176,11 @@ public sealed class ProjectionBackfillService
         INSERT INTO absences_projection (
             event_id, employee_id, date, absence_type, hours, feriedage,
             agreement_code, ok_version, occurred_at,
-            actor_id, actor_role, correlation_id, outbox_id
+            actor_id, actor_role, correlation_id, outbox_id, source
         ) VALUES (
             @eventId, @employeeId, @date, @absenceType, @hours, @feriedage,
             @agreementCode, @okVersion, @occurredAt,
-            @actorId, @actorRole, @correlationId, @outboxId
+            @actorId, @actorRole, @correlationId, @outboxId, @source
         )
         ON CONFLICT (event_id) DO NOTHING
     ";
@@ -237,6 +266,22 @@ public sealed class ProjectionBackfillService
         insertTimeCmd.Parameters.Add("actorRole", NpgsqlDbType.Text);
         insertTimeCmd.Parameters.Add("correlationId", NpgsqlDbType.Uuid);
         insertTimeCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
+        insertTimeCmd.Parameters.Add("source", NpgsqlDbType.Text);
+
+        // S145 / TASK-14507 — the per-event supersession marks (the live repositories' SQL, verbatim).
+        await using var markTimeCmd = new NpgsqlCommand(
+            TimeEntryProjectionRepository.MarkSupersededSkemaCellSql, conn, tx);
+        markTimeCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
+        markTimeCmd.Parameters.Add("employeeId", NpgsqlDbType.Text);
+        markTimeCmd.Parameters.Add("date", NpgsqlDbType.Date);
+        markTimeCmd.Parameters.Add("taskId", NpgsqlDbType.Text);
+
+        await using var markAbsCmd = new NpgsqlCommand(
+            AbsenceProjectionRepository.MarkSupersededSkemaCellSql, conn, tx);
+        markAbsCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
+        markAbsCmd.Parameters.Add("employeeId", NpgsqlDbType.Text);
+        markAbsCmd.Parameters.Add("date", NpgsqlDbType.Date);
+        markAbsCmd.Parameters.Add("absenceType", NpgsqlDbType.Text);
 
         await using var insertAbsCmd = new NpgsqlCommand(InsertAbsSql, conn, tx);
         insertAbsCmd.Parameters.Add("eventId", NpgsqlDbType.Uuid);
@@ -252,6 +297,7 @@ public sealed class ProjectionBackfillService
         insertAbsCmd.Parameters.Add("actorRole", NpgsqlDbType.Text);
         insertAbsCmd.Parameters.Add("correlationId", NpgsqlDbType.Uuid);
         insertAbsCmd.Parameters.Add("outboxId", NpgsqlDbType.Bigint);
+        insertAbsCmd.Parameters.Add("source", NpgsqlDbType.Text);
 
         // ADR-032 D2 — replacement-set applicator (absence-event-keyed feriedage overwrite).
         await using var applyRevalCmd = new NpgsqlCommand(ApplyRevaluationSql, conn, tx);
@@ -298,6 +344,8 @@ public sealed class ProjectionBackfillService
         int unknownEventTypes = 0;
         int appliedWorkTime = 0;
         int skippedWorkTime = 0;
+        int supersededTime = 0;
+        int supersededAbs = 0;
 
         // ADR-032 D2 — buffer EntitlementBalanceRevalued replacement sets in event order
         // (rows already sorted by stream_id, stream_version). Applied AFTER the absence
@@ -350,6 +398,18 @@ public sealed class ProjectionBackfillService
 
             if (domainEvent is TimeEntryRegistered te)
             {
+                // S145 / TASK-14507 (R48) — a SKEMA event retires its cell's predecessor FIRST,
+                // then inserts; a TIME_POST event is inserted only.
+                var teSource = HoursSource.Resolve(te.Source);
+                if (string.Equals(teSource, HoursSource.Skema, StringComparison.Ordinal))
+                {
+                    markTimeCmd.Parameters["outboxId"].Value = outboxId;
+                    markTimeCmd.Parameters["employeeId"].Value = te.EmployeeId;
+                    markTimeCmd.Parameters["date"].Value = te.Date;
+                    markTimeCmd.Parameters["taskId"].Value = (object?)te.TaskId ?? DBNull.Value;
+                    supersededTime += await markTimeCmd.ExecuteNonQueryAsync(ct);
+                }
+
                 insertTimeCmd.Parameters["eventId"].Value = te.EventId;
                 insertTimeCmd.Parameters["employeeId"].Value = te.EmployeeId;
                 insertTimeCmd.Parameters["date"].Value = te.Date;
@@ -373,6 +433,7 @@ public sealed class ProjectionBackfillService
                 insertTimeCmd.Parameters["actorRole"].Value = (object?)te.ActorRole ?? DBNull.Value;
                 insertTimeCmd.Parameters["correlationId"].Value = (object?)te.CorrelationId ?? DBNull.Value;
                 insertTimeCmd.Parameters["outboxId"].Value = outboxId;
+                insertTimeCmd.Parameters["source"].Value = teSource;
 
                 var affected = await insertTimeCmd.ExecuteNonQueryAsync(ct);
                 if (affected == 1) insertedTime++;
@@ -380,6 +441,17 @@ public sealed class ProjectionBackfillService
             }
             else if (domainEvent is AbsenceRegistered ab)
             {
+                // S145 / TASK-14507 (R48) — same mark-then-insert as the time-entry branch.
+                var abSource = HoursSource.Resolve(ab.Source);
+                if (string.Equals(abSource, HoursSource.Skema, StringComparison.Ordinal))
+                {
+                    markAbsCmd.Parameters["outboxId"].Value = outboxId;
+                    markAbsCmd.Parameters["employeeId"].Value = ab.EmployeeId;
+                    markAbsCmd.Parameters["date"].Value = ab.Date;
+                    markAbsCmd.Parameters["absenceType"].Value = ab.AbsenceType;
+                    supersededAbs += await markAbsCmd.ExecuteNonQueryAsync(ct);
+                }
+
                 insertAbsCmd.Parameters["eventId"].Value = ab.EventId;
                 insertAbsCmd.Parameters["employeeId"].Value = ab.EmployeeId;
                 insertAbsCmd.Parameters["date"].Value = ab.Date;
@@ -402,6 +474,7 @@ public sealed class ProjectionBackfillService
                 insertAbsCmd.Parameters["actorRole"].Value = (object?)ab.ActorRole ?? DBNull.Value;
                 insertAbsCmd.Parameters["correlationId"].Value = (object?)ab.CorrelationId ?? DBNull.Value;
                 insertAbsCmd.Parameters["outboxId"].Value = outboxId;
+                insertAbsCmd.Parameters["source"].Value = abSource;
 
                 var affected = await insertAbsCmd.ExecuteNonQueryAsync(ct);
                 if (affected == 1) insertedAbs++;
@@ -467,6 +540,8 @@ public sealed class ProjectionBackfillService
             FallbackWarnings: fallbackWarns,
             UnknownEventTypes: unknownEventTypes,
             AppliedWorkTime: appliedWorkTime,
-            SkippedWorkTime: skippedWorkTime);
+            SkippedWorkTime: skippedWorkTime,
+            SupersededTime: supersededTime,
+            SupersededAbsences: supersededAbs);
     }
 }
