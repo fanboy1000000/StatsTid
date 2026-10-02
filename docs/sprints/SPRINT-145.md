@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **planning** — refinement READY (rev 3.4, Step-4 cycle 5 of 5). Plan **draft 5** (`.claude/plans/PLAN-s145.md`, 887 lines; 30 task briefs in `.claude/plans/s145/`) going to Step 0b **cycle 4 of 5**. Cycles 1–3: internal lens READY-WITH-WARNINGS each time; external lens NOT-READY each time, every blocker in the evidence machinery. All adjudicated (R41–R66, see Planning record) |
+| **Status** | **planning complete; READY to dispatch**: refinement READY (rev 3.4, Step 4, five cycles), plan READY (`.claude/plans/PLAN-s145.md` draft 5, 887 lines, plus 30 task briefs in `.claude/plans/s145/`; Step 0b, five cycles, both lenses READY at cycle 5). No S145 code yet |
 | **Test Verified** | not yet — no S145 code written |
 | **Theme** | Payroll stops judging a whole month against one week's norm, which today makes every ordinary month's overtime, merarbejde and flex wrong (QUAL-186). Then a month with a mid-month change to hours, position or agreement becomes payable, with each part under its own wage-type codes (QUAL-149/150). Along the way, a Skema correction stops being counted twice (QUAL-192..194) |
 | **Predecessor** | S144: close `cbaa5e0` (CI red: nine test-setup failures) · governance `6b0d982` (review cap 3 → 5; the close guard's CI-health query fix) · post-close fix `8a87d16` (CI green `36610948637`) · docs-only `018ef2a` (QUAL-186), `6849b84` (QUAL-187..191), `de6c228` (the S144 C-9 record), `62fcdc3` (QUAL-192..194) |
@@ -38,6 +38,24 @@ Each cycle's findings were adjudicated by the Fable seat (rulings R1–R24) befo
 ## Carried from S144 — the CI-health gate waiver, recorded as the waiver directs
 
 At the S144 close the sprint-close guard's CI-health check queried `gh run list --branch master --event push --status completed --limit 1`. It received a stale answer from GitHub's filtered listing: an old S138 red run instead of the newest green one. On that basis it refused to close S144 "on top of a red sprint". The close went ahead under a written waiver (`.claude/reviews/SPRINT-144-ci-health-WAIVED.md`), because master's latest completed push run was in fact green. The fix landed in the governance commit `6b0d982`: the guard now lists ten push runs and takes the newest completed one client-side, with its harness at 22/22. That hook change falls inside this sprint's Step-7a diff, and Step 7a reviews it.
+
+## Step 0b — plan review (both lenses), five cycles: READY
+
+| Cycle | Draft | External (Codex, full repository read) | Internal (Fable reviewer) | What it turned on |
+|---|---|---|---|---|
+| 1 | draft 2 (1419 lines) | NOT-READY (2 B, 6 W) | READY-WITH-WARNINGS (4 W) | Frozen inputs lacked the leaver's settlement cutoff (R41). Mutation coverage had gaps (R46). Replay ran live admission checks (R42). A hire-dated agreement row read as a change (R43) |
+| 2 | draft 3 (1631) | NOT-READY (2 B) | READY-WITH-WARNINGS (4 W) | The evidence partition: mutations masking each other or turning Unit red (R52–R55). A weak replay sentinel (R56). The settlement leg could not pass on correct code (R57) |
+| 3 | draft 4 (1913) | NOT-READY (2 B) | READY-WITH-WARNINGS (1 W) | The replay stub could not observe the claimed differences (R60). One mutation site reached the raw export routes (R61). Proportionality: **owner OQ1, "Keep for S145"** (R66) |
+| 4 | draft 5 (887 + 30 briefs, R66b split) | **READY** | READY-WITH-WARNINGS (2 W) | The Not-guards table was incomplete. RP7/RP8 should change the engine fingerprint, not edit the stored record (refinement rev 3.4 `:662`). The Orchestrator absorbed both with four short edits. The two lenses had disagreed on the RP7/RP8 method, and the refinement's wording decided it |
+| 5 | draft 5 + the four edits | **READY** | **READY** | Verification of the four edits only; three notes (wording, citation ranges, this log entry) |
+
+**In plain language.** Five cycles, every one in the plan's proof machinery rather than the payroll design:
+- **What the machinery is.** The plan proves each new test can fail by breaking the code deliberately in 51 known ways on a throwaway branch, grouped into four CI runs.
+- **Where the cycles went.** Getting that grouping and the test stand-ins right took the cycles. Each blocker the external lens found was real, and each was verified by the Fable seat before it was fixed.
+- **The size question.** At cycle 3 the owner was asked whether to switch to a lighter method mid-plan, and chose to keep this one for S145.
+- **The split.** The plan was then split: the per-task briefs moved into their own files, and the planning history moved into this log. The part re-read at each gate went from 1913 lines to 887.
+
+These cycles are recorded as observations for the governance review the owner asked for (ROADMAP § Governance / docs). They are not conclusions.
 
 ## Planning record (Step 0b)
 
@@ -449,9 +467,9 @@ Every BLOCKER and WARNING is mapped below, then the notes.
 
 | | |
 |---|---|
-| **As of** | 2026-10-02; master `c022e1c` (+ this log and ROADMAP, uncommitted) |
-| **Phase** | Plan draft 5 written. Step 0b cycle 4 next (both lenses, scoped to R60–R66 and the split) |
+| **As of** | 2026-10-02, Step 0b closed READY; master `ecaef51` (+ this log, uncommitted) |
+| **Phase** | Plan READY. Next is Step 1: dispatch wave A.1a (TASK-14500 data-model; 14501, 14502, 14503a, 14503b, 14504 test-qa; 14505 rule-engine; 14506 authored), per the plan ledger |
 | **Dispatched tasks / worktrees** | None. No S145 code exists |
-| **Pending gates** | Step 0b cycle 4 → plan READY → Step 1 dispatch of wave A.1a. *Cleared 2026-10-01:* CI on master `62fcdc3` (S144's record push), run `36842927335`, green on all 7 jobs; `299c3dd` (this log opened), run `36853773268`, green on all 7 |
-| **Open rulings** | None. OQ1 answered 2026-10-02 ("Keep for S145"). Planner's two minor draft-5 questions (slim further; RP7/RP8 tamper method) go to cycle 4 to confirm |
-| **Next action** | Run Step 0b cycle 4 on both lenses |
+| **Pending gates** | Wave A.1a dispatch, then the A.1 gate (5α/5a per task, explicit). *Cleared:* CI green on `62fcdc3` (`36842927335`) and `299c3dd` (`36853773268`); Step 0b READY at cycle 5 |
+| **Open rulings** | None. The planner's draft-5 questions were decided at cycle 4: (a) keep the plan at 887 lines; (b) RP7/RP8 produce the engine change through the echo handler's constructor parameters (`["stub-2"]` / `weekly-timeline-v2`), the refinement's "synthetic config", over the stored-record tamper the external lens had first confirmed |
+| **Next action** | Dispatch wave A.1a |
