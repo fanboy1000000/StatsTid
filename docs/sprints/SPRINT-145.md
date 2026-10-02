@@ -508,6 +508,33 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 - **Finding 4:** the extra assertions (baseline hash, Created event and audit row) are kept.
 - **Finding 6:** the stray detached worktree is cleared at teardown.
 
+**At TASK-14507's return (Step 5a in progress; not merged).**
+- **5α: PASS.** Fable: APPROVED-WITH-WARNINGS. Codex: REQUEST-CHANGES (one BLOCKER). The lenses split, so the adjudicator ruled.
+- **BLOCKER (Codex), a false quota refusal.** Fixed in a 14507 fix-up; reviewed, not pinned (a race).
+  - **The problem.** The pre-check read "what this save replaces" and "what the employee has used" at two moments. A concurrent save of the same cell in between could make it refuse, with a final 422, a save that fit either before or after. Before S145, `used` only ever rose, so a stale read could only be lenient. Reductions now exist, so it can be strict.
+  - **The fix.** Both reads share one read-only REPEATABLE READ snapshot, which holds no lock, so the rule-engine call stays outside the lock.
+  - **Rejected alternative.** Codex's "re-validate under the lock" would either put the HTTP call under the lock or move the quota decision from the Rule Engine into SQL. An architectural-integrity regression either way.
+  - **Accepted residual.** A coherent-but-stale refusal remains possible: a reduction lands between the snapshot and the lock. This class already existed through D4 revaluation. The client can retry, and it is never a wrong write.
+- **Codex WARNING, `used = 0` seeding.** A missing balance row is seeded at `used = 0`. Recorded as **QUAL-196** (M), with a comment-only note in the code. No clamp: a floor would hide the inconsistency. The live booking paths always create the row; only the no-config skip, a from-events rebuild or SQL-seeded fixtures reach the state.
+- **Codex WARNING / Fable NOTE 5, the backfill's "re-runnable in any state".** The claim is narrowed in a code comment, and the recovery is in the legacy-DB runbook's S145 row. A hand-deleted older row fails loudly; the cure is to truncate the projections and restart, or reseed.
+- **Fable W1, merge order.** 14507 merges after 14501 and 14502, because the harness DDL must know the new columns first. Then a rebase and the cycle-2 review.
+- **Fable W2, the `awayToday` filter has no pin.** It cannot change any answer until a retraction exists, so no fact and no MD. The pin is owed by the "clear a cell" task (ROADMAP).
+- **Deviation (4).** The whitespace project code is now refused too (`IsNullOrWhiteSpace`, mirroring `RequestValidator.cs`). Deviations 1–3 and 5–7 are accepted.
+- **Smaller items.**
+  - The two 422 bodies use different baselines; that note goes to TASK-14516.
+  - The `projectCode` echo in the 400 body stays (sibling convention; SEC-039 governs logs, not response bodies).
+  - The backfill tool's new counters (`tools/ProjectionBackfill/Program.cs:82-83`) join O-9.
+- **The grid accepts a negative number** (14507's UX finding). The negative now gets a 400 and is re-queued with every later save. New TASK-14516 (`ux`, A.2) refuses it at entry. Zero and empty cells never reach the server (`useSkema.ts:203`).
+- **Stale comments** in `DemoLoader.cs`, `SmokeTests.cs` and `ProjectionBackfillService.cs` are added to O-9.
+- **No 14507-T:** no existing test pinned the double count.
+
+**At TASK-14501's return (not yet merged; batched 5α/5a pending).**
+- **Its pin gap, the absence side of the rebuild.** A follow-up adds B3 (`Backfill_AfterSkemaAbsenceResave_…`), with RED by MD-11. Its fixture conditions keep MD-01, MD-02 and MD-06 off it, and EA-1 grows to 55 facts.
+- **The original agent's resume was refused** ("worktree could not be verified"; git ran at about 3 s per call). A fresh `test-qa` agent was pinned to the same worktree.
+- **Its drift finding:** harness DDL copies outside the S145 tables differ from `init.sql`. Registered as **QUAL-195** (M), not S145 scope.
+- **Its brief contradictions are accepted:** harness `hours NUMERIC(6,2)` corrected to production's `(8,4)`, and the "byte-for-byte" claims corrected. `TxContractTests.SchemaDdl` may become `internal`, removing the reflection.
+- **5α of 14502, 14503a and 14504: PASS.** The checklist's "no hard-coded service URLs" item is read as applying to `src/**`. The rule-engine stub's base address in two test files follows eleven existing test files.
+
 **Wave A.1a dispositions so far.** These are adjudicator rulings, recorded for the A.1 gate:
 - **TASK-14505's March value change** (`OkVersionRuntimeRegressionTests`: one `OVERTIME_50 1.20` dated 2026-03-31) is labelled change 4.
 - **The A.1→A.3 intermediate state:**

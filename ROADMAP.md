@@ -350,6 +350,9 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   the norm rule would emit a 0-hour `NORMAL_HOURS` line (`NormCheckRule.cs:179-186`). Full-day-only absence
   types also need their clear rule stated. S145's storage design leaves room for this. A small UX + backend
   task; source: the S145 refinement, ruling R24.
+  When it is designed, two items from S145's Step 5a review of TASK-14507 come with it:
+  - the team overview's "away today" filter (`ApprovalEndpoints.cs:1003`) gets its pin, since a retraction is the first change that can make it matter;
+  - QUAL-196 is revisited: a missing balance row is seeded at `used = 0`.
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
   production; not enforced today. [CONVENTIONS.md]
 
