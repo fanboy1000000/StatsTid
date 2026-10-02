@@ -463,13 +463,46 @@ Every BLOCKER and WARNING is mapped below, then the notes.
 | 4 | 2026-10-01 | `planner` (Opus 5.5) | Applies the Step-0b cycle-2 rulings R52–R59 at master `299c3dd`. **R59:** § "RED evidence" becomes a mechanical partition table: a fact key, a path key, 51 rows built by effect (site · reds · edited path · relied-on paths · Unit/DemoSeed reach · run), four check lines per run (all PASS), and 27 fixture conditions that make each row determinate. Each test brief pastes its conditions. **R52:** MD-22 → EA-1. **R53:** MD-45 null-tolerant. **R54:** MD-40 → MU-40 at the A.4 gate, and R46a reworded. **R55:** MD-21 and MD-42 lists by effect; MD-42 sited in the endpoint handler. **R56:** the sentinel pin's fourth source is a real repository over an unreachable connection. **R57:** the termination leg is a save and re-save on 5 November 2025 (`used` 3, crystallized 9.5). **R58:** `AddProjectionHoursReader`. Notes N1–N7; N2 applied as "exactly the day norm" (contradiction 19). **Declared:** deviation D1 (MD-21 stays EA-2, MD-42 → EA-4, because R55's placement fails against MD-24, contradiction 18) and extension E1 (a "relies on" column and check (c)). Runs 18 / 14 / 12 / 7. Contradictions 18–19 added; 16 updated; 17 closed |
 | 5 | 2026-10-02 | `planner` (Opus 5.5) | Applies the Step-0b cycle-3 rulings R60–R66 and the owner's OQ1 ("Keep for S145") at HEAD `c022e1c` (code-identical to `299c3dd`). **R60:** the replay facts get a test-local echo handler, and nine rows are re-derived against it, with no list membership changes. **R61:** MD-24 moves to the per-plan lane's admission step, and H11 and H5 join its Not list. **R62:** the entitlement-validation stub in the settlement and Skema fixtures. **R63:** the EA-2 500 annotations, the hard/soft "relies on" rule, a Not-guards table and check (c′); all runs PASS. **R64, R65:** citations and the CA-3 note. **R66a:** CA-1 re-derives only rows that can have moved. **R66b:** the plan is slimmed by move: the briefs go to `.claude/plans/s145/TASK-*.md`, and this record goes to the sprint log, with a move map. Runs unchanged: 18 / 14 / 12 / 7 |
 
+## Task ledger (merge checklist record, `PLAN-s145.md` § "The merge checklist")
+
+A row is written when a task merges. **A row with an empty 5α or 5a cell is not merged.**
+
+| Task | Branch | Build | 5α | 5a Reviewer (Fable) | 5a Codex | Merged |
+|---|---|---|---|---|---|---|
+| TASK-14500 schema + shapes (`data-model`) | `worktree-agent-ac1278752784ecede` (`cf110d9`, `adedc48`, fix-up `ab3b6d9`) | 0 errors / 145 warnings; Unit 1309 · DemoSeed 170 · Regression non-Docker 128 (O-1 on merged master) | PASS | APPROVED-WITH-WARNINGS (`adedc48`); fix-up verification APPROVED-WITH-WARNINGS (`ab3b6d9`) | APPROVE-WITH-WARNINGS; fix-up APPROVE | `1b6160c` (+ O-3: `db-schema.md` hand-transcribed in the generator's format; no Python on this machine, so CI `--check` arbitrates) |
+
+**Dispositions at the 14500 merge.**
+- **Accepted deviation:** the two partial unique indexes live only in the S145 segment, not beside the base CREATEs. On an existing database, a base-position index would fail before the segment's `ADD COLUMN` runs. Both lenses called the brief wrong on this point.
+- **Codex W, NULL `task_id` (Fable N7 concurred):** fixed by making the time-entry index `NULLS NOT DISTINCT`. TASK-14507 also gains a 400 for a null or empty project code, and TASK-14501 gains the guard fact `CurrentSkemaCellIndex_NullTaskId_TwoCurrentRows_Collide23505` (verification W1).
+- **Fable W1, the ops rebuild script `docker/postgres/scripts/rebuild_segment_manifests.sql`:** added to TASK-14509's authorized files.
+- **Fable W2 and N2, comment corrections:** fixed in the fix-up.
+- **N3:** recorded in the 14500 brief.
+- **N4:** TASK-14513's brief now pins the ordinal `D`-string sort of event ids.
+- **Verification N1:** the generator does not print `NULLS NOT DISTINCT`; `init.sql` is the record.
+
+**Wave A.1a dispositions so far.** These are adjudicator rulings, recorded for the A.1 gate:
+- **TASK-14505's March value change** (`OkVersionRuntimeRegressionTests`: one `OVERTIME_50 1.20` dated 2026-03-31) is labelled change 4.
+- **The A.1→A.3 intermediate state:**
+  - from the 14505 merge until TASK-14511, payroll's per-segment legacy calls run week by week, with the calendar month as the settlement window and no context days;
+  - a closing partial week over its in-month norm is paid in-month, dated the month end, until TASK-14511 applies F1;
+  - RE1–RE3 stay known-red on local master until A.2/A.3;
+  - TASK-14511 is named as the task that closes this.
+- **TASK-14503a's extra RE2 assertion** (exactly one `payroll_export_records` row) is confirmed as a non-vacuity guard.
+- **TASK-14506's re-spawn 1 pins the fingerprint's exact canonical text** (a contract; recorded at the ADR-016 D10 amendment) and adds 37.00 totals to the 4-week legacy legs.
+- **QUAL-190 is widened** to seven dropped config fields (found by TASK-14505, re-checked by the Orchestrator).
+
+**Tooling note.**
+- **Failure:** isolation worktrees for four A.1a agents were refused at creation ("git could not be run" / "could not read the repository git config"). Eight simultaneous creations collided, then git ran slowly under build load: 1–6 s per trivial call while VS Code, a VS Code update and the builds held the CPU at 100 %.
+- **Workaround:** the Orchestrator created those worktrees by hand (`.claude/worktrees/s145-task-*`) and launched agents pinned to them by absolute path. TASK-14505-T ran inside 14505's existing worktree.
+- **Interruption:** a usage limit then cut off six agents mid-work. They were resumed with their context.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-02, Step 0b closed READY; master `ecaef51` (+ this log, uncommitted) |
-| **Phase** | Plan READY. Next is Step 1: dispatch wave A.1a (TASK-14500 data-model; 14501, 14502, 14503a, 14503b, 14504 test-qa; 14505 rule-engine; 14506 authored), per the plan ledger |
-| **Dispatched tasks / worktrees** | None. No S145 code exists |
-| **Pending gates** | Wave A.1a dispatch, then the A.1 gate (5α/5a per task, explicit). *Cleared:* CI green on `62fcdc3` (`36842927335`) and `299c3dd` (`36853773268`); Step 0b READY at cycle 5 |
+| **As of** | 2026-10-02, wave A.1a dispatched; master `cdd8253` |
+| **Phase** | Step 1: wave A.1a in flight. The briefs went to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints were pasted verbatim into every prompt |
+| **Dispatched tasks / worktrees** | Running, each in its own worktree off `cdd8253`: TASK-14500 (`data-model`), 14505 (`rule-engine`), 14503a, 14506 (authored only) and 14501 (`test-qa`). **Not yet launched:** 14502, 14503b, 14504. Their isolation worktrees were refused at creation: eight simultaneous creations collided, then a single retry failed while git was slow under load (a trivial git call took 5.7 s). Relaunch one at a time as running agents finish. The orphan worktrees were removed (two leftover directories with a locked file each, unregistered in git, to clear at teardown) |
+| **Pending gates** | Each A.1a task merges through the merge checklist as it lands (5α and 5a explicit). TASK-14507 is dispatched the moment 14500 merges. Then the A.1 gate |
 | **Open rulings** | None. The planner's draft-5 questions were decided at cycle 4: (a) keep the plan at 887 lines; (b) RP7/RP8 produce the engine change through the echo handler's constructor parameters (`["stub-2"]` / `weekly-timeline-v2`), the refinement's "synthetic config", over the stored-record tamper the external lens had first confirmed |
-| **Next action** | Dispatch wave A.1a |
+| **Next action** | Relaunch 14502, 14503b and 14504 as load allows, then run the merge checklist on each returning task |
