@@ -1,4 +1,3 @@
-using System.Reflection;
 using Npgsql;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Outbox;
@@ -217,26 +216,10 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
     private static (string Ddl, string[] Tables) ResolveCopy(string copy) => copy switch
     {
         "ProjectionSchemaTestFixture" => (ProjectionSchemaTestFixture.Ddl, HoursTables),
-        "TxContractTests" => (ReadTxContractSchemaDdl(), HoursTables),
+        "TxContractTests" => (StatsTid.Tests.Regression.Infrastructure.TxContractTests.SchemaDdl, HoursTables),
         "TestFixtures.DockerHarness.SchemaDdl" => (TestFixtures.DockerHarness.SchemaDdl, ManifestTables),
         _ => throw new ArgumentOutOfRangeException(nameof(copy), copy, "Unknown harness copy."),
     };
-
-    /// <summary>
-    /// <c>TxContractTests.SchemaDdl</c> is a <c>private const</c> in a file whose authorized edit range
-    /// for this task is the DDL block only, so it is read by reflection rather than made
-    /// <c>internal</c>. A rename or move fails loudly here. (Making it <c>internal</c> in
-    /// <c>TxContractTests.cs</c> would remove the reflection; that is a one-token change outside the
-    /// task's file range, reported for the Orchestrator.)
-    /// </summary>
-    private static string ReadTxContractSchemaDdl()
-    {
-        var field = typeof(StatsTid.Tests.Regression.Infrastructure.TxContractTests)
-            .GetField("SchemaDdl", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new InvalidOperationException(
-                "TxContractTests.SchemaDdl was renamed or moved; update HarnessDdlMatchesInitSqlTests.");
-        return (string)field.GetRawConstantValue()!;
-    }
 
     /// <summary>Creates an empty database in the container and returns its connection string.</summary>
     private async Task<string> CreateFreshDatabaseAsync(string databaseName)

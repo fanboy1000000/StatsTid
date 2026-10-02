@@ -285,7 +285,7 @@ public sealed class ProjectionBackfillTests : IAsyncLifetime
     /// naming policy fails here with a clear message instead of silently dropping the stamp.
     /// A null <paramref name="source"/> writes nothing: that is every pre-S145 event.
     /// </summary>
-    private static string SerializeWithSource(TimeEntryRegistered evt, string? source)
+    private static string SerializeWithSource(IDomainEvent evt, string? source)
     {
         var node = JsonNode.Parse(EventSerializer.Serialize(evt))!.AsObject();
         Assert.True(node.ContainsKey("employeeId"),
@@ -301,7 +301,7 @@ public sealed class ProjectionBackfillTests : IAsyncLifetime
     /// published <c>outbox_events</c> row, and returns the <c>outbox_id</c> Postgres assigned.
     /// </summary>
     private async Task<long> SeedPayloadAsync(
-        TimeEntryRegistered evt, string dataJson, string streamId, int streamVersion)
+        IDomainEvent evt, string dataJson, string streamId, int streamVersion)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
@@ -461,5 +461,154 @@ public sealed class ProjectionBackfillTests : IAsyncLifetime
             $"SELECT COUNT(*) FROM {tableName} WHERE event_id = @id", conn);
         cmd.Parameters.AddWithValue("id", eventId);
         return Convert.ToInt64(await cmd.ExecuteScalarAsync());
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════════
+    // S145 / TASK-14501 follow-up (A0, refinement R22) — the ABSENCE half of the rebuild.
+    //
+    // Plain language. B1 and B2 above pin the time-entry half. The rebuild has a separate branch
+    // for AbsenceRegistered events, with its own mark step and its own unique index
+    // (ux_absences_proj_current_skema_cell), and nothing pinned that branch: an absence rebuild that
+    // stopped marking would have passed every other fact in this class. An absence "cell" is one
+    // employee + one day + one absence type; a Skema re-save of it replaces the earlier row exactly
+    // as for a time entry (the earlier row is kept, marked superseded by the later outbox id, and
+    // the later row is the only current one). Like B1 and B2, the fact below seeds `events`
+    // directly (not through the Skema endpoint), so it tests the rebuild alone.
+    // ════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// The absence type of the B3 cell: sickness. <c>EntitlementMapping.AbsenceToEntitlementType</c>
+    /// maps <c>SICK_DAY</c> to no entitlement (<c>EntitlementMapping.cs:64</c>), so it has no quota.
+    /// </summary>
+    private const string AbsenceCellType = "SICK_DAY";
+
+    /// <summary>
+    /// The absence mirror of
+    /// <see cref="Backfill_AfterSkemaResave_RebuildsCurrentSet_SupersessionInOutboxOrder"/>.
+    /// Seeds one absence cell as it would sit in the log after two Skema saves: <c>SICK_DAY</c> on
+    /// Monday 4 May 2026 for 7.4 h, then saved again for 3.7 h, both events carrying
+    /// <c>"source":"SKEMA"</c> in the payload. Runs the production backfill and reads the result back
+    /// by SQL.
+    ///
+    /// <para><b>Expected (spec: refinement A0 constraints 2 and 4, R22: the absence cell is
+    /// employee + date + absence type, and a rebuild reproduces the current set with supersession
+    /// decided in outbox order).</b> After one backfill run, on <c>absences_projection</c>: two rows
+    /// (the superseded row is retained, so a replay by event id still finds it); both
+    /// <c>source = 'SKEMA'</c>; exactly one CURRENT row, the second save's (3.7 h); the first row
+    /// (7.4 h) carries <c>superseded_by_outbox_id</c> = the second event's <c>outbox_id</c>.</para>
+    ///
+    /// <para><b>Fixture conditions.</b> They keep the evidence-run partition determinate: each says
+    /// why one catalogued mutation cannot reach this fact.
+    /// (a) <b>An absence type with NO entitlement quota:</b> <c>SICK_DAY</c>
+    /// (<c>EntitlementMapping.AbsenceToEntitlementType["SICK_DAY"]</c> is <c>null</c>). The Skema
+    /// quota step skips a type with no entitlement, and the event carries no <c>Feriedage</c> (the
+    /// endpoint writes null for such a type), so <b>MD-06</b> (the quota delta, run EA-1, the same run
+    /// as this fact) has nothing to change here.
+    /// (b) <b>Asserted by raw SQL on <c>absences_projection</c></b>, never through
+    /// <c>AbsenceProjectionRepository</c>'s default reads: <b>MD-02</b> (run EA-2) removes the
+    /// current-rows predicate from those reads; this fact is not on EA-2's list and a raw read cannot
+    /// see that edit. The SQL is deliberately unfiltered, because the retained superseded row is
+    /// part of what is asserted.
+    /// (c) <b>Absence events only.</b> No time entry exists in this fact, so <b>MD-01</b> (the
+    /// time-entry source stamp, run EA-1) cannot reach it.
+    /// (d) <b>No Skema save goes through the endpoint.</b> B1 and B2, which this fact copies, seed
+    /// their saves as events and make no HTTP call, so there is no status to assert and no R62
+    /// entitlement-validation stub to install; the endpoint's 200 and the stub apply to a fact that
+    /// posts a save, and this one does not. For the same reason nothing in the live path (the Skema
+    /// handler, the repositories' <c>InsertAsync</c> and reads, the quota step) runs, so no live-path
+    /// mutation can reach it.</para>
+    ///
+    /// <para><b>Red conditions (Docker; compiles today, so its RED is argued here).</b>
+    /// (1) TODAY's backfill never reads <c>source</c> and never marks: it inserts both rows with the
+    /// column default <c>TIME_POST</c>, so the fact fails on "exactly one current SKEMA row" with 0
+    /// found. (2) <b>MD-11</b> (run EA-1: <c>ProjectionBackfillService</c>, the per-event mark step
+    /// removed, with <c>source</c> still stamped) is this fact's named mutation. The backfill has two
+    /// mark blocks, one per event type; MD-11 must remove the <b>absence</b> one for this fact to turn
+    /// red (removing only the time-entry block leaves it green, B1 and B2 red). With the absence mark
+    /// gone, the second SKEMA insert meets <c>ux_absences_proj_current_skema_cell</c> and
+    /// <c>RunAsync</c> throws a unique violation (23505), which <see cref="RunBackfillAsync"/> turns
+    /// into the named assertion failure "the backfill must complete". (That helper's message names
+    /// the time-entry index; the exception text it appends names the absence index.) Which of the two
+    /// shows depends on whether the implementation has merged; both are red. Not reached by MD-12 or
+    /// MD-13 (live-path edits; the rebuild has its own mark step).</para>
+    /// </summary>
+    [Fact]
+    public async Task Backfill_AfterSkemaAbsenceResave_RebuildsCurrentSet_SupersessionInOutboxOrder()
+    {
+        var employeeId = "EMP_BF_S145_ABS_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        var streamId = $"employee-{employeeId}";
+        var first = NewAbsenceCellEvent(employeeId, hours: 7.4m);
+        var resave = NewAbsenceCellEvent(employeeId, hours: 3.7m);
+
+        var firstOutbox = await SeedPayloadAsync(first, SerializeWithSource(first, "SKEMA"), streamId, streamVersion: 1);
+        var resaveOutbox = await SeedPayloadAsync(resave, SerializeWithSource(resave, "SKEMA"), streamId, streamVersion: 2);
+
+        // The outbox ids are assigned by BIGSERIAL in insertion order; the fact depends on that order.
+        Assert.True(firstOutbox < resaveOutbox, "fixture: outbox ids must follow the insertion order");
+
+        var run = await RunBackfillAsync();
+        Assert.Equal(2, run.InsertedAbsences); // both events were replayed into absences_projection
+
+        var rows = await ReadAbsenceCellRowsAsync(employeeId);
+        Assert.True(rows.Count == 2, // superseded rows are retained: replay by event id still needs them.
+            $"Two rows expected for the absence cell (one superseded, one current), found {rows.Count}. Rows: {Describe(rows)}");
+
+        var currentSkema = rows.Where(r => r.Source == "SKEMA" && r.SupersededBy is null).ToList();
+        Assert.True(currentSkema.Count == 1,
+            $"Exactly one current SKEMA row expected for the absence cell, found {currentSkema.Count}. Rows: {Describe(rows)}");
+        Assert.Equal(resave.EventId, currentSkema[0].EventId); // the later outbox_id wins
+        Assert.Equal(3.7m, currentSkema[0].Hours);
+
+        var earlier = rows.Single(r => r.EventId == first.EventId);
+        Assert.Equal("SKEMA", earlier.Source);
+        Assert.Equal(7.4m, earlier.Hours);
+        Assert.Equal(resaveOutbox, earlier.SupersededBy); // marked by the LATER row, in outbox order
+    }
+
+    /// <summary>
+    /// One absence save as the Skema endpoint leaves it in the log for a non-entitlement type: no
+    /// <c>Feriedage</c> (the endpoint writes null for a type with no entitlement). The cell is
+    /// <see cref="AbsenceCellType"/> on <see cref="CellDate"/> (a Monday).
+    /// </summary>
+    private static AbsenceRegistered NewAbsenceCellEvent(string employeeId, decimal hours) => new()
+    {
+        EmployeeId = employeeId,
+        Date = CellDate,
+        AbsenceType = AbsenceCellType,
+        Hours = hours,
+        AgreementCode = "HK",
+        OkVersion = "OK24",
+    };
+
+    /// <summary>
+    /// Every row of the absence cell, current or superseded, oldest outbox id first. Raw SQL on purpose:
+    /// no repository read, and no <c>superseded_by_outbox_id IS NULL</c> filter.
+    /// </summary>
+    private async Task<List<CellRow>> ReadAbsenceCellRowsAsync(string employeeId)
+    {
+        var rows = new List<CellRow>();
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT event_id, hours, source, superseded_by_outbox_id, outbox_id
+            FROM absences_projection
+            WHERE employee_id = @e AND date = @d AND absence_type = @t
+            ORDER BY outbox_id
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("d", CellDate);
+        cmd.Parameters.AddWithValue("t", AbsenceCellType);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new CellRow(
+                EventId: reader.GetGuid(0),
+                Hours: reader.GetDecimal(1),
+                Source: reader.GetString(2),
+                SupersededBy: reader.IsDBNull(3) ? null : reader.GetInt64(3),
+                OutboxId: reader.GetInt64(4)));
+        }
+        return rows;
     }
 }

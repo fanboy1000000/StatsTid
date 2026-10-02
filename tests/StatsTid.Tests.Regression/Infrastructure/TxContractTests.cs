@@ -54,7 +54,7 @@ public sealed class TxContractTests : IAsyncLifetime
     /// <c>docker/postgres/init.sql</c> for column shapes — schema drift between this DDL
     /// and production must be mirrored here.
     /// </summary>
-    private const string SchemaDdl = """
+    internal const string SchemaDdl = """
         CREATE TABLE IF NOT EXISTS organizations (
             org_id              TEXT        PRIMARY KEY,
             org_name            TEXT        NOT NULL,
