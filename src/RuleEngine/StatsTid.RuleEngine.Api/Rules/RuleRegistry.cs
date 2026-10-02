@@ -1,4 +1,6 @@
 using StatsTid.RuleEngine.Api.Config;
+using StatsTid.RuleEngine.Api.Contracts;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
 
@@ -15,6 +17,13 @@ namespace StatsTid.RuleEngine.Api.Rules;
 /// / <see cref="EvaluateFlexBalance"/> entry points consumed by Program.cs HTTP routes.
 /// The S20 planner (TASK-2008) consumes <see cref="GetAll"/> + <see cref="Get"/>; HTTP
 /// routes still go through the legacy dispatcher methods until TASK-2008 lands.
+///
+/// <para>
+/// S145 / TASK-14505: overtime, the four norm ids and flex dispatch onto the week-by-week
+/// <see cref="WeeklyTimelineCore"/> (one arithmetic path, R8); <see cref="EvaluateTimeline"/>
+/// serves <c>POST /api/rules/evaluate-timeline</c>. The registered classifications are unchanged
+/// in Stage A (R17).
+/// </para>
 /// </summary>
 public sealed class RuleRegistry
 {
@@ -35,8 +44,8 @@ public sealed class RuleRegistry
         OnCallDutyRule.RuleId,
         CallInWorkRule.RuleId,
         TravelTimeRule.RuleId,
-        // S20-decomposed norm ids — accepted by EvaluateTimeRule as aliases that
-        // dispatch to the matching mode-specific entry point on NormCheckRule.
+        // S20-decomposed norm ids — accepted by EvaluateTimeRule as aliases that run the
+        // weekly core with the matching forced norm mode (S145 R34).
         NormCheckRule.WeeklyRuleId,
         NormCheckRule.MultiWeekRuleId,
         NormCheckRule.AnnualRuleId,
@@ -197,9 +206,18 @@ public sealed class RuleRegistry
 
     /// <summary>
     /// Multi-dispatch for config-aware time rules (supplements, overtime, norm modes).
-    /// Routes the legacy <c>NORM_CHECK_37H</c> id through the legacy dispatch-by-NormModel
-    /// entry point AND the S20-decomposed <c>NORM_CHECK_WEEKLY/MULTIWEEK/ANNUAL</c> ids
-    /// through the matching new entry points on <see cref="NormCheckRule"/>.
+    ///
+    /// <para>
+    /// <b>S145 / TASK-14505 (R8, R34).</b> <c>OVERTIME_CALC</c> and all four norm ids run the
+    /// week-by-week <see cref="WeeklyTimelineCore"/> on a one-piece timeline built from the
+    /// request profile (<see cref="LegacyTimeline"/>): the period is the settlement window, its
+    /// last day the cutoff, and the request's entries the only facts. The decomposed norm ids
+    /// force their mode and keep their own <c>RuleId</c>: <c>NORM_CHECK_37H</c> → no force
+    /// (dispatch on NormModel); <c>NORM_CHECK_WEEKLY</c> → <see cref="TimelineNormMode.Weekly"/>;
+    /// <c>NORM_CHECK_MULTIWEEK</c> → <see cref="TimelineNormMode.MultiWeek"/>;
+    /// <c>NORM_CHECK_ANNUAL</c> → <see cref="TimelineNormMode.Annual"/>. Supplement, on-call,
+    /// call-in and travel rules are untouched.
+    /// </para>
     /// </summary>
     public CalculationResult EvaluateTimeRule(
         string ruleId,
@@ -212,12 +230,12 @@ public sealed class RuleRegistry
 
         return ruleId switch
         {
-            NormCheckRule.RuleId          => NormCheckRule.Evaluate(profile, entries, periodStart, periodEnd, config),
-            NormCheckRule.WeeklyRuleId    => NormCheckRule.EvaluateWeekly(profile, entries, periodStart, periodEnd, config),
-            NormCheckRule.MultiWeekRuleId => NormCheckRule.EvaluateMultiWeek(profile, entries, periodStart, periodEnd, config),
-            NormCheckRule.AnnualRuleId    => NormCheckRule.EvaluateAnnual(profile, entries, periodStart, periodEnd, config),
+            NormCheckRule.RuleId          => EvaluateNormOnCore(ruleId, null, profile, entries, periodStart, periodEnd, config),
+            NormCheckRule.WeeklyRuleId    => EvaluateNormOnCore(ruleId, TimelineNormMode.Weekly, profile, entries, periodStart, periodEnd, config),
+            NormCheckRule.MultiWeekRuleId => EvaluateNormOnCore(ruleId, TimelineNormMode.MultiWeek, profile, entries, periodStart, periodEnd, config),
+            NormCheckRule.AnnualRuleId    => EvaluateNormOnCore(ruleId, TimelineNormMode.Annual, profile, entries, periodStart, periodEnd, config),
             SupplementRule.RuleId         => SupplementRule.Evaluate(profile, entries, periodStart, periodEnd, config),
-            OvertimeRule.RuleId           => OvertimeRule.Evaluate(profile, entries, periodStart, periodEnd, config),
+            OvertimeRule.RuleId           => EvaluateOvertimeOnCore(profile, entries, periodStart, periodEnd, config),
             OnCallDutyRule.RuleId         => OnCallDutyRule.Evaluate(profile, entries, periodStart, periodEnd, config),
             CallInWorkRule.RuleId         => CallInWorkRule.Evaluate(profile, entries, periodStart, periodEnd, config),
             TravelTimeRule.RuleId         => TravelTimeRule.Evaluate(profile, entries, periodStart, periodEnd, config),
@@ -232,6 +250,83 @@ public sealed class RuleRegistry
         };
     }
 
+    private static CalculationResult EvaluateNormOnCore(
+        string ruleId,
+        TimelineNormMode? forcedMode,
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config)
+    {
+        try
+        {
+            return WeeklyTimelineCore.Evaluate(LegacyTimeline(
+                profile, entries, [], periodStart, periodEnd, config, 0m, forcedMode, ruleId)).Norm;
+        }
+        catch (TimelineInputException ex)
+        {
+            return FailedTimeRule(ruleId, profile, ex);
+        }
+    }
+
+    private static CalculationResult EvaluateOvertimeOnCore(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config)
+    {
+        try
+        {
+            return WeeklyTimelineCore.Evaluate(LegacyTimeline(
+                profile, entries, [], periodStart, periodEnd, config, 0m, null, NormCheckRule.RuleId)).Overtime;
+        }
+        catch (TimelineInputException ex)
+        {
+            return FailedTimeRule(OvertimeRule.RuleId, profile, ex);
+        }
+    }
+
+    private static CalculationResult FailedTimeRule(string ruleId, EmploymentProfile profile, TimelineInputException ex) =>
+        new()
+        {
+            RuleId = ruleId,
+            EmployeeId = profile.EmployeeId,
+            Success = false,
+            LineItems = [],
+            ErrorMessage = ex.Message
+        };
+
+    /// <summary>
+    /// R8 — what a legacy single-period call means under the weekly core: a one-piece timeline
+    /// <c>[periodStart, periodEnd]</c> at the profile's fraction and config (resolved from the
+    /// profile's own OK version, as before), with <c>SettlementCutoff = periodEnd</c>. The period
+    /// is the settlement window: it settles the weeks whose Sunday — or, for its last week, the
+    /// period's last day — lies inside it, and days outside it are not evaluated.
+    /// </summary>
+    private static TimelineCoreInput LegacyTimeline(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<AbsenceEntry> absences,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config,
+        decimal previousFlexBalance,
+        TimelineNormMode? forcedNormMode,
+        string normRuleId) =>
+        new(
+            profile.EmployeeId,
+            periodStart,
+            periodEnd,
+            periodEnd,
+            [new ResolvedPiece(periodStart, periodEnd, profile.PartTimeFraction, config)],
+            entries,
+            absences,
+            previousFlexBalance,
+            forcedNormMode,
+            normRuleId);
+
     /// <summary>
     /// Evaluates absence rules.
     /// </summary>
@@ -245,9 +340,24 @@ public sealed class RuleRegistry
     }
 
     /// <summary>
-    /// Evaluates flex balance.
+    /// Evaluates flex balance over a legacy single period (R8: on the weekly core, one piece,
+    /// settled on the period's last day at that day's cap).
     /// </summary>
     public FlexBalanceResult EvaluateFlexBalance(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<AbsenceEntry> absences,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        decimal previousBalance) =>
+        EvaluateFlexBalanceWithPayout(profile, entries, absences, periodStart, periodEnd, previousBalance).Flex;
+
+    /// <summary>
+    /// As <see cref="EvaluateFlexBalance"/>, plus the core's <c>FLEX_PAYOUT</c> line (dated on the
+    /// settlement day, null when nothing exceeds the cap). An invalid period yields an
+    /// unsuccessful result and no payout.
+    /// </summary>
+    public (FlexBalanceResult Flex, CalculationLineItem? Payout) EvaluateFlexBalanceWithPayout(
         EmploymentProfile profile,
         IReadOnlyList<TimeEntry> entries,
         IReadOnlyList<AbsenceEntry> absences,
@@ -256,6 +366,121 @@ public sealed class RuleRegistry
         decimal previousBalance)
     {
         var config = AgreementConfigProvider.GetConfig(profile.AgreementCode, profile.OkVersion, profile.Position);
-        return FlexBalanceRule.Evaluate(profile, entries, absences, periodStart, periodEnd, config, previousBalance);
+        try
+        {
+            var core = WeeklyTimelineCore.Evaluate(LegacyTimeline(
+                profile, entries, absences, periodStart, periodEnd, config, previousBalance, null, NormCheckRule.RuleId));
+            return (core.Flex, core.FlexPayout);
+        }
+        catch (TimelineInputException)
+        {
+            return (new FlexBalanceResult
+            {
+                EmployeeId = profile.EmployeeId,
+                PreviousBalance = previousBalance,
+                NewBalance = previousBalance,
+                Delta = 0m,
+                WorkedHours = 0m,
+                AbsenceNormCredits = 0m,
+                NormHours = 0m,
+                ExcessForPayout = 0m,
+                Success = false
+            }, null);
+        }
+    }
+
+    /// <summary>
+    /// S145 / TASK-14505 — <c>POST /api/rules/evaluate-timeline</c>: resolves each request piece's
+    /// config per OK-version date (a piece crossing 1 April is split there, so the core never
+    /// resolves), runs <see cref="WeeklyTimelineCore"/>, and fingerprints exactly the configs it
+    /// resolved (<see cref="ConfigFingerprint"/>). Throws <see cref="TimelineInputException"/> for
+    /// an invalid request; the route answers 400.
+    /// </summary>
+    public TimelineEvaluation EvaluateTimeline(EvaluateTimelineRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Pieces is null)
+            throw new TimelineInputException("Pieces are required.");
+
+        var resolvedPieces = new List<ResolvedPiece>();
+        var resolvedConfigs = new List<(string AgreementCode, string OkVersion, string? Position, AgreementRuleConfig Config)>();
+
+        foreach (var piece in request.Pieces)
+        {
+            if (piece is null)
+                throw new TimelineInputException("Pieces may not contain null.");
+            if (piece.From > piece.To)
+                throw new TimelineInputException("A piece's From is after its To.");
+            if (string.IsNullOrWhiteSpace(piece.AgreementCode))
+                throw new TimelineInputException("Every piece needs an AgreementCode.");
+            if (piece.PartTimeFraction <= 0m || piece.PartTimeFraction > 1m)
+                throw new TimelineInputException("A piece's PartTimeFraction must be greater than 0 and at most 1.");
+
+            foreach (var (from, to, okVersion) in SplitAtOkVersions(piece.From, piece.To))
+            {
+                if (!AgreementConfigProvider.HasConfig(piece.AgreementCode, okVersion))
+                    throw new TimelineInputException("No agreement configuration exists for a piece's agreement and OK version.");
+
+                var config = AgreementConfigProvider.GetConfig(piece.AgreementCode, okVersion, piece.Position);
+                resolvedPieces.Add(new ResolvedPiece(from, to, piece.PartTimeFraction, config));
+                resolvedConfigs.Add((piece.AgreementCode, okVersion, piece.Position, config));
+            }
+        }
+
+        var core = WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
+            request.EmployeeId,
+            request.PeriodStart,
+            request.PeriodEnd,
+            request.SettlementCutoff,
+            resolvedPieces,
+            request.Entries,
+            request.Absences,
+            request.PreviousFlexBalance));
+
+        return new TimelineEvaluation(
+            core,
+            [ConfigFingerprint.Compute(resolvedConfigs)],
+            WeeklyTimelineCore.EvaluationModel);
+    }
+
+    /// <summary>
+    /// Splits <c>[from, to]</c> into runs of days sharing one OK version, by date. Every day of the
+    /// piece stays covered: <see cref="OkVersionResolver.ResolveVersionsForPeriod"/> clips to the
+    /// known version table, so its first and last runs are stretched back to the piece's own ends,
+    /// which <see cref="OkVersionResolver.ResolveVersion"/> clamps to the earliest / latest version
+    /// anyway. The result is checked against <c>ResolveVersion</c> so a gap can never pass silently.
+    /// </summary>
+    private static List<(DateOnly From, DateOnly To, string OkVersion)> SplitAtOkVersions(DateOnly from, DateOnly to)
+    {
+        var runs = OkVersionResolver.ResolveVersionsForPeriod(from, to)
+            .Select(r => (From: r.Start, To: r.End, OkVersion: r.Version))
+            .ToList();
+
+        runs[0] = (from, runs[0].To, runs[0].OkVersion);
+        runs[^1] = (runs[^1].From, to, runs[^1].OkVersion);
+
+        for (var i = 0; i < runs.Count; i++)
+        {
+            var run = runs[i];
+            var contiguous = i == 0 || run.From == runs[i - 1].To.AddDays(1);
+            if (!contiguous
+                || run.From > run.To
+                || OkVersionResolver.ResolveVersion(run.From) != run.OkVersion
+                || OkVersionResolver.ResolveVersion(run.To) != run.OkVersion)
+            {
+                throw new InvalidOperationException("OK-version runs do not cover the piece contiguously.");
+            }
+        }
+
+        return runs;
     }
 }
+
+/// <summary>
+/// The timeline evaluation: the core's results, the fingerprint of the configs resolved for this
+/// call (one entry), and the evaluation-model marker.
+/// </summary>
+public sealed record TimelineEvaluation(
+    TimelineCoreResult Core,
+    IReadOnlyList<string> ConfigFingerprints,
+    string EvaluationModel);

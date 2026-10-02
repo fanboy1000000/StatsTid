@@ -45,7 +45,9 @@ app.MapPost("/api/rules/evaluate-absence", (EvaluateAbsenceRequest request, Rule
 
 app.MapPost("/api/rules/evaluate-flex", (EvaluateFlexRequest request, RuleRegistry registry) =>
 {
-    var result = registry.EvaluateFlexBalance(
+    // S145 R8: a one-piece timeline on the weekly core; the payout line is the core's, dated on
+    // the settlement day (for a legacy call, the period's last day — as before).
+    var (result, payoutItem) = registry.EvaluateFlexBalanceWithPayout(
         request.Profile,
         request.Entries,
         request.Absences,
@@ -55,41 +57,53 @@ app.MapPost("/api/rules/evaluate-flex", (EvaluateFlexRequest request, RuleRegist
 
     if (!result.Success)
     {
-        return Results.BadRequest(new FlexEvaluationResponse
-        {
-            RuleId = FlexBalanceRule.RuleId,
-            EmployeeId = result.EmployeeId,
-            Success = false,
-            LineItems = [],
-            ErrorMessage = "Flex balance evaluation failed",
-            PreviousBalance = result.PreviousBalance,
-            NewBalance = result.NewBalance,
-            Delta = result.Delta,
-            WorkedHours = result.WorkedHours,
-            AbsenceNormCredits = result.AbsenceNormCredits,
-            EffectiveNorm = result.NormHours,
-            ExcessForPayout = result.ExcessForPayout
-        });
+        return Results.BadRequest(ToFlexResponse(result, null, "Flex balance evaluation failed"));
     }
 
-    var payoutItem = FlexBalanceRule.GetPayoutLineItem(result, request.PeriodEnd);
-    var lineItems = payoutItem is not null
-        ? new List<CalculationLineItem> { payoutItem }
+    return Results.Ok(ToFlexResponse(result, payoutItem, null));
+}).RequireAuthorization("Authenticated");
+
+// S145 / TASK-14505 — the week-by-week evaluation payroll calls once per plan: overtime /
+// merarbejde per settled Monday–Sunday week (dated on its settlement day), the norm check over the
+// period's own covered days, and flex settled once on the period's last covered day. The engine
+// resolves each piece's config per OK-version date and returns the fingerprint of exactly the
+// configs it resolved plus the evaluation-model marker, which payroll records for replay
+// (refinement A7). Pure apart from HTTP: the registry and the core do no I/O (ADR-002).
+app.MapPost("/api/rules/evaluate-timeline", (EvaluateTimelineRequest request, RuleRegistry registry) =>
+{
+    TimelineEvaluation evaluation;
+    try
+    {
+        evaluation = registry.EvaluateTimeline(request);
+    }
+    catch (TimelineInputException ex)
+    {
+        // Fixed, value-free sentences only (no employee id, dates or hours echoed — SEC-039).
+        return Results.BadRequest(new { success = false, error = ex.Message });
+    }
+
+    var core = evaluation.Core;
+    var flexLineItems = core.FlexPayout is not null
+        ? new List<CalculationLineItem> { core.FlexPayout }
         : new List<CalculationLineItem>();
 
-    return Results.Ok(new FlexEvaluationResponse
+    return Results.Ok(new TimelineEvaluationResponse
     {
-        RuleId = FlexBalanceRule.RuleId,
-        EmployeeId = result.EmployeeId,
-        Success = true,
-        LineItems = lineItems,
-        PreviousBalance = result.PreviousBalance,
-        NewBalance = result.NewBalance,
-        Delta = result.Delta,
-        WorkedHours = result.WorkedHours,
-        AbsenceNormCredits = result.AbsenceNormCredits,
-        EffectiveNorm = result.NormHours,
-        ExcessForPayout = result.ExcessForPayout
+        Results =
+        [
+            core.Overtime,
+            core.Norm,
+            new CalculationResult
+            {
+                RuleId = FlexBalanceRule.RuleId,
+                EmployeeId = core.Flex.EmployeeId,
+                Success = core.Flex.Success,
+                LineItems = flexLineItems
+            },
+        ],
+        Flex = ToFlexResponse(core.Flex, core.FlexPayout, null),
+        ConfigFingerprints = evaluation.ConfigFingerprints.ToList(),
+        EvaluationModel = evaluation.EvaluationModel
     });
 }).RequireAuthorization("Authenticated");
 
@@ -135,3 +149,22 @@ app.MapPost("/api/rules/check-overtime-governance", (CheckOvertimeGovernanceRequ
 }).RequireAuthorization("Authenticated");
 
 app.Run();
+
+static FlexEvaluationResponse ToFlexResponse(FlexBalanceResult result, CalculationLineItem? payoutItem, string? errorMessage) =>
+    new()
+    {
+        RuleId = FlexBalanceRule.RuleId,
+        EmployeeId = result.EmployeeId,
+        Success = result.Success,
+        LineItems = payoutItem is not null
+            ? new List<CalculationLineItem> { payoutItem }
+            : new List<CalculationLineItem>(),
+        ErrorMessage = errorMessage,
+        PreviousBalance = result.PreviousBalance,
+        NewBalance = result.NewBalance,
+        Delta = result.Delta,
+        WorkedHours = result.WorkedHours,
+        AbsenceNormCredits = result.AbsenceNormCredits,
+        EffectiveNorm = result.NormHours,
+        ExcessForPayout = result.ExcessForPayout
+    };
