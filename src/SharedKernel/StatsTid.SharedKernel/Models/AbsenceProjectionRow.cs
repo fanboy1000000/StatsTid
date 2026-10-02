@@ -32,4 +32,20 @@ public sealed class AbsenceProjectionRow
     public string? ActorRole { get; init; }
     public Guid? CorrelationId { get; init; }
     public required long OutboxId { get; init; }
+
+    /// <summary>
+    /// S145 / A0 — <c>source</c> column: <see cref="HoursSource.Skema"/> for a Skema save (latest-wins
+    /// per cell) or <see cref="HoursSource.TimePost"/> for an additive registration. Defaults to
+    /// <see cref="HoursSource.TimePost"/>, the truthful class of every row that predates the
+    /// column (and the column's own DEFAULT), so a row built without it stays additive.
+    /// </summary>
+    public string Source { get; init; } = HoursSource.TimePost;
+
+    /// <summary>
+    /// S145 / A0 — <c>superseded_by_outbox_id</c> column: the <c>outbox_id</c> of the Skema re-save
+    /// that replaced this row, or null while it is the current value of its cell. A superseded row
+    /// is retained for replay and audit; the vacation settlement and every quota total count
+    /// current rows only.
+    /// </summary>
+    public long? SupersededByOutboxId { get; init; }
 }

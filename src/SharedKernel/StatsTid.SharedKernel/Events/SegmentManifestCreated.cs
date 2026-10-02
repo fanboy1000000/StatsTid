@@ -65,4 +65,19 @@ public sealed class SegmentManifestCreated : DomainEventBase
     /// <see cref="BoundaryCauseSummary"/> — see remarks there.
     /// </remarks>
     public IReadOnlyList<PlannedSegment> Segments { get; init; } = Array.Empty<PlannedSegment>();
+
+    /// <summary>
+    /// The frozen inputs of the calculation this manifest describes (S145 / A7): per-piece profile
+    /// inputs, the opening flex balance, the hours rows by event id with their digests, the
+    /// Rule Engine's config fingerprints and the evaluation-model marker. Serialised into
+    /// <c>plan_inputs_jsonb JSONB NULL</c> in the projection table. This event is the record of
+    /// truth for it, because the projection is rebuildable from events (ADR-016 D10).
+    /// </summary>
+    /// <remarks>
+    /// Nullable and not marked <c>required</c>, for the same reason as <see cref="Segments"/>:
+    /// the generic EventSerializer round-trip must still work, and every pre-S145 event lacks the
+    /// field and keeps deserializing to null. A manifest without it is refused at replay
+    /// (<c>replay-manifest-without-frozen-inputs</c>) rather than recomputed from live data.
+    /// </remarks>
+    public PlanInputs? PlanInputs { get; init; }
 }

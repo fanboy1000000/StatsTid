@@ -1893,8 +1893,35 @@ CREATE TABLE IF NOT EXISTS time_entries_projection (
     actor_id                    TEXT,
     actor_role                  TEXT,
     correlation_id              UUID,
-    outbox_id                   BIGINT          NOT NULL
+    outbox_id                   BIGINT          NOT NULL,
+    -- S145 / A0 (QUAL-192, QUAL-194): WHICH KIND OF ROW this is, and WHETHER it is still the
+    -- current one. In plain terms: a Skema cell (one employee + one day + one task) holds ONE
+    -- number, and saving it again must REPLACE the old number, not add a second row beside it
+    -- (before S145 every re-save left both rows and every server-side total counted both).
+    -- But a row written by POST /api/time-entries is a different thing: each such registration
+    -- is a separate piece of work and stays ADDITIVE even when it happens to carry a task id.
+    -- `source` is what tells the two apart, so the "one current row" rule below can apply to
+    -- Skema cells only. Allowed values are 'SKEMA' and 'TIME_POST' (the CHECK at the end of
+    -- this table); the C# names are HoursSource.Skema / HoursSource.TimePost.
+    --   * DEFAULT 'TIME_POST' (R28/N4) is the truthful class of every pre-S145 row: the table
+    --     was append-per-event, so every row was additive. It is also what lets the column be
+    --     added to an existing table (a NOT NULL column with no default cannot be added to a
+    --     populated one), keeps the many raw-INSERT test fixtures that omit the column meaning
+    --     what they always meant, and means the partial unique index below selects no legacy
+    --     row, so creating it can never fail. The cost: a future Skema writer that forgets to
+    --     stamp 'SKEMA' would silently be additive; the Resave_Entry_* tests pin that.
+    source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
+    -- Set to the outbox_id of the re-save that REPLACED this row; NULL while the row is the
+    -- current value of its cell. A replaced row is KEPT, not deleted, so the audit trail and
+    -- a replay by event id can still read exactly what a calculation was fed (ADR-028 D6,
+    -- recorded at O-4). Every read that totals hours counts current rows only.
+    superseded_by_outbox_id     BIGINT          NULL,
+    CONSTRAINT time_entries_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 );
+-- The "one current row per Skema cell" index (ux_time_entries_proj_current_skema_cell) is
+-- created in the S145 segment further down, after the two columns above are guaranteed to
+-- exist on every path (an existing database skips this CREATE TABLE, so an index here that
+-- names `source` would fail there). It is listed with this table in docs/generated/db-schema.md.
 CREATE INDEX IF NOT EXISTS idx_time_entries_proj_emp_date_outbox
     ON time_entries_projection(employee_id, date, outbox_id);
 CREATE INDEX IF NOT EXISTS idx_time_entries_proj_emp_outbox
@@ -1919,8 +1946,24 @@ CREATE TABLE IF NOT EXISTS absences_projection (
     actor_id                    TEXT,
     actor_role                  TEXT,
     correlation_id              UUID,
-    outbox_id                   BIGINT          NOT NULL
+    outbox_id                   BIGINT          NOT NULL,
+    -- S145 / A0 (QUAL-192, QUAL-193, QUAL-194): same two columns and the same reasoning as
+    -- time_entries_projection (read that table's comment first). In plain terms: a Skema
+    -- absence cell (one employee + one day + one absence type) holds ONE value, and saving it
+    -- again REPLACES the old row instead of adding a second one that every total and the
+    -- vacation quota counted twice. An absence is only ever written by Skema today, but the
+    -- column is kept symmetrical so the same rule and the same reader filter apply to both
+    -- tables. Allowed values: 'SKEMA' and 'TIME_POST' (CHECK at the end of this table);
+    -- DEFAULT 'TIME_POST' for the reasons given on the sibling table (R28/N4).
+    source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
+    -- outbox_id of the re-save that REPLACED this row; NULL while it is the current value.
+    -- Replaced rows are kept for replay and audit (ADR-028 D6, recorded at O-4). The vacation
+    -- settlement and every quota total count current rows only.
+    superseded_by_outbox_id     BIGINT          NULL,
+    CONSTRAINT absences_projection_source_check CHECK (source IN ('SKEMA', 'TIME_POST'))
 );
+-- The "one current row per Skema cell" index (ux_absences_proj_current_skema_cell) is created
+-- in the S145 segment further down, for the same reason as the time-entries one above.
 CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_date_outbox
     ON absences_projection(employee_id, date, outbox_id);
 CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
@@ -1930,10 +1973,19 @@ CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
 -- SPRINT 56 (TASK-5602A): Self-recorded work-time projection
 -- ============================================================
 -- Read-path projection for "Arbejdstid" self-recorded work time, fed by WorkTimeRegistered
--- (ADR-018 D13 sync-in-tx). Unlike time_entries_projection (append-per-event), this is a
--- LATEST-WINS aggregate per (employee_id, date): re-saving a day emits a NEW superseding event,
--- and the projection holds only the latest state. outbox_id carries event ordering so a stale
--- event never overwrites a newer one (apply only when incoming outbox_id >= stored).
+-- (ADR-018 D13 sync-in-tx). Unlike time_entries_projection, this is a LATEST-WINS aggregate
+-- per (employee_id, date): re-saving a day emits a NEW superseding event, and the projection
+-- holds ONLY the latest state (one row per day, overwritten in place). outbox_id carries event
+-- ordering so a stale event never overwrites a newer one (apply only when incoming
+-- outbox_id >= stored).
+--
+-- S145 / A0 correction of the former "time_entries_projection is append-per-event" remark:
+-- a Skema cell (employee + date + task) in time_entries_projection is ALSO latest-wins now,
+-- but by a different mechanism: a re-save inserts a new row and marks the old one superseded
+-- (superseded_by_outbox_id), so the replaced rows are RETAINED for replay and audit rather
+-- than overwritten. Rows written by POST /api/time-entries stay ADDITIVE (one row per
+-- event, never superseded). The same holds for absences_projection. See ADR-028 D6
+-- (recorded at O-4) and the S145 segment further down.
 CREATE TABLE IF NOT EXISTS work_time_projection (
     employee_id     TEXT            NOT NULL,
     date            DATE            NOT NULL,
@@ -2068,7 +2120,20 @@ CREATE TABLE IF NOT EXISTS segment_manifests (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Full segment detail: array of {segmentStart, segmentEnd, okVersion, configSnapshot, ...}
     -- Shape is defined and owned by the Payroll / PeriodPlanner domain (S20 implementation tasks)
-    segments_jsonb          JSONB       NOT NULL
+    segments_jsonb          JSONB       NOT NULL,
+    -- S145 / A7 (R29): the frozen INPUTS of the calculation this manifest describes. In plain
+    -- terms: `segments_jsonb` records how the month was cut into pieces, but not what the
+    -- calculation was fed (the opening flex balance, each piece's part-time fraction and
+    -- agreement, which hours rows were read and a fingerprint of them, the agreement-config
+    -- fingerprints, the arithmetic version, the settlement cutoff). Without those a replay
+    -- cannot prove it re-ran the same calculation, so a replay reads them from here rather
+    -- than asking the live database. The shape is the C# record
+    -- StatsTid.SharedKernel.Segmentation.PlanInputs (owned by the Payroll / planner domain, like
+    -- segments_jsonb). NULLABLE on purpose: a manifest written before S145 has no frozen
+    -- inputs and a replay refuses it by name (`replay-manifest-without-frozen-inputs`) instead
+    -- of silently recomputing from today's data. The event SegmentManifestCreated is the
+    -- record of truth (ADR-016 D10); this column is its rebuildable projection.
+    plan_inputs_jsonb       JSONB       NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_segment_manifests_employee_period
@@ -3030,6 +3095,108 @@ BEGIN
     ON CONFLICT (migration_id) DO NOTHING;
 END
 $$;
+
+-- =========================================================================
+-- S145 / TASK-14500 (A0 + A7) — "a Skema save replaces the cell" and "a calculation
+-- records what it was fed": the supersession columns, their rule and the manifest slot.
+--
+-- WHY (plain language): until S145 every re-save of a Skema cell stored a SECOND row and
+-- every server-side total counted both (QUAL-192/193/194), and a stored calculation
+-- (segment manifest) recorded how the month was cut up but not what it was fed, so a
+-- replay could not prove it re-ran the same thing. This segment lands, on every path:
+--   * source + superseded_by_outbox_id on time_entries_projection and absences_projection,
+--     with the named CHECK <table>_source_check ('SKEMA' | 'TIME_POST');
+--   * ux_time_entries_proj_current_skema_cell / ux_absences_proj_current_skema_cell: a
+--     PARTIAL UNIQUE INDEX (a rule that allows one row per key, but only among the rows a
+--     condition selects) that lets the database hold at most ONE CURRENT Skema row per
+--     cell. A row written by POST /api/time-entries has source 'TIME_POST', is outside the
+--     condition, and stays additive;
+--   * segment_manifests.plan_inputs_jsonb, the frozen inputs of the calculation (ADR-016
+--     D10, R29).
+-- Nothing behaves differently yet: every new column is defaulted or nullable and the
+-- readers and writers are changed in later S145 tasks.
+--
+-- SHAPE — an existing table, so the guarded ALTERs are the additive migration and the DO
+-- block records only the ledger key (no CREATE TABLE here or in the DO block:
+-- generate_db_schema.py would double-count the table):
+--   * greenfield first apply — the base CREATE TABLEs above already carry the columns and
+--     the CHECK, so the ADD COLUMNs are no-ops, the CHECK is dropped and re-added, and
+--     the indexes land;
+--   * legacy / rerun database — the base CREATE TABLE IF NOT EXISTS is a no-op there (the
+--     segment_manifests and projection tables already exist without the new members), so
+--     this segment is the ONLY thing that reaches them;
+--   * any re-apply — IF NOT EXISTS, the guarded DROP-then-ADD (S122 idiom) and
+--     ON CONFLICT DO NOTHING short-circuit.
+--
+-- WHY THE INDEXES ARE HERE AND NOT BESIDE THE BASE CREATE TABLEs: an index whose WHERE
+-- clause names `source` fails with "column does not exist" on a legacy database, because
+-- the base CREATE TABLE is skipped there and this segment sits further down the file. Here
+-- they run after the ADD COLUMNs, so they are correct on all three paths, and they appear
+-- once (not twice) in docs/generated/db-schema.md.
+--
+-- WHY THE INDEXES CAN NOT FAIL TO BUILD: every pre-existing row takes the DEFAULT
+-- 'TIME_POST' (R28/N4), so the index condition selects no legacy row. A Skema entry cell
+-- always carries a task id (the request's ProjectCode is `required`, and it becomes
+-- TaskId), so a NULL task_id (which a unique index treats as distinct) never applies to a
+-- SKEMA row. Postgres is 16.
+--
+-- By the reseed ruling (2026-09-28, ADR-038 D9) no pre-S145 database holding real rows
+-- exists: pre-S145 databases are reseeded, not upgraded, and no backfill is written on
+-- purpose.
+--
+-- The S145-HOURS-SUPERSESSION-AND-PLAN-INPUTS-SEGMENT markers are extracted VERBATIM by
+-- the migration / harness-DDL tests (the S71/S72/S73/S136/S137/S138 pattern: the test
+-- replays this exact segment against a reconstructed pre-S145 schema) — keep the marker
+-- lines intact and keep all S145 DDL between them. The segment sits after the S66 block and
+-- outside every other marker pair.
+-- =========================================================================
+-- S145-HOURS-SUPERSESSION-AND-PLAN-INPUTS-SEGMENT-BEGIN
+ALTER TABLE time_entries_projection
+    ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'TIME_POST';
+ALTER TABLE time_entries_projection
+    ADD COLUMN IF NOT EXISTS superseded_by_outbox_id BIGINT NULL;
+
+ALTER TABLE absences_projection
+    ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'TIME_POST';
+ALTER TABLE absences_projection
+    ADD COLUMN IF NOT EXISTS superseded_by_outbox_id BIGINT NULL;
+
+ALTER TABLE segment_manifests
+    ADD COLUMN IF NOT EXISTS plan_inputs_jsonb JSONB NULL;
+
+-- The closed two-value vocabulary, as a named CHECK in the S122 guarded DROP-then-ADD form
+-- so it reaches a legacy / rerun database where the base CREATE TABLE was skipped.
+ALTER TABLE time_entries_projection
+    DROP CONSTRAINT IF EXISTS time_entries_projection_source_check;
+ALTER TABLE time_entries_projection
+    ADD CONSTRAINT time_entries_projection_source_check
+    CHECK (source IN ('SKEMA', 'TIME_POST'));
+
+ALTER TABLE absences_projection
+    DROP CONSTRAINT IF EXISTS absences_projection_source_check;
+ALTER TABLE absences_projection
+    ADD CONSTRAINT absences_projection_source_check
+    CHECK (source IN ('SKEMA', 'TIME_POST'));
+
+-- Exactly one CURRENT row per Skema cell, enforced by the schema. Writes are already
+-- serialized per employee (EmployeeConsumptionLock) and a save marks the old row superseded
+-- before inserting the new one, so this index is the backstop, not the mechanism.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_time_entries_proj_current_skema_cell
+    ON time_entries_projection (employee_id, date, task_id)
+    WHERE source = 'SKEMA' AND superseded_by_outbox_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_absences_proj_current_skema_cell
+    ON absences_projection (employee_id, date, absence_type)
+    WHERE source = 'SKEMA' AND superseded_by_outbox_id IS NULL;
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s145-hours-supersession-plan-inputs', 'S145/TASK-14500 (A0, A7): time_entries_projection and absences_projection gain source TEXT NOT NULL DEFAULT ''TIME_POST'' (named CHECK <table>_source_check: SKEMA or TIME_POST) and superseded_by_outbox_id BIGINT NULL, plus the partial unique indexes ux_time_entries_proj_current_skema_cell and ux_absences_proj_current_skema_cell that hold at most one CURRENT Skema row per cell (a Skema save replaces the cell; POST /api/time-entries rows stay additive). segment_manifests gains plan_inputs_jsonb JSONB NULL, the frozen inputs of a calculation for replay (ADR-016 D10); a manifest without them is refused at replay. Nothing is backfilled: every existing row takes the TIME_POST default, so the indexes select no legacy row. No schema consumer changes behaviour in this task; the readers and writers follow in later S145 tasks. No backfill is written: pre-S145 databases are reseeded, not upgraded.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+-- S145-HOURS-SUPERSESSION-AND-PLAN-INPUTS-SEGMENT-END
 
 -- =========================================================================
 -- SPRINT 68 / ADR-033 — Vacation Settlement (slice 1a)
