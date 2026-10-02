@@ -45,7 +45,7 @@ public sealed class AbsenceProjectionRepository
            AND outbox_id < @outboxId";
 
     // S145 / TASK-14507 — the current Skema rows in a date range: the predecessors a save is about
-    // to replace. Shared by the pooled and the (conn, tx) overloads below.
+    // to replace. Used by GetCurrentSkemaRowsAsync below.
     private const string SelectCurrentSkemaRowsSql = @"
         SELECT event_id, employee_id, date, absence_type, hours, feriedage,
                agreement_code, ok_version, occurred_at, actor_id, actor_role,
@@ -218,27 +218,13 @@ public sealed class AbsenceProjectionRepository
     /// S145 / TASK-14507 (R23) — the CURRENT Skema rows of the employee dated in
     /// <c>[start, end]</c>: the rows a Skema save is about to replace, read so the save can move the
     /// quota by the SIGNED difference (new feriedage minus the stored feriedage of the replaced row)
-    /// instead of adding the full new value again. Pooled-connection overload, for the advisory
-    /// pre-transaction quota check; the authoritative re-read under the employee's lock uses the
-    /// (conn, tx) overload. Additive (<c>TIME_POST</c>) rows are never replaced, so they are not
-    /// returned.
-    /// </summary>
-    public async Task<IReadOnlyList<AbsenceProjectionRow>> GetCurrentSkemaRowsAsync(
-        string employeeId, DateOnly start, DateOnly end, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(SelectCurrentSkemaRowsSql, conn);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        cmd.Parameters.AddWithValue("start", start);
-        cmd.Parameters.AddWithValue("end", end);
-        return await ReadRowsAsync(cmd, ct);
-    }
-
-    /// <summary>
-    /// In-transaction sibling of <see cref="GetCurrentSkemaRowsAsync(string, DateOnly, DateOnly, CancellationToken)"/>:
-    /// reads on the caller's <paramref name="conn"/> + <paramref name="tx"/> so the predecessors are
-    /// read AFTER the caller took the employee's consumption lock (the authoritative read).
+    /// instead of adding the full new value again. Additive (<c>TIME_POST</c>) rows are never
+    /// replaced, so they are not returned.
+    ///
+    /// <para>Reads on the caller's <paramref name="conn"/> + <paramref name="tx"/>. The Skema save
+    /// calls it twice: in its advisory pre-check, on a short read-only REPEATABLE READ snapshot that
+    /// the pre-check's balance reads share (so the two agree); and AFTER it took the employee's
+    /// consumption lock, inside the write transaction (the authoritative read).</para>
     /// </summary>
     public async Task<IReadOnlyList<AbsenceProjectionRow>> GetCurrentSkemaRowsAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
