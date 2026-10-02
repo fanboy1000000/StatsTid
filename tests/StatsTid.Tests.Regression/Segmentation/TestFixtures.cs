@@ -411,7 +411,7 @@ internal static class TestFixtures
     ///   S29 additions (S144 post-close W). Against production's final table it has a
     ///   <c>DEFAULT '2020-01-01'</c> on <c>effective_from</c> that production lacks, and it omits
     ///   <c>idx_wtm_natural_key_history</c>. (Its <c>version BIGINT NOT NULL DEFAULT 1</c> column
-    ///   matches production's final table: <c>init.sql</c> adds it in an S29 block, so it differs
+    ///   matches production's final table: <c>init.sql</c> adds it in an S25 block (ADR-019, ledger key `s25-d2-2-version`), so it differs
     ///   from the base <c>CREATE</c> only.) Nothing checks this table against
     ///   <c>init.sql</c>.</description></item>
     ///   <item><description><c>segment_manifests</c> — and the two hours projection tables copied in
