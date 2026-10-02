@@ -470,6 +470,7 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 | Task | Branch | Build | 5α | 5a Reviewer (Fable) | 5a Codex | Merged |
 |---|---|---|---|---|---|---|
 | TASK-14500 schema + shapes (`data-model`) | `worktree-agent-ac1278752784ecede` (`cf110d9`, `adedc48`, fix-up `ab3b6d9`) | 0 errors / 145 warnings; Unit 1309 · DemoSeed 170 · Regression non-Docker 128 (O-1 on merged master) | PASS | APPROVED-WITH-WARNINGS (`adedc48`); fix-up verification APPROVED-WITH-WARNINGS (`ab3b6d9`) | APPROVE-WITH-WARNINGS; fix-up APPROVE | `1b6160c` (+ O-3: `db-schema.md` hand-transcribed in the generator's format; no Python on this machine, so CI `--check` arbitrates) |
+| TASK-14505 week-by-week core (`rule-engine`) + 14505-T paired migration (`test-qa`) | `worktree-agent-ad9053a02a651ddfb` (`b30ae64`, `3ee7e3a`, fix-up `2259cc1`, comments `c81349c`) | 0 errors / 145 warnings (full rebuild); Unit 1309 · DemoSeed 170 · Regression non-Docker 128 (O-1 on merged master). CA2100 not re-counted: no SQL-bearing file is in the merge and the total is unchanged | PASS (19 files, all on the union list; 14505-T touches no `src/**`) | APPROVED-WITH-WARNINGS (`3ee7e3a`, W1); cycle 2 APPROVED (`2259cc1`) | APPROVE-WITH-WARNINGS (`3ee7e3a`); cycle 2 APPROVE (`2259cc1`) | `ce51a38` |
 
 **Dispositions at the 14500 merge.**
 - **Accepted deviation:** the two partial unique indexes live only in the S145 segment, not beside the base CREATEs. On an existing database, a base-position index would fail before the segment's `ADD COLUMN` runs. Both lenses called the brief wrong on this point.
@@ -479,6 +480,33 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 - **N3:** recorded in the 14500 brief.
 - **N4:** TASK-14513's brief now pins the ordinal `D`-string sort of event ids.
 - **Verification N1:** the generator does not print `NULLS NOT DISTINCT`; `init.sql` is the record.
+
+**Dispositions at the 14505 merge.**
+- **W1, both lenses: a day after the month could govern the closing week.**
+  - The problem: pieces reaching past `PeriodEnd`, or a cutoff past it, let a day outside the month decide the closing week's norm mode and reported `NormPeriodWeeks`.
+  - Fixed in `2259cc1` by bounding evaluation at `PeriodEnd` in `PieceIndexOn`. Over-wide input stays valid; TASK-14511 may send an employment piece running past the month.
+  - Reading adopted: "a week's governing day is its latest evaluated day, bounded by the period end". Under it, R6 holds automatically.
+  - Codex's literal alternative (report the last in-period day's own config) was not adopted. It would report a config other than the one that judged the week, and under the bound the two readings coincide.
+  - Both lenses verified at cycle 2 that no in-scope figure can change.
+- **How the fix was made.** The rule-engine agent's resume was refused twice ("worktree could not be verified"). The Orchestrator made the two-line fix under the Small Tasks Exception, then sent it to both lenses for cycle 2. The cycle-2 wording notes (both lenses) were applied in `c81349c` exactly as suggested; comments only, not re-reviewed.
+- **The pin for the bound:** `Core_PiecesBeyondPeriodEnd_DoNotGovern` goes to TASK-14506, with mutation MU-41. Its shape comes from Fable cycle-2 N3: no cutoff, a weekday `PeriodEnd`, a second piece whose config differs observably, called on the core directly. Today's suite cannot reach the bound.
+- **N1, the fingerprint's canonical text** is richer than the refinement states. The ADR-016 D10 amendment transcribes `ConfigFingerprint.cs:21-38` (Records owed).
+- **N3, the timeline endpoint's 400 body** (`{success, error}`, also the 5α observation) and **cycle-2 N4** (`weekly-timeline-v1` includes the bound): both recorded in TASK-14511's brief.
+- **N4, the year-overview header** computes `Math.Round(WeeklyNormHours × fraction, 2)` for the week (`BalanceEndpoints.cs:796`). That gives 30.01 for fraction 0.811, where the engine's per-day sum is 30.00.
+  - Ruled an R11 completion: TASK-14509 Do 5 puts it on `DayNorm`, adding that one line to its authorized files.
+  - `ConsumptionCalculator.cs:108, :141` is ADR-032 vacation valuation, not a norm, and stays as it is.
+- **N2** (a mixed-mode week, unreachable under Q5 (c); the refinement reserves its test) and **N5** (style): no action.
+
+**At TASK-14504's return (not yet merged; batched 5α/5a pending).**
+- **Finding 1, an existing fact turns red under R5(a).** `WriteForExportedMonths_SelectsMonthsIntersectingInterval_…` will fail once 14509 lands, and no task owned it.
+  - A new paired task, TASK-14509-T, re-expects it to February, March and April (W1-EX, labelled `// S145 R5(a):`).
+  - MD-47's row now lists W1-EX, and EA-1's frozen list grows to 54 facts. MD-47 is the only EA-1 site in that writer.
+- **Finding 5:** the guard W1-G (a backdate bounded at Monday 28 Sep flags no October) goes to 14509-T.
+- **Finding 3, the reopen hook's `EffectiveFrom`.** The spec was silent. The Orchestrator ruled it is the Monday of M+1's opening week: the earliest day whose change can alter M+1, 28 Sep in the September case.
+  - Recorded in 14509 Do 2 and pinned by one added RO1 assertion in 14509-T.
+  - Put to the batched Fable 5a for confirmation.
+- **Finding 4:** the extra assertions (baseline hash, Created event and audit row) are kept.
+- **Finding 6:** the stray detached worktree is cleared at teardown.
 
 **Wave A.1a dispositions so far.** These are adjudicator rulings, recorded for the A.1 gate:
 - **TASK-14505's March value change** (`OkVersionRuntimeRegressionTests`: one `OVERTIME_50 1.20` dated 2026-03-31) is labelled change 4.
@@ -500,9 +528,9 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 
 | | |
 |---|---|
-| **As of** | 2026-10-02, wave A.1a dispatched; master `cdd8253` |
-| **Phase** | Step 1: wave A.1a in flight. The briefs went to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints were pasted verbatim into every prompt |
-| **Dispatched tasks / worktrees** | Running, each in its own worktree off `cdd8253`: TASK-14500 (`data-model`), 14505 (`rule-engine`), 14503a, 14506 (authored only) and 14501 (`test-qa`). **Not yet launched:** 14502, 14503b, 14504. Their isolation worktrees were refused at creation: eight simultaneous creations collided, then a single retry failed while git was slow under load (a trivial git call took 5.7 s). Relaunch one at a time as running agents finish. The orphan worktrees were removed (two leftover directories with a locked file each, unregistered in git, to clear at teardown) |
-| **Pending gates** | Each A.1a task merges through the merge checklist as it lands (5α and 5a explicit). TASK-14507 is dispatched the moment 14500 merges. Then the A.1 gate |
-| **Open rulings** | None. The planner's draft-5 questions were decided at cycle 4: (a) keep the plan at 887 lines; (b) RP7/RP8 produce the engine change through the echo handler's constructor parameters (`["stub-2"]` / `weekly-timeline-v2`), the refinement's "synthetic config", over the stored-record tamper the external lens had first confirmed |
-| **Next action** | Relaunch 14502, 14503b and 14504 as load allows, then run the merge checklist on each returning task |
+| **As of** | 2026-10-02, wave A.1a in flight; master `ce51a38` (14500 and 14505+T merged) |
+| **Phase** | Step 1: wave A.1a. The briefs went to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints were pasted verbatim into every prompt. The plan and briefs were amended at the 14505 merge and at 14504's return (see the dispositions above); TASK-14509-T is new |
+| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`). **Returned, awaiting the batched 5α/5a:** 14502, 14503a (its merge excludes `c3543f1`), 14504 (`s145/task-14504`, `5f0fd3d`). **Running:** 14501 (`worktree-agent-a1e2cddcd1ccda107`), 14503b (`s145/task-14503b`), 14507 (`s145/task-14507`). **Authored, waiting for re-spawn 1:** 14506. Leftover directories to clear at teardown: two unregistered dirs with a locked file each, plus the merged worktrees |
+| **Pending gates** | When 14501 and 14503b return: a batched 5α, then one Fable 5a with a verdict line per task for 14501–14504 (no Codex). Then 14507 (5α, Fable, Codex; 14507-T if needed; O-2, O-9). Then the A.1 gate: 14506 re-spawn 1 (rebase, names, fingerprint text, 37.00 totals, the R49 file, the new MU-41 pin), merge, 14506 re-spawn 2 (MU-01..24, MU-37, MU-41), handoff |
+| **Open rulings** | None for the owner. Put to the batched Fable 5a for confirmation: the Orchestrator's ruling on the reopen hook's `EffectiveFrom` |
+| **Next action** | Process 14501, 14503b and 14507 as they return |
