@@ -667,7 +667,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
 
     // ─── Assertions ──────────────────────────────────────────────────────
 
-    /// <summary>The week-3 premises every fact leans on, asserted so a wrong calendar reads as a
+    /// <summary>The calendar premises every fact leans on, asserted so a wrong calendar reads as a
     /// named failure rather than as a mysterious status.</summary>
     private static void AssertCalendarPremises()
     {
