@@ -1,12 +1,17 @@
 using System.Data;
 using System.Globalization;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
 using StatsTid.Tests.Regression.TestSupport;
@@ -35,6 +40,7 @@ namespace StatsTid.Tests.Regression.Settlement;
 [Trait("Category", "Docker")]
 public sealed class SpecialHolidaySettlementTests : IAsyncLifetime
 {
+    private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
     private const string OrgId = "STY01";
     private const string SpecialHolidayType = "SPECIAL_HOLIDAY";
     private const string VacationType = "VACATION";
@@ -122,6 +128,68 @@ public sealed class SpecialHolidaySettlementTests : IAsyncLifetime
         Assert.Equal(3m, outcome.Partition!.PayoutDays);
         Assert.Equal(0m, outcome.Partition.ForfeitDays);
         Assert.Equal("SETTLED", outcome.Row!.SettlementState);
+    }
+
+    /// <summary>
+    /// <b>S145 / TASK-14501 (A0, R20, R57) — a re-saved særlig-feriedag cell counts once.</b>
+    ///
+    /// <para><b>Plain language.</b> The godtgørelse (the cash payout of unused særlige feriedage) is the
+    /// 5-day quota minus the days recorded as taken in the taking window. Correcting a Skema cell
+    /// (saving it again) used to leave two rows for the same day and the settlement counted both, so the
+    /// employee was paid one day too little. The ruled meaning is that a Skema save replaces the cell.
+    /// This fact saves one SPECIAL_HOLIDAY_ALLOWANCE day through the real Skema endpoint, saves it again
+    /// with the same hours, then settles the accrual year once.</para>
+    ///
+    /// <para><b>Expected (derived from the spec).</b> Accrual year 2024 has its taking window
+    /// <c>[1 May 2025, 30 Apr 2026]</c> (<c>VacationSettlementService.cs:917-924</c>, the resolver's
+    /// geometry). Tuesday 4 November 2025 is inside it and, being May-December, keys to accrual year 2024,
+    /// which is fully accrued (5 days), so the 5-day quota leaves four days of headroom after the cell
+    /// (fixture condition C-A2; the employee has no end date, which would clamp the accrual cap). No raw
+    /// row is seeded on the date (C-A1: a raw TIME_POST row is never superseded, so one on the same date
+    /// would only add). <c>used</c> counts the day <b>once</b> = 1 and there is one recorded component;
+    /// payout = earned 5 − used 1 = <b>4</b>, state SETTLED. A read that counted both rows would give
+    /// used 2 and payout 3.</para>
+    ///
+    /// <para><b>Red conditions (Docker; compiles today, so its RED is argued here).</b> TODAY the re-save
+    /// stores a second row and the settlement sums every row of the type in the window, so the fact fails
+    /// on <c>used</c> with 2 instead of 1. <b>MD-05</b> (<c>ReadRecordedFeriedageAsync</c>, the current-row
+    /// predicate removed) restores exactly that. Not reached by MD-06 (the guarded quota step stays inside
+    /// the cap) nor by MD-13 (this fact saves through Skema only; no raw row shares the cell).</para>
+    /// </summary>
+    [Fact]
+    public async Task SpecialHoliday_ResavedAllowanceDayInTakingWindow_UsedCountedOnce()
+    {
+        const int accrualYear = 2024;                              // taking window [1 May 2025, 30 Apr 2026]
+        var employeeId = await SeedEmployeeAsync();                // active, no end date, AC, OK24, fraction 1.0
+        var cell = new DateOnly(2025, 11, 4);
+        Assert.Equal(DayOfWeek.Tuesday, cell.DayOfWeek);           // fixture: a zero-norm day would be refused
+        Assert.True(cell >= new DateOnly(accrualYear + 1, 5, 1) && cell <= new DateOnly(accrualYear + 2, 4, 30));
+
+        var client = EmployeeSkemaClient(employeeId);
+        foreach (var attempt in new[] { "first save", "re-save with the same hours" })
+        {
+            var save = await client.PostAsJsonAsync($"/api/skema/{employeeId}/save", new
+            {
+                year = cell.Year,
+                month = cell.Month,
+                absences = new[] { new { date = cell.ToString("yyyy-MM-dd"), absenceType = "SPECIAL_HOLIDAY_ALLOWANCE", hours = 7.4m } },
+            });
+            Assert.True(save.StatusCode == HttpStatusCode.OK,
+                $"Skema {attempt}: expected 200, got {(int)save.StatusCode} {await save.Content.ReadAsStringAsync()}");
+        }
+
+        var outcome = await SettleAsync(employeeId, accrualYear);
+
+        Assert.True(outcome.DidSettle);
+        var row = await ReadActiveSettlementAsync(employeeId, accrualYear);
+        Assert.NotNull(row);
+        Assert.Equal("SETTLED", row!.Value.State);
+        using var snap = JsonDocument.Parse(row.Value.SnapshotJson);
+        var root = snap.RootElement;
+        Assert.Equal(5m, root.GetProperty("earned").GetDecimal());
+        Assert.Equal(1m, root.GetProperty("used").GetDecimal());                          // the cell, once
+        Assert.Equal(1, root.GetProperty("recordedAbsences").GetArrayLength());
+        Assert.Equal(4m, row.Value.Payout);                                               // 5 − 1
     }
 
     /// <summary>
@@ -332,6 +400,68 @@ public sealed class SpecialHolidaySettlementTests : IAsyncLifetime
         var outcome = await Service.SettleAsync(employeeId, SpecialHolidayType, accrualYear, YearEnd, conn, tx);
         await tx.CommitAsync();
         return outcome;
+    }
+
+    /// <summary>
+    /// S145 / TASK-14501 (R57, R62) — a client for the employee's OWN Skema saves, on a host derived
+    /// from the suite's factory with the rule-engine seam stubbed. A Skema absence save posts to
+    /// <c>/api/rules/validate-entitlement</c> and fails closed without an answer; this suite boots the
+    /// plain factory, which has no rule engine behind it, so the derived host answers that one route
+    /// with the real <c>EntitlementValidationRule.Evaluate</c> (the pattern of
+    /// <c>Adr032RevaluationTests</c>). An employee may save only their own data.
+    /// </summary>
+    private HttpClient EmployeeSkemaClient(string employeeId)
+    {
+        var svc = new JwtTokenService(new JwtSettings
+        {
+            Issuer = "statstid",
+            Audience = "statstid",
+            SigningKey = DevFallbackSigningKey,
+            ExpirationMinutes = 60,
+        });
+        var token = svc.GenerateToken(
+            employeeId: employeeId, name: employeeId, role: StatsTidRoles.Employee,
+            agreementCode: "AC", orgId: OrgId,
+            scopes: new[] { new RoleScope(StatsTidRoles.Employee, OrgId, "ORG_ONLY") });
+        var client = _factory
+            .WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+                services.AddSingleton<IHttpClientFactory>(new EntitlementValidationStubFactory())))
+            .CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
+    /// <summary>Replaces the whole <see cref="IHttpClientFactory"/>, so it supplies the BaseAddress the
+    /// production registration sets (the named RuleEngine client uses relative URIs).</summary>
+    private sealed class EntitlementValidationStubFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new EntitlementValidationStubHandler(), disposeHandler: false)
+        {
+            BaseAddress = new Uri("http://rule-engine:8080"),
+        };
+    }
+
+    /// <summary>Answers <c>/api/rules/validate-entitlement</c> with the real rule; everything else is 404.</summary>
+    private sealed class EntitlementValidationStubHandler : HttpMessageHandler
+    {
+        private static readonly JsonSerializerOptions Camel = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (!path.EndsWith("/api/rules/validate-entitlement", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            var json = await request.Content!.ReadAsStringAsync(cancellationToken);
+            var req = JsonSerializer.Deserialize<StatsTid.RuleEngine.Api.Contracts.ValidateEntitlementRequest>(json, Camel)!;
+            var result = StatsTid.RuleEngine.Api.Rules.EntitlementValidationRule.Evaluate(req);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(result, Camel), System.Text.Encoding.UTF8, "application/json"),
+            };
+        }
     }
 
     /// <summary>Marks the employee a leaver (end date + is_active=false) for the BLOCKER-1 leaver guard.</summary>

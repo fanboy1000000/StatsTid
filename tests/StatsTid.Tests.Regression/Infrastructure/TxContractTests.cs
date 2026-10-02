@@ -54,7 +54,7 @@ public sealed class TxContractTests : IAsyncLifetime
     /// <c>docker/postgres/init.sql</c> for column shapes — schema drift between this DDL
     /// and production must be mirrored here.
     /// </summary>
-    private const string SchemaDdl = """
+    internal const string SchemaDdl = """
         CREATE TABLE IF NOT EXISTS organizations (
             org_id              TEXT        PRIMARY KEY,
             org_name            TEXT        NOT NULL,
@@ -280,11 +280,17 @@ public sealed class TxContractTests : IAsyncLifetime
         -- S27 / TASK-2702 projection tables (mirrors docker/postgres/init.sql:1181-1221).
         -- Wired into the (conn, tx) tx-contract tests below per S27 / TASK-2710 Slot 7.
         -- Schema drift between this DDL and production must be mirrored here.
+        -- S145 / TASK-14501: init.sql-COMPATIBLE copy (same columns, indexes and CHECK for these two
+        -- tables; NOT byte-identical — no production comments, own column order). The drift guard
+        -- Migrations.HarnessDdlMatchesInitSqlTests compares this copy with a database built from
+        -- init.sql alone, so a column, type, default, index or CHECK that falls behind fails CI
+        -- with a name. `hours` was NUMERIC(6,2) here against init.sql's NUMERIC(8,4) (S27 Step 7a
+        -- P2 fix: sub-centesimal hours must survive); it now matches.
         CREATE TABLE IF NOT EXISTS time_entries_projection (
             event_id                    UUID            PRIMARY KEY,
             employee_id                 TEXT            NOT NULL,
             date                        DATE            NOT NULL,
-            hours                       NUMERIC(6,2)    NOT NULL,
+            hours                       NUMERIC(8,4)    NOT NULL,
             start_time                  TIME,
             end_time                    TIME,
             task_id                     TEXT,
@@ -296,15 +302,29 @@ public sealed class TxContractTests : IAsyncLifetime
             actor_id                    TEXT,
             actor_role                  TEXT,
             correlation_id              UUID,
-            outbox_id                   BIGINT          NOT NULL
+            outbox_id                   BIGINT          NOT NULL,
+            -- S145 / TASK-14500 (A0): 'SKEMA' = a Skema save (one current value per cell),
+            -- 'TIME_POST' = POST /api/time-entries (additive). A pre-S145 row is TIME_POST.
+            source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
+            superseded_by_outbox_id     BIGINT          NULL,
+            CONSTRAINT time_entries_projection_source_check CHECK (source IN ('SKEMA','TIME_POST'))
         );
+        CREATE INDEX IF NOT EXISTS idx_time_entries_proj_emp_date_outbox
+            ON time_entries_projection(employee_id, date, outbox_id);
+        CREATE INDEX IF NOT EXISTS idx_time_entries_proj_emp_outbox
+            ON time_entries_projection(employee_id, outbox_id);
+        -- NULLS NOT DISTINCT (PostgreSQL 15+): a NULL task_id cannot slip two current Skema rows past
+        -- the index. Same clause as init.sql's S145 segment; the drift guard compares the definition.
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_time_entries_proj_current_skema_cell
+            ON time_entries_projection (employee_id, date, task_id) NULLS NOT DISTINCT
+            WHERE source = 'SKEMA' AND superseded_by_outbox_id IS NULL;
 
         CREATE TABLE IF NOT EXISTS absences_projection (
             event_id                    UUID            PRIMARY KEY,
             employee_id                 TEXT            NOT NULL,
             date                        DATE            NOT NULL,
             absence_type                TEXT            NOT NULL,
-            hours                       NUMERIC(6,2)    NOT NULL,
+            hours                       NUMERIC(8,4)    NOT NULL,
             agreement_code              TEXT            NOT NULL,
             ok_version                  TEXT            NOT NULL,
             occurred_at                 TIMESTAMPTZ     NOT NULL,
@@ -312,8 +332,19 @@ public sealed class TxContractTests : IAsyncLifetime
             actor_role                  TEXT,
             correlation_id              UUID,
             outbox_id                   BIGINT          NOT NULL,
-            feriedage                   NUMERIC(8,4)
+            feriedage                   NUMERIC(8,4),
+            -- S145 / TASK-14500 (A0): same two columns as time_entries_projection above.
+            source                      TEXT            NOT NULL DEFAULT 'TIME_POST',
+            superseded_by_outbox_id     BIGINT          NULL,
+            CONSTRAINT absences_projection_source_check CHECK (source IN ('SKEMA','TIME_POST'))
         );
+        CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_date_outbox
+            ON absences_projection(employee_id, date, outbox_id);
+        CREATE INDEX IF NOT EXISTS idx_absences_proj_emp_outbox
+            ON absences_projection(employee_id, outbox_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_absences_proj_current_skema_cell
+            ON absences_projection (employee_id, date, absence_type)
+            WHERE source = 'SKEMA' AND superseded_by_outbox_id IS NULL;
 
         ALTER TABLE absences_projection ADD COLUMN IF NOT EXISTS feriedage NUMERIC(8,4);
         """;
