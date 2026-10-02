@@ -748,14 +748,15 @@ public static class SkemaEndpoints
             //       NORMAL_HOURS line. The grid already drops empty and zero cells before posting
             //       (useSkema.ts), so this refuses only a hand-built request. The storage design still
             //       allows a later retraction (mark the current row superseded, insert nothing).
-            //   (2) an entry whose projectCode is null or empty. `required string` only demands that
-            //       the property is PRESENT, so an explicit JSON null passes model binding and would
-            //       become a NULL task_id, i.e. a cell keyed by no task at all.
+            //   (2) an entry whose projectCode is null, empty or whitespace (IsNullOrWhiteSpace, the
+            //       RequestValidator idiom). `required string` only demands that the property is
+            //       PRESENT, so an explicit JSON null passes model binding and would become a NULL
+            //       task_id, i.e. a cell keyed by no task at all.
             // The cell date echoed back is the request's own registration date, never an
             // employment date (ADR-040 D7).
             foreach (var entry in request.Entries ?? Array.Empty<SkemaEntry>())
             {
-                if (string.IsNullOrEmpty(entry.ProjectCode))
+                if (string.IsNullOrWhiteSpace(entry.ProjectCode))
                     return Results.BadRequest(new
                     {
                         error = "skema_entry_project_code_missing",
@@ -1197,12 +1198,14 @@ public static class SkemaEndpoints
             //     delta = Σ new feriedage − Σ stored feriedage of the current rows this save replaces.
             // "Stored" is absences_projection.feriedage, i.e. after any ADR-032 D4 revaluation: exactly
             // what entitlement_balances.used holds for those rows. An unchanged re-save therefore
-            // moves nothing, and a reduction gives days back. Read twice, like the valuation:
-            // (null, null) is the advisory pre-lock read feeding the rule-engine pre-check;
-            // (conn, tx) is the AUTHORITATIVE re-read under the consumption lock, which drives the
-            // balance write. A null stored feriedage counts 0, mirroring the `?? 0m` with which the
-            // replaced save added it to `used`. Additive (TIME_POST) rows are never replaced, so the
-            // repository read returns Skema rows only.
+            // moves nothing, and a reduction gives days back. Read twice, like the valuation, and
+            // both times on a transaction: first on the pre-check's read-only REPEATABLE READ
+            // snapshot, which every balance read of the pre-check shares, so the advisory
+            // subtraction is over one real state; then the AUTHORITATIVE re-read under the
+            // consumption lock, which drives the balance write. (The pooled (null, null) form is no
+            // longer called by this handler.) A null stored feriedage counts 0, mirroring the `?? 0m`
+            // with which the replaced save added it to `used`. Additive (TIME_POST) rows are never
+            // replaced, so the repository read returns Skema rows only.
             async Task<Dictionary<string, decimal>> ReadReplacedFeriedageByTypeAsync(
                 NpgsqlConnection? conn, NpgsqlTransaction? tx)
             {
@@ -1277,9 +1280,23 @@ public static class SkemaEndpoints
                 var httpClient = httpClientFactory.CreateClient(Http.RuleEngineClient.Name);
                 var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-                // S145 / TASK-14507 (R23) — the advisory read of what this save replaces (see
-                // ReadReplacedFeriedageByTypeAsync). The in-lock step re-reads it authoritatively.
-                var provisionalReplacedByEntitlementType = await ReadReplacedFeriedageByTypeAsync(null, null);
+                // S145 / TASK-14507 (R23; Step-5a BLOCKER) — ONE snapshot for the whole pre-check. The
+                // advisory read of what this save replaces and EVERY balance read below share this one
+                // REPEATABLE READ snapshot, so `balance.Used − Σ replaced` is a subtraction over one
+                // real state of the database. Read on separate connections, a concurrent save of the
+                // same cell landing between the two reads would pair numbers that were never true at
+                // once, and since S145 that can make the pre-check STRICTER than the truth (a stale
+                // refusal), not only more lenient. Read-only: no advisory lock, no FOR UPDATE, no
+                // write, so the rule-engine HTTP call below still sits outside every lock (a snapshot
+                // holds none). The config reads stay on their own pooled connections. Disposed at the
+                // end of this block, before the write transaction opens; the in-lock step re-reads the
+                // replaced rows and the balance authoritatively.
+                await using var preCheckConn = connectionFactory.Create();
+                await preCheckConn.OpenAsync(ct);
+                await using var preCheckTx = await preCheckConn.BeginTransactionAsync(
+                    System.Data.IsolationLevel.RepeatableRead, ct);
+
+                var provisionalReplacedByEntitlementType = await ReadReplacedFeriedageByTypeAsync(preCheckConn, preCheckTx);
 
                 foreach (var (entitlementType, totalRequestedDays) in requestedByEntitlementType)
                 {
@@ -1353,8 +1370,10 @@ public static class SkemaEndpoints
                         entitlementType, entitlementYearStart,
                         OkVersionResolver.ResolveVersion(entitlementYearStart), liveConfig, ct);
 
+                    // S145 / TASK-14507 (Step-5a) — on the pre-check snapshot, the same one the replaced
+                    // feriedage above was read from (see preCheckTx).
                     var balance = await entitlementBalanceRepo.GetByEmployeeAndTypeAsync(
-                        employeeId, entitlementType, entitlementYear, ct);
+                        preCheckConn, preCheckTx, employeeId, entitlementType, entitlementYear, ct);
 
                     // ── S60 / TASK-6005 — dated part-time fraction at the per-type batch anchor ──
                     // Source the part_time_fraction from the dated employment profile AS-OF
@@ -1587,7 +1606,11 @@ public static class SkemaEndpoints
             // committed before our lock is visible). The authoritative values stamp
             // AbsenceRegistered.Feriedage AND drive the CheckAndAdjustAsync delta (one valuation,
             // reused — Σ event Feriedage == guard delta). A stale PROVISIONAL advisory result is
-            // benign: the in-lock guard re-enforces against the fresh values.
+            // benign for the WRITE, because the in-lock guard re-enforces the cap against the fresh
+            // values. S145 / TASK-14507: since a re-save can now REDUCE `used`, a reduction can land
+            // between the pre-check snapshot and our lock, so a stale advisory result can also be a
+            // refusal the fresh state would not make: a spurious 422 the client may retry, never a
+            // wrong write.
             try
             {
                 await using var conn = connectionFactory.Create();

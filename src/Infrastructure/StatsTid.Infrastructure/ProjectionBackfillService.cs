@@ -16,8 +16,9 @@ namespace StatsTid.Infrastructure;
 //
 // Rebuilds `time_entries_projection` + `absences_projection` from the canonical
 // `events` log so deployments don't strand pre-S27 events outside the new sync
-// projection tables. Re-runnable in any state — `ON CONFLICT (event_id) DO
-// NOTHING` makes the backfill idempotent.
+// projection tables. Re-runnable against an empty projection or a complete one —
+// `ON CONFLICT (event_id) DO NOTHING` makes the backfill idempotent (see the S145
+// block below for the one partial state it cannot repair).
 //
 // This service is the canonical backfill implementation. Three call sites:
 //
@@ -67,6 +68,15 @@ namespace StatsTid.Infrastructure;
 //   Idempotent: on a re-run every INSERT conflicts on event_id, and every mark
 //   finds its predecessor already marked (superseded_by_outbox_id IS NULL fails),
 //   so nothing changes. No TRUNCATE, as before.
+//   NOT recoverable here: a hand-deleted OLDER row of a cell whose NEWER row is
+//   still current. Replaying the older event, its mark matches nothing (the only
+//   current row of the cell has a LARGER outbox_id), and its insert, as a second
+//   current Skema row, collides with the partial unique index. The run fails
+//   loudly with a unique violation (23505), its transaction rolls back, and the
+//   Backend host does not start. Recovery: truncate both hours projections
+//   (time_entries_projection and absences_projection) and restart, so the rebuild
+//   runs from empty; or reseed. The live write path cannot produce this state
+//   (each row is written in the same transaction as its event).
 
 /// <summary>
 /// Counters returned by <see cref="ProjectionBackfillService.RunAsync"/>.
@@ -189,9 +199,12 @@ public sealed class ProjectionBackfillService
     // from-events rebuild equals live state byte-identically, INCLUDING post-revaluation.
     // Keyed on the ABSENCE event_id (NOT the revaluation event); idempotent on re-run
     // (overwrites with the same recorded value). Replays are applied AFTER all absence
-    // INSERTs so the target row is guaranteed present regardless of cross-stream ordering
-    // (AbsenceRegistered rides time/skema streams; EntitlementBalanceRevalued rides
-    // employee-{id} streams — a single (stream_id, stream_version) sort interleaves them).
+    // INSERTs so the target row is guaranteed present whatever order the events are read
+    // in. Both AbsenceRegistered and EntitlementBalanceRevalued ride the employee's
+    // `employee-{id}` stream (the revaluation by EmployeeProfileEndpoints, not on the
+    // PUT's employee-profile-{id} stream), so this is robustness to any ordering, not a
+    // cross-stream interleave: a revaluation never has to wait for an absence that the
+    // sort happens to place after it.
     private const string ApplyRevaluationSql = @"
         UPDATE absences_projection
            SET feriedage = @feriedage
@@ -349,7 +362,7 @@ public sealed class ProjectionBackfillService
 
         // ADR-032 D2 — buffer EntitlementBalanceRevalued replacement sets in event order
         // (rows already sorted by stream_id, stream_version). Applied AFTER the absence
-        // INSERTs so every targeted absence row exists regardless of cross-stream interleave;
+        // INSERTs so every targeted absence row exists whatever the event ordering;
         // last-wins within event order replays the live state (later revaluations supersede
         // earlier ones for the same absence — the live profile-PUT path overwrites in place).
         var revaluations = new List<AbsenceFeriedageReplacement>();

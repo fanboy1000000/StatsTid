@@ -120,6 +120,12 @@ public sealed class EntitlementBalanceRepository
     /// <c>EntitlementBalanceAdjusted</c> event. Participates in the caller's transaction (ADR-018 D3);
     /// the caller commits or rolls back, this method does NOT. The caller must hold the employee's
     /// consumption lock, as for every balance write of the save path.</para>
+    ///
+    /// <para>Known gap (QUAL-196, revisit): like the guarded path and
+    /// <see cref="ApplyRevaluationAsync"/>, a MISSING row is seeded at <c>used = 0</c>. If current
+    /// recorded absence rows already exist for the type and year (so the row should have existed),
+    /// the result shows as a negative or under-counted <c>used</c>; the correct seed would be the
+    /// Σ of the current recorded feriedage.</para>
     /// </summary>
     public async Task<decimal> AdjustUsedAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
