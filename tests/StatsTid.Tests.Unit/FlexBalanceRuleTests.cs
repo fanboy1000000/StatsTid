@@ -27,6 +27,30 @@ public class FlexBalanceRuleTests
     private static readonly DateOnly Monday = new(2024, 4, 8);
     private static readonly DateOnly Sunday = Monday.AddDays(6);
 
+    // S145 TASK-14505-T: FlexBalanceRule.Evaluate (one week's norm for any period) was retired by R8.
+    // The same question is now put to the weekly core as a legacy call: a one-piece timeline
+    // [periodStart, periodEnd] at the profile's fraction, cutoff on the period's last day. Flex is
+    // settled once, on that last covered day, at the cap of the piece's config. Every period in this
+    // class is exactly one Monday-Sunday week, so the per-day norm sums to the old 37.00 and no
+    // expected value below changes. GetPayoutLineItem stays a pure helper (called directly below).
+    private static FlexBalanceResult EvaluateFlex(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<AbsenceEntry> absences,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config,
+        decimal previousBalance) =>
+        WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
+            profile.EmployeeId,
+            periodStart,
+            periodEnd,
+            periodEnd,
+            [new ResolvedPiece(periodStart, periodEnd, profile.PartTimeFraction, config)],
+            entries,
+            absences,
+            previousBalance)).Flex;
+
     [Fact]
     public void ExactNorm_ZeroDelta()
     {
@@ -41,7 +65,7 @@ public class FlexBalanceRuleTests
             CreateEntry(Monday.AddDays(4), 7.4m),
         };
 
-        var result = FlexBalanceRule.Evaluate(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 0m);
+        var result = EvaluateFlex(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 0m);
 
         Assert.True(result.Success);
         Assert.Equal(0m, result.Delta);
@@ -62,7 +86,7 @@ public class FlexBalanceRuleTests
             CreateEntry(Monday.AddDays(4), 8m),
         };
 
-        var result = FlexBalanceRule.Evaluate(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 0m);
+        var result = EvaluateFlex(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 0m);
 
         Assert.Equal(3.0m, result.Delta);
         Assert.Equal(3.0m, result.NewBalance);
@@ -82,7 +106,7 @@ public class FlexBalanceRuleTests
             CreateEntry(Monday.AddDays(4), 7m),
         };
 
-        var result = FlexBalanceRule.Evaluate(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 10m);
+        var result = EvaluateFlex(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 10m);
 
         Assert.Equal(-2.0m, result.Delta);
         Assert.Equal(8.0m, result.NewBalance);
@@ -111,7 +135,7 @@ public class FlexBalanceRuleTests
             }
         };
 
-        var result = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 0m);
+        var result = EvaluateFlex(profile, entries, absences, Monday, Sunday, config, 0m);
 
         Assert.Equal(0m, result.Delta); // 29.6 + 7.4 = 37
     }
@@ -130,7 +154,7 @@ public class FlexBalanceRuleTests
             CreateEntry(Monday.AddDays(4), 10m),
         };
 
-        var result = FlexBalanceRule.Evaluate(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 95m);
+        var result = EvaluateFlex(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 95m);
 
         Assert.Equal(100m, result.NewBalance);
         Assert.True(result.ExcessForPayout > 0);
@@ -150,7 +174,7 @@ public class FlexBalanceRuleTests
             CreateEntry(Monday.AddDays(4), 7.4m),
         };
 
-        var result = FlexBalanceRule.Evaluate(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 25.5m);
+        var result = EvaluateFlex(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 25.5m);
 
         Assert.Equal(0m, result.Delta);
         Assert.Equal(25.5m, result.NewBalance);
@@ -180,7 +204,7 @@ public class FlexBalanceRuleTests
         };
 
         // Norm = 37 - 7.4 = 29.6, Worked = 22.2, No norm credit from unpaid leave
-        var result = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 0m);
+        var result = EvaluateFlex(profile, entries, absences, Monday, Sunday, config, 0m);
 
         Assert.Equal(-7.4m, result.Delta); // 22.2 - 29.6
     }
@@ -200,7 +224,7 @@ public class FlexBalanceRuleTests
         };
 
         // Previous = 148, delta = 23 → raw = 171, clamped to 150, excess = 21
-        var result = FlexBalanceRule.Evaluate(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 148m);
+        var result = EvaluateFlex(profile, entries, new List<AbsenceEntry>(), Monday, Sunday, config, 148m);
 
         Assert.Equal(150m, result.NewBalance);
         Assert.Equal(21m, result.ExcessForPayout);

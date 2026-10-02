@@ -28,6 +28,62 @@ public class RegressionTests
     private static readonly DateOnly Monday = new(2024, 4, 8);
     private static readonly DateOnly Sunday = Monday.AddDays(6);
 
+    // S145 TASK-14505-T: OvertimeRule.Evaluate, every public NormCheckRule.Evaluate* and
+    // FlexBalanceRule.Evaluate were retired by R8/R34. Each is now one result of the weekly core, run
+    // as a legacy call: a one-piece timeline [periodStart, periodEnd] at the profile's fraction and
+    // the given config, with the settlement cutoff on the period's last day. Every period in this
+    // class is exactly one Monday-Sunday week, so the per-day norm and thresholds sum to the old
+    // weekly figures (37.00 / 37.00 / 40.00 full-time) and no expected value below changes.
+    private static TimelineCoreResult RunCore(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<AbsenceEntry> absences,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config,
+        decimal previousFlexBalance,
+        TimelineNormMode? forcedNormMode = null) =>
+        WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
+            profile.EmployeeId,
+            periodStart,
+            periodEnd,
+            periodEnd,
+            [new ResolvedPiece(periodStart, periodEnd, profile.PartTimeFraction, config)],
+            entries,
+            absences,
+            previousFlexBalance,
+            forcedNormMode));
+
+    private static CalculationResult EvaluateOvertime(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config) =>
+        RunCore(profile, entries, [], periodStart, periodEnd, config, 0m).Overtime;
+
+    // The retired Evaluate(profile, entries, start, end, normPeriodWeeks: 1) took a 1-week norm period
+    // whatever the config said; its equivalent is the weekly mode forced (R34), which reports
+    // NormPeriodWeeks 1. The result keeps the NORM_CHECK_37H id (the core's default NormRuleId).
+    private static CalculationResult EvaluateNorm(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config,
+        TimelineNormMode? forcedNormMode) =>
+        RunCore(profile, entries, [], periodStart, periodEnd, config, 0m, forcedNormMode).Norm;
+
+    private static FlexBalanceResult EvaluateFlex(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<AbsenceEntry> absences,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config,
+        decimal previousBalance) =>
+        RunCore(profile, entries, absences, periodStart, periodEnd, config, previousBalance).Flex;
+
     /// <summary>
     /// Regression 1: Same inputs evaluated under OK24 and OK26 must produce structurally
     /// identical results (since OK26 is a placeholder with identical values).
@@ -48,8 +104,8 @@ public class RegressionTests
         var configOk24 = AgreementConfigProvider.GetConfig("HK", "OK24");
         var configOk26 = AgreementConfigProvider.GetConfig("HK", "OK26");
 
-        var overtimeOk24 = OvertimeRule.Evaluate(profileOk24, entriesOk24, Monday, Sunday, configOk24);
-        var overtimeOk26 = OvertimeRule.Evaluate(profileOk26, entriesOk26, Monday, Sunday, configOk26);
+        var overtimeOk24 = EvaluateOvertime(profileOk24, entriesOk24, Monday, Sunday, configOk24);
+        var overtimeOk26 = EvaluateOvertime(profileOk26, entriesOk26, Monday, Sunday, configOk26);
 
         Assert.Equal(overtimeOk24.LineItems.Count, overtimeOk26.LineItems.Count);
         for (int i = 0; i < overtimeOk24.LineItems.Count; i++)
@@ -72,8 +128,8 @@ public class RegressionTests
             .Select(i => CreateEntry(Monday.AddDays(i), 7.8m))
             .ToList();
 
-        var result1 = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
-        var result2 = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result1 = EvaluateOvertime(profile, entries, Monday, Sunday, config);
+        var result2 = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.Equal(result1.LineItems.Count, result2.LineItems.Count);
         for (int i = 0; i < result1.LineItems.Count; i++)
@@ -98,13 +154,13 @@ public class RegressionTests
             .Select(i => CreateEntry(Monday.AddDays(i), 7.4m))
             .ToList();
 
-        var resultBefore = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var resultBefore = EvaluateOvertime(profile, entries, Monday, Sunday, config);
         Assert.Empty(resultBefore.LineItems); // Exactly at norm
 
         // Retroactive correction: add 2 extra hours on Monday
         entries.Add(CreateEntry(Monday, 2m));
 
-        var resultAfter = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var resultAfter = EvaluateOvertime(profile, entries, Monday, Sunday, config);
         Assert.NotEmpty(resultAfter.LineItems); // Now has overtime
     }
 
@@ -120,7 +176,7 @@ public class RegressionTests
             .Select(i => CreateEntry(Monday.AddDays(i), 12m))
             .ToList();
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.DoesNotContain(result.LineItems, li => li.TimeType == OvertimeTypes.Overtime50);
         Assert.DoesNotContain(result.LineItems, li => li.TimeType == OvertimeTypes.Overtime100);
@@ -139,7 +195,7 @@ public class RegressionTests
             .Select(i => CreateEntry(Monday.AddDays(i), 9m))
             .ToList();
 
-        var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         Assert.DoesNotContain(result.LineItems, li => li.TimeType == OvertimeTypes.Merarbejde);
         Assert.Contains(result.LineItems, li => li.TimeType == OvertimeTypes.Overtime50);
@@ -157,11 +213,11 @@ public class RegressionTests
             .Select(i => CreateEntry(Monday.AddDays(i), 8.5m))
             .ToList();
 
-        var referenceResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var referenceResult = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
         for (int run = 0; run < 100; run++)
         {
-            var result = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+            var result = EvaluateOvertime(profile, entries, Monday, Sunday, config);
 
             Assert.Equal(referenceResult.LineItems.Count, result.LineItems.Count);
             for (int i = 0; i < referenceResult.LineItems.Count; i++)
@@ -202,11 +258,11 @@ public class RegressionTests
         var absences = new List<AbsenceEntry>();
 
         // Run all 5 pure rule functions in sequence
-        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday, normPeriodWeeks: 1);
+        var normResult = EvaluateNorm(profile, entries, Monday, Sunday, config, TimelineNormMode.Weekly);
         var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
-        var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var overtimeResult = EvaluateOvertime(profile, entries, Monday, Sunday, config);
         var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
-        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 0m);
+        var flexResult = EvaluateFlex(profile, entries, absences, Monday, Sunday, config, 0m);
 
         // AC must produce MERARBEJDE, not OVERTIME
         Assert.Contains(overtimeResult.LineItems, li => li.TimeType == OvertimeTypes.Merarbejde);
@@ -254,11 +310,11 @@ public class RegressionTests
         var absences = new List<AbsenceEntry>();
 
         // Run all rules
-        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday, normPeriodWeeks: 1);
+        var normResult = EvaluateNorm(profile, entries, Monday, Sunday, config, TimelineNormMode.Weekly);
         var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
-        var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var overtimeResult = EvaluateOvertime(profile, entries, Monday, Sunday, config);
         var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
-        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 0m);
+        var flexResult = EvaluateFlex(profile, entries, absences, Monday, Sunday, config, 0m);
 
         // HK must produce overtime, not merarbejde
         Assert.DoesNotContain(overtimeResult.LineItems, li => li.TimeType == OvertimeTypes.Merarbejde);
@@ -342,7 +398,7 @@ public class RegressionTests
         var absences = new List<AbsenceEntry>();
 
         // Previous balance = 145
-        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 145m);
+        var flexResult = EvaluateFlex(profile, entries, absences, Monday, Sunday, config, 145m);
 
         // Delta = 45 - 37 = 8, raw = 145 + 8 = 153, clamped to 150, excess = 3
         Assert.Equal(150m, flexResult.NewBalance);
@@ -385,11 +441,11 @@ public class RegressionTests
         };
 
         // Run all 5 rules
-        var normResult = NormCheckRule.Evaluate(profile, entries, Monday, Sunday, normPeriodWeeks: 1);
+        var normResult = EvaluateNorm(profile, entries, Monday, Sunday, config, TimelineNormMode.Weekly);
         var supplementResult = SupplementRule.Evaluate(profile, entries, Monday, Sunday, config);
-        var overtimeResult = OvertimeRule.Evaluate(profile, entries, Monday, Sunday, config);
+        var overtimeResult = EvaluateOvertime(profile, entries, Monday, Sunday, config);
         var absenceResult = AbsenceRule.Evaluate(profile, absences, Monday, Sunday);
-        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 50m);
+        var flexResult = EvaluateFlex(profile, entries, absences, Monday, Sunday, config, 50m);
 
         // Collect all results with their rule IDs
         var allResults = new List<CalculationResult>
@@ -554,7 +610,7 @@ public class RegressionTests
         var absences = new List<AbsenceEntry>();
 
         // Previous balance = 145, delta = 13 → raw = 158, clamped to 150, excess = 8
-        var flexResult = FlexBalanceRule.Evaluate(profile, entries, absences, Monday, Sunday, config, 145m);
+        var flexResult = EvaluateFlex(profile, entries, absences, Monday, Sunday, config, 145m);
 
         Assert.Equal(150m, flexResult.NewBalance);
         Assert.Equal(8m, flexResult.ExcessForPayout);

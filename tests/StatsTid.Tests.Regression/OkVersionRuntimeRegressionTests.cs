@@ -26,7 +26,7 @@ namespace StatsTid.Tests.Regression;
 //         invariant continues to apply to any future week-anchored caller);
 //     (c) proving that a retroactive split at the OK-transition date yields
 //         two structurally-consistent result sets — one per version — using
-//         the same pure OvertimeRule path as RegressionTests.cs.
+//         the same pure overtime path as RegressionTests.cs (the weekly core since S145 R8).
 //
 // Tests kept pure (no HTTP, no DB, no Docker). This mirrors the style of the
 // existing RegressionTests.cs. A live HTTP drift-log test for
@@ -57,6 +57,26 @@ public class OkVersionRuntimeRegressionTests
         AgreementCode = agreement,
         OkVersion = okVersion
     };
+
+    // S145 TASK-14505-T: OvertimeRule.Evaluate was retired by R8. A legacy single-period overtime
+    // call is now the Overtime result of the weekly core: a one-piece timeline [periodStart,
+    // periodEnd] at the profile's fraction and the given config, with the settlement cutoff on the
+    // period's last day. The window is the settlement window: only the days inside it are evaluated.
+    private static CalculationResult EvaluateOvertime(
+        EmploymentProfile profile,
+        IReadOnlyList<TimeEntry> entries,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        AgreementRuleConfig config) =>
+        WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
+            profile.EmployeeId,
+            periodStart,
+            periodEnd,
+            periodEnd,
+            [new ResolvedPiece(periodStart, periodEnd, profile.PartTimeFraction, config)],
+            entries,
+            [],
+            0m)).Overtime;
 
     private static AbsenceEntry CreateAbsence(DateOnly date, string okVersion) => new()
     {
@@ -208,8 +228,20 @@ public class OkVersionRuntimeRegressionTests
     //    NOTE: We do NOT call RetroactiveCorrectionService.RecalculateAsync
     //    directly because it depends on PeriodCalculationService, which in
     //    turn requires an HTTP rule-engine endpoint. Instead, we exercise the
-    //    same pure OvertimeRule twice — once per partition — which is what
-    //    the split path ultimately invokes per segment.
+    //    same pure weekly core (WeeklyTimelineCore, the successor of the retired
+    //    OvertimeRule.Evaluate, S145 R8) twice — once per partition — which is
+    //    what the split path ultimately invokes per segment.
+    //
+    //    Red conditions (S145 R8, labelled change 4). The segment-1 assertion
+    //    names a type S145 creates (WeeklyTimelineCore), so its RED is proven by
+    //    MUTATION at the gate in an isolated checkout, never by reverting. Two
+    //    named mutations, each keeping the API and breaking one behaviour:
+    //      (a) the core judges each settled week against a full week's norm and
+    //          thresholds (37 x fraction / 40 x fraction) instead of the sums of
+    //          its own covered weekdays (the QUAL-186 defect): segment 1 (16.00 h
+    //          against 37.00) produces NO line, so Assert.Single trips;
+    //      (b) week lines dated on the week's Monday (plan MU-02): the line is
+    //          dated 30 March, so the Date assertion (31 March) trips.
     // -----------------------------------------------------------------------
     [Fact]
     public void PayrollRetroactive_OkTransitionDateSplitsPeriod()
@@ -253,9 +285,9 @@ public class OkVersionRuntimeRegressionTests
         var segment1End   = transitionDate.AddDays(-1);
         var segment2Start = transitionDate;
 
-        var result1 = OvertimeRule.Evaluate(
+        var result1 = EvaluateOvertime(
             profileOk24, entriesBefore, periodStart, segment1End, configOk24);
-        var result2 = OvertimeRule.Evaluate(
+        var result2 = EvaluateOvertime(
             profileOk26, entriesOnOrAfter, segment2Start, periodEnd, configOk26);
 
         // Both segments must succeed and carry the same RuleId (structural consistency)
@@ -269,10 +301,26 @@ public class OkVersionRuntimeRegressionTests
         // indirectly asserted by the fact each was evaluated with the correct
         // config and entry set). What we CAN assert directly: each per-segment
         // line item's hours are accounted for within the partition that produced
-        // it (segment2 has 5x 8h = 40h, which exceeds 37h norm, so OK26 segment
-        // must produce overtime-type line items; segment1 has 2x 8h = 16h which
-        // is under norm and therefore produces zero overtime line items).
-        Assert.Empty(result1.LineItems);
+        // it.
+        //
+        // Each segment is a legacy single-period call: a one-piece timeline over its OWN window,
+        // settled on the window's last day. Under the week-by-week rule (owner rulings Q2 and Q3) a
+        // window is judged against the norm and thresholds of ITS OWN weekdays, never against one
+        // full 37 h week; judging 16 h against a full week's norm was the defect (QUAL-186), not
+        // the specification. The figures, from the spec (HK: norm 37, thresholds 37 / 40; a weekday
+        // carries 7.40 / 7.40 / 8.00):
+        //   segment 1, Mon 30 - Tue 31 March (OK24): 2 weekdays, so norm 2 x 7.40 = 14.80 and the
+        //     100% threshold 2 x 8.00 = 16.00; 16.00 h worked is 1.20 h over the norm, all of it in
+        //     the 50% band.
+        //   segment 2, Wed 1 - Sun 5 April (OK26): 3 weekdays, so norm 22.20 and threshold 24.00;
+        //     40.00 h worked is 17.80 h over = OVERTIME_50 1.80 + OVERTIME_100 16.00, dated 5 April.
+        //
+        // S145 R8: labelled change 4 — a non-aligned legacy period is judged week by week; the 30–31 March segment settles on 31 March (norm 14.80, threshold 16.00)
+        var segment1Line = Assert.Single(result1.LineItems);
+        Assert.Equal("OVERTIME_50", segment1Line.TimeType);
+        Assert.Equal(1.20m, segment1Line.Hours);
+        Assert.Equal(1.5m, segment1Line.Rate);
+        Assert.Equal(new DateOnly(2026, 3, 31), segment1Line.Date);
         Assert.NotEmpty(result2.LineItems);
 
         // Structural consistency: both results share the same RuleId shape and
