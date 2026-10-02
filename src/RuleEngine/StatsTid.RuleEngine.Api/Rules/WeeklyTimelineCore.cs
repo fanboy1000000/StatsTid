@@ -111,7 +111,9 @@ public sealed class TimelineInputException : ArgumentException
 ///   cutoff or after <c>PeriodEnd</c>. That is how a starter's opening week counts norm only from
 ///   the first day, and how a legacy call's opening partial week counts only in-period days. A day
 ///   past the period never decides the closing week's mode or reported <c>NormPeriodWeeks</c>:
-///   under F1 that week settles in the next period's run anyway.</description></item>
+///   the closing week's in-period days still count toward this period's norm, so only an
+///   in-period day may decide how; the week's overtime settles in the period holding its
+///   settlement day (F1).</description></item>
 /// </list>
 ///
 /// <para>
@@ -407,7 +409,7 @@ public static class WeeklyTimelineCore
             return new Timeline(sorted, input.PeriodStart, input.PeriodEnd, input.SettlementCutoff, hoursByDay);
         }
 
-        /// <summary>The piece covering <paramref name="day"/>, or null when no piece covers it or it is after the cutoff.</summary>
+        /// <summary>The piece covering <paramref name="day"/>, or null when no piece covers it or it is after the cutoff or after <c>PeriodEnd</c>.</summary>
         public ResolvedPiece? PieceOn(DateOnly day)
         {
             var index = PieceIndexOn(day);
