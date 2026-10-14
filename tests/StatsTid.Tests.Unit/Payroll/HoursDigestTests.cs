@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 
@@ -220,6 +223,155 @@ public sealed class HoursDigestTests
         AgreementCode = "HK",
         OkVersion = "OK26",
         OccurredAt = new DateTime(2026, 10, 5, 8, 0, 0, DateTimeKind.Utc),
+        OutboxId = 1,
+    };
+
+    // ═══ TASK-14515 (R15): lossless digest property facts, appended at re-spawn 1 ═══
+    // Plain language: a replay proves a month by hashing the hour rows as read; the hash must be LOSSLESS
+    // (fifth decimal, 100 ns) and over the rows BEFORE midnight normalization. Expected hashes are computed
+    // here from the spec line forms (refinement A7 as amended by R-13), independently of the product.
+
+    private static readonly Guid DIdA = Guid.Parse("00000000-0000-0000-0000-00000000000a");
+    private static readonly Guid DIdB = Guid.Parse("a0000000-0000-0000-0000-000000000001");
+    private static readonly DateOnly DigestDay = new(2026, 9, 15);
+
+    /// <summary>
+    /// Two entry sets identical except <c>Hours</c> 7.4 versus 7.40001 (FIFTH decimal) hash differently, and each
+    /// equals the hash of its spec-written lines. Spec: refinement :674 and :383 (no rounding).
+    /// Mutation (MU-33): write Hours to four decimals; both rows write 7.4, the hashes are equal, and the
+    /// inequality and the exact-hash assertion for the second set fail.
+    /// </summary>
+    [Fact]
+    public void HoursDifferingInFifthDecimal_HashDifferently()
+    {
+        var a = new[] { DEntry(DIdA, hours: 7.4m) };
+        var b = new[] { DEntry(DIdA, hours: 7.40001m) };
+
+        var hashA = HoursDigest.ComputeEntriesDigest(a);
+        var hashB = HoursDigest.ComputeEntriesDigest(b);
+
+        Assert.Equal(SpecEntriesDigest(a), hashA);
+        Assert.Equal(SpecEntriesDigest(b), hashB);
+        Assert.NotEqual(hashA, hashB);
+    }
+
+    /// <summary>
+    /// Two entry sets identical except one clock time differs by 100 ns (one tick) hash differently, for the
+    /// start and for the end time, each equal to its spec-written lines (<c>16:00:00.0000000</c> versus
+    /// <c>16:00:00.0000001</c>). Spec: refinement :674 and :384.
+    /// Mutation (MU-34): times written as <c>HH:mm:ss</c>; the tick vanishes, the hashes are equal, and the
+    /// inequality and exact-hash assertions fail.
+    /// </summary>
+    [Fact]
+    public void TimesDifferingBy100ns_HashDifferently()
+    {
+        var oneTick = TimeSpan.FromTicks(1);
+        var baseStart = new TimeOnly(8, 0, 0);
+        var baseEnd = new TimeOnly(16, 0, 0);
+
+        var plain = new[] { DEntry(DIdA, start: baseStart, end: baseEnd) };
+        var endPlusTick = new[] { DEntry(DIdA, start: baseStart, end: baseEnd.Add(oneTick)) };
+        var startPlusTick = new[] { DEntry(DIdA, start: baseStart.Add(oneTick), end: baseEnd) };
+
+        var hashPlain = HoursDigest.ComputeEntriesDigest(plain);
+        var hashEnd = HoursDigest.ComputeEntriesDigest(endPlusTick);
+        var hashStart = HoursDigest.ComputeEntriesDigest(startPlusTick);
+
+        Assert.Equal(SpecEntriesDigest(plain), hashPlain);
+        Assert.Equal(SpecEntriesDigest(endPlusTick), hashEnd);
+        Assert.Equal(SpecEntriesDigest(startPlusTick), hashStart);
+        Assert.NotEqual(hashPlain, hashEnd);
+        Assert.NotEqual(hashPlain, hashStart);
+        Assert.NotEqual(hashEnd, hashStart);
+    }
+
+    /// <summary>
+    /// The digest hashes rows exactly AS READ: a midnight-crossing row (22:00 to 06:00, 8 h) and an ordinary row,
+    /// listed out of order, must equal the hash of the two as-read lines sorted ordinally. Spec: R15 and
+    /// refinement :379-380.
+    /// Mutation (MU-35): digest over normalized entries; the crossing row becomes two lines, the exact hash fails.
+    /// </summary>
+    [Fact]
+    public void HashesRowsAsRead_BeforeNormalization()
+    {
+        var crossing = DEntry(DIdB, start: new TimeOnly(22, 0, 0), end: new TimeOnly(6, 0, 0), hours: 8.0m);
+        var ordinary = DEntry(DIdA, start: new TimeOnly(8, 0, 0), end: new TimeOnly(15, 24, 0), hours: 7.4m);
+
+        var hash = HoursDigest.ComputeEntriesDigest(new[] { crossing, ordinary });
+
+        var expected = Sha256Hex(string.Join("\n", new[]
+        {
+            "00000000-0000-0000-0000-00000000000a|2026-09-15|08:00:00.0000000|15:24:00.0000000|7.4||false",
+            "a0000000-0000-0000-0000-000000000001|2026-09-15|22:00:00.0000000|06:00:00.0000000|8||false",
+        }));
+        Assert.Equal(expected, hash);
+    }
+
+    /// <summary>
+    /// Guard (no MU; QUAL-197 check). The absences line does NOT include <c>Feriedage</c>: a row with a
+    /// back-filled Feriedage and one with NULL hash identically, equal to the spec line. The AbsenceType is
+    /// written as hex in the expected line since R-13 (the one expected-text change of re-spawn 1: the line
+    /// FORM was amended by the ruling, the property pinned is unchanged).
+    /// </summary>
+    [Fact]
+    public void AbsencesDigest_IgnoresFeriedage_QUAL197()
+    {
+        var live = new[] { DAbsence(DIdA, AbsenceTypes.LeaveWithPay, 7.4m, feriedage: null) };
+        var rebuilt = new[] { DAbsence(DIdA, AbsenceTypes.LeaveWithPay, 7.4m, feriedage: 1.0m) };
+
+        var hexType = Convert.ToHexString(Encoding.UTF8.GetBytes("LEAVE_WITH_PAY"));
+        var expected = Sha256Hex("00000000-0000-0000-0000-00000000000a|2026-09-15|" + hexType + "|7.4");
+        Assert.Equal(expected, HoursDigest.ComputeAbsencesDigest(live));
+        Assert.Equal(expected, HoursDigest.ComputeAbsencesDigest(rebuilt));
+    }
+
+    private static string SpecEntriesDigest(IEnumerable<TimeEntryProjectionRow> rows) =>
+        Sha256Hex(string.Join("\n", rows.Select(SpecEntryLine).OrderBy(l => l, StringComparer.Ordinal)));
+
+    private static string SpecEntryLine(TimeEntryProjectionRow r) => string.Join("|",
+        r.EventId.ToString("D"),
+        r.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+        SpecTime(r.StartTime),
+        SpecTime(r.EndTime),
+        SpecDecimal(r.Hours),
+        string.IsNullOrEmpty(r.ActivityType) ? "" : Convert.ToHexString(Encoding.UTF8.GetBytes(r.ActivityType)),
+        r.VoluntaryUnsocialHours ? "true" : "false");
+
+    private static string SpecTime(TimeOnly? t) =>
+        t is null ? "" : t.Value.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture);
+
+    private static string SpecDecimal(decimal d) =>
+        d.ToString("0.############################", CultureInfo.InvariantCulture);
+
+    private static string Sha256Hex(string text) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+
+    private static TimeEntryProjectionRow DEntry(
+        Guid id, decimal hours = 7.4m, TimeOnly? start = null, TimeOnly? end = null) => new()
+    {
+        EventId = id,
+        EmployeeId = "EMP-DIGEST",
+        Date = DigestDay,
+        Hours = hours,
+        StartTime = start,
+        EndTime = end,
+        AgreementCode = "HK",
+        OkVersion = "OK26",
+        OccurredAt = new DateTime(2026, 9, 15, 12, 0, 0, DateTimeKind.Utc),
+        OutboxId = 1,
+    };
+
+    private static AbsenceProjectionRow DAbsence(Guid id, string type, decimal hours, decimal? feriedage) => new()
+    {
+        EventId = id,
+        EmployeeId = "EMP-DIGEST",
+        Date = DigestDay,
+        AbsenceType = type,
+        Hours = hours,
+        Feriedage = feriedage,
+        AgreementCode = "HK",
+        OkVersion = "OK26",
+        OccurredAt = new DateTime(2026, 9, 15, 12, 0, 0, DateTimeKind.Utc),
         OutboxId = 1,
     };
 }
