@@ -22,20 +22,20 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// half could not be proven to be picked up elsewhere. Now payroll reads its own hours and October's read
 /// starts the day before its opening Monday (28 September minus 1 = 27 September), so October SEES the
 /// registration and dates the after-midnight half on 1 October. The guard has therefore served its
-/// purpose and is to be retired; this pin holds the behaviour that makes that safe.
+/// purpose and has been retired (commit 37ab341); this pin holds the behaviour that makes that safe.
 /// </para>
 ///
 /// <para>
 /// <b>Ruling and history.</b> The adjudicator's ruling at TASK-14508's return (the guard was interim until
 /// payroll widened its own read; QUAL-144; ADR-039 D5b/D8; SPRINT-132 lines 315-320 said the two must
-/// change in lockstep, and TASK-14508 is that widened read). The guard is retired in a 14508 fix-up that
-/// the implementer does after this pin is written.
+/// change in lockstep, and TASK-14508 is that widened read). The guard was retired in the 14508 fix-up
+/// (37ab341), which came after this pin was written.
 /// </para>
 ///
 /// <para>
-/// <b>Red conditions (mechanic (a): observed RED on the branch as it stood at 66ec0d1, guard present).</b>
+/// <b>Red conditions (mechanic (a): observed RED against the guard (0c36ed6), green since its retirement (37ab341)).</b>
 /// Assertion 1 fails: September's <c>CalculateWithOutcomeAsync</c> throws
-/// <c>PlannerInvariantViolation</c> from the guard. After the fix-up it is green. Mutation MU-43, catalogued
+/// <c>PlannerInvariantViolation</c> from the guard. Since the guard was retired it is green. Mutation MU-43, catalogued
 /// at the A.4 gate: restore the throw in <c>AssertNoDroppedBoundaryCrossing</c> (keep the API, bring back
 /// the refusal) — assertion 1 trips again.
 /// </para>
