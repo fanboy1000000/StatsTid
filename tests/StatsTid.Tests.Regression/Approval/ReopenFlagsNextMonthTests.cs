@@ -136,6 +136,9 @@ public sealed class ReopenFlagsNextMonthTests : IAsyncLifetime
         Assert.Equal(PriorMonthReopenedKind, trigger.GetProperty("kind").GetString());
         Assert.Equal(reopenedEventId, trigger.GetProperty("eventId").GetGuid());
         Assert.Equal(october.ContentHash, trigger.GetProperty("baselineContentHash").GetString());
+        // R5(c): dated from the Monday of October's opening week (1 Oct 2026 is a Thursday), the
+        // earliest day whose change can alter October.
+        Assert.Equal("2026-09-28", trigger.GetProperty("effectiveFrom").GetString());
 
         // Non-blocking, through the GET: no register id at row level, none at trigger level, and the
         // export has not moved since the baseline was captured.

@@ -108,17 +108,21 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         var aprId = await SeedExportAsync(emp, 2026, 4, "h-2026-04");
 
         // Interval [10 Feb, 1 Apr): Feb (partially covered) + Mar (fully) intersect; Jan is before
-        // `from`; Apr's month-start equals toExclusive → the half-open interval does NOT reach it.
+        // `from`.
+        // S145 R5(a): April is now flagged too. The last day, Tue 31 March, sits in a week that ends
+        // Sun 5 April, which payroll settles with April, so `hi` widens from 1 Apr to Mon 6 Apr and
+        // reaches April (it used to stop at 1 Apr, where the half-open interval excluded April).
+        Assert.Equal(DayOfWeek.Tuesday, new DateOnly(2026, 3, 31).DayOfWeek);
         var trigger = Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 2, 10));
         var ids = await RunExportedAsync(emp, trigger, new DateOnly(2026, 2, 10), new DateOnly(2026, 4, 1));
 
-        Assert.Equal(2, ids.Count);
+        Assert.Equal(3, ids.Count); // S145 R5(a): was 2
         var rows = await _repo.GetOpenAsync(emp);
-        Assert.Equal(2, rows.Count);
+        Assert.Equal(3, rows.Count); // S145 R5(a): was 2
         Assert.All(rows, r => Assert.Equal(WorklistKinds.ExportedMonth, r.Kind));
-        Assert.Equal(new[] { (2026, 2), (2026, 3) }, rows.Select(r => (r.Year!.Value, r.Month!.Value)).ToArray());
-        Assert.Equal(new[] { febId, marId }, rows.Select(r => r.ExportId!.Value).ToArray());
-        Assert.Equal(new[] { "h-2026-02", "h-2026-03" }, rows.Select(r => r.Triggers.Single().BaselineContentHash).ToArray());
+        Assert.Equal(new[] { (2026, 2), (2026, 3), (2026, 4) }, rows.Select(r => (r.Year!.Value, r.Month!.Value)).ToArray()); // S145 R5(a): April added
+        Assert.Equal(new[] { febId, marId, aprId }, rows.Select(r => r.ExportId!.Value).ToArray()); // S145 R5(a): April added
+        Assert.Equal(new[] { "h-2026-02", "h-2026-03", "h-2026-04" }, rows.Select(r => r.Triggers.Single().BaselineContentHash).ToArray()); // S145 R5(a): April's own baseline hash
         Assert.All(rows, r =>
         {
             Assert.Equal(1L, r.Version);
@@ -135,16 +139,16 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
             // Current state rides with the row: the export's CURRENT hash == the baseline right now.
             Assert.Equal(t.BaselineContentHash, r.Current.CurrentContentHash);
         });
-        Assert.DoesNotContain(rows, r => r.ExportId == janId || r.ExportId == aprId);
+        Assert.DoesNotContain(rows, r => r.ExportId == janId); // S145 R5(a): April is no longer excluded
 
         // ADR-018 D3: one Created event per row on employee-{id}, none appended; ADR-026 rows.
         var events = await OutboxEventsAsync(emp, "BackdateWorklistRowCreated");
-        Assert.Equal(2, events.Count);
+        Assert.Equal(3, events.Count); // S145 R5(a): was 2
         Assert.All(events, e => Assert.False(e.GetProperty("appended").GetBoolean()));
-        Assert.Equal(new[] { 2, 3 }, events.Select(e => e.GetProperty("month").GetInt32()).OrderBy(m => m).ToArray());
-        Assert.Equal(2, await CountAsync(
+        Assert.Equal(new[] { 2, 3, 4 }, events.Select(e => e.GetProperty("month").GetInt32()).OrderBy(m => m).ToArray()); // S145 R5(a): April added
+        Assert.Equal(3, await CountAsync( // S145 R5(a): was 2
             "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowCreated' AND target_resource_id = @p0", emp));
-        Assert.Equal(2, await CountAsync(
+        Assert.Equal(3, await CountAsync( // S145 R5(a): was 2
             "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowCreated' AND target_resource_id = @p0 AND target_org_id = 'STY_WL_A' AND visibility_scope = 'TENANT_TARGETED'", emp));
     }
 
@@ -1173,5 +1177,74 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         var events = await OutboxEventsAsync(emp, "BackdateWorklistRowCreated");
         Assert.Equal(new[] { 9, 10 }, events.Select(e => e.GetProperty("month").GetInt32()).OrderBy(m => m).ToArray());
         Assert.All(events, e => Assert.False(e.GetProperty("appended").GetBoolean()));
+    }
+
+    /// <summary>
+    /// <b>W1-G (guard).</b> R5(a) widens a bounded <c>hi</c> to the Monday after the week holding the
+    /// interval's LAST day, <c>hi - 1</c>, not the week holding <c>hi</c>. Interval
+    /// <c>[Tue 22 Sep, Mon 28 Sep 2026)</c>: the last day is Sun 27 Sep, which closes its week that
+    /// same day, so <c>hi</c> stays Mon 28 Sep and October (whose export is seeded) must NOT be
+    /// flagged. Only September is.
+    ///
+    /// <para><b>Red conditions</b> (Docker-gated; CI-verified). A guard: green before and after
+    /// TASK-14509. It goes red only under the off-by-one that widens from <c>hi</c> instead of
+    /// <c>hi - 1</c>: Mon 28 Sep opens a week ending Sun 4 Oct, so that wrong widening moves
+    /// <c>hi</c> to Mon 5 Oct, reaches October, and the second (October) row trips the
+    /// exact-September assertion.</para>
+    /// </summary>
+    [Fact]
+    public async Task WriteForExportedMonths_BackdateBoundedAtMonday28Sep_DoesNotFlagOctober()
+    {
+        var from = new DateOnly(2026, 9, 22);
+        var to = new DateOnly(2026, 9, 28);
+        Assert.Equal(DayOfWeek.Tuesday, from.DayOfWeek);
+        Assert.Equal(DayOfWeek.Monday, to.DayOfWeek);
+        Assert.Equal(DayOfWeek.Sunday, to.AddDays(-1).DayOfWeek);
+
+        const string emp = "wl_emp_exp_guard_28sep";
+        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, emp, "STY_WL_A");
+        var sepId = await SeedExportAsync(emp, 2026, 9, "h-2026-09");
+        await SeedExportAsync(emp, 2026, 10, "h-2026-10");
+
+        var trigger = Trigger(WorklistTriggerKinds.ProfileChange, from);
+        var ids = await RunExportedAsync(emp, trigger, from, to);
+
+        var rows = await _repo.GetOpenAsync(emp);
+        Assert.Equal(new[] { (2026, 9) }, rows.Select(r => (r.Year!.Value, r.Month!.Value)).ToArray());
+        Assert.Equal(new[] { sepId }, rows.Select(r => r.ExportId!.Value).ToArray());
+        Assert.Equal(rows.Select(r => r.WorklistId).ToArray(), ids.ToArray());
+    }
+
+    /// <summary>
+    /// <b>Open-ended guard.</b> R5(a) widens only a BOUNDED upper bound. The open-ended clip (the first
+    /// day of the month after the Copenhagen today) bounds what can have been exported, not where the
+    /// correction ends, so it is NOT widened. At the pinned instant (2026-07-31 22:30Z, Copenhagen
+    /// 1 Aug 2026) the clip <c>hi</c> is 1 Sep; with exports for July, August and September seeded and
+    /// the writer called open-ended from 5 Jul, exactly July and August are flagged.
+    ///
+    /// <para><b>Red conditions</b> (Docker-gated; CI-verified). A guard: green before and after
+    /// TASK-14509, exempt from RED evidence. It goes red only if the R5(a) widening is ever applied to
+    /// the open-ended branch: <c>hi</c> = 1 Sep, <c>hi - 1</c> = Mon 31 Aug, whose week ends Sun 6 Sep,
+    /// so <c>hi</c> would become Mon 7 Sep and select September, a third row.</para>
+    /// </summary>
+    [Fact]
+    public async Task WriteForExportedMonths_OpenEnded_ClipIsNotWidenedIntoNextMonth()
+    {
+        Assert.Equal(DayOfWeek.Monday, new DateOnly(2026, 8, 31).DayOfWeek);
+
+        const string emp = "wl_emp_exp_open_nowiden";
+        await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, emp, "STY_WL_A");
+        await SeedExportAsync(emp, 2026, 7, "h-2026-07");
+        await SeedExportAsync(emp, 2026, 8, "h-2026-08");
+        await SeedExportAsync(emp, 2026, 9, "h-2026-09");
+
+        var repo = RepositoryAt(LastEveningOfJulyAlreadyAugustInCopenhagen);
+        var from = new DateOnly(2026, 7, 5);
+        var ids = await RunExportedAsync(emp, Trigger(WorklistTriggerKinds.AgreementCodeChange, from),
+            from: from, toExclusive: null, repo: repo);
+
+        var rows = await repo.GetOpenAsync(emp);
+        Assert.Equal(new[] { (2026, 7), (2026, 8) }, rows.Select(r => (r.Year!.Value, r.Month!.Value)).ToArray());
+        Assert.Equal(rows.Select(r => r.WorklistId).ToArray(), ids.ToArray());
     }
 }
