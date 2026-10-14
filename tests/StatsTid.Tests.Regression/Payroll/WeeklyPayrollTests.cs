@@ -900,7 +900,11 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
     {
         await using var conn = _db.Create();
         await conn.OpenAsync();
+        // CA2100-justified (QUAL-073 ratchet): both callers pass a compile-time test constant
+        // (WP5's mapping update, WP12's mapping row) — never user input.
+#pragma warning disable CA2100
         await using var cmd = new NpgsqlCommand(sql, conn);
+#pragma warning restore CA2100
         await cmd.ExecuteNonQueryAsync();
     }
 
