@@ -1360,6 +1360,32 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
   3. 5a cycle 2, both lenses.
   4. The merge and O-1.
   5. Then 14515 re-spawn 1, and 14519 with 14519-T.
+- **At 14513-T cycle 2's return** (`41fd80c`, on a docs-only merge of master, `713ccb7`):
+  - **New Docker file `FrozenInputsSlotTests.cs`:**
+    - R-17: a wrong-shape slot refuses despite an intact event;
+    - R-18: a slot missing the opening balance refuses;
+    - R-22: the event-fallback guard;
+    - the optional damaged-segments guard.
+  - **New Unit file `PlanInputsRequiredMembersTests.cs`:** three RED facts (a missing opening balance, a missing piece fraction, and the same through `EventSerializer`), plus three guards.
+  - **R-19:** a second fact in `RetroactiveCorrectionTrailTests`.
+  - **R-23:** two field-coverage Theories in `HoursDigestTests` (7 entry cases and 4 absence cases).
+  - **R-24:** `TimelinePiece.AgreementCode` in the fixture, plus the assert.
+  - **The R-17 comment edits** in `BoundaryCauseEncodingTests`.
+  - **Checks:** Unit 1470 + 3 RED of 1473 · DemoSeed 170 · Regression non-Docker 128 · 0 errors / 145 / 115.
+- **At the cycle-2 fix-up's return** (`cb8d5e0`, on a second docs-only merge, `6f1055e`):
+  - **R-17:** `LoadManifestAsync`'s catch-all now wraps only the SQL read. A found row is decoded afterwards: undecodable segments throw `InvalidOperationException`, and an undecodable slot is logged at Warning and refused by name.
+  - **R-18:** `[JsonRequired]` on the nine `PlanInputs` and four `FrozenPiece` members. System.Text.Json honours it on net8.0 through both read paths, so no fallback check was needed.
+  - **R-19:** `outcome.ManifestId`.
+  - **Checks:** the three RED pins went green. Unit **1473** · DemoSeed 170 · Regression non-Docker 128 · 0 errors / 145 / 115.
+  - **Residuals it reported:** a null reaching a required member at freeze would write but not read back (no source today can be null); the R-19 link when both manifest writes fail (pre-existing); both slots damaged fail as a damaged row; a JSON `null` in `segments_jsonb` still becomes an empty list; the catch-all still catches cancellation.
+- **Build (Orchestrator, at `cb8d5e0`, unpiped):** 0 errors / 145 warnings · CA2100 115 · Unit 1473 · DemoSeed 170 · Regression non-Docker 128.
+- **5α cycle 2: PASS.** Each commit stays in its authorized files; `PlanInputs.cs` gains only BCL serialization attributes and SharedKernel no new reference; the new decode-failure log carries the manifest id and the exception only, never the row's contents.
+- **5a Codex cycle 2: APPROVE.** B1, B2 and B3 are closed; no new finding. The local-profile warning stays with TASK-14519.
+- **5a Fable cycle 2: APPROVED.** Each cycle-1 finding is closed as ruled, with no regression to the forward path, RP9, the rebuild round trip, the event fallback or the three refusals. The new pins are non-vacuous. Of the fix-up's five residuals, three are not findings, and two are register items.
+  - **NOTE 1:** the read's catch reset an already-read row to null, so a fault while closing the connection could still hand a found row to the event. **NOTE 2:** both load catches swallowed cancellation, so a cancelled replay read "manifest not found". **NOTE 4:** the R-22 guard's equality could compare two empty lists. All three applied by the Orchestrator in `702c894` (Small Tasks Exception: drop the reset, `when (ex is not OperationCanceledException)` on both catches, `Assert.NotEmpty`). Build and tests re-run green (145 / 115 · Unit 1473 · Regression 128); not re-reviewed.
+  - **NOTE 3:** a correction ignores its calculation's `AuditState`, so when both manifest writes fail its event links a manifest that exists nowhere. It predates S145. Registered as **QUAL-205**, with the ruling question (refuse before the transaction?).
+  - **NOTE 5:** the Unit pin carries a private copy of the reader's JSON options. `[JsonRequired]` does not depend on the options, so no change.
+- **Orchestrator `fc7658b`:** the correction event's `AgreementCode` and `Position` docs say what they record (R-11 e; comments only).
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
