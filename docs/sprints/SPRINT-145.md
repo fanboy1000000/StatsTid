@@ -1285,11 +1285,81 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
   - **Registered from the adjudicator's NOTEs:**
     - **QUAL-202:** activity type is free text nothing validates, so a typo is silently paid as normal hours. Medium.
     - **SEC-048:** the payroll routes' audit row takes its target org from the request body. Low; a new Group 12 in the security register.
-    - *Not registered:* an unparseable `plan_inputs_jsonb` falls back to the event, which is the record of truth, so the replay stays faithful. The per-segment lane's fingerprint coverage is a check item for 14515 re-spawn 1.
+    - *Not registered at the return:* an unparseable `plan_inputs_jsonb` falls back to the event. **Reversed at Step 5a cycle 1 on Codex BLOCKER 2 (R-17):** faithfulness was the wrong test; consistency with R-14(vii) is the right one. The per-segment lane's fingerprint coverage is a check item for 14515 re-spawn 1.
 - **Order from here:**
   1. 14513-T, the paired pass: the 12 call sites and the three RED-first pins. Dispatched.
   2. The `payroll-integration` fix-up: R-11, R-12, R-13 and R-14(ii).
   3. 5α, then Fable and Codex (high-risk).
+- **At TASK-14513-T's return** (`e5e05cb`):
+  - **The call sites.** All 12 moved to `ReplayAsync(manifestId)`. No new seeding was needed: the Docker facts already seed hours through the in-memory reader, which re-reads by id, and the marquee stub already reads the fraction from the request's pieces. The marquee docstrings now describe pins of the freeze.
+  - **The labelled changes.** The three hand-built-manifest facts in `BoundaryCauseEncodingTests` now expect `replay-manifest-without-frozen-inputs` (labelled `// S145 R14:`).
+  - **The RED-first pins.** Four Unit pins were observed RED as intended:
+    - R-12: `Expected "AC", Actual "HK"`, and the empty-agreement assert;
+    - R-13: both separator facts, `Strings are equal`.
+
+    R-11's Docker trail test argues its RED in the docstring.
+  - **Checks:** 0 errors / 145 / 115 · Unit 1452 + 4 RED of 1456 · DemoSeed 170 · Regression non-Docker 128.
+- **At the fix-up's return** (`b25bf24`, `payroll-integration`):
+  - **R-11:** the correction service calls `CalculateWithOutcomeAsync`, and a success without frozen inputs throws before its transaction opens. The event's agreement and position come from the frozen first EMPLOYED piece.
+  - **R-12:** `EvaluateAsync` takes the employee id, and `ReplayResultProfile` is deleted. One `evaluatedAgreementCode` feeds the success result, the refusal and the legacy event.
+  - **R-13:** a `TypedText` helper hex-encodes the two types.
+  - **R-14(ii):** the exception has its own file.
+  - **Checks:** the four pins went green. Unit **1456** · DemoSeed 170 · Regression non-Docker 128 · 0 errors / 145 / 115.
+  - **Reported, not changed:** (A) local-profile planning still keys on the request's agreement and OK version; (B) a correction for a month with no EMPLOYED segment records `Guid.Empty` as its manifest id. Both are sent to the review lenses.
+- **Build (Orchestrator, at `b25bf24`, unpiped):** 0 errors / 145 warnings · CA2100 115 · Unit 1456 · DemoSeed 170 · Regression non-Docker 128.
+- **5α: PASS.** Each commit stays in its agent's authorized files (14 files, exactly the authorized set). No generated file is touched, the digest is culture-invariant, and the new SQL is parameterized constants. One observation: a fourth `// S145 R14:` change in `BoundaryCauseEncodingTests`, beyond the three named. The live-write fact now asserts each rule result's manifest id, because the result no longer carries one; the meaning is unchanged.
+- **5a Fable: APPROVED-WITH-WARNINGS.**
+  - **What it verified:** it traced every input evaluation reads, and each is frozen, fingerprinted, or a pure function of a frozen value. So a replay of an untouched manifest reproduces the forward result. Each refusal fires for its own cause only, in the ruled order, and writes nothing. The five live sources sit only in planning and admission code, which replay never enters. 14515's 13 replay facts are consistent with the implementation.
+  - **WARNING 1:** a zero-EMPLOYED correction records `Guid.Empty` as its manifest id. Fix now: `outcome.ManifestId`.
+  - **WARNING 2:** planning's local-agreement-profile lookup keys on the request body. A forward-planning residual; Fable recommends registering it (QUAL, Medium).
+  - **NOTEs:**
+    - the marker covers the per-segment rule arithmetic only by convention; the ADR-016 amendment should say so;
+    - the event-fallback load of a populated `planInputs` has no pin;
+    - `HoursDigestTests` pins the separator collision but not field coverage;
+    - the R-12 pin should assert the pieces' agreement.
+- **5a Codex: REQUEST-CHANGES.**
+  - **BLOCKER 1:** a projection slot missing `openingFlexBalance` deserializes as 0 and passes the completeness check, so a replay could evaluate the wrong balance with every digest still matching. The same holds for missing piece fields.
+  - **BLOCKER 2:** a found projection row with malformed inputs falls back to the event through the old catch-all, while a NULL slot refuses.
+  - **BLOCKER 3:** the zero-EMPLOYED correction's empty manifest id, with a reachable scenario: a month exported with lines, whose employment dates are later corrected so nothing is EMPLOYED.
+  - **WARNING:** the planning lookup, as Fable's WARNING 2.
+- **Orchestrator disposition:**
+  - Codex B3 / Fable W1, and Codex B1 (R-14(iv) not fully delivered): fix-up cycle 2, with RED-first pins.
+  - Codex B2: it contradicts the adjudicator's declined NOTE at the return. Sent to the adjudicator.
+  - The planning lookup: the lenses differ on now or later. Sent to the adjudicator.
+- **The adjudicator on the cycle-1 findings: R-17..R-25, all RULED, no owner question.** Two facts frame them:
+  - payroll's freeze never writes a null list or an empty digest, so the only members that may legitimately be absent are the two nullable ones (the cutoff and a piece's position);
+  - the Rule Engine applies no local agreement profile, so a local profile can split a month but cannot change a figure.
+
+  The rulings:
+  - **R-17, a found projection row with undecodable stored inputs refuses by name (it upholds Codex B2 and reverses the adjudicator's return NOTE).** *Why the reversal:* "the event is the record of truth, so the replay stays faithful" was the wrong test. R-14(vii) already refuses a row whose slot is NULL, and a row holding garbage is more damaged than a NULL one. Refusing the lesser damage while quietly succeeding on the greater is incoherent, and it hides a damaged projection from the operator who should rebuild it. Nothing is lost by refusing: the replay is one projection rebuild away, and the refusal says so.
+    - The catch-all still covers "the projection could not be consulted" and "no row"; both fall back to the event.
+    - A damaged `segments_jsonb` fails as a damaged row, not as an event substitution.
+  - **R-18, a missing required member refuses.** `[JsonRequired]` goes on every non-nullable member of `PlanInputs` and `FrozenPiece`, but not on the cutoff or the position. `PlanInputs.cs` (SharedKernel) is authorized as a scope extension. A Unit pin proves the serializer honours the attribute.
+  - **R-19, the correction event links its manifest:** `outcome.ManifestId`. Codex's scenario is real and R-11's note had missed it.
+  - **R-20, the local-profile activation key is fixed in Stage A, as its own task:** TASK-14519, then 14519-T, in wave A.5 after 14513 merges and before Gate A-CLOSE.
+    - *Why not in this fix-up:* it lies outside the replay contract, changes no paid figure, and would widen a high-risk branch already in review.
+    - *Why not later:* it is a hole in A4's claim ("each month's codes come from the dated record"), which Gate A-CLOSE checks, and the owner prefers the complete fix.
+    - *The key:* per (agreement, OK-version) interval on the dated record, including its `OrgId`. "The record at `periodStart`" alone would miss an interior agreement change or OK transition.
+    - Registered as QUAL-203; SEC-048 notes the same dated `OrgId` as its fix source.
+  - **R-21:** at close, ADR-016 D10 states that the model marker names the arithmetic of every rule endpoint payroll calls, and the marker's doc says the same.
+  - **R-22:** the event-fallback load of a populated `planInputs` is pinned in this cycle, as a guard beside R-17's refusals.
+  - **R-23:** a digest field-coverage Theory is added in this cycle. 14515's facts do not cover the typed fields, so the Orchestrator's premise was wrong.
+  - **R-24:** the R-12 pin asserts the pieces' agreement; the fixture learns the field.
+  - **R-25:** amended:
+    - TASK-14513's brief (the cycle-2 fix-up);
+    - TASK-14513-T's (the pins);
+    - TASK-14515's;
+    - the plan (TASK-14519 and 14519-T rows, and the A.5 wave row);
+    - TASK-14518's (CA-1 must classify the post-draft-5 Docker pins);
+    - QUAL-203, and QUAL-204 (the product question, below);
+    - SEC-048.
+  - **Registered from the declined findings: QUAL-204.** A local agreement profile never reaches payroll's arithmetic, although ADR-017 reasons as if it shapes pay. It is an open product question, "should a local profile change pay?", not a defect.
+- **Order from here:**
+  1. 14513-T cycle 2, the pins (dispatched).
+  2. The `payroll-integration` cycle-2 fix-up (R-17, R-18, R-19).
+  3. 5a cycle 2, both lenses.
+  4. The merge and O-1.
+  5. Then 14515 re-spawn 1, and 14519 with 14519-T.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
