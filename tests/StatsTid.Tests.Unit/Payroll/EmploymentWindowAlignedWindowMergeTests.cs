@@ -54,10 +54,12 @@ public sealed class EmploymentWindowAlignedWindowMergeTests
         Assert.Null(aligned.ErrorMessage);
 
         // The rule ran exactly once — over the employed span only.
-        var alignedCalls = engine.Calls.Where(c => c.RuleId == AlignedRuleId).ToList();
-        var alignedCall = Assert.Single(alignedCalls);
-        Assert.Equal(Mar01, alignedCall.PeriodStart);
-        Assert.Equal(lastDay, alignedCall.PeriodEnd);
+        // S145 F1: overtime is no longer a per-segment call; it is judged inside the plan's ONE timeline
+        // call, whose pieces end on the last employed day (so the rule is still evaluated once, over
+        // the employed span only). The per-segment lane makes no OVERTIME_CALC call at all.
+        Assert.DoesNotContain(engine.PerSegmentCalls, c => c.RuleId == AlignedRuleId);
+        var timeline = Assert.Single(engine.TimelineCalls);
+        AssertPiecesRun(timeline.Pieces, new DateOnly(2026, 2, 23), lastDay);
     }
 
     /// <summary>(ii) Two EMPLOYED segments (a profile change while employed — a genuine
@@ -87,7 +89,15 @@ public sealed class EmploymentWindowAlignedWindowMergeTests
 
         // The calculation continues; the failure surfaces ON THE RULE (PCS merge contract).
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
-        Assert.Equal(2, engine.Calls.Count(c => c.RuleId == AlignedRuleId));
+        // S145 R14: overtime is judged by the plan's one timeline call, not by one call per segment
+        // (was 2 per-segment OVERTIME_CALC calls). The timeline's pieces still split at the profile
+        // change; the per-segment lane makes no OVERTIME_CALC call. The merger's refusal (below) is
+        // unchanged: the joined answer reaches it as one row per EMPLOYED segment.
+        Assert.DoesNotContain(engine.PerSegmentCalls, c => c.RuleId == AlignedRuleId);
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Contains(timeline.Pieces!, p => p.To == profileChange.AddDays(-1));
+        Assert.Contains(timeline.Pieces!, p => p.From == profileChange);
+        Assert.Equal(Mar31, timeline.Pieces![^1].To);
 
         var aligned = Assert.Single(outcome.Result.RuleResults, r => r.RuleId == AlignedRuleId);
         Assert.False(aligned.Success);
@@ -101,7 +111,7 @@ public sealed class EmploymentWindowAlignedWindowMergeTests
         Assert.All(
             outcome.Result.RuleResults.Where(r => r.RuleId != AlignedRuleId),
             r => Assert.True(r.Success, r.ErrorMessage));
-        Assert.Equal(RuleCallsPerEmployedSegment, outcome.Result.RuleResults.Count);
+        Assert.Equal(RuleResultsPerPlan, outcome.Result.RuleResults.Count);
     }
 
     /// <summary>Negative control for (ii): WITHOUT the pass-through flag the planner itself

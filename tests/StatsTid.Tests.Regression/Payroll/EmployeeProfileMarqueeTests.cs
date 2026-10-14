@@ -419,6 +419,38 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     {
         var path = request.RequestUri?.AbsolutePath ?? string.Empty;
 
+        // S145 F1: the norm result (and the fraction-scaled NormHoursTotal) now comes from the plan's
+        // ONE timeline call. The fraction is the part-time fraction of the plan's last piece: the piece
+        // of the EMPLOYED segment, resolved from the dated profile row at its start (context pieces,
+        // if any, precede it). Same coupling to the resolver as the old per-segment `profile` field.
+        if (path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal))
+        {
+            return TestFixtures.EvaluateTimelineResponse(request, (root, inMonth) =>
+            {
+                var employeeId = root.TryGetProperty("employeeId", out var eid) ? eid.GetString() ?? "EMP" : "EMP";
+                var pieces = root.GetProperty("pieces").EnumerateArray().ToList();
+                var fraction = pieces.Count > 0
+                    && pieces[^1].TryGetProperty("partTimeFraction", out var ptf)
+                    && ptf.ValueKind == JsonValueKind.Number
+                    ? ptf.GetDecimal()
+                    : 1.0m;
+                return new
+                {
+                    ruleId = "NORM_CHECK_37H",
+                    employeeId,
+                    success = true,
+                    lineItems = inMonth.Select(e => (object)new
+                    {
+                        timeType = "NORMAL_HOURS",
+                        hours = e.GetProperty("hours").GetDecimal(),
+                        rate = 1.0m,
+                        date = e.GetProperty("date").GetString(),
+                    }).ToList(),
+                    // The resolver-coupled field: scales with the resolved dated fraction.
+                    normHoursTotal = FullTimeWeeklyNorm * fraction,
+                };
+            });
+        }
         if (path.EndsWith("/api/rules/evaluate", StringComparison.Ordinal))
             return EvaluateTimeRuleWithNorm(request);
         if (path.EndsWith("/api/rules/evaluate-absence", StringComparison.Ordinal))

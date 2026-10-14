@@ -280,7 +280,7 @@ internal static class TestFixtures
 
     /// <summary>
     /// Default Rule Engine stub: every endpoint returns a NORMAL_HOURS line item per
-    /// matched entry. The flex endpoint returns zero delta. The absence endpoint returns
+    /// matched entry. The timeline endpoint (S145 F1) answers the three results in one call. The absence endpoint returns
     /// an empty success. This is the minimum shape PCS needs to walk the full code path
     /// (per-segment evaluation -> per-rule merge -> export-line mapping -> manifest emit).
     /// </summary>
@@ -291,6 +291,10 @@ internal static class TestFixtures
         if (path.EndsWith("/api/rules/evaluate", StringComparison.Ordinal))
         {
             return EvaluateTimeRuleResponse(request);
+        }
+        if (path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal))
+        {
+            return EvaluateTimelineResponse(request);
         }
         if (path.EndsWith("/api/rules/evaluate-absence", StringComparison.Ordinal))
         {
@@ -345,6 +349,84 @@ internal static class TestFixtures
             employeeId,
             success = true,
             lineItems,
+        };
+        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    /// <summary>
+    /// S145 F1 (TASK-14511-T): the default answer to <c>POST /api/rules/evaluate-timeline</c> — the
+    /// per-plan lane's one call. A COMPLETE answer, because PCS refuses an incomplete one as a failed
+    /// call: exactly the three results (<c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c>, <c>FLEX_BALANCE</c>),
+    /// the full flex block with delta 0, <c>configFingerprints: ["stub"]</c> and
+    /// <c>evaluationModel: "weekly-timeline-v1"</c>. The norm result carries a <c>NORMAL_HOURS</c> line per
+    /// entry dated INSIDE the month (<c>periodStart</c>..<c>periodEnd</c>) — the request also carries
+    /// the opening week's context days from the previous month, which the previous month settles, so no
+    /// line is emitted for them (mirrors what the old per-segment default produced).
+    /// <paramref name="normRowFactory"/> lets a marquee stub replace the norm result's shape (it receives
+    /// the request root and the in-month entries).
+    /// </summary>
+    public static HttpResponseMessage EvaluateTimelineResponse(
+        HttpRequestMessage request,
+        Func<JsonElement, IReadOnlyList<JsonElement>, object>? normRowFactory = null)
+    {
+        string body = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? "{}";
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        var employeeId = root.TryGetProperty("employeeId", out var eid) ? eid.GetString() ?? "EMP" : "EMP";
+        var periodStart = DateOnly.Parse(root.GetProperty("periodStart").GetString()!);
+        var periodEnd = DateOnly.Parse(root.GetProperty("periodEnd").GetString()!);
+        var inMonth = (root.TryGetProperty("entries", out var ents) ? ents.EnumerateArray().ToList() : new List<JsonElement>())
+            .Where(e =>
+            {
+                var d = DateOnly.Parse(e.GetProperty("date").GetString()!);
+                return d >= periodStart && d <= periodEnd;
+            })
+            .ToList();
+
+        object norm = normRowFactory is not null
+            ? normRowFactory(root, inMonth)
+            : new
+            {
+                ruleId = "NORM_CHECK_37H",
+                employeeId,
+                success = true,
+                lineItems = inMonth.Select(e => (object)new
+                {
+                    timeType = "NORMAL_HOURS",
+                    hours = e.GetProperty("hours").GetDecimal(),
+                    rate = 1.0m,
+                    date = e.GetProperty("date").GetString(),
+                }).ToList(),
+            };
+
+        var payload = new
+        {
+            results = new object[]
+            {
+                new { ruleId = "OVERTIME_CALC", employeeId, success = true, lineItems = Array.Empty<object>() },
+                norm,
+                new { ruleId = "FLEX_BALANCE", employeeId, success = true, lineItems = Array.Empty<object>() },
+            },
+            flex = new
+            {
+                ruleId = "FLEX_BALANCE",
+                employeeId,
+                success = true,
+                lineItems = Array.Empty<object>(),
+                previousBalance = 0m,
+                newBalance = 0m,
+                delta = 0m,
+                workedHours = 0m,
+                absenceNormCredits = 0m,
+                effectiveNorm = 0m,
+                excessForPayout = 0m,
+            },
+            configFingerprints = new[] { "stub" },
+            evaluationModel = "weekly-timeline-v1",
         };
         var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         return new HttpResponseMessage(HttpStatusCode.OK)

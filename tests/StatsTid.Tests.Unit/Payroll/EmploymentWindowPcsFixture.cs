@@ -32,9 +32,9 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// <list type="bullet">
 ///   <item>The rule-engine stub returns ZERO line items, so <c>PayrollMappingService</c>
 ///     (sealed, DB-backed) is never dereferenced and is passed as <c>null!</c> — the same
-///     idiom as <c>RuleEngineFailureLoggingTests</c>. Consequence: flex-carry pass-through
-///     is pinned STRUCTURALLY here (the carry reaching the third segment equals the carry
-///     the first received; the skipped segment issues no flex call) with a ZERO delta; the
+///     idiom as <c>RuleEngineFailureLoggingTests</c>. Consequence: the opening flex balance
+///     is pinned STRUCTURALLY here (S145 F1: it reaches the one timeline call unchanged; there is
+///     no per-segment flex call) with a ZERO delta; the
 ///     NON-ZERO-delta variant needs seeded wage-type mappings and lives in the Docker-gated
 ///     <c>EmploymentWindowPayrollTests</c>.</item>
 ///   <item>The projection insert (<c>segment_manifests</c>) runs inside PCS's own swallowing
@@ -77,8 +77,36 @@ internal static class EmploymentWindowPcsFixture
         new("FLEX_BALANCE",    Span.CrossPeriod, SplitBehavior.Mergeable,     Family.Calculation, MergeStrategy.Custom,                   SnapshotContract: null),
     };
 
-    /// <summary>PCS attempts 4 time rules + absence + flex per EMPLOYED segment.</summary>
-    public const int RuleCallsPerEmployedSegment = 6;
+    /// <summary>
+    /// S145 R14: the rule RESULTS a plan with an employed segment yields: 3 from the one timeline
+    /// call (overtime, norm, flex) + supplement, on-call and absence from the per-segment lane.
+    /// (Before S145 this was "calls per employed segment", 6; the calls are now counted by
+    /// <see cref="TimelineCallsPerPlan"/> + <see cref="PerSegmentCallsPerEmployedSegment"/>.)
+    /// </summary>
+    public const int RuleResultsPerPlan = 6;
+
+    /// <summary>S145 R14: the one timeline call a plan with any EMPLOYED segment makes.</summary>
+    public const int TimelineCallsPerPlan = 1;
+
+    /// <summary>S145 R14: supplement + on-call + absence, per EMPLOYED segment.</summary>
+    public const int PerSegmentCallsPerEmployedSegment = 3;
+
+    /// <summary>
+    /// S145 F1: the timeline's pieces form one gap-free run: ordered, each starting the day after the
+    /// previous one ends, the first starting on <paramref name="firstDay"/> and the last ending on
+    /// <paramref name="lastDay"/>. (Whether the opening-week context days are a separate piece or part
+    /// of the first is the implementation's choice; the covered days are the contract.)
+    /// </summary>
+    public static void AssertPiecesRun(
+        IReadOnlyList<RecordingRuleEngine.TimelinePiece>? pieces, DateOnly firstDay, DateOnly lastDay)
+    {
+        Xunit.Assert.NotNull(pieces);
+        Xunit.Assert.NotEmpty(pieces!);
+        Xunit.Assert.Equal(firstDay, pieces![0].From);
+        Xunit.Assert.Equal(lastDay, pieces[^1].To);
+        for (var i = 1; i < pieces.Count; i++)
+            Xunit.Assert.Equal(pieces[i - 1].To.AddDays(1), pieces[i].From);
+    }
 
     public static readonly DateOnly Mar01 = new(2026, 3, 1);
     public static readonly DateOnly Mar31 = new(2026, 3, 31);
@@ -255,7 +283,20 @@ internal static class EmploymentWindowPcsFixture
             DateOnly PeriodStart,
             DateOnly PeriodEnd,
             decimal? PreviousBalance,
-            decimal? ProfilePartTimeFraction);
+            decimal? ProfilePartTimeFraction,
+            // S145 F1: the timeline call's own shape (null on the per-segment calls): the pieces the
+            // per-plan lane sent and the entries it sent with them (context days included).
+            IReadOnlyList<TimelinePiece>? Pieces = null,
+            IReadOnlyList<TimelineEntry>? TimelineEntries = null,
+            decimal? TimelinePreviousFlexBalance = null);
+
+        /// <summary>One piece of the timeline request: its inclusive range and part-time fraction.</summary>
+        public sealed record TimelinePiece(DateOnly From, DateOnly To, decimal PartTimeFraction);
+
+        /// <summary>One entry of the timeline request.</summary>
+        public sealed record TimelineEntry(DateOnly Date, decimal Hours);
+
+        public const string TimelinePath = "/api/rules/evaluate-timeline";
 
         private readonly List<Call> _calls = new();
         private readonly Func<Call, HttpResponseMessage> _responder;
@@ -270,6 +311,14 @@ internal static class EmploymentWindowPcsFixture
 
         public IReadOnlyList<Call> FlexCalls =>
             Calls.Where(c => c.Path.EndsWith("/evaluate-flex", StringComparison.Ordinal)).ToList();
+
+        /// <summary>S145 F1: the timeline calls (one per plan).</summary>
+        public IReadOnlyList<Call> TimelineCalls =>
+            Calls.Where(c => c.Path.EndsWith(TimelinePath, StringComparison.Ordinal)).ToList();
+
+        /// <summary>S145 F1: every call except the timeline call (the per-segment lane).</summary>
+        public IReadOnlyList<Call> PerSegmentCalls =>
+            Calls.Where(c => !c.Path.EndsWith(TimelinePath, StringComparison.Ordinal)).ToList();
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
@@ -290,6 +339,22 @@ internal static class EmploymentWindowPcsFixture
                     && prof.TryGetProperty("partTimeFraction", out var ptf)
                     && ptf.ValueKind == JsonValueKind.Number
                     ? ptf.GetDecimal()
+                    : null,
+                Pieces: root.TryGetProperty("pieces", out var pcs) && pcs.ValueKind == JsonValueKind.Array
+                    ? pcs.EnumerateArray().Select(p => new TimelinePiece(
+                        DateOnly.Parse(p.GetProperty("from").GetString()!),
+                        DateOnly.Parse(p.GetProperty("to").GetString()!),
+                        p.GetProperty("partTimeFraction").GetDecimal())).ToList()
+                    : null,
+                TimelineEntries: (request.RequestUri?.AbsolutePath ?? string.Empty).EndsWith(TimelinePath, StringComparison.Ordinal)
+                    && root.TryGetProperty("entries", out var tents)
+                    ? tents.EnumerateArray().Select(e => new TimelineEntry(
+                        DateOnly.Parse(e.GetProperty("date").GetString()!),
+                        e.GetProperty("hours").GetDecimal())).ToList()
+                    : null,
+                TimelinePreviousFlexBalance: root.TryGetProperty("previousFlexBalance", out var pfb)
+                    && pfb.ValueKind == JsonValueKind.Number
+                    ? pfb.GetDecimal()
                     : null);
 
             lock (_calls) _calls.Add(call);
@@ -298,13 +363,52 @@ internal static class EmploymentWindowPcsFixture
 
         /// <summary>Every endpoint succeeds with an EMPTY line-item list (flex delta = 0).</summary>
         public static HttpResponseMessage AllSucceedWithNoLineItems(Call call) =>
-            Json(new
+            call.Path.EndsWith(TimelinePath, StringComparison.Ordinal)
+                ? TimelineSuccess()
+                : Json(new
+                {
+                    ruleId = RuleIdFor(call),
+                    employeeId = "EMP",
+                    success = true,
+                    lineItems = Array.Empty<object>(),
+                });
+
+        /// <summary>
+        /// S145 F1: a COMPLETE timeline answer: exactly the three results (overtime, norm, flex) with
+        /// no line items (this harness has no wage-type mappings), the full flex block with delta 0,
+        /// <c>configFingerprints: ["stub"]</c> and <c>evaluationModel: "weekly-timeline-v1"</c>. PCS
+        /// refuses anything less as a failed call.
+        /// </summary>
+        public static HttpResponseMessage TimelineSuccess()
+        {
+            object Row(string ruleId) => new
             {
-                ruleId = RuleIdFor(call),
+                ruleId,
                 employeeId = "EMP",
                 success = true,
                 lineItems = Array.Empty<object>(),
+            };
+            return Json(new
+            {
+                results = new[] { Row("OVERTIME_CALC"), Row("NORM_CHECK_37H"), Row("FLEX_BALANCE") },
+                flex = new
+                {
+                    ruleId = "FLEX_BALANCE",
+                    employeeId = "EMP",
+                    success = true,
+                    lineItems = Array.Empty<object>(),
+                    previousBalance = 0m,
+                    newBalance = 0m,
+                    delta = 0m,
+                    workedHours = 0m,
+                    absenceNormCredits = 0m,
+                    effectiveNorm = 0m,
+                    excessForPayout = 0m,
+                },
+                configFingerprints = new[] { "stub" },
+                evaluationModel = "weekly-timeline-v1",
             });
+        }
 
         /// <summary>Every endpoint fails with HTTP 500 — the "rule engine down" shape.</summary>
         public static HttpResponseMessage AllFail(Call call) =>

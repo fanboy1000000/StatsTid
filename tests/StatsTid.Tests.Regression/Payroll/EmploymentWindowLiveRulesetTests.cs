@@ -115,13 +115,24 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         Assert.True(overtime.Success, overtime.ErrorMessage);
         Assert.All(outcome.Result.RuleResults, r => Assert.True(r.Success, r.ErrorMessage));
 
-        // No rule-engine call after the end date: every call covers [04-01 .. 04-15].
-        Assert.NotEmpty(engine.Calls);
-        Assert.All(engine.Calls, c =>
+        // No rule-engine call after the end date: every per-segment call covers [04-01 .. 04-15].
+        // S145 F1: the plan's one timeline call carries the period's range (04-01 .. 04-30); what must
+        // end on the last employed day is its PIECES (so nothing after it is judged), and no entry
+        // after it is sent. Its pieces start on April's opening Monday, 30 Mar (the week
+        // holding Sunday 5 Apr is April's); the leaver is employed on those context days. The request's
+        // SettlementCutoff is deliberately not asserted here (C-T1; pinned at the endpoint's own tests).
+        Assert.NotEmpty(engine.PerSegmentCalls);
+        Assert.All(engine.PerSegmentCalls, c =>
         {
             Assert.Equal(Apr01, c.PeriodStart);
             Assert.Equal(lastDay, c.PeriodEnd);
         });
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(Apr01, timeline.PeriodStart);
+        Assert.Equal(Apr30, timeline.PeriodEnd);
+        Assert.Equal(new DateOnly(2026, 3, 30), timeline.Pieces![0].From);
+        Assert.Equal(lastDay, timeline.Pieces[^1].To);
+        Assert.All(timeline.EntryDates!, d => Assert.True(d <= lastDay, $"{d} is after the last employed day"));
 
         // The last employed day's hours export (ADR-040 D1 end-inclusive fencepost).
         var normalLines = outcome.Result.ExportLines.Where(l => l.SourceTimeType == "NORMAL_HOURS").ToList();
@@ -167,13 +178,22 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         Assert.All(outcome.Result.RuleResults, r => Assert.True(r.Success, r.ErrorMessage));
 
-        // Every rule-engine call covers [04-13 .. 04-30] — nothing for the pre-hire prefix.
-        Assert.NotEmpty(engine.Calls);
-        Assert.All(engine.Calls, c =>
+        // Every per-segment rule-engine call covers [04-13 .. 04-30] — nothing for the pre-hire prefix.
+        // S145 F1: the timeline call carries the period's range (04-01 .. 04-30); its PIECES start on
+        // the hire date (the pre-hire days, context days included, are not employed, so no piece covers
+        // them) and end on 04-30, and no entry before the hire is sent.
+        Assert.NotEmpty(engine.PerSegmentCalls);
+        Assert.All(engine.PerSegmentCalls, c =>
         {
             Assert.Equal(hire, c.PeriodStart);
             Assert.Equal(Apr30, c.PeriodEnd);
         });
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(Apr01, timeline.PeriodStart);
+        Assert.Equal(Apr30, timeline.PeriodEnd);
+        Assert.Equal(hire, timeline.Pieces![0].From);
+        Assert.Equal(Apr30, timeline.Pieces[^1].To);
+        Assert.All(timeline.EntryDates!, d => Assert.True(d >= hire, $"{d} is before the hire date"));
 
         // Day `start` pays; nothing before it does.
         var normalLines = outcome.Result.ExportLines.Where(l => l.SourceTimeType == "NORMAL_HOURS").ToList();
@@ -398,7 +418,20 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
     /// </summary>
     private sealed class RecordingRuleEngine : HttpMessageHandler
     {
-        public sealed record Call(string Path, DateOnly PeriodStart, DateOnly PeriodEnd);
+        // S145 F1: the timeline call also records its pieces (inclusive ranges) and the dates of the
+        // entries it carried; both are null on the per-segment calls.
+        public sealed record Call(
+            string Path,
+            DateOnly PeriodStart,
+            DateOnly PeriodEnd,
+            IReadOnlyList<(DateOnly From, DateOnly To)>? Pieces = null,
+            IReadOnlyList<DateOnly>? EntryDates = null);
+
+        public IReadOnlyList<Call> TimelineCalls =>
+            Calls.Where(c => c.Path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal)).ToList();
+
+        public IReadOnlyList<Call> PerSegmentCalls =>
+            Calls.Where(c => !c.Path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal)).ToList();
 
         private readonly List<Call> _calls = new();
 
@@ -420,11 +453,27 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
                 ? eid.GetString() ?? "EMP"
                 : "EMP";
 
+            var isTimeline = path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal);
             var call = new Call(
                 path,
                 DateOnly.Parse(root.GetProperty("periodStart").GetString()!, CultureInfo.InvariantCulture),
-                DateOnly.Parse(root.GetProperty("periodEnd").GetString()!, CultureInfo.InvariantCulture));
+                DateOnly.Parse(root.GetProperty("periodEnd").GetString()!, CultureInfo.InvariantCulture),
+                Pieces: isTimeline
+                    ? root.GetProperty("pieces").EnumerateArray().Select(p => (
+                        DateOnly.Parse(p.GetProperty("from").GetString()!, CultureInfo.InvariantCulture),
+                        DateOnly.Parse(p.GetProperty("to").GetString()!, CultureInfo.InvariantCulture))).ToList()
+                    : null,
+                EntryDates: isTimeline
+                    ? root.GetProperty("entries").EnumerateArray()
+                        .Select(e => DateOnly.Parse(e.GetProperty("date").GetString()!, CultureInfo.InvariantCulture)).ToList()
+                    : null);
             lock (_calls) _calls.Add(call);
+
+            // S145 F1: the plan's one timeline call is answered with a COMPLETE timeline response (the
+            // three results, the flex block, fingerprints and model marker; NORMAL_HOURS lines for the
+            // in-month entries only). PCS refuses anything less as a failed call.
+            if (isTimeline)
+                return TestFixtures.EvaluateTimelineResponse(request);
 
             if (path.EndsWith("/api/rules/evaluate", StringComparison.Ordinal))
             {

@@ -234,6 +234,54 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
     private static HttpResponseMessage AgreementCodeBranchingRuleHandler(HttpRequestMessage request)
     {
         var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+
+        // S145 F1: the norm result now comes from the plan's ONE timeline call (not a per-segment
+        // /api/rules/evaluate call). The agreement code is no longer a request-level `profile` field:
+        // it is the agreement code of the PIECE covering each entry's date (the piece is resolved from
+        // the dated profile, exactly as the segment's profile was). Same discrimination, same lines.
+        if (path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal))
+        {
+            return TestFixtures.EvaluateTimelineResponse(request, (root, inMonth) =>
+            {
+                var pieces = root.GetProperty("pieces").EnumerateArray().ToList();
+                string AgreementCodeOn(DateOnly day)
+                {
+                    foreach (var p in pieces)
+                    {
+                        if (DateOnly.Parse(p.GetProperty("from").GetString()!) <= day
+                            && day <= DateOnly.Parse(p.GetProperty("to").GetString()!))
+                            return p.GetProperty("agreementCode").GetString() ?? "AC";
+                    }
+                    return "AC";
+                }
+
+                var employeeId = root.TryGetProperty("employeeId", out var eid) ? eid.GetString() ?? "EMP" : "EMP";
+                var lastPieceCode = pieces.Count > 0
+                    ? pieces[^1].GetProperty("agreementCode").GetString() ?? "AC"
+                    : "AC";
+                return new
+                {
+                    ruleId = "NORM_CHECK_37H",
+                    employeeId,
+                    success = true,
+                    // Stash the resolved agreement_code on the rule result (as before).
+                    agreementCode = lastPieceCode,
+                    lineItems = inMonth.Select(e =>
+                    {
+                        var date = e.GetProperty("date").GetString();
+                        var code = AgreementCodeOn(DateOnly.Parse(date!));
+                        return (object)new
+                        {
+                            timeType = string.Equals(code, "AC", StringComparison.Ordinal) ? "MERARBEJDE" : "OVERTIME_50",
+                            hours = e.GetProperty("hours").GetDecimal(),
+                            rate = 1.0m,
+                            date,
+                        };
+                    }).ToList(),
+                };
+            });
+        }
+
         if (!path.EndsWith("/api/rules/evaluate", StringComparison.Ordinal))
         {
             return TestFixtures.DefaultRuleEngineHandler(request);
