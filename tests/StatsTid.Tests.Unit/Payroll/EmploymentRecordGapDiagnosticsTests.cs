@@ -91,12 +91,12 @@ public sealed class EmploymentRecordGapDiagnosticsTests
 
         var engine = new RecordingRuleEngine();
         var logger = new CapturingLogger<PeriodCalculationService>();
-        var pcs = BuildPcsWith(engine, logger, GapProfileResolver.ReturningNull());
+        var pcs = BuildPcsWith(engine, logger, GapProfileResolver.ReturningNull(), WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var ex = await Assert.ThrowsAsync<EmployeeProfileNotFoundException>(() =>
             pcs.CalculateWithOutcomeAsync(
-                plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-                Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m));
+                plan, Profile(EmployeeId),
+                previousFlexBalance: 0m));
 
         // FAIL CLOSED: nothing was evaluated, so no figure could have been produced on a guess.
         Assert.Empty(engine.Calls);
@@ -139,12 +139,12 @@ public sealed class EmploymentRecordGapDiagnosticsTests
         var engine = new RecordingRuleEngine();
         var logger = new CapturingLogger<PeriodCalculationService>();
         var resolver = GapProfileResolver.Throwing();
-        var pcs = BuildPcsWith(engine, logger, resolver);
+        var pcs = BuildPcsWith(engine, logger, resolver, WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var ex = await Assert.ThrowsAsync<EmployeeProfileNotFoundException>(() =>
             pcs.CalculateWithOutcomeAsync(
-                plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-                Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m));
+                plan, Profile(EmployeeId),
+                previousFlexBalance: 0m));
 
         // The resolver really was asked at the hire date (the correct as-of, ADR-040 D10) — so the
         // date genuinely was in play and its absence below is a property of the diagnostics, not
@@ -193,11 +193,11 @@ public sealed class EmploymentRecordGapDiagnosticsTests
 
         var engine = new RecordingRuleEngine();
         var logger = new CapturingLogger<PeriodCalculationService>();
-        var pcs = BuildPcsWith(engine, logger, new CountingProfileResolver());
+        var pcs = BuildPcsWith(engine, logger, new CountingProfileResolver(), WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m);
+            plan, Profile(EmployeeId),
+            previousFlexBalance: 0m);
 
         Assert.True(outcome.Result.Success);
         Assert.NotEmpty(engine.Calls);
@@ -240,7 +240,8 @@ public sealed class EmploymentRecordGapDiagnosticsTests
     private static PeriodCalculationService BuildPcsWith(
         RecordingRuleEngine engine,
         ILogger<PeriodCalculationService> logger,
-        IEmploymentProfileResolver profileResolver) =>
+        IEmploymentProfileResolver profileResolver,
+        IRecordedHoursReader hoursReader) =>
         new(
             new SingleClientHttpFactory(engine),
             // Never dereferenced: the stub rule engine returns no line items (and on the gap paths
@@ -257,7 +258,9 @@ public sealed class EmploymentRecordGapDiagnosticsTests
             // PCS refuses a profile resolver without a window resolver; an unbounded window keeps
             // the typing decision with the PLAN the test built, not with this fake.
             employmentWindowResolver: new FakeWindowResolver(new EmploymentWindow(null, null)),
-            employeeProfileRepo: null);
+            employeeProfileRepo: null,
+            // S145 R14: the in-memory hours reader (payroll reads its own hours).
+            hoursReader: hoursReader);
 
     /// <summary>
     /// <see cref="IEmploymentProfileResolver"/> fake standing in for an employee with a hole in

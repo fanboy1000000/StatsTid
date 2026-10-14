@@ -84,6 +84,14 @@ builder.Services.AddSingleton<PayrollExportService>();
 // current_effective_lines as the /recalculate diff baseline (B3) and rewrites it in the
 // correction tx so a 2nd correction diffs against the 1st correction's result.
 builder.Services.AddSingleton<PayrollExportRecordRepository>();
+// S145 TASK-14508 (rulings R14, R25, R58): payroll reads the employee's recorded hours itself —
+// the calculating routes no longer take them from the request. This registers IRecordedHoursReader
+// (PeriodCalculationService's optional-but-never-silent hours source: without it every calculation
+// throws, naming this line) and the two read-model repositories behind it. The registration lives in
+// Services/ProjectionHoursReader.cs, the ONLY Integrations file allowed to name those repositories,
+// so this file — which also hosts the endpoints — never does (R58; TASK-14514's hours-repository
+// access guard keeps its allowlist to that one file).
+builder.Services.AddProjectionHoursReader();
 builder.Services.AddSingleton<PeriodCalculationService>();
 builder.Services.AddSingleton<RetroactiveCorrectionService>();
 // S45: cross-process audit projection for RetroactiveCorrectionRequested
@@ -301,6 +309,14 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         }, statusCode: 403);
     }
 
+    // S145 TASK-14508 (R14; placement ruled N1): hours in the body are refused, loudly. Payroll reads
+    // the employee's recorded hours itself, so a non-empty Entries/Absences list is never used — and
+    // silently ignoring it is exactly the dropped-hours defect class S145 removes. It sits AFTER the
+    // org-scope 403 (an out-of-scope caller learns nothing about the body) and BEFORE the approval read
+    // below, which is itself a database read: nothing further is read, calculated or written.
+    if (RefuseBodyHours(request.Entries, request.Absences) is { } bodyHoursRefusal)
+        return bodyHoursRefusal;
+
     // Approval guard: period must be APPROVED before payroll export
     var approval = await approvalRepo.GetByEmployeeAndPeriodAsync(
         request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd, ct);
@@ -329,13 +345,13 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // outcome.Result is bit-identical to what CalculateAsync(profile, …) returned here before:
     // the export payload / SLS lines are unchanged BY CONSTRUCTION. The outcome additionally
     // exposes the ManifestId + AuditState.
+    // S145 TASK-14508 (R14): no hours are passed — the calculation reads the employee's recorded
+    // rows itself (the body's lists were refused above when non-empty).
     PeriodCalculationService.PeriodCalculationOutcome outcome;
     try
     {
         outcome = await calculator.CalculateWithOutcomeAsync(
             request.Profile,
-            request.Entries,
-            request.Absences,
             request.PeriodStart,
             request.PeriodEnd,
             request.PreviousFlexBalance,
@@ -445,6 +461,13 @@ app.MapPost("/api/payroll/recalculate", async (
     HttpContext httpContext,
     CancellationToken ct) =>
 {
+    // S145 TASK-14508 (R14): hours in the body are refused, loudly — payroll reads the employee's
+    // recorded hours itself. This route has no org-scope check (GlobalAdminOnly) and no approval read,
+    // so the refusal comes FIRST: before the idempotency lookup below (a database read) and before
+    // anything is calculated or written — no baseline change, correction event, audit row or marker.
+    if (RefuseBodyHours(request.Entries, request.Absences) is { } bodyHoursRefusal)
+        return bodyHoursRefusal;
+
     var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
     Guid? correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var corrValues)
         && Guid.TryParse(corrValues.FirstOrDefault(), out var parsedCorr)
@@ -474,10 +497,10 @@ app.MapPost("/api/payroll/recalculate", async (
         // S90 / TASK-9004 (B3): the diff baseline is read from payroll_export_records
         // (current_effective_lines), NOT from the request body — corrections require a prior
         // export. A never-exported month throws PayrollExportNotFoundException → a clean 422 below.
+        // S145 TASK-14508 (R14): no hours are passed — the recalculation reads the employee's current
+        // recorded rows itself.
         result = await correctionService.RecalculateAsync(
             request.Profile,
-            request.Entries,
-            request.Absences,
             request.PeriodStart,
             request.PeriodEnd,
             request.PreviousFlexBalance,
@@ -623,6 +646,24 @@ static IResult RulesUnavailable() =>
         kind = "payroll-rules-unavailable"
     }, statusCode: 503);
 
+// S145 TASK-14508 (R14) — the ONE refusal for "this request carries hours". Payroll reads the
+// employee's recorded, current hours itself, so a caller-supplied hours list is no longer an input.
+// An absent or EMPTY list is accepted (callers built for the old contract send empty lists); a
+// NON-EMPTY list answers 400 rather than being silently ignored, because silently dropped hours is
+// exactly the defect class S145 fixes — and unlike the quiet deprecation of the optional
+// PreviousExportLines field (RecalculateRequest below), hours were never optional to the result.
+// The body is FIXED: it echoes neither the refused entries' dates nor the employee id. Shared by
+// /calculate-and-export and /recalculate; returns null when the request carries no hours.
+static IResult? RefuseBodyHours(List<TimeEntry>? entries, List<AbsenceEntry>? absences) =>
+    (entries is { Count: > 0 } || absences is { Count: > 0 })
+        ? Results.Json(new
+        {
+            success = false,
+            error = "Hours are not accepted in the request. Payroll reads the employee's recorded hours itself; send the request without entries and absences. Nothing was calculated, written or exported.",
+            kind = "payroll-entries-not-accepted"
+        }, statusCode: 400)
+        : null;
+
 // S90 / TASK-9002 — builds the PayrollExportContext for the raw /export + /export-period
 // endpoints (the calculate-and-export path builds its own context inline because it already
 // has the resolved actor + correlation id + the approval period). The raw endpoints pass a
@@ -663,8 +704,18 @@ public sealed class PayrollPeriodExportRequest
 public sealed class CalculateAndExportRequest
 {
     public required EmploymentProfile Profile { get; init; }
-    public required List<TimeEntry> Entries { get; init; }
-    public required List<AbsenceEntry> Absences { get; init; }
+
+    /// <summary>
+    /// NOT AN INPUT (S145 / TASK-14508, R14). Payroll reads the employee's recorded hours itself.
+    /// Optional so that callers built for the old contract, which send an empty list, still bind; an
+    /// absent or empty list is accepted, a NON-EMPTY list is refused with 400
+    /// <c>payroll-entries-not-accepted</c> (never silently ignored).
+    /// </summary>
+    public List<TimeEntry>? Entries { get; init; }
+
+    /// <summary>NOT AN INPUT (S145 / TASK-14508, R14) — as <see cref="Entries"/>.</summary>
+    public List<AbsenceEntry>? Absences { get; init; }
+
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
     public decimal PreviousFlexBalance { get; init; }
@@ -673,8 +724,17 @@ public sealed class CalculateAndExportRequest
 public sealed class RecalculateRequest
 {
     public required EmploymentProfile Profile { get; init; }
-    public required List<TimeEntry> Entries { get; init; }
-    public required List<AbsenceEntry> Absences { get; init; }
+
+    /// <summary>
+    /// NOT AN INPUT (S145 / TASK-14508, R14). The recalculation reads the employee's current recorded
+    /// hours itself. An absent or empty list is accepted; a NON-EMPTY list is refused with 400
+    /// <c>payroll-entries-not-accepted</c> before anything is read or written.
+    /// </summary>
+    public List<TimeEntry>? Entries { get; init; }
+
+    /// <summary>NOT AN INPUT (S145 / TASK-14508, R14) — as <see cref="Entries"/>.</summary>
+    public List<AbsenceEntry>? Absences { get; init; }
+
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
     public decimal PreviousFlexBalance { get; init; }

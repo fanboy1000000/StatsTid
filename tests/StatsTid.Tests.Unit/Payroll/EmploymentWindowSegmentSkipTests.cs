@@ -53,11 +53,11 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.Equal(EmploymentWindowStatus.EMPLOYED, plan.Segments[1].EmploymentStatus);
 
         var engine = new RecordingRuleEngine(RecordingRuleEngine.AllFail);
-        var pcs = BuildPcs(engine);
+        var pcs = BuildPcs(engine, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m);
+            plan, Profile(EmployeeId),
+            previousFlexBalance: 0m);
 
         Assert.False(outcome.Result.Success);
         Assert.Equal("All rule evaluations failed", outcome.Result.ErrorMessage);
@@ -80,11 +80,11 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.Equal(2, plan.Segments.Count);
 
         var engine = new RecordingRuleEngine(RecordingRuleEngine.AllFail);
-        var pcs = BuildPcs(engine);
+        var pcs = BuildPcs(engine, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m);
+            plan, Profile(EmployeeId),
+            previousFlexBalance: 0m);
 
         Assert.False(outcome.Result.Success);
         Assert.Equal("All rule evaluations failed", outcome.Result.ErrorMessage);
@@ -103,11 +103,11 @@ public sealed class EmploymentWindowSegmentSkipTests
 
         var engine = new RecordingRuleEngine();
         var eventStore = new InMemoryEventStore();
-        var pcs = BuildPcs(engine, eventStore);
+        var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m);
+            plan, Profile(EmployeeId),
+            previousFlexBalance: 0m);
 
         Assert.True(outcome.Result.Success);
         Assert.Null(outcome.Result.ErrorMessage);
@@ -151,11 +151,11 @@ public sealed class EmploymentWindowSegmentSkipTests
         var engine = new RecordingRuleEngine(RecordingRuleEngine.AllFail); // would fail IF called
         var eventStore = new InMemoryEventStore();
         var profileResolver = new CountingProfileResolver();
-        var pcs = BuildPcs(engine, eventStore, profileResolver);
+        var pcs = BuildPcs(engine, eventStore, profileResolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m);
+            plan, Profile(EmployeeId),
+            previousFlexBalance: 0m);
 
         Assert.True(outcome.Result.Success);
         Assert.Null(outcome.Result.ErrorMessage);
@@ -189,11 +189,11 @@ public sealed class EmploymentWindowSegmentSkipTests
         var profileResolver = new CountingProfileResolver();
         var engine = new RecordingRuleEngine();
         var eventStore = new InMemoryEventStore();
-        var pcs = BuildPcs(engine, eventStore, profileResolver, windowResolver);
+        var pcs = BuildPcs(engine, eventStore, profileResolver, windowResolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31), Array.Empty<AbsenceEntry>(),
+            Profile(EmployeeId),
             Mar01, Mar31, previousFlexBalance: 0m);
 #pragma warning restore CS0618
 
@@ -243,11 +243,11 @@ public sealed class EmploymentWindowSegmentSkipTests
 
         const decimal openingBalance = 12.5m;
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine);
+        var pcs = BuildPcs(engine, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: openingBalance);
+            plan, Profile(EmployeeId),
+            previousFlexBalance: openingBalance);
 
         Assert.True(outcome.Result.Success);
 

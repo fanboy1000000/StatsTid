@@ -41,11 +41,11 @@ public sealed class EmploymentWindowAlignedWindowMergeTests
         Assert.Equal(EmploymentWindowStatus.NOT_EMPLOYED, plan.Segments[1].EmploymentStatus);
 
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine, ruleSet: AlignedWindowRuleSet);
+        var pcs = BuildPcs(engine, ruleSet: AlignedWindowRuleSet, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m);
+            plan, Profile(EmployeeId),
+            previousFlexBalance: 0m);
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
@@ -79,11 +79,11 @@ public sealed class EmploymentWindowAlignedWindowMergeTests
         Assert.Equal(BoundaryCause.EmployeeProfileChange, plan.Segments[1].BoundaryCause);
 
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine, ruleSet: AlignedWindowRuleSet);
+        var pcs = BuildPcs(engine, ruleSet: AlignedWindowRuleSet, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), WeekdayEntries(EmployeeId, Mar01, Mar31),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: 0m);
+            plan, Profile(EmployeeId),
+            previousFlexBalance: 0m);
 
         // The calculation continues; the failure surfaces ON THE RULE (PCS merge contract).
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);

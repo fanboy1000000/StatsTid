@@ -97,11 +97,13 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         await SetEmploymentWindowAsync(employeeId, start: null, end: lastDay);
 
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(entries));
 
         // Before the ruling this call threw PlannerInvariantViolation naming OVERTIME_CALC.
-        var outcome = await RunShimAsync(pcs, employeeId, entries, Array.Empty<AbsenceEntry>());
+        var outcome = await RunShimAsync(pcs, employeeId);
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         Assert.Equal(PeriodCalculationService.AuditState.Complete, outcome.AuditState);
@@ -155,10 +157,12 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         await SetEmploymentWindowAsync(employeeId, start: hire, end: null);
 
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(entries));
 
-        var outcome = await RunShimAsync(pcs, employeeId, entries, Array.Empty<AbsenceEntry>());
+        var outcome = await RunShimAsync(pcs, employeeId);
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         Assert.All(outcome.Result.RuleResults, r => Assert.True(r.Success, r.ErrorMessage));
@@ -214,11 +218,13 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         // profile change alone.
 
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(entries));
 
         var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
-            RunShimAsync(pcs, employeeId, entries, Array.Empty<AbsenceEntry>()));
+            RunShimAsync(pcs, employeeId));
 
         // The refusal happened at plan time — nothing was evaluated, nothing exported.
         Assert.Empty(engine.Calls);
@@ -307,7 +313,7 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
 
     // ─── PCS wiring (the production DI shape, hand-built) ────────────────
 
-    private PeriodCalculationService BuildPcs(RecordingRuleEngine engine)
+    private PeriodCalculationService BuildPcs(RecordingRuleEngine engine, IRecordedHoursReader hoursReader)
     {
         var httpFactory = new SingleClientFactory(engine);
         var wtmRepo = new WageTypeMappingRepository(_harness.Factory);
@@ -333,18 +339,18 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
             localAgreementProfileRepo: null,
             profileResolver: new EmploymentProfileResolver(_harness.Factory, new UserAgreementCodeRepository(_harness.Factory)),
             employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
-            employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory));
+            employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
+            // S145 R14: the in-memory hours reader (payroll reads its own hours).
+            hoursReader: hoursReader);
     }
 
     private static async Task<PeriodCalculationService.PeriodCalculationOutcome> RunShimAsync(
         PeriodCalculationService pcs,
-        string employeeId,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences)
+        string employeeId)
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         return await pcs.CalculateWithOutcomeAsync(
-            Profile(employeeId), entries, absences, Apr01, Apr30, previousFlexBalance: 0m);
+            Profile(employeeId), Apr01, Apr30, previousFlexBalance: 0m);
 #pragma warning restore CS0618
     }
 

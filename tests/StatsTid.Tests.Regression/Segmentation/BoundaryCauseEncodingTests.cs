@@ -6,6 +6,7 @@ using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -161,11 +162,15 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
     public async Task ForwardCalcWrite_And_Rebuild_BothStringEncode_CorrectBoundaryCause()
     {
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
-        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
 
         var profile = TestFixtures.Profile("EMP-BC-ENCODING-1");
         var entries = TestFixtures.WeekdayEntriesForPeriod(
             profile.EmployeeId, new DateOnly(2026, 3, 25), new DateOnly(2026, 4, 7));
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader (TestSupport) instead of through the call.
+        var pcs = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(entries));
 
         // Straddles the OK24→OK26 boundary (2026-04-01), so the plan has a real BoundaryCause
         // beyond the default — see the existing Manifest{Replay,ProjectionRebuild}Tests.
@@ -180,7 +185,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        await pcs.CalculateAsync(plan, profile, entries, Array.Empty<AbsenceEntry>(), 0m);
+        await pcs.CalculateAsync(plan, profile, 0m);
 
         var expectedCauses = plan.Segments.Select(s => s.BoundaryCause.ToString()).ToList();
 

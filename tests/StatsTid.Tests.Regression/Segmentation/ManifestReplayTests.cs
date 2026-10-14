@@ -1,13 +1,14 @@
 using Npgsql;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
 /// <summary>
-/// Replay-determinism contract for <see cref="StatsTid.Integrations.Payroll.Services.PeriodCalculationService.ReplayAsync(System.Guid, EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, decimal, string?, System.Guid?, System.Threading.CancellationToken)"/>
+/// Replay-determinism contract for <see cref="StatsTid.Integrations.Payroll.Services.PeriodCalculationService.ReplayAsync(System.Guid, EmploymentProfile, decimal, string?, System.Guid?, System.Threading.CancellationToken)"/>
 /// (ADR-016 D10): replay loads the persisted manifest, reconstructs the plan, and
-/// re-evaluates rules against the supplied inputs WITHOUT minting a new manifest.
+/// re-evaluates rules against the hours its recorded-hours reader supplies (S145 R14: payroll reads its own hours) WITHOUT minting a new manifest.
 /// The replay-emitted result MUST carry the original <c>ManifestId</c> end-to-end.
 ///
 /// <para>
@@ -32,11 +33,15 @@ public sealed class ManifestReplayTests : IAsyncLifetime
     public async Task ReplayAsync_ReturnsResult_WithOriginalManifestId_AndMatchingShape()
     {
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
-        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
 
         var profile = TestFixtures.Profile("EMP-REPLAY-1");
         var entries = TestFixtures.WeekdayEntriesForPeriod(profile.EmployeeId, new DateOnly(2026, 3, 25), new DateOnly(2026, 4, 7));
         var absences = Array.Empty<AbsenceEntry>();
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader (TestSupport) instead of through the call.
+        var pcs = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(entries, absences));
 
         // Forward calculation produces manifest M1.
         var plan = PeriodPlanner.Plan(
@@ -55,13 +60,13 @@ public sealed class ManifestReplayTests : IAsyncLifetime
             profile: profile);
 
         var forward = await pcs.CalculateAsync(
-            plan, profile, entries, absences,
+            plan, profile,
             previousFlexBalance: 0m);
         Assert.True(forward.Success);
 
         // Replay against the same manifest id with the same inputs.
         var replay = await pcs.ReplayAsync(
-            plan.ManifestId, profile, entries, absences,
+            plan.ManifestId, profile,
             previousFlexBalance: 0m);
 
         // Replay result is success, carries the same manifest id on every rule result,

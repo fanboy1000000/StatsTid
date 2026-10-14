@@ -2,6 +2,7 @@ using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
 using StatsTid.Tests.Regression.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Payroll;
 
@@ -33,12 +34,16 @@ public sealed class MixedVersionExportTests : IAsyncLifetime
     public async Task StraddlingPeriod_ProducesPerLineOkVersionStamping_AndSlsFileColumns()
     {
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
-        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
 
         var profile = TestFixtures.Profile("EMP-MIXED-1");
         var periodStart = new DateOnly(2026, 3, 25);
         var periodEnd = new DateOnly(2026, 4, 30);
         var entries = TestFixtures.WeekdayEntriesForPeriod(profile.EmployeeId, periodStart, periodEnd);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var pcs = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(entries));
 
         var plan = PeriodPlanner.Plan(
             employeeId: profile.EmployeeId,
@@ -57,7 +62,7 @@ public sealed class MixedVersionExportTests : IAsyncLifetime
 
         Assert.Equal(2, plan.Segments.Count);
 
-        var result = await pcs.CalculateAsync(plan, profile, entries, Array.Empty<AbsenceEntry>(), 0m);
+        var result = await pcs.CalculateAsync(plan, profile, 0m);
         Assert.True(result.Success);
         Assert.NotEmpty(result.ExportLines);
 

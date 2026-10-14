@@ -10,6 +10,7 @@ using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Payroll;
 
@@ -121,20 +122,22 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
     [Fact]
     public async Task ReplayAsync_StableUnderAgreementCodeMutation_ResultByteIdentical()
     {
-        var pcs = BuildPcsWithResolver(_resolver);
+        // S145 R14: payroll reads its own hours; the same entries/absences reach PCS through an
+        // in-memory IRecordedHoursReader instead of through call arguments.
+        var entries = TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd);
+        var absences = Array.Empty<AbsenceEntry>();
+        var pcs = BuildPcsWithResolver(_resolver, new InMemoryRecordedHoursReader(entries, absences));
 
         // Caller-supplied profile (AgreementCode here matches the seed; PCS L344-358
         // overwrites this from the dated resolver per segment).
         var profileSeed = TestFixtures.Profile(EmployeeId) with { AgreementCode = PredecessorAgreementCode };
-        var entries = TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd);
-        var absences = Array.Empty<AbsenceEntry>();
 
         // Baseline forward calc via the (Obsolete) legacy shim — same entry point
         // S33 employee_profile marquee uses (BuildPlanForLegacyCallersAsync registers
         // the WtmNaturalKey hydrator on the plan's IPlannerEnrollment per S29).
 #pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.
         var baseline = await pcs.CalculateAsync(
-            profileSeed, entries, absences, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
+            profileSeed, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
 #pragma warning restore CS0618
         Assert.True(baseline.Success);
         Assert.NotEmpty(baseline.RuleResults);
@@ -160,7 +163,7 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
         // for any asOfDate < Today, and the agreement_code-branching rule stub
         // produces identical output for the same agreement_code input.
         var replay = await pcs.ReplayAsync(
-            baselineManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
+            baselineManifestId, profileSeed, previousFlexBalance: 0m);
         Assert.True(replay.Success);
 
         var replayJson = JsonSerializer.Serialize(replay.RuleResults, SerializerOptions);
@@ -185,7 +188,8 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
     /// load-bearing assertion in this marquee. We override the handler
     /// here to make the test fail loudly if the cutover ever regresses.
     /// </summary>
-    private PeriodCalculationService BuildPcsWithResolver(EmploymentProfileResolver resolver)
+    private PeriodCalculationService BuildPcsWithResolver(
+        EmploymentProfileResolver resolver, IRecordedHoursReader hoursReader)
     {
         var stubHandler = new TestFixtures.StubHandler(AgreementCodeBranchingRuleHandler);
         var httpFactory = new SingleClientFactory(stubHandler);
@@ -214,7 +218,9 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
             // shape that would silently pay a leaver for the whole month. The real self-managed
             // resolver is harmless here: plan-first calls never consult it, and the shim would read
             // the seeded users row's unbounded window → every segment EMPLOYED, as before.
-            employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory));
+            employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
+            // S145 R14: the in-memory hours reader (payroll reads its own hours).
+            hoursReader: hoursReader);
     }
 
     /// <summary>

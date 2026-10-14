@@ -9,6 +9,7 @@ using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 using StatsTid.Tests.Regression.Outbox;
 using StatsTid.Tests.Regression.PhaseE;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Payroll;
 
@@ -217,8 +218,6 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         // The read-baseline guard throws BEFORE the rule-engine calc, so no HTTP stand-up is needed.
         var ex = await Assert.ThrowsAsync<PayrollExportNotFoundException>(() => service.RecalculateAsync(
             profile,
-            entries: [],
-            absences: [],
             periodStart: new DateOnly(year, month, 1),
             periodEnd: new DateOnly(year, month, DateTime.DaysInMonth(year, month)),
             previousFlexBalance: 0m,
@@ -298,8 +297,6 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         // Post-fix the failure PROPAGATES (the call surfaces an error, not Success=true).
         await Assert.ThrowsAnyAsync<Exception>(() => service.RecalculateAsync(
             profile,
-            entries: [],
-            absences: [],
             periodStart: new DateOnly(year, month, 1),
             periodEnd: new DateOnly(year, month, DateTime.DaysInMonth(year, month)),
             previousFlexBalance: 0m,
@@ -401,8 +398,6 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
 
         var result = await service.RecalculateAsync(
             profile,
-            entries: [],
-            absences: [],
             periodStart: new DateOnly(year, month, 1),
             periodEnd: new DateOnly(year, month, DateTime.DaysInMonth(year, month)),
             previousFlexBalance: 0m,
@@ -437,7 +432,7 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
 
         // First correction with token T: succeeds and marks T delivered atomically with the event.
         var first = await service.RecalculateAsync(
-            profile, entries: [], absences: [], periodStart: ps, periodEnd: pe,
+            profile, periodStart: ps, periodEnd: pe,
             previousFlexBalance: 0m, reason: "first", actorId: actor, idempotencyToken: token);
         Assert.True(first.Success);
         Assert.Equal(1, await CountCorrectionEventsAsync(emp));
@@ -451,7 +446,7 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         // RED-on-old: pre-S132 RecalculateAsync had no marker of its own, so this second call re-ran
         // and committed a PHANTOM second correction event + audit row (Success, no throw).
         await Assert.ThrowsAnyAsync<Exception>(() => service.RecalculateAsync(
-            profile, entries: [], absences: [], periodStart: ps, periodEnd: pe,
+            profile, periodStart: ps, periodEnd: pe,
             previousFlexBalance: 0m, reason: "retry", actorId: actor, idempotencyToken: token));
 
         // Still exactly ONE correction event + ONE audit row + ONE delivered marker — no phantom.
@@ -498,7 +493,10 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
             eventStore,
             factory,
             configuration,
-            NullLogger<PeriodCalculationService>.Instance);
+            NullLogger<PeriodCalculationService>.Instance,
+            // S145 R14/R25: PCS refuses to calculate without a reader. These calls passed NO hours
+            // before (entries: [], absences: []), so the reader is empty — same meaning.
+            hoursReader: new InMemoryRecordedHoursReader());
         return new RetroactiveCorrectionService(
             calc,
             factory,

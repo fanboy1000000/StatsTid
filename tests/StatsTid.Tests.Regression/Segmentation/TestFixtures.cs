@@ -9,6 +9,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 using Testcontainers.PostgreSql;
 
 namespace StatsTid.Tests.Regression.Segmentation;
@@ -246,7 +247,8 @@ internal static class TestFixtures
     public static PeriodCalculationService BuildPcs(
         DbConnectionFactory factory,
         PostgresEventStore eventStore,
-        Func<HttpRequestMessage, HttpResponseMessage>? handler = null)
+        Func<HttpRequestMessage, HttpResponseMessage>? handler = null,
+        IRecordedHoursReader? hoursReader = null)
     {
         var stubHandler = new StubHandler(handler ?? DefaultRuleEngineHandler);
         var httpFactory = new SingleClientFactory(stubHandler);
@@ -268,7 +270,12 @@ internal static class TestFixtures
             factory,
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
-            classificationProvider: new InMemoryRuleClassificationProvider(RuleSet));
+            classificationProvider: new InMemoryRuleClassificationProvider(RuleSet),
+            // S145 / TASK-14508-T (R14, R25): PCS refuses to calculate or replay without an hours
+            // reader, so BuildPcs always supplies one. Default = an EMPTY in-memory reader (enough for
+            // the tests that only plan, or replay without needing hours); a test that calculates
+            // passes a reader holding the hours it used to hand to the call as arguments.
+            hoursReader: hoursReader ?? new InMemoryRecordedHoursReader());
     }
 
     /// <summary>

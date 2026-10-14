@@ -103,10 +103,12 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
         await SetEmploymentWindowAsync(employeeId, start: null, end: lastDay);
 
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(entries));
 
-        var outcome = await RunShimAsync(pcs, employeeId, entries, Array.Empty<AbsenceEntry>());
+        var outcome = await RunShimAsync(pcs, employeeId);
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         Assert.Equal(PeriodCalculationService.AuditState.Complete, outcome.AuditState);
@@ -162,10 +164,12 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
         await SetEmploymentWindowAsync(employeeId, start: hire, end: null);
 
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(entries));
 
-        var outcome = await RunShimAsync(pcs, employeeId, entries, Array.Empty<AbsenceEntry>());
+        var outcome = await RunShimAsync(pcs, employeeId);
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
@@ -212,7 +216,6 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
         // profile change alone.
 
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
         // One vacation day per span, Hours = 0 so the stub applies the AbsenceRule formula
         // (7.4 × part_time_fraction) exactly as the real rule would.
@@ -221,8 +224,11 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
             VacationDay(employeeId, new DateOnly(2026, 4, 8)),
             VacationDay(employeeId, new DateOnly(2026, 4, 22)),
         };
+        // S145 R14: payroll reads its own hours — entries and absences reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(entries, absences));
 
-        var outcome = await RunShimAsync(pcs, employeeId, entries, absences);
+        var outcome = await RunShimAsync(pcs, employeeId);
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
@@ -307,11 +313,13 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
         const decimal openingBalance = 12.5m;
         const decimal firstSegmentDelta = 2.5m;
         var engine = new RecordingRuleEngine(flexDeltaFor: call => call.PeriodStart == Apr01 ? firstSegmentDelta : 0m);
-        var pcs = BuildPcs(engine);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(
+            TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30)));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(employeeId), TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30),
-            Array.Empty<AbsenceEntry>(), previousFlexBalance: openingBalance);
+            plan, Profile(employeeId), previousFlexBalance: openingBalance);
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
@@ -404,7 +412,7 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
 
     // ─── PCS wiring (the production DI shape, hand-built) ────────────────
 
-    private PeriodCalculationService BuildPcs(RecordingRuleEngine engine)
+    private PeriodCalculationService BuildPcs(RecordingRuleEngine engine, IRecordedHoursReader hoursReader)
     {
         var httpFactory = new SingleClientFactory(engine);
         var wtmRepo = new WageTypeMappingRepository(_harness.Factory);
@@ -431,18 +439,18 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
             localAgreementProfileRepo: null,
             profileResolver: new EmploymentProfileResolver(_harness.Factory, new UserAgreementCodeRepository(_harness.Factory)),
             employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
-            employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory));
+            employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
+            // S145 R14: the in-memory hours reader (payroll reads its own hours).
+            hoursReader: hoursReader);
     }
 
     private static async Task<PeriodCalculationService.PeriodCalculationOutcome> RunShimAsync(
         PeriodCalculationService pcs,
-        string employeeId,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences)
+        string employeeId)
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         return await pcs.CalculateWithOutcomeAsync(
-            Profile(employeeId), entries, absences, Apr01, Apr30, previousFlexBalance: 0m);
+            Profile(employeeId), Apr01, Apr30, previousFlexBalance: 0m);
 #pragma warning restore CS0618
     }
 

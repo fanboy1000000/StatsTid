@@ -90,16 +90,10 @@ public sealed class PayrollCalcAuditSmokeTests
                 partTimeFraction = 1.0m,
                 orgId = OrgId,
             },
-            // A full week of weekday 7.4h entries (Mon 2026-03-02 .. Fri 2026-03-06). Enough for the
-            // calc to run to manifest emission; the probe does not depend on export lines existing.
-            entries = new[]
-            {
-                new { employeeId = EmployeeId, date = "2026-03-02", hours = 7.4m, agreementCode = "AC", okVersion = "OK24" },
-                new { employeeId = EmployeeId, date = "2026-03-03", hours = 7.4m, agreementCode = "AC", okVersion = "OK24" },
-                new { employeeId = EmployeeId, date = "2026-03-04", hours = 7.4m, agreementCode = "AC", okVersion = "OK24" },
-                new { employeeId = EmployeeId, date = "2026-03-05", hours = 7.4m, agreementCode = "AC", okVersion = "OK24" },
-                new { employeeId = EmployeeId, date = "2026-03-06", hours = 7.4m, agreementCode = "AC", okVersion = "OK24" },
-            },
+            // S145 R14: the body carries NO hours — payroll reads the employee's recorded hours itself
+            // and a body that carries hours is refused with 400 (payroll-entries-not-accepted). The
+            // probe does not need export lines: the calc runs to manifest emission on whatever hours
+            // the read finds (none for this probe employee).
             absences = Array.Empty<object>(),
             periodStart = "2026-03-01",
             periodEnd = "2026-03-31",
