@@ -42,8 +42,10 @@ namespace StatsTid.Tests.Unit.Payroll;
 ///
 /// <para>
 /// Deliberately NOT asserted: any overtime or hour totals (they change when TASK-14511 lands). Only what is
-/// stable across A.2 and A.3 is pinned: no refusal, no September entry past 30 September, October reads
-/// from on or before 30 September, October receives the 2.00 h on 1 October.
+/// stable across A.2 and A.3 is pinned: no refusal, no entry past the month end, the read starts EXACTLY
+/// on the day before the opening Monday, and the halves are 1.00 h (30 Sep) and 2.00 h (1 Oct), each once per
+/// request, adding to the registered 3.00 h. The Step 5a fix-up added the exact-window theory and the Sunday
+/// month-end fact (31 Jan 2027), where the extra read day is the only thing that keeps the hours.
 /// </para>
 /// </summary>
 public sealed class MonthEndCrossingTests
@@ -60,39 +62,110 @@ public sealed class MonthEndCrossingTests
         // The calendar premise the story rests on.
         Assert.Equal(DayOfWeek.Wednesday, Sep30.DayOfWeek);
 
-        var profile = Profile(Emp) with { OkVersion = "OK26" }; // HK, full time, employed throughout (no windows)
+        // September: 1. completes (no throw); 2. nothing after 30 Sep; 3. 1.00 h on 30 Sep, once per request.
+        var september = await RunMonthAsync(Sep01, Sep30, NightShiftRow(Sep30));
+        Assert.True(september.Outcome.Result.Success, september.Outcome.Result.ErrorMessage);
+        var septHours = AssertShiftHalfInEveryRequest(september.Engine, Sep30, expectedHours: 1.00m, nothingAfter: Sep30);
 
-        // ── September ────────────────────────────────────────────────────────────────
-        var septReader = new WindowHonouringReader(NightShiftRow());
-        var septEngine = new CapturingEngine();
-        var septPcs = BuildPcsOver(septEngine, septReader);
+        // October
+        var october = await RunMonthAsync(Oct01, Oct31, NightShiftRow(Sep30));
+        Assert.True(october.Outcome.Result.Success, october.Outcome.Result.ErrorMessage);
 
-        // 1. September's calculation completes: no PlannerInvariantViolation or other throw.
-        var september = await septPcs.CalculateWithOutcomeAsync(
-            Plan(Emp, Sep01, Sep30, windows: null), profile, previousFlexBalance: 0m);
-        Assert.True(september.Result.Success, september.Result.ErrorMessage);
+        // 3. October read starts EXACTLY on Sunday 27 Sep (opening Monday 28 Sep, minus one day).
+        var from = Assert.Single(october.Reader.FromInclusiveCalls);
+        Assert.Equal(new DateOnly(2026, 9, 27), from);
 
-        // 2. No entry September sends to the engine is dated after 30 Sep.
-        Assert.NotEmpty(septEngine.SentEntries);
-        Assert.All(septEngine.SentEntries, e => Assert.True(
-            e.Date <= Sep30, $"September sent an entry dated {e.Date:yyyy-MM-dd}, after 30 Sep."));
+        // 4. October sends the after-midnight half: one entry dated 1 Oct, 2.00 h (no Distinct()).
+        var octHours = AssertShiftHalfInEveryRequest(october.Engine, Oct01, expectedHours: 2.00m, nothingAfter: Oct31);
 
-        // ── October ──────────────────────────────────────────────────────────────────
-        var octReader = new WindowHonouringReader(NightShiftRow());
-        var octEngine = new CapturingEngine();
-        var octPcs = BuildPcsOver(octEngine, octReader);
+        // Conservation: the two halves add back to the 3.00 h that was registered.
+        Assert.Equal(3.00m, septHours + octHours);
+    }
 
-        var october = await octPcs.CalculateWithOutcomeAsync(
-            Plan(Emp, Oct01, Oct31, windows: null), profile, previousFlexBalance: 0m);
-        Assert.True(october.Result.Success, october.Result.ErrorMessage);
+    /// <summary>
+    /// The read window starts at WeekStart(periodStart) - 1: the Sunday before the Monday of the
+    /// month opening week. The extra day is what lets a Sunday month-end night shift after-midnight
+    /// hours reach the next month. Rows derived from the rule, each with its weekday premise.
+    /// </summary>
+    [Theory]
+    [InlineData("2026-10-01", "2026-10-31", "2026-09-27", DayOfWeek.Thursday)] // opening Monday 28 Sep
+    [InlineData("2026-06-01", "2026-06-30", "2026-05-31", DayOfWeek.Monday)]   // 1 Jun IS the Monday
+    [InlineData("2027-01-01", "2027-01-31", "2026-12-27", DayOfWeek.Friday)]   // opening Monday 28 Dec; year boundary
+    [InlineData("2027-02-01", "2027-02-28", "2027-01-31", DayOfWeek.Monday)]   // 1 Feb IS the Monday
+    public async Task HoursReadStart_IsTheDayBeforeTheOpeningMonday(
+        string periodStart, string periodEnd, string expectedFrom, DayOfWeek firstDayOfWeek)
+    {
+        var start = DateOnly.Parse(periodStart);
+        var from = DateOnly.Parse(expectedFrom);
+        Assert.Equal(firstDayOfWeek, start.DayOfWeek);
+        Assert.Equal(DayOfWeek.Sunday, from.DayOfWeek); // the day before a Monday
 
-        // 3. October's reader call starts on or before 30 Sep.
-        var from = Assert.Single(octReader.FromInclusiveCalls);
-        Assert.True(from <= Sep30, $"October's read started {from:yyyy-MM-dd}, after 30 Sep.");
+        var run = await RunMonthAsync(start, DateOnly.Parse(periodEnd));
 
-        // 4. An entry October sends is dated 1 Oct with 2.00 h.
-        var postMidnight = Assert.Single(octEngine.SentEntries.Where(e => e.Date == Oct01).Distinct());
-        Assert.Equal(2.00m, postMidnight.Hours);
+        Assert.Equal(from, Assert.Single(run.Reader.FromInclusiveCalls));
+    }
+
+    [Fact]
+    public async Task MonthEndNightShift_Sun31Jan2027_2300To0200_FebruaryReadsItAndPays200On1Feb()
+    {
+        var jan31 = new DateOnly(2027, 1, 31);
+        var feb01 = new DateOnly(2027, 2, 1);
+        Assert.Equal(DayOfWeek.Sunday, jan31.DayOfWeek);
+        Assert.Equal(DayOfWeek.Monday, feb01.DayOfWeek);
+
+        // January completes; nothing dated after 31 Jan; the pre-midnight half is 1.00 h on 31 Jan, once per request.
+        var january = await RunMonthAsync(new DateOnly(2027, 1, 1), jan31, NightShiftRow(jan31));
+        Assert.True(january.Outcome.Result.Success, january.Outcome.Result.ErrorMessage);
+        var janHours = AssertShiftHalfInEveryRequest(january.Engine, jan31, expectedHours: 1.00m, nothingAfter: jan31);
+
+        // February read starts exactly on Sunday 31 Jan: the extra day is the ONLY thing that keeps
+        // these hours, since a read from 1 Feb would never see the row.
+        var february = await RunMonthAsync(feb01, new DateOnly(2027, 2, 28), NightShiftRow(jan31));
+        Assert.True(february.Outcome.Result.Success, february.Outcome.Result.ErrorMessage);
+        Assert.Equal(jan31, Assert.Single(february.Reader.FromInclusiveCalls));
+
+        // February sends exactly one entry dated Mon 1 Feb, 2.00 h.
+        var febHours = AssertShiftHalfInEveryRequest(february.Engine, feb01, expectedHours: 2.00m, nothingAfter: new DateOnly(2027, 2, 28));
+        Assert.Equal(3.00m, janHours + febHours);
+    }
+
+    private sealed record MonthRun(
+        PeriodCalculationService.PeriodCalculationOutcome Outcome, WindowHonouringReader Reader, CapturingEngine Engine);
+
+    /// <summary>Runs PCS for one month (HK, full time, employed throughout) over a window-honouring reader
+    /// holding the given rows.</summary>
+    private static async Task<MonthRun> RunMonthAsync(
+        DateOnly start, DateOnly end, params TimeEntryProjectionRow[] rows)
+    {
+        var reader = new WindowHonouringReader(rows);
+        var engine = new CapturingEngine();
+        var pcs = BuildPcsOver(engine, reader);
+        var profile = Profile(Emp) with { OkVersion = "OK26" };
+        var outcome = await pcs.CalculateWithOutcomeAsync(
+            Plan(Emp, start, end, windows: null), profile, previousFlexBalance: 0m);
+        return new MonthRun(outcome, reader, engine);
+    }
+
+    /// <summary>
+    /// Shape found: PCS sends the segment entries to each of the four time rules (one request each), so
+    /// the half appears once PER request, never twice within one. Asserted per request, without Distinct():
+    /// at least one request carries entries; in EVERY such request exactly one entry is dated the given
+    /// date with the expected hours, and none is dated after the month end. Returns that one entry hours
+    /// (for the conservation sum).
+    /// </summary>
+    private static decimal AssertShiftHalfInEveryRequest(
+        CapturingEngine engine, DateOnly date, decimal expectedHours, DateOnly nothingAfter)
+    {
+        var requests = engine.RequestsWithEntries;
+        Assert.NotEmpty(requests);
+        foreach (var request in requests)
+        {
+            Assert.All(request, e => Assert.True(
+                e.Date <= nothingAfter, $"A request carried an entry dated {e.Date:yyyy-MM-dd}, after {nothingAfter:yyyy-MM-dd}."));
+            var half = Assert.Single(request.Where(e => e.Date == date));
+            Assert.Equal(expectedHours, half.Hours);
+        }
+        return expectedHours;
     }
 
     private static PeriodCalculationService BuildPcsOver(HttpMessageHandler engine, IRecordedHoursReader reader)
@@ -110,17 +183,17 @@ public sealed class MonthEndCrossingTests
                 employeeProfileRepo: null,
                 hoursReader: reader);
 
-    private static TimeEntryProjectionRow NightShiftRow() => new()
+    private static TimeEntryProjectionRow NightShiftRow(DateOnly date) => new()
     {
         EventId = Guid.Parse("00000000-0000-0000-0000-0000000145aa"),
         EmployeeId = Emp,
-        Date = Sep30,
+        Date = date,
         Hours = 3.00m,
         StartTime = new TimeOnly(23, 0),
         EndTime = new TimeOnly(2, 0),
         AgreementCode = "HK",
         OkVersion = "OK26",
-        OccurredAt = new DateTime(2026, 9, 30, 21, 0, 0, DateTimeKind.Utc),
+        OccurredAt = date.ToDateTime(new TimeOnly(21, 0), DateTimeKind.Utc),
         OutboxId = 1,
     };
 
@@ -154,8 +227,13 @@ public sealed class MonthEndCrossingTests
     /// <summary>Captures the <c>entries</c> of every request PCS sends and answers success with no line items.</summary>
     private sealed class CapturingEngine : HttpMessageHandler
     {
-        private readonly List<(DateOnly Date, decimal Hours)> _entries = new();
-        public IReadOnlyList<(DateOnly Date, decimal Hours)> SentEntries { get { lock (_entries) return _entries.ToList(); } }
+        private readonly List<IReadOnlyList<(DateOnly Date, decimal Hours)>> _requests = new();
+
+        /// <summary>The entries of each request that carried an entries array, one list per request.</summary>
+        public IReadOnlyList<IReadOnlyList<(DateOnly Date, decimal Hours)>> RequestsWithEntries
+        {
+            get { lock (_requests) return _requests.ToList(); }
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
@@ -164,9 +242,10 @@ public sealed class MonthEndCrossingTests
             using var doc = JsonDocument.Parse(body);
             if (doc.RootElement.TryGetProperty("entries", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
-                lock (_entries)
-                    foreach (var e in arr.EnumerateArray())
-                        _entries.Add((DateOnly.Parse(e.GetProperty("date").GetString()!), e.GetProperty("hours").GetDecimal()));
+                IReadOnlyList<(DateOnly Date, decimal Hours)> list = arr.EnumerateArray()
+                    .Select(e => (DateOnly.Parse(e.GetProperty("date").GetString()!), e.GetProperty("hours").GetDecimal()))
+                    .ToList();
+                lock (_requests) _requests.Add(list);
             }
 
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;

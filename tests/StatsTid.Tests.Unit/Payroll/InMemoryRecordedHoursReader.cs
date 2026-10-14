@@ -25,6 +25,13 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// </para>
 ///
 /// <para>
+/// <b>Caveat (Step 5a).</b> "Same input" holds for an existing non-null <c>SourceStintId</c>, which survives.
+/// A formerly NULL one becomes a deterministic event id here, so PCS's mapping hands it a
+/// <c>SourceStintId</c> it did not have before. A test that needs the normalizer's missing-id fallback
+/// must therefore not rely on this reader.
+/// </para>
+///
+/// <para>
 /// Built with no rows it is the "empty reader" (a calculation on no hours; a replay that needs a reader
 /// to exist but reads nothing).
 /// </para>
