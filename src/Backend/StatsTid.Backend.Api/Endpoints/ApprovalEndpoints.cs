@@ -1768,9 +1768,10 @@ public static class ApprovalEndpoints
             // a Monday or has no export record. Same transaction as the transition, so a reopen that
             // sees the next month's export lands its row atomically with the reopen; the export read
             // sits after the approval-row lock taken above (ADR-034 D4). Not yet serialized against a
-            // CONCURRENT export of the next month, which checks this month's approval before its own
-            // transaction: in a sub-second interleaving both can commit with no row. TASK-14512 Do 7
-            // closes it (the export row-locks this month's approval inside its transaction).
+            // CONCURRENT export of the next month, which today does not lock this month's approval at
+            // all: in a sub-second interleaving both can commit with no row. TASK-14512 Do 2 adds the
+            // export's prior-month check, and Do 7 puts it under a row lock inside the export's
+            // transaction, which closes the gap.
             // Not the widened backdate writer (R36): that would reach a month further.
             // Placed after the PeriodReopened enqueue, so the outbox order follows the causal order.
             await worklistRepo.WriteForPriorMonthReopenedAsync(

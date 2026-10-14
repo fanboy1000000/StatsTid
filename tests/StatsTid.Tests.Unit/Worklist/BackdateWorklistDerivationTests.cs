@@ -467,17 +467,20 @@ public sealed class BackdateWorklistDerivationTests
     /// </summary>
     [Theory]
     // Mon 28 Sep: last day Sun 27 Sep ends its own week, so the bound is unchanged.
-    [InlineData(2026, 9, 28, 2026, 9, 28)]
+    [InlineData(2026, 9, 28, DayOfWeek.Monday, 2026, 9, 28)]
     // Thu 1 Oct: last day Wed 30 Sep, week ends Sun 4 Oct, so the bound becomes Mon 5 Oct.
-    [InlineData(2026, 10, 1, 2026, 10, 5)]
+    [InlineData(2026, 10, 1, DayOfWeek.Thursday, 2026, 10, 5)]
     // Wed 1 Apr: last day Tue 31 Mar, week ends Sun 5 Apr, so Mon 6 Apr (W1-EX's case).
-    [InlineData(2026, 4, 1, 2026, 4, 6)]
+    [InlineData(2026, 4, 1, DayOfWeek.Wednesday, 2026, 4, 6)]
     // Fri 1 Jan 2027: last day Thu 31 Dec 2026, week ends Sun 3 Jan, so Mon 4 Jan 2027 (year rollover).
-    [InlineData(2027, 1, 1, 2027, 1, 4)]
+    [InlineData(2027, 1, 1, DayOfWeek.Friday, 2027, 1, 4)]
     public void SettlingMondayAfter_MondayAfterTheWeekHoldingTheLastDay(
-        int y, int m, int d, int ey, int em, int ed)
+        int y, int m, int d, DayOfWeek inputDay, int ey, int em, int ed)
     {
         var input = new DateOnly(y, m, d);
+        // The input weekday is asserted, not just commented: the Monday row is the one that catches
+        // widening from toExclusive instead of toExclusive - 1 (S145 TASK-14509 Step 5a cycle 2, NOTE 1).
+        Assert.Equal(inputDay, input.DayOfWeek);
         var expected = new DateOnly(ey, em, ed);
         Assert.Equal(DayOfWeek.Monday, expected.DayOfWeek);
 
@@ -516,5 +519,22 @@ public sealed class BackdateWorklistDerivationTests
         Assert.NotEqual(DayOfWeek.Monday, new DateOnly(nextYear, nextMonth, 1).DayOfWeek);
         Assert.NotNull(result);
         Assert.Equal((nextYear, nextMonth, expectedFrom), (result!.Value.Year, result.Value.Month, result.Value.EffectiveFrom));
+    }
+
+    /// <summary>
+    /// R5(c) with a period start that is not the 1st: the helper normalises to the month, so a
+    /// reopened period starting Tue 15 Sep 2026 reaches October from Mon 28 Sep, as the 1st does
+    /// (S145 TASK-14509 Step 5a cycle 2, NOTE 2: pins the month normalisation).
+    /// </summary>
+    [Fact]
+    public void NextMonthReachOfReopen_MidMonthPeriodStart_NormalisesToTheMonth()
+    {
+        var start = new DateOnly(2026, 9, 15);
+        Assert.Equal(DayOfWeek.Tuesday, start.DayOfWeek);
+
+        var result = BackdateWorklistDerivation.NextMonthReachOfReopen(start);
+
+        Assert.NotNull(result);
+        Assert.Equal((2026, 10, new DateOnly(2026, 9, 28)), (result!.Value.Year, result.Value.Month, result.Value.EffectiveFrom));
     }
 }
