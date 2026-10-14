@@ -239,7 +239,9 @@ public sealed class MonthEndCrossingTests
                 profileResolver: null,
                 employmentWindowResolver: null,
                 employeeProfileRepo: null,
-                hoursReader: reader);
+                hoursReader: reader,
+                // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+                priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
 
     private static TimeEntryProjectionRow NightShiftRow(DateOnly date) => new()
     {

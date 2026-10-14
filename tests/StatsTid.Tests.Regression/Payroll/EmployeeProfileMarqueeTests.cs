@@ -393,7 +393,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             // same weekday entries for the whole period and no absences; they now reach PCS
             // through this in-memory reader instead of through call arguments.
             hoursReader: new InMemoryRecordedHoursReader(
-                TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd)));
+                TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd)),
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
     }
 
     // ─── QUAL-015: resolver-sensitive rule-engine stub ───────────────────────

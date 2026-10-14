@@ -246,7 +246,20 @@ internal static class EmploymentWindowPcsFixture
             // S145 / TASK-14508-T (R14, R25): PCS refuses to calculate or replay without an hours
             // reader. Default = an EMPTY in-memory reader (right for the tests that only plan); a test
             // that calculates passes the hours it used to hand to the call (see WeekdayHours).
-            hoursReader: hoursReader ?? new InMemoryRecordedHoursReader());
+            hoursReader: hoursReader ?? new InMemoryRecordedHoursReader(),
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
+    }
+
+    /// <summary>
+    /// S145 R26: the fake prior-month approval reader for every PCS-level fact that is not ABOUT the
+    /// prior-month check — it answers APPROVED for any period, so the check passes without a database.
+    /// </summary>
+    public sealed class AlwaysApprovedPriorPeriods : IPriorPeriodApprovalReader
+    {
+        public Task<string?> GetApprovalStatusAsync(
+            string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct)
+            => Task.FromResult<string?>("APPROVED");
     }
 
     /// <summary>

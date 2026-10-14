@@ -260,7 +260,9 @@ public sealed class EmploymentRecordGapDiagnosticsTests
             employmentWindowResolver: new FakeWindowResolver(new EmploymentWindow(null, null)),
             employeeProfileRepo: null,
             // S145 R14: the in-memory hours reader (payroll reads its own hours).
-            hoursReader: hoursReader);
+            hoursReader: hoursReader,
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
 
     /// <summary>
     /// <see cref="IEmploymentProfileResolver"/> fake standing in for an employee with a hole in
