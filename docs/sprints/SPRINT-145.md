@@ -1038,6 +1038,35 @@ The detail:
 - **The R-6 fix-up returned** (`0281d5d`, implementer, +37/−30): any failed call refuses, with the fixed sentence and the refusal log line, and the doc wording updated. **One change beyond the list:** a refused result now carries **no rule results**; before, it carried the successful rows, which the host's 422 body would have sent while saying no figure was produced. The four RED facts went green: Unit **1438**, build 0 errors / 145 warnings, CA2100 115.
 - **Orchestrator `b5f29eb`:** `Payroll/Program.cs`'s audit-stamp comment names the R-6 refusal instead of the retired "total-rule-failure short-circuit" (comment only).
 - **Review in flight:** the build check, 5α, Fable and Codex, on `master...s145/task-14511`.
+- **Build (Orchestrator, at `b5f29eb`, unpiped):** 0 errors / 145 warnings · CA2100 115 · Unit 1438 · DemoSeed 170 · Regression non-Docker 128.
+- **5α: PASS** (union scope, labels, no money or hours figure changed, C-T1 holds, the 400 logging is safe, `PlannerBypassGuardTests`' literal path is intact).
+- **5a Fable: APPROVED-WITH-WARNINGS.** It recomputed every figure from the spec by hand, and all match: September 162.80 with no overtime; the closing week 3.00 + 1.80 dated 4 Oct; the leaver 1.20 + 2.00 dated 29 Sep; the starter's norm 14.80. It verified the R-6 refusal is complete and that each stub's reply matches the real response contract.
+  - **WARNING 1:** five Docker files first execute in CI. Recorded; inspection says green.
+  - **WARNING 2:** in the deferred spells case, a line can be dated on a NOT_EMPLOYED gap day and exported under the preceding segment. Written into ROADMAP's re-hire-spells design input and TASK-14524's B.0 inputs.
+  - **WARNING 3:** a re-expressed flex-carry pin could pass vacuously. `Assert.NotEmpty` was sent to 14511-T.
+  - **NOTEs:**
+    - replay re-derives until 14513 (ruled);
+    - a zero-call plan leaves `EvaluationModel` null, written into TASK-14513's brief;
+    - an asymmetric absence filter, to get a comment;
+    - the exact-three coupling;
+    - stale class-doc wording, sent to 14511-T;
+    - hoisting the history read into 14512's admission, written into TASK-14512's brief.
+- **5a Codex: APPROVE-WITH-WARNINGS.**
+  - **WARNING 1:** a context piece can inherit the caller's position. → the adjudicator.
+  - **WARNING 2:** the timeline reply is validated for presence, not success: a complete 200 with a failed row or empty fingerprints passes. → a fix-up plus RED-first pins.
+  - **NOTE:** the R-6 pins don't assert empty rule results; sent to 14511-T.
+- **R-10, the adjudicator on Codex WARNING 1 (RULED, no owner question): the caller-position fallback is retired for every piece.**
+  - *Plain language:* a blank position on an employee's dated record means "no position, base rules apply". It was never "use what the request says".
+  - The fallback was an S33 cutover leftover (ADR-023 D1), already superseded by ADR-040 D4.
+  - No money moves today: the seeded position overrides touch only the flex cap and the norm-period length. But the wrong position would be frozen into the calculation's record and fingerprint.
+  - Fixing only the context piece would leave two rules inside one timeline.
+  - **Owed:**
+    - two RED-first pins in 14511-T (`ContextPiece_PromotedToDepartmentHead1Sep2026_…`, `InMonthPieces_DatedRowHasNoPosition_…`);
+    - the implementer deletes the fallback;
+    - mutation **MU-45**;
+    - at merge, an ADR-023 D1 amendment line.
+  - **Declined, to TASK-14513's brief:** the correction event records the caller's position.
+- **The Step 5a batch was dispatched,** test-qa first (RED-first), then the implementer: R-10, Codex WARNING 2's validation, and Fable's comment notes.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 

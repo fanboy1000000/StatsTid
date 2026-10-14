@@ -242,7 +242,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   reversal) deferred from S140 under owner ruling OQ-4. The **"current ≠ live" precondition still gates future-dating** and is the
   reason the increment was not simply bundled into S140 — it is a read-model change with roughly 200 read sites in its blast
   radius and deserves its own refinement and plan review. Remaining scope (unchanged design inputs: the HR follow-up register's Increment-4 checklist, S139: the landing tiles, the worklist UI with its role-mismatch decision, the termination screen, the admin-create hire date, the "efter frist" tile fix computed from the owner-ratified +2/+5 deadlines, routing the overtime page) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
-  until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail) · **OQ-4** (IMMEDIATE-
+  until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail; **S145 design input:** per-spell settlement cutoffs are needed, since today's single cutoff takes the latest-ending window, and `PeriodCalculationService.SegmentIndexForLine`'s out-of-segment fallback must become a refusal; otherwise a week settled on a NOT_EMPLOYED gap day exports an overtime line dated in the gap under the preceding segment. Fable 5a of TASK-14511, WARNING 2) · **OQ-4** (IMMEDIATE-
   grant pro-rating at mid-year hire → Phase B expert list). **S137-owed items by increment:** Increment 3 — **all three DELIVERED in
   S138**: the retroactive-correction window pin (the Docker pin that exports a windowless month, records a
   mid-month end date, corrects, and asserts the claw-back deltas cover only post-end days with the manifest
