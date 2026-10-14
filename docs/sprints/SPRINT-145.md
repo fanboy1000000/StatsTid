@@ -1231,6 +1231,66 @@ The detail:
 
 *Brief contradictions, accepted:* MU-31's site is the rule-side `WeeklyTimelineCore` (the pin's own docstring names it; the screen-side calculator only yields per-day values). MU-45's site is `TryResolveDatedProfileAsync`, which `ResolveProfileAtAsync` and `SegmentProfileAsync` both call since R-10. Four trips are exceptions inside the test rather than an `Assert` line (MU-26, MU-29, MU-38, MU-43); each fails on the behaviour it guards.
 
+## Wave A.5 (dispatched 2026-10-14)
+
+**At TASK-14513's return (the replay contract; not yet merged; ruled R-11..R-16; 14513-T dispatched).**
+
+*Plain language:* a payroll figure must be provable later. Every successful calculation now stores what it ran on:
+- **the data:** the employment pieces, the leaver's cutoff, the opening flex balance, the event ids of the hours rows it read, and a lossless fingerprint (digest) of those rows exactly as read;
+- **the code:** the Rule Engine's config fingerprints and its arithmetic marker.
+
+A replay takes only the manifest id. It re-runs from those stored inputs, re-reads the hours rows by id (a row the employee later re-saved is still found), and refuses by name if anything differs. It never looks at today's approval state, employment window, profile or agreement history.
+
+- **Commit `21fa447`** (`payroll-integration`; PCS plus a new `HoursDigest.cs`). Every `src/**` project builds with 0 errors; warnings unchanged (145, CA2100 115). The 12 test call-site errors are expected; they belong to 14513-T.
+- **The named refusals:** `replay-manifest-without-frozen-inputs`, `replay-entries-missing`, `replay-entries-digest-mismatch`, `replay-absences-digest-mismatch`, `replay-evaluation-model-changed`, `replay-config-changed` (a new `ReplayRefusedException` carrying the reason).
+- **A zero-call plan** (no employed segment, so no engine call) freezes no fingerprints and a dedicated marker, `no-engine-call`, rather than a copy of the engine's own marker, which payroll would otherwise have to hard-code across the context boundary.
+- **QUAL-197:** the absence digest line has no `Feriedage`, so no STOP; `superseded_by_outbox_id` is in neither line.
+- **`plan_inputs_jsonb`** is filled from the event's own serialized `planInputs`, so the rebuilder's copy is identical by construction (R47).
+- **Local evidence:** the agent ran the tests in a throwaway checkout with compile-only retargets (deleted, nothing committed). Unit 1469 (1453, 14515's 4 `HoursDigestTests`, and 12 in-memory probes of every refusal), Regression non-Docker 128, DemoSeed 170. Two sanity mutations each reddened only their own probes. 14515's six files compile against the branch once its two pre-14508 names are reconciled (its re-spawn 1).
+- **Brief contradictions:** line numbers predate A.2 (re-anchored in the report); `CalculatePlanAsync` does not exist (the shared entry is `EvaluateAsync`); the correction event's position needs `RetroactiveCorrectionService.cs`, which the ledger does not authorize.
+- **Sent to the adjudicator:**
+  - the correction event's position and agreement code;
+  - the result-level `AgreementCode`, which is not frozen;
+  - the digest line form's `|` ambiguity on free-text `ActivityType`;
+  - ten declared interpretations.
+- **Orchestrator `9984173`:** `ProjectionHoursReader.cs`'s doc says the binding has landed (comment only).
+- **The adjudicator on 14513's return: R-11..R-16, all RULED, no owner question.** One principle runs through R-11 and R-12: **the result and the audit trail report the agreement and position the month was evaluated under, never what the request body said.** It is R-10's rule, applied to the two remaining labels.
+  - **R-11, the correction event records what ran.** A correction's audit event wrote the request body's agreement and position, under a comment promising "what actually ran". Since R-10 and A4 the calculation ignores those body fields, so a stale body could label an AC month "HK" in the audit log. Both fields now come from the frozen first EMPLOYED piece. `RetroactiveCorrectionService.cs` is authorized for 14513 (a scope extension); a missing `PlanInputs` after success throws, never falling back to the caller. The audit mapper already copies the event's agreement, so the fixed event fixes the row. Pin (14513-T, Docker, RED-first): `RetroactiveCorrectionTrailTests.Recalculate_RequestProfileDiffersFromDatedRecord_EventRecordsDatedAgreementAndPosition`.
+  - **R-12, the result's `AgreementCode` is the agreement the month was paid under.** It echoed the request body on a forward calculation but reported the frozen piece on replay, so "replay reproduces the result byte for byte" held only by luck.
+    - *Rejected:* freezing the caller's value, which would faithfully reproduce a wrong label; and accepting the mismatch, a latent flake in the 14515 pins, which compare the whole result.
+    - *Ruled:* forward, refusal and replay share one derivation, the first EMPLOYED piece's agreement; `EvaluateAsync` stops reading the caller's agreement and position.
+    - *The field reaches* only the `/calculate-and-export` 200 and 422 bodies: no export column, no frontend use, no OpenAPI change.
+    - *Information for the owner, no question:* the calculating route's `agreementCode` now names the agreement the month was actually paid under, not the one the request said.
+    - *Pins* (14513-T, Unit, RED-first): `ForwardCalc_RequestAgreementDiffersFromDatedRecord_ResultReportsDatedAgreement`, plus an empty-agreement assert on the no-EMPLOYED fact.
+  - **R-13, typed text in the hours digest is hex-encoded.** The digest proves the hours rows behind a payslip are unchanged. A `|` or a newline typed into the free-text activity field could make two different row lists hash alike; the adjudicator built such a pair.
+    - *Rejected:* validating the field at registration, because Payroll's proof would then rest on another context's input checks, and it would not cover existing rows.
+    - *Ruled:* `ActivityType` and `AbsenceType` are written as the hex of their UTF-8 bytes, so the line form is unambiguous by construction. Refinement A7's line forms are amended. 14515's digest facts are property facts, so nothing is re-expected.
+    - *Pin* (14513-T, Unit, RED-first): `HoursDigestTests.ActivityTypeContainingSeparatorAndNewline_CannotMergeTwoRows`, in a new file that 14515 re-spawn 1 then adds its facts to.
+  - **R-14, the ten declared interpretations are confirmed, with one correction.** `ReplayRefusedException` moves to its own file (the one-file-per-exception convention). The claim that the replay profile's empty `EmploymentCategory` and null `OrgId` are read by nothing was verified against the Rule Engine and Payroll. Confirmed as declared:
+    - an absent absence id refuses as entries-missing;
+    - a damaged slot refuses as without-frozen-inputs;
+    - a failed engine call at replay gets the R-6 shape;
+    - the marker is checked before the fingerprints;
+    - a NULL slot does not fall back to the event;
+    - `AsOfOutboxId` is recorded but not verified, because a rebuild re-stamps it;
+    - a zero-call plan freezes the `no-engine-call` marker;
+    - the brief's `CalculatePlanAsync` means `EvaluateAsync`.
+  - **R-15:** the stale `ProjectionHoursReader` comment, done in `9984173`.
+  - **R-16:** amended:
+    - TASK-14513's brief (the fix-up's contract);
+    - TASK-14513-T's brief (the three pins, the `BoundaryCauseEncodingTests` relabel);
+    - TASK-14515's brief (adds its facts to the existing `HoursDigestTests.cs`; checks per-segment fingerprint coverage);
+    - the plan's ledger rows;
+    - refinement A7's line forms.
+  - **Registered from the adjudicator's NOTEs:**
+    - **QUAL-202:** activity type is free text nothing validates, so a typo is silently paid as normal hours. Medium.
+    - **SEC-048:** the payroll routes' audit row takes its target org from the request body. Low; a new Group 12 in the security register.
+    - *Not registered:* an unparseable `plan_inputs_jsonb` falls back to the event, which is the record of truth, so the replay stays faithful. The per-segment lane's fingerprint coverage is a check item for 14515 re-spawn 1.
+- **Order from here:**
+  1. 14513-T, the paired pass: the 12 call sites and the three RED-first pins. Dispatched.
+  2. The `payroll-integration` fix-up: R-11, R-12, R-13 and R-14(ii).
+  3. 5α, then Fable and Codex (high-risk).
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
