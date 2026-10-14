@@ -70,7 +70,21 @@ public static class SegmentManifestProjectionRebuilder
     ///   <item><c>boundary_cause_summary</c> ← <c>data-&gt;'boundaryCauseSummary'</c> (jsonb → text[])</item>
     ///   <item><c>created_at</c>             ← <c>data-&gt;&gt;'createdAt'</c></item>
     ///   <item><c>segments_jsonb</c>         ← <c>data-&gt;'segments'</c></item>
+    ///   <item><c>plan_inputs_jsonb</c>      ← <c>data-&gt;'planInputs'</c> (S145 / A7; see below)</item>
     /// </list>
+    /// <para>
+    /// <b><c>plan_inputs_jsonb</c> (S145 / TASK-14509, refinement A7).</b> The frozen inputs of the
+    /// calculation a replay must reuse (the per-piece profile inputs, the opening flex balance, the
+    /// hours rows by event id with their digests, the config fingerprints, the evaluation-model
+    /// marker). The event <c>SegmentManifestCreated.PlanInputs</c> is the record of truth, so the
+    /// rebuild copies <c>data-&gt;'planInputs'</c> as-is, exactly as <c>segments_jsonb</c> copies
+    /// <c>data-&gt;'segments'</c>. Unlike segments the column is NULLABLE and there is
+    /// deliberately NO <c>COALESCE</c> to an empty value: a manifest written before S145 has no
+    /// frozen inputs (the serializer omits the null property, so the key is absent), and its row
+    /// must stay NULL so a replay refuses it by name (<c>replay-manifest-without-frozen-inputs</c>)
+    /// rather than reading a fabricated empty input set. <c>NULLIF(…, 'null'::jsonb)</c> folds an
+    /// explicit JSON <c>null</c> to SQL NULL for the same reason.
+    /// </para>
     /// </remarks>
     private const string ReplaySql = @"
         TRUNCATE TABLE segment_manifests;
@@ -83,7 +97,8 @@ public static class SegmentManifestProjectionRebuilder
             calculation_kind,
             boundary_cause_summary,
             created_at,
-            segments_jsonb
+            segments_jsonb,
+            plan_inputs_jsonb
         )
         SELECT DISTINCT ON (manifest_id)
             manifest_id,
@@ -93,7 +108,8 @@ public static class SegmentManifestProjectionRebuilder
             calculation_kind,
             boundary_cause_summary,
             created_at,
-            segments_jsonb
+            segments_jsonb,
+            plan_inputs_jsonb
         FROM (
             SELECT
                 (data->>'manifestId')::uuid                     AS manifest_id,
@@ -108,6 +124,7 @@ public static class SegmentManifestProjectionRebuilder
                 )                                               AS boundary_cause_summary,
                 (data->>'createdAt')::timestamptz               AS created_at,
                 COALESCE(data->'segments', '[]'::jsonb)         AS segments_jsonb,
+                NULLIF(data->'planInputs', 'null'::jsonb)       AS plan_inputs_jsonb,
                 global_position
             FROM events
             WHERE event_type = 'SegmentManifestCreated'

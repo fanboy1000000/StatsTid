@@ -774,8 +774,11 @@ public static class BalanceEndpoints
                 ?? user.AgreementCode;
             var headerOkVersion = OkVersionResolver.ResolveVersion(today);
 
-            // weeklyNormHours = merged-config WeeklyNorm × current PartTimeFraction; null if no
-            // dated profile/config (graceful per ADR-023 D3 — a profile-less employee renders).
+            // weeklyNormHours = the SUM of the five weekday norms from the merged-config WeeklyNorm
+            // and the current PartTimeFraction (S145 / TASK-14509, R11: DayNorm.ForWeekday × 5, the
+            // per-day amount the Rule Engine judges each weekday with — so a 30-hour week shows
+            // 5 × 6.00 = 30.00, as the payslip computes it, not the whole-week 37 × 0.811 = 30.01);
+            // null if no dated profile/config (graceful per ADR-023 D3 — a profile-less employee renders).
             decimal? weeklyNormHours = null;
             EmploymentProfile? todayProfile;
             try
@@ -792,8 +795,8 @@ public static class BalanceEndpoints
                 var mergedConfig = await configResolver.ResolveAsync(
                     orgId, todayProfile.AgreementCode, OkVersionResolver.ResolveVersion(today),
                     todayProfile.Position, ct);
-                weeklyNormHours = Math.Round(
-                    mergedConfig.WeeklyNormHours * todayProfile.PartTimeFraction, 2);
+                weeklyNormHours = DayNorm.ForWeekday(mergedConfig.WeeklyNormHours, todayProfile.PartTimeFraction)
+                    * DayNorm.WorkingDaysPerWeek;
             }
 
             // ── All absences for the employee (one read), mapped to entitlement type +

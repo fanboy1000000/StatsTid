@@ -49,7 +49,20 @@ public sealed class BackdateWorklistRowCreated : DomainEventBase
     public required string TriggerKind { get; init; }
     /// <summary>The correction event that caused this trigger (the causal link into dated history).</summary>
     public required Guid TriggerEventId { get; init; }
-    /// <summary>The correction's effective date — the backdate.</summary>
+    /// <summary>
+    /// The EARLIEST DAY whose change can alter the flagged period — the date HR should start
+    /// looking from. Its meaning is the same for every trigger kind; only its source differs (S145,
+    /// widened together with <c>WorklistTrigger.EffectiveFrom</c> so the field does not fork):
+    /// <list type="bullet">
+    ///   <item><c>PROFILE_CHANGE</c> / <c>AGREEMENT_CODE_CHANGE</c> / <c>EMPLOYMENT_CATEGORY_CHANGE</c>:
+    ///     the correction's effective date — the real backdate, NOT the flagged month's first day
+    ///     (a backdate of Tue 29 Sep 2026 that also flags October, whose first week settled it,
+    ///     carries 29 Sep on the October row too).</item>
+    ///   <item><c>PRIOR_MONTH_REOPENED</c>: the earliest day of the REOPENED month that the flagged
+    ///     next month's settlement reads — the Monday of the next month's opening week. September
+    ///     2026 reopened under an exported October gives Mon 28 Sep 2026.</item>
+    /// </list>
+    /// </summary>
     public required DateOnly TriggerEffectiveFrom { get; init; }
 
     /// <summary>EXPORTED_MONTH: the export record's <c>content_hash</c> at append time.</summary>
