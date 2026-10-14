@@ -697,8 +697,10 @@ public sealed class PeriodCalculationService
     {
         var inputs = await DeriveEvaluationInputsAsync(admitted.Plan, admitted.Histories, profile, ct);
 
+        // S145 R-12: evaluation takes the employee id only. The caller's profile fed the derivation above
+        // (the fallback where no dated record is resolved); the result reports what the pieces ran under.
         var outcome = await EvaluateAsync(
-            admitted.Plan, inputs, admitted.Hours, profile,
+            admitted.Plan, inputs, admitted.Hours, profile.EmployeeId,
             previousFlexBalance, authorizationHeader, correlationId, emitAuditEvents, ct);
 
         return outcome with { PriorMonthApprovalRequired = admitted.PriorMonthApproved };
@@ -808,12 +810,22 @@ public sealed class PeriodCalculationService
     /// fingerprints and marker. A forward calculation writes it onto the manifest; every outcome carries it,
     /// which is what a replay compares with the manifest's record. A refused evaluation records nothing.
     /// </para>
+    ///
+    /// <para>
+    /// <b>The agreement the result reports (S145 ruling R-12).</b> Evaluation takes the employee id, never a
+    /// caller profile: the success result, the refused result (R-6) and the legacy
+    /// <see cref="PeriodCalculationCompleted"/> event all report the agreement the period was EVALUATED under,
+    /// the first EMPLOYED segment's piece (<see cref="FirstEmployedSegmentPiece"/>), or empty when no segment
+    /// is EMPLOYED (nothing was evaluated under any agreement). One derivation serves a forward calculation and
+    /// a replay alike, so a request body that disagrees with the employee's dated record can never relabel the
+    /// month (the same principle as R-10 for the position).
+    /// </para>
     /// </summary>
     private async Task<PeriodCalculationOutcome> EvaluateAsync(
         PlannedCalculation plan,
         EvaluationInputs inputs,
         RecordedHours recordedHours,
-        EmploymentProfile profile,
+        string employeeId,
         decimal previousFlexBalance,
         string? authorizationHeader,
         Guid? correlationId,
@@ -823,7 +835,7 @@ public sealed class PeriodCalculationService
         // Belt + braces at the emission boundary: the manifest is about to be persisted as the
         // audit-of-record, so a corrupted or mismatched plan must surface here (the forward entry points
         // checked it before admission too; replay arrives here directly).
-        AssertPlanMatchesProfile(plan, profile);
+        AssertPlanMatchesEmployee(plan, employeeId);
 
         // `recordedHours` is kept exactly as read; `entries` / `absences` are the one mapping of it that
         // BOTH lanes consume. Since TASK-14511 the per-plan lane sends the context days' entries with its
@@ -881,6 +893,12 @@ public sealed class PeriodCalculationService
         var pieces = inputs.Pieces;
         var segmentProfiles = inputs.SegmentProfiles;
         var settlementCutoff = inputs.SettlementCutoff;
+
+        // S145 R-12 — the ONE derivation of the agreement this period is evaluated under: the first EMPLOYED
+        // segment's piece, or empty for a plan with no EMPLOYED segment. The success result, the R-6 refused
+        // result and the legacy completed event below all report it; never the request body's agreement.
+        var evaluatedAgreementCode = FirstEmployedSegmentPiece(pieces, plan.PeriodStart)?.AgreementCode ?? string.Empty;
+
         var employedIndices = new List<int>(plan.Segments.Count);
         for (int s = 0; s < plan.Segments.Count; s++)
         {
@@ -1014,15 +1032,16 @@ public sealed class PeriodCalculationService
                 "per-segment calls of {EmployedSegmentCount} employed segment(s), of {SegmentCount}) for employee " +
                 "{EmployeeId} manifest {ManifestId} period {PeriodStart}-{PeriodEnd}. The calculation is REFUSED and " +
                 "no payroll figure is produced for this period.",
-                callsFailed, callsAttempted, employedIndices.Count, plan.Segments.Count, profile.EmployeeId,
+                callsFailed, callsAttempted, employedIndices.Count, plan.Segments.Count, employeeId,
                 plan.ManifestId, plan.PeriodStart, plan.PeriodEnd);
 
             var failResult = new PeriodCalculationResult
             {
-                EmployeeId = profile.EmployeeId,
+                EmployeeId = employeeId,
                 PeriodStart = plan.PeriodStart,
                 PeriodEnd = plan.PeriodEnd,
-                AgreementCode = profile.AgreementCode,
+                // S145 R-12: the agreement the period was evaluated under, as on the success result.
+                AgreementCode = evaluatedAgreementCode,
                 OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
                 // No figure leaves a refused calculation: the rows of the calls that DID succeed are
                 // not returned either (the host's 422 carries this result as its body). This is the
@@ -1056,7 +1075,7 @@ public sealed class PeriodCalculationService
         // ---------------------------------------------------------------
         var allExportLines = perSegmentExportLines.SelectMany(s => s).ToList();
         var allRuleResults = MergePerSegmentRuleResults(
-            perSegmentRuleResults, ruleSet, profile.EmployeeId, plan.ManifestId);
+            perSegmentRuleResults, ruleSet, employeeId, plan.ManifestId);
 
         // ---------------------------------------------------------------
         // 5. Freeze what this evaluation ran on (S145 TASK-14513, refinement A7): the data as stored
@@ -1081,7 +1100,7 @@ public sealed class PeriodCalculationService
             // alongside SegmentManifestCreated so existing audit queries against
             // PeriodCalculationCompleted continue to work; the new event is the source of
             // truth for segmentation, the legacy one for high-level period-result counts.
-            await EmitLegacyPeriodCompletedAsync(plan, profile, allRuleResults.Count, allExportLines.Count, allExportLines.Sum(l => l.Hours), correlationId, ct);
+            await EmitLegacyPeriodCompletedAsync(plan, employeeId, evaluatedAgreementCode, allRuleResults.Count, allExportLines.Count, allExportLines.Sum(l => l.Hours), correlationId, ct);
         }
         else
         {
@@ -1095,14 +1114,16 @@ public sealed class PeriodCalculationService
         _logger.LogInformation(
             "Period calculation complete for {EmployeeId} manifest {ManifestId}: " +
             "{SegmentCount} segment(s), {RuleCount} rule results, {LineCount} export lines, audit={AuditState}",
-            profile.EmployeeId, plan.ManifestId, plan.Segments.Count, allRuleResults.Count, allExportLines.Count, auditState);
+            employeeId, plan.ManifestId, plan.Segments.Count, allRuleResults.Count, allExportLines.Count, auditState);
 
         var okResult = new PeriodCalculationResult
         {
-            EmployeeId = profile.EmployeeId,
+            EmployeeId = employeeId,
             PeriodStart = plan.PeriodStart,
             PeriodEnd = plan.PeriodEnd,
-            AgreementCode = profile.AgreementCode,
+            // S145 R-12: the agreement the period was EVALUATED under (the first EMPLOYED segment's piece, or
+            // empty when none is EMPLOYED), never the request body's. No rule and no export line reads it.
+            AgreementCode = evaluatedAgreementCode,
             // The result-level OkVersion remains the period-start-resolved version for
             // legacy callers that read this field (RetroactiveCorrectionService, /export).
             // Per-line OK-version stamping on PayrollExportLine.OkVersion is the new
@@ -1191,15 +1212,22 @@ public sealed class PeriodCalculationService
     /// inputs. Both sides are strings per the ADR-016 D10 amendment of 2026-05-01 — no synthetic Guid
     /// round-trip.
     /// </summary>
-    private static void AssertPlanMatchesProfile(PlannedCalculation plan, EmploymentProfile profile)
+    private static void AssertPlanMatchesProfile(PlannedCalculation plan, EmploymentProfile profile) =>
+        AssertPlanMatchesEmployee(plan, profile.EmployeeId);
+
+    /// <summary>
+    /// The same check over an employee id: what evaluation receives since S145 ruling R-12 (a forward
+    /// calculation passes its caller profile's id, a replay its manifest's own). The message is unchanged.
+    /// </summary>
+    private static void AssertPlanMatchesEmployee(PlannedCalculation plan, string employeeId)
     {
         AssertGeometricInvariants(plan);
 
-        if (!string.Equals(plan.EmployeeId, profile.EmployeeId, StringComparison.Ordinal))
+        if (!string.Equals(plan.EmployeeId, employeeId, StringComparison.Ordinal))
         {
             throw new PlannerInvariantViolation(
                 $"PeriodCalculationService.CalculateAsync invariant violated: PlannedCalculation.EmployeeId " +
-                $"('{plan.EmployeeId}') does not match profile.EmployeeId ('{profile.EmployeeId}'). " +
+                $"('{plan.EmployeeId}') does not match profile.EmployeeId ('{employeeId}'). " +
                 $"ManifestId={plan.ManifestId}.");
         }
     }
@@ -1869,9 +1897,10 @@ public sealed class PeriodCalculationService
 
         // 4. Evaluation only (R42), on the frozen opening balance. emitAuditEvents:false — a replay re-evaluates
         //    but does NOT mint a new SegmentManifestCreated or PeriodCalculationCompleted event (ADR-016 D10
-        //    immutability; Codex sprint-end review).
+        //    immutability; Codex sprint-end review). The result's agreement comes from the frozen pieces by the
+        //    same derivation a forward calculation uses (R-12), so a replay needs no caller profile (R14).
         var outcome = await EvaluateAsync(
-            plan, inputs, recordedHours, ReplayResultProfile(plan, frozen),
+            plan, inputs, recordedHours, plan.EmployeeId,
             frozen.OpeningFlexBalance, authorizationHeader, correlationId,
             emitAuditEvents: false, ct);
 
@@ -1965,32 +1994,14 @@ public sealed class PeriodCalculationService
     };
 
     /// <summary>
-    /// S145 / TASK-14513 — the profile a replay hands to <see cref="EvaluateAsync"/> for the result's own fields:
-    /// the employee id and <see cref="PeriodCalculationResult.AgreementCode"/> (no rule and no export line reads
-    /// it). A replay has no caller profile (R14), so the agreement reported is the one the period was evaluated
-    /// under: the frozen piece of the first EMPLOYED segment (<see cref="FirstEmployedSegmentPiece"/>). A plan with
-    /// no EMPLOYED segment evaluated nothing under any agreement, so its replay reports none (empty). A forward
-    /// calculation reports its caller's agreement code in that field, which is the same value whenever the caller
-    /// sent the employee's dated agreement at the first EMPLOYED segment's start.
-    /// </summary>
-    private static EmploymentProfile ReplayResultProfile(PlannedCalculation plan, PlanInputs frozen) =>
-        FirstEmployedSegmentPiece(frozen.Pieces, plan.PeriodStart) is { } first
-            ? ProfileFromPiece(plan.EmployeeId, first, first.From)
-            : new EmploymentProfile
-            {
-                EmployeeId = plan.EmployeeId,
-                AgreementCode = string.Empty,
-                OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
-                EmploymentCategory = string.Empty,
-            };
-
-    /// <summary>
     /// S145 / TASK-14513 — the frozen piece of the period's first EMPLOYED segment: the first piece starting on
     /// or after <paramref name="periodStart"/> (the opening week's context pieces all end before it), or
     /// <c>null</c> when the plan has no EMPLOYED segment. It is what the period actually ran under (its
-    /// agreement, fraction and position), as opposed to what a caller sent: a replay reports its agreement on the
-    /// result, and it is the source the retroactive-correction event's position is to take (TASK-14513 Do 3;
-    /// the <c>RetroactiveCorrectionService</c> edit is declared, not made, by that task).
+    /// agreement, fraction and position), as opposed to what a caller sent. Two readers take their labels from
+    /// it and from nowhere else: <see cref="EvaluateAsync"/> reports its agreement on every result and on the
+    /// legacy completed event, forward and replay alike (ruling R-12), and
+    /// <c>RetroactiveCorrectionService</c> records its agreement and position on the
+    /// <c>RetroactiveCorrectionRequested</c> event (rulings R-10, R-11).
     /// </summary>
     internal static FrozenPiece? FirstEmployedSegmentPiece(IReadOnlyList<FrozenPiece> pieces, DateOnly periodStart)
     {
@@ -2521,9 +2532,14 @@ public sealed class PeriodCalculationService
         return null;
     }
 
+    /// <summary>
+    /// The legacy <see cref="PeriodCalculationCompleted"/> event. <paramref name="evaluatedAgreementCode"/> is the
+    /// agreement the period was evaluated under, the same single derivation the result reports (S145 R-12).
+    /// </summary>
     private async Task EmitLegacyPeriodCompletedAsync(
         PlannedCalculation plan,
-        EmploymentProfile profile,
+        string employeeId,
+        string evaluatedAgreementCode,
         int ruleResultCount,
         int exportLineCount,
         decimal totalHours,
@@ -2534,10 +2550,10 @@ public sealed class PeriodCalculationService
         {
             var calcEvent = new PeriodCalculationCompleted
             {
-                EmployeeId = profile.EmployeeId,
+                EmployeeId = employeeId,
                 PeriodStart = plan.PeriodStart,
                 PeriodEnd = plan.PeriodEnd,
-                AgreementCode = profile.AgreementCode,
+                AgreementCode = evaluatedAgreementCode,
                 OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
                 RuleCount = ruleResultCount,
                 ExportLineCount = exportLineCount,
@@ -2546,14 +2562,14 @@ public sealed class PeriodCalculationService
             };
 
             await _eventStore.AppendAsync(
-                $"period-calc-{profile.EmployeeId}-{plan.PeriodStart:yyyy-MM-dd}",
+                $"period-calc-{employeeId}-{plan.PeriodStart:yyyy-MM-dd}",
                 calcEvent, ct);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
                 "Failed to emit PeriodCalculationCompleted legacy event for {EmployeeId} manifest {ManifestId}",
-                profile.EmployeeId, plan.ManifestId);
+                employeeId, plan.ManifestId);
         }
     }
 
@@ -3885,64 +3901,4 @@ public sealed class EmptyRuleClassificationProvider : IRuleClassificationProvide
 
     public IReadOnlyList<RuleClassification> GetClassifications() =>
         Array.Empty<RuleClassification>();
-}
-
-// =====================================================================================
-// ReplayRefusedException — the named refusals of the replay contract (S145 / TASK-14513)
-// =====================================================================================
-
-/// <summary>
-/// S145 / TASK-14513 (refinement A7; rulings R14, R15) — a replay that cannot reproduce its calculation
-/// faithfully, refused by name. Thrown only by
-/// <see cref="PeriodCalculationService.ReplayAsync(Guid, string?, Guid?, CancellationToken)"/>.
-///
-/// <para>
-/// <b>Why refusals have names (plain language).</b> A replay either gives back exactly what was calculated,
-/// or says precisely why it cannot: a recorded hours row is gone, a row's content changed, the agreement
-/// configs or the arithmetic changed, or the manifest predates frozen inputs. Silently recomputing from
-/// today's data would produce a different payslip labelled as the old one, which is the one thing a replay
-/// must never do. <see cref="Reason"/> carries the name; <see cref="Exception.Message"/> starts with it too.
-/// </para>
-///
-/// <para>
-/// <b>What it carries.</b> The reason, the manifest id and a fixed description: no hours and no dates. A
-/// replay writes nothing, so a refusal leaves nothing behind. No HTTP route replays today; a host that adds
-/// one should answer from <see cref="Reason"/>, not from the message.
-/// </para>
-/// </summary>
-public sealed class ReplayRefusedException : Exception
-{
-    /// <summary>A recorded hours row (a time entry or an absence) is genuinely absent from its read model.
-    /// A row superseded by a later re-save is not absent: the replay reads it by its event id.</summary>
-    public const string EntriesMissing = "replay-entries-missing";
-
-    /// <summary>The recorded time-entry rows no longer hash to the recorded lossless digest (R15).</summary>
-    public const string EntriesDigestMismatch = "replay-entries-digest-mismatch";
-
-    /// <summary>The recorded absence rows no longer hash to the recorded lossless digest (R15).</summary>
-    public const string AbsencesDigestMismatch = "replay-absences-digest-mismatch";
-
-    /// <summary>The Rule Engine's config fingerprints for the frozen pieces differ from the recorded ones.</summary>
-    public const string ConfigChanged = "replay-config-changed";
-
-    /// <summary>The Rule Engine's evaluation-model marker differs from the recorded one.</summary>
-    public const string EvaluationModelChanged = "replay-evaluation-model-changed";
-
-    /// <summary>The manifest carries no (complete) frozen inputs: every manifest written before S145, a
-    /// projection row whose <c>plan_inputs_jsonb</c> is NULL, or a damaged record.</summary>
-    public const string ManifestWithoutFrozenInputs = "replay-manifest-without-frozen-inputs";
-
-    public ReplayRefusedException(string reason, Guid manifestId, string message)
-        : base($"{reason}: {message}")
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        Reason = reason;
-        ManifestId = manifestId;
-    }
-
-    /// <summary>The refusal's name, one of the constants on this type (for example <see cref="EntriesMissing"/>).</summary>
-    public string Reason { get; }
-
-    /// <summary>The manifest whose replay was refused.</summary>
-    public Guid ManifestId { get; }
 }

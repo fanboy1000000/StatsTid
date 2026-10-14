@@ -28,18 +28,29 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
-/// <b>The line forms (refinement A7, :381-388).</b> One line per row:
+/// <b>The line forms (refinement A7, :381-388, as amended by adjudicator ruling R-13).</b> One line per row:
 /// <list type="bullet">
-/// <item>entries: <c>EventId|Date|StartTime|EndTime|Hours|ActivityType|VoluntaryUnsocialHours</c>;</item>
-/// <item>absences: <c>EventId|Date|AbsenceType|Hours</c>.</item>
+/// <item>entries: <c>EventId|Date|StartTime|EndTime|Hours|hex(ActivityType)|VoluntaryUnsocialHours</c>;</item>
+/// <item>absences: <c>EventId|Date|hex(AbsenceType)|Hours</c>.</item>
 /// </list>
 /// The event id in its <c>D</c> form (lowercase, hyphenated); the date <c>yyyy-MM-dd</c>; times
 /// <c>HH:mm:ss.fffffff</c> (full <see cref="TimeOnly"/> precision) or empty; <c>Hours</c> an invariant
 /// decimal, value-normalised (no rounding, no trailing zeros: <c>7.40</c> → <c>7.4</c>, <c>8.0</c> →
 /// <c>8</c>) — the same form as the Rule Engine's config fingerprint; booleans <c>true</c>/<c>false</c>;
+/// the typed text (<c>ActivityType</c>, <c>AbsenceType</c>) as <c>hex(…)</c>, the uppercase hex of its UTF-8
+/// bytes (<see cref="Convert.ToHexString(byte[])"/>), with null and empty both as an empty field; any other
 /// null as empty. The lines are sorted ordinally, joined with <c>\n</c>, encoded UTF-8 and hashed with
 /// SHA-256; the result is lowercase hex (64 characters). Sorting makes the digest independent of the order
 /// the rows were read in.
+/// </para>
+///
+/// <para>
+/// <b>Why typed text is hex-encoded (R-13, plain language).</b> Every other field has a fixed shape that can
+/// never contain <c>|</c> or a newline. The activity and absence types are text a person or an import can type,
+/// so unencoded they could: one row whose type text reads <c>"X|true\n"</c> followed by a second row's line
+/// would produce exactly the joined text of two rows, and the two different row sets would share a digest. A
+/// replay would then accept changed data as unchanged. Hex digits contain neither separator, so the line
+/// boundaries are unambiguous by construction, and nothing is lost (it decodes back to the exact bytes).
 /// </para>
 ///
 /// <para>
@@ -82,7 +93,7 @@ public static class HoursDigest
         return Digest(rows.Select(AbsenceLine));
     }
 
-    /// <summary>One entry line: <c>EventId|Date|StartTime|EndTime|Hours|ActivityType|VoluntaryUnsocialHours</c>.</summary>
+    /// <summary>One entry line: <c>EventId|Date|StartTime|EndTime|Hours|hex(ActivityType)|VoluntaryUnsocialHours</c>.</summary>
     internal static string EntryLine(TimeEntryProjectionRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
@@ -92,18 +103,18 @@ public static class HoursDigest
             Time(row.StartTime),
             Time(row.EndTime),
             Number(row.Hours),
-            row.ActivityType ?? string.Empty,
+            TypedText(row.ActivityType),
             row.VoluntaryUnsocialHours ? "true" : "false");
     }
 
-    /// <summary>One absence line: <c>EventId|Date|AbsenceType|Hours</c>.</summary>
+    /// <summary>One absence line: <c>EventId|Date|hex(AbsenceType)|Hours</c>.</summary>
     internal static string AbsenceLine(AbsenceProjectionRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
         return string.Join('|',
             row.EventId.ToString("D", CultureInfo.InvariantCulture),
             Date(row.Date),
-            row.AbsenceType,
+            TypedText(row.AbsenceType),
             Number(row.Hours));
     }
 
@@ -119,6 +130,15 @@ public static class HoursDigest
 
     private static string Time(TimeOnly? time) =>
         time is { } t ? t.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture) : string.Empty;
+
+    /// <summary>
+    /// S145 R-13 — a typed-text field (<c>ActivityType</c>, <c>AbsenceType</c>) as the hex of its UTF-8 bytes
+    /// (<c>"NORMAL"</c> → <c>4E4F524D414C</c>); null and empty both give an empty field. Hex digits contain
+    /// neither the field separator <c>|</c> nor the line separator <c>\n</c>, so no typed value can imitate a
+    /// field or row boundary, and the encoding loses nothing (every distinct string has distinct bytes).
+    /// </summary>
+    private static string TypedText(string? text) =>
+        string.IsNullOrEmpty(text) ? string.Empty : Convert.ToHexString(Encoding.UTF8.GetBytes(text));
 
     /// <summary>
     /// The value-normalised invariant form: trailing zeros removed without changing the value
