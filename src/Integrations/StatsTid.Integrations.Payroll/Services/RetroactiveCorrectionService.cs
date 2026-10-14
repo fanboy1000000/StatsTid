@@ -108,11 +108,18 @@ public sealed class RetroactiveCorrectionService
     /// recalculation (<c>RecalculateWithVersionSplitAsync</c>) was retired by
     /// TASK-2009; segmentation is the planner's responsibility, end-to-end.
     /// </para>
+    /// <para>
+    /// <strong>S145 / TASK-14508 (rulings R14 and R25) — no hours parameters.</strong> The correction
+    /// recalculates on the employee's CURRENT recorded hours, which
+    /// <see cref="PeriodCalculationService"/> reads itself (through its
+    /// <see cref="IRecordedHoursReader"/>) when this service calls it — before the correction
+    /// transaction opens, so no hours read ever runs under the export record's FOR UPDATE lock.
+    /// Keeping an hours-taking overload would keep the defect class R14 removes: a caller could leave
+    /// out a day and nobody would notice.
+    /// </para>
     /// </summary>
     public async Task<RetroactiveCorrectionResult> RecalculateAsync(
         EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences,
         DateOnly periodStart,
         DateOnly periodEnd,
         decimal previousFlexBalance,
@@ -205,10 +212,15 @@ public sealed class RetroactiveCorrectionService
         // directly. We are inside the migration path here, so the call is
         // intentional and the warning is suppressed locally only — do NOT
         // suppress at file scope.
+        //
+        // S145 TASK-14508 (R14): no hours are passed — PCS reads the employee's current recorded
+        // rows itself over [the day before the opening week's Monday, periodEnd]. This call still
+        // runs BEFORE the correction transaction below, so the hours read (like planning) holds no
+        // lock and a refusal or failure here leaves the baseline, the event and the marker untouched.
         // ---------------------------------------------------------------
 #pragma warning disable CS0618 // RetroactiveCorrectionService intentionally calls the [Obsolete] shim overload during the TASK-2009 / TASK-2010 migration; remove once the service constructs PlannedCalculation explicitly.
         var newResult = await _calculationService.CalculateAsync(
-            profile, entries, absences, periodStart, periodEnd,
+            profile, periodStart, periodEnd,
             previousFlexBalance, authorizationHeader, correlationId, ct);
 #pragma warning restore CS0618
 

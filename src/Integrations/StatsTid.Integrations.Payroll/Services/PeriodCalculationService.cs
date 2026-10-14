@@ -19,11 +19,19 @@ namespace StatsTid.Integrations.Payroll.Services;
 ///
 /// <para>
 /// Sprint 20 (ADR-016 D1, D8): the sole logic entry point is
-/// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, decimal, string?, Guid?, CancellationToken)"/>.
+/// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, bool, CancellationToken)"/>.
 /// Every calculation routes through <see cref="PeriodPlanner"/> first — the back-compat
-/// overload <c>CalculateAsync(profile, entries, …)</c> below is a thin shim that hydrates
+/// overload <c>CalculateAsync(profile, periodStart, periodEnd, …)</c> below is a thin shim that hydrates
 /// <see cref="BoundarySources"/> from <see cref="OkVersionResolver"/> and immediately
 /// re-enters the new entry point. There is no "skip planner" code path.
+/// </para>
+///
+/// <para>
+/// <strong>Payroll reads its own hours (S145 / TASK-14508, rulings R14 and R25).</strong> No entry
+/// point takes time entries or absences any more. The sole logic entry point reads the employee's
+/// CURRENT recorded rows itself, through <see cref="IRecordedHoursReader"/>, over
+/// [the day before the opening week's Monday, period end], and keeps the rows exactly as read. A
+/// calculation or replay on a service built without a reader throws before it reads anything.
 /// </para>
 ///
 /// <para>
@@ -55,9 +63,11 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <see cref="PeriodPlanner.FromManifest"/> using the same rule-set provider as a forward
 /// calculation, and returns a <see cref="CalculationResult"/> envelope carrying the
 /// <em>same</em> <see cref="CalculationResult.ManifestId"/>. The richer overload
-/// <see cref="ReplayAsync(Guid, EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, decimal, string?, Guid?, CancellationToken)"/>
-/// re-evaluates rules against the reconstructed plan when the caller supplies the original
-/// inputs (TASK-2012 manifest-replay tests use this overload).
+/// <see cref="ReplayAsync(Guid, EmploymentProfile, decimal, string?, Guid?, CancellationToken)"/>
+/// re-evaluates rules against the reconstructed plan (TASK-2012 manifest-replay tests use this
+/// overload). Since S145 / TASK-14508 it takes no hours: it re-reads the employee's current rows
+/// through <see cref="IRecordedHoursReader"/>, like a forward calculation (TASK-14513 moves replay to
+/// the recorded event ids).
 /// </para>
 ///
 /// <para>
@@ -114,6 +124,13 @@ public sealed class PeriodCalculationService
     // _employeeProfileRepo (ruled R2, S144); the host-level /recalculate pin
     // (PayrollHostRecalcBlockedTests) is what catches a dropped registration.
     private readonly UserAgreementCodeRepository? _userAgreementCodeRepo;
+    // S145 TASK-14508 (rulings R14, R25): the ONE source of the hours a calculation consumes —
+    // payroll reads the employee's recorded rows itself instead of taking them from its caller.
+    // Optional in the constructor (fixtures that only PLAN — the raw routes' plan-only guard, the
+    // reflection-driven planning tests — need no hours), but NEVER SILENT: every calculation and
+    // replay entry point calls RequireHoursReader first, before any read, so a missing reader is a
+    // named InvalidOperationException rather than a month paid as if nothing had been worked.
+    private readonly IRecordedHoursReader? _hoursReader;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
 
@@ -192,7 +209,8 @@ public sealed class PeriodCalculationService
         IEmploymentProfileResolver? profileResolver = null,
         IEmploymentWindowResolver? employmentWindowResolver = null,
         EmployeeProfileRepository? employeeProfileRepo = null,
-        UserAgreementCodeRepository? userAgreementCodeRepo = null)
+        UserAgreementCodeRepository? userAgreementCodeRepo = null,
+        IRecordedHoursReader? hoursReader = null)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
@@ -261,8 +279,38 @@ public sealed class PeriodCalculationService
         // accepted cost — a dropped registration fails silently HERE — is covered at host level by
         // PayrollHostRecalcBlockedTests (a null repository → one segment → 200 instead of 422).
         _userAgreementCodeRepo = userAgreementCodeRepo;
+        // S145 TASK-14508 (R25): NOT enforced here, deliberately — unlike the window resolver above,
+        // whose absence is only ever a wiring defect, a PCS without a reader is a legitimate
+        // plan-only instance (EnsurePeriodPlannableAsync, which the raw export routes call, never
+        // reads hours). The never-silent check runs at call time instead (RequireHoursReader), on
+        // every entry point that calculates or replays, before it reads anything.
+        _hoursReader = hoursReader;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
+
+    /// <summary>
+    /// S145 / TASK-14508 (ruling R25) — the never-silent check for the hours source. Called FIRST by
+    /// every public entry point that calculates or replays, before any read: before the rule
+    /// classification fetch, the history and employment-window reads of planning, the manifest load
+    /// and the hours read itself.
+    ///
+    /// <para>
+    /// <b>Why it throws (plain language).</b> Since S145 payroll reads the employee's recorded hours
+    /// itself; nothing else feeds a calculation. A service built without a reader would calculate a
+    /// month on NO hours — a payslip as if nothing had been worked — so it refuses, by name, instead.
+    /// </para>
+    /// </summary>
+    private IRecordedHoursReader RequireHoursReader(string entryPoint) =>
+        _hoursReader ?? throw new InvalidOperationException(
+            $"PeriodCalculationService.{entryPoint} was called on a service constructed WITHOUT an " +
+            "IRecordedHoursReader. Payroll reads the employee's recorded hours itself (S145 R14/R25) — no " +
+            "caller supplies them — so without a reader the calculation would run on no hours and pay the " +
+            "month as if nothing had been worked. It is refused before anything is read. Fix the wiring: " +
+            "the Payroll host must call builder.Services.AddProjectionHoursReader() in " +
+            "src/Integrations/StatsTid.Integrations.Payroll/Program.cs (defined in Services/" +
+            "ProjectionHoursReader.cs; it registers IRecordedHoursReader -> ProjectionHoursReader and the two " +
+            "read-model repositories it reads). Test fixtures that calculate or replay must pass an " +
+            "IRecordedHoursReader (an in-memory one is fine) as the hoursReader constructor argument.");
 
     // -------------------------------------------------------------------
     // Public outcome / audit-state types
@@ -309,7 +357,7 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// Wrapper surfacing the calculation result alongside its <see cref="AuditState"/>.
     /// Returned by <see cref="CalculateWithOutcomeAsync"/>; the legacy
-    /// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, CancellationToken)"/>
     /// returns just <see cref="PeriodCalculationResult"/> for backward compatibility but
     /// loses the <see cref="AuditState"/> signal.
     ///
@@ -339,21 +387,25 @@ public sealed class PeriodCalculationService
     /// <para>
     /// Returns just <see cref="PeriodCalculationResult"/>; callers that need the
     /// <see cref="AuditState"/> signal should use
-    /// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, decimal, string?, Guid?, CancellationToken)"/>.
+    /// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, bool, CancellationToken)"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// S145 / TASK-14508 (R14, R25): takes no hours. The entry point it re-enters reads the
+    /// employee's current recorded rows itself; a service built without an
+    /// <see cref="IRecordedHoursReader"/> throws there before anything is read.
     /// </para>
     /// </summary>
     public async Task<PeriodCalculationResult> CalculateAsync(
         PlannedCalculation plan,
         EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences,
         decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
         CancellationToken ct = default)
     {
         var outcome = await CalculateWithOutcomeAsync(
-            plan, profile, entries, absences,
+            plan, profile,
             previousFlexBalance, authorizationHeader, correlationId,
             ct: ct);
         return outcome.Result;
@@ -361,15 +413,25 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// Sole logic entry point — same semantics as
-    /// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, CancellationToken)"/>
     /// but additionally returns an explicit <see cref="AuditState"/> describing the
     /// completeness of the manifest-persistence chain.
+    ///
+    /// <para>
+    /// <strong>The hours (S145 / TASK-14508, rulings R14 and R25).</strong> This method reads the
+    /// hours it evaluates: the employee's CURRENT time-entry and absence rows dated in
+    /// [the day before the opening week's Monday, <see cref="PlannedCalculation.PeriodEnd"/>], through
+    /// <see cref="IRecordedHoursReader.ReadCurrentAsync"/>. The opening week is the Monday–Sunday week
+    /// holding <see cref="PlannedCalculation.PeriodStart"/>; the extra day before its Monday catches a
+    /// night shift filed on that day whose after-midnight hours land on the Monday (N5, the Compliance
+    /// precedent). The rows are kept exactly as read (TASK-14513 binds and digests them) and mapped
+    /// once to the <see cref="TimeEntry"/> / <see cref="AbsenceEntry"/> inputs the lanes consume. A
+    /// service built without a reader throws <see cref="InvalidOperationException"/> before any read.
+    /// </para>
     /// </summary>
     public async Task<PeriodCalculationOutcome> CalculateWithOutcomeAsync(
         PlannedCalculation plan,
         EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences,
         decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
@@ -378,8 +440,11 @@ public sealed class PeriodCalculationService
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(profile);
-        ArgumentNullException.ThrowIfNull(entries);
-        ArgumentNullException.ThrowIfNull(absences);
+
+        // S145 TASK-14508 (R25) — never silent, and FIRST: before the hours read below and the
+        // rule-classification fetch further down. (The planless shims and the replay overloads run
+        // the same check before THEIR first read — planning or the manifest load — and re-enter here.)
+        var hoursReader = RequireHoursReader(nameof(CalculateWithOutcomeAsync));
 
         // -------------------------------------------------------------------
         // Belt + braces re-check of geometric invariants. The planner already ran them when
@@ -402,6 +467,28 @@ public sealed class PeriodCalculationService
                 $"('{plan.EmployeeId}') does not match profile.EmployeeId ('{profile.EmployeeId}'). " +
                 $"ManifestId={plan.ManifestId}.");
         }
+
+        // ---------------------------------------------------------------
+        // S145 TASK-14508 (R14) — payroll reads its own hours. Nobody hands a calculation its
+        // hours any more: it reads the employee's CURRENT recorded rows (one current row per Skema
+        // cell plus every additive registration; a re-saved cell's earlier row is superseded and
+        // not read) for [the day before the opening week's Monday, period end]. Reading the whole
+        // opening week means the days of the month's first week that lie in the PREVIOUS month
+        // ("context days") are present, so a missing one can no longer be mistaken for a day not
+        // worked; the day before that Monday catches a night shift whose after-midnight hours land
+        // on the Monday (N5 — the same widened read as ComplianceEndpoints, ADR-039 GAP-B).
+        //
+        // `recordedHours` is kept exactly as read (TASK-14513 binds its event ids and digests it);
+        // `entries` / `absences` are the one mapping of it that BOTH lanes consume. Context rows are
+        // carried in both, and the per-segment lane's date filter below keeps them out of the
+        // segment evaluation, so until TASK-14511's per-plan lane they change nothing — apart from
+        // the post-midnight half of a crossing filed the day before the period's first day, which
+        // normalization dates INSIDE the period (that is the GAP-B hours the widened read exists for).
+        // ---------------------------------------------------------------
+        var recordedHours = await hoursReader.ReadCurrentAsync(
+            plan.EmployeeId, HoursReadStart(plan.PeriodStart), plan.PeriodEnd, ct);
+        var entries = ToTimeEntries(recordedHours.Entries);
+        var absences = ToAbsenceEntries(recordedHours.Absences);
 
         // ADR-039 (S132 TASK-132-1b-1) — midnight-crossing normalization on the calculation
         // INPUT, BEFORE the per-segment filter below. A shift crossing midnight (e.g.
@@ -609,6 +696,11 @@ public sealed class PeriodCalculationService
             if (segmentProfile.Position is null && profile.Position is not null)
                 segmentProfile = segmentProfile with { Position = profile.Position };
 
+            // S145 TASK-14508: this date filter is UNCHANGED and load-bearing. Since payroll reads its
+            // own hours from the day before the opening week's Monday, `normalizedEntries` / `absences`
+            // also carry the context days before the period's first day; segments never start before
+            // it, so those rows stay out of the per-segment evaluation here (TASK-14511's per-plan
+            // lane is what will consume them).
             var segmentEntries = normalizedEntries.Where(e => e.Date >= segment.StartDate && e.Date <= segment.EndDate).ToList();
             var segmentAbsences = absences.Where(a => a.Date >= segment.StartDate && a.Date <= segment.EndDate).ToList();
 
@@ -765,11 +857,15 @@ public sealed class PeriodCalculationService
     // No "skip planner" code path exists.
     //
     // [Obsolete] is intentional: it marks the migration runway from caller-supplied
-    // (profile, entries, …) to caller-constructed PlannedCalculation. TASK-2009 and
+    // (profile, period, …) to caller-constructed PlannedCalculation. TASK-2009 and
     // TASK-2010 migrated their own surfaces (RetroactiveCorrectionService internals;
     // /export and /export-period). The /calculate-and-export endpoint at Program.cs
     // is the last surviving customer; its retirement was explicitly out-of-scope per
     // S20 Step 0b W2 (full retirement of PeriodCalculationService is deferred).
+    //
+    // S145 TASK-14508 (R14, R25): the shim takes no hours. The never-silent hours-reader check
+    // runs FIRST, before planning's reads (the rule-classification fetch, the employment-window
+    // and history reads); the hours themselves are read by the entry point it re-enters.
     // -------------------------------------------------------------------
     [Obsolete(
         "Use CalculateAsync(PlannedCalculation, …) or CalculateWithOutcomeAsync(PlannedCalculation, …). " +
@@ -780,8 +876,6 @@ public sealed class PeriodCalculationService
         error: false)]
     public async Task<PeriodCalculationResult> CalculateAsync(
         EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences,
         DateOnly periodStart,
         DateOnly periodEnd,
         decimal previousFlexBalance,
@@ -791,13 +885,16 @@ public sealed class PeriodCalculationService
     {
         ArgumentNullException.ThrowIfNull(profile);
 
+        // S145 TASK-14508 (R25): never silent, before any read.
+        _ = RequireHoursReader(nameof(CalculateAsync));
+
         // BuildPlanForLegacyCallers became async in S21 TASK-2108 (ADR-017 D9c) so the
         // shim can hydrate LocalProfileActivations from the local_agreement_profiles
         // table. Other than the await, the method body is unchanged.
         var plan = await BuildPlanForLegacyCallersAsync(profile, periodStart, periodEnd, ct);
 
         return await CalculateAsync(
-            plan, profile, entries, absences,
+            plan, profile,
             previousFlexBalance, authorizationHeader, correlationId, ct);
     }
 
@@ -809,14 +906,14 @@ public sealed class PeriodCalculationService
     /// Planless back-compat shim that returns the full <see cref="PeriodCalculationOutcome"/>
     /// (result + <see cref="AuditState"/> + <see cref="PeriodCalculationOutcome.ManifestId"/>),
     /// the outcome-returning sibling of the legacy planless
-    /// <see cref="CalculateAsync(EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateAsync(EmploymentProfile, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
     /// shim above.
     ///
     /// <para>
     /// <strong>Byte-identical export by construction (QUAL-003 payroll-boundary invariant).</strong>
     /// This method builds the plan via the SAME <see cref="BuildPlanForLegacyCallersAsync"/> and
     /// re-enters the SAME sole logic entry point
-    /// (<see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, decimal, string?, Guid?, bool, CancellationToken)"/>)
+    /// (<see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, bool, CancellationToken)"/>)
     /// as the planless <c>CalculateAsync</c> — which is literally
     /// <c>CalculateWithOutcomeAsync(plan, …).Result</c>. So <c>this(…).Result</c> is bit-identical
     /// to <c>CalculateAsync(profile, …)</c> for the same inputs; the ONLY difference across two
@@ -834,6 +931,12 @@ public sealed class PeriodCalculationService
     /// the planless <c>CalculateAsync</c> re-enters the emitting path (only <c>ReplayAsync</c> passes
     /// <c>emitAuditEvents:false</c>).
     /// </para>
+    ///
+    /// <para>
+    /// S145 / TASK-14508 (R14, R25): takes no hours, like its sibling. The never-silent
+    /// hours-reader check runs first, before planning reads anything; the hours are read by the
+    /// entry point it re-enters.
+    /// </para>
     /// </summary>
     [Obsolete(
         "Use CalculateWithOutcomeAsync(PlannedCalculation, …). Boundary sources are limited to " +
@@ -844,8 +947,6 @@ public sealed class PeriodCalculationService
         error: false)]
     public async Task<PeriodCalculationOutcome> CalculateWithOutcomeAsync(
         EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences,
         DateOnly periodStart,
         DateOnly periodEnd,
         decimal previousFlexBalance,
@@ -855,6 +956,9 @@ public sealed class PeriodCalculationService
     {
         ArgumentNullException.ThrowIfNull(profile);
 
+        // S145 TASK-14508 (R25): never silent, before any read.
+        _ = RequireHoursReader(nameof(CalculateWithOutcomeAsync));
+
         // Mirrors the planless CalculateAsync shim EXACTLY (build the plan via the same
         // BuildPlanForLegacyCallersAsync), then returns the PeriodCalculationOutcome INSTEAD of its
         // .Result — this shared plan-building is what makes the export output bit-identical.
@@ -863,7 +967,7 @@ public sealed class PeriodCalculationService
         // Named ct: so the plan-first overload's emitAuditEvents parameter keeps its default (true) —
         // identical to how the plan-first CalculateAsync re-enters this method.
         return await CalculateWithOutcomeAsync(
-            plan, profile, entries, absences,
+            plan, profile,
             previousFlexBalance, authorizationHeader, correlationId, ct: ct);
     }
 
@@ -890,7 +994,7 @@ public sealed class PeriodCalculationService
     /// <para>
     /// <b>Same builder, by design.</b> This goes through the SAME private
     /// <see cref="BuildPlanForLegacyCallersAsync"/> as
-    /// <see cref="CalculateWithOutcomeAsync(EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateWithOutcomeAsync(EmploymentProfile, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
     /// — same boundary sources, same rule classifications, same <see cref="PeriodPlanner.Plan"/>.
     /// There is no second copy of the boundary logic to drift, and no caller-supplied "already
     /// checked" flag. The day the planner learns to split such a month instead of refusing it
@@ -955,7 +1059,7 @@ public sealed class PeriodCalculationService
     /// <para>
     /// <strong>Async (S21 TASK-2108)</strong>: the method became async to accommodate the
     /// DB lookup against <c>local_agreement_profiles</c>. The single call site (the
-    /// <see cref="CalculateAsync(EmploymentProfile, IReadOnlyList{TimeEntry}, IReadOnlyList{AbsenceEntry}, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateAsync(EmploymentProfile, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
     /// shim) was updated to <c>await</c>. Sync-over-async (<c>.GetAwaiter().GetResult()</c>)
     /// was rejected to avoid ASP.NET deadlock risk.
     /// </para>
@@ -1134,9 +1238,19 @@ public sealed class PeriodCalculationService
     /// (this catches the case where a rule grew a new SnapshotContract after the manifest
     /// was originally persisted).
     /// </para>
+    ///
+    /// <para>
+    /// S145 / TASK-14508 (R25): a replay, so it is never silent about its hours source either —
+    /// a service built without an <see cref="IRecordedHoursReader"/> throws before the manifest load.
+    /// This overload reads no hours today; TASK-14513 makes it THE replay, re-reading the rows a
+    /// calculation recorded by their event ids, and the check is already in place for it.
+    /// </para>
     /// </summary>
     public async Task<CalculationResult> ReplayAsync(Guid manifestId, CancellationToken ct = default)
     {
+        // S145 TASK-14508 (R25): never silent, before any read (the manifest load is a read).
+        _ = RequireHoursReader(nameof(ReplayAsync));
+
         var manifest = await LoadManifestAsync(manifestId, ct)
             ?? throw new InvalidOperationException(
                 $"Manifest {manifestId} not found in segment_manifests projection or event store. " +
@@ -1156,7 +1270,7 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// Full replay: loads the manifest, reconstructs the plan, and re-evaluates rules
-    /// against the supplied inputs. The returned <see cref="PeriodCalculationResult"/> is
+    /// against it. The returned <see cref="PeriodCalculationResult"/> is
     /// produced by the same rule evaluation pipeline as a forward calculation, so the
     /// per-rule <see cref="CalculationResult.ManifestId"/> stamping and per-line OK-version
     /// stamping are identical — only the <see cref="PlannedCalculation.ManifestId"/> is
@@ -1167,17 +1281,27 @@ public sealed class PeriodCalculationService
     /// reconstructed plan, NOT live DB reads. Determinism (ADR-016 D10) holds even after
     /// the live DB has changed.
     /// </para>
+    ///
+    /// <para>
+    /// <strong>The hours (S145 / TASK-14508, R14 and R25).</strong> The caller no longer supplies
+    /// them. Until TASK-14513 binds a calculation's rows by event id, this replay re-reads the
+    /// employee's CURRENT rows over the reconstructed plan's window, exactly as a forward
+    /// calculation does (it re-enters the same entry point); TASK-14513 replaces that read with
+    /// the by-id read of the recorded rows. A service built without an
+    /// <see cref="IRecordedHoursReader"/> throws before the manifest load.
+    /// </para>
     /// </summary>
     public async Task<PeriodCalculationResult> ReplayAsync(
         Guid manifestId,
         EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences,
         decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
         CancellationToken ct = default)
     {
+        // S145 TASK-14508 (R25): never silent, before any read (the manifest load is a read).
+        _ = RequireHoursReader(nameof(ReplayAsync));
+
         var manifest = await LoadManifestAsync(manifestId, ct)
             ?? throw new InvalidOperationException(
                 $"Manifest {manifestId} not found in segment_manifests projection or event store. " +
@@ -1192,7 +1316,7 @@ public sealed class PeriodCalculationService
         // a fresh createdAt, mutating an immutable audit record (Codex sprint-end review).
         // emitAuditEvents:false skips both EmitManifestAsync and EmitLegacyPeriodCompletedAsync.
         var outcome = await CalculateWithOutcomeAsync(
-            plan, profile, entries, absences,
+            plan, profile,
             previousFlexBalance, authorizationHeader, correlationId,
             emitAuditEvents: false, ct);
         return outcome.Result;
@@ -1608,6 +1732,65 @@ public sealed class PeriodCalculationService
                 profile.EmployeeId, plan.ManifestId);
         }
     }
+
+    // -------------------------------------------------------------------
+    // Recorded hours — S145 TASK-14508 (R14, R25)
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// The first day of a calculation's hours read: the day BEFORE the Monday of the
+    /// Monday–Sunday week holding <paramref name="periodStart"/> (the opening week). The read runs
+    /// from here to the period end, so every context day of the opening week is present, plus the
+    /// day before it for a night shift whose after-midnight hours land on that Monday (N5 — the
+    /// window mirrors ComplianceEndpoints' widened read). Example: October 2026 starts on a
+    /// Thursday, its opening week starts Monday 28 September, so the read starts Sunday 27 September.
+    /// </summary>
+    private static DateOnly HoursReadStart(DateOnly periodStart) =>
+        WeeklyContext.WeekStart(periodStart).AddDays(-1);
+
+    /// <summary>
+    /// Maps recorded time-entry rows to the <see cref="TimeEntry"/> inputs the lanes consume, one to
+    /// one and in read order (outbox id). Pure: the result depends on the rows alone.
+    /// <list type="bullet">
+    /// <item><c>SourceStintId</c> = the row's immutable event id — the ADR-039 D4 continuity link,
+    /// populated at the read boundary that builds the consumed list, exactly as ComplianceEndpoints
+    /// does, so a midnight-crossing shift's two normalized halves keep one identity.</item>
+    /// <item><c>RegisteredAt</c> = the registration's <c>occurred_at</c> (the TimeEndpoints mapping),
+    /// not the type's wall-clock default, so the mapped input is reproducible from the row.</item>
+    /// </list>
+    /// </summary>
+    private static IReadOnlyList<TimeEntry> ToTimeEntries(IReadOnlyList<TimeEntryProjectionRow> rows) =>
+        rows.Select(r => new TimeEntry
+        {
+            EmployeeId = r.EmployeeId,
+            Date = r.Date,
+            Hours = r.Hours,
+            StartTime = r.StartTime,
+            EndTime = r.EndTime,
+            TaskId = r.TaskId,
+            ActivityType = r.ActivityType,
+            AgreementCode = r.AgreementCode,
+            OkVersion = r.OkVersion,
+            RegisteredAt = r.OccurredAt,
+            VoluntaryUnsocialHours = r.VoluntaryUnsocialHours,
+            SourceStintId = r.EventId,
+        }).ToList();
+
+    /// <summary>
+    /// Maps recorded absence rows to the <see cref="AbsenceEntry"/> inputs the lanes consume, one to
+    /// one and in read order. The row's <c>feriedage</c> (the vacation-day revaluation, ADR-032) is
+    /// not an input of any payroll rule and is not carried.
+    /// </summary>
+    private static IReadOnlyList<AbsenceEntry> ToAbsenceEntries(IReadOnlyList<AbsenceProjectionRow> rows) =>
+        rows.Select(r => new AbsenceEntry
+        {
+            EmployeeId = r.EmployeeId,
+            Date = r.Date,
+            AbsenceType = r.AbsenceType,
+            Hours = r.Hours,
+            AgreementCode = r.AgreementCode,
+            OkVersion = r.OkVersion,
+        }).ToList();
 
     // -------------------------------------------------------------------
     // Per-segment helpers
