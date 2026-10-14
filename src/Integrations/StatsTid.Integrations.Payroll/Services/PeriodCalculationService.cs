@@ -2711,7 +2711,9 @@ public sealed class PeriodCalculationService
             var timeline = JsonSerializer.Deserialize<TimelineEvaluationResponse>(json, JsonOptions);
             if (TimelineReplyDefect(timeline) is { } defect)
             {
-                // The defect is a fixed phrase naming rule ids only — never anything from the body.
+                // The defect is a fixed phrase naming rule ids only — never anything from the body. That holds
+                // because TimelineReplyDefect checks the rule-id set before it names a failed row: the
+                // ordering is load-bearing (SEC-039; S145 TASK-14511 Step 5a cycle 2, Fable NOTE 1).
                 _logger.LogWarning(
                     "Rule engine answered the timeline evaluation for employee {EmployeeId} with an unusable " +
                     "response ({Defect}); the call is treated as failed",

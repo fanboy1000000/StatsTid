@@ -278,8 +278,8 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         var pcs = BuildPcsWithResolver(_resolver);
 
         // Caller-supplied profile with Position=null. Resolver-returned value
-        // (Position="RESEARCHER") wins per PCS L344-345; line L357 does NOT
-        // fire because segmentProfile.Position is already non-null.
+        // (Position="RESEARCHER") is what PCS uses; since S145 R-10 a dated
+        // value is never replaced by the caller's, null or not.
         var callerProfile = TestFixtures.Profile(EmployeeId) with { Position = null };
 
         // Legacy shim — registers WtmNaturalKey hydrator (S29 precedent).
@@ -311,14 +311,14 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // The contract under test is the resolver/PCS precedence, NOT a
         // mutation. We probe the resolver directly — the same lookup PCS
         // does at the segment-loop site — to assert that a dated Position
-        // value short-circuits any caller-supplied fallback inside PCS
-        // (per L357 null-guard).
+        // value is what PCS uses (S145 R-10: the caller-supplied fallback
+        // is retired; a null dated position means none).
         var probe = await _resolver.GetByEmployeeIdAtAsync(EmployeeId, PeriodStart);
         Assert.NotNull(probe);
         Assert.Equal("RESEARCHER", probe!.Position);
-        // The PCS code path that would copy caller's "DEPARTMENT_HEAD" into
-        // segmentProfile is gated on `segmentProfile.Position is null`; with
-        // probe.Position == "RESEARCHER" that guard is never satisfied.
+        // Before S145 a PCS path copied the caller's position into the
+        // segment profile when the dated one was null; R-10 removed it, so
+        // the caller's "DEPARTMENT_HEAD" can never reach the engine.
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
