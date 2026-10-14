@@ -2515,11 +2515,12 @@ public sealed class PeriodCalculationService
                     PlanInputsJson: reader.IsDBNull(8) ? null : reader.GetString(8));
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // A fault anywhere in the read, closing the connection included, means the projection could not be
-            // consulted; no decoding has happened yet, so nothing here can be a damaged row.
-            row = null;
+            // A fault in the read means the projection could not be consulted; no decoding has happened yet,
+            // so nothing here can be a damaged row. A row already read stays read: a fault after it (closing
+            // the connection) does not hand a found row to the event (R-17). A cancelled replay propagates
+            // as cancellation, not as "manifest not found".
             _logger.LogWarning(ex,
                 "Projection lookup for manifest {ManifestId} failed; falling back to event-replay.",
                 manifestId);
@@ -2550,7 +2551,7 @@ public sealed class PeriodCalculationService
                     PlanInputs: created.PlanInputs);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex,
                 "Event-replay fallback for manifest {ManifestId} failed.", manifestId);

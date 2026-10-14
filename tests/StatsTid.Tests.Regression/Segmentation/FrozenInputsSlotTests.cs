@@ -140,6 +140,7 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
         var replay = await pcs.ReplayAsync(manifestId);
 
         Assert.True(replay.Success, replay.ErrorMessage);
+        Assert.NotEmpty(forward.RuleResults); // the equality below must compare something (Step 5a cycle 2, Fable NOTE 4)
         Assert.Equal(
             JsonSerializer.Serialize(forward.RuleResults),
             JsonSerializer.Serialize(replay.RuleResults));
