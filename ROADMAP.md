@@ -367,6 +367,10 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   production; not enforced today. [CONVENTIONS.md]
 
 ### Tooling / infra / environment
+- **Backlog — pin the Rule Engine's "fixed, value-free 400 sentences" (S145 TASK-14511 adjudication, declined NOTE 1).** Payroll now
+  logs the timeline endpoint's 400 `error` sentence, capped at 200 characters, with the employee id. That is safe only because
+  every `TimelineInputException` message is a literal with no interpolation (`WeeklyTimelineCore.cs`, `RuleRegistry.cs`), and that
+  rests on convention, not a test. A Rule Engine unit guard asserting each message is in the fixed set would make it durable.
 - **Backlog — fold the remaining rule-engine test stubs onto the shared handler (S145 O-10 finding).** S145's O-10 moved four private
   copies of the entitlement-validation stub onto `tests/StatsTid.Tests.Regression/TestSupport/EntitlementValidationStubHandler.cs`.
   Nine further identical private `RuleEngineStubHandler`s remain in the Regression project (`Balance/DatedQuotaAnchorTests`,

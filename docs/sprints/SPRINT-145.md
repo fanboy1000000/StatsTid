@@ -999,6 +999,35 @@ The detail:
   - **the partial-failure rule:** a failed timeline call drops overtime, norm and flex together while the month still reports Success;
   - **a spec question:** the same hours over norm count in September's flex and in October's overtime.
 
+**The adjudicator's rulings on 14511 (Fable seat, 2026-10-14; verdict RULED, no owner question).**
+- **R-1 to R-4, deviations 1–4: ACCEPTED.**
+  - The window read stays: the resolver returns the whole overlapping spell, and a spell that ended before the 1st was settled by its own month.
+  - The split by line date is accepted for Stage A. Its Stage B planning input is written into TASK-14524's brief: the merger must accept the per-segment rows.
+  - Caller-built plans read histories as the A.3→A.5 intermediate state. TASK-14513's brief now says replay must not re-derive pieces or cutoff.
+  - Only covered days are sent; this matches A2 `:233`.
+- **R-5, the 400 sentence plus the employee id in the log: KEPT.** It is the shape SEC-039's own remediation ruled acceptable. The sentence is a literal with no interpolation, and status-only would lose the diagnosis.
+  - **Owed at close:** one sentence on SEC-039's row.
+  - The engine-side "value-free" promise is unpinned, so it gets a ROADMAP guard line.
+- **R-6, the partial-failure rule: CHANGED.**
+  - *Plain language:* until now, if the one call that computes overtime, norm and flex failed but the smaller calls succeeded, the month reported Success and exported without overtime, norm lines or flex. That is wrong money labelled Success.
+  - **Now any failed rule-engine call refuses the whole calculation:** `Success = false`, no export lines, no manifest, a fixed sentence, and the host's existing 422. A plan with no employed segment still succeeds.
+  - It is strictly safer, so there is no owner question.
+  - *Why it was never caught:* the pre-S145 pins covered only "all calls fail" and "all succeed". The three Regression fakes answering 404 to the timeline would have run green with three rules missing.
+  - **Owed:** a 14511 fix-up (implementer, after 14511-T), plus two RED-first pins in 14511-T:
+    - `TimelineCallFails_PerSegmentCallsSucceed_CalculationRefused_NothingWritten`;
+    - `OnePerSegmentCallFails_TimelineSucceeds_CalculationRefused_NothingWritten`.
+  - The two existing message asserts take the new sentence, labelled. Mutation **MU-44** is catalogued, run by 14514 re-spawn 2 at A.4.
+- **R-7, the double count: SPECIFIED and already registered as QUAL-189** (pre-existing: an hour paid as overtime also raises flex). New under F1: the two counts can fall in different months. That is appended to QUAL-189 as a design constraint on any future fix. Not a 14511 defect.
+  - *Plain language:* 4.8 h over norm on 28–30 September raise September's flex balance and are also paid as overtime in October.
+- **R-8 and R-9, the two widened test files: CONFIRMED,** with additions sent to 14511-T:
+  - `MonthEndCrossingTests`' engine must answer the timeline path with the complete shape, or under R-6 the month is refused;
+  - the exact piece shapes for `RetroactiveCorrectionWindowTests`.
+- **Declined, recorded:**
+  - (1) the engine-sentence guard, now a ROADMAP line;
+  - (2) the spells cutoff, for the deferred spells increment;
+  - (3) 422 vs 503 for an engine outage, which 14512 may take;
+  - (4) **a watch item for CA-4.** A context piece is now profile-resolved fail-closed, so a Docker fixture whose `employee_profiles` row starts on the 1st while its window covers the opening week will refuse with `employment_record_gap`. This is correct behaviour, but it may surface as unlisted reds at the Stage A gate.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
