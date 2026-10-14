@@ -876,6 +876,17 @@ The followers:
   - the Sunday fact `MonthEndNightShift_Sun31Jan2027_2300To0200_FebruaryReadsItAndPays200On1Feb`;
   - per-request capture without `Distinct()`, asserting 1.00 h and 2.00 h halves exactly once;
   - the reader doc qualified.
+- **Returned `0293a71`:** Unit 1427 (+5). The agent proved non-vacuity in a throwaway checkout: dropping the `− 1` from `HoursReadStart` turns all six `MonthEndCrossingTests` cases red. Shape found: PCS sends a segment's entries to each of the four time rules, so the halves are asserted once per request, never twice within one.
+- **The adjudicator on Fable WARNING 1, the two-snapshot read (Fable seat, 2026-10-14; RULED, no owner question).**
+  - **The defect class is real; the stated route is not.** An exported month cannot be reopened (ADR-034 D5), and APPROVED locks both write paths.
+  - **Two narrower routes are reachable:**
+    - **A,** a raw-exported month, which stays DRAFT, so it is recalculable and saveable;
+    - **B,** the previous month's days inside the opening week, which are locked only by that month's own approval.
+  - **Fix (a):** one read-only REPEATABLE READ snapshot in `ProjectionHoursReader`. It takes no lock and cannot deadlock with 14512 Do 7.
+  - **Fix (b) rejected:** requiring APPROVED on `/recalculate` would strand raw-exported months, whose only correction path it is, and would not close B. Because it is rejected on the merits, no owner question arises.
+  - **Scope widened** for the 14508 implementer's fix-up 2 to `TimeEntryProjectionRepository.cs` and `AbsenceProjectionRepository.cs`, one `(conn, tx)` overload of `GetByEmployeeAndDateRangeAsync` each, with the old overload delegating so the SQL exists once.
+  - **Reviewed, not pinned** (a race). Registered as **QUAL-200** (M, FIXED).
+  - **Pointer for TASK-14513:** the digest line forms must never include `superseded_by_outbox_id`, the one mutable column, or a later re-save would fail an untouched row's replay. The refinement's forms already exclude it, and 14513's brief now says so explicitly.
 
 **At TASK-14516's cycle 2; merged `46cecd8`.**
 - **Fix-up `330a966`:** five recovery cases, the `aria-invalid` cell outline, and no flash after a refused negative. tsc 0 · vitest 1001.
