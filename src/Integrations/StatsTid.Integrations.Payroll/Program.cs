@@ -380,7 +380,7 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // BEFORE returning, so the AuditLoggingMiddleware — which reads Items AFTER the endpoint runs
     // (post-_next) — writes it into audit_log.details, creating the ADR-016 D10
     // segment_manifests⋈audit_log linkage. No-op when no manifest was produced (Guid.Empty), e.g.
-    // the total-rule-failure short-circuit.
+    // a calculation refused because a rule-engine call failed (S145 TASK-14511, adjudicator R-6).
     PeriodCalculationService.StampAuditContext(httpContext, outcome);
 
     // Derive the SAME PeriodCalculationResult the endpoint returned before — the response body,
