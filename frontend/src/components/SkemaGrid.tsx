@@ -771,7 +771,7 @@ export function SkemaGrid({
 
       {/* S145/TASK-14516 — the reason a negative entry was refused (announced, visible) */}
       {negativeCell !== null && (
-        <p id={NEGATIVE_NOTE_ID} role="alert" className={styles.hiddenNote}>
+        <p id={NEGATIVE_NOTE_ID} role="alert" className={styles.negativeNote}>
           {NEGATIVE_HOURS_MESSAGE}
         </p>
       )}

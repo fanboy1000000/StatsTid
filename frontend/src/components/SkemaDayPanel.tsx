@@ -386,7 +386,7 @@ export function SkemaDayPanel({
               </div>
             ))}
             {negativeAlloc !== null && (
-              <p id="alloc-negative-note" role="alert" className={styles.formLead}>
+              <p id="alloc-negative-note" role="alert" className={styles.negativeNote}>
                 Timer kan ikke være negative
               </p>
             )}
