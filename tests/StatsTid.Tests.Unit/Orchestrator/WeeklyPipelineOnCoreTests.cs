@@ -93,7 +93,7 @@ public sealed class WeeklyPipelineOnCoreTests
         Assert.Equal("OVERTIME_50", overtimeLine.GetProperty("timeType").GetString());
         Assert.Equal(3.00m, overtimeLine.GetProperty("hours").GetDecimal());   // the SAME hours as before
         Assert.Equal(1.5m, overtimeLine.GetProperty("rate").GetDecimal());
-        Assert.Equal(sunday.ToString("yyyy-MM-dd"), overtimeLine.GetProperty("date").GetString());   // …now dated Sunday
+        Assert.Equal(sunday.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), overtimeLine.GetProperty("date").GetString());   // …now dated Sunday
 
         // The norm result for the same call is unchanged: norm 37.00, actual 40.00, one NORMAL_HOURS line per entry.
         var norm = RuleResult(result, "NORM_CHECK_37H");

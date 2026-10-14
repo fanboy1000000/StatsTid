@@ -41,7 +41,7 @@ namespace StatsTid.Tests.Unit.Rules;
 /// uncovered weekdays) · MU-06 (one config per week, the Sunday's) · MU-07 (one fraction per week,
 /// the Sunday's) · MU-08 (NORMAL_HOURS for context entries) · MU-09 (mode from the week's first
 /// covered day) · MU-10 (annual mode through weekday norms) · MU-11 (flex clamped per week) · MU-12
-/// (cap from the first covered day) · MU-13 (default credit <c>7.4 × fraction</c>, unrounded) · MU-41 (pieces beyond <c>PeriodEnd</c> governing).
+/// (cap from the first covered day) · MU-13 (default credit <c>7.4 × fraction</c>, unrounded) · MU-41 (pieces beyond <c>PeriodEnd</c> governing) · MU-42 (default credit takes the settlement day's fraction, not the absence day's).
 /// </para>
 /// </summary>
 public sealed class WeeklyTimelineCoreTests
@@ -534,6 +534,8 @@ public sealed class WeeklyTimelineCoreTests
     [Fact]
     public void Core_PiecesBeyondPeriodEnd_DoNotGovern()
     {
+        // Premise: the pin is vacuous unless the period end is a weekday (the closing week must run past it).
+        Assert.Equal(DayOfWeek.Wednesday, Sep30.DayOfWeek);
         var entries = WeekdayHours(Aug31, Sep30, 7.40m);
         var october = With(Hk26,
             (nameof(AgreementRuleConfig.NormPeriodWeeks), 4),
@@ -688,6 +690,53 @@ public sealed class WeeklyTimelineCoreTests
         Assert.Equal(114.00m, result.Flex.WorkedHours);
         Assert.Equal(-2.00m, result.Flex.Delta);
         Assert.Equal(-2.00m, result.Flex.NewBalance);
+        Assert.Null(result.FlexPayout);
+    }
+
+    /// <summary>
+    /// Refinement :616 — "the per-day default credit uses THAT day's fraction" (R35, precision rule :548).
+    /// A part-timer drops from 37 to 30 h (fraction 0.811) effective Wednesday 16 September and books a
+    /// 0-hour VACATION on a Wednesday each side of the change (0 hours is the only branch where the
+    /// default credit applies; brief contradiction 12). Wed 9 Sep is on the old contract: credit
+    /// 7.4 × 1.0 = 7.40. Wed 23 Sep is on the new one: 7.4 × 0.811 = 6.0014 → 6.00 (rounded per day).
+    /// Credits 13.40. September has 11 weekdays in each piece (1–15 Sep: 4 + 5 + 2; 16–30 Sep: 3 + 5 + 3):
+    /// norm 11 × 7.40 + 11 × 6.00 = 147.40 (no unpaid absence, so the norm is not reduced); worked
+    /// 10 × 7.40 + 10 × 6.00 = 134.00 (the two absence days carry no entry); delta 134.00 + 13.40 −
+    /// 147.40 = 0. RED by MU-42 (the default credit takes its fraction from the piece in force on the
+    /// settlement day instead of the absence day's piece): credits 12.00 (0.811 for both), delta −1.40.
+    /// A first-piece regression gives 14.80 (1.0 for both), delta +1.40, and trips it as well. The
+    /// existing single-fraction fact cannot tell these apart.
+    /// </summary>
+    [Fact]
+    public void Core_Flex_MidMonthFractionChange_ZeroHourCredits_UseEachDaysFraction_1340()
+    {
+        // Weekday premises: the absences and the change are on weekdays, so none is skipped as zero-norm.
+        Assert.Equal(DayOfWeek.Wednesday, Sep9.DayOfWeek);
+        Assert.Equal(DayOfWeek.Tuesday, Sep15.DayOfWeek);
+        Assert.Equal(DayOfWeek.Wednesday, Sep16.DayOfWeek);
+        Assert.Equal(DayOfWeek.Wednesday, new DateOnly(2026, 9, 23).DayOfWeek);
+
+        var sep23 = new DateOnly(2026, 9, 23);
+        var entries = WeekdayHours(Sep1, Sep15, 7.40m)
+            .Concat(WeekdayHours(Sep16, Sep30, 6.00m))
+            .Where(e => e.Date != Sep9 && e.Date != sep23)
+            .ToList();
+        var absences = new List<AbsenceEntry>
+        {
+            Absence(Sep9, AbsenceTypes.Vacation, 0m),
+            Absence(sep23, AbsenceTypes.Vacation, 0m),
+        };
+
+        var result = Run(
+            Sep1, Sep30, null,
+            [Piece(Sep1, Sep15, 1.0m, Hk26), Piece(Sep16, Sep30, 0.811m, Hk26)],
+            entries, absences);
+
+        Assert.Equal(13.40m, result.Flex.AbsenceNormCredits);   // 7.40 (old day) + 6.00 (new day)
+        Assert.Equal(147.40m, result.Flex.NormHours);
+        Assert.Equal(134.00m, result.Flex.WorkedHours);
+        Assert.Equal(0m, result.Flex.Delta);
+        Assert.Equal(0m, result.Flex.NewBalance);
         Assert.Null(result.FlexPayout);
     }
 
