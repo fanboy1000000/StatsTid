@@ -147,25 +147,29 @@ public sealed class MonthEndCrossingTests
     }
 
     /// <summary>
-    /// Shape found: PCS sends the segment entries to each of the four time rules (one request each), so
-    /// the half appears once PER request, never twice within one. Asserted per request, without Distinct():
-    /// at least one request carries entries; in EVERY such request exactly one entry is dated the given
-    /// date with the expected hours, and none is dated after the month end. Returns that one entry hours
-    /// (for the conservation sum).
+    /// Shape found: PCS sends the segment entries to every engine call that carries entries — the four time
+    /// rules and the flex call, five requests per segment — so the half appears once PER request, never twice
+    /// within one. Asserted per request, without Distinct(): at least one request carries entries, and EVERY
+    /// such request carries EXACTLY ONE entry, the half dated the given date with the expected hours. In
+    /// these one-row scenarios that pins both leak directions: the other month's half can neither leak in
+    /// after the month end nor before the month start (a double-paid hour). Returns the observed hours, so
+    /// the conservation sum checks observed values (S145 TASK-14508 Step 5a cycle 2, WARNING 1, NOTEs 1-2).
     /// </summary>
     private static decimal AssertShiftHalfInEveryRequest(
         CapturingEngine engine, DateOnly date, decimal expectedHours, DateOnly nothingAfter)
     {
         var requests = engine.RequestsWithEntries;
         Assert.NotEmpty(requests);
+        decimal observed = 0m;
         foreach (var request in requests)
         {
-            Assert.All(request, e => Assert.True(
-                e.Date <= nothingAfter, $"A request carried an entry dated {e.Date:yyyy-MM-dd}, after {nothingAfter:yyyy-MM-dd}."));
-            var half = Assert.Single(request.Where(e => e.Date == date));
+            var half = Assert.Single(request);
+            Assert.Equal(date, half.Date);
+            Assert.True(half.Date <= nothingAfter, $"The half is dated {half.Date:yyyy-MM-dd}, after {nothingAfter:yyyy-MM-dd}.");
             Assert.Equal(expectedHours, half.Hours);
+            observed = half.Hours;
         }
-        return expectedHours;
+        return observed;
     }
 
     private static PeriodCalculationService BuildPcsOver(HttpMessageHandler engine, IRecordedHoursReader reader)
