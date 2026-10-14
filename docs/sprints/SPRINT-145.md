@@ -1028,6 +1028,17 @@ The detail:
   - (3) 422 vs 503 for an engine outage, which 14512 may take;
   - (4) **a watch item for CA-4.** A context piece is now profile-resolved fail-closed, so a Docker fixture whose `employee_profiles` row starts on the 1st while its window covers the opening week will refuse with `employment_record_gap`. This is correct behaviour, but it may surface as unlisted reds at the Stage A gate.
 
+**At TASK-14511-T's return** (`646b132` on `s145/task-14511`, on top of `48a8a7c`, a merge of master that brings O-10's test tidy; the implementer's `c775e92` is untouched).
+- **Every stub and fake answers `/api/rules/evaluate-timeline`** with a complete reply: three results, the full flex block, `["stub"]` and `weekly-timeline-v1`. The shared default emits `NORMAL_HOURS` only for in-month entries.
+- **Per-segment call counts and request shapes are rewritten.** The timeline's pieces and entries are asserted. No `SettlementCutoff` is asserted anywhere (C-T1), and no money or hours figure changed.
+- **Two facts are re-expressed** because the flex carry is retired: `FlexCarry_PassesThroughNotEmployedMiddleSegment_Unchanged` (unit) and `TwoSpells_FlexDeltaCarriesThroughNotEmployedMiddleSegment` (Docker). Now the opening balance reaches the one timeline call unchanged, and the gap days are left out of the pieces and entries.
+- **`MonthEndCrossingTests`** tells timeline requests from per-segment ones: October's timeline carries the 30 Sep context half, and no per-segment request does. **`RetroactiveCorrectionWindowTests`** asserts the pieces end on the leaver's last day, with no cutoff.
+- **The R-6 pins are added RED-first.** Four Unit facts are RED on `c775e92` by design: the two new refusal facts (`Assert.False` failure: a failed call still reports Success) and the two re-messaged asserts (the old sentence).
+- **Checks:** build 0 errors / 145 warnings · Unit 1434 + 4 RED of 1438 · DemoSeed 170 · Regression non-Docker 128.
+- **The R-6 fix-up returned** (`0281d5d`, implementer, +37/−30): any failed call refuses, with the fixed sentence and the refusal log line, and the doc wording updated. **One change beyond the list:** a refused result now carries **no rule results**; before, it carried the successful rows, which the host's 422 body would have sent while saying no figure was produced. The four RED facts went green: Unit **1438**, build 0 errors / 145 warnings, CA2100 115.
+- **Orchestrator `b5f29eb`:** `Payroll/Program.cs`'s audit-stamp comment names the R-6 refusal instead of the retired "total-rule-failure short-circuit" (comment only).
+- **Review in flight:** the build check, 5α, Fable and Codex, on `master...s145/task-14511`.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
