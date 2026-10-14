@@ -505,10 +505,18 @@ public sealed class PeriodCalculationService
         // absences list is unaffected (absences are day-keyed, they cannot cross midnight).
         var normalizedEntries = MidnightCrossingNormalizer.Normalize(entries);
 
-        // ADR-039 BLOCKER-3 (Reviewer Q3) — fail-closed guard against a dropped-hours payroll
-        // underpayment. If a boundary-LAST-day crossing's post-midnight half now lands after the
-        // period end, the per-segment filter below would silently drop it. Refuse loudly instead.
-        AssertNoDroppedBoundaryCrossing(normalizedEntries, plan);
+        // ADR-039 D5b/D8 (GAP-B) — the month-end night shift. A shift filed on the period's last day
+        // that runs past midnight yields a post-midnight half dated PeriodEnd + 1. That half belongs
+        // to the NEXT month (ADR-039 D3: post-midnight hours are the next calendar day's), and the
+        // next month reads it: its hours read starts at HoursReadStart(next.PeriodStart), the day
+        // before its opening Monday, which is never later than this.PeriodEnd. So the half is
+        // dropped HERE by the per-segment date filter below and counted THERE — no hours are lost
+        // and none are counted twice. The fail-closed guard that refused such a month
+        // (AssertNoDroppedBoundaryCrossing, ADR-039 BLOCKER-3) was interim until payroll widened its
+        // own read (QUAL-144; SPRINT-132); S145 TASK-14508 is that read, and the guard was retired
+        // with it (adjudicator ruling, 2026-10-14). Pinned by
+        // MonthEndCrossingTests.MonthEndNightShift_Wed30Sep2300To0200_SeptemberNotRefused_PostMidnightHoursReachOctober
+        // (mutation MU-43: restore the throw).
 
         // Resolve the rule classification set once per call. Used for per-rule MergeStrategy
         // dispatch below AND for the "rules attempted per segment" budget in the
@@ -2016,54 +2024,6 @@ public sealed class PeriodCalculationService
                 $"PeriodCalculationService.CalculateAsync invariant violated: last segment EndDate " +
                 $"({plan.Segments[^1].EndDate}) does not equal PeriodEnd ({plan.PeriodEnd}). " +
                 $"ManifestId={plan.ManifestId}.");
-    }
-
-    /// <summary>
-    /// ADR-039 BLOCKER-3 (Reviewer Q3) — fail-closed guard against a dropped-hours payroll
-    /// underpayment at the period's LAST day.
-    ///
-    /// <para>
-    /// After normalization, a midnight-crossing shift filed on the period's last day becomes a
-    /// pre-half dated <c>periodEnd</c> and a post-half dated <c>periodEnd+1</c>. The per-segment
-    /// date filter keeps only dates within the plan's segments (which end at <see cref="PlannedCalculation.PeriodEnd"/>),
-    /// so the post-half would be SILENTLY DROPPED — its post-midnight hours lost from this period,
-    /// and (unless the caller widens its read) never picked up by the next period either. That is a
-    /// payroll underpayment, so we throw rather than emit a short-paid calculation.
-    /// </para>
-    ///
-    /// <para>
-    /// Trips ONLY on the genuine case: a normalized half dated after <see cref="PlannedCalculation.PeriodEnd"/>
-    /// whose stint sibling is in-period. A fully-in-period crossing splits into two in-period halves
-    /// (no spill); a WorkTime-pre-split crossing is already two per-day rows (never a crossing, never
-    /// split); an OK-boundary crossing mid-period keeps both halves in-period (routed to their
-    /// segments). The REAL fix is the caller widening its entries read to <c>[periodStart-1, periodEnd]</c>
-    /// (ADR-039 GAP-B caller-contract) so the NEXT period receives this crossing on its first day —
-    /// this guard makes the gap LOUD until that lands.
-    /// </para>
-    /// </summary>
-    private static void AssertNoDroppedBoundaryCrossing(
-        IReadOnlyList<TimeEntry> normalizedEntries, PlannedCalculation plan)
-    {
-        foreach (var e in normalizedEntries)
-        {
-            if (e.Date <= plan.PeriodEnd)
-                continue; // in-period (or a lower-edge pre-half) — never a drop at the upper edge
-
-            // e is a post-half spilling past the period end. Confirm its stint sibling is in-period
-            // (i.e. this really is a split boundary-last-day crossing, not a stray out-of-range row).
-            var siblingInPeriod = e.SourceStintId is Guid id
-                && normalizedEntries.Any(o => o.SourceStintId == id && o.Date <= plan.PeriodEnd);
-            if (!siblingInPeriod)
-                continue;
-
-            throw new PlannerInvariantViolation(
-                $"PeriodCalculationService: a midnight-crossing time entry on the last day of the period " +
-                $"(employee {e.EmployeeId}, stint {e.SourceStintId}) has post-midnight hours dated " +
-                $"{e.Date:yyyy-MM-dd}, AFTER PeriodEnd {plan.PeriodEnd:yyyy-MM-dd}. The per-segment filter " +
-                $"would silently drop them — a payroll underpayment. Those hours belong to the NEXT period, " +
-                $"which MUST include this crossing: the caller must widen its entries read to " +
-                $"[periodStart-1, periodEnd] per ADR-039 (GAP-B). ManifestId={plan.ManifestId}.");
-        }
     }
 
     // ---------------------------------------------------------------
