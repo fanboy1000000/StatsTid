@@ -141,6 +141,34 @@ public sealed class AbsenceProjectionRepository
     {
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
+        return await QueryCurrentByDateRangeAsync(conn, tx: null, employeeId, start, end, ct);
+    }
+
+    /// <summary>
+    /// S145 / TASK-14508 fix-up 2 (QUAL-200) — the same CURRENT-rows date-range read as
+    /// <see cref="GetByEmployeeAndDateRangeAsync(string, DateOnly, DateOnly, CancellationToken)"/>, on the
+    /// caller's <paramref name="conn"/> + <paramref name="tx"/>. It exists so that payroll's hours read
+    /// can take the absence rows and the time-entry rows from ONE snapshot (one REPEATABLE READ
+    /// transaction): a Skema save writes both projections in one transaction, and two reads on two
+    /// connections could otherwise see it half-applied. Same SQL, same filter, same order (the one query
+    /// below serves both overloads). The caller owns the transaction; this method neither commits nor
+    /// rolls back. Precedent: <see cref="GetCurrentSkemaRowsAsync"/>.
+    /// </summary>
+    public Task<IReadOnlyList<AbsenceProjectionRow>> GetByEmployeeAndDateRangeAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, DateOnly start, DateOnly end, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(conn);
+        ArgumentNullException.ThrowIfNull(tx);
+        return QueryCurrentByDateRangeAsync(conn, tx, employeeId, start, end, ct);
+    }
+
+    // The ONE current-rows date-range query behind both GetByEmployeeAndDateRangeAsync overloads
+    // (a null tx only from the self-connecting overload, which runs it outside any transaction).
+    private static async Task<IReadOnlyList<AbsenceProjectionRow>> QueryCurrentByDateRangeAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx,
+        string employeeId, DateOnly start, DateOnly end, CancellationToken ct)
+    {
         await using var cmd = new NpgsqlCommand(
             @"SELECT event_id, employee_id, date, absence_type, hours, feriedage,
                      agreement_code, ok_version, occurred_at, actor_id, actor_role,
@@ -149,7 +177,7 @@ public sealed class AbsenceProjectionRepository
               WHERE employee_id = @employeeId AND date >= @start AND date <= @end
                 AND superseded_by_outbox_id IS NULL
               ORDER BY outbox_id ASC",
-            conn);
+            conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         cmd.Parameters.AddWithValue("start", start);
         cmd.Parameters.AddWithValue("end", end);
