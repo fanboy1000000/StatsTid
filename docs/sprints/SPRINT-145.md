@@ -1099,6 +1099,45 @@ Along the way, two silent-failure paths were closed:
   - a fixture whose profile row starts on the 1st while its window covers the opening week will refuse with `employment_record_gap`;
   - a caller position no longer reaches the engine, so stored fingerprints differ from pre-R-10 runs. No literal fingerprint is pinned.
 
+## Wave A.4 (dispatched 2026-10-14)
+
+**At TASK-14512's return (calculability checks, the dated key, Q7; not yet merged).**
+
+*Plain language:*
+1. **An agreement change in the middle of a week** (for example HK→AC on Tue 1 Sep, or on 29 Sep inside October's first week) refuses the month with a 422 on all four routes: "a week cannot be judged under two agreements". A new hire's first row is not a change, and a Monday change is fine.
+2. **Months in order.** October is calculated only once September is APPROVED, if October's first week holds September days the employee worked. Employee-signed or no row (a raw-exported month) is not enough, and the answer is a 409 naming September. June 2026 and hires on the 1st are exempt; the raw routes are unaffected.
+3. **Replay never runs these checks** and never consults the approval reader.
+4. **The export's wage-type key comes from the employee's dated record,** OK version, agreement and position alike, using the same lookup as the engine. The two can no longer disagree.
+5. **Recalculating a month that does not end on a Sunday** while the next is exported names the next month in the response and the audit row.
+
+The refusal order is the planner's 422 → the week-check 422 → the prior-month 409 → the rules, and no refusal writes anything.
+
+The detail:
+- **Branch** `s145/task-14512` at `bd63dd1`: twelve files, all authorized.
+- **Checks:** build 0 errors / 145 warnings · CA2100 115 · Unit 1427/1443 (16 expected "no approval reader" reds, cleared by 14512-T) · DemoSeed 170 · Regression non-Docker 128. In a throwaway run with the check satisfied, Unit was 1443/1443: the dated key and the restructure change no Unit-visible value.
+- **Deviations (accepted):**
+  - A4 resolves the dated record once, in planning, at every possible segment start, and evaluation reuses it. That is what guarantees engine and export agree.
+  - `BuildPlanForLegacyCallersAsync` keeps its name, because tests reach it by reflection.
+  - Do 7 uses `FOR SHARE`, since the export only reads the row.
+- **Do 7, the reopen-vs-export race, is closed.**
+  - Inside its transaction the export takes the previous month's row lock (`FOR SHARE`) before the current month's (`FOR UPDATE`) and rechecks APPROVED.
+  - If the reopen commits first, the export answers the 409. If the export commits first, the reopen sees the export record and writes the worklist row.
+  - There is no deadlock: the reopen takes one approval row after its advisory locks.
+  - The implementer says a deterministic Docker pin is feasible, so it was added to 14512-T's scope as `PriorMonthExportRaceTests`.
+- **Ruled by the Orchestrator (consistent with adjudicator R-3 at 14511): the replay interim.** Replay skips admission and never consults the approval reader. It still reads the window, the agreement history and the hours through `ReadReplayInputsUntilFrozenAsync`, since nothing frozen exists until TASK-14513. That task's brief now says it replaces that method; R42's sentinels (14515) prove it.
+- **For 14514's re-spawn 1:** its replay pin calls `ReplayAsync(Guid)`, which evaluates nothing until 14513, so it is to be retargeted (written into its brief). The other 9 of 14514's Unit pins passed against 14512 as built.
+- **14512-T was dispatched** with `MonthEndCrossingTests` added to its list, the race pin, and the H12–H14 tightening to the as-built Q7 member names.
+- **Owed at the merge** (Orchestrator):
+  - narrow 14509's comment in `ApprovalEndpoints.cs:1770-1774` now that Do 7 landed (comment only);
+  - `WtmNaturalKey.cs:8-11` still says "once per plan" (doc only);
+  - an ADR-020 D1 component 5 / D1.5 amendment (the dated key);
+  - an audit-projection catalog row (two new detail keys, `NextPeriodToRecalculateStart/End`);
+  - QUAL-150's planner half closed.
+- **Watch items for CA-4:**
+  - a Docker fact whose request body has a stale OK version, agreement or position now maps under the dated values;
+  - the raw-route guard now makes one profile-resolver read per month;
+  - under R43 as specified, an agreement row dated the day after a leaver's last day still counts as mid-week. That over-refuses, which fails safe.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
