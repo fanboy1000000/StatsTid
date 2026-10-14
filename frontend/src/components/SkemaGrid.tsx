@@ -535,14 +535,15 @@ export function SkemaGrid({
           }
         }
       }
-      if (editing && editing.raw !== editing.initial) {
+      // S145: no green "changed" flash for a refused negative (the display reverts).
+      if (editing && editing.raw !== editing.initial && negativeCell !== editing.key) {
         triggerFlash(editing.key)
       }
       setEditing(null)
       setNoBasisCell(null)
       setNegativeCell(null)
     },
-    [editing, triggerFlash, consumptionBasis, onCellChange],
+    [editing, triggerFlash, consumptionBasis, onCellChange, negativeCell],
   )
 
   const toggleGroup = useCallback((id: 'projects' | 'absences') => {

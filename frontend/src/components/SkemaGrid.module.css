@@ -300,6 +300,13 @@ td.workClickable {
   outline-offset: -2px;
 }
 
+/* S145/TASK-14516 - an invalid cell (negative refused, no-basis, over-cap) is visible
+   at the cell; declared after :focus so the error outline wins while typing. */
+.cellInput[aria-invalid='true'] {
+  outline: 2px solid var(--color-error);
+  outline-offset: -2px;
+}
+
 .cellDisplay {
   display: block;
   height: 30px;

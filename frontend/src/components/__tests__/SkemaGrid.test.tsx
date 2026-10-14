@@ -1010,6 +1010,30 @@ describe('SkemaGrid — negative entry is refused at entry (S145 TASK-14516)', (
     expect(onCellChange).not.toHaveBeenCalled()
   })
 
+  it('recovery: -2 then 2 → flag shown, then exactly one onCellChange(2), flag and alert gone', () => {
+    const onCellChange = vi.fn()
+    renderGrid({ onCellChange })
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-2' } })
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByRole('alert')).toBeTruthy()
+    fireEvent.change(input, { target: { value: '2' } })
+    expect(onCellChange).toHaveBeenCalledTimes(1)
+    expect(onCellChange).toHaveBeenCalledWith('DRIFT', '2026-03-02', 2)
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('blurring a refused negative does not flash the cell as "changed"', () => {
+    const { container } = renderGrid()
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-2' } })
+    fireEvent.blur(input)
+    expect(dayCell(rowByLabel(container, 'Drift'), 2).className).not.toContain('recent')
+  })
+
   it('the flag clears on blur', () => {
     renderGrid()
     const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
