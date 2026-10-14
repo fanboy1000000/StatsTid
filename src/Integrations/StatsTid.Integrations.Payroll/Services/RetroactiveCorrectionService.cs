@@ -1,3 +1,4 @@
+using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
@@ -116,6 +117,17 @@ public sealed class RetroactiveCorrectionService
     /// transaction opens, so no hours read ever runs under the export record's FOR UPDATE lock.
     /// Keeping an hours-taking overload would keep the defect class R14 removes: a caller could leave
     /// out a day and nobody would notice.
+    /// </para>
+    /// <para>
+    /// <strong>S145 / TASK-14512 — admission, and the next month.</strong> A recalculation is a forward
+    /// calculation, so <see cref="PeriodCalculationService"/>'s admission runs in full: the planner's
+    /// split refusal, the week check (<see cref="PeriodNotCalculableException"/>) and the months-in-order
+    /// check (<see cref="PriorMonthNotApprovedException"/>) all propagate from the calculation call below,
+    /// BEFORE the correction transaction opens, so a refused correction writes nothing (no baseline change,
+    /// event, audit row or idempotency marker). And Q7 (b) (R37): when the corrected month does not end on
+    /// a Sunday and the next month has an export record, the result, the event and the audit row name the
+    /// next month's pay period (<see cref="RetroactiveCorrectionResult.NextPeriodToRecalculateStart"/> /
+    /// <c>…End</c>), because the next month already paid this month's closing week.
     /// </para>
     /// </summary>
     public async Task<RetroactiveCorrectionResult> RecalculateAsync(
@@ -262,6 +274,7 @@ public sealed class RetroactiveCorrectionService
         // NEVER be swallowed into a phantom Success=true (which would hand the caller correction lines
         // while leaving the baseline un-advanced → the exact B3 double-count this sprint prevents).
         IReadOnlyList<CorrectionExportLine> correctionLines;
+        (DateOnly Start, DateOnly End)? nextPeriod;
         await using (var conn = _connectionFactory.Create())
         {
             await conn.OpenAsync(ct);
@@ -286,6 +299,12 @@ public sealed class RetroactiveCorrectionService
                 profile, lockedBaseline, newResult.ExportLines, periodStart, periodEnd,
                 flexDelta, okTransitionDate, canonicalPreviousOkVersion);
 
+            // S145 TASK-14512 — Q7 (b), ruling R37: does this correction leave the NEXT month stale?
+            // A plain read inside this tx (READ COMMITTED: it sees every export committed before it runs);
+            // it takes no lock and writes nothing to the next month — the response, the event and the
+            // audit row only name it.
+            nextPeriod = await NextPeriodToRecalculateAsync(conn, tx, profile.EmployeeId, corrYear, corrMonth, ct);
+
             // Emit RetroactiveCorrectionRequested (MANDATORY — see BLOCKER 2 above).
             // Persist the canonical (date-resolved) OK versions and the profile Position so the audit
             // trail reflects what actually ran, not what the caller sent. ManifestId joins this event
@@ -307,7 +326,11 @@ public sealed class RetroactiveCorrectionService
                 IdempotencyToken = idempotencyToken,
                 PreviousOkVersion = canonicalPreviousOkVersion,
                 Position = profile.Position,
-                ManifestId = manifestId
+                ManifestId = manifestId,
+                // S145 TASK-14512 — Q7 (b), R37: the next month's pay period, when it must be recalculated
+                // too (null otherwise). The audit mapper carries both into the audit row's details.
+                NextPeriodToRecalculateStart = nextPeriod?.Start,
+                NextPeriodToRecalculateEnd = nextPeriod?.End,
             };
 
             var streamId = $"retro-correction-{profile.EmployeeId}-{periodStart:yyyy-MM-dd}";
@@ -396,8 +419,57 @@ public sealed class RetroactiveCorrectionService
             PeriodStart = periodStart,
             PeriodEnd = periodEnd,
             CorrectionLines = correctionLines,
-            Success = true
+            Success = true,
+            NextPeriodToRecalculateStart = nextPeriod?.Start,
+            NextPeriodToRecalculateEnd = nextPeriod?.End,
         };
+    }
+
+    /// <summary>
+    /// S145 / TASK-14512 — Q7 (b), owner ruling; R37. The pay period of the month AFTER the corrected one,
+    /// when this correction can have changed a week that month already paid; otherwise <c>null</c>.
+    ///
+    /// <para>
+    /// <b>Why (plain language).</b> A week that crosses a month boundary is settled — and its overtime paid
+    /// — by the month holding its Sunday (owner ruling Q3 = F1). So when September does not end on a
+    /// Sunday, its last week (Monday 28 September – Sunday 4 October in 2026) was paid with October.
+    /// Correcting September corrects September only (ADR-034 D5), so October's figure for that shared week
+    /// may now be stale. The system cannot correct October by itself; it tells the admin to recalculate it
+    /// too (the HR follow-up HRP-003 points there).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The rule (R37).</b> Name M+1 if and only if M's last day is not a Sunday AND a
+    /// <c>payroll_export_records</c> row exists for M+1 (there is nothing to go stale in a month never
+    /// exported). M is the calendar month of the period start, as for the baseline. For a leaver whose last
+    /// week was settled inside M, naming M+1 over-names: it is advisory and harmless, because nothing is
+    /// written to M+1 — the response, the event and the audit row only point at it.
+    /// </para>
+    /// </summary>
+    private static async Task<(DateOnly Start, DateOnly End)?> NextPeriodToRecalculateAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, int year, int month, CancellationToken ct)
+    {
+        var monthStart = new DateOnly(year, month, 1);
+        var monthEnd = monthStart.AddMonths(1).AddDays(-1);
+
+        // The closing week ends inside M (M's last day is a Sunday): M settled it, M+1 paid none of it.
+        if (WeeklyContext.WeekEnd(monthEnd) == monthEnd)
+            return null;
+
+        var nextStart = monthStart.AddMonths(1);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM payroll_export_records
+                WHERE employee_id = @employeeId AND year = @year AND month = @month)
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("year", nextStart.Year);
+        cmd.Parameters.AddWithValue("month", nextStart.Month);
+        var nextExported = await cmd.ExecuteScalarAsync(ct) is true;
+
+        return nextExported ? (nextStart, nextStart.AddMonths(1).AddDays(-1)) : null;
     }
 
     /// <summary>
@@ -506,6 +578,21 @@ public sealed class RetroactiveCorrectionResult
     public required IReadOnlyList<CorrectionExportLine> CorrectionLines { get; init; }
     public required bool Success { get; init; }
     public string? ErrorMessage { get; init; }
+
+    /// <summary>
+    /// S145 / TASK-14512 — Q7 (b), R37: the first day of the NEXT month's pay period when this correction
+    /// can have changed a week that month already paid (the corrected month does not end on a Sunday, and
+    /// the next month has a payroll export record) — the admin should recalculate that month too.
+    /// <c>null</c> otherwise. A pay-period date, never an employment date. Serialized as
+    /// <c>nextPeriodToRecalculateStart</c>.
+    /// </summary>
+    public DateOnly? NextPeriodToRecalculateStart { get; init; }
+
+    /// <summary>
+    /// S145 / TASK-14512 — Q7 (b), R37: the last day of the next month's pay period; set together with
+    /// <see cref="NextPeriodToRecalculateStart"/>. Serialized as <c>nextPeriodToRecalculateEnd</c>.
+    /// </summary>
+    public DateOnly? NextPeriodToRecalculateEnd { get; init; }
 }
 
 /// <summary>

@@ -333,7 +333,9 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
             employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
             employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
             // S145 R14: the in-memory hours reader (payroll reads its own hours).
-            hoursReader: hoursReader);
+            hoursReader: hoursReader,
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
     }
 
     /// <summary>The S90 correction-service shape over the supplied (window-hydrated) PCS.</summary>

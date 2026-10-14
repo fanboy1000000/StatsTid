@@ -92,5 +92,7 @@ public sealed class PcsConstructionCouplingTests
             localAgreementProfileRepo: null,
             profileResolver: profileResolver,
             employmentWindowResolver: windowResolver,
-            employeeProfileRepo: null);
+            employeeProfileRepo: null,
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
 }

@@ -553,10 +553,10 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     /// <i>Plain language:</i> September's last week (28 September – 4 October) was settled — and its
     /// overtime paid — with October. Recalculating September corrects September alone (ADR-034 D5), so
     /// October's figure for that shared week can go stale. The system cannot fix October itself, so it
-    /// tells the admin: "recalculate October too". The member names that carry the October period are
-    /// the implementation's to choose (the brief names none; the event's are
-    /// <c>NextPeriodToRecalculateStart/End</c>), so this fact asserts the VALUES: October's first and
-    /// last day appear in the response and in the audit details, and nowhere in today's body.
+    /// tells the admin: "recalculate October too". S145 (TASK-14512-T tightening): the October period is
+    /// carried in the members <c>nextPeriodToRecalculateStart</c> / <c>nextPeriodToRecalculateEnd</c> -
+    /// the same two names on the response, the event (<c>NextPeriodToRecalculateStart/End</c>) and the
+    /// audit details - and this fact asserts those members hold 2026-10-01 and 2026-10-31 exactly.
     /// </para>
     ///
     /// Setup: August is APPROVED (September's first week reaches 31 August, R26's host-fact rule), so
@@ -565,7 +565,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified):
     /// (1) before TASK-14512 the response and the audit row carry only September's dates; the
-    /// assertion that October's first day is among the response's date values trips. (2) mutation
+    /// <c>nextPeriodToRecalculateStart</c> lookup on the response trips (the member is absent). (2) mutation
     /// MD-28 — the Q7 (b) block removed from <c>RetroactiveCorrectionService</c> → the same.
     /// (3) mutation MD-21 — the reader registration removed → September's opening week reaches August,
     /// the never-silent throw escapes before the response.
@@ -590,17 +590,16 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         Assert.Equal("2026-09-01", response.RootElement.GetProperty("periodStart").GetString());
         Assert.Equal("2026-09-30", response.RootElement.GetProperty("periodEnd").GetString());
 
-        var responseDates = StringLeaves(response.RootElement);
-        // October's first and last day, wherever the implementation carries them.
-        Assert.Contains("2026-10-01", responseDates);
-        Assert.Contains("2026-10-31", responseDates);
+        // S145 R37 / Q7 (b): October's pay period, in the members TASK-14512 names (the same two names
+        // on the response, the event and the audit details) — not merely "somewhere among the strings".
+        Assert.Equal("2026-10-01", response.RootElement.GetProperty("nextPeriodToRecalculateStart").GetString());
+        Assert.Equal("2026-10-31", response.RootElement.GetProperty("nextPeriodToRecalculateEnd").GetString());
 
         var auditRow = Assert.Single(await ReadCorrectionAuditDetailsAsync(employeeId));
         using var audit = JsonDocument.Parse(auditRow);
         Assert.Equal("2026-09-01", audit.RootElement.GetProperty("originalPeriodStart").GetString());
-        var auditDates = StringLeaves(audit.RootElement);
-        Assert.Contains("2026-10-01", auditDates);
-        Assert.Contains("2026-10-31", auditDates);
+        Assert.Equal("2026-10-01", audit.RootElement.GetProperty("nextPeriodToRecalculateStart").GetString());
+        Assert.Equal("2026-10-31", audit.RootElement.GetProperty("nextPeriodToRecalculateEnd").GetString());
 
         // Q7 (b) only POINTS at October; it writes nothing there.
         Assert.Equal(octoberLinesBefore, await ReadCurrentEffectiveLinesAsync(employeeId, 2026, 10));
@@ -802,12 +801,21 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         Assert.True(status == HttpStatusCode.OK, $"expected 200, got {(int)status}: {json}");
         using var response = JsonDocument.Parse(json);
         Assert.True(response.RootElement.GetProperty("success").GetBoolean(), json);
+        // S145 R37 / Q7 (b): the named members are null or absent on the response, and LEFT OUT of the
+        // audit details when null (AuditMapperJsonOptions writes no nulls). The value-level check stays
+        // as the second net: no next-month date appears anywhere else either.
+        foreach (var member in new[] { "nextPeriodToRecalculateStart", "nextPeriodToRecalculateEnd" })
+            Assert.True(
+                !response.RootElement.TryGetProperty(member, out var named) || named.ValueKind == JsonValueKind.Null,
+                $"the response must not name a next period ({member}): {json}");
         var responseDates = StringLeaves(response.RootElement);
         Assert.DoesNotContain(nextPeriodStart, responseDates);
         Assert.DoesNotContain(nextPeriodEnd, responseDates);
 
         var auditRow = Assert.Single(await ReadCorrectionAuditDetailsAsync(employeeId));
         using var audit = JsonDocument.Parse(auditRow);
+        Assert.False(audit.RootElement.TryGetProperty("nextPeriodToRecalculateStart", out _), auditRow);
+        Assert.False(audit.RootElement.TryGetProperty("nextPeriodToRecalculateEnd", out _), auditRow);
         var auditDates = StringLeaves(audit.RootElement);
         Assert.DoesNotContain(nextPeriodStart, auditDates);
         Assert.DoesNotContain(nextPeriodEnd, auditDates);

@@ -47,11 +47,15 @@ public static class PeriodPlanner
     /// <param name="options">Planner call-site options (e.g., upstream alignment).</param>
     /// <param name="enrollment">ADR-020 D1: optional non-rule snapshot enrollment. When
     /// non-null AND <paramref name="profile"/> is non-null, registered hydrators run per
-    /// segment and their results merge into <see cref="SegmentSnapshot.Values"/>. Null
-    /// for test-direct call-sites that construct <see cref="BoundarySources"/> directly.</param>
+    /// EMPLOYED segment, with that segment's start date (S145 / TASK-14512, A4), and their
+    /// results merge into <see cref="SegmentSnapshot.Values"/>; a NOT_EMPLOYED segment runs
+    /// none. Null for test-direct call-sites that construct <see cref="BoundarySources"/>
+    /// directly.</param>
     /// <param name="profile">ADR-020 D1: optional <see cref="EmploymentProfile"/> fed to
-    /// each enrollment hydrator. Same profile is re-used across all segments (D1.5
-    /// uniform-per-plan binding). Null skips hydrator invocation silently.</param>
+    /// each enrollment hydrator together with the segment start. The same profile object is
+    /// passed for every segment; a value that varies by date comes from the dated history the
+    /// caller's hydrator closes over, not from this profile. Null skips hydrator invocation
+    /// silently.</param>
     /// <param name="employmentWindows">ADR-040 D5 (S137): the employee's employment
     /// window(s), resolver-supplied by the caller (the payroll host reads them via
     /// <c>IEmploymentWindowResolver.GetWindowsAsync</c> — spells-proof list shape), used
@@ -156,45 +160,48 @@ public static class PeriodPlanner
         // --- 4. Gather snapshots per segment ---
         // If any rule in ruleSet has a SnapshotContract, OR a non-rule enrollment is
         // active with a non-null profile (ADR-020 D1), every segment carries a snapshot;
-        // otherwise Snapshot is null. Per ADR-016 D5b: a single snapshot per segment is
-        // sufficient because non-dated sources are time-invariant within a calculation
-        // run; the segment dimension is there for symmetry with future versioned-history
-        // work (Phase 4). ADR-020 D1.5: enrollment hydrators run uniformly per plan
-        // (same profile reused across segments today; per-segment evolution is a
-        // forward-compat seam, not a today binding).
+        // otherwise Snapshot is null. Per ADR-016 D5b the rule-declared non-dated source
+        // values are time-invariant within a calculation run, so every segment carries the
+        // same ones.
+        //
+        // S145 / TASK-14512 (refinement A4, QUAL-150; amends ADR-020 D1 component 5 / D1.5):
+        // the ENROLLMENT values are per segment and dated. Each EMPLOYED segment runs every
+        // hydrator with its OWN start date, so a caller that handed in the employee's dated
+        // history gets the value in force on that day — for the wage-type key, the dated
+        // record's OK version, agreement code and position at the segment's start, never the
+        // request body's. Before S145 the hydrators ran once per plan against the request's
+        // profile and every segment shared that one value, so a split month's second segment
+        // carried the first segment's key. The planner stays pure: the histories are data,
+        // closed over by the hydrator. A NOT_EMPLOYED segment runs no hydrator and carries no
+        // enrollment key: it maps nothing (ADR-040 D5 — it is skipped at evaluation) and an
+        // employment record need not exist on its days. The snapshot SHAPE is unchanged, so the
+        // manifest format is too; a windowless (all-EMPLOYED) plan whose key is unchanged
+        // serializes byte for byte as before (EMPLOYED is an absent key — see PlannedSegment).
         var anyContract = HasAnySnapshotContract(ruleSet, enrollment);
         var enrollmentActive = enrollment is not null && profile is not null;
-        SegmentSnapshot? sharedSnapshot = null;
-        if (anyContract || enrollmentActive)
-        {
-            // Build a merged values dictionary so the externally-visible Values stays an
-            // IReadOnlyDictionary; rule-declared non-dated source values land first,
-            // then enrollment-injected entries layer on top at well-known keys (e.g.
-            // S29 uses "WtmNaturalKey"). Rule-declared keys do not overlap with
-            // enrollment keys by design — rules don't declare enrollment contract keys.
-            var merged = new Dictionary<string, object?>(sources.NonDatedSourceValues);
-            if (enrollmentActive)
-            {
-                foreach (var (contractKey, hydrator) in enrollment!.GetEnrollments())
-                {
-                    merged[contractKey] = hydrator(profile!);
-                }
-            }
-            sharedSnapshot = new SegmentSnapshot(merged);
-        }
-
-        // ADR-040 D5 typed segments: NOT_EMPLOYED iff the segment lies outside every
-        // supplied employment window. NOT_EMPLOYED segments keep the uniform
-        // sharedSnapshot like every other segment — they are SKIPPED at evaluation time,
-        // not stripped here: the snapshot is a plan-construction input artifact (hydrated
-        // once from caller-supplied inputs), not a per-segment resolver read, so keeping
-        // it preserves manifest replay/rebuild semantics (every segment deserializes
-        // identically) and changes no bytes for windowless plans (EMPLOYED serializes as
-        // an absent key — see PlannedSegment).
         var segments = new List<PlannedSegment>(ranges.Count);
         foreach (var r in ranges)
         {
-            segments.Add(new PlannedSegment(r.Start, r.End, r.Cause, sharedSnapshot, r.Status));
+            SegmentSnapshot? snapshot = null;
+            if (anyContract || enrollmentActive)
+            {
+                // Build a merged values dictionary so the externally-visible Values stays an
+                // IReadOnlyDictionary; rule-declared non-dated source values land first,
+                // then enrollment-injected entries layer on top at well-known keys (e.g.
+                // S29 uses "WtmNaturalKey"). Rule-declared keys do not overlap with
+                // enrollment keys by design — rules don't declare enrollment contract keys.
+                var merged = new Dictionary<string, object?>(sources.NonDatedSourceValues);
+                if (enrollmentActive && r.Status == EmploymentWindowStatus.EMPLOYED)
+                {
+                    foreach (var (contractKey, hydrator) in enrollment!.GetEnrollments())
+                    {
+                        merged[contractKey] = hydrator(profile!, r.Start);
+                    }
+                }
+                snapshot = new SegmentSnapshot(merged);
+            }
+
+            segments.Add(new PlannedSegment(r.Start, r.End, r.Cause, snapshot, r.Status));
         }
 
         // --- 5. Construct PlannedCalculation via the internal ctor (geometric invariants here) ---

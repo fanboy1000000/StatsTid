@@ -275,7 +275,9 @@ internal static class TestFixtures
             // reader, so BuildPcs always supplies one. Default = an EMPTY in-memory reader (enough for
             // the tests that only plan, or replay without needing hours); a test that calculates
             // passes a reader holding the hours it used to hand to the call as arguments.
-            hoursReader: hoursReader ?? new InMemoryRecordedHoursReader());
+            hoursReader: hoursReader ?? new InMemoryRecordedHoursReader(),
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
     }
 
     /// <summary>
@@ -449,6 +451,18 @@ internal static class TestFixtures
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json"),
         };
+    }
+
+    /// <summary>
+    /// S145 R26: the fake prior-month approval reader for every PCS-level fact that is not ABOUT the
+    /// prior-month check — it answers APPROVED for any period. (A fact about the check, a host fact,
+    /// <c>WeeklyPayrollTests</c> and the smoke test use the real adapter with M−1 seeded APPROVED.)
+    /// </summary>
+    public sealed class AlwaysApprovedPriorPeriods : IPriorPeriodApprovalReader
+    {
+        public Task<string?> GetApprovalStatusAsync(
+            string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct)
+            => Task.FromResult<string?>("APPROVED");
     }
 
     public sealed class StubHandler : HttpMessageHandler

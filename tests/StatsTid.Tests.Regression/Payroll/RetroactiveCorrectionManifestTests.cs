@@ -496,7 +496,9 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
             NullLogger<PeriodCalculationService>.Instance,
             // S145 R14/R25: PCS refuses to calculate without a reader. These calls passed NO hours
             // before (entries: [], absences: []), so the reader is empty — same meaning.
-            hoursReader: new InMemoryRecordedHoursReader());
+            hoursReader: new InMemoryRecordedHoursReader(),
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new Segmentation.TestFixtures.AlwaysApprovedPriorPeriods());
         return new RetroactiveCorrectionService(
             calc,
             factory,

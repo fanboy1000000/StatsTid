@@ -73,6 +73,10 @@ public sealed class PayrollCalcAuditSmokeTests
         // ── Seed the calc path's prerequisites (idempotent) ──
         await EnsureEmployeeProvisionedAsync(db, EmployeeId);
         await EnsureApprovedPeriodAsync(db, EmployeeId, OrgId, periodStart, periodEnd);
+        // S145 R26: March 2026 starts on a Sunday, so its opening week (Mon 23 Feb - Sun 1 Mar) holds
+        // February days; payroll calculates March only once February is APPROVED (months in order),
+        // and this smoke test runs the real adapter, so February is seeded APPROVED.
+        await EnsureApprovedPeriodAsync(db, EmployeeId, OrgId, new DateOnly(2026, 2, 1), new DateOnly(2026, 2, 28));
 
         // High-water mark BEFORE the call, DB-side, so THIS run's manifest is identifiable on a
         // lived-in database where earlier runs left their own segment_manifests rows.

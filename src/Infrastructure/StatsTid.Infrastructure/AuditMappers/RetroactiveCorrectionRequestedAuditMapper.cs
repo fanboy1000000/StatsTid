@@ -21,6 +21,12 @@ public sealed class RetroactiveCorrectionRequestedAuditMapper : IAuditProjection
             correctionLineCount = @event.CorrectionLineCount,
             totalDifferenceHours = @event.TotalDifferenceHours,
             manifestId = @event.ManifestId,
+            // S145 TASK-14512 — Q7 (b), R37: the next month's pay period when this correction changed a
+            // week that month already paid (the admin must recalculate it too). Null otherwise, and then
+            // omitted (AuditMapperJsonOptions writes no nulls), so the details of every correction that
+            // names nothing are byte-identical to before.
+            nextPeriodToRecalculateStart = @event.NextPeriodToRecalculateStart,
+            nextPeriodToRecalculateEnd = @event.NextPeriodToRecalculateEnd,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,

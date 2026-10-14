@@ -164,7 +164,9 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: null,
-            localAgreementProfileRepo: profileRepo);
+            localAgreementProfileRepo: profileRepo,
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
     }
 
     private static async Task<PlannedCalculation> InvokeBuildPlanAsync(

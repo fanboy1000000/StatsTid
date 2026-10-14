@@ -128,7 +128,9 @@ public sealed class RuleEngineFailureLoggingTests
             eventStore: null!,
             connectionFactory: null!,
             configuration,
-            logger);
+            logger,
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new EmploymentWindowPcsFixture.AlwaysApprovedPriorPeriods());
     }
 
     private sealed class FixedResponseHandler : HttpMessageHandler

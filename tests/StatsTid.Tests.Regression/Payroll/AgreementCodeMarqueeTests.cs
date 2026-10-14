@@ -220,7 +220,9 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
             // the seeded users row's unbounded window → every segment EMPLOYED, as before.
             employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
             // S145 R14: the in-memory hours reader (payroll reads its own hours).
-            hoursReader: hoursReader);
+            hoursReader: hoursReader,
+            // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
     }
 
     /// <summary>
