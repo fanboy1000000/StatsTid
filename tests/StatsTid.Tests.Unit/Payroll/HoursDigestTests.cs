@@ -121,4 +121,105 @@ public sealed class HoursDigestTests
             HoursDigest.ComputeAbsencesDigest(twoRows),
             HoursDigest.ComputeAbsencesDigest(oneRow));
     }
+
+    // ── R-23: every field of a digest line is covered ───────────────────────────────
+
+    /// <summary>
+    /// S145 R-23 (guard, green today and after the fix-up): changing ONLY one field of a time-entry row changes the
+    /// entries digest. The digest proves "these rows are unchanged"; a field left out of the line would let that
+    /// field change unnoticed. One case per line field of refinement A7
+    /// (<c>EventId|Date|StartTime|EndTime|Hours|ActivityType|VoluntaryUnsocialHours</c>).
+    ///
+    /// <para>
+    /// <b>Mutation per case</b> (each makes exactly its case fail): drop that field from <c>EntryLine</c> in
+    /// <see cref="HoursDigest"/>. The assertion tripped is the <c>NotEqual</c> of the two digests (they become
+    /// equal when the field is not hashed). Note for <c>EventId</c>: with one row, dropping the id from the line
+    /// does not change the sort either, so the case isolates the id's own presence in the line.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("EventId")]
+    [InlineData("Date")]
+    [InlineData("StartTime")]
+    [InlineData("EndTime")]
+    [InlineData("Hours")]
+    [InlineData("ActivityType")]
+    [InlineData("VoluntaryUnsocialHours")]
+    public void EntriesDigest_ChangingOnlyOneField_ChangesTheDigest(string field)
+    {
+        // S145 R-23:
+        var baseline = EntryWith(G1, Day, Start, End, Hours, "X", true);
+        var changed = field switch
+        {
+            "EventId" => EntryWith(G2, Day, Start, End, Hours, "X", true),
+            "Date" => EntryWith(G1, Day.AddDays(1), Start, End, Hours, "X", true),
+            "StartTime" => EntryWith(G1, Day, new TimeOnly(8, 30, 0), End, Hours, "X", true),
+            "EndTime" => EntryWith(G1, Day, Start, new TimeOnly(16, 0, 0), Hours, "X", true),
+            "Hours" => EntryWith(G1, Day, Start, End, 7.5m, "X", true),
+            "ActivityType" => EntryWith(G1, Day, Start, End, Hours, "Y", true),
+            "VoluntaryUnsocialHours" => EntryWith(G1, Day, Start, End, Hours, "X", false),
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+
+        Assert.NotEqual(
+            HoursDigest.ComputeEntriesDigest(new[] { baseline }),
+            HoursDigest.ComputeEntriesDigest(new[] { changed }));
+    }
+
+    /// <summary>
+    /// S145 R-23 (guard): the same for an absence row, one case per line field
+    /// (<c>EventId|Date|AbsenceType|Hours</c>). Mutation per case: drop that field from <c>AbsenceLine</c>.
+    /// </summary>
+    [Theory]
+    [InlineData("EventId")]
+    [InlineData("Date")]
+    [InlineData("AbsenceType")]
+    [InlineData("Hours")]
+    public void AbsencesDigest_ChangingOnlyOneField_ChangesTheDigest(string field)
+    {
+        // S145 R-23:
+        var baseline = AbsenceWith(G1, Day, "X", Hours);
+        var changed = field switch
+        {
+            "EventId" => AbsenceWith(G2, Day, "X", Hours),
+            "Date" => AbsenceWith(G1, Day.AddDays(1), "X", Hours),
+            "AbsenceType" => AbsenceWith(G1, Day, "Y", Hours),
+            "Hours" => AbsenceWith(G1, Day, "X", 7.5m),
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+
+        Assert.NotEqual(
+            HoursDigest.ComputeAbsencesDigest(new[] { baseline }),
+            HoursDigest.ComputeAbsencesDigest(new[] { changed }));
+    }
+
+    private static TimeEntryProjectionRow EntryWith(
+        Guid id, DateOnly date, TimeOnly start, TimeOnly end, decimal hours, string? activityType, bool voluntary) => new()
+    {
+        EventId = id,
+        EmployeeId = Emp,
+        Date = date,
+        StartTime = start,
+        EndTime = end,
+        Hours = hours,
+        ActivityType = activityType,
+        VoluntaryUnsocialHours = voluntary,
+        AgreementCode = "HK",
+        OkVersion = "OK26",
+        OccurredAt = new DateTime(2026, 10, 5, 8, 0, 0, DateTimeKind.Utc),
+        OutboxId = 1,
+    };
+
+    private static AbsenceProjectionRow AbsenceWith(Guid id, DateOnly date, string absenceType, decimal hours) => new()
+    {
+        EventId = id,
+        EmployeeId = Emp,
+        Date = date,
+        AbsenceType = absenceType,
+        Hours = hours,
+        AgreementCode = "HK",
+        OkVersion = "OK26",
+        OccurredAt = new DateTime(2026, 10, 5, 8, 0, 0, DateTimeKind.Utc),
+        OutboxId = 1,
+    };
 }

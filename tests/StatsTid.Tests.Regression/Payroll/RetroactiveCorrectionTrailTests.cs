@@ -131,6 +131,97 @@ public sealed class RetroactiveCorrectionTrailTests : IAsyncLifetime
         Assert.Equal("DEPARTMENT_HEAD", doc.RootElement.GetProperty("position").GetString());
     }
 
+    /// <summary>
+    /// <b>R-19.</b> A correction for a month in which the employee has NO employed day (the employment window
+    /// ended before the month) still writes a manifest, and the <c>RetroactiveCorrectionRequested</c> event must
+    /// LINK it: its <c>manifestId</c> is the id of the <c>segment_manifests</c> row written for that employee and
+    /// period, never the empty GUID.
+    ///
+    /// <para>
+    /// <b>Red conditions</b> (Docker, so argued, not run locally). On <c>b25bf24</c>
+    /// <c>RetroactiveCorrectionService.RecalculateAsync</c> derives the event's manifest id from
+    /// <c>result.RuleResults.FirstOrDefault()?.ManifestId</c>; a month with no employed segment produces no rule
+    /// results, so the event is written with <c>Guid.Empty</c> and the assertion
+    /// <c>Assert.NotEqual(Guid.Empty, linked)</c> fails (Expected: not 00000000-0000-0000-0000-000000000000).
+    /// The production mutation that reproduces it after the fix-up is "derive the event's manifest id from the
+    /// first rule result again instead of <c>outcome.ManifestId</c>"; it trips the same assertion.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Recalculate_NoEmployedSegment_EventLinksPersistedManifest()
+    {
+        // S145 R-19: the employee's window ENDED before July (last employed day 30 June).
+        await using (var conn = _harness.Factory.Create())
+        {
+            await conn.OpenAsync();
+            await RegressionSeed.SeedEmployeeAsync(
+                conn,
+                employeeId: EmployeeId,
+                orgId: OrgId,
+                agreementCode: "AC",
+                okVersion: "OK26",
+                position: "DEPARTMENT_HEAD");
+            await using var window = new NpgsqlCommand(
+                "UPDATE users SET employment_start_date = NULL, employment_end_date = @e WHERE user_id = @id", conn);
+            window.Parameters.AddWithValue("e", new DateTime(Year, Month - 1, 30));
+            window.Parameters.AddWithValue("id", EmployeeId);
+            Assert.Equal(1, await window.ExecuteNonQueryAsync());
+        }
+
+        var periodStart = new DateOnly(Year, Month, 1);
+        var periodEnd = new DateOnly(Year, Month, DateTime.DaysInMonth(Year, Month));
+
+        await SeedExportRecordAsync(new PayrollExportLine
+        {
+            EmployeeId = EmployeeId,
+            WageType = "SLS_0110",
+            Hours = 10m,
+            Amount = 1000m,
+            PeriodStart = periodStart,
+            PeriodEnd = periodEnd,
+            OkVersion = "OK26",
+            SourceTimeType = "NORMAL_HOURS",
+        });
+
+        var service = BuildCorrectionService(
+            Segmentation.TestFixtures.WeekdayEntriesForPeriod(EmployeeId, periodStart, periodEnd));
+
+        var body = new EmploymentProfile
+        {
+            EmployeeId = EmployeeId,
+            AgreementCode = "AC",
+            OkVersion = "OK26",
+            EmploymentCategory = "FULL_TIME",
+            Position = "DEPARTMENT_HEAD",
+            OrgId = OrgId,
+        };
+
+        var result = await service.RecalculateAsync(
+            body, periodStart, periodEnd,
+            previousFlexBalance: 0m,
+            reason: "R-19: the event links the manifest it wrote",
+            actorId: "admin-r19");
+        Assert.True(result.Success, result.ErrorMessage);
+
+        var payload = await ReadCorrectionEventPayloadAsync();
+        using var doc = JsonDocument.Parse(payload);
+        var linked = doc.RootElement.GetProperty("manifestId").GetGuid();
+        Assert.NotEqual(Guid.Empty, linked);
+
+        await using var read = new NpgsqlConnection(_harness.ConnectionString);
+        await read.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT manifest_id FROM segment_manifests
+            WHERE employee_id = @emp AND period_start = @ps AND period_end = @pe
+            """, read);
+        cmd.Parameters.AddWithValue("emp", EmployeeId);
+        cmd.Parameters.AddWithValue("ps", new DateTime(Year, Month, 1));
+        cmd.Parameters.AddWithValue("pe", new DateTime(Year, Month, DateTime.DaysInMonth(Year, Month)));
+        var persisted = Assert.IsType<Guid>(await cmd.ExecuteScalarAsync());
+        Assert.Equal(persisted, linked);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>

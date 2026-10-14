@@ -106,7 +106,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
 
         // S145 R14: a hand-built manifest has no frozen inputs (it is a pre-S145 shape), so the replay
         // loads it successfully and then refuses by name. The parse still succeeds (a parse failure
-        // would show as "not found"), so the fact keeps its meaning.
+        // would fail as a damaged row; S145 R-17), so the fact keeps its meaning.
         var refused = await Assert.ThrowsAsync<ReplayRefusedException>(() => pcs.ReplayAsync(manifestId));
 
         Assert.Equal("replay-manifest-without-frozen-inputs", refused.Reason);
@@ -136,7 +136,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
         // Pre-fix baseline: the load returned null and this threw "not found". Now the load succeeds.
         // S145 R14: a hand-built manifest has no frozen inputs (it is a pre-S145 shape), so the replay
         // loads it successfully and then refuses by name. The parse still succeeds (a parse failure
-        // would show as "not found"), so the fact keeps its meaning.
+        // would fail as a damaged row; S145 R-17), so the fact keeps its meaning.
         var refused = await Assert.ThrowsAsync<ReplayRefusedException>(() => pcs.ReplayAsync(manifestId));
 
         Assert.Equal("replay-manifest-without-frozen-inputs", refused.Reason);
@@ -287,7 +287,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
 
         // (c) The real reader replays the rebuilt (omitted-key, null-snapshot) row end-to-end.
         // S145 R14: a hand-built (event-only) manifest has no frozen inputs: refused by name after a
-        // successful load (the omitted-key parse still works - a parse failure would be "not found").
+        // successful load (the omitted-key parse still works - a parse failure would fail as a damaged row; S145 R-17).
         var refused = await Assert.ThrowsAsync<ReplayRefusedException>(() => pcs.ReplayAsync(manifestId));
         Assert.Equal("replay-manifest-without-frozen-inputs", refused.Reason);
         Assert.Equal(manifestId, refused.ManifestId);

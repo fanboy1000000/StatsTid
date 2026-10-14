@@ -325,6 +325,8 @@ public sealed class EmploymentWindowSegmentSkipTests
         // The engine really ran under the dated agreement (so "AC" is what the period was evaluated under).
         var pieces = Assert.Single(engine.TimelineCalls).Pieces!;
         Assert.NotEmpty(pieces);
+        // S145 R-24: every piece the engine was sent carries the dated agreement, not the body's "HK".
+        Assert.All(pieces, p => Assert.Equal("AC", p.AgreementCode));
 
         Assert.Equal("AC", outcome.Result.AgreementCode);
         // The legacy completed event reports the same single derivation.
