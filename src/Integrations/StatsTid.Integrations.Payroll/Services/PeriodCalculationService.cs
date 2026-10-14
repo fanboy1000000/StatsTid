@@ -52,7 +52,11 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <see cref="PeriodNotCalculableException"/>), the months-in-order check (the previous month must be
 /// APPROVED when the opening week holds its EMPLOYED days — a 409,
 /// <see cref="PriorMonthNotApprovedException"/>, read through <see cref="IPriorPeriodApprovalReader"/>)
-/// and the hours read. The refusals come in exactly that order (N1), and each one writes nothing.
+/// and the hours read. These admission refusals come in exactly that order (N1), and each one writes
+/// nothing. (The export's own race recheck, TASK-14512 Do 7, is different: it refuses after the
+/// calculation completed, so the manifest and the legacy calculation-completed event are kept, as with
+/// the existing B2 recheck; no export record, export event, delivery envelope or export audit row is
+/// written. Pinned by `PriorMonthExportRaceHostTests`.)
 /// <em>Evaluation</em> runs the two lanes over a plan, its timeline pieces, the settlement cutoff, the
 /// opening balance and the hours rows, then merges, emits the manifest and maps wage types. Forward
 /// calculation and recalculation run both steps; replay runs evaluation only, because a replay proves
