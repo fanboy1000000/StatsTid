@@ -687,13 +687,95 @@ Green today and expected to stay green:
 - **MU-22:** applied to both `Source` properties at once. Each Source fact trips on its own event.
 - **Extra reds, information only:** MU-21 also turned `Legacy_…ClosingPartialWeekSettledOnPeriodEnd_Dated30Sep` red.
 
+## Wave A.2 (dispatched 2026-10-14)
+
+Four tasks were dispatched at once, each in a worktree the Orchestrator created by hand from `b210a1d`: 14508 (`payroll-integration`), 14509 (`backend-infrastructure`), 14510 (`ux`) and 14516 (`ux`). The authoring of 14514 and 14515, and O-10, are held until the first build-heavy agents return. On 2026-10-02 simultaneous builds held the CPU at 100 % and made git calls fail.
+
+**At TASK-14516's return (not yet merged).**
+
+*Plain language:* the Skema grid now refuses a negative number at entry. Nothing is sent to the server, the cell is marked invalid, and the user sees "Timer kan ikke være negative". Before this, the negative was sent, the save failed, and every later save in that session failed too, with no explanation.
+- **Branch** `s145/task-14516` at `83a49a6`. Four files: `SkemaGrid.tsx`, `SkemaDayPanel.tsx` and their two test files.
+- **RED first:** six of the new cases failed against the old code. The `7,4` and `-0` cases passed already, as they should. **Green:** `tsc --noEmit` exit 0; vitest 996 passed (baseline 988; +7 grid cases, +1 panel case).
+- **Census, accepted:** the day panel's allocation input (`SkemaDayPanel.tsx:212`) feeds the same save (`SkemaPage.tsx:769` → `handleCellChange`), so the same rule applies there. Its test in `SkemaDayPanel.test.tsx` lies a step outside the brief's "its test file" wording. **Accepted:** a changed input without its test would be the real defect.
+- **Declared deviation, overruled by an authorization.** With no CSS file authorized, the agent styled the message with existing grey secondary classes (`hiddenNote`, `formLead`). The text was visible but easy to miss as an error, and usability is the first-ranked trade-off. The Orchestrator authorized `SkemaGrid.module.css` and `SkemaDayPanel.module.css`, one error class each, using `--color-error` and mirroring the house error look (`ui/Alert`, `ui/FormField`). It was sent back to the same agent before the review, so the review sees the finished presentation.
+- **Accessibility as built:** `aria-invalid="true"`, `aria-describedby` → a `role="alert"` message, plus a `title` on the cell (the `noBasisCell` pattern).
+- **Review lenses:** 5α and Fable 5a, because entry behaviour changes. No Codex: not a high-risk category.
+- **Styling added** (`05753a4`): `.negativeNote` in each module, `--color-error` text; the grid note also takes the Alert error background and left border.
+- **5α: PASS. 5a (Fable): APPROVED-WITH-WARNINGS.**
+  - The reviewer confirmed every path that can carry a negative is guarded: typing, paste, blur, the panel input, the page's re-queue from local state (it only holds guarded values), and the read-only manager grid.
+  - It confirmed six of the eight new cases fail on master for the stated reasons.
+  - It confirmed `#cc0000` on `#fee2e2` is about 4.8:1, which passes AA.
+- **Its WARNING, the recovery path (type −2, then 2) is untested:** sent back as a fix-up to the same agent, with grid and panel cases plus panel blur-clears and `-0`.
+- **Two NOTEs ride along in the same fix-up (usability):**
+  - an `aria-invalid` error outline on the refused cell, which also makes the existing no-basis and over-cap flags visible at the cell;
+  - no success-green "changed" flash after a refused negative.
+- **NOTEs recorded, no action:**
+  - The grid note is a hybrid: Alert's background and border, FormField's red text. It is not a pure mirror of `ui/Alert`.
+  - The static DOM ids assume one editable grid per page.
+  - Negative hours stored before S145 are covered by reseed-not-migrate.
+
+**At TASK-14510's return; merged `d928cf5`.**
+- **What it does:** `triggerKindLabel` renders `PRIOR_MONTH_REOPENED` as "Forrige måned genåbnet". A test renders it.
+- **RED:** with the case deleted, the raw kind renders and the test fails (`Unable to find an element with the text: /Forrige måned genåbnet — effektiv fra/`).
+- **5α: PASS with a note.** Its "no `as` cast" item came from the Orchestrator's over-broad wording. The CI lint rule covers only the files listed in `frontend/package.json`'s `lint` script, and neither file is listed. The test's `as object` spread follows the file's existing casts.
+- **5a: SKIP** per the plan's 5a table: a pure UI label with no backend change (`docs/AGENTS.md:353`).
+- **Checks:** tsc exit 0 · vitest 989 (baseline 988), on the branch by the Orchestrator.
+
+**At TASK-14509's return (not yet merged; 14509-T and the adjudicator running).**
+
+*Plain language:* the HR worklist now flags the next month when payroll's month-boundary weeks make it depend on a corrected or reopened month.
+- A backdate to Tue 29 Sep flags an exported October too.
+- Reopening September under an exported October writes one non-blocking `PRIOR_MONTH_REOPENED` row for October, dated Mon 28 Sep. Nothing is written when the next month opens on a Monday.
+
+The followers:
+- the manifest rebuilder and its SQL twin restore `plan_inputs_jsonb`;
+- the Backend's daily norm and the year-overview header now use `DayNorm`, so a 30-hour header shows 30.00, not 30.01.
+- **Branch** `s145/task-14509` at `d61dc3a`. Build 0 errors / 145 warnings · Unit 1421 · DemoSeed 170 · Regression non-Docker 128. The norm-arithmetic grep under `src/Backend/**` is empty.
+- **Declared deviation, put to the adjudicator:** R5(a) widens a *bounded* upper bound only, and leaves the open-ended clip (the current Copenhagen month) alone.
+  - Argument: no month after the current one can have been exported.
+  - It also keeps the guard `WriteForExportedMonths_OpenEnded_SelectsThroughCurrentCopenhagenMonth_NotBeyond` able to fail.
+- **Brief contradictions (factual, accepted):**
+  - The range loop does no norm arithmetic; only `:153` does.
+  - The header comment spans `:777-778`.
+  - No test asserts a part-time header value, so nothing moved.
+- **Put to the adjudicator as scope questions:**
+  - two full-time monthly norms computed as `(weekdays / 5) × weeklyNorm` (`BalanceEndpoints.cs:173`, `ApprovalEndpoints.cs:1085`);
+  - the stale trigger-kind doc comments in `BackdateWorklistRowCreated.cs` (`:4-6`, `:23-24`, `:48`), which lie outside the docstring-only authorization.
+- **For TASK-14513:** the live manifest insert does not write `plan_inputs_jsonb` yet. Its JSON must match the event's camelCase `planInputs`, which the rebuilder copies verbatim. That is now written into TASK-14513's brief (Do 2).
+- **Recorded, no action:** the hook runs on both reopen arms, employee and leader (Do 2 sets no status condition). Legacy WEEKLY periods take M from `PeriodStart`.
+- **Review lenses:** 5α, Fable and **Codex** (retroactive-correction paths), on the combined branch after 14509-T.
+
+**At TASK-14508's return (not yet merged; 14508-T and the adjudicator running).**
+
+*Plain language:* payroll now reads each employee's current recorded hours itself, through one payroll-only reader (`IRecordedHoursReader`, implemented by `ProjectionHoursReader`, R25/R58). A request that still carries hours gets 400 `payroll-entries-not-accepted`. No pay figure changes yet. The previous month's days in the opening week are read and kept, but filtered out until TASK-14511.
+- **Branch** `s145/task-14508` at `4cf072c`. `src` builds with 0 errors. The test projects do not compile (57 errors), which is expected: TASK-14508-T migrates them from the implementer's site-by-site work order.
+- **Where the checks sit:**
+  - The 400 sits after the org-scope 403 and before the approval read on `/calculate-and-export` (N1).
+  - On `/recalculate`, which has neither, it is the first statement.
+  - The never-silent throw comes before planning in the planless shims, first in the plan-taking path, and before the manifest load in both replay overloads.
+- **Declared deviation, put to the adjudicator:** the hours are read after planning, not before. Plan-taking entry points arrive with a plan, one read site serves them all, and the order matches TASK-14512's refusal order.
+- **Accepted, small:**
+  - `SourceStintId` = the row's event id and `RegisteredAt` = the row's `OccurredAt` in the row-to-input mapping, so the mapped input depends on the row, not the clock;
+  - `TryAddSingleton` in the registration;
+  - argument checks in the reader.
+- **Unnamed finding, put to the adjudicator: a month-end night shift now makes a month fail with a 500.**
+  - `AssertNoDroppedBoundaryCrossing` refuses a last-day shift whose after-midnight hours fall in the next month. Payroll now sees real rows, and the Backend accepts such shifts.
+  - The check's own comment names the cure, "the caller widening its read", which 14508 delivers.
+  - The question is whether it should now drop those hours in M (they are counted in M+1), who owns that, and which pin.
+- **Recorded:**
+  - A full replay re-reads current rows until TASK-14513 binds the frozen ones (documented on the method).
+  - Entries and absences are read as two reads, not one snapshot; the rows are kept as received.
+  - The correction service's own export-record read precedes PCS's check, and lies outside PCS.
+  - A stale `[Obsolete]` text, which predates the task.
+- **Review lenses:** 5α, Fable and **Codex** (payroll export), on the combined branch after 14508-T.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-14, the A.1 gate closed (see § "A.1 gate — closed 2026-10-14"). Local master is this log commit, on top of `379567e` (the TASK-14506 merge). It is not pushed, by design: master is pushed only at sprint close |
 | **Phase** | Step 1, wave A.2 dispatched (2026-10-14). (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
-| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Running (wave A.2), each in a worktree created by hand from `b210a1d`:** 14508 (`payroll-integration`, `.claude/worktrees/s145-task-14508`, branch `s145/task-14508`) · 14509 (`backend-infrastructure`, `s145-task-14509`) · 14510 (`ux`, `s145-task-14510`) · 14516 (`ux`, `s145-task-14516`). **Not yet dispatched:** 14514 and 14515 authoring, and O-10. They follow as the first A.2 agents return, to keep builds from competing on this machine. **To clear at teardown:** the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
+| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`). **Running:** 14508-T (paired pass on `s145/task-14508`, implementer `4cf072c`) · 14509-T (paired pass on `s145/task-14509`, implementer `d61dc3a`) · the adjudicator on 14508's deviation and the month-end night-shift 500 · the adjudicator on 14509's deviation and two scope questions · the 14516 Step-5a fix-up (`s145/task-14516`) · 14514 authoring (`s145/task-14514`) · 14515 authoring (`s145/task-14515`). **Not yet dispatched:** O-10, after 14508-T merges, because both edit `PayrollHostRecalcBlockedTests.cs`. **To clear at teardown:** the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
 | **Pending gates** | Wave A.2 (`PLAN-s145.md` wave table): 14508 hours read + host contract (`payroll-integration`) → 14508-T · 14509 A6 + rebuilder + `DailyNormCalculator` (`backend-infrastructure`) → 14509-T · 14510 trigger label (`ux`) · 14516 negative-hours guard in the grid (`ux`) · 14514 and 14515 authored from the spec (`test-qa`) · O-10, the post-A.1 test tidy (`test-qa`, beside 14514's authoring). **A.2 gate:** 14508+T, 14509+T, 14510 and 14516 merged · O-1 including `tsc --noEmit` and vitest · O-2 check. The Docker side of everything merged so far, including 14507's turning 24 known-red facts green (B1–B3, TRM, SHO, S1–S13, Q1–Q7, counting S8's four rows), is unobserved until the Stage A gate's CI run (CA-4) |
 | **Open rulings** | None for the owner. The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | Process the A.2 returns (paired passes 14508-T and 14509-T on their implementers' branches); dispatch 14514, 14515 and O-10 |
+| **Next action** | Process the adjudicator rulings; then, per combined branch, the build, 5α, Fable and Codex for 14508+T and 14509+T; the 14516 fix-up's cycle 2; O-10 after 14508-T merges |
