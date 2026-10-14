@@ -480,6 +480,7 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 | TASK-14506 new-API Unit pins for the core, the helpers, the fingerprint, the legacy route and the shapes (`test-qa`) + the R49 file | `worktree-agent-a97b8efd3e8cd8e90` (`7dfc9d5`, `574bc5b`; R49 `67b17a0`; re-spawn 1 `80966e8`; fix-up `08ad021`; Orchestrator `2699609`) | O-1 on merged master `379567e`: 0 errors / 145 warnings · CA2100 115 · Unit **1421** (+112: the eight new files) · DemoSeed 170 · Regression non-Docker 128 | PASS; fix-up PASS; `2699609` PASS | APPROVED-WITH-WARNINGS (`80966e8`); cycle 2 APPROVED (`08ad021`); cycle 3 APPROVED (`2699609`) | not required (not high-risk) | `379567e`. The R49 file is byte-identical to `c3543f1`, so `worktree-agent-a0fe62b0b3b73d252` can now be cleared. Unit mutation run (re-spawn 2): 27 of 27 tripped, no findings (§ "A.1 gate") |
 | TASK-14510 label for `PRIOR_MONTH_REOPENED` (`ux`) | `s145/task-14510` (`735cba3`) | Branch: tsc 0 · vitest 989. O-1 on merged master `d928cf5`: frontend only, so the .NET side is unchanged since `379567e`; tsc exit 0 · vitest **989** (baseline 988) | PASS (note: the "no `as` cast" item was over-broad, see § Wave A.2) | **SKIP** per the plan's 5a table: pure UI label (`docs/AGENTS.md:353`) | not required | `d928cf5` |
 | TASK-14516 the Skema grid refuses a negative at entry (`ux`) | `s145/task-14516` (`83a49a6`, styling `05753a4`, fix-up `330a966`) | Branch: tsc 0 · vitest 1001. O-1 on merged master `46cecd8`: frontend only; tsc exit 0 · vitest **1002** (988 + 1 from 14510 + 13 from 14516) | PASS; fix-up PASS | APPROVED-WITH-WARNINGS (`05753a4`; WARNING = the recovery path unpinned); cycle 2 APPROVED (`330a966`) | not required (not high-risk) | `46cecd8` |
+| TASK-14509 next-month honesty + rebuilder + `DayNorm` (`backend-infrastructure`) + 14509-T paired pass (`test-qa`) | `s145/task-14509` (`d61dc3a`; 14509-T `d46112d`, `e2055a2`; Orchestrator `7108c78` (R-3 docs), `826b64b` and `99bf061` (comment and test tweaks)) | O-1 on merged master `755cb14`: 0 errors / 145 warnings · CA2100 115 · Unit **1430** (+8 rows from 14509-T, +1 fact from cycle 3) · DemoSeed 170 · Regression non-Docker 128 · the norm grep is empty. **O-2:** no drift in `openapi.json` or `api-types.ts` | PASS (each cycle) | APPROVED-WITH-WARNINGS (`7108c78`); cycle 2 APPROVED-WITH-WARNINGS (`e2055a2`); cycle 3 APPROVED (`99bf061`) | APPROVE-WITH-WARNINGS (`7108c78`); cycle 2 APPROVE; cycle 3 APPROVE | `755cb14`. One accepted deviation (adjudicator R-1, bounded `hi` only). The reopen-vs-export race is closed by TASK-14512 Do 7. Spun off: QUAL-198 (S146) and HRP-001b |
 
 **O-1 for the six merges `5c35ffb`…`94dea75`.** All six were merged on 2026-10-02 within one minute, with no O-1 between them. O-1 was run once afterwards, on 2026-10-14, at `9b75848`. That commit is the six merges plus O-9, which changes comments and one console line, so it is code-identical to `94dea75` for every test. Result: build 0 errors / 145 warnings (full `--no-incremental` Release rebuild) · CA2100 115 distinct sites · Unit 1309 · DemoSeed 170 · Regression `Category!=Docker` 128, all passing and all equal to the S144 baseline. The counts do not move because every new A.1a pin is a Docker fact, and Docker does not run on this machine; CI runs them. So nothing here verifies the Docker side of the known-red list below.
 
@@ -777,6 +778,14 @@ The followers:
   - **WARNING 2:** the two new pure date helpers had no locally runnable test, and nothing crossed a year boundary. Sent to 14509-T as two Unit Theories in `BackdateWorklistDerivationTests.cs`, with the rollovers Fri 1 Jan 2027 → Mon 4 Jan 2027 and December 2026 → (2027, 1, Mon 28 Dec).
   - **NOTEs** verified the guard order, the hook end to end, R36, the `effectiveFrom` wire format, non-vacuity, and that no other Docker fact moves.
   - **NOTE 9:** the HR follow-up process register gains **HRP-001b** (the `PRIOR_MONTH_REOPENED` hand-off).
+- **Cycle 2 on `7108c78..e2055a2`:** the narrowed comment `826b64b` and 14509-T's Unit Theories `e2055a2` (8 rows; Unit 1429).
+  - **Codex cycle 2: APPROVE.** It confirmed that 14512 Do 7's specification closes the race: reopen-first makes the export reject the withdrawn approval, and export-first makes the reopen see the committed export.
+  - **Fable cycle 2: APPROVED-WITH-WARNINGS.** Its WARNING: the narrowed comment claimed the next month's export "checks this month's approval before its own transaction". At this commit the export does not look at the prior month at all; that is 14512 Do 2.
+  - Its NOTEs: assert row 1's input weekday (the row that catches widening from `toExclusive`), and add a mid-month period-start row.
+- **Cycle 3, `99bf061`** (Orchestrator, Small Tasks Exception): the comment now says the export "today does not lock this month's approval at all", that Do 2 adds the check, and that Do 7 locks it. The theory carries and asserts each input weekday. New fact: `NextMonthReachOfReopen_MidMonthPeriodStart_NormalisesToTheMonth`.
+  - **Both lenses: APPROVE(D)**, with 5α PASS.
+  - Fable NOTE B corrected TASK-14512's "gap" paragraph to today's state. It also added the wider sequential gap: before Do 2, a reopen that commits before the export leaves an export on an unapproved M, which Do 2's 409 closes.
+- **Merged `755cb14`** (O-1 and O-2 below the ledger).
 - **R-4, handed to the 5a lenses:** M's row lock does not serialize against an export of M+1. In a millisecond interleaving, an October export reads September APPROVED while September's reopen reads no October export, and both commit with no worklist row. It is narrow and advisory. If closed, it is two-sided and belongs with TASK-14512's 409.
 
 **At TASK-14508's return (not yet merged; 14508-T and the adjudicator running).**
@@ -843,6 +852,30 @@ The followers:
   - **RED observed** against the guard: `PlannerInvariantViolation … post-midnight hours dated 2026-10-01, AFTER PeriodEnd 2026-09-30` at `AssertNoDroppedBoundaryCrossing` (`PeriodCalculationService.cs:2059`).
   - Unit was 1421 passed + 1 failed; the full build had 145 warnings. The earlier "126" came from an incremental build.
   - Assertions 2–4 run first after the implementer's fix-up.
+- **The guard retired** (`37ab341`, implementer, `PeriodCalculationService.cs` only, +12/−52). The method and its call are gone, and a comment at the normalization site names the attribution and the pin. **The pin is green on all four assertions**; assertion 4, the October 2.00 h half, ran for the first time and passed. Build (Orchestrator, unpiped): 0 errors / 145 warnings · CA2100 115 · Unit 1422 · DemoSeed 170 · Regression non-Docker 128. The R25 grep finds only `ProjectionHoursReader.cs` in source.
+- **5α: PASS** on the union scope.
+  - No expected value changed; `ProjectionHoursReader.cs` is the only file naming the repositories; the 400 body is fixed text.
+  - **Noted for the merge records:** ADR-016 `:180` and ADR-039 `:153` still describe the guard as live. `MonthEndCrossingTests.cs:39` still says "RED until retired", which is added to O-10.
+- **5a Codex: APPROVE-WITH-WARNINGS.** No production blocker. The guards, registration, current-row filter, mapping and correction service match the rulings, and month-end attribution works by inspection for weekday and Sunday endings and year boundaries.
+  - **WARNING:** a Sunday month-end is unpinned. If the extra day were removed from `HoursReadStart`, a Sun 31 Jan 2027 shift's post-midnight hours would be lost with the Wednesday pin still green.
+  - **WARNING:** the pin proves delivery but not conservation or uniqueness. `Distinct()` could hide a duplicated half.
+  - **NOTE:** the in-memory reader turns a null `SourceStintId` into an event id, so its "same input" doc should say so.
+- **5a Fable: APPROVED-WITH-WARNINGS.**
+  - **WARNING 1:** entries and absences are two reads on two connections. `/recalculate` has no lock precondition, so a recalculation during a Skema save could see the save half-applied. The lenses diverged on this one, so it went to the adjudicator.
+  - **WARNING 2:** the read window has no exact local pin. Hand-checked correct: October 2026 → 27 Sep; June 2026 → 31 May; January 2027 → 27 Dec 2026.
+  - **NOTEs:**
+    - ADR-039 D5b/D8 and QUAL-144 are owed at merge.
+    - `IRecordedHoursReader.cs:19-21` cites an ADR-016 amendment not yet written; it is in the plan's Records owed.
+    - The 400 facts are CI-only.
+    - Replay re-reads current rows until 14513.
+    - A stale `[Obsolete]` text.
+    - The smoke probe now runs on the live DB's rows.
+- **Fix-up dispatched to 14508-T** (the test findings of both lenses):
+  - the exact-window theory `HoursReadStart_IsTheDayBeforeTheOpeningMonday` (October 2026, June 2026, January 2027, February 2027);
+  - assertion 3 tightened to `== 27 Sep`;
+  - the Sunday fact `MonthEndNightShift_Sun31Jan2027_2300To0200_FebruaryReadsItAndPays200On1Feb`;
+  - per-request capture without `Distinct()`, asserting 1.00 h and 2.00 h halves exactly once;
+  - the reader doc qualified.
 
 **At TASK-14516's cycle 2; merged `46cecd8`.**
 - **Fix-up `330a966`:** five recovery cases, the `aria-invalid` cell outline, and no flash after a refused negative. tsc 0 · vitest 1001.
