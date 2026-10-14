@@ -159,6 +159,16 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Tier-probe log noise** — every legitimate leader read logs a spurious "Access denied" WARNING. [S128 FU-A]
 
 ### Correctness / domain
+- **Scheduled for S146 (owner Q-1, 2026-10-14): part-time staff are shown a full-time monthly norm (QUAL-198).**
+  The balance summary and the manager's team overview compute "hours expected this month" as
+  `(weekdays / 5) × the agreement's weekly norm`, with no part-time fraction. A 30-hour employee sees
+  162.80 where payroll judges 132.00. It is display only. The fix covers both sites in one task:
+  `weekdays × DayNorm.ForWeekday(W, fraction)`, with the fraction from the dated profile at month end.
+  The team overview gains a per-employee profile read with fault isolation, and its contract note changes.
+  Surfaced by S145's TASK-14509; ruled outside R11 by the adjudicator.
+- **Backlog — needs its own refinement: a leaver's post-end-date night-shift hours are paid by no month
+  (QUAL-199).** The post-midnight half of a last shift falls on a NOT_EMPLOYED day. It predates S145.
+  Whether such hours are payable, and in which month, is a domain question.
 - **✅ SHIPPED IN S142 — business dates are the Danish calendar day** (owner ruling 2026-09-14, S141:
   *"Why not update the system's clock to the Danish clock? We will only have Danish users."*).
   Twelve tasks, 64 production sites, the frontend included; instants stayed UTC. Recorded as

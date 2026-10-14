@@ -784,6 +784,65 @@ The followers:
   - A stale `[Obsolete]` text, which predates the task.
 - **Review lenses:** 5α, Fable and **Codex** (payroll export), on the combined branch after 14508-T.
 
+**The adjudicator's rulings on 14508 (Fable seat, 2026-10-14; verdict RULED, no owner question).**
+- **Q1, the hours read after planning: ACCEPTED as built.** The brief's "before planning" was stale. Three entry points are handed a finished plan, and R42 already makes the hours read the last admission step. The planner takes no hours (`PeriodPlanner.cs:83-93`). The order on the branch is `RequireHoursReader` → plan invariants → `ReadCurrentAsync` → normalize → classification fetch. TASK-14508 Do 2 is amended.
+- **Q2, the month-end night shift: the guard is retired in a 14508 fix-up; the post-midnight hours are paid by the month they fall in.**
+  - *Plain language:* a night shift from 23:00 on 30 September to 02:00 on 1 October now counts its three hours across the two months, split at midnight. Before, it would have stopped September's calculation with a server error.
+  - *Why it is right:* the guard was interim by design. SPRINT-132:315-320, QUAL-144 and ADR-039 D5b/D8 say it must be removed in lockstep with payroll's widened read, and TASK-14508 is that read.
+  - *Verified attribution:*
+    - the next month's read starts at `WeekStart(1st) − 1 ≤ this month's last day`;
+    - the normalizer conserves the hours across the split;
+    - the post-midnight half is in-period for M+1;
+    - the pre-midnight half is either an F1 context day of M+1 or, when M's last day is a Sunday, settled by M itself;
+    - there is no double count.
+  - *Rejected alternatives:*
+    - a named 422 would refuse every legitimate month-end night shift, and push HR to re-register shifts in the two-row form ADR-039 D8 rejected;
+    - paying the post-midnight half in M would break ADR-039 D3 and F1, and double-count.
+  - *Owed:*
+    - the 14508 implementer retires the method and leaves a comment that names the pin;
+    - 14508-T adds `MonthEndCrossingTests.MonthEndNightShift_Wed30Sep2300To0200_SeptemberNotRefused_PostMidnightHoursReachOctober`, written first and observed RED against the guard;
+    - mutation **MU-43** ("restore the throw") is added to the catalogue, run by 14514 re-spawn 2 at A.4;
+    - at merge: QUAL-144 → RESOLVED, plus ADR-039 D5b/D8 and `docs/QUALITY.md:220` amended.
+  - *The owner is informed* (2026-10-14, in session).
+- **Q3, brief contradictions: confirmed.**
+  - The org-scope 403 reads user and org rows itself, which is accepted; the 403-first order stands.
+  - `/recalculate`'s 400 comes first, before the idempotency read.
+  - `ReplayAsync(Guid)` never had hours.
+  - The never-silent check on the by-id replay is consistent with R25.
+  - Brief Do 3 is amended.
+- **Declined and registered:** a leaver whose last shift crosses midnight past the end date is paid by no month for the post-midnight hours. It predates S145 and is a domain question. **QUAL-199** (M) is registered, and a ROADMAP backlog line added.
+
+**Owner ruling Q-1 (2026-10-14, in session): QUAL-198 is done in S146**, as its own task, with the person's own norm (the fraction at month end). It is recorded in the register row and the ROADMAP.
+
+**At TASK-14508-T's return.**
+- **Branch:** `66ec0d1` on `s145/task-14508`. Every listed site is migrated through an in-memory `IRecordedHoursReader`, kept as two copies because the test projects share no support project.
+- **No expected value changed.** The `// S145 R14:` tag appears only in explanatory comments.
+- **Checks:** build 0 errors / 126 warnings · Unit 1421 · DemoSeed 170 · Regression non-Docker 128.
+- **One unlisted adjustment:** `ReplayDeterminismTests` forward3 gets its own February-only reader, so its inputs keep their meaning.
+
+**At TASK-14516's cycle 2; merged `46cecd8`.**
+- **Fix-up `330a966`:** five recovery cases, the `aria-invalid` cell outline, and no flash after a refused negative. tsc 0 · vitest 1001.
+- **Fable cycle 2: APPROVED; 5α: PASS** (folded into the verification for a four-file fix-up).
+- **Cycle-2 NOTE, recorded as a visible change:** the outline also marks the S123 over-cap absence flag. That flag is data-derived and persistent, so absence cells on an over-norm day now show a red outline where before the flag was tooltip and screen-reader only. This is intended, an accessibility improvement, and not a regression.
+- **Cycle-2 NOTE, backlog:** the no-basis block (S123) still flashes success-green after a refused partial. A one-token follow-up (`&& noBasisCell !== editing.key`) would make the two refusals symmetric. It predates this task.
+
+**At TASK-14514's and TASK-14515's authoring returns (merged later, at A.4 and A.5).**
+- **14514 (`1905950`):**
+  - six new files plus the two R50 files; every fact name exactly as briefed;
+  - the three pins that compile today pass (`ScreenParityTests`, the R31d guard, `HoursRepositoryAccessGuardTests`), and each tripped under MU-31, MU-32 or MU-39 in a throwaway checkout;
+  - **brief contradictions:**
+    - `EmploymentWindowSegmentSkipTests.cs:51…:237`, MU-40's anchor lines, refer to the post-14511-T file and must be re-checked at A.3;
+    - `ScreenParityTests` already passes on master because the A.1 core is merged, so its RED is MU-31's;
+    - EE2's "October evaluates nothing" is asserted in a form that holds whether or not PCS calls the engine for an all-NOT_EMPLOYED month.
+- **14515 (`af163e0`):**
+  - five Docker files and one Unit file, including `ReplayEchoRuleEngine` and `ReplayTestKit`;
+  - the digest facts rehearsed against a throwaway spec implementation: each tripped under its MU;
+  - **QUAL-197 check:** the absences digest line form has no `Feriedage`, so the backfill drift cannot trip it; there is a guard fact for that.
+  - **Brief contradictions, accepted:**
+    - `TestFixtures.BuildPcs` cannot take the sentinels, so `ReplayTestKit.BuildPcs` builds PCS by named arguments;
+    - "differs" is compared with manifest ids stripped, because a fresh calculation always mints a new id.
+- **Both carry "assumed names"** that differ from 14508's actual names (for example `recordedHoursReader` against the merged `hoursReader`). Re-spawn 1 of each reconciles them; that is expected.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
