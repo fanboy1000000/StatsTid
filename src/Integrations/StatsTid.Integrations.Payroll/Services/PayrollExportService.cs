@@ -5,6 +5,7 @@ using StatsTid.Infrastructure.Outbox;
 using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
+using System.Globalization;
 using System.Text.Json;
 
 namespace StatsTid.Integrations.Payroll.Services;
@@ -64,6 +65,11 @@ public sealed class PayrollExportService
     /// <list type="number">
     /// <item><description>runs the fail-closed <c>GuardSettlementLineDelivery</c> FIRST
     /// (settlement lines must throw before any write);</description></item>
+    /// <item><description>(S145 / TASK-14512 Do 7) when the calculation required the PREVIOUS month to be
+    /// APPROVED (<see cref="PayrollExportContext.PriorMonthToRecheck"/> set — the
+    /// <c>/calculate-and-export</c> path), re-asserts that under <c>SELECT … FOR SHARE</c>, once, before any
+    /// group's own lock — a previous month no longer APPROVED aborts the WHOLE tx with
+    /// <see cref="PriorMonthNotApprovedException"/>;</description></item>
     /// <item><description>(B2) when the group maps to an approval period
     /// (<see cref="PayrollExportContext.PeriodId"/> set — the <c>/calculate-and-export</c>
     /// path), re-asserts <c>status='APPROVED'</c> under <c>SELECT … FOR UPDATE</c> — a period
@@ -127,6 +133,21 @@ public sealed class PayrollExportService
         {
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(ct);
+
+            // S145 TASK-14512 Do 7 — the PREVIOUS month first. When the calculation's admission required the
+            // previous month to be APPROVED (calculate-and-export threads it), re-check that approval here,
+            // under a row lock held to COMMIT, BEFORE the current month's own FOR UPDATE below. Every export
+            // thus locks an earlier month's approval row before a later one's, and a reopen locks exactly one
+            // approval row (its own month's, after advisory locks no export takes), so no wait cycle can form.
+            // Raw routes carry no previous month and skip this.
+            if (context.PriorMonthToRecheck is { } priorMonth)
+            {
+                foreach (var employeeId in groups.Select(g => g.Key.EmployeeId).Distinct(StringComparer.Ordinal))
+                {
+                    await AssertPriorMonthApprovedForShareAsync(
+                        conn, tx, employeeId, priorMonth.PeriodStart, priorMonth.PeriodEnd, ct);
+                }
+            }
 
             foreach (var group in groups)
             {
@@ -272,6 +293,70 @@ public sealed class PayrollExportService
         {
             throw new PayrollExportConflictException(
                 $"Approval period '{periodId}' is '{status}', not APPROVED, at export time; payroll export aborted.");
+        }
+    }
+
+    /// <summary>
+    /// S145 / TASK-14512 Do 7 — closes the reopen-vs-export race on the PREVIOUS month (adjudicator R-4 on
+    /// TASK-14509). Re-reads the previous month's approval status under <c>SELECT … FOR SHARE</c> inside
+    /// the export transaction and requires <c>APPROVED</c>; a missing row or any other status throws
+    /// <see cref="PriorMonthNotApprovedException"/>, which rolls the whole export back.
+    ///
+    /// <para>
+    /// <b>The race (plain language).</b> October's first week holds September's last days, so October is
+    /// calculated only while September is APPROVED (TASK-14512 Do 2). A reopen of September locks
+    /// September's approval row and, in the same transaction, writes a worklist row for October if October
+    /// is already exported. Without this recheck an October export could read September as APPROVED a
+    /// moment before the reopen committed, the reopen could read "October not exported" a moment before the
+    /// export committed, and both would commit: October paid on a September being withdrawn, and no
+    /// worklist row telling HR.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Why a row lock, and why it is enough.</b> A plain SELECT under READ COMMITTED would not wait for
+    /// the reopen. <c>FOR SHARE</c> conflicts with the reopen's <c>FOR UPDATE</c> on the same row, so the
+    /// two transactions serialize: if the reopen holds the row, this read waits for its commit and then
+    /// reads the committed status (DRAFT) and refuses; if this export holds the row, the reopen waits until
+    /// the export commits and then — its next statement seeing committed data — finds October's export
+    /// record and writes the worklist row. <c>FOR SHARE</c> rather than <c>FOR UPDATE</c> because the export
+    /// only reads the row: two exports may share it, and nothing here ever upgrades the lock.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Lock order.</b> This is taken before the current month's row lock
+    /// (<see cref="AssertPeriodApprovedForUpdateAsync"/>), so every export locks an earlier month before a
+    /// later one. The reopen takes its advisory locks (which no export takes) and then exactly one approval
+    /// row lock, its own month's, before it reads the export records (a plain read, no lock). No
+    /// transaction ever holds a later month's approval row while waiting for an earlier one's, so no wait
+    /// cycle can form.
+    /// </para>
+    /// </summary>
+    private static async Task AssertPriorMonthApprovedForShareAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT status FROM approval_periods
+            WHERE employee_id = @employeeId AND period_start = @periodStart AND period_end = @periodEnd
+            FOR SHARE
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", employeeId);
+        cmd.Parameters.AddWithValue("periodStart", periodStart);
+        cmd.Parameters.AddWithValue("periodEnd", periodEnd);
+        var status = await cmd.ExecuteScalarAsync(ct) as string;
+
+        if (!string.Equals(status, "APPROVED", StringComparison.Ordinal))
+        {
+            throw new PriorMonthNotApprovedException(
+                periodStart,
+                periodEnd,
+                $"Payroll export aborted: the previous month of employee '{employeeId}' " +
+                $"({periodStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.." +
+                $"{periodEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}) is " +
+                $"'{status ?? "(no approval row)"}', not " +
+                "APPROVED, at export time (re-checked under a row lock; it was withdrawn after the calculation " +
+                "read it). Nothing was exported.");
         }
     }
 
@@ -442,6 +527,14 @@ public sealed class PayrollExportContext
 {
     /// <summary>The approval period (calculate-and-export only); null for the raw endpoints.</summary>
     public Guid? PeriodId { get; init; }
+
+    /// <summary>
+    /// S145 / TASK-14512 Do 7 — the previous month's pay period the calculation's admission required to be
+    /// APPROVED (calculate-and-export only, from <c>PeriodCalculationOutcome.PriorMonthApprovalRequired</c>);
+    /// <c>null</c> when the check did not apply, and always for the raw endpoints. When set, the export
+    /// re-checks that approval under a row lock, before the current month's, inside its transaction.
+    /// </summary>
+    public (DateOnly PeriodStart, DateOnly PeriodEnd)? PriorMonthToRecheck { get; init; }
 
     /// <summary>The originating endpoint: CALCULATE_AND_EXPORT / EXPORT / EXPORT_PERIOD.</summary>
     public required string Source { get; init; }

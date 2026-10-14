@@ -111,6 +111,13 @@ builder.Services.AddSingleton<StatsTid.SharedKernel.Audit.IAuditProjectionMapper
 // registration or behaviour changes.
 builder.Services.AddSingleton<AuditLogRepository>();
 builder.Services.AddSingleton<ApprovalPeriodRepository>();
+// S145 TASK-14512 (rulings R5(b), R16, R21 as amended by R26): months in order. A month whose first
+// Monday–Sunday week holds EMPLOYED days of the previous month is calculated only once that month is
+// APPROVED; PeriodCalculationService asks through this payroll-local reader, whose production adapter
+// wraps the ApprovalPeriodRepository registered above. Optional in PCS's constructor but never silent:
+// without this registration every such calculation throws, naming it (the host 409 facts pin that,
+// mutation MD-21). The raw /export routes never consult it (they bypass approval by design).
+builder.Services.AddSingleton<IPriorPeriodApprovalReader, ApprovalPeriodPriorPeriodReader>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
 // S21 TASK-2108 (ADR-017 D9c): hydrates BoundarySources.LocalProfileActivations on
 // the legacy [Obsolete] CalculateAsync(profile, …) shim path. Optional dependency on
@@ -368,6 +375,22 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         // violation is a bug and falls through as a 500.
         return Results.Json(problem, statusCode: 422);
     }
+    catch (PeriodNotCalculableException ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
+    {
+        // S145 TASK-14512 (Q5 (c)): the week check REFUSED the month — an agreement change inside a
+        // Monday–Sunday week the month settles (a change on a 1st that is not a Monday, or in the
+        // previous month's last days). Raised by admission, after the planner and before the
+        // prior-month check and any rule call (N1), so nothing was calculated or written. The second
+        // 422 variant: reason "agreement-change-mid-week", no ruleId, no date, no employee id.
+        return Results.Json(problem, statusCode: 422);
+    }
+    catch (PriorMonthNotApprovedException ex)
+    {
+        // S145 TASK-14512 (R5(b), R16): months in order — the month's first week holds EMPLOYED days
+        // of the previous month, which is not APPROVED. Raised by admission after both 422 checks and
+        // before any rule call, so nothing was calculated or written. 409 naming the previous month.
+        return PriorMonthNotApproved(ex);
+    }
     catch (RuleClassificationsUnavailableException)
     {
         // S144 TASK-14412 (ruling B1): the rule set could not be fetched, so the month could not be
@@ -396,10 +419,17 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         // S90 / TASK-9002 (B2 + OQ-1): thread the approval period id so ExportAsync re-asserts
         // status='APPROVED' under FOR UPDATE before writing the lock record — closing the
         // export↔reopen race. The lock is set at COMMIT, independent of downstream delivery.
+        //
+        // S145 TASK-14512 Do 7: thread the PREVIOUS month the calculation's admission required to be
+        // APPROVED as well. ExportAsync re-checks it under a row lock inside the same transaction, taking
+        // that lock BEFORE this month's (the reopen's order: an earlier month before a later one), so a
+        // reopen of the previous month and this export serialize: whichever commits first, the other sees
+        // it — no export on a withdrawn approval, and no reopen that misses this export's record.
         var actorId = httpContext.User.FindFirst("sub")?.Value;
         var context = new PayrollExportContext
         {
             PeriodId = approval.PeriodId,
+            PriorMonthToRecheck = outcome.PriorMonthApprovalRequired,
             Source = "CALCULATE_AND_EXPORT",
             ActorId = actorId,
             ActorRole = actor.ActorRole,
@@ -410,6 +440,16 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         try
         {
             exportResult = await export.ExportAsync(result.ExportLines, context, ct);
+        }
+        catch (PriorMonthNotApprovedException ex)
+        {
+            // S145 TASK-14512 Do 7: the previous month was reopened after this calculation's admission
+            // read it as APPROVED; the export's row-locked recheck saw the withdrawal and rolled back its
+            // transaction: no export record (so no lock), no PayrollExportGenerated event, no audit row.
+            // The calculation's own manifest, written when the calculation succeeded a moment earlier,
+            // stays — the same as the B2 recheck of this month's approval below. The same 409 as
+            // admission's.
+            return PriorMonthNotApproved(ex);
         }
         catch (PayrollExportConflictException ex)
         {
@@ -537,6 +577,21 @@ app.MapPost("/api/payroll/recalculate", async (
         // planner violation is a bug and falls through as a 500.
         return Results.Json(problem, statusCode: 422);
     }
+    catch (PeriodNotCalculableException ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
+    {
+        // S145 TASK-14512 (Q5 (c)): the week check REFUSED the month (an agreement change inside a week
+        // it settles). The correction service calculates BEFORE it opens its transaction, so nothing was
+        // written: baseline, correction event, audit row and idempotency marker are all untouched. The
+        // second 422 variant (reason "agreement-change-mid-week").
+        return Results.Json(problem, statusCode: 422);
+    }
+    catch (PriorMonthNotApprovedException ex)
+    {
+        // S145 TASK-14512 (R5(b), R16): months in order — the previous month is not APPROVED (for a
+        // month exported through the raw routes it typically has no approval row at all). Raised before
+        // the correction transaction opens, so nothing was written. 409 naming the previous month.
+        return PriorMonthNotApproved(ex);
+    }
     catch (RuleClassificationsUnavailableException)
     {
         // S144 TASK-14412 (ruling B1): the rule set could not be fetched. The correction service
@@ -597,6 +652,11 @@ app.Run();
 // happen to stop on the 15th, and a result that crosses a month edge is never mistaken for a split
 // (the 2026-04-01 OK transition is a month START, so it is never interior to a planned month).
 // Months are checked in date order; the first refusal wins and nothing downstream runs.
+//
+// S145 TASK-14512 (Q5 (c)): the guard now also runs the calculating routes' week check
+// (EnsurePeriodCalculableAsync): a month with an agreement change inside a week it settles — on a 1st
+// that is not a Monday, or in the previous month's last days — gets the same second 422 variant. It
+// still reads no approval: the months-in-order 409 belongs to the calculating routes alone.
 static async Task<IResult?> RefuseUnplannableMonthsAsync(
     PeriodCalculationService calculator,
     EmploymentProfile profile,
@@ -613,12 +673,18 @@ static async Task<IResult?> RefuseUnplannableMonthsAsync(
     {
         try
         {
-            await calculator.EnsurePeriodPlannableAsync(profile, monthStart, monthStart.AddMonths(1).AddDays(-1), ct);
+            await calculator.EnsurePeriodCalculableAsync(profile, monthStart, monthStart.AddMonths(1).AddDays(-1), ct);
         }
         catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
         {
             // Same mapping as the calculating handlers: a split refusal → redacted 422 (counts +
             // causes, never dates or the employee id). Any other violation falls through as a 500.
+            return Results.Json(problem, statusCode: 422);
+        }
+        catch (PeriodNotCalculableException ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
+        {
+            // Same mapping as the calculating handlers: the week check's 422 variant (reason
+            // "agreement-change-mid-week", no ruleId, no date, no employee id).
             return Results.Json(problem, statusCode: 422);
         }
         catch (RuleClassificationsUnavailableException)
@@ -645,6 +711,22 @@ static IResult RulesUnavailable() =>
         error = "The rule set could not be obtained from the Rule Engine, so the period could not be checked. Nothing was calculated, written or exported. Retry when the Rule Engine is reachable.",
         kind = "payroll-rules-unavailable"
     }, statusCode: 503);
+
+// S145 TASK-14512 (rulings R5(b), R16, N2) — the ONE response for "the previous month must be approved
+// first". 409 because the month itself is fine but its predecessor is in the wrong state, which the operator
+// can fix (approve it) and retry. The body carries the PREVIOUS month's pay period — a pay period, never an
+// employment date — plus the members every sibling body has (success, error, kind). The sentence is fixed:
+// no employee id and no other date. Shared by /calculate-and-export (admission's check and the export's
+// row-locked recheck, Do 7) and /recalculate.
+static IResult PriorMonthNotApproved(PriorMonthNotApprovedException ex) =>
+    Results.Json(new
+    {
+        success = false,
+        error = PriorMonthNotApprovedException.ErrorSentence,
+        kind = PriorMonthNotApprovedException.KindValue,
+        periodStart = ex.PeriodStart,
+        periodEnd = ex.PeriodEnd
+    }, statusCode: 409);
 
 // S145 TASK-14508 (R14) — the ONE refusal for "this request carries hours". Payroll reads the
 // employee's recorded, current hours itself, so a caller-supplied hours list is no longer an input.
