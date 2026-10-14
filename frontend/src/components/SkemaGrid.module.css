@@ -300,6 +300,13 @@ td.workClickable {
   outline-offset: -2px;
 }
 
+/* S145/TASK-14516 - an invalid cell (negative refused, no-basis, over-cap) is visible
+   at the cell; declared after :focus so the error outline wins while typing. */
+.cellInput[aria-invalid='true'] {
+  outline: 2px solid var(--color-error);
+  outline-offset: -2px;
+}
+
 .cellDisplay {
   display: block;
   height: 30px;
@@ -388,4 +395,15 @@ td.recent {
 .hiddenNoteButton:focus-visible {
   outline: var(--focus-outline);
   outline-offset: var(--focus-outline-offset);
+}
+
+/* S145/TASK-14516 - negative-hours refusal message; mirrors ui/Alert error variant */
+.negativeNote {
+  margin: 0;
+  padding: var(--space-1) 10px;
+  font-size: 13px;
+  color: var(--color-error);
+  background: var(--color-error-light);
+  border-top: var(--border-width) solid var(--color-border);
+  border-left: 4px solid var(--color-error);
 }

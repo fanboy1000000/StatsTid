@@ -207,9 +207,18 @@ export function SkemaDayPanel({
     return v != null && v !== 0 ? formatDanishNumber(v, 1) : ''
   }
 
+  // S145/TASK-14516 — a negative allocation feeds the same Skema cell save, so it is
+  // refused here too (flagged + announced, never propagated). `-0` is not negative.
+  const [negativeAlloc, setNegativeAlloc] = useState<string | null>(null)
+
   const handleAllocInput = (key: string, raw: string) => {
     setEditingAlloc({ key, raw })
     const num = raw === '' ? null : parseDanishNumber(raw)
+    if (num !== null && !isNaN(num) && num < 0) {
+      setNegativeAlloc(key)
+      return
+    }
+    setNegativeAlloc((cur) => (cur === key ? null : cur))
     if (num !== null && isNaN(num)) return
     onAllocationChange(date, key, num === 0 ? null : num)
   }
@@ -365,12 +374,22 @@ export function SkemaDayPanel({
                   disabled={stepTwoDisabled}
                   onFocus={() => setEditingAlloc({ key: p.key, raw: allocDisplay(p.key) })}
                   onChange={(e) => handleAllocInput(p.key, e.target.value)}
-                  onBlur={() => setEditingAlloc(null)}
+                  onBlur={() => {
+                    setEditingAlloc(null)
+                    setNegativeAlloc(null)
+                  }}
+                  error={negativeAlloc === p.key}
+                  aria-describedby={negativeAlloc === p.key ? 'alloc-negative-note' : undefined}
                   aria-label={p.label}
                 />
                 <span className={styles.unit}>t</span>
               </div>
             ))}
+            {negativeAlloc !== null && (
+              <p id="alloc-negative-note" role="alert" className={styles.negativeNote}>
+                Timer kan ikke være negative
+              </p>
+            )}
             <div
               className={`${styles.remaining} ${
                 allocationState === 'balanced'

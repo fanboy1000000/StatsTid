@@ -39,6 +39,9 @@ import { classifyAllocation, unallocated } from '../lib/allocation'
 import { computeDayDiffs, computeMonthDiffTotal } from '../hooks/useSkema'
 import styles from './SkemaGrid.module.css'
 
+const NEGATIVE_HOURS_MESSAGE = 'Timer kan ikke være negative'
+const NEGATIVE_NOTE_ID = 'skema-negative-hours-note'
+
 export interface WorkInterval {
   start: string  // "HH:mm" or "HH:mm:ss"
   end: string    // "HH:mm" or "HH:mm:ss"
@@ -259,6 +262,13 @@ export function SkemaGrid({
   // time; cleared on focus/blur). Keyed by `${rowKey}:${dateKey}`.
   const [noBasisCell, setNoBasisCell] = useState<string | null>(null)
 
+  // S145/TASK-14516 — a NEGATIVE hours entry is refused at entry (the server answers a
+  // cell with hours <= 0 with a 400, and a bad cell would otherwise sit in local state
+  // and fail every later save). Same ephemeral shape as noBasisCell: the cell is
+  // flagged (aria-invalid) and a Danish message is announced (role=alert) until the
+  // user changes the value or leaves the cell. `-0` is not negative (`-0 < 0` is false).
+  const [negativeCell, setNegativeCell] = useState<string | null>(null)
+
   // ── Recently-changed flash (--color-success-light → transparent, 1.2s) ──
   const [recentKey, setRecentKey] = useState<string | null>(null)
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -424,6 +434,7 @@ export function SkemaGrid({
       const cellKey = `${row.key}:${dateKey}`
       const fmt = currentValue != null ? formatCell(currentValue) : ''
       setNoBasisCell((cur) => (cur === cellKey ? null : cur))
+      setNegativeCell((cur) => (cur === cellKey ? null : cur))
       setEditing({ key: cellKey, raw: fmt, initial: fmt })
     },
     [],
@@ -450,8 +461,14 @@ export function SkemaGrid({
     (row: SkemaRow, cellKey: string, dateKey: string, value: string) => {
       const num = value === '' ? null : parseDanishNumber(value)
       const unparsable = num !== null && isNaN(num)
+      const negative = num !== null && !isNaN(num) && num < 0
       const isFullDayEntry =
-        row.type === 'absence' && !!row.fullDayOnly && num !== null && !isNaN(num) && num !== 0
+        row.type === 'absence' &&
+        !!row.fullDayOnly &&
+        num !== null &&
+        !isNaN(num) &&
+        !negative &&
+        num !== 0
       const basis = isFullDayEntry ? consumptionBasis?.get(dateKey) : undefined
       const canSnap = isFullDayEntry && basis !== null && basis !== undefined && basis > 0
 
@@ -479,7 +496,12 @@ export function SkemaGrid({
       if (isFullDayEntry && !canSnap) setNoBasisCell(cellKey)
       else setNoBasisCell((cur) => (cur === cellKey ? null : cur))
 
+      // S145: a negative is flagged and never propagated (and never snapped to a day).
+      if (negative) setNegativeCell(cellKey)
+      else setNegativeCell((cur) => (cur === cellKey ? null : cur))
+
       if (unparsable) return // no propagation (shipped semantics)
+      if (negative) return // S145 — refused at entry
       if (isFullDayEntry && !canSnap) return // BLOCK — never let a partial full-day autosave (→ 422)
       if (canSnap) {
         onCellChange(row.key, dateKey, basis as number)
@@ -503,7 +525,7 @@ export function SkemaGrid({
     (row: SkemaRow, dateKey: string) => {
       if (row.type === 'absence' && row.fullDayOnly && editing) {
         const num = editing.raw === '' ? null : parseDanishNumber(editing.raw)
-        const hasEntry = num !== null && !isNaN(num) && num !== 0
+        const hasEntry = num !== null && !isNaN(num) && num > 0 // S145: never snap a negative
         if (hasEntry) {
           const basis = consumptionBasis?.get(dateKey)
           // null basis → no snap (the on-input path blocked the partial); a
@@ -513,13 +535,15 @@ export function SkemaGrid({
           }
         }
       }
-      if (editing && editing.raw !== editing.initial) {
+      // S145: no green "changed" flash for a refused negative (the display reverts).
+      if (editing && editing.raw !== editing.initial && negativeCell !== editing.key) {
         triggerFlash(editing.key)
       }
       setEditing(null)
       setNoBasisCell(null)
+      setNegativeCell(null)
     },
-    [editing, triggerFlash, consumptionBasis, onCellChange],
+    [editing, triggerFlash, consumptionBasis, onCellChange, negativeCell],
   )
 
   const toggleGroup = useCallback((id: 'projects' | 'absences') => {
@@ -564,8 +588,11 @@ export function SkemaGrid({
           const overCapAbsence =
             row.type === 'absence' && val != null && val !== 0 && absenceOverNorm(dateKey)
           const noBasis = noBasisCell === cellKey
-          const invalid = overCapAbsence || noBasis
-          const invalidTitle = noBasis
+          const negative = negativeCell === cellKey
+          const invalid = overCapAbsence || noBasis || negative
+          const invalidTitle = negative
+            ? NEGATIVE_HOURS_MESSAGE
+            : noBasis
             ? 'Fuld-dags fravær: dagens normtid kan ikke findes — kan ikke registreres'
             : overCapAbsence
               ? `Samlet fravær ${formatCell(absencePerDay.get(dateKey) ?? 0)} t overstiger dagsnormen`
@@ -582,6 +609,7 @@ export function SkemaGrid({
                 onBlur={() => handleCellBlur(row, dateKey)}
                 aria-label={`${row.label} dag ${day.getDate()}`}
                 aria-invalid={invalid || undefined}
+                aria-describedby={negative ? NEGATIVE_NOTE_ID : undefined}
                 title={invalidTitle}
               />
             </td>
@@ -741,6 +769,13 @@ export function SkemaGrid({
           </tr>
         </tbody>
       </table>
+
+      {/* S145/TASK-14516 — the reason a negative entry was refused (announced, visible) */}
+      {negativeCell !== null && (
+        <p id={NEGATIVE_NOTE_ID} role="alert" className={styles.negativeNote}>
+          {NEGATIVE_HOURS_MESSAGE}
+        </p>
+      )}
 
       {/* Hidden-rows affordance (R3): only meaningful under preference filtering */}
       {hiddenRowsWithHours > 0 && (

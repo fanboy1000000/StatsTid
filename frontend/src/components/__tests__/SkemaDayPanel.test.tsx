@@ -272,6 +272,47 @@ describe('SkemaDayPanel — step 2: Fordel på projekter (R11 + R5)', () => {
     expect(props.onAllocationChange).toHaveBeenCalledWith('2026-03-09', 'PRJ-A', 3.5)
   })
 
+  it('S145 TASK-14516: a negative allocation (-3,5) is refused at entry — no onAllocationChange, flagged with an alert', () => {
+    const { props } = renderPanel({ periods: [per('p1', '08:00', '16:00')] })
+    const input = screen.getByLabelText('Projekt Alfa')
+    fireEvent.change(input, { target: { value: '-3,5' } })
+    expect(props.onAllocationChange).not.toHaveBeenCalled()
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByRole('alert').textContent).toBe('Timer kan ikke være negative')
+  })
+
+  it('S145 TASK-14516 recovery: -3,5 then 3,5 → exactly one onAllocationChange(3.5), alert gone', () => {
+    const { props } = renderPanel({ periods: [per('p1', '08:00', '16:00')] })
+    const input = screen.getByLabelText('Projekt Alfa')
+    fireEvent.change(input, { target: { value: '-3,5' } })
+    expect(screen.getByRole('alert')).toBeTruthy()
+    fireEvent.change(input, { target: { value: '3,5' } })
+    expect(props.onAllocationChange).toHaveBeenCalledTimes(1)
+    expect(props.onAllocationChange).toHaveBeenCalledWith('2026-03-09', 'PRJ-A', 3.5)
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('S145 TASK-14516: blur clears the negative-allocation flag', () => {
+    renderPanel({ periods: [per('p1', '08:00', '16:00')] })
+    const input = screen.getByLabelText('Projekt Alfa')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-3,5' } })
+    expect(screen.getByRole('alert')).toBeTruthy()
+    fireEvent.blur(input)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('S145 TASK-14516: -0 in an allocation is not flagged and propagates null', () => {
+    const { props } = renderPanel({ periods: [per('p1', '08:00', '16:00')] })
+    const input = screen.getByLabelText('Projekt Alfa')
+    fireEvent.change(input, { target: { value: '-0' } })
+    expect(props.onAllocationChange).toHaveBeenCalledWith('2026-03-09', 'PRJ-A', null)
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('clearing a project row propagates null (the save path drops null/0 — R17 recorded limitation)', () => {
     const allocations = new Map([['PRJ-A', 4]])
     const { props } = renderPanel({ periods: [per('p1', '08:00', '16:00')], allocations })

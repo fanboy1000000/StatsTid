@@ -926,6 +926,125 @@ describe('SkemaGrid — absence daily-norm cap (S123)', () => {
   })
 })
 
+// ── S145/TASK-14516 — a negative hours value is refused at entry ──
+describe('SkemaGrid — negative entry is refused at entry (S145 TASK-14516)', () => {
+  const NEG_MSG = 'Timer kan ikke være negative'
+
+  it('typing -7,4 into a PROJECT cell calls no onCellChange and shows the flag', () => {
+    const onCellChange = vi.fn()
+    renderGrid({ onCellChange })
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-7,4' } })
+    expect(onCellChange).not.toHaveBeenCalled()
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByRole('alert').textContent).toBe(NEG_MSG)
+    expect(input.getAttribute('aria-describedby')).toBe(screen.getByRole('alert').id)
+  })
+
+  it('typing -7,4 into an ABSENCE cell calls no onCellChange and shows the flag', () => {
+    const onCellChange = vi.fn()
+    renderGrid({ onCellChange })
+    const input = screen.getByLabelText('Ferie dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-7,4' } })
+    expect(onCellChange).not.toHaveBeenCalled()
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByRole('alert').textContent).toBe(NEG_MSG)
+  })
+
+  it('typing 7,4 still propagates 7.4 and shows no flag', () => {
+    const onCellChange = vi.fn()
+    renderGrid({ onCellChange })
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '7,4' } })
+    expect(onCellChange).toHaveBeenCalledWith('DRIFT', '2026-03-02', 7.4)
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('clearing to empty still propagates null, and clears the flag', () => {
+    const onCellChange = vi.fn()
+    renderGrid({ onCellChange })
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-2' } })
+    fireEvent.change(input, { target: { value: '' } })
+    expect(onCellChange).toHaveBeenCalledTimes(1)
+    expect(onCellChange).toHaveBeenCalledWith('DRIFT', '2026-03-02', null)
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('-0 is not flagged and stays "no entry" (null)', () => {
+    const onCellChange = vi.fn()
+    renderGrid({ onCellChange })
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-0' } })
+    expect(onCellChange).toHaveBeenCalledWith('DRIFT', '2026-03-02', null)
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a negative in a full-day-only absence cell does not snap to the full day (input or blur)', () => {
+    const onCellChange = vi.fn()
+    render(
+      <SkemaGrid
+        year={2026}
+        month={3}
+        rows={[{ type: 'absence', key: 'CARE_DAY', label: 'Omsorgsdage', fullDayOnly: true }]}
+        cellValues={new Map()}
+        readOnly={false}
+        onCellChange={onCellChange}
+        consumptionBasis={new Map([['2026-03-02', 7.4]])}
+      />,
+    )
+    const input = screen.getByLabelText('Omsorgsdage dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-3' } })
+    expect(input.value).toBe('-3') // not snapped to the whole day on display
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    fireEvent.blur(input)
+    expect(onCellChange).not.toHaveBeenCalled()
+  })
+
+  it('recovery: -2 then 2 → flag shown, then exactly one onCellChange(2), flag and alert gone', () => {
+    const onCellChange = vi.fn()
+    renderGrid({ onCellChange })
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-2' } })
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByRole('alert')).toBeTruthy()
+    fireEvent.change(input, { target: { value: '2' } })
+    expect(onCellChange).toHaveBeenCalledTimes(1)
+    expect(onCellChange).toHaveBeenCalledWith('DRIFT', '2026-03-02', 2)
+    expect(input.getAttribute('aria-invalid')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('blurring a refused negative does not flash the cell as "changed"', () => {
+    const { container } = renderGrid()
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-2' } })
+    fireEvent.blur(input)
+    expect(dayCell(rowByLabel(container, 'Drift'), 2).className).not.toContain('recent')
+  })
+
+  it('the flag clears on blur', () => {
+    renderGrid()
+    const input = screen.getByLabelText('Drift dag 2') as HTMLInputElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '-2' } })
+    expect(screen.getByRole('alert')).toBeTruthy()
+    fireEvent.blur(input)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
 describe('SkemaGrid — read-only / review mode (R12)', () => {
   it('renders NO inputs in read-only mode; values render as formatted text', () => {
     const { container } = renderGrid({
