@@ -27,15 +27,10 @@ namespace StatsTid.Tests.Unit.Rules;
 /// </para>
 ///
 /// <para>
-/// <b>What the spec fixes and what it leaves open.</b> Refinement :390 fixes: every public
-/// <c>AgreementRuleConfig</c> property as <c>Name=Value</c>, in <b>ordinal name order</b>; decimals
-/// value-normalised in invariant culture (no trailing zeros); enums by name; configs sorted
-/// ordinally by agreement, OK version, position; the whole text hashed with SHA-256, lowercase hex.
-/// It does NOT fix the separator between entries, how a boolean is spelled, or whether a config
-/// block carries a header. <c>Timeline_ConfigFingerprint_StableAcrossPropertyOrder</c> needs the
-/// preimage to say anything about order, so it accepts a small, documented family of those open
-/// choices (<see cref="CanonicalForms"/>) and fails if the produced hash is none of them — see its
-/// docstring and the report to the Orchestrator. This is a declared gap, not an adjusted expectation.
+/// <b>The canonical text is a contract.</b> The refinement (:390) left the separator, boolean
+/// spelling and header open; the Orchestrator has since ruled one exact form (see the block comment
+/// above <c>Timeline_ConfigFingerprint_StableAcrossPropertyOrder</c>) and the pins assert it exactly.
+/// A hash matching no spelling of it is RED; the form is never widened back.
 /// </para>
 ///
 /// <para>
@@ -165,54 +160,52 @@ public sealed class ConfigFingerprintTests
     }
 
     // -------------------------------------------------------------------------
-    // StableAcrossPropertyOrder — see the class remarks: needs the preimage, which the spec only
-    // half-specifies, so it accepts a documented family of the open choices.
+    // The canonical text — a CONTRACT (Orchestrator ruling, recorded for the A.1 gate), derived from
+    // the ruling's text and not from the production code:
+    //   each (agreement, OK version, position, config) is one block: header line
+    //   `config|{AgreementCode}|{OkVersion}|{Position}` (null position -> empty), then one line per
+    //   public instance property as `Name=Value` in ordinal order of the property name. Decimals are
+    //   value-normalised, invariant culture, no trailing zeros (37.0 -> 37); integers invariant;
+    //   booleans true/false; enums by name; strings as-is; null as empty; any other type throws.
+    //   Identical blocks count once; blocks are sorted ordinally by (agreement, OK version, position)
+    //   and then by block text; joined with "\n", UTF-8, SHA-256, lowercase hex.
     // -------------------------------------------------------------------------
 
     private static string NormalizedDecimal(decimal value) =>
-        // value-normalised, invariant culture, no trailing zeros (refinement :390): 37.0 → "37", 0.33 → "0.33"
         value.ToString("0.############################", CultureInfo.InvariantCulture);
 
-    private static string Render(object? value, bool lowerCaseBooleans) => value switch
+    private static string Render(PropertyInfo property, object? value) => value switch
     {
         null => "",
         decimal d => NormalizedDecimal(d),
-        bool b => lowerCaseBooleans ? (b ? "true" : "false") : (b ? "True" : "False"),
-        Enum e => e.ToString(),                                   // enums are written BY NAME
-        IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
-        _ => value.ToString() ?? "",
+        bool b => b ? "true" : "false",
+        Enum e => e.ToString(),
+        int i => i.ToString(CultureInfo.InvariantCulture),
+        string s => s,
+        _ => throw new InvalidOperationException(
+            $"AgreementRuleConfig.{property.Name} has type {property.PropertyType.Name}, which the canonical form does not define."),
     };
 
-    private static IEnumerable<string> CanonicalForms(
+    private static string Block(
         AgreementRuleConfig config, string agreement, string ok, string? position, IEnumerable<PropertyInfo> propertiesInOrder)
     {
-        foreach (var separator in new[] { "\n", "\r\n", ";", ",", "|", "&", "\t", " ", "" })
-        foreach (var trailingSeparator in new[] { false, true })
-        foreach (var lowerCaseBooleans in new[] { false, true })
-        foreach (var header in new string?[] { null, $"{agreement}|{ok}|{position}" })
-        {
-            var entries = propertiesInOrder
-                .Select(p => $"{p.Name}={Render(p.GetValue(config), lowerCaseBooleans)}")
-                .ToList();
-            if (header is not null)
-                entries.Insert(0, header);
-            var text = string.Join(separator, entries) + (trailingSeparator ? separator : "");
-            yield return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
-        }
+        var lines = new List<string> { $"config|{agreement}|{ok}|{position ?? ""}" };
+        lines.AddRange(propertiesInOrder.Select(p => $"{p.Name}={Render(p, p.GetValue(config))}"));
+        return string.Join("\n", lines);
     }
 
+    private static string Sha256Hex(string text) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+
+    private static IEnumerable<PropertyInfo> OrdinalProperties() =>
+        ConfigProperties.OrderBy(p => p.Name, StringComparer.Ordinal);
+
     /// <summary>
-    /// "In ordinal name order" (refinement :390). The assertion is on the PREIMAGE ORDER: the produced
-    /// hash must equal the hash of the ordinal-ordered canonical text (in at least one of the spec's
-    /// open spellings), and must NOT equal any declaration-order spelling. A declaration-order hash
-    /// would silently change if anyone reordered the properties in <c>AgreementRuleConfig</c>, and
-    /// every stored fingerprint would then read as "the rules changed".
-    ///
-    /// <para><b>Declared gap.</b> The separator, boolean spelling and header are not fixed by the
-    /// spec; <see cref="CanonicalForms"/> enumerates the plausible spellings. If the engine's own form
-    /// is outside the family this pin is RED for that reason — the fix is to ADD the engine's documented
-    /// form to the family (a form choice, not an expected value), which is why it is reported rather
-    /// than silently widened.</para>
+    /// "In ordinal name order" (refinement :390) and the ONE canonical text above. The produced hash
+    /// must equal the hash of the ordinal-ordered text exactly, and must NOT equal the hash of the
+    /// declaration-order text (which would silently change if anyone reordered the properties in
+    /// <c>AgreementRuleConfig</c>, so every stored fingerprint would read as "the rules changed").
+    /// MU-19 (declaration order) trips both assertions.
     /// </summary>
     [Fact]
     public void Timeline_ConfigFingerprint_StableAcrossPropertyOrder()
@@ -220,7 +213,7 @@ public sealed class ConfigFingerprintTests
         var config = BaseConfig();
         var actual = Fingerprint(config);
 
-        var ordinal = ConfigProperties.OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
+        var ordinal = OrdinalProperties().ToList();
         var declaration = ConfigProperties.ToList();
 
         // Sanity: the two orders really differ for this type, otherwise the pin proves nothing.
@@ -228,19 +221,36 @@ public sealed class ConfigFingerprintTests
             ordinal.Select(p => p.Name).ToArray(),
             declaration.Select(p => p.Name).ToArray());
 
-        var ordinalForms = CanonicalForms(config, "HK", "OK26", null, ordinal).ToHashSet(StringComparer.Ordinal);
-        var declarationForms = CanonicalForms(config, "HK", "OK26", null, declaration).ToHashSet(StringComparer.Ordinal);
+        var expected = Sha256Hex(Block(config, "HK", "OK26", null, ordinal));
+        var declarationHash = Sha256Hex(Block(config, "HK", "OK26", null, declaration));
 
-        Assert.False(
-            declarationForms.Contains(actual),
-            "The fingerprint matches the DECLARATION-order preimage: properties must be hashed in ordinal name order " +
-            "(refinement :390), so a reordering of AgreementRuleConfig cannot invalidate stored fingerprints.");
+        Assert.NotEqual(declarationHash, actual);
+        Assert.Equal(expected, actual);
+    }
 
-        Assert.True(
-            ordinalForms.Contains(actual),
-            "The fingerprint matches none of the ordinal-order canonical spellings (separator / boolean case / header) " +
-            "this pin accepts. Either the properties are not hashed in ordinal Name=Value form, or the engine uses a " +
-            "spelling outside CanonicalForms — report which, do not weaken the order assertion.");
+    [Fact]
+    public void Timeline_ConfigFingerprint_MultipleBlocks_SortedByKey_JoinedByNewline_PositionInHeader()
+    {
+        var hk = CentralAgreementConfigs.GetConfig("HK", "OK26");
+        var ac = CentralAgreementConfigs.GetConfig("AC", "OK26");
+        var acHead = CentralAgreementConfigs.GetConfig("AC", "OK26", "DEPARTMENT_HEAD");
+        var ordinal = OrdinalProperties().ToList();
+
+        // Sorted ordinally by (agreement, OK version, position): AC/null < AC/DEPARTMENT_HEAD < HK/null
+        // (an empty position sorts before a non-empty one).
+        var expected = Sha256Hex(string.Join("\n",
+            Block(ac, "AC", "OK26", null, ordinal),
+            Block(acHead, "AC", "OK26", "DEPARTMENT_HEAD", ordinal),
+            Block(hk, "HK", "OK26", null, ordinal)));
+
+        var actual = ConfigFingerprint.Compute(new[]
+        {
+            ("HK", "OK26", (string?)null, hk),
+            ("AC", "OK26", "DEPARTMENT_HEAD", acHead),
+            ("AC", "OK26", (string?)null, ac),
+        });
+
+        Assert.Equal(expected, actual);
     }
 
     [Fact]

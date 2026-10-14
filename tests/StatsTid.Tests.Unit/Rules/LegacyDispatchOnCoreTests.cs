@@ -153,11 +153,15 @@ public sealed class LegacyDispatchOnCoreTests
         Assert.True(multiWeek.Success);
         Assert.Equal("NORM_CHECK_MULTIWEEK", multiWeek.RuleId);
         Assert.Equal(4, multiWeek.NormPeriodWeeks);
+        Assert.Equal(37.00m, multiWeek.NormHoursTotal);
+        Assert.Equal(37.00m, multiWeek.ActualHoursTotal);
 
         var legacy = registry.Evaluate("NORM_CHECK_37H", profile, entries, Sep7, Sep13);
         Assert.True(legacy.Success);
         Assert.Equal("NORM_CHECK_37H", legacy.RuleId);
         Assert.Equal(4, legacy.NormPeriodWeeks);
+        Assert.Equal(37.00m, legacy.NormHoursTotal);
+        Assert.Equal(37.00m, legacy.ActualHoursTotal);
     }
 
     /// <summary>

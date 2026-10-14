@@ -2,10 +2,6 @@ using System.Reflection;
 using StatsTid.RuleEngine.Api.Rules;
 using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Models;
-// R40 lists TimelineCoreInput / ResolvedPiece / TimelineNormMode / TimelineCoreResult under
-// WeeklyTimelineCore without saying whether they are nested or namespace-level siblings. This using
-// makes either layout resolve (it is a no-op for siblings). Reconcile at re-spawn 1 and delete it.
-using static StatsTid.RuleEngine.Api.Rules.WeeklyTimelineCore;
 
 namespace StatsTid.Tests.Unit.Rules;
 
@@ -45,7 +41,7 @@ namespace StatsTid.Tests.Unit.Rules;
 /// uncovered weekdays) · MU-06 (one config per week, the Sunday's) · MU-07 (one fraction per week,
 /// the Sunday's) · MU-08 (NORMAL_HOURS for context entries) · MU-09 (mode from the week's first
 /// covered day) · MU-10 (annual mode through weekday norms) · MU-11 (flex clamped per week) · MU-12
-/// (cap from the first covered day) · MU-13 (default credit <c>7.4 × fraction</c>, unrounded).
+/// (cap from the first covered day) · MU-13 (default credit <c>7.4 × fraction</c>, unrounded) · MU-41 (pieces beyond <c>PeriodEnd</c> governing).
 /// </para>
 /// </summary>
 public sealed class WeeklyTimelineCoreTests
@@ -517,6 +513,55 @@ public sealed class WeeklyTimelineCoreTests
         Assert.Equal(4, legC.Norm.NormPeriodWeeks);
         Assert.Equal(162.80m, Val(legC.Norm.NormHoursTotal));
         AssertNoOvertimeLinesAndNoFlexPayout(legC);
+    }
+
+    /// <summary>
+    /// A piece that starts after <c>PeriodEnd</c> must not govern the closing week (TASK-14505 Step 5a,
+    /// W1). September 2026 ends on Wednesday 30 September, so the closing week Mon 28 Sep – Sun 4 Oct
+    /// runs past the period end; a piece covering Thu 1 – Sun 4 Oct would otherwise be the week's
+    /// Sunday piece and decide its mode and its reported norm-period length. Here that second piece
+    /// differs from September's HK OK26 config in <c>NormPeriodWeeks</c> (4) AND in
+    /// <c>NormModel</c> (ANNUAL_ACTIVITY, the field <c>ModeFor</c> reads), so BOTH the mode and the
+    /// label would move if it governed. Called directly on the core with two resolved configs (the
+    /// endpoint resolves config from the agreement code and cannot be given such a piece). Leg 1 has
+    /// <c>SettlementCutoff</c> null — with a cutoff at 30 Sep the cutoff check fires first and the
+    /// pin would pass with or without the bound, i.e. it would be vacuous. Wed 30 Sep is a weekday, so
+    /// the closing week really does run past the end. Expected: the same result as the one-piece
+    /// reference call (September's <c>NormPeriodWeeks</c> 1, same norm total, same NORMAL_HOURS lines).
+    /// Leg 2: a cutoff of 4 Oct is past <c>PeriodEnd</c> and must not widen evaluation. RED by MU-41
+    /// (the <c>day &gt; _periodEnd → -1</c> bound in <c>PieceIndexOn</c> removed, fix-up 2259cc1).
+    /// </summary>
+    [Fact]
+    public void Core_PiecesBeyondPeriodEnd_DoNotGovern()
+    {
+        var entries = WeekdayHours(Aug31, Sep30, 7.40m);
+        var october = With(Hk26,
+            (nameof(AgreementRuleConfig.NormPeriodWeeks), 4),
+            (nameof(AgreementRuleConfig.NormModel), NormModel.ANNUAL_ACTIVITY));
+
+        // Reference: one piece, to the period end only.
+        var reference = Run(Sep1, Sep30, null, [Piece(Aug31, Sep30, 1.0m, Hk26)], entries);
+        Assert.Equal(1, reference.Norm.NormPeriodWeeks);
+        Assert.Equal(162.80m, Val(reference.Norm.NormHoursTotal));
+        Assert.NotEmpty(reference.Norm.LineItems.Where(l => l.TimeType == "NORMAL_HOURS"));
+
+        var pieces = new[] { Piece(Aug31, Sep30, 1.0m, Hk26), Piece(Oct1, Oct4, 1.0m, october) };
+
+        foreach (DateOnly? cutoff in new DateOnly?[] { null, Oct4 })
+        {
+            var result = Run(Sep1, Sep30, cutoff, pieces, entries);
+
+            Assert.Equal(1, result.Norm.NormPeriodWeeks);
+            Assert.Equal("NORM_CHECK_37H", result.Norm.RuleId);
+            Assert.Equal(Val(reference.Norm.NormHoursTotal), Val(result.Norm.NormHoursTotal));
+            Assert.Equal(Val(reference.Norm.ActualHoursTotal), Val(result.Norm.ActualHoursTotal));
+            Assert.Equal(
+                reference.Norm.LineItems.Where(l => l.TimeType == "NORMAL_HOURS")
+                    .Select(l => (l.Date, l.Hours, l.Rate)).OrderBy(l => l.Date).ToList(),
+                result.Norm.LineItems.Where(l => l.TimeType == "NORMAL_HOURS")
+                    .Select(l => (l.Date, l.Hours, l.Rate)).OrderBy(l => l.Date).ToList());
+            AssertNoOvertimeLinesAndNoFlexPayout(result);
+        }
     }
 
     /// <summary>
