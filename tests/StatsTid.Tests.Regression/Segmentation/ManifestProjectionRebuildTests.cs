@@ -3,6 +3,7 @@ using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -35,10 +36,14 @@ public sealed class ManifestProjectionRebuildTests : IAsyncLifetime
     public async Task RebuildAsync_AfterTruncate_RestoresProjectionFromEvents()
     {
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
-        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
 
         var profile = TestFixtures.Profile("EMP-REBUILD-1");
         var entries = TestFixtures.WeekdayEntriesForPeriod(profile.EmployeeId, new DateOnly(2026, 3, 25), new DateOnly(2026, 4, 7));
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader (TestSupport) instead of through the call.
+        var pcs = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(entries));
 
         var plan = PeriodPlanner.Plan(
             employeeId: profile.EmployeeId,
@@ -55,7 +60,7 @@ public sealed class ManifestProjectionRebuildTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        await pcs.CalculateAsync(plan, profile, entries, Array.Empty<AbsenceEntry>(), 0m);
+        await pcs.CalculateAsync(plan, profile, 0m);
 
         // Snapshot the row pre-truncate so we can compare exactly after rebuild.
         var pre = await ReadSingleRowAsync(plan.ManifestId);

@@ -168,8 +168,6 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         var body = new
         {
             profile = Profile(employeeId),
-            entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31),
-            absences = Array.Empty<AbsenceEntry>(),
             periodStart = Mar01,
             periodEnd = Mar31,
             previousFlexBalance = 0m,
@@ -219,8 +217,6 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         var body = new
         {
             profile = Profile(employeeId),
-            entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31),
-            absences = Array.Empty<AbsenceEntry>(),
             periodStart = Mar01,
             periodEnd = Mar31,
             previousFlexBalance = 0m,
@@ -478,8 +474,6 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         var body = new
         {
             profile = Profile(employeeId),
-            entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31),
-            absences = Array.Empty<AbsenceEntry>(),
             periodStart = Mar01,
             periodEnd = Mar31,
             previousFlexBalance = 0m,
@@ -518,8 +512,6 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         var body = new
         {
             profile = Profile(employeeId),
-            entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31),
-            absences = Array.Empty<AbsenceEntry>(),
             periodStart = Mar01,
             periodEnd = Mar31,
             previousFlexBalance = 0m,

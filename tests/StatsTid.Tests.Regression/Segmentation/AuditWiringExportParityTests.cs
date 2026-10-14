@@ -1,5 +1,6 @@
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -61,16 +62,20 @@ public sealed class AuditWiringExportParityTests : IAsyncLifetime
         var absences = Array.Empty<AbsenceEntry>();
 
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
-        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader (TestSupport) instead of through the call.
+        var pcs = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(entries, absences));
 
 #pragma warning disable CS0618 // Both planless overloads are [Obsolete] by design (legacy shim path).
         // OLD endpoint behaviour (pre-QUAL-003): the planless CalculateAsync, returning just the result.
         var resultOld = await pcs.CalculateAsync(
-            profile, entries, absences, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd, previousFlexBalance: 0m);
         // NEW endpoint behaviour (post-QUAL-003): the planless CalculateWithOutcomeAsync, returning the
         // full outcome (result + AuditState + ManifestId). outcome.Result is what the endpoint returns.
         var outcomeNew = await pcs.CalculateWithOutcomeAsync(
-            profile, entries, absences, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd, previousFlexBalance: 0m);
 #pragma warning restore CS0618
 
         // Both must succeed and produce export lines (NORM_CHECK emits one NORMAL_HOURS line per entry).

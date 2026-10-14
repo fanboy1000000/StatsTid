@@ -10,6 +10,7 @@ using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Payroll;
 
@@ -143,8 +144,6 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         var pcs = BuildPcsWithResolver(_resolver);
 
         var profileSeed = TestFixtures.Profile(EmployeeId);
-        var entries = TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd);
-        var absences = Array.Empty<AbsenceEntry>();
 
         // ── Baseline forward calc via the (Obsolete) legacy shim — same entry
         // point S29 TASK-2909 marquee uses. The shim routes through
@@ -154,7 +153,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // PeriodPlanner.Plan() bypasses this registration and fails replay.
 #pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.
         var baseline = await pcs.CalculateAsync(
-            profileSeed, entries, absences, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
+            profileSeed, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
 #pragma warning restore CS0618
         Assert.True(baseline.Success);
         Assert.NotEmpty(baseline.RuleResults);
@@ -186,7 +185,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // byte-identically because the resolver returns the predecessor row
         // for any asOfDate < Today.
         var replay = await pcs.ReplayAsync(
-            baselineManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
+            baselineManifestId, profileSeed, previousFlexBalance: 0m);
         Assert.True(replay.Success);
 
         // The dated resolver returns the predecessor (fraction=1.000) for asOfDate=2026-04-01
@@ -217,14 +216,12 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         var pcs = BuildPcsWithResolver(_resolver);
 
         var profileSeed = TestFixtures.Profile(EmployeeId);
-        var entries = TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd);
-        var absences = Array.Empty<AbsenceEntry>();
 
         // Legacy shim — registers WtmNaturalKey hydrator via BuildPlanForLegacyCallersAsync
         // (S29 TASK-2909 precedent; required by PCS.MapSegmentToExportLinesAsync L1236).
 #pragma warning disable CS0618
         var baseline = await pcs.CalculateAsync(
-            profileSeed, entries, absences, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
+            profileSeed, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
 #pragma warning restore CS0618
         Assert.True(baseline.Success);
         // QUAL-015 falsifiability guard (see variant 1): the resolved fraction reaches the
@@ -239,7 +236,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             effectiveFrom: Today);
 
         var replay = await pcs.ReplayAsync(
-            baselineManifestId, profileSeed, entries, absences, previousFlexBalance: 0m);
+            baselineManifestId, profileSeed, previousFlexBalance: 0m);
         Assert.True(replay.Success);
         // Dated resolver returns the predecessor (1.000) → 37.0, identical to baseline. A
         // regression reading the live row (0.750) would yield 27.75 → byte-identity FAILS.
@@ -284,12 +281,11 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // (Position="RESEARCHER") wins per PCS L344-345; line L357 does NOT
         // fire because segmentProfile.Position is already non-null.
         var callerProfile = TestFixtures.Profile(EmployeeId) with { Position = null };
-        var entries = TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd);
 
         // Legacy shim — registers WtmNaturalKey hydrator (S29 precedent).
 #pragma warning disable CS0618
         var result = await pcs.CalculateAsync(
-            callerProfile, entries, Array.Empty<AbsenceEntry>(), PeriodStart, PeriodEnd,
+            callerProfile, PeriodStart, PeriodEnd,
             previousFlexBalance: 0m);
 #pragma warning restore CS0618
         Assert.True(result.Success);
@@ -392,7 +388,12 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             // shape that would silently pay a leaver for the whole month. The real self-managed
             // resolver is harmless here: plan-first calls never consult it, and the shim would read
             // the seeded users row's unbounded window → every segment EMPLOYED, as before.
-            employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory));
+            employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
+            // S145 R14: payroll reads its own hours. Every test in this file calculated on the
+            // same weekday entries for the whole period and no absences; they now reach PCS
+            // through this in-memory reader instead of through call arguments.
+            hoursReader: new InMemoryRecordedHoursReader(
+                TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd)));
     }
 
     // ─── QUAL-015: resolver-sensitive rule-engine stub ───────────────────────

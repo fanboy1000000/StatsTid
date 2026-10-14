@@ -187,7 +187,8 @@ internal static class EmploymentWindowPcsFixture
         IEventStore? eventStore = null,
         IEmploymentProfileResolver? profileResolver = null,
         IEmploymentWindowResolver? windowResolver = null,
-        IReadOnlyList<RuleClassification>? ruleSet = null)
+        IReadOnlyList<RuleClassification>? ruleSet = null,
+        IRecordedHoursReader? hoursReader = null)
     {
         // S137 Step-5a (Reviewer WARNING 1): PCS REFUSES a profile resolver without a window
         // resolver — that pairing is the dropped-DI shape that would silently pay a leaver all
@@ -213,8 +214,19 @@ internal static class EmploymentWindowPcsFixture
             localAgreementProfileRepo: null,
             profileResolver: profileResolver,
             employmentWindowResolver: windowResolver,
-            employeeProfileRepo: null);
+            employeeProfileRepo: null,
+            // S145 / TASK-14508-T (R14, R25): PCS refuses to calculate or replay without an hours
+            // reader. Default = an EMPTY in-memory reader (right for the tests that only plan); a test
+            // that calculates passes the hours it used to hand to the call (see WeekdayHours).
+            hoursReader: hoursReader ?? new InMemoryRecordedHoursReader());
     }
+
+    /// <summary>
+    /// S145 R14: an in-memory hours reader holding <see cref="WeekdayEntries"/> for the range and no
+    /// absences — what these tests used to pass as the <c>entries</c> / <c>absences</c> arguments.
+    /// </summary>
+    public static InMemoryRecordedHoursReader WeekdayHours(string employeeId, DateOnly start, DateOnly end)
+        => new(WeekdayEntries(employeeId, start, end));
 
     /// <summary>The in-memory configuration every PCS in this suite is built with.</summary>
     public static IConfiguration Configuration() => new ConfigurationBuilder()

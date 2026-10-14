@@ -112,7 +112,7 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31);
 
         // The ORIGINAL export happens BEFORE the agreement change exists: one segment, succeeds.
-        var first = await RunShimAsync(BuildPcs(), employeeId, entries);
+        var first = await RunShimAsync(BuildPcs(HoursOf(entries)), employeeId);
         Assert.True(first.Result.Success, first.Result.ErrorMessage);
         await PersistFirstExportRecordAsync(employeeId, first.Result.ExportLines);
         var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId);
@@ -121,10 +121,10 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         // HR records an agreement change effective mid-March, afterwards.
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
 
-        var service = BuildCorrectionService(BuildPcs());
+        var service = BuildCorrectionService(BuildPcs(HoursOf(entries)));
         var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
             service.RecalculateAsync(
-                Profile(employeeId), entries, Array.Empty<AbsenceEntry>(),
+                Profile(employeeId),
                 periodStart: Mar01, periodEnd: Mar31, previousFlexBalance: 0m,
                 reason: "S144 pin — agreement change recorded after export", actorId: "hr-s144"));
 
@@ -162,7 +162,7 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         await SeedEmployeeAsync(employeeId);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31);
 
-        var first = await RunShimAsync(BuildPcs(), employeeId, entries);
+        var first = await RunShimAsync(BuildPcs(HoursOf(entries)), employeeId);
         Assert.True(first.Result.Success, first.Result.ErrorMessage);
         await PersistFirstExportRecordAsync(employeeId, first.Result.ExportLines);
         var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId);
@@ -170,10 +170,10 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
 
         await SupersedeFractionAsync(employeeId, newFraction: 0.800m, effectiveFrom: Mar16);
 
-        var service = BuildCorrectionService(BuildPcs());
+        var service = BuildCorrectionService(BuildPcs(HoursOf(entries)));
         var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
             service.RecalculateAsync(
-                Profile(employeeId), entries, Array.Empty<AbsenceEntry>(),
+                Profile(employeeId),
                 periodStart: Mar01, periodEnd: Mar31, previousFlexBalance: 0m,
                 reason: "S144 no-regression pin — profile change", actorId: "hr-s144"));
 
@@ -211,7 +211,7 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31);
 
         var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
-            RunShimAsync(BuildPcs(), employeeId, entries));
+            RunShimAsync(BuildPcs(HoursOf(entries)), employeeId));
 
         Assert.True(ex.IsSplitRefusal);
         Assert.Equal(2, ex.EmployedSegmentCount);
@@ -255,7 +255,7 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31);
 
-        var outcome = await RunShimAsync(BuildPcs(TestFixtures.StraddleSafeRuleSet), employeeId, entries);
+        var outcome = await RunShimAsync(BuildPcs(HoursOf(entries), TestFixtures.StraddleSafeRuleSet), employeeId);
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         var manifest = await LoadManifestAsync(outcome.ManifestId);
@@ -463,7 +463,8 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
     /// harness factory. Leaving it out would skip the agreement-code hydration whatever the
     /// production code does, so the facts could not detect mutation M-14.
     /// </summary>
-    private PeriodCalculationService BuildPcs(IReadOnlyList<RuleClassification>? classifications = null)
+    private PeriodCalculationService BuildPcs(
+        IRecordedHoursReader hoursReader, IReadOnlyList<RuleClassification>? classifications = null)
     {
         var httpFactory = new SingleClientFactory(new TestFixtures.StubHandler(TestFixtures.DefaultRuleEngineHandler));
         var wtmRepo = new WageTypeMappingRepository(_harness.Factory);
@@ -489,8 +490,16 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
             profileResolver: new EmploymentProfileResolver(_harness.Factory, userAgreementCodeRepo),
             employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
             employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
-            userAgreementCodeRepo: userAgreementCodeRepo);
+            userAgreementCodeRepo: userAgreementCodeRepo,
+            // S145 R14: the in-memory hours reader (payroll reads its own hours).
+            hoursReader: hoursReader);
     }
+
+    /// <summary>
+    /// S145 R14: the in-memory reader that hands PCS the hours these facts used to pass as call
+    /// arguments (time entries only, no absences).
+    /// </summary>
+    private static InMemoryRecordedHoursReader HoursOf(IEnumerable<TimeEntry> entries) => new(entries);
 
     private RetroactiveCorrectionService BuildCorrectionService(PeriodCalculationService pcs)
         => new(
@@ -503,11 +512,11 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
             NullLogger<RetroactiveCorrectionService>.Instance);
 
     private static async Task<PeriodCalculationService.PeriodCalculationOutcome> RunShimAsync(
-        PeriodCalculationService pcs, string employeeId, IReadOnlyList<TimeEntry> entries)
+        PeriodCalculationService pcs, string employeeId)
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export and /recalculate).
         return await pcs.CalculateWithOutcomeAsync(
-            Profile(employeeId), entries, Array.Empty<AbsenceEntry>(), Mar01, Mar31, previousFlexBalance: 0m);
+            Profile(employeeId), Mar01, Mar31, previousFlexBalance: 0m);
 #pragma warning restore CS0618
     }
 

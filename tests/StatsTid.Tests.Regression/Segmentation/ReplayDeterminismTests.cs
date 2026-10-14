@@ -4,6 +4,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -39,11 +40,15 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
     public async Task ReplayAsync_StableUnderLiveDbMutation_RecomputeProducesDifferentManifest()
     {
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
-        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
 
         var profile = TestFixtures.Profile("EMP-DETERM-1");
         var entries = TestFixtures.WeekdayEntriesForPeriod(profile.EmployeeId, new DateOnly(2026, 3, 25), new DateOnly(2026, 4, 7));
         var absences = Array.Empty<AbsenceEntry>();
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader (TestSupport) instead of through the call.
+        var pcs = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(entries, absences));
 
         // Forward calculation produces manifest M1 with hours total H1.
         var plan1 = PeriodPlanner.Plan(
@@ -61,7 +66,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        var forward1 = await pcs.CalculateAsync(plan1, profile, entries, absences, 0m);
+        var forward1 = await pcs.CalculateAsync(plan1, profile, 0m);
         Assert.True(forward1.Success);
         var hoursForward1 = forward1.ExportLines.Sum(l => l.Hours);
         Assert.True(hoursForward1 > 0, "Forward calculation must produce non-zero export hours for the determinism test to be meaningful.");
@@ -90,7 +95,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
         }
 
         // Replay against M1 must succeed and carry M1 on every result.
-        var replay = await pcs.ReplayAsync(plan1.ManifestId, profile, entries, absences, 0m);
+        var replay = await pcs.ReplayAsync(plan1.ManifestId, profile, 0m);
         Assert.True(replay.Success);
         Assert.All(replay.RuleResults, r => Assert.Equal(plan1.ManifestId, r.ManifestId));
 
@@ -111,7 +116,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        var forward2 = await pcs.CalculateAsync(plan2, profile, entries, absences, 0m);
+        var forward2 = await pcs.CalculateAsync(plan2, profile, 0m);
         Assert.NotEqual(plan1.ManifestId, plan2.ManifestId);
         Assert.True(forward2.Success);
 
@@ -186,10 +191,13 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
         // Build PCS — TestFixtures.BuildPcs now wires the WageTypeMappingRepository into
         // PayrollMappingService so the dated-read path works (per S29 TASK-2909 fixture
         // update).
-        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
-
         var entries = TestFixtures.WeekdayEntriesForPeriod(profile.EmployeeId, periodStart, periodEnd);
         var absences = Array.Empty<AbsenceEntry>();
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader (TestSupport) instead of through the call.
+        var pcs = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(entries, absences));
 
         // Forward calc via the (Obsolete) shim — this routes through
         // BuildPlanForLegacyCallersAsync, which registers the WtmNaturalKey hydrator on the
@@ -197,7 +205,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
         // at segment.StartDate = 2026-01-01 (SLS_PRE — closed predecessor still effective).
 #pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.
         var forward1 = await pcs.CalculateAsync(
-            profile, entries, absences, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd, previousFlexBalance: 0m);
 #pragma warning restore CS0618
         Assert.True(forward1.Success);
         Assert.NotEmpty(forward1.RuleResults);
@@ -239,7 +247,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
         // Replay against M1 — must read the WTM via GetByKeyAtAsync(asOfDate = segment.StartDate
         // = 2026-01-01), which returns the CLOSED predecessor (effective at 2026-01-01).
         var replay = await pcs.ReplayAsync(
-            forward1ManifestId, profile, entries, absences, previousFlexBalance: 0m);
+            forward1ManifestId, profile, previousFlexBalance: 0m);
         Assert.True(replay.Success);
         Assert.All(replay.RuleResults, r => Assert.Equal(forward1ManifestId, r.ManifestId));
 
@@ -264,7 +272,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
         // deterministic on the WTM row that was effective at the segment's left edge.
 #pragma warning disable CS0618
         var forward2 = await pcs.CalculateAsync(
-            profile, entries, absences, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd, previousFlexBalance: 0m);
 #pragma warning restore CS0618
         Assert.True(forward2.Success);
         Assert.All(forward2.ExportLines, line =>
@@ -284,9 +292,15 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
         var postMutationEnd = new DateOnly(2026, 2, 28);
         var postMutationEntries = TestFixtures.WeekdayEntriesForPeriod(
             profile.EmployeeId, postMutationStart, postMutationEnd);
+        // S145 R14: this calculation used to be handed the February entries alone, so it gets
+        // its own PCS over a reader holding exactly those (the January reader above would also
+        // hand it January rows).
+        var pcsPostMutation = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(postMutationEntries, absences));
 #pragma warning disable CS0618
-        var forward3 = await pcs.CalculateAsync(
-            profile, postMutationEntries, absences, postMutationStart, postMutationEnd,
+        var forward3 = await pcsPostMutation.CalculateAsync(
+            profile, postMutationStart, postMutationEnd,
             previousFlexBalance: 0m);
 #pragma warning restore CS0618
         Assert.True(forward3.Success);

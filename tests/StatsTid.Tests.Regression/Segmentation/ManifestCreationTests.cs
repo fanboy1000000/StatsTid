@@ -2,6 +2,7 @@ using System.Text.Json;
 using Npgsql;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -42,7 +43,11 @@ public sealed class ManifestCreationTests : IAsyncLifetime
         var absences = Array.Empty<AbsenceEntry>();
 
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
-        var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader (TestSupport) instead of through the call.
+        var pcs = TestFixtures.BuildPcs(
+            _harness.Factory, _harness.EventStore,
+            hoursReader: new InMemoryRecordedHoursReader(entries, absences));
 
         var plan = PeriodPlanner.Plan(
             employeeId: profile.EmployeeId,
@@ -62,7 +67,7 @@ public sealed class ManifestCreationTests : IAsyncLifetime
         Assert.Equal(2, plan.Segments.Count);
 
         var result = await pcs.CalculateAsync(
-            plan, profile, entries, absences,
+            plan, profile,
             previousFlexBalance: 0m);
 
         Assert.True(result.Success);

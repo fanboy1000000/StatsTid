@@ -117,8 +117,11 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
         Assert.NotEmpty(postEndEntries);
 
         // ── 1. The ORIGINAL export — a WINDOWLESS month: every weekday pays ──────────────
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader instead of through the call.
+        var hours = new InMemoryRecordedHoursReader(entries);
         var exportEngine = new RecordingRuleEngine();
-        var exportOutcome = await RunShimAsync(BuildPcs(exportEngine), employeeId, entries);
+        var exportOutcome = await RunShimAsync(BuildPcs(exportEngine, hours), employeeId);
         Assert.True(exportOutcome.Result.Success, exportOutcome.Result.ErrorMessage);
         Assert.Equal(PeriodCalculationService.AuditState.Complete, exportOutcome.AuditState);
 
@@ -144,12 +147,10 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
 
         // ── 3. The correction — driven exactly as /api/payroll/recalculate drives it ─────
         var correctionEngine = new RecordingRuleEngine();
-        var service = BuildCorrectionService(BuildPcs(correctionEngine));
+        var service = BuildCorrectionService(BuildPcs(correctionEngine, hours));
 
         var result = await service.RecalculateAsync(
             Profile(employeeId),
-            entries,
-            Array.Empty<AbsenceEntry>(),
             periodStart: Apr01,
             periodEnd: Apr30,
             previousFlexBalance: 0m,
@@ -293,7 +294,7 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
     /// <summary>The S137 payroll-host PCS shape: the dated profile resolver (ADR-023), the
     /// employment-window resolver (self-managed surface, ADR-040 D7) and the profile-history
     /// read (D5) — over the straddle-safe classification set so any split is plannable.</summary>
-    private PeriodCalculationService BuildPcs(RecordingRuleEngine engine)
+    private PeriodCalculationService BuildPcs(RecordingRuleEngine engine, IRecordedHoursReader hoursReader)
     {
         var httpFactory = new SingleClientFactory(engine);
         var wtmRepo = new WageTypeMappingRepository(_harness.Factory);
@@ -317,7 +318,9 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
             localAgreementProfileRepo: null,
             profileResolver: new EmploymentProfileResolver(_harness.Factory, new UserAgreementCodeRepository(_harness.Factory)),
             employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
-            employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory));
+            employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
+            // S145 R14: the in-memory hours reader (payroll reads its own hours).
+            hoursReader: hoursReader);
     }
 
     /// <summary>The S90 correction-service shape over the supplied (window-hydrated) PCS.</summary>
@@ -332,11 +335,11 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
             NullLogger<RetroactiveCorrectionService>.Instance);
 
     private static async Task<PeriodCalculationService.PeriodCalculationOutcome> RunShimAsync(
-        PeriodCalculationService pcs, string employeeId, IReadOnlyList<TimeEntry> entries)
+        PeriodCalculationService pcs, string employeeId)
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export and /recalculate).
         return await pcs.CalculateWithOutcomeAsync(
-            Profile(employeeId), entries, Array.Empty<AbsenceEntry>(), Apr01, Apr30, previousFlexBalance: 0m);
+            Profile(employeeId), Apr01, Apr30, previousFlexBalance: 0m);
 #pragma warning restore CS0618
     }
 

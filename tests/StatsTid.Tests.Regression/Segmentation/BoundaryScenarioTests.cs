@@ -1,7 +1,9 @@
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -273,10 +275,12 @@ public sealed class BoundaryScenarioTests
     [Trait("Category", "Docker")]
     public async Task OkTransition_Valid_PcsRoundTrip_EmitsManifestWithOkTransitionCause()
     {
-        await using var fixture = await BoundaryScenarioFixture.CreateAsync();
-
         var profile = TestFixtures.Profile("EMP-OK-VALID-PCS");
         var entries = TestFixtures.WeekdayEntriesForPeriod(profile.EmployeeId, Mar25, Apr07);
+        // S145 R14: payroll reads its own hours — the same entries reach PCS through an
+        // in-memory IRecordedHoursReader (TestSupport) instead of through the call.
+        await using var fixture = await BoundaryScenarioFixture.CreateAsync(
+            new InMemoryRecordedHoursReader(entries));
 
         var plan = PeriodPlanner.Plan(
             employeeId: profile.EmployeeId,
@@ -296,7 +300,7 @@ public sealed class BoundaryScenarioTests
         Assert.Equal(2, plan.Segments.Count);
 
         var result = await fixture.Pcs.CalculateAsync(
-            plan, profile, entries, Array.Empty<AbsenceEntry>(), 0m);
+            plan, profile, 0m);
         Assert.True(result.Success);
 
         await using var conn = new NpgsqlConnection(fixture.ConnectionString);
@@ -331,11 +335,11 @@ internal sealed class BoundaryScenarioFixture : IAsyncDisposable
         Pcs = pcs;
     }
 
-    public static async Task<BoundaryScenarioFixture> CreateAsync()
+    public static async Task<BoundaryScenarioFixture> CreateAsync(IRecordedHoursReader hoursReader)
     {
         var harness = await TestFixtures.DockerHarness.StartAsync();
         await TestFixtures.SeedWageTypeMappingsAsync(harness.Factory);
-        var pcs = TestFixtures.BuildPcs(harness.Factory, harness.EventStore);
+        var pcs = TestFixtures.BuildPcs(harness.Factory, harness.EventStore, hoursReader: hoursReader);
         return new BoundaryScenarioFixture(harness, pcs);
     }
 
