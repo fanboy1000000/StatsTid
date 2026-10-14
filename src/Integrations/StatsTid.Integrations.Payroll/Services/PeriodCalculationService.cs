@@ -713,6 +713,9 @@ public sealed class PeriodCalculationService
             // With the timeline go the entries dated on a day it covers (context days included) and
             // the month's absences on a covered day; nothing outside the evaluated days is sent.
             var timelineEntries = normalizedEntries.Where(e => IsCovered(pieces, e.Date)).ToList();
+            // Asymmetric on purpose: context-day ENTRIES count toward the opening week's overtime, but
+            // context-day absences would be dead weight — the core reads absences only on in-period
+            // covered days (flex), and overtime reads no absences at all.
             var timelineAbsences = absences
                 .Where(a => a.Date >= plan.PeriodStart && IsCovered(pieces, a.Date))
                 .ToList();
@@ -2036,7 +2039,11 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// The employment profile in force on <paramref name="asOf"/> — for an EMPLOYED segment (asked at
     /// its start) and for a context piece (asked at its first day). Moved out of the per-segment loop
-    /// unchanged in S145 / TASK-14511 so both uses share one resolution and one fail-closed path.
+    /// in S145 / TASK-14511 so both uses share one resolution and one fail-closed path. One change was
+    /// made here (S145 ruling R-10): the TASK-1802 caller-position fallback was retired. A dated
+    /// <c>employee_profiles</c> row with no position means "no position" (the base agreement config)
+    /// and is never filled in from the request's profile — otherwise a context day before a promotion
+    /// would carry the new position into the timeline and the frozen record.
     /// </summary>
     private async Task<EmploymentProfile> ResolveProfileAtAsync(
         EmploymentProfile callerProfile, DateOnly asOf, PlannedCalculation plan, CancellationToken ct)
@@ -2142,11 +2149,9 @@ public sealed class PeriodCalculationService
         if (!string.Equals(resolved.OkVersion, okVersion, StringComparison.Ordinal))
             resolved = resolved with { OkVersion = okVersion };
 
-        // Position caller-fallback (TASK-1802 preservation — when resolver has no
-        // Position but caller supplied one, prefer caller's).
-        if (resolved.Position is null && callerProfile.Position is not null)
-            resolved = resolved with { Position = callerProfile.Position };
-
+        // S145 R-10: no position fallback. A dated row's null Position means "no position" (the base
+        // agreement config — ADR-040 D4) and is never substituted from the request's profile. The
+        // resolver-free path above keeps the caller's WHOLE profile by construction, position included.
         return resolved;
     }
 
@@ -2643,10 +2648,11 @@ public sealed class PeriodCalculationService
     /// </para>
     ///
     /// <para>
-    /// A 2xx answer is accepted only when it is complete: exactly the three rows <c>OVERTIME_CALC</c>,
-    /// <c>NORM_CHECK_37H</c> and <c>FLEX_BALANCE</c>, the flex block, the fingerprint list and a
-    /// non-empty evaluation-model marker (TASK-14513 records the last two for replay). Anything else is
-    /// a failed call, not a partial result.
+    /// A 2xx answer is accepted only when it is complete AND successful: exactly the three rows
+    /// <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and <c>FLEX_BALANCE</c>, each with
+    /// <c>Success == true</c>; a flex block with <c>Success == true</c>; at least one config fingerprint;
+    /// and a non-empty evaluation-model marker (TASK-14513 records the last two for replay). Anything
+    /// else is a failed call, not a partial result (<see cref="TimelineReplyDefect"/>).
     /// </para>
     /// </summary>
     private async Task<TimelineEvaluationResponse?> CallTimelineAsync(
@@ -2703,13 +2709,13 @@ public sealed class PeriodCalculationService
 
             var json = await response.Content.ReadAsStringAsync(ct);
             var timeline = JsonSerializer.Deserialize<TimelineEvaluationResponse>(json, JsonOptions);
-            if (!IsCompleteTimelineResponse(timeline))
+            if (TimelineReplyDefect(timeline) is { } defect)
             {
+                // The defect is a fixed phrase naming rule ids only — never anything from the body.
                 _logger.LogWarning(
-                    "Rule engine answered the timeline evaluation for employee {EmployeeId} with an incomplete " +
-                    "response (it must carry exactly the {Overtime}, {Norm} and {Flex} rows, the flex block, the " +
-                    "config fingerprints and the evaluation-model marker); the call is treated as failed",
-                    employeeId, OvertimeRuleId, NormRuleId, FlexRuleId);
+                    "Rule engine answered the timeline evaluation for employee {EmployeeId} with an unusable " +
+                    "response ({Defect}); the call is treated as failed",
+                    employeeId, defect);
                 return null;
             }
 
@@ -2751,34 +2757,59 @@ public sealed class PeriodCalculationService
     }
 
     /// <summary>
-    /// True when a 2xx timeline answer carries everything the per-plan lane and TASK-14513 rely on:
-    /// exactly one row each for <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and <c>FLEX_BALANCE</c>
-    /// (and nothing else), each with a line-item list, the flex block, the fingerprint list and a
-    /// non-empty evaluation-model marker.
+    /// Why a 2xx timeline answer cannot be used, or <c>null</c> when it can. Usable means complete AND
+    /// successful — what the per-plan lane and TASK-14513 rely on:
+    /// <list type="bullet">
+    /// <item>exactly one row each for <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and
+    /// <c>FLEX_BALANCE</c> (and nothing else), each with a line-item list and <c>Success == true</c>
+    /// (a failed row is a failed evaluation, not a payroll figure — Codex WARNING 2, R-6);</item>
+    /// <item>a flex block with <c>Success == true</c>;</item>
+    /// <item>at least one config fingerprint, none blank (an answer without one cannot be replayed,
+    /// TASK-14513);</item>
+    /// <item>a non-empty evaluation-model marker.</item>
+    /// </list>
+    /// The returned phrase is fixed text naming rule ids only, so it is safe to log; nothing from the
+    /// response body is ever echoed (SEC-039).
     /// </summary>
-    private static bool IsCompleteTimelineResponse(TimelineEvaluationResponse? timeline)
+    private static string? TimelineReplyDefect(TimelineEvaluationResponse? timeline)
     {
-        if (timeline?.Results is null
-            || timeline.Flex is null
-            || timeline.ConfigFingerprints is null
-            || string.IsNullOrWhiteSpace(timeline.EvaluationModel)
-            || timeline.Results.Count != 3)
-        {
-            return false;
-        }
+        if (timeline?.Results is null || timeline.Results.Count != 3)
+            return $"incomplete: it must carry exactly the {OvertimeRuleId}, {NormRuleId} and {FlexRuleId} rows";
 
         foreach (var row in timeline.Results)
         {
             if (row?.LineItems is null)
-                return false;
+                return "incomplete: a result row without a line-item list";
         }
 
-        return CountRows(timeline.Results, OvertimeRuleId) == 1
-            && CountRows(timeline.Results, NormRuleId) == 1
-            && CountRows(timeline.Results, FlexRuleId) == 1;
+        foreach (var ruleId in new[] { OvertimeRuleId, NormRuleId, FlexRuleId })
+        {
+            if (timeline.Results.Count(r => string.Equals(r.RuleId, ruleId, StringComparison.Ordinal)) != 1)
+                return $"incomplete: it must carry exactly the {OvertimeRuleId}, {NormRuleId} and {FlexRuleId} rows";
+        }
 
-        static int CountRows(IReadOnlyList<CalculationResult> rows, string ruleId) =>
-            rows.Count(r => string.Equals(r.RuleId, ruleId, StringComparison.Ordinal));
+        foreach (var row in timeline.Results)
+        {
+            if (!row.Success)
+                return $"failed result row {row.RuleId}";
+        }
+
+        if (timeline.Flex is null)
+            return "incomplete: no flex block";
+        if (!timeline.Flex.Success)
+            return "failed flex block";
+
+        if (timeline.ConfigFingerprints is null
+            || timeline.ConfigFingerprints.Count == 0
+            || timeline.ConfigFingerprints.Any(string.IsNullOrWhiteSpace))
+        {
+            return "no config fingerprint";
+        }
+
+        if (string.IsNullOrWhiteSpace(timeline.EvaluationModel))
+            return "no evaluation-model marker";
+
+        return null;
     }
 }
 
