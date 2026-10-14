@@ -696,35 +696,40 @@ public sealed class WeeklyTimelineCoreTests
     /// <summary>
     /// Refinement :616 — "the per-day default credit uses THAT day's fraction" (R35, precision rule :548).
     /// A part-timer drops from 37 to 30 h (fraction 0.811) effective Wednesday 16 September and books a
-    /// 0-hour VACATION on a Wednesday each side of the change (0 hours is the only branch where the
-    /// default credit applies; brief contradiction 12). Wed 9 Sep is on the old contract: credit
-    /// 7.4 × 1.0 = 7.40. Wed 23 Sep is on the new one: 7.4 × 0.811 = 6.0014 → 6.00 (rounded per day).
-    /// Credits 13.40. September has 11 weekdays in each piece (1–15 Sep: 4 + 5 + 2; 16–30 Sep: 3 + 5 + 3):
-    /// norm 11 × 7.40 + 11 × 6.00 = 147.40 (no unpaid absence, so the norm is not reduced); worked
-    /// 10 × 7.40 + 10 × 6.00 = 134.00 (the two absence days carry no entry); delta 134.00 + 13.40 −
-    /// 147.40 = 0. RED by MU-42 (the default credit takes its fraction from the piece in force on the
-    /// settlement day instead of the absence day's piece): credits 12.00 (0.811 for both), delta −1.40.
-    /// A first-piece regression gives 14.80 (1.0 for both), delta +1.40, and trips it as well. The
-    /// existing single-fraction fact cannot tell these apart.
+    /// 0-hour VACATION on each side of the change, both inside the one week that straddles it (Mon 14 –
+    /// Sun 20 Sep). 0 hours is the only branch where the default credit applies (brief contradiction 12).
+    /// Mon 14 Sep is on the old contract: credit 7.4 × 1.0 = 7.40. Thu 17 Sep is on the new one:
+    /// 7.4 × 0.811 = 6.0014 → 6.00 (rounded per day). Credits 13.40. September has 11 weekdays in each
+    /// piece (1–15 Sep: 4 + 5 + 2; 16–30 Sep: 3 + 5 + 3): norm 11 × 7.40 + 11 × 6.00 = 147.40 (no unpaid
+    /// absence, so the norm is not reduced); worked 10 × 7.40 + 10 × 6.00 = 134.00 (the two absence days
+    /// carry no entry); delta 134.00 + 13.40 − 147.40 = 0. The straddle week is worked 19.40 against a
+    /// norm of 32.80, so no overtime arises anywhere. RED by MU-42 (the default credit takes its fraction
+    /// from the piece in force on the settlement day instead of the absence day's piece): credits 12.00
+    /// (0.811 for both), delta −1.40. A first-piece regression gives 14.80 (1.0 for both), delta +1.40.
+    /// Because both days share one week, a week-level regression (the credit at the fraction of the
+    /// piece governing the week, i.e. the Sunday's) also gives 12.00, and one at the Monday's gives
+    /// 14.80 (Step 5a cycle 2 of 14506, NOTE). The existing single-fraction fact cannot tell any of
+    /// these apart.
     /// </summary>
     [Fact]
     public void Core_Flex_MidMonthFractionChange_ZeroHourCredits_UseEachDaysFraction_1340()
     {
-        // Weekday premises: the absences and the change are on weekdays, so none is skipped as zero-norm.
-        Assert.Equal(DayOfWeek.Wednesday, Sep9.DayOfWeek);
+        // Weekday premises: the absences and the change are on weekdays, so none is skipped as zero-norm,
+        // and both absences fall in the straddle week Mon 14 – Sun 20 Sep.
+        var sep17 = new DateOnly(2026, 9, 17);
+        Assert.Equal(DayOfWeek.Monday, Sep14.DayOfWeek);
         Assert.Equal(DayOfWeek.Tuesday, Sep15.DayOfWeek);
         Assert.Equal(DayOfWeek.Wednesday, Sep16.DayOfWeek);
-        Assert.Equal(DayOfWeek.Wednesday, new DateOnly(2026, 9, 23).DayOfWeek);
+        Assert.Equal(DayOfWeek.Thursday, sep17.DayOfWeek);
 
-        var sep23 = new DateOnly(2026, 9, 23);
         var entries = WeekdayHours(Sep1, Sep15, 7.40m)
             .Concat(WeekdayHours(Sep16, Sep30, 6.00m))
-            .Where(e => e.Date != Sep9 && e.Date != sep23)
+            .Where(e => e.Date != Sep14 && e.Date != sep17)
             .ToList();
         var absences = new List<AbsenceEntry>
         {
-            Absence(Sep9, AbsenceTypes.Vacation, 0m),
-            Absence(sep23, AbsenceTypes.Vacation, 0m),
+            Absence(Sep14, AbsenceTypes.Vacation, 0m),
+            Absence(sep17, AbsenceTypes.Vacation, 0m),
         };
 
         var result = Run(
