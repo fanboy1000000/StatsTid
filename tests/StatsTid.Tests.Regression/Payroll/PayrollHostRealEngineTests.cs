@@ -231,7 +231,7 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // RE3 — R14 over HTTP, closing week
+    // RE3 — R14 over HTTP, October's opening week (28 Sep–4 Oct; settled by October under F1)
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
