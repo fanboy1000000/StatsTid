@@ -970,6 +970,35 @@ The followers:
 - **Review:** one combined pass. **5α: PASS; Fable: APPROVED-WITH-WARNINGS.** It verified the stub bodies are verbatim, no product query reads `approval_periods.ok_version`, every weekday, the harness DDL against `init.sql`, RE3 under F1, and the commit history behind the `MonthEndCrossingTests` wording. **WARNING, recorded:** eight of the eleven files are Docker-gated, so the local runs never executed them; the stub move and the label change are equivalent by inspection, and the first push is their first execution. **NOTEs applied** in `2cd2a83` (comments and usings only, as suggested, not re-reviewed): the RE3 banner and two unused `using System.Text`.
 - **Merged `a59825b`.** O-1: 0 errors / 145 warnings · CA2100 115 · Unit 1436 · DemoSeed 170 · Regression non-Docker 128.
 
+## Wave A.3 (dispatched 2026-10-14)
+
+**At TASK-14511's return (the per-plan lane, the QUAL-186 fix; not yet merged).**
+
+*Plain language:* payroll no longer judges a month as one giant week. It sends each month to the Rule Engine once, and the engine judges it Monday to Sunday.
+- **A normal 37-hour September** (full-time HK, 7.40 h every weekday) now exports **no overtime and no flex payout**, with a norm of 22 × 7.40 = 162.80. Before, it exported 3.0 h at 50 % plus 122.8 h at 100 %, and a 25.8 h flex payout.
+- **A week crossing a month boundary is paid by the month holding its Sunday.** 9 h on 28–30 Sep plus 7.40 h on 1–2 Oct is paid in October as 3.00 h at 50 % plus 1.80 h at 100 %, both dated 4 Oct. September pays nothing for that week.
+- **A leaver whose last day is 30 Sep** has the week settled in September, dated 30 Sep.
+- These figures come from a throwaway in-process run by the implementer. The binding evidence is RE1–RE3 (Docker, CI).
+
+The detail:
+- **Branch** `s145/task-14511` at `c775e92` (one file, `PeriodCalculationService.cs`, +915/−324). Build 0 errors / 145 warnings · CA2100 115 · DemoSeed 170 · Regression non-Docker 128 · Unit 1428/1436.
+- **The 8 Unit reds** are 7 per-segment call-count and request-shape assertions (14511-T's work), plus `MonthEndCrossingTests`. Under F1, October's timeline request now correctly also carries 30 Sep's pre-midnight half as a context entry.
+- **Built:**
+  - pieces: the context days only when employed on the 1st, then one per employed segment;
+  - `SettlementCutoff` = the employment window's end when ≤ `periodEnd`;
+  - the profile and agreement-code reads widened to the opening Monday;
+  - one timeline call; the three results joined; the flex carry and `CallFlexRuleAsync` retired;
+  - the attempt budget counts real calls;
+  - a non-success or incomplete timeline answer is a failed call, never read as a result;
+  - four outcome members kept for TASK-14513 (`TimelinePieces`, `SettlementCutoff`, `ConfigFingerprints`, `EvaluationModel`);
+  - `PlannerBypassGuardTests` stays green.
+- **Brief contradictions:** the brief's line numbers are pre-A.2, and the actual ones are listed in the return.
+- **14511-T's list was widened by the Orchestrator** to `MonthEndCrossingTests.cs` and `RetroactiveCorrectionWindowTests.cs` (`:165-169`; the timeline call carries the period end). Both were briefed with exact assertion shapes; the second does not assert the cutoff (C-T1).
+- **Put to the adjudicator:**
+  - five declared deviations: the window read not widened; several employed segments split by line date (fixtures only); caller-built plans read histories; only covered days sent; and the timeline 400's sentence logged with the employee id;
+  - **the partial-failure rule:** a failed timeline call drops overtime, norm and flex together while the month still reports Success;
+  - **a spec question:** the same hours over norm count in September's flex and in October's overtime.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
