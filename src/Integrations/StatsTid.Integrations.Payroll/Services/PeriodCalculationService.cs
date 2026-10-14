@@ -352,9 +352,9 @@ public sealed class PeriodCalculationService
         /// audit-of-record is unsafe.</summary>
         BothFailed,
 
-        /// <summary>No manifest emission was attempted. Set on the total-failure
-        /// short-circuit (every rule-engine call the calculation made failed — typically Rule Engine
-        /// outage or auth misconfiguration) and on replay (the original manifest already
+        /// <summary>No manifest emission was attempted. Set on the refused calculation
+        /// (any rule-engine call failed — typically Rule Engine outage, auth misconfiguration
+        /// or a rejected input; S145 ruling R-6) and on replay (the original manifest already
         /// exists in the audit chain; replay re-evaluates rules but does NOT mint a new
         /// manifest event — ADR-016 D10 immutability). The ManifestId carried alongside
         /// this state references the in-memory plan; in the failure case it does not
@@ -699,10 +699,11 @@ public sealed class PeriodCalculationService
 
         var settlementCutoff = SettlementCutoffFrom(histories.EmploymentWindows, plan.PeriodEnd);
 
-        // The short-circuit budget counts the rule-engine CALLS actually made — the one timeline call
-        // plus three per EMPLOYED segment — so it fires exactly when every real call failed, and never
-        // when one succeeded. (S137 Codex-B2 hazards — a budget captured from a skipped segment, or
-        // multiplied by segments that made no call — cannot recur: nothing is multiplied.)
+        // The rule-engine CALLS actually made — the one timeline call plus three per EMPLOYED segment —
+        // and how many of them failed. ANY failed call refuses the calculation (S145 ruling R-6, below);
+        // a plan that made no call is never refused. (S137 Codex-B2 hazards — a budget captured from a
+        // skipped segment, or multiplied by segments that made no call — cannot recur: nothing is
+        // multiplied.)
         int callsAttempted = 0;
         int callsFailed = 0;
 
@@ -784,24 +785,27 @@ public sealed class PeriodCalculationService
             perSegmentExportLines.Add(segmentExportLines);
         }
 
-        // If EVERY rule-engine call the calculation made failed, treat the whole calculation as
-        // failed (typically a Rule Engine outage or an auth misconfiguration). The budget is the
-        // count of calls actually made (see above). Two consequences:
-        //   (i)  a plan whose segment 0 is NOT_EMPLOYED still short-circuits when every call fails
-        //        (the skipped segment simply made no call);
-        //   (ii) a plan with ZERO employed segments made no call, so it never short-circuits: it
-        //        returns Success == true with no rule results, no export lines, and a manifest
-        //        whose segments are all NOT_EMPLOYED. That is the RULED semantics — "nothing to
-        //        calculate" is a successful, auditable calculation (the manifest records WHY
-        //        nothing was paid), not a failure.
-        if (callsAttempted > 0 && callsFailed >= callsAttempted)
+        // If ANY rule-engine call failed, the calculation is refused: a month exported without one of
+        // its rules is wrong money labelled Success (S145 ruling R-6, adjudicator 2026-10-14). Since
+        // TASK-14511 one failed timeline call would otherwise drop overtime, norm and flex together
+        // while supplement, on-call and absence still exported. The refusal covers a Rule Engine
+        // outage, an auth misconfiguration and a rejected input alike; the failed call itself was
+        // already logged with its bounded diagnostic. Nothing is written: no manifest event, no
+        // projection row, no export lines (the host answers 422 on !Success, so no export record).
+        //
+        // A plan with ZERO employed segments made no call, so it is never refused: it returns
+        // Success == true with no rule results, no export lines, and a manifest whose segments are
+        // all NOT_EMPLOYED. That is the RULED semantics — "nothing to calculate" is a successful,
+        // auditable calculation (the manifest records WHY nothing was paid), not a failure.
+        if (callsFailed > 0)
         {
             _logger.LogError(
-                "All {CallsAttempted} rule-engine calls failed (the plan's timeline call and the per-segment calls of " +
-                "{EmployedSegmentCount} employed segment(s), of {SegmentCount}) for employee {EmployeeId} manifest " +
-                "{ManifestId} period {PeriodStart}-{PeriodEnd}",
-                callsAttempted, employedIndices.Count, plan.Segments.Count, profile.EmployeeId, plan.ManifestId,
-                plan.PeriodStart, plan.PeriodEnd);
+                "{CallsFailed} of {CallsAttempted} rule-engine calls failed (the plan's timeline call and the " +
+                "per-segment calls of {EmployedSegmentCount} employed segment(s), of {SegmentCount}) for employee " +
+                "{EmployeeId} manifest {ManifestId} period {PeriodStart}-{PeriodEnd}. The calculation is REFUSED and " +
+                "no payroll figure is produced for this period.",
+                callsFailed, callsAttempted, employedIndices.Count, plan.Segments.Count, profile.EmployeeId,
+                plan.ManifestId, plan.PeriodStart, plan.PeriodEnd);
 
             var failResult = new PeriodCalculationResult
             {
@@ -810,12 +814,15 @@ public sealed class PeriodCalculationService
                 PeriodEnd = plan.PeriodEnd,
                 AgreementCode = profile.AgreementCode,
                 OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
-                RuleResults = MergePerSegmentRuleResults(perSegmentRuleResults, ruleSet, profile.EmployeeId, plan.ManifestId),
+                // No figure leaves a refused calculation: the rows of the calls that DID succeed are
+                // not returned either (the host's 422 carries this result as its body). This is the
+                // shape the all-calls-failed case always had — a failed call yields no row.
+                RuleResults = [],
                 ExportLines = [],
                 Success = false,
-                ErrorMessage = "All rule evaluations failed"
+                ErrorMessage = "Rule engine evaluation failed; no payroll figure is produced for this period"
             };
-            // No manifest was emitted on this short-circuit (BuildManifest +
+            // No manifest was emitted on this refusal (BuildManifest +
             // EmitManifestAsync run later). Return AuditState.NoManifest so callers do
             // not treat plan.ManifestId as a valid audit-query key — it does not exist
             // in segment_manifests or the event store. (Codex sprint-end review fix.)
@@ -2319,8 +2326,8 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// What the per-segment lane got back for one EMPLOYED segment: the supplement, on-call and
-    /// absence results (<c>null</c> where that call failed), how many of its calls failed and how
-    /// many it made.
+    /// absence results (<c>null</c> where that call failed — a bounded diagnostic is logged and the
+    /// calculation is refused, S145 ruling R-6), how many of its calls failed and how many it made.
     /// </summary>
     private sealed record SegmentLaneResults(
         CalculationResult? Supplement,
@@ -2622,8 +2629,8 @@ public sealed class PeriodCalculationService
     /// <c>POST /api/rules/evaluate-timeline</c>, which evaluates overtime / merarbejde, the norm check
     /// and flex for the whole plan, week by week. Returns the engine's response, or <c>null</c> when the
     /// call failed — the same failure contract as the per-segment calls: never silent (a bounded
-    /// diagnostic is logged and the caller counts the failure toward the total-failure short-circuit),
-    /// and never a guess (no result is synthesized for the three rules).
+    /// diagnostic is logged and the calculation is refused, S145 ruling R-6), and never a guess (no
+    /// result is synthesized for the three rules).
     ///
     /// <para>
     /// <b>The endpoint's 400 has its own shape.</b> A rejected timeline answers 400 with an anonymous
