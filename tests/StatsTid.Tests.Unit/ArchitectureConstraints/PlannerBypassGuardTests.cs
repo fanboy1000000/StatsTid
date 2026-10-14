@@ -135,6 +135,72 @@ public class PlannerBypassGuardTests
     }
 
     /// <summary>
+    /// S145 / TASK-14514 (R31d) — the SAME guard for the new week-by-week endpoint. The pattern above deliberately
+    /// does not match sub-paths, so a file that posted straight to <c>/api/rules/evaluate-timeline</c> was
+    /// invisible to it. The timeline endpoint carries the overtime, norm and flex arithmetic for a whole plan, so
+    /// calling it from anywhere but <c>PeriodCalculationService</c> would bypass the planner's refusals, the
+    /// calculability checks and the frozen-inputs contract exactly as a direct <c>/evaluate</c> call would.
+    /// Same file-level allowlist, same two-condition scan (the guarded path as a literal AND a POST call in the
+    /// same file).
+    ///
+    /// <para>
+    /// Red conditions: RED by INJECTION (R46b, MU-32), not by reverting: in a throwaway checkout, add a
+    /// <c>PostAsJsonAsync("/api/rules/evaluate-timeline", ...)</c> literal to a non-allowlisted
+    /// <c>src/Integrations/**</c> file. The guard flags a file only when it holds both the path and a POST
+    /// (above), so a valid tree gives it nothing to find and restoring an old regex can never trip it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void NoIntegrationFile_OtherThanAllowlist_PostsToApiRulesEvaluateTimeline()
+    {
+        var repoRoot = LocateRepoRoot();
+        var integrationsDir = Path.Combine(repoRoot, "src", "Integrations");
+
+        Assert.True(Directory.Exists(integrationsDir),
+            $"src/Integrations directory not found under repo root '{repoRoot}'. " +
+            "If the directory was renamed, update AllowlistedRelativePath and this check.");
+
+        var violations = new List<string>();
+
+        foreach (var file in Directory.EnumerateFiles(integrationsDir, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal))
+                continue;
+
+            var text = File.ReadAllText(file);
+
+            if (!EvaluateTimelinePathPattern.IsMatch(text)) continue;
+            if (!HttpPostPattern.IsMatch(text)) continue;
+
+            var relativePath = Path.GetRelativePath(repoRoot, file)
+                .Replace('\\', '/');
+
+            if (string.Equals(relativePath, AllowlistedRelativePath, StringComparison.OrdinalIgnoreCase))
+                continue; // Expected: the canonical call site (the per-plan lane).
+
+            violations.Add(relativePath);
+        }
+
+        Assert.True(violations.Count == 0,
+            $"The following file(s) under src/Integrations/ post directly to /api/rules/evaluate-timeline " +
+            $"without going through PeriodCalculationService (PAT-005 / planner-bypass guard, S145 R31d). " +
+            $"Either route the call through PeriodCalculationService, or add the file to the allowlist " +
+            $"with explicit Orchestrator approval and a KB entry:{Environment.NewLine}" +
+            string.Join(Environment.NewLine, violations.Select(v => $"  - {v}")));
+    }
+
+    /// <summary>
+    /// Matches the week-by-week endpoint path (S145 R31d). Anchored like <see cref="EvaluatePathPattern"/>: the
+    /// lookahead keeps a deeper path segment from matching.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex EvaluateTimelinePathPattern =
+        new(
+            @"/api/rules/evaluate-timeline(?![/\-\w])",
+            System.Text.RegularExpressions.RegexOptions.Compiled |
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
     /// Sanity guard: confirms the allowlisted file still exists and still
     /// contains a POST to <c>/api/rules/evaluate</c>. If the legitimate call
     /// site is removed or renamed, this test fails loudly so the allowlist
