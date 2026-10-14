@@ -746,6 +746,20 @@ The followers:
 - **Recorded, no action:** the hook runs on both reopen arms, employee and leader (Do 2 sets no status condition). Legacy WEEKLY periods take M from `PeriodStart`.
 - **Review lenses:** 5α, Fable and **Codex** (retroactive-correction paths), on the combined branch after 14509-T.
 
+**The adjudicator's rulings on 14509 (Fable seat, 2026-10-14; verdict RULED-WITH-QUESTIONS).**
+- **R-1, the open-ended clip: ACCEPTED.**
+  - The sprint's new reach matters only where a correction stops. An open-ended correction already reaches every later month.
+  - The open-ended branch's cut-off marks the last month that can have gone to payroll, so widening it adds nothing payable. It would also mask the UTC-slip guard: under a UTC regression, `hi` = Sat 1 Aug would widen to Mon 3 Aug and still select August.
+  - **Changes:** the brief's Do 1 now says "a **bounded** `hi`". 14509-T gains Do 4, the guard `WriteForExportedMonths_OpenEnded_ClipIsNotWidenedIntoNextMonth`: July–September seeded, open-ended from 5 Jul at Copenhagen 1 Aug, exactly July and August. It goes red only if the widening is applied to the open-ended branch.
+  - **Declined, recorded here:** nothing enforces "no month after the current Copenhagen month can be exported". The raw export routes take any month. That is pre-existing, GlobalAdmin-only, and costs only an advisory flag, so it falls below the register's floor.
+- **R-2, the two `(weekdays / 5) × W` sites: not owed under R11. Registered as QUAL-198 (M).**
+  - R11's "one implementation" counted the Rule Engine's and the Skema screen's per-day norms. These are an older monthly denominator.
+  - No value differs today: every seeded norm is a multiple of 0.05.
+  - The real defect is the missing part-time fraction: a 30-hour employee is shown 162.80 where the engine judges 132.00. It is display only.
+  - Fixing it means both sites in one task, plus a per-employee dated-profile read on the roster and a contract-note change. Owner question **Q-1** asks when.
+- **R-3, the stale doc comments in `BackdateWorklistRowCreated.cs`: authorization widened** to the file's doc comments (no member, type or namespace change). The Orchestrator applies them as a comment-only fix-up after 14509-T, before the 5a lenses.
+- **R-4, handed to the 5a lenses:** M's row lock does not serialize against an export of M+1. In a millisecond interleaving, an October export reads September APPROVED while September's reopen reads no October export, and both commit with no worklist row. It is narrow and advisory. If closed, it is two-sided and belongs with TASK-14512's 409.
+
 **At TASK-14508's return (not yet merged; 14508-T and the adjudicator running).**
 
 *Plain language:* payroll now reads each employee's current recorded hours itself, through one payroll-only reader (`IRecordedHoursReader`, implemented by `ProjectionHoursReader`, R25/R58). A request that still carries hours gets 400 `payroll-entries-not-accepted`. No pay figure changes yet. The previous month's days in the opening week are read and kept, but filtered out until TASK-14511.
