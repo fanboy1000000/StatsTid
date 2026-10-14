@@ -59,7 +59,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 ///
 /// Red conditions (Docker-gated — cannot run locally; CI-verified):
 /// (1) mutation: the prior-month recheck in <c>PayrollExportService.ExportAsync</c> is removed (or
-/// <c>PriorMonthToRecheck</c> is not threaded) → the export does not block on September's row, the
+/// <c>ExportAsync</c> ignores the context's <c>PriorMonthToRecheck</c>) → the export does not block on September's row, the
 /// "export is waiting on the lock" condition never holds and the fact fails with that message (and the
 /// export would commit October).
 /// (2) mutation: the recheck reads September with a plain <c>SELECT</c> (no <c>FOR SHARE</c>) → same as
@@ -352,7 +352,7 @@ public sealed class PriorMonthExportRaceTests : IAsyncLifetime
 /// artifacts are written BEFORE the export and stay: the segment manifest (<c>segment_manifests</c> row)
 /// and the legacy <c>PeriodCalculationCompleted</c> event (stream <c>period-calc-{employee}-2026-10-01</c>
 /// in <c>events</c>). Both are observable from the test, by SQL. Not asserted separately: the manifest
-/// event's own stream (<c>manifest-*</c>), which is the same fact as the manifest row.
+/// event's own stream (<c>segment-manifest-{manifestId}</c>), which is the same fact as the manifest row.
 /// </para>
 ///
 /// Red conditions (Docker-gated — cannot run locally; CI-verified):
@@ -362,7 +362,7 @@ public sealed class PriorMonthExportRaceTests : IAsyncLifetime
 /// 200 and exports October on a withdrawn September).
 /// (2) mutation: the recheck in <c>ExportAsync</c> removed or reading with a plain <c>SELECT</c> → the same.
 /// (3) mutation: the host drops its catch of the export's <c>PriorMonthNotApprovedException</c> → the 409
-/// assertion trips (500 on this in-process host).
+/// assertion trips (the in-process host has no exception middleware, so the request task faults rather than answering 500; the fact goes red either way).
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class PriorMonthExportRaceHostTests : IAsyncLifetime
