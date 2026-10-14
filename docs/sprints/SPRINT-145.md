@@ -949,13 +949,34 @@ The followers:
 - **Still owed:** the ADR-016 read-contract amendment for `IRecordedHoursReader` is in the plan's Records owed, at close.
 - **Not observed yet:** the Docker side of A.1 and A.2. It is first seen at the Stage A gate's CI run (CA-4).
 
+## After the A.2 gate
+
+**At O-10's return (the post-A.1 test tidy); merged `a59825b`.**
+- **Branch** `s145/o10` at `ee0ce4d`: 11 files, tests only, no expected value changed. Build 0 errors / 145 warnings · Unit 1436 · DemoSeed 170 · Regression non-Docker 128, all unchanged.
+- **All seven items done:**
+  1. Four stub copies moved onto `TestSupport/EntitlementValidationStubHandler.cs`.
+  2. `SeedMonthApprovalAsync` takes `okVersion`.
+  3. A weekday-premise fact for the AR dates.
+  4. Two stale sentences reworded.
+  5. RE3's docstring corrected: 28 Sep–4 Oct is October's opening week under F1.
+  6. `Assert.Empty(result.Overtime.LineItems)` in the MU-42 pin.
+  7. `MonthEndCrossingTests`' docstrings updated for the retired guard.
+- **Brief contradictions, accepted** (the O-10 list was written from review notes, not the files):
+  - nine further identical private stubs exist (the implementer counted eight; the reviewer listed nine); they go to a ROADMAP sweep line rather than this tidy;
+  - the `HarnessDdl` stale claim was "AHEAD of init.sql", not "compiles against today's code";
+  - `MonthEndCrossingTests` never held the quoted phrase; the stale claims were reworded as found;
+  - RE3's real mis-assignment was calling 28 Sep–4 Oct "September's closing week". Its test name still says `ClosingWeek`; test names are contract (the evidence lists), so it is left as is and noted here.
+- **NOTE:** the new weekday fact sits in a Docker-gated class, so it runs only in CI. It is cheap date arithmetic, and moving it is optional.
+- **Review:** one combined pass. **5α: PASS; Fable: APPROVED-WITH-WARNINGS.** It verified the stub bodies are verbatim, no product query reads `approval_periods.ok_version`, every weekday, the harness DDL against `init.sql`, RE3 under F1, and the commit history behind the `MonthEndCrossingTests` wording. **WARNING, recorded:** eight of the eleven files are Docker-gated, so the local runs never executed them; the stub move and the label change are equivalent by inspection, and the first push is their first execution. **NOTEs applied** in `2cd2a83` (comments and usings only, as suggested, not re-reviewed): the RE3 banner and two unused `using System.Text`.
+- **Merged `a59825b`.** O-1: 0 errors / 145 warnings · CA2100 115 · Unit 1436 · DemoSeed 170 · Regression non-Docker 128.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-14, the A.2 gate closed (see § "A.2 gate — closed 2026-10-14"). Local master is this log commit, on top of `f0a863b` (the 14508 merge). Not pushed, by design |
 | **Phase** | Step 1, wave A.3 dispatched (2026-10-14). (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
-| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`). , 14508+T (`f0a863b`). **Running:** TASK-14511, the per-plan lane (`payroll-integration`, worktree `.claude/worktrees/s145-task-14511`, branch `s145/task-14511`, from `98d9f6e`) · O-10, the post-A.1 test tidy (`test-qa`, worktree `.claude/worktrees/s145-o10`, branch `s145/o10`, from `f0a863b`). **Authored, waiting for later gates:** 14514 (`s145/task-14514`, `1905950`; A.4) and 14515 (`s145/task-14515`, `af163e0`; A.5). **To clear at teardown:** the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
+| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`). , 14508+T (`f0a863b`). **Running:** TASK-14511, the per-plan lane (`payroll-integration`, worktree `.claude/worktrees/s145-task-14511`, branch `s145/task-14511`, from `98d9f6e`). O-10 merged (`a59825b`). **Authored, waiting for later gates:** 14514 (`s145/task-14514`, `1905950`; A.4) and 14515 (`s145/task-14515`, `af163e0`; A.5). **To clear at teardown:** the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
 | **Pending gates** | **Wave A.3:** TASK-14511, the per-plan lane (`payroll-integration`, which applies F1: context days, the cutoff and timeline pieces), then 14511-T. **A.3 gate:** merged · O-1. Then A.4 (14512+T; 14514 rebased and merged, plus its re-spawn 2 mutations incl. MU-43) and A.5 (14513+T; 14515 rebased and merged, plus its re-spawn 2), then Gate A-CLOSE. The Docker side of everything merged so far is unobserved until the Stage A gate's CI run (CA-4) |
 | **Open rulings** | None for the owner. The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | Process O-10 when it returns (5α, merge, O-1). When TASK-14511 returns: 14511-T paired pass on its branch, then build, 5α, Fable and Codex (payroll export), merge, A.3 gate |
+| **Next action** | When TASK-14511 returns: 14511-T paired pass on its branch, then build, 5α, Fable and Codex (payroll export), merge, A.3 gate |

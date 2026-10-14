@@ -367,6 +367,12 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   production; not enforced today. [CONVENTIONS.md]
 
 ### Tooling / infra / environment
+- **Backlog — fold the remaining rule-engine test stubs onto the shared handler (S145 O-10 finding).** S145's O-10 moved four private
+  copies of the entitlement-validation stub onto `tests/StatsTid.Tests.Regression/TestSupport/EntitlementValidationStubHandler.cs`.
+  Nine further identical private `RuleEngineStubHandler`s remain in the Regression project (`Balance/DatedQuotaAnchorTests`,
+  `EmployeeProfile/Adr032RevaluationTests`, `Hosting/PublisherStallReadYourWriteTests`, `Outbox/ProjectionParityTests`,
+  `Outbox/SkemaEntitlementEligibilityGuardTests`, `Outbox/SkemaMonthlyAccrualGuardTests`, `Skema/Adr032ConsumptionPinTests`,
+  `Skema/SkemaAccrualCapTests`, `Skema/SkemaFullDayOnlyGuardTests`). A mechanical `sweep` task; tests only.
 - **Fixed clock — ✅ DONE (S140).** Both tranches are now converted. S140 finished `QUAL-154`: the six remaining suites onto one
   constant anchor, three product seams widened plus a fourth found in passing (the cross-org transfer date), four probe legs, and
   the annual 1-September hard failure defused by a fact that calls the real resolver. The lasting lesson is a **method** correction,
