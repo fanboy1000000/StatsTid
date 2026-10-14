@@ -479,6 +479,7 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 | TASK-14507 Skema supersession (`backend-infrastructure`) | `s145/task-14507` (`56fdd8c`, fix-ups `93a9370` and `d744ba3`, note `79f18e7`) | O-1 at `9b75848`. O-2: no drift in `docs/api/openapi.json` or `frontend/src/lib/api-types.ts` (run 2026-10-14) | PASS | APPROVED-WITH-WARNINGS (`56fdd8c`); cycle 2 APPROVED-WITH-WARNINGS (`93a9370`); cycle 3 APPROVED (`d744ba3`) | REQUEST-CHANGES (`56fdd8c`, the pre-check BLOCKER, adjudicated); cycle 2 APPROVE-WITH-WARNINGS; cycle 3 APPROVE-WITH-WARNINGS | `94dea75`. Merged after 14501 and 14502 (Fable W1: the harness DDL had to know the new columns first), without a rebase, so the reviewed SHAs stand. No 14507-T. Closes QUAL-192, QUAL-193, QUAL-194. O-9 followed as `9b75848` |
 | TASK-14506 new-API Unit pins for the core, the helpers, the fingerprint, the legacy route and the shapes (`test-qa`) + the R49 file | `worktree-agent-a97b8efd3e8cd8e90` (`7dfc9d5`, `574bc5b`; R49 `67b17a0`; re-spawn 1 `80966e8`; fix-up `08ad021`; Orchestrator `2699609`) | O-1 on merged master `379567e`: 0 errors / 145 warnings · CA2100 115 · Unit **1421** (+112: the eight new files) · DemoSeed 170 · Regression non-Docker 128 | PASS; fix-up PASS; `2699609` PASS | APPROVED-WITH-WARNINGS (`80966e8`); cycle 2 APPROVED (`08ad021`); cycle 3 APPROVED (`2699609`) | not required (not high-risk) | `379567e`. The R49 file is byte-identical to `c3543f1`, so `worktree-agent-a0fe62b0b3b73d252` can now be cleared. Unit mutation run (re-spawn 2): 27 of 27 tripped, no findings (§ "A.1 gate") |
 | TASK-14510 label for `PRIOR_MONTH_REOPENED` (`ux`) | `s145/task-14510` (`735cba3`) | Branch: tsc 0 · vitest 989. O-1 on merged master `d928cf5`: frontend only, so the .NET side is unchanged since `379567e`; tsc exit 0 · vitest **989** (baseline 988) | PASS (note: the "no `as` cast" item was over-broad, see § Wave A.2) | **SKIP** per the plan's 5a table: pure UI label (`docs/AGENTS.md:353`) | not required | `d928cf5` |
+| TASK-14516 the Skema grid refuses a negative at entry (`ux`) | `s145/task-14516` (`83a49a6`, styling `05753a4`, fix-up `330a966`) | Branch: tsc 0 · vitest 1001. O-1 on merged master `46cecd8`: frontend only; tsc exit 0 · vitest **1002** (988 + 1 from 14510 + 13 from 14516) | PASS; fix-up PASS | APPROVED-WITH-WARNINGS (`05753a4`; WARNING = the recovery path unpinned); cycle 2 APPROVED (`330a966`) | not required (not high-risk) | `46cecd8` |
 
 **O-1 for the six merges `5c35ffb`…`94dea75`.** All six were merged on 2026-10-02 within one minute, with no O-1 between them. O-1 was run once afterwards, on 2026-10-14, at `9b75848`. That commit is the six merges plus O-9, which changes comments and one console line, so it is code-identical to `94dea75` for every test. Result: build 0 errors / 145 warnings (full `--no-incremental` Release rebuild) · CA2100 115 distinct sites · Unit 1309 · DemoSeed 170 · Regression `Category!=Docker` 128, all passing and all equal to the S144 baseline. The counts do not move because every new A.1a pin is a Docker fact, and Docker does not run on this machine; CI runs them. So nothing here verifies the Docker side of the known-red list below.
 
@@ -758,6 +759,24 @@ The followers:
   - The real defect is the missing part-time fraction: a 30-hour employee is shown 162.80 where the engine judges 132.00. It is display only.
   - Fixing it means both sites in one task, plus a per-employee dated-profile read on the roster and a contract-note change. Owner question **Q-1** asks when.
 - **R-3, the stale doc comments in `BackdateWorklistRowCreated.cs`: authorization widened** to the file's doc comments (no member, type or namespace change). The Orchestrator applies them as a comment-only fix-up after 14509-T, before the 5a lenses.
+- **The combined branch** is now `d61dc3a` (implementer) + `d46112d` (14509-T) + `7108c78` (R-3 doc comments) + `826b64b` (comment narrowed, Codex WARNING). Build at `7108c78`: 0 errors / 145 warnings · CA2100 115 · Unit 1421 · DemoSeed 170 · Regression non-Docker 128 · the norm grep is empty.
+- **14509-T** (`d46112d`): W1-EX is re-expected to February, March and April (labelled `// S145 R5(a):`). Also added: W1-G, the open-ended no-widen guard (adjudicator R-1), and RO1's `effectiveFrom = 2026-09-28`.
+- **5α: PASS.**
+  - Every file is in scope (union per R27).
+  - The reopen-handler and header edits are confined to their stated lines.
+  - SQL is parameterised.
+  - The new row reuses the shared upsert, event and audit tail.
+  - A note on the label wording: the R27 text lists R8/R9/R14/R26 only, and `// S145 R5(a):` is 14509-T's own brief-sanctioned label.
+- **5a Codex: APPROVE-WITH-WARNINGS.**
+  - It verified bounded widening, Monday boundaries and the year rollover.
+  - It verified that December 2026 → January 2027 gives Mon 28 Dec, and that May 2026 writes nothing.
+  - It verified the twin rebuilders are in sync, and that DayNorm changes only the cent.
+  - **WARNING:** the R-4 race is accepted as advisory for 14509, but the hook comment "never behind the state" overstated the guarantee. Narrowed in `826b64b`; the closure is in TASK-14512 Do 7.
+- **5a Fable: APPROVED-WITH-WARNINGS.**
+  - **WARNING 1:** the R-4 race. The closure stays with TASK-14512 Do 7, which is amended with Fable's condition: the export's read of M must be a row lock (`FOR UPDATE` / `FOR SHARE`), not a plain SELECT.
+  - **WARNING 2:** the two new pure date helpers had no locally runnable test, and nothing crossed a year boundary. Sent to 14509-T as two Unit Theories in `BackdateWorklistDerivationTests.cs`, with the rollovers Fri 1 Jan 2027 → Mon 4 Jan 2027 and December 2026 → (2027, 1, Mon 28 Dec).
+  - **NOTEs** verified the guard order, the hook end to end, R36, the `effectiveFrom` wire format, non-vacuity, and that no other Docker fact moves.
+  - **NOTE 9:** the HR follow-up process register gains **HRP-001b** (the `PRIOR_MONTH_REOPENED` hand-off).
 - **R-4, handed to the 5a lenses:** M's row lock does not serialize against an export of M+1. In a millisecond interleaving, an October export reads September APPROVED while September's reopen reads no October export, and both commit with no worklist row. It is narrow and advisory. If closed, it is two-sided and belongs with TASK-14512's 409.
 
 **At TASK-14508's return (not yet merged; 14508-T and the adjudicator running).**
@@ -819,6 +838,11 @@ The followers:
 - **No expected value changed.** The `// S145 R14:` tag appears only in explanatory comments.
 - **Checks:** build 0 errors / 126 warnings · Unit 1421 · DemoSeed 170 · Regression non-Docker 128.
 - **One unlisted adjustment:** `ReplayDeterminismTests` forward3 gets its own February-only reader, so its inputs keep their meaning.
+- **Scope addition (adjudicator Q2), written RED-first:** `MonthEndCrossingTests.MonthEndNightShift_Wed30Sep2300To0200_SeptemberNotRefused_PostMidnightHoursReachOctober` (`0c36ed6`).
+  - The fixture uses a window-honouring reader and a fake engine that captures entries.
+  - **RED observed** against the guard: `PlannerInvariantViolation … post-midnight hours dated 2026-10-01, AFTER PeriodEnd 2026-09-30` at `AssertNoDroppedBoundaryCrossing` (`PeriodCalculationService.cs:2059`).
+  - Unit was 1421 passed + 1 failed; the full build had 145 warnings. The earlier "126" came from an incremental build.
+  - Assertions 2–4 run first after the implementer's fix-up.
 
 **At TASK-14516's cycle 2; merged `46cecd8`.**
 - **Fix-up `330a966`:** five recovery cases, the `aria-invalid` cell outline, and no flash after a refused negative. tsc 0 · vitest 1001.
