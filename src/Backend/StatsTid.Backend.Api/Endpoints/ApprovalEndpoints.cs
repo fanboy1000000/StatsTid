@@ -1765,9 +1765,13 @@ public static class ApprovalEndpoints
             // the repository lands exactly that month's EXPORTED_MONTH row, non-blocking trigger kind
             // PRIOR_MONTH_REOPENED, linked to the PeriodReopened event above, effective from the
             // Monday of the next month's opening week. It writes nothing when the next month opens on
-            // a Monday or has no export record. Same transaction as the transition, so the list is
-            // never behind the state; the export read sits after the approval-row lock taken above
-            // (ADR-034 D4). Not the widened backdate writer (R36): that would reach a month further.
+            // a Monday or has no export record. Same transaction as the transition, so a reopen that
+            // sees the next month's export lands its row atomically with the reopen; the export read
+            // sits after the approval-row lock taken above (ADR-034 D4). Not yet serialized against a
+            // CONCURRENT export of the next month, which checks this month's approval before its own
+            // transaction: in a sub-second interleaving both can commit with no row. TASK-14512 Do 7
+            // closes it (the export row-locks this month's approval inside its transaction).
+            // Not the widened backdate writer (R36): that would reach a month further.
             // Placed after the PeriodReopened enqueue, so the outbox order follows the causal order.
             await worklistRepo.WriteForPriorMonthReopenedAsync(
                 conn, tx, period.EmployeeId, period.PeriodStart, @event.EventId, actor.ActorId!, ct);
