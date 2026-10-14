@@ -141,4 +141,86 @@ public sealed class PayrollPlanRefusalProblemTests
         Assert.DoesNotContain(EmployeeId, json);
         Assert.DoesNotContain("88213", json);
     }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S145 / TASK-14514 — the second 422 variant: an agreement change inside a settled week (Q5 (c))
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// A week-check refusal (TASK-14512's <c>PeriodNotCalculableException</c>, reason
+    /// <c>agreement-change-mid-week</c>) maps to the SAME <c>payroll-recalc-blocked</c> kind with the discriminating
+    /// <c>reason</c>, the cause <c>AgreementCodeChange</c>, a fixed error sentence, and NO <c>ruleId</c> (it is not
+    /// a rule's refusal). Consumers tell the two 422 variants apart by <c>reason</c> (refinement A5 :321-322).
+    ///
+    /// <para>
+    /// <b>Why it must map (plain language).</b> <c>TryCreate</c> returned null for anything without a rule id,
+    /// which surfaces as a bare 500: an operator would learn nothing. The new variant is what an agreement change on
+    /// a Tuesday inside a settled week (HK to AC on 1 September) answers on every payroll route.
+    /// </para>
+    ///
+    /// Red conditions (names a type TASK-14512 creates, so RED by MUTATION at the A.4 gate): MU-26 (the mapping
+    /// omits <c>reason</c>) trips the <c>reason</c> assertion; a mapping that returns null for the week variant (the
+    /// shape of master's <c>TryCreate</c>) trips <c>Assert.NotNull</c>.
+    /// </summary>
+    [Fact]
+    public void WeekVariant_HasReasonAgreementChangeMidWeek_NoRuleId()
+    {
+        var ex = WeekRefusal();
+
+        var problem = PayrollPlanRefusalProblem.TryCreate(ex);
+
+        Assert.NotNull(problem);
+        using var doc = JsonDocument.Parse(ToWireJson(problem!));
+        var root = doc.RootElement;
+        Assert.Equal("payroll-recalc-blocked", root.GetProperty("kind").GetString());
+        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.Equal("agreement-change-mid-week", root.GetProperty("reason").GetString());
+        Assert.Equal(new[] { "AgreementCodeChange" },
+            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        // No ruleId: absent, or an explicit null (the host test's own formulation).
+        Assert.True(
+            !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
+            "the week check's variant carries no ruleId (it is not a rule's refusal)");
+    }
+
+    /// <summary>
+    /// The week variant, SERIALIZED, contains no calendar date, not the change date the exception's own message
+    /// names (ISO or machine-culture form), and not the employee id. The preconditions assert the exception's
+    /// message really carries the change date and the employee id, so the redaction assertions CAN fail.
+    ///
+    /// Red conditions (names a type TASK-14512 creates, so RED by MUTATION at the A.4 gate): MU-27 (the change
+    /// date is included in <c>error</c>, for example <c>error = ex.Message</c>) puts the date and
+    /// <c>EMP-REDACT-88213</c> into the JSON and trips the date-pattern and employee-id assertions.
+    /// </summary>
+    [Fact]
+    public void WeekVariant_SerializedJson_HasNoDateNoEmployeeId()
+    {
+        var ex = WeekRefusal();
+        var isoChange = ChangeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        Assert.Contains(EmployeeId, ex.Message);
+        Assert.Contains(isoChange, ex.Message);
+
+        var problem = PayrollPlanRefusalProblem.TryCreate(ex);
+        Assert.NotNull(problem);
+        var json = ToWireJson(problem!);
+
+        Assert.DoesNotMatch(@"\d{4}-\d{2}-\d{2}", json);
+        Assert.DoesNotContain(isoChange, json);
+        Assert.DoesNotContain(ChangeDate.ToString(), json);
+        Assert.DoesNotContain(EmployeeId, json);
+        Assert.DoesNotContain("88213", json);
+    }
+
+    private static readonly DateOnly ChangeDate = new(2026, 9, 1);
+
+    /// <summary>
+    /// A week-check refusal for a diagnostic message that names the employee and the change date (as the planner's
+    /// own refusal message names the employee and the period), so the redaction pin has something to redact.
+    /// </summary>
+    private static PeriodNotCalculableException WeekRefusal() =>
+        new(
+            reason: "agreement-change-mid-week",
+            message: "Period for employee '" + EmployeeId + "' has an agreement change on " +
+                     ChangeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " inside a settled week.");
 }
