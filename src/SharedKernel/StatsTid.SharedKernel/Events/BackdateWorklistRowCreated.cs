@@ -5,7 +5,9 @@ namespace StatsTid.SharedKernel.Events;
 /// profile / agreement-code / employment-category correction lands a row on the HR diagnostic
 /// worklist (<c>hr_backdate_worklist</c>) — OR appends a further trigger to an already-OPEN row
 /// for the same key (<see cref="Appended"/> = true; same event type, so a reader of the
-/// employee stream sees every correction that touched the row in order).
+/// employee stream sees every trigger that touched the row in order). Since S145 (TASK-14509,
+/// R5(c)) a fourth cause lands rows too: reopening a month whose next month is already exported
+/// (<c>PRIOR_MONTH_REOPENED</c>), because the next month's opening week read days of the reopened one.
 ///
 /// <para>
 /// <b>Two row kinds, one event.</b> <see cref="Kind"/> is <c>EXPORTED_MONTH</c> (the correction
@@ -20,9 +22,10 @@ namespace StatsTid.SharedKernel.Events;
 ///
 /// <para>
 /// <b>Not a command.</b> This records that a worklist row exists / grew; nothing recalculates
-/// automatically (ADR-013). <see cref="TriggerEventId"/> is the causing correction event
-/// (<c>EmployeeProfileSuperseded</c> / <c>UserAgreementCodeSuperseded</c> / …) — the causal link
-/// back to the dated-history write. Stream: <c>employee-{employeeId}</c> (ADR-018 D6).
+/// automatically (ADR-013). <see cref="TriggerEventId"/> is the causing event: for the three
+/// correction kinds the correction event (<c>EmployeeProfileSuperseded</c> /
+/// <c>UserAgreementCodeSuperseded</c> / …), the causal link back to the dated-history write; for
+/// <c>PRIOR_MONTH_REOPENED</c> the <c>PeriodReopened</c> event. Stream: <c>employee-{employeeId}</c> (ADR-018 D6).
 /// </para>
 /// </summary>
 public sealed class BackdateWorklistRowCreated : DomainEventBase
@@ -45,11 +48,25 @@ public sealed class BackdateWorklistRowCreated : DomainEventBase
     public string? EntitlementType { get; init; }
     public int? EntitlementYear { get; init; }
 
-    /// <summary><c>PROFILE_CHANGE</c> | <c>AGREEMENT_CODE_CHANGE</c> | <c>EMPLOYMENT_CATEGORY_CHANGE</c>.</summary>
+    /// <summary><c>PROFILE_CHANGE</c> | <c>AGREEMENT_CODE_CHANGE</c> | <c>EMPLOYMENT_CATEGORY_CHANGE</c> | <c>PRIOR_MONTH_REOPENED</c> (S145).</summary>
     public required string TriggerKind { get; init; }
-    /// <summary>The correction event that caused this trigger (the causal link into dated history).</summary>
+    /// <summary>The event that caused this trigger: the correction event for the three correction kinds (the causal
+    /// link into dated history), the <c>PeriodReopened</c> event for <c>PRIOR_MONTH_REOPENED</c>.</summary>
     public required Guid TriggerEventId { get; init; }
-    /// <summary>The correction's effective date — the backdate.</summary>
+    /// <summary>
+    /// The EARLIEST DAY whose change can alter the flagged period — the date HR should start
+    /// looking from. Its meaning is the same for every trigger kind; only its source differs (S145,
+    /// widened together with <c>WorklistTrigger.EffectiveFrom</c> so the field does not fork):
+    /// <list type="bullet">
+    ///   <item><c>PROFILE_CHANGE</c> / <c>AGREEMENT_CODE_CHANGE</c> / <c>EMPLOYMENT_CATEGORY_CHANGE</c>:
+    ///     the correction's effective date — the real backdate, NOT the flagged month's first day
+    ///     (a backdate of Tue 29 Sep 2026 that also flags October, whose first week settled it,
+    ///     carries 29 Sep on the October row too).</item>
+    ///   <item><c>PRIOR_MONTH_REOPENED</c>: the earliest day of the REOPENED month that the flagged
+    ///     next month's settlement reads — the Monday of the next month's opening week. September
+    ///     2026 reopened under an exported October gives Mon 28 Sep 2026.</item>
+    /// </list>
+    /// </summary>
     public required DateOnly TriggerEffectiveFrom { get; init; }
 
     /// <summary>EXPORTED_MONTH: the export record's <c>content_hash</c> at append time.</summary>

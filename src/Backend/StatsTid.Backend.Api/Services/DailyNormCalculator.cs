@@ -25,7 +25,11 @@ namespace StatsTid.Backend.Api.Services;
 ///     <see cref="OkVersionResolver.ResolveVersion(DateOnly)"/> (NOT <c>year &gt;= 2026</c> — the
 ///     OK24→OK26 switch is 2026-04-01).</description></item>
 /// </list>
-/// Daily norm = <c>WeeklyNorm × fraction / 5</c>, rounded to 2 decimals. Weekends ⇒ 0.
+/// Daily norm = <see cref="DayNorm.ForWeekday"/>: <c>WeeklyNorm × fraction / 5</c>, rounded to
+/// 2 decimals half-to-even. Weekends ⇒ 0 (<see cref="DayNorm.IsWeekday"/>). S145 / TASK-14509
+/// (R11): the formula is no longer written out here — it is the ONE shared helper the Rule
+/// Engine's week-by-week core uses too, so the Skema screen and the payslip agree to the cent
+/// (the same formula as before, so every value is unchanged; one implementation instead of two).
 /// <c>ANNUAL_ACTIVITY</c> (academic) ⇒ <c>null</c> (a weekday split would be wrong — do NOT
 /// approximate). No dated profile covering the day ⇒ <c>null</c> (graceful, ADR-023 D3 —
 /// blank rather than a fabricated norm; e.g. days before <c>employment_start_date</c>).
@@ -84,7 +88,8 @@ public sealed class DailyNormCalculator
 
         for (var day = rangeStart; day <= rangeEnd; day = day.AddDays(1))
         {
-            if (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            // S145 / TASK-14509 — the shared weekend test (DayNorm); same Saturday/Sunday rule.
+            if (!DayNorm.IsWeekday(day))
             {
                 result.Add(new DailyNorm(day, 0m));
                 continue;
@@ -125,6 +130,14 @@ public sealed class DailyNormCalculator
     /// null, otherwise <c>Math.Round(WeeklyNorm × fraction / 5, 2)</c>. OK version is resolved per
     /// day; org falls back to <paramref name="fallbackOrgId"/> when the profile carries none.
     /// </para>
+    ///
+    /// <para>
+    /// S145 / TASK-14509 (R11): the weekday amount is <see cref="DayNorm.ForWeekday"/> — the same
+    /// function the Rule Engine's week-by-week core judges each weekday with. It is the formula
+    /// above, unchanged (<c>Math.Round(decimal, 2)</c> already rounded half-to-even, which is what
+    /// the helper states explicitly), so no value moves; what changes is that there is now one
+    /// implementation, so the screen and the payslip cannot drift apart.
+    /// </para>
     /// </summary>
     private async Task<decimal?> ComputeForProfileAsync(
         EmploymentProfile profile,
@@ -150,7 +163,7 @@ public sealed class DailyNormCalculator
             return null;
         }
 
-        return Math.Round(resolved.WeeklyNormHours * profile.PartTimeFraction / 5m, 2);
+        return DayNorm.ForWeekday(resolved.WeeklyNormHours, profile.PartTimeFraction);
     }
 
     /// <summary>
@@ -168,7 +181,7 @@ public sealed class DailyNormCalculator
         string fallbackOrgId,
         CancellationToken ct = default)
     {
-        if (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+        if (!DayNorm.IsWeekday(day))
             return 0m;
 
         var normCache = new Dictionary<string, (decimal WeeklyNormHours, NormModel NormModel)>(StringComparer.Ordinal);

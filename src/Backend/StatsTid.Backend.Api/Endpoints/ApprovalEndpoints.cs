@@ -1535,6 +1535,8 @@ public static class ApprovalEndpoints
             IAuditProjectionMapper<PeriodReopened> auditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
+            // S145 / TASK-14509 (R5(c)) — the reopen hook that flags an exported next month.
+            HrBackdateWorklistRepository worklistRepo,
             ILoggerFactory loggerFactory,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
@@ -1754,6 +1756,26 @@ public static class ApprovalEndpoints
                             $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
+
+            // ── S145 / TASK-14509 — R5(c): the reopen keeps the NEXT month honest (refinement A6, R36) ──
+            // Payroll settles each Monday–Sunday week with the month holding its Sunday (Q3 = F1), so
+            // when the next month starts mid-week its export already paid this month's last few days
+            // (October 2026's first week is Mon 28 Sep – Sun 4 Oct). Reopening this month lets those
+            // days change. If the next month is already exported, HR must be told it may be stale:
+            // the repository lands exactly that month's EXPORTED_MONTH row, non-blocking trigger kind
+            // PRIOR_MONTH_REOPENED, linked to the PeriodReopened event above, effective from the
+            // Monday of the next month's opening week. It writes nothing when the next month opens on
+            // a Monday or has no export record. Same transaction as the transition, so a reopen that
+            // sees the next month's export lands its row atomically with the reopen; the export read
+            // sits after the approval-row lock taken above (ADR-034 D4). Not yet serialized against a
+            // CONCURRENT export of the next month, which today does not lock this month's approval at
+            // all: in a sub-second interleaving both can commit with no row. TASK-14512 Do 2 adds the
+            // export's prior-month check, and Do 7 puts it under a row lock inside the export's
+            // transaction, which closes the gap.
+            // Not the widened backdate writer (R36): that would reach a month further.
+            // Placed after the PeriodReopened enqueue, so the outbox order follows the causal order.
+            await worklistRepo.WriteForPriorMonthReopenedAsync(
+                conn, tx, period.EmployeeId, period.PeriodStart, @event.EventId, actor.ActorId!, ct);
 
             await tx.CommitAsync(ct);
 

@@ -29,24 +29,61 @@ namespace StatsTid.Infrastructure;
 /// write endpoints (TASK-13802) construct one of these per dated-history write and hand it to
 /// <see cref="HrBackdateWorklistRepository.WriteForExportedMonthsAsync"/> and
 /// <see cref="HrBackdateWorklistRepository.WriteForSettledYearsAsync"/> in their transaction.
+/// S145 (R5(c)): the period reopen builds one too, inside
+/// <see cref="HrBackdateWorklistRepository.WriteForPriorMonthReopenedAsync"/>.
 /// </summary>
 /// <param name="Kind">One of <see cref="WorklistTriggerKinds"/>.</param>
-/// <param name="EventId">The causing correction event (e.g. <c>EmployeeProfileSuperseded</c>) — the causal link into dated history.</param>
-/// <param name="EffectiveFrom">The correction's effective date — the backdate.</param>
-/// <param name="ActorId">Who made the correction (becomes <c>created_by</c> on a new row; recorded per trigger).</param>
+/// <param name="EventId">The causing event — the causal link back to what HR must look at: the
+/// correction event (e.g. <c>EmployeeProfileSuperseded</c>) for the three correction kinds, the
+/// <c>PeriodReopened</c> event for <see cref="WorklistTriggerKinds.PriorMonthReopened"/>.</param>
+/// <param name="EffectiveFrom">
+/// The EARLIEST DAY whose change can alter the flagged period — the date HR should start looking
+/// from. Its meaning is the same for every kind; only where the date comes from differs (S145,
+/// widened under the 14504-return ruling so the field does not silently mean two things):
+/// <list type="bullet">
+///   <item><b>The three correction kinds</b> (<see cref="WorklistTriggerKinds.ProfileChange"/>,
+///     <see cref="WorklistTriggerKinds.AgreementCodeChange"/>,
+///     <see cref="WorklistTriggerKinds.EmploymentCategoryChange"/>): the correction's effective
+///     date — the real backdate, NOT the flagged month's first day. Under R5(a) a backdate in a
+///     month's last days also flags the NEXT month, whose opening week settles those days; that
+///     next month's trigger still carries the real backdate (e.g. Tue 29 Sep 2026 on the
+///     October row).</item>
+///   <item><b><see cref="WorklistTriggerKinds.PriorMonthReopened"/></b>: the earliest day of the
+///     REOPENED month that the flagged next month's settlement reads — the Monday of that next
+///     month's opening week (week-by-week settlement, owner ruling Q3 = F1). September 2026
+///     reopened under an exported October gives Mon 28 Sep 2026: October's first week runs
+///     Mon 28 Sep – Sun 4 Oct, so 28–30 September are the September days October paid.</item>
+/// </list>
+/// </param>
+/// <param name="ActorId">Who made the correction or the reopen (becomes <c>created_by</c> on a new row; recorded per trigger).</param>
 public sealed record WorklistTrigger(string Kind, Guid EventId, DateOnly EffectiveFrom, string ActorId);
 
-/// <summary>The three correction kinds that can land a worklist row (refinement rev 4, TASK-13803).</summary>
+/// <summary>
+/// The kinds of change that can land a worklist row: the three corrections of dated history
+/// (refinement rev 4, TASK-13803) and, since S145 (refinement A6, R5(c)), the reopen of the month
+/// before an exported month.
+/// </summary>
 public static class WorklistTriggerKinds
 {
     public const string ProfileChange = "PROFILE_CHANGE";
     public const string AgreementCodeChange = "AGREEMENT_CODE_CHANGE";
     public const string EmploymentCategoryChange = "EMPLOYMENT_CATEGORY_CHANGE";
 
+    /// <summary>
+    /// S145 / R5(c) — month M was reopened while M+1 was already exported, and M+1's opening week
+    /// holds days of M. Under week-by-week settlement (Q3 = F1) M+1's export paid that week, using
+    /// M's figures as they stood; the reopen lets those figures change, so M+1 may now be stale.
+    /// NON-BLOCKING: nothing about M+1's own data stops its re-plan (the QUAL-149 / QUAL-150
+    /// refusals concern a profile or agreement split INSIDE the flagged month, which a reopen is
+    /// not), so <see cref="BackdateWorklistDerivation.RecalcBlockedByForTrigger"/> derives no block.
+    /// </summary>
+    public const string PriorMonthReopened = "PRIOR_MONTH_REOPENED";
+
     public static bool IsKnown(string? kind) =>
         string.Equals(kind, ProfileChange, StringComparison.Ordinal)
         || string.Equals(kind, AgreementCodeChange, StringComparison.Ordinal)
-        || string.Equals(kind, EmploymentCategoryChange, StringComparison.Ordinal);
+        || string.Equals(kind, EmploymentCategoryChange, StringComparison.Ordinal)
+        || string.Equals(kind, PriorMonthReopened, StringComparison.Ordinal);
 }
 
 /// <summary>The two row kinds of <c>hr_backdate_worklist</c> (the <c>kind</c> CHECK).</summary>
@@ -216,7 +253,9 @@ public static class WorklistTriggerJson
 ///     1st and on or before the last day: a change ON the 1st coincides with the period start
 ///     (one segment), a change on the last day still splits the month. Both are OUT this sprint
 ///     (owner ruling OQ-3 (a)) and made VISIBLE here. SETTLED_YEAR rows are never blocked this
-///     way — their fix is ADR-033's reverse-then-re-settle, not a re-plan.</item>
+///     way — their fix is ADR-033's reverse-then-re-settle, not a re-plan. A
+///     PRIOR_MONTH_REOPENED trigger (S145 R5(c)) never blocks either: it splits nothing inside
+///     the flagged month.</item>
 ///   <item><b>recalculatedSince</b> (EXPORTED_MONTH) — per trigger: the export record's CURRENT
 ///     <c>content_hash</c> differs from the baseline THAT trigger captured (corrections advance
 ///     the hash in place via <c>PayrollExportRecordRepository.UpdateCurrentEffectiveLinesAsync</c>,
@@ -256,6 +295,11 @@ public static class BackdateWorklistDerivation
             WorklistTriggerKinds.ProfileChange => RecalcBlockedProfileSplit,
             WorklistTriggerKinds.EmploymentCategoryChange => RecalcBlockedProfileSplit,
             WorklistTriggerKinds.AgreementCodeChange => RecalcBlockedAgreementKey,
+            // S145 R5(c): a reopen of the previous month splits nothing inside this month, so it
+            // never blocks the re-plan. Stated explicitly rather than left to the default arm.
+            // (Its effectiveFrom lies in the previous month anyway, so the strictly-inside test
+            // above already answers null for it.)
+            WorklistTriggerKinds.PriorMonthReopened => null,
             _ => null,
         };
     }
@@ -378,6 +422,53 @@ public static class BackdateWorklistDerivation
     }
 
     /// <summary>
+    /// S145 / R5(a) — the exclusive upper bound of an exported-month selection, extended to the
+    /// Monday after the week containing <c>toExclusive − 1</c> (the interval's last day).
+    ///
+    /// <para>
+    /// <b>Plain language.</b> Payroll settles each Monday–Sunday week with the month that holds
+    /// its Sunday (owner ruling Q3 = F1). So a backdate on Tuesday 29 September 2026 that stops at
+    /// 1 October still changes the week Mon 28 Sep – Sun 4 Oct, which OCTOBER paid. Rounding the
+    /// bound up to that week's following Monday (5 October) brings October into the selection.
+    /// An interval that already ends on a week boundary (its last day a Sunday, so the bound is a
+    /// Monday) is returned unchanged: no later month settled any of its days.
+    /// </para>
+    ///
+    /// <para>
+    /// Widening from <c>toExclusive − 1</c>, not from <c>toExclusive</c>, is the point: the bound
+    /// is exclusive, so a bound of Monday 28 September means the last corrected day is Sunday 27,
+    /// whose week ends that day — widening from the bound itself would wrongly reach 5 October.
+    /// </para>
+    /// </summary>
+    public static DateOnly SettlingMondayAfter(DateOnly toExclusive) =>
+        WeeklyContext.WeekEnd(toExclusive.AddDays(-1)).AddDays(1);
+
+    /// <summary>
+    /// S145 / R5(c) — what reopening the month that starts at (or contains)
+    /// <paramref name="reopenedPeriodStart"/> can reach in the NEXT month: that next month's key and
+    /// the trigger's <c>EffectiveFrom</c>, or <c>null</c> when the next month opens on a Monday and
+    /// so its settlement reads no day of the reopened month.
+    ///
+    /// <para>
+    /// <b>Plain language.</b> When the next month M+1 starts mid-week, its opening Monday–Sunday
+    /// week begins in M, and M+1 settles that whole week (Q3 = F1): M+1's pay used M's last few
+    /// days. Reopening M lets those days change, so M+1 — if already exported — may be stale.
+    /// <c>EffectiveFrom</c> is the Monday of M+1's opening week: the first day of M that M+1's
+    /// settlement reads, so the earliest day whose change can alter M+1 (Orchestrator ruling at
+    /// TASK-14504's return; the spec was silent). September 2026 → October, Mon 28 Sep 2026.
+    /// May 2026 → <c>null</c> (1 June 2026 is a Monday).
+    /// </para>
+    /// </summary>
+    public static (int Year, int Month, DateOnly EffectiveFrom)? NextMonthReachOfReopen(DateOnly reopenedPeriodStart)
+    {
+        var nextMonthStart = new DateOnly(reopenedPeriodStart.Year, reopenedPeriodStart.Month, 1).AddMonths(1);
+        var openingMonday = WeeklyContext.WeekStart(nextMonthStart);
+        if (openingMonday == nextMonthStart)
+            return null;
+        return (nextMonthStart.Year, nextMonthStart.Month, openingMonday);
+    }
+
+    /// <summary>
     /// Whether the half-open correction interval <c>[from, toExclusive)</c> (null upper = open-ended)
     /// touches the CLOSED calendar window <c>[windowStart, windowEndInclusive]</c>.
     /// </summary>
@@ -494,6 +585,18 @@ public static class BackdateWorklistDerivation
 /// <b>Selection semantics.</b> Exported months = every export record of the employee whose
 /// (year, month) intersects <c>[from, toExclusive)</c>; a null upper bound is open-ended and is
 /// clipped at the CURRENT Copenhagen month (an export for a later month cannot exist yet).
+/// S145 (R5(a)): a BOUNDED upper bound is extended to the Monday after the week holding the
+/// interval's last day (<see cref="BackdateWorklistDerivation.SettlingMondayAfter"/>), so the
+/// month that SETTLED that week — the next month, when the week runs into it — is selected too.
+/// The open-ended clip is not widened: it marks what can have been exported, not where the
+/// correction ends.
+/// </para>
+///
+/// <para>
+/// <b>The reopen hook (S145, R5(c), R36).</b> <see cref="WriteForPriorMonthReopenedAsync"/> is a
+/// separate single-month writer: reopening M flags exactly M+1 (when M+1 is exported and its
+/// opening week holds days of M), never through the widened selection above — widening
+/// <c>[1 Oct, 1 Nov)</c> would reach Monday 2 November 2026 and wrongly flag November too.
 /// </para>
 ///
 /// <para>
@@ -723,8 +826,13 @@ public sealed class HrBackdateWorklistRepository
     /// <summary>
     /// Lands / appends an EXPORTED_MONTH row for every <c>payroll_export_records</c> row of the
     /// employee whose month intersects <c>[from, toExclusive)</c> (null = open-ended, clipped at
-    /// the current Copenhagen month). Emits <see cref="BackdateWorklistRowCreated"/> per affected
-    /// row in the caller's tx. Returns the affected row ids (new or appended), in month order.
+    /// the current Copenhagen month), with a bounded <paramref name="toExclusive"/> extended to the
+    /// Monday after the week holding the interval's last day (S145 R5(a), <see cref="BackdateWorklistDerivation.SettlingMondayAfter"/>):
+    /// a backdate effective Tuesday 29 September 2026 bounded at 1 October flags September AND
+    /// October, because October settled the week Mon 28 Sep – Sun 4 Oct. Every row's trigger
+    /// carries the real backdate (<see cref="WorklistTrigger.EffectiveFrom"/>), not the flagged
+    /// month's first day. Emits <see cref="BackdateWorklistRowCreated"/> per affected row in the
+    /// caller's tx. Returns the affected row ids (new or appended), in month order.
     /// </summary>
     public async Task<IReadOnlyList<Guid>> WriteForExportedMonthsAsync(
         NpgsqlConnection conn,
@@ -740,11 +848,85 @@ public sealed class HrBackdateWorklistRepository
             return Array.Empty<Guid>();
 
         var lo = new DateOnly(from.Year, from.Month, 1);
-        var hi = toExclusive ?? FirstDayOfNextMonth(CopenhagenBusinessDate.Today(_timeProvider));
+        // S145 R5(a): a BOUNDED interval reaches the month that SETTLED its last week. Writers pass
+        // the written row's own interval, so without this a backdate in a month's closing days
+        // would never flag the next month, which paid that week (week-by-week settlement, Q3 = F1).
+        // Only ever widens; an interval whose last day is a Sunday is left as it is.
+        //
+        // The OPEN-ENDED clip is deliberately not widened. It is not the interval's end — an
+        // open-ended correction already reaches every later month — but the limit of what can
+        // have been exported (no month after the current Copenhagen month has an export yet).
+        // Widening it could only add a month that cannot be exported, and it would blunt the guard
+        // on that clip: a regression to the UTC day (hi = 1 Aug 2026, a Saturday) would widen to
+        // Monday 3 August and hide itself (WriteForExportedMonths_OpenEnded_SelectsThroughCurrentCopenhagenMonth_NotBeyond).
+        var hi = toExclusive is { } bound
+            ? BackdateWorklistDerivation.SettlingMondayAfter(bound)
+            : FirstDayOfNextMonth(CopenhagenBusinessDate.Today(_timeProvider));
         if (hi <= lo)
             return Array.Empty<Guid>();
 
         var exports = await ReadExportedMonthsAsync(conn, tx, employeeId, lo, hi, ct);
+        return await UpsertAndEmitExportedMonthsAsync(conn, tx, employeeId, trigger, exports, ct);
+    }
+
+    /// <summary>
+    /// S145 / R5(c) (refinement A6; R36) — the reopen hook. Called by the period-reopen handler in
+    /// ITS transaction, after the payroll-export lock read and the state transition, with the
+    /// <c>PeriodReopened</c> event's id. When the month after the reopened one (M+1) opens
+    /// mid-week — so its opening Monday–Sunday week holds days of the reopened month M — and M+1
+    /// has a <c>payroll_export_records</c> row, lands (or appends to) exactly M+1's EXPORTED_MONTH
+    /// row, trigger kind <see cref="WorklistTriggerKinds.PriorMonthReopened"/> (non-blocking),
+    /// <c>EffectiveFrom</c> = the Monday of M+1's opening week
+    /// (<see cref="BackdateWorklistDerivation.NextMonthReachOfReopen"/>). Writes nothing when M+1
+    /// opens on a Monday or is not exported. Emits <see cref="BackdateWorklistRowCreated"/> and its
+    /// ADR-026 audit row in the caller's tx, like every other writer here.
+    ///
+    /// <para>
+    /// <b>Why a separate single-month writer (R36).</b> The reopen reaches the very next month
+    /// only. It deliberately does NOT go through <see cref="WriteForExportedMonthsAsync"/>, whose
+    /// R5(a) widening is right for a backdate but wrong here: October 2026 ends on a Saturday, so
+    /// widening October's <c>[1 Oct, 1 Nov)</c> would reach Monday 2 November and flag November,
+    /// which a reopen of September cannot have touched.
+    /// </para>
+    /// </summary>
+    /// <param name="reopenedPeriodStart">The reopened approval period's start; its calendar month is M.</param>
+    /// <param name="periodReopenedEventId">The <c>PeriodReopened</c> event id — the trigger's causal link.</param>
+    /// <param name="actorId">Who reopened the period.</param>
+    /// <returns>The affected row id (new or appended), or an empty list when nothing was flagged.</returns>
+    public async Task<IReadOnlyList<Guid>> WriteForPriorMonthReopenedAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string employeeId,
+        DateOnly reopenedPeriodStart,
+        Guid periodReopenedEventId,
+        string actorId,
+        CancellationToken ct)
+    {
+        if (BackdateWorklistDerivation.NextMonthReachOfReopen(reopenedPeriodStart) is not { } reach)
+            return Array.Empty<Guid>();
+
+        var trigger = new WorklistTrigger(
+            WorklistTriggerKinds.PriorMonthReopened, periodReopenedEventId, reach.EffectiveFrom, actorId);
+        ValidateTrigger(trigger);
+
+        // Exactly M+1: [first of M+1, first of M+2), UNWIDENED (R36).
+        var lo = new DateOnly(reach.Year, reach.Month, 1);
+        var hi = lo.AddMonths(1);
+        var exports = await ReadExportedMonthsAsync(conn, tx, employeeId, lo, hi, ct);
+        return await UpsertAndEmitExportedMonthsAsync(conn, tx, employeeId, trigger, exports, ct);
+    }
+
+    /// <summary>The shared tail of both EXPORTED_MONTH entry points: one upsert + one event (and
+    /// its ADR-026 audit row) per selected export record, in the caller's tx. Nothing is read or
+    /// written when <paramref name="exports"/> is empty.</summary>
+    private async Task<IReadOnlyList<Guid>> UpsertAndEmitExportedMonthsAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string employeeId,
+        WorklistTrigger trigger,
+        IReadOnlyList<ExportedMonth> exports,
+        CancellationToken ct)
+    {
         if (exports.Count == 0)
             return Array.Empty<Guid>();
 

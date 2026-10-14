@@ -43,6 +43,15 @@
 --   boundary_cause_summary <- data->'boundaryCauseSummary'     (jsonb -> text[])
 --   created_at             <- data->>'createdAt'               (timestamptz)
 --   segments_jsonb         <- data->'segments'                 (jsonb)
+--   plan_inputs_jsonb      <- data->'planInputs'               (jsonb, NULLABLE — S145 / A7)
+--
+-- plan_inputs_jsonb (S145 / TASK-14509, refinement A7): the frozen inputs of the calculation
+-- a replay must reuse. The event SegmentManifestCreated.planInputs is the record of truth, so
+-- it is copied as-is, like segments. Unlike segments there is deliberately NO COALESCE: a
+-- manifest written before S145 has no frozen inputs (the key is absent) and its row must stay
+-- NULL, so a replay refuses it by name (replay-manifest-without-frozen-inputs) instead of
+-- reading a fabricated empty input set. NULLIF(..., 'null'::jsonb) folds an explicit JSON null
+-- to SQL NULL for the same reason.
 --
 -- Note: `manifest_id` keeps its `::uuid` cast (column stays UUID per D10).
 --       `employee_id` does NOT cast — the column is TEXT and `data->>` already
@@ -83,7 +92,8 @@ INSERT INTO segment_manifests (
     calculation_kind,
     boundary_cause_summary,
     created_at,
-    segments_jsonb
+    segments_jsonb,
+    plan_inputs_jsonb
 )
 SELECT DISTINCT ON (manifest_id)
     manifest_id,
@@ -93,7 +103,8 @@ SELECT DISTINCT ON (manifest_id)
     calculation_kind,
     boundary_cause_summary,
     created_at,
-    segments_jsonb
+    segments_jsonb,
+    plan_inputs_jsonb
 FROM (
     SELECT
         (data->>'manifestId')::uuid                     AS manifest_id,
@@ -108,6 +119,7 @@ FROM (
         )                                               AS boundary_cause_summary,
         (data->>'createdAt')::timestamptz               AS created_at,
         COALESCE(data->'segments', '[]'::jsonb)         AS segments_jsonb,
+        NULLIF(data->'planInputs', 'null'::jsonb)       AS plan_inputs_jsonb,
         global_position
     FROM events
     WHERE event_type = 'SegmentManifestCreated'
