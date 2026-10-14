@@ -40,11 +40,10 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// </para>
 ///
 /// <para>
-/// <b>Written from the spec, before the code exists.</b> These pins name types TASK-14508 / 14511 / 14512 create
-/// (<c>IRecordedHoursReader</c>, <c>ProjectionHoursReader</c>, <c>IPriorPeriodApprovalReader</c>,
-/// <c>ApprovalPeriodPriorPeriodReader</c>) and a PCS signature without hours, so on master they do not compile;
-/// the names are the plan's, and every name the briefs left open is listed in the TASK-14514 report as
-/// "assumed". Docker-gated: CI-verified, never locally green.
+/// <b>Written from the spec, before the code existed.</b> These pins use the types TASK-14508 / 14511 / 14512
+/// created (<c>IRecordedHoursReader</c>, <c>ProjectionHoursReader</c>, <c>IPriorPeriodApprovalReader</c>,
+/// <c>ApprovalPeriodPriorPeriodReader</c>) and the PCS signature without hours; re-spawn 1 reconciled the names
+/// with the merged code, and no expected value changed. Docker-gated: CI-verified, never locally green.
 /// </para>
 ///
 /// <para>
@@ -492,8 +491,9 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
     /// WP9 (R6 table; refinement :610, :612; N7). The fixture is <b>AC</b>, the only agreement with a
     /// DEPARTMENT_HEAD override (<c>PositionOverrideConfigs.cs:27-36</c>: <c>NormPeriodWeeks</c> 4, flex cap 200,
     /// weekly norm unchanged). The employee's position becomes DEPARTMENT_HEAD effective Tuesday 1 September (the
-    /// period start, so one segment); the opening week 31 August - 6 September is reported under the
-    /// <b>Sunday's</b> configuration: <c>NormPeriodWeeks</c> <b>4</b>. The no-position-change twin (a second AC
+    /// period start, so one segment); the result reports <c>NormPeriodWeeks</c> from the configuration in force
+    /// on the period's last covered day (30 September, DEPARTMENT_HEAD; the week's Sunday 6 September gives the
+    /// same value): <b>4</b>. The no-position-change twin (a second AC
     /// employee with the same hours, calculated in the same fact, C-W6) reports the base AC value, 1. Every day is
     /// at exactly the day norm (C-W3), so the figures are comparable, and the export lines of the two employees
     /// are identical ("no export line change"; wage type, hours and dates, in order).
