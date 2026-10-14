@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | **in progress — Stage A, wave A.1.** Every A.1 task is merged (14500, 14501–14504, 14505+T, 14506, 14507). The A.1 gate is open: only TASK-14506 re-spawn 2, the Unit mutation run, remains. Planning: refinement READY (rev 3.4, Step 4, five cycles), plan READY (`.claude/plans/PLAN-s145.md` draft 5 plus 30 task briefs in `.claude/plans/s145/`; Step 0b, five cycles, both lenses READY at cycle 5) |
+| **Status** | **in progress — Stage A. The A.1 gate closed on 2026-10-14** (every A.1 task merged; the Unit mutation run caught 27 of 27). Next: wave A.2. Planning: refinement READY (rev 3.4, Step 4, five cycles), plan READY (`.claude/plans/PLAN-s145.md` draft 5 plus 30 task briefs in `.claude/plans/s145/`; Step 0b, five cycles, both lenses READY at cycle 5) |
 | **Test Verified** | **Locally only** (O-1 at `379567e`, 2026-10-14): build 0 errors / 145 warnings · CA2100 115 · Unit 1421 (baseline 1309; +112 from TASK-14506) · DemoSeed 170 · Regression non-Docker 128. **CI has not yet run any S145 code.** That is by design: this project pushes master only at sprint close (`PLAN-s145.md` § "Standing constraints"), and CI first sees Stage A on the evidence branch at the Stage A gate (CA-4, `s145-evidence-a`) |
 | **Theme** | Payroll stops judging a whole month against one week's norm, which today makes every ordinary month's overtime, merarbejde and flex wrong (QUAL-186). Then a month with a mid-month change to hours, position or agreement becomes payable, with each part under its own wage-type codes (QUAL-149/150). Along the way, a Skema correction stops being counted twice (QUAL-192..194) |
 | **Predecessor** | S144: close `cbaa5e0` (CI red: nine test-setup failures) · governance `6b0d982` (review cap 3 → 5; the close guard's CI-health query fix) · post-close fix `8a87d16` (CI green `36610948637`) · docs-only `018ef2a` (QUAL-186), `6849b84` (QUAL-187..191), `de6c228` (the S144 C-9 record), `62fcdc3` (QUAL-192..194) |
@@ -477,7 +477,7 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 | TASK-14503b stub-engine host pins + R38 wording (`test-qa`) | `s145/task-14503b` (`9f3e8bc`, comments `488dcfc`) | O-1 at `9b75848` | PASS | APPROVED-WITH-WARNINGS (batched) | not required | `510619e` |
 | TASK-14504 A6 backend pins (`test-qa`) | `s145/task-14504` (`5f0fd3d`) | O-1 at `9b75848` | PASS | APPROVED-WITH-WARNINGS (batched) | not required | `630bf89` |
 | TASK-14507 Skema supersession (`backend-infrastructure`) | `s145/task-14507` (`56fdd8c`, fix-ups `93a9370` and `d744ba3`, note `79f18e7`) | O-1 at `9b75848`. O-2: no drift in `docs/api/openapi.json` or `frontend/src/lib/api-types.ts` (run 2026-10-14) | PASS | APPROVED-WITH-WARNINGS (`56fdd8c`); cycle 2 APPROVED-WITH-WARNINGS (`93a9370`); cycle 3 APPROVED (`d744ba3`) | REQUEST-CHANGES (`56fdd8c`, the pre-check BLOCKER, adjudicated); cycle 2 APPROVE-WITH-WARNINGS; cycle 3 APPROVE-WITH-WARNINGS | `94dea75`. Merged after 14501 and 14502 (Fable W1: the harness DDL had to know the new columns first), without a rebase, so the reviewed SHAs stand. No 14507-T. Closes QUAL-192, QUAL-193, QUAL-194. O-9 followed as `9b75848` |
-| TASK-14506 new-API Unit pins for the core, the helpers, the fingerprint, the legacy route and the shapes (`test-qa`) + the R49 file | `worktree-agent-a97b8efd3e8cd8e90` (`7dfc9d5`, `574bc5b`; R49 `67b17a0`; re-spawn 1 `80966e8`; fix-up `08ad021`; Orchestrator `2699609`) | O-1 on merged master `379567e`: 0 errors / 145 warnings · CA2100 115 · Unit **1421** (+112: the eight new files) · DemoSeed 170 · Regression non-Docker 128 | PASS; fix-up PASS; `2699609` PASS | APPROVED-WITH-WARNINGS (`80966e8`); cycle 2 APPROVED (`08ad021`); cycle 3 APPROVED (`2699609`) | not required (not high-risk) | `379567e`. The R49 file is byte-identical to `c3543f1`, so `worktree-agent-a0fe62b0b3b73d252` can now be cleared. Unit mutation run (re-spawn 2) in progress |
+| TASK-14506 new-API Unit pins for the core, the helpers, the fingerprint, the legacy route and the shapes (`test-qa`) + the R49 file | `worktree-agent-a97b8efd3e8cd8e90` (`7dfc9d5`, `574bc5b`; R49 `67b17a0`; re-spawn 1 `80966e8`; fix-up `08ad021`; Orchestrator `2699609`) | O-1 on merged master `379567e`: 0 errors / 145 warnings · CA2100 115 · Unit **1421** (+112: the eight new files) · DemoSeed 170 · Regression non-Docker 128 | PASS; fix-up PASS; `2699609` PASS | APPROVED-WITH-WARNINGS (`80966e8`); cycle 2 APPROVED (`08ad021`); cycle 3 APPROVED (`2699609`) | not required (not high-risk) | `379567e`. The R49 file is byte-identical to `c3543f1`, so `worktree-agent-a0fe62b0b3b73d252` can now be cleared. Unit mutation run (re-spawn 2): 27 of 27 tripped, no findings (§ "A.1 gate") |
 
 **O-1 for the six merges `5c35ffb`…`94dea75`.** All six were merged on 2026-10-02 within one minute, with no O-1 between them. O-1 was run once afterwards, on 2026-10-14, at `9b75848`. That commit is the six merges plus O-9, which changes comments and one console line, so it is code-identical to `94dea75` for every test. Result: build 0 errors / 145 warnings (full `--no-incremental` Release rebuild) · CA2100 115 distinct sites · Unit 1309 · DemoSeed 170 · Regression `Category!=Docker` 128, all passing and all equal to the S144 baseline. The counts do not move because every new A.1a pin is a Docker fact, and Docker does not run on this machine; CI runs them. So nothing here verifies the Docker side of the known-red list below.
 
@@ -636,13 +636,64 @@ Green today and expected to stay green:
 - **Cycle-3 NOTE:** the docstring says "no overtime arises", but the fact does not assert it. The claim is true, and overtime cannot reach the flex figures. Added to O-10 (the plan's post-A.1 test tidy) as `Assert.Empty(result.Overtime.LineItems)`, rather than a fourth review cycle.
 - **Merged `379567e`**: code-identical to `2699609`.
 
+## A.1 gate — closed 2026-10-14
+
+*Plain language:* wave A.1 put the new week-by-week calculation core, the database changes and the Skema "a save replaces its cell" fix on master, together with the tests that define them. The gate checks three things: every task passed its checks before merging, master still builds and passes, and the new tests can actually fail. The last check breaks the production code on purpose, one behaviour at a time in a throwaway copy, and confirms the matching test goes red. All 27 deliberate breakages were caught.
+
+**The checklist** (`PLAN-s145.md` § wave table, row A.1b):
+- **All A.1 tasks merged:** 14500 `1b6160c`, 14501 `5c35ffb`, 14502 `25eb8eb`, 14503a `32b668a`, 14503b `510619e`, 14504 `630bf89`, 14505+T `ce51a38`, 14506 `379567e` (with 14503a's characterization file, R49), 14507 `94dea75`. No 14507-T was needed. 14505b was not needed: 14505 landed whole.
+- **Every A.1 ledger row has its 5α and 5a cells,** and Codex where the plan marks a task high-risk (14500, 14505, 14507).
+- **O-1** on `379567e`: 0 errors / 145 warnings · CA2100 115 · Unit 1421 · DemoSeed 170 · Regression non-Docker 128.
+- **O-2:** no drift (after 14507).
+- **O-3:** `db-schema.md` was hand-transcribed at the 14500 merge, because there is no Python on this machine. It is arbitrated by CI's `--check` at the Stage A gate's run.
+- **14506 re-spawn 2, the Unit mutation run:** 27 of 27 tripped their named pin, with no findings (table below).
+- **Not observed yet:** the Docker side of A.1. That covers the known-red list, and 14507's 24 facts expected green. It is seen first at the Stage A gate's CI run (CA-4).
+
+**The Unit mutation table (TASK-14506 re-spawn 2).** Each mutation was applied alone in a detached throwaway checkout at `379567e`, outside the repository, then restored to a clean status before the next. The checkout was removed and pruned at the end, and `src/**` on master is untouched. Every run exited 1 with the named pin failing, read from an unpiped `dotnet test`. "core" is `src/RuleEngine/StatsTid.RuleEngine.Api/Rules/WeeklyTimelineCore.cs`.
+
+| Id | Mutation as applied | Captured failure |
+|---|---|---|
+| MU-01 | core:153-154, 170-172: one week = the whole period, against one week's norm and thresholds | `Assert.Empty()`: overtime lines present |
+| MU-02 | core:180: week lines dated on the Monday | expected 20-09-2026, actual 14-09-2026 |
+| MU-03 | `WeeklyContext.cs:69`: a week is settled by the month of its Monday | both pins fail; September holds the closing week's lines dated 4 Oct |
+| MU-04 | core:135: `SettlementCutoff` forced to null | expected `[OVERTIME_100 2.00, OVERTIME_50 1.20 @ 29 Sep]`, actual `[]` |
+| MU-05 | core:431-433: uncovered weekdays counted on piece 0 | expected 148.00, actual 162.80 |
+| MU-06 | core:170-172: the week's norm and thresholds from the Sunday's config | expected 3.60, actual 4.00 |
+| MU-07 | core:170-172: the Sunday's fraction for the whole week | HK expected 6.04 / 2.56, actual 7.55 / 2.45; AC expected 8.60, actual 10.00 |
+| MU-08 | core:223-224: `NORMAL_HOURS` emitted for context entries | `DoesNotContain()`: the 31 Aug line present |
+| MU-09 | core:248, 265: mode and `NormPeriodWeeks` from the week's first covered day | expected 4, actual 1 |
+| MU-10 | core:203: annual branch disabled | expected 158.136986, actual 162.80 |
+| MU-11 | core:322-329: flex clamped at each week's end | expected 97.00, actual 92.00 |
+| MU-12 | core:329: cap from the first in-period day | expected 100.00, actual 110.00 |
+| MU-13 | `AbsenceRule.cs` default credit unrounded | expected 10.00, actual 10.0014 |
+| MU-14 | `DayNorm.cs:45`: `AwayFromZero` | 4 of 5 rows, e.g. expected 4.62, actual 4.63 |
+| MU-15 | `DayNorm.cs:52`: weekends get the weekday norm | expected 0, actual 7.40 |
+| MU-16 | `WeeklyContext.cs:101`: context days ignored | the "Tue 29 Sep is a context day of October" row: expected True, got False |
+| MU-17 | `WeeklyContext.cs:100-101`: Monday exemption deleted | four Monday rows: expected False, got True |
+| MU-18 | `ConfigFingerprint.cs:44`: `WeeklyNormHours` omitted | the `WeeklyNormHours` row: "did not change the fingerprint" |
+| MU-19 | `ConfigFingerprint.cs:45`: declaration order | `NotEqual()`: equals the declaration-order hash |
+| MU-20 | `RuleRegistry.cs:323`: legacy opening week judged against 37 | `Single()`: collection empty |
+| MU-21 | `RuleRegistry.cs:282-283`: legacy lines dated `periodStart` | expected 2026-09-20, actual 2026-09-14 |
+| MU-22 | `[JsonIgnore]` on `Source` (`TimeEntryRegistered.cs:26`, `AbsenceRegistered.cs:30`) | both Source facts: expected "SKEMA", actual null |
+| MU-23 | `[JsonIgnore]` on `PlanInputs` (`SegmentManifestCreated.cs:82`) | `NotNull()`: null |
+| MU-24 | `[JsonIgnore]` on the next-period fields (`RetroactiveCorrectionRequested.cs:47, 54`) | expected 01-10-2026, actual null |
+| MU-37 | `RuleRegistry.cs:327`: `ForcedNormMode` null for every norm id | weekly: expected 1, actual 4; annual: expected null, actual 1 |
+| MU-41 | core:467-468: the `day > _periodEnd` bound removed | expected 1, actual null (October's annual mode governed the closing week) |
+| MU-42 | core:314: credit fraction from the settlement day's piece | expected 13.40, actual 12.00 |
+
+**Readings the agent chose where a catalogue row was loose (not findings).**
+- **MU-01:** "one week's norm" is `WeeklyNormHours × fraction`, assigned. A sum of per-day norms over the window would produce no overtime and test nothing.
+- **MU-16:** "context days ignored" is expressed through the month of the first settled week's end, because the helper does not receive the period start.
+- **MU-22:** applied to both `Source` properties at once. Each Source fact trips on its own event.
+- **Extra reds, information only:** MU-21 also turned `Legacy_…ClosingPartialWeekSettledOnPeriodEnd_Dated30Sep` red.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-14, later the same day. Every A.1 task is merged, the last being TASK-14506 (`379567e`). The A.1 gate is open, waiting on 14506 re-spawn 2 (the Unit mutation run). Local master is this log commit, on top of `379567e`. It is not pushed, by design: master is pushed only at sprint close |
-| **Phase** | Step 1, the A.1 gate. The 2026-10-02 session ended right after the 14507 merge and TASK-14506's rebase, before the log was updated; this block and the six ledger rows above were written on 2026-10-14 from the merge commits, the branches and a fresh O-1. The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
-| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). **TASK-14506 re-spawn 2 running:** the same `test-qa` agent, in a throwaway detached checkout outside the repository (`C:\Users\b200895\source\repos\s145-mu-14506`), runs MU-01..24, MU-37, MU-41 and MU-42 one at a time and removes the checkout at the end. **To clear at teardown:** the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
-| **Pending gates** | The A.1 gate: 14506 re-spawn 2 (Unit mutation run MU-01..24, MU-37, MU-41, MU-42; a mutation that does not trip its pin is a finding) → the A.1 gate checklist (every A.1 row has its 5α and 5a cells; O-1; O-2 done; O-3 arbitrated by CI) → A.1 handoff → wave A.2. The Docker side of everything merged so far, including 14507's turning 24 known-red facts green (B1–B3, TRM, SHO, S1–S13, Q1–Q7, counting S8's four rows), is unobserved until the Stage A gate's CI run (CA-4) |
+| **As of** | 2026-10-14, the A.1 gate closed (see § "A.1 gate — closed 2026-10-14"). Local master is this log commit, on top of `379567e` (the TASK-14506 merge). It is not pushed, by design: master is pushed only at sprint close |
+| **Phase** | Step 1, between the A.1 gate and wave A.2. (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
+| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Nothing running.** **To clear at teardown:** the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
+| **Pending gates** | Wave A.2 (`PLAN-s145.md` wave table): 14508 hours read + host contract (`payroll-integration`) → 14508-T · 14509 A6 + rebuilder + `DailyNormCalculator` (`backend-infrastructure`) → 14509-T · 14510 trigger label (`ux`) · 14516 negative-hours guard in the grid (`ux`) · 14514 and 14515 authored from the spec (`test-qa`) · O-10, the post-A.1 test tidy (`test-qa`, beside 14514's authoring). **A.2 gate:** 14508+T, 14509+T, 14510 and 14516 merged · O-1 including `tsc --noEmit` and vitest · O-2 check. The Docker side of everything merged so far, including 14507's turning 24 known-red facts green (B1–B3, TRM, SHO, S1–S13, Q1–Q7, counting S8's four rows), is unobserved until the Stage A gate's CI run (CA-4) |
 | **Open rulings** | None for the owner. The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | Process 14506 re-spawn 2's mutation table when it returns |
+| **Next action** | Dispatch wave A.2 |
