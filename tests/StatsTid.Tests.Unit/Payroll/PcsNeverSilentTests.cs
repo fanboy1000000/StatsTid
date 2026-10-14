@@ -162,7 +162,7 @@ public sealed class PcsNeverSilentTests
         // The replay: a null approval reader, a fresh engine.
         var replayEngine = new StubEngine();
         var replayPcs = BuildPcs(replayEngine, store, hours, approval: null);
-        var replay = await replayPcs.ReplayAsync(forward.ManifestId);
+        var replay = await replayPcs.ReplayAsync(forward.ManifestId, Profile(Emp), previousFlexBalance: 0m);
 
         Assert.True(replay.Success, replay.ErrorMessage);
         Assert.Contains("/api/rules/evaluate-timeline", replayEngine.Paths);
@@ -200,7 +200,7 @@ public sealed class PcsNeverSilentTests
             profileResolver: null,
             employmentWindowResolver: windows,
             employeeProfileRepo: null,
-            recordedHoursReader: hours,
+            hoursReader: hours,
             priorPeriodApprovalReader: approval);
 
     private static TimeEntryProjectionRow Row(DateOnly date, decimal hours, long outboxId) => new()

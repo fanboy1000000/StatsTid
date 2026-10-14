@@ -696,7 +696,7 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
             employmentWindowResolver: new EmploymentWindowResolver(_db),
             employeeProfileRepo: new EmployeeProfileRepository(_db),
             userAgreementCodeRepo: agreementCodes,
-            recordedHoursReader: new ProjectionHoursReader(
+            hoursReader: new ProjectionHoursReader(_db,
                 new TimeEntryProjectionRepository(_db), new AbsenceProjectionRepository(_db)),
             priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)));
     }

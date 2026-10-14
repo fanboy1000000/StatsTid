@@ -200,7 +200,7 @@ public sealed class EmploymentEdgesTimelineTests : IAsyncLifetime
             profileResolver: new EmploymentProfileResolver(_harness.Factory, new UserAgreementCodeRepository(_harness.Factory)),
             employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
             employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
-            recordedHoursReader: new EmptyHours(),
+            hoursReader: new EmptyHours(),
             priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
     }
 
