@@ -1881,7 +1881,7 @@ public sealed class PeriodCalculationService
                 ReplayRefusedException.ManifestWithoutFrozenInputs, manifestId, manifest.EmployeeId,
                 manifest.PlanInputs is null
                     ? "the manifest carries no frozen inputs (a manifest written before S145, or a projection row whose plan_inputs_jsonb is NULL)"
-                    : "the manifest's frozen inputs are incomplete (a member is missing)");
+                    : "the manifest's frozen inputs are incomplete (a member is null or empty)");
 
         // 2. The plan (today's rule set re-asserts the D9 invariants, as on a forward calculation) and the
         //    evaluation inputs from the frozen pieces and cutoff alone: no employment window, no profile or
@@ -1916,8 +1916,11 @@ public sealed class PeriodCalculationService
     }
 
     /// <summary>
-    /// True when every member of a loaded <see cref="PlanInputs"/> is present. A record deserialized from a
-    /// damaged <c>plan_inputs_jsonb</c> or event could miss a member; it is refused by name
+    /// True when every member of a loaded <see cref="PlanInputs"/> holds a usable value. This is the semantic
+    /// half of the completeness check: a MISSING member already fails the decode (<c>[JsonRequired]</c>, S145
+    /// ruling R-18: on the projection row it is refused by name in <see cref="DecodeProjectionRow"/>; on the
+    /// event the stream read fails, see <see cref="LoadManifestAsync"/>), but a member written as an explicit
+    /// JSON <c>null</c> list or an empty digest still decodes; it is refused by the same name
     /// (<see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>) rather than crashing later. An empty
     /// list is complete (no rows read; no fingerprint for a plan that made no engine call).
     /// </summary>
@@ -2452,12 +2455,37 @@ public sealed class PeriodCalculationService
                     $"ManifestId={manifestEvent.ManifestId}.");
     }
 
+    /// <summary>
+    /// The raw values of one <c>segment_manifests</c> row, read before anything is decoded (S145 ruling R-17):
+    /// the scalars as typed by the reader, and the two JSON columns as text (<c>plan_inputs_jsonb</c> is
+    /// <c>null</c> when the column is NULL).
+    /// </summary>
+    private sealed record ManifestProjectionRow(
+        Guid ManifestId,
+        DateOnly PeriodStart,
+        DateOnly PeriodEnd,
+        string EmployeeId,
+        string CalculationKind,
+        List<string> BoundaryCauseSummary,
+        DateTimeOffset CreatedAt,
+        string SegmentsJson,
+        string? PlanInputsJson);
+
     private async Task<SegmentManifest?> LoadManifestAsync(Guid manifestId, CancellationToken ct)
     {
         // 1. Try the projection table first — single-row indexed lookup. Since S145 / TASK-14513 the row's
-        //    plan_inputs_jsonb is read too: a NULL slot loads as a manifest without frozen inputs, which the
-        //    replay refuses by name. It deliberately does NOT fall back to the event for the slot: the row is
-        //    what the projection says was calculated, and a rebuild (not a replay) is what restores a row.
+        //    plan_inputs_jsonb is read too. Three outcomes (S145 rulings R-14 vii, R-17):
+        //    - no row, or the projection unreachable (a connection failure, a missing table, a SQL error)
+        //      → the event (step 2 below);
+        //    - a found row with a NULL slot → refused by the replay (R-14 vii): a manifest without frozen inputs;
+        //    - a found row with an undecodable slot → refused here (R-17), by the same name.
+        //    A found row never falls back to the event for the slot: the row is what the projection says was
+        //    calculated, and a rebuild (not a replay) is what restores a damaged row. That is why the catch-all
+        //    below wraps ONLY the SQL read into raw values; the decoding happens after it, where no catch can
+        //    turn a damaged row into a silent event substitution.
+        //    A SegmentManifestCreated whose own planInputs cannot be decoded fails the stream read and surfaces
+        //    as "not found / cannot replay": a store-level fault in an append-only record.
+        ManifestProjectionRow? row = null;
         try
         {
             await using var conn = _connectionFactory.Create();
@@ -2475,14 +2503,7 @@ public sealed class PeriodCalculationService
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct))
             {
-                var segmentsJson = reader.GetString(7);
-                var segments = JsonSerializer.Deserialize<List<PlannedSegment>>(segmentsJson, JsonOptions)
-                    ?? new List<PlannedSegment>();
-                var planInputs = reader.IsDBNull(8)
-                    ? null
-                    : JsonSerializer.Deserialize<PlanInputs>(reader.GetString(8), JsonOptions);
-
-                return new SegmentManifest(
+                row = new ManifestProjectionRow(
                     ManifestId: reader.GetGuid(0),
                     PeriodStart: DateOnly.FromDateTime(reader.GetDateTime(1)),
                     PeriodEnd: DateOnly.FromDateTime(reader.GetDateTime(2)),
@@ -2490,16 +2511,22 @@ public sealed class PeriodCalculationService
                     CalculationKind: reader.GetString(4),
                     BoundaryCauseSummary: ((string[])reader.GetValue(5)).ToList(),
                     CreatedAt: reader.GetFieldValue<DateTimeOffset>(6),
-                    Segments: segments,
-                    PlanInputs: planInputs);
+                    SegmentsJson: reader.GetString(7),
+                    PlanInputsJson: reader.IsDBNull(8) ? null : reader.GetString(8));
             }
         }
         catch (Exception ex)
         {
+            // A fault anywhere in the read, closing the connection included, means the projection could not be
+            // consulted; no decoding has happened yet, so nothing here can be a damaged row.
+            row = null;
             _logger.LogWarning(ex,
                 "Projection lookup for manifest {ManifestId} failed; falling back to event-replay.",
                 manifestId);
         }
+
+        if (row is not null)
+            return DecodeProjectionRow(row);
 
         // 2. Event-replay fallback — read SegmentManifestCreated events on the manifest's
         //    stream and rehydrate the manifest. This path covers the projection-truncated /
@@ -2530,6 +2557,68 @@ public sealed class PeriodCalculationService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// S145 ruling R-17 — decodes a FOUND <c>segment_manifests</c> row. Runs outside the projection read's
+    /// catch-all, so a damaged row fails loudly and is never replaced by the event:
+    /// <list type="bullet">
+    /// <item><c>segments_jsonb</c> not decodable → <see cref="InvalidOperationException"/> naming the manifest and
+    /// the column. The segments are the plan, not frozen inputs, so this is a damaged row, not a named replay
+    /// refusal;</item>
+    /// <item><c>plan_inputs_jsonb</c> present but not decodable as <see cref="PlanInputs"/> (the wrong shape, for
+    /// example <c>[]</c>, or a missing required member, R-18) → logged at Warning with the exception, then refused
+    /// <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
+    /// <item><c>plan_inputs_jsonb</c> NULL (or the JSON literal <c>null</c>) → a manifest without frozen inputs,
+    /// which <see cref="ReplayAsync"/> refuses by the same name (R-14 vii).</item>
+    /// </list>
+    /// </summary>
+    private SegmentManifest DecodeProjectionRow(ManifestProjectionRow row)
+    {
+        List<PlannedSegment> segments;
+        try
+        {
+            segments = JsonSerializer.Deserialize<List<PlannedSegment>>(row.SegmentsJson, JsonOptions)
+                ?? new List<PlannedSegment>();
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Damaged projection row: segment_manifests.segments_jsonb of manifest {row.ManifestId} could not be " +
+                "decoded as the planned segments; rebuild the projection. The replay does not fall back to the " +
+                "event for a found row.",
+                ex);
+        }
+
+        PlanInputs? planInputs = null;
+        if (row.PlanInputsJson is not null)
+        {
+            try
+            {
+                planInputs = JsonSerializer.Deserialize<PlanInputs>(row.PlanInputsJson, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex,
+                    "The segment_manifests row of manifest {ManifestId} holds a plan_inputs_jsonb that cannot be " +
+                    "decoded as frozen inputs.",
+                    row.ManifestId);
+                throw Refuse(
+                    ReplayRefusedException.ManifestWithoutFrozenInputs, row.ManifestId, row.EmployeeId,
+                    "the projection row's plan_inputs_jsonb could not be decoded as frozen inputs; rebuild the projection");
+            }
+        }
+
+        return new SegmentManifest(
+            ManifestId: row.ManifestId,
+            PeriodStart: row.PeriodStart,
+            PeriodEnd: row.PeriodEnd,
+            EmployeeId: row.EmployeeId,
+            CalculationKind: row.CalculationKind,
+            BoundaryCauseSummary: row.BoundaryCauseSummary,
+            CreatedAt: row.CreatedAt,
+            Segments: segments,
+            PlanInputs: planInputs);
     }
 
     /// <summary>

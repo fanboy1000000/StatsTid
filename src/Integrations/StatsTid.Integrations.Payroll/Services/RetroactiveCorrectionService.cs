@@ -263,7 +263,10 @@ public sealed class RetroactiveCorrectionService
         var resolvedOrgId = profile.OrgId
             ?? throw new InvalidOperationException(
                 $"Audit projection: employee {profile.EmployeeId} has no OrgId; cannot resolve target_org_id.");
-        var manifestId = newResult.RuleResults.FirstOrDefault()?.ManifestId ?? Guid.Empty;
+        // S145 ruling R-19: the manifest this recalculation persisted, straight from the outcome. Never derived
+        // from the first rule result: a month with no EMPLOYED day evaluates nothing and has no rule results,
+        // yet its manifest is still written, and the event must still link it.
+        var manifestId = outcome.ManifestId;
 
         // S145 rulings R-10 / R-11 — what the calculation actually RAN under: the frozen piece of the first
         // EMPLOYED segment (null when no segment is EMPLOYED, so nothing ran under any agreement or position).
