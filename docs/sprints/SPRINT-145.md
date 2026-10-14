@@ -1138,6 +1138,15 @@ The detail:
   - the raw-route guard now makes one profile-resolver read per month;
   - under R43 as specified, an agreement row dated the day after a leaver's last day still counts as mid-week. That over-refuses, which fails safe.
 
+**At TASK-14512-T's return** (`d307220` on `s145/task-14512`).
+- **The R26 rule is applied** per file: a fake `AlwaysApprovedPriorPeriods` in both test fixtures (the unit `EmploymentWindowPcsFixture` and the Regression `TestFixtures.BuildPcs` default) and at every PCS construction site, with the R26 comment. The smoke test uses the real adapter with February 2026 seeded APPROVED (March 2026 starts on a Sunday). `PayrollHostRecalcBlockedTests` needs no edit: its only positive calculating fact is June 2026, which starts on a Monday.
+- **H12–H14 are tightened** to the as-built Q7 member names (`nextPeriodToRecalculateStart/End`, present on H12, absent or null on H13 and H14). They live in `PayrollHostWeeklyTests.cs`, not the file the brief named, a brief contradiction.
+- **A new Docker race pin,** `PriorMonthExportRaceTests.Export_PriorMonthReopenedWhileExportWaits_RefusedPriorMonthNotApproved_NothingWritten`.
+  - How it works: it holds September's row `FOR UPDATE`, starts October's export, and waits on a condition (`pg_stat_activity` showing the export's `FOR SHARE` lock wait, bounded at 30 s, no sleeps). Then it reopens September and expects `PriorMonthNotApprovedException` with no export record, event, outbox envelope or audit row.
+  - Its red conditions: without the recheck or the lock, the export never blocks; without the status comparison, `ThrowsAsync` trips.
+- **No assertion value changed.** Build 0 errors / 145 warnings · Unit 1443 (the 16 reds green) · DemoSeed 170 · Regression non-Docker 128.
+- **Review in flight:** the build check, then Fable with 5α, and Codex.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
