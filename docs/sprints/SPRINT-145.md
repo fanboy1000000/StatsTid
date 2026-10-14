@@ -1124,7 +1124,7 @@ The detail:
   - If the reopen commits first, the export answers the 409. If the export commits first, the reopen sees the export record and writes the worklist row.
   - There is no deadlock: the reopen takes one approval row after its advisory locks.
   - The implementer says a deterministic Docker pin is feasible, so it was added to 14512-T's scope as `PriorMonthExportRaceTests`.
-- **Ruled by the Orchestrator (consistent with adjudicator R-3 at 14511): the replay interim.** Replay skips admission and never consults the approval reader. It still reads the window, the agreement history and the hours through `ReadReplayInputsUntilFrozenAsync`, since nothing frozen exists until TASK-14513. That task's brief now says it replaces that method; R42's sentinels (14515) prove it.
+- **Ruled by the Orchestrator (consistent with adjudicator R-3 at 14511): the replay interim.** Replay skips admission and never consults the approval reader. It still reads the window, the agreement history, the hours **and the dated profiles** (the last added at Step 5a, Fable WARNING 1) through `ReadReplayInputsUntilFrozenAsync`, since nothing frozen exists until TASK-14513. That task's brief now says it replaces that method; R42's sentinels (14515) prove it.
 - **For 14514's re-spawn 1:** its replay pin calls `ReplayAsync(Guid)`, which evaluates nothing until 14513, so it is to be retargeted (written into its brief). The other 9 of 14514's Unit pins passed against 14512 as built.
 - **14512-T was dispatched** with `MonthEndCrossingTests` added to its list, the race pin, and the H12–H14 tightening to the as-built Q7 member names.
 - **Owed at the merge** (Orchestrator):
@@ -1136,7 +1136,7 @@ The detail:
 - **Watch items for CA-4:**
   - a Docker fact whose request body has a stale OK version, agreement or position now maps under the dated values;
   - the raw-route guard now makes one profile-resolver read per month;
-  - under R43 as specified, an agreement row dated the day after a leaver's last day still counts as mid-week. That over-refuses, which fails safe.
+  - ~~under R43 as specified, an agreement row dated the day after a leaver's last day still counts as mid-week~~. *Corrected at Step 5a (Fable NOTE 1):* not reachable through the production resolver. The month after the leave gets an empty window list, so R43 drops every date. It is reachable only windowless.
 
 **At TASK-14512-T's return** (`d307220` on `s145/task-14512`).
 - **The R26 rule is applied** per file: a fake `AlwaysApprovedPriorPeriods` in both test fixtures (the unit `EmploymentWindowPcsFixture` and the Regression `TestFixtures.BuildPcs` default) and at every PCS construction site, with the R26 comment. The smoke test uses the real adapter with February 2026 seeded APPROVED (March 2026 starts on a Sunday). `PayrollHostRecalcBlockedTests` needs no edit: its only positive calculating fact is June 2026, which starts on a Monday.
@@ -1146,6 +1146,29 @@ The detail:
   - Its red conditions: without the recheck or the lock, the export never blocks; without the status comparison, `ThrowsAsync` trips.
 - **No assertion value changed.** Build 0 errors / 145 warnings · Unit 1443 (the 16 reds green) · DemoSeed 170 · Regression non-Docker 128.
 - **Review in flight:** the build check, then Fable with 5α, and Codex.
+- **Build (Orchestrator, at `d307220`, unpiped):** 0 errors / 145 warnings · CA2100 115 · Unit 1443 · DemoSeed 170 · Regression non-Docker 128.
+- **5a Fable: APPROVED-WITH-WARNINGS; 5α: PASS.** It verified every load-bearing claim against the code:
+  - the week check's weeks;
+  - R43 with real windows;
+  - all four routes' bodies;
+  - the prior-month order and nothing written;
+  - replay never admitting;
+  - the A4 candidate starts matching every boundary source;
+  - Q7's names;
+  - Do 7's lock order against the reopen handler's actual statements;
+  - the R26 rule per file.
+  
+  The findings:
+  - **WARNING 1:** the replay-interim record undercounted; replay also reads the dated profiles. Corrected above, and written into TASK-14513's brief: `SegmentProfiles` come from frozen pieces, never `_profileResolver`. TASK-14515's brief now has a profile-resolver sentinel note.
+  - **NOTE 1:** the leaver End+1 watch item is unreachable in production. Corrected above.
+  - **NOTE 2:** `/recalculate`'s prior-month check is not under the Do 7 lock. It is bounded, because the reopen hook still writes M's worklist row. Registered as **QUAL-201**.
+  - **NOTE 3 and NOTE 4:** the race test's faulted-export diagnostic and its busy loop. Sent to 14512-T.
+  - **NOTE 5:** the prior-month lookup assumes monthly approval periods. A line is owed in the ADR amendment at merge.
+  - **NOTE 6:** the owed comments are confirmed.
+- **5a Codex: APPROVE-WITH-WARNINGS.**
+  - **WARNING:** the race pin supplies `PriorMonthToRecheck` directly, so dropping the host's assignment would reopen the race unseen. Sent to 14512-T: an endpoint-level race fact, `CalculateAndExport_PriorMonthReopenedWhileExportWaits_Returns409_CalculationKept_NoExportRecord`, with the service fact's claim narrowed.
+  - **NOTE:** a race-refused export keeps the calculation's manifest and its legacy calculation-completed event, as with B2. The Orchestrator qualifies "refusals write nothing" to *admission* refusals (comment), and the endpoint fact pins the retained artifacts.
+  - **NOTE:** the reopen comment is owed at merge.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
