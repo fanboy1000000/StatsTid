@@ -457,4 +457,64 @@ public sealed class BackdateWorklistDerivationTests
         new(Guid.NewGuid(), "emp1", WorklistKinds.SettledYear, null, null, null, type, year,
             triggers, AppendedAt, "hr01", null, null, null, null, 1,
             new WorklistCurrentState(null, highest, reversed));
+
+    // ── S145 / TASK-14509-T — the two pure date helpers (R5(a), R5(c)); runs locally ──
+
+    /// <summary>
+    /// R5(a): a bounded upper bound becomes the Monday after the Monday-Sunday week holding
+    /// <c>toExclusive - 1</c> (the interval's last day). Expected values derived from that rule and
+    /// the calendar, not from the code. Includes a year rollover (Fri 1 Jan 2027).
+    /// </summary>
+    [Theory]
+    // Mon 28 Sep: last day Sun 27 Sep ends its own week, so the bound is unchanged.
+    [InlineData(2026, 9, 28, 2026, 9, 28)]
+    // Thu 1 Oct: last day Wed 30 Sep, week ends Sun 4 Oct, so the bound becomes Mon 5 Oct.
+    [InlineData(2026, 10, 1, 2026, 10, 5)]
+    // Wed 1 Apr: last day Tue 31 Mar, week ends Sun 5 Apr, so Mon 6 Apr (W1-EX's case).
+    [InlineData(2026, 4, 1, 2026, 4, 6)]
+    // Fri 1 Jan 2027: last day Thu 31 Dec 2026, week ends Sun 3 Jan, so Mon 4 Jan 2027 (year rollover).
+    [InlineData(2027, 1, 1, 2027, 1, 4)]
+    public void SettlingMondayAfter_MondayAfterTheWeekHoldingTheLastDay(
+        int y, int m, int d, int ey, int em, int ed)
+    {
+        var input = new DateOnly(y, m, d);
+        var expected = new DateOnly(ey, em, ed);
+        Assert.Equal(DayOfWeek.Monday, expected.DayOfWeek);
+
+        Assert.Equal(expected, BackdateWorklistDerivation.SettlingMondayAfter(input));
+    }
+
+    /// <summary>
+    /// R5(c): reopening month M reaches M+1 only when M+1 starts mid-week, and then from M+1's
+    /// opening Monday; when M+1 starts on a Monday the result is null.
+    /// </summary>
+    [Theory]
+    // 1 Oct 2026 is a Thursday: opening Monday 28 Sep.
+    [InlineData(2026, 9, true, 2026, 10, 2026, 9, 28)]
+    // 1 Jan 2027 is a Friday: opening Monday 28 Dec 2026 (year rollover).
+    [InlineData(2026, 12, true, 2027, 1, 2026, 12, 28)]
+    // 1 Jun 2026 is a Monday: nothing.
+    [InlineData(2026, 5, false, 0, 0, 0, 0, 0)]
+    // 1 Feb 2027 is a Monday (1 Jan 2027 is a Friday, plus 31 days): nothing.
+    [InlineData(2027, 1, false, 0, 0, 0, 0, 0)]
+    public void NextMonthReachOfReopen_OpeningMondayWhenNextMonthStartsMidWeek_ElseNull(
+        int year, int month, bool reaches, int nextYear, int nextMonth, int fy, int fm, int fd)
+    {
+        var start = new DateOnly(year, month, 1);
+        var result = BackdateWorklistDerivation.NextMonthReachOfReopen(start);
+
+        if (!reaches)
+        {
+            var nextFirst = start.AddMonths(1);
+            Assert.Equal(DayOfWeek.Monday, nextFirst.DayOfWeek);
+            Assert.Null(result);
+            return;
+        }
+
+        var expectedFrom = new DateOnly(fy, fm, fd);
+        Assert.Equal(DayOfWeek.Monday, expectedFrom.DayOfWeek);
+        Assert.NotEqual(DayOfWeek.Monday, new DateOnly(nextYear, nextMonth, 1).DayOfWeek);
+        Assert.NotNull(result);
+        Assert.Equal((nextYear, nextMonth, expectedFrom), (result!.Value.Year, result.Value.Month, result.Value.EffectiveFrom));
+    }
 }
