@@ -81,6 +81,7 @@ if (target == "time_absences" || target == "all")
     Console.WriteLine($"Scanned: {result.Scanned}");
     Console.WriteLine($"time_entries_projection: inserted={result.InsertedTime}, conflicts={result.ConflictsTime}");
     Console.WriteLine($"absences_projection: inserted={result.InsertedAbsences}, conflicts={result.ConflictsAbsences}");
+    Console.WriteLine($"superseded (Skema re-saves): time={result.SupersededTime}, absences={result.SupersededAbsences}");
     Console.WriteLine($"stream_version fallback warnings: {result.FallbackWarnings}");
     if (result.UnknownEventTypes > 0)
     {

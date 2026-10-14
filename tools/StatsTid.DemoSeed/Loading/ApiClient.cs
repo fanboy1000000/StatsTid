@@ -68,12 +68,13 @@ public sealed class ApiClient : IDisposable
     /// GET /api/skema/{id}/month?year=&amp;month= → (status, already-recorded row counts).
     ///
     /// <para>S127 — the probe now reports ALL THREE month collections, not just absences, because
-    /// the loader writes all three. <c>entries</c> is the one that MUST be probed: the skema save is
-    /// event-sourced and APPENDS a fresh TimeEntryRegistered per call (time_entries_projection keys
-    /// on event_id, not on (employee, date, project)), so a blind re-save would double every
-    /// allocation and leave the month UNBALANCED against unchanged work time — turning a re-run into
-    /// a broken demo world. Work time is latest-wins (upsert under the outbox_id guard) and absences
-    /// append like entries.</para>
+    /// the loader writes all three. Until S145 the skema save APPENDED a fresh row per call, so a
+    /// blind re-save doubled every allocation and left the month UNBALANCED against unchanged work
+    /// time. Since S145 (TASK-14507) a Skema save REPLACES its cell (latest-wins per cell; the older
+    /// row is kept, marked superseded), so a blind re-save no longer doubles any total or quota.
+    /// The probe stays: it keeps a re-run from appending redundant events to the stream. The counts
+    /// are of current rows only. Work time was already latest-wins (upsert under the outbox_id
+    /// guard).</para>
     /// </summary>
     public async Task<(HttpStatusCode Status, int AbsenceCount, int EntryCount, int WorkTimeCount)> GetSkemaMonthCountsAsync(
         string employeeId, int year, int month, CancellationToken ct)

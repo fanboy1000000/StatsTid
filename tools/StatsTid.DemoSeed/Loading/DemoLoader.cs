@@ -555,13 +555,13 @@ public sealed class DemoLoader
             // 1. Save the month — absences, project allocations and self-recorded work time — but
             //    IDEMPOTENTLY, and PER COLLECTION.
             //
-            //    The skema save is event-sourced: absences and time entries APPEND a fresh event
-            //    per call (their projections key on event_id, not on (employee, date)), so a blind
-            //    re-save accumulates duplicates. For entries that is not merely untidy — doubling
-            //    the allocations while work time stays put (it is a latest-wins upsert under the
-            //    outbox_id guard) leaves every day UNBALANCED, which is exactly what the S127
-            //    submit-time gate rejects. So the month is probed first and each collection is sent
-            //    only if it is short. The save is one atomic transaction, so a collection is either
+            //    The skema save is event-sourced: every call appends a fresh event. Until S145 the
+            //    projections appended too, so a blind re-save doubled the allocations while work
+            //    time stayed put (a latest-wins upsert), leaving every day UNBALANCED for the S127
+            //    submit-time gate. Since S145 (TASK-14507) a Skema save replaces its cell, so a
+            //    re-save no longer doubles anything. The probe is kept to avoid appending redundant
+            //    events on a re-run: the month is probed first and each collection is sent only if
+            //    it is short. The save is one atomic transaction, so a collection is either
             //    fully present or fully absent — the count comparison is exact, never partial.
             // Null ⇒ an unfilled month (a pre-S127 manifest, which must still load).
             var allocations = a.Allocations ?? new List<DemoAllocation>();

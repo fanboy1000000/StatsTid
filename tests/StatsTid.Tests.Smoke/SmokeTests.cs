@@ -219,9 +219,10 @@ public class SmokeTests
     //       backend→rule-engine /api/rules/check-compliance hop is alive.
     //
     // SELF-ISOLATION (R6 / Step-0b B4 + Step-7a B3): the dev stack is lived-in and this test
-    // re-runs. The absence save APPENDS an event-sourced projection row + increments the VACATION
-    // `used` balance per save (it is NOT an upsert keyed on (employee,type,date) — verified
-    // against AbsenceProjectionRepository.InsertAsync, keyed on a fresh event_id), and the VACATION
+    // re-runs. Before S145 the absence save APPENDED a projection row and added to the VACATION
+    // `used` balance on every save. Since S145 (TASK-14507) a Skema save replaces its cell and moves
+    // `used` by the signed change, so a same-cell re-save costs no quota. The isolation below
+    // predates that and is kept: it is harmless and still keeps reruns independent. The VACATION
     // quota is per FERIEÅR. A prior implementation walked 10 fixed dates within a SINGLE far-future
     // year, so reruns shared that one year's 25-day quota and eventually depleted it (and a
     // same-minute rerun reused a date). The fix isolates by FERIEÅR: each run derives its
@@ -230,9 +231,9 @@ public class SmokeTests
     // and any two reruns within that span hit a DIFFERENT ferieår (replacing the Guid-hash-modulo-800
     // whose ~50% birthday collision after ~34 runs shared dates+quota — S73 Step-7a cycle-2 B3; and
     // the cycle-2 per-SECOND derivation whose modulo wrapped every ~6900 s ≈ 1h55m — cycle-3).
-    // Same-day reruns share a year+date but only APPEND ~0.4 day each against the FRESH 25-day
-    // ferieår quota (the save is append-not-upsert), so dozens of same-day reruns stay green; no
-    // deletion of real data.
+    // Same-day reruns share a year+date. Since S145 the re-save replaces the cell and costs no
+    // further quota (before S145 each one appended ~0.4 day against the fresh 25-day ferieår quota),
+    // so same-day reruns stay green; no deletion of real data.
     [Fact]
     public async Task Backend_RuleEngineHop_AbsenceAndCompliance_ComposedStack()
     {
