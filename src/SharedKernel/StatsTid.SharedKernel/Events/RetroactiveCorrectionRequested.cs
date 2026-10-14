@@ -7,6 +7,13 @@ public sealed class RetroactiveCorrectionRequested : DomainEventBase
     public required string EmployeeId { get; init; }
     public required DateOnly OriginalPeriodStart { get; init; }
     public required DateOnly OriginalPeriodEnd { get; init; }
+
+    /// <summary>
+    /// The agreement the recalculation ran under: that of the period's first EMPLOYED segment, as the
+    /// calculation's frozen inputs record it, never the request body (S145 R-11). Empty when no day of the
+    /// period was employed. The full per-piece record is reachable through <see cref="ManifestId"/>
+    /// (<c>PlanInputs.Pieces</c>).
+    /// </summary>
     public required string AgreementCode { get; init; }
     public required string OkVersion { get; init; }
     public required string Reason { get; init; }
@@ -22,8 +29,10 @@ public sealed class RetroactiveCorrectionRequested : DomainEventBase
     public string? PreviousOkVersion { get; init; }
 
     /// <summary>
-    /// The employee's position code when the correction was made.
-    /// Null when no position-based override applied.
+    /// The position the recalculation ran under: that of the period's first EMPLOYED segment, as the
+    /// calculation's frozen inputs record it, never the request body (S145 R-10, R-11). Null when the dated
+    /// record carries no position or no day of the period was employed. The full per-piece record is
+    /// reachable through <see cref="ManifestId"/> (<c>PlanInputs.Pieces</c>).
     /// </summary>
     public string? Position { get; init; }
 
