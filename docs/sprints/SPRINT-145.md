@@ -970,6 +970,75 @@ The followers:
 - **Review:** one combined pass. **5α: PASS; Fable: APPROVED-WITH-WARNINGS.** It verified the stub bodies are verbatim, no product query reads `approval_periods.ok_version`, every weekday, the harness DDL against `init.sql`, RE3 under F1, and the commit history behind the `MonthEndCrossingTests` wording. **WARNING, recorded:** eight of the eleven files are Docker-gated, so the local runs never executed them; the stub move and the label change are equivalent by inspection, and the first push is their first execution. **NOTEs applied** in `2cd2a83` (comments and usings only, as suggested, not re-reviewed): the RE3 banner and two unused `using System.Text`.
 - **Merged `a59825b`.** O-1: 0 errors / 145 warnings · CA2100 115 · Unit 1436 · DemoSeed 170 · Regression non-Docker 128.
 
+## Wave A.3 (dispatched 2026-10-14)
+
+**At TASK-14511's return (the per-plan lane, the QUAL-186 fix; not yet merged).**
+
+*Plain language:* payroll no longer judges a month as one giant week. It sends each month to the Rule Engine once, and the engine judges it Monday to Sunday.
+- **A normal 37-hour September** (full-time HK, 7.40 h every weekday) now exports **no overtime and no flex payout**, with a norm of 22 × 7.40 = 162.80. Before, it exported 3.0 h at 50 % plus 122.8 h at 100 %, and a 25.8 h flex payout.
+- **A week crossing a month boundary is paid by the month holding its Sunday.** 9 h on 28–30 Sep plus 7.40 h on 1–2 Oct is paid in October as 3.00 h at 50 % plus 1.80 h at 100 %, both dated 4 Oct. September pays nothing for that week.
+- **A leaver whose last day is 30 Sep** has the week settled in September, dated 30 Sep.
+- These figures come from a throwaway in-process run by the implementer. The binding evidence is RE1–RE3 (Docker, CI).
+
+The detail:
+- **Branch** `s145/task-14511` at `c775e92` (one file, `PeriodCalculationService.cs`, +915/−324). Build 0 errors / 145 warnings · CA2100 115 · DemoSeed 170 · Regression non-Docker 128 · Unit 1428/1436.
+- **The 8 Unit reds** are 7 per-segment call-count and request-shape assertions (14511-T's work), plus `MonthEndCrossingTests`. Under F1, October's timeline request now correctly also carries 30 Sep's pre-midnight half as a context entry.
+- **Built:**
+  - pieces: the context days only when employed on the 1st, then one per employed segment;
+  - `SettlementCutoff` = the employment window's end when ≤ `periodEnd`;
+  - the profile and agreement-code reads widened to the opening Monday;
+  - one timeline call; the three results joined; the flex carry and `CallFlexRuleAsync` retired;
+  - the attempt budget counts real calls;
+  - a non-success or incomplete timeline answer is a failed call, never read as a result;
+  - four outcome members kept for TASK-14513 (`TimelinePieces`, `SettlementCutoff`, `ConfigFingerprints`, `EvaluationModel`);
+  - `PlannerBypassGuardTests` stays green.
+- **Brief contradictions:** the brief's line numbers are pre-A.2, and the actual ones are listed in the return.
+- **14511-T's list was widened by the Orchestrator** to `MonthEndCrossingTests.cs` and `RetroactiveCorrectionWindowTests.cs` (`:165-169`; the timeline call carries the period end). Both were briefed with exact assertion shapes; the second does not assert the cutoff (C-T1).
+- **Put to the adjudicator:**
+  - five declared deviations: the window read not widened; several employed segments split by line date (fixtures only); caller-built plans read histories; only covered days sent; and the timeline 400's sentence logged with the employee id;
+  - **the partial-failure rule:** a failed timeline call drops overtime, norm and flex together while the month still reports Success;
+  - **a spec question:** the same hours over norm count in September's flex and in October's overtime.
+
+**The adjudicator's rulings on 14511 (Fable seat, 2026-10-14; verdict RULED, no owner question).**
+- **R-1 to R-4, deviations 1–4: ACCEPTED.**
+  - The window read stays: the resolver returns the whole overlapping spell, and a spell that ended before the 1st was settled by its own month.
+  - The split by line date is accepted for Stage A. Its Stage B planning input is written into TASK-14524's brief: the merger must accept the per-segment rows.
+  - Caller-built plans read histories as the A.3→A.5 intermediate state. TASK-14513's brief now says replay must not re-derive pieces or cutoff.
+  - Only covered days are sent; this matches A2 `:233`.
+- **R-5, the 400 sentence plus the employee id in the log: KEPT.** It is the shape SEC-039's own remediation ruled acceptable. The sentence is a literal with no interpolation, and status-only would lose the diagnosis.
+  - **Owed at close:** one sentence on SEC-039's row.
+  - The engine-side "value-free" promise is unpinned, so it gets a ROADMAP guard line.
+- **R-6, the partial-failure rule: CHANGED.**
+  - *Plain language:* until now, if the one call that computes overtime, norm and flex failed but the smaller calls succeeded, the month reported Success and exported without overtime, norm lines or flex. That is wrong money labelled Success.
+  - **Now any failed rule-engine call refuses the whole calculation:** `Success = false`, no export lines, no manifest, a fixed sentence, and the host's existing 422. A plan with no employed segment still succeeds.
+  - It is strictly safer, so there is no owner question.
+  - *Why it was never caught:* the pre-S145 pins covered only "all calls fail" and "all succeed". The three Regression fakes answering 404 to the timeline would have run green with three rules missing.
+  - **Owed:** a 14511 fix-up (implementer, after 14511-T), plus two RED-first pins in 14511-T:
+    - `TimelineCallFails_PerSegmentCallsSucceed_CalculationRefused_NothingWritten`;
+    - `OnePerSegmentCallFails_TimelineSucceeds_CalculationRefused_NothingWritten`.
+  - The two existing message asserts take the new sentence, labelled. Mutation **MU-44** is catalogued, run by 14514 re-spawn 2 at A.4.
+- **R-7, the double count: SPECIFIED and already registered as QUAL-189** (pre-existing: an hour paid as overtime also raises flex). New under F1: the two counts can fall in different months. That is appended to QUAL-189 as a design constraint on any future fix. Not a 14511 defect.
+  - *Plain language:* 4.8 h over norm on 28–30 September raise September's flex balance and are also paid as overtime in October.
+- **R-8 and R-9, the two widened test files: CONFIRMED,** with additions sent to 14511-T:
+  - `MonthEndCrossingTests`' engine must answer the timeline path with the complete shape, or under R-6 the month is refused;
+  - the exact piece shapes for `RetroactiveCorrectionWindowTests`.
+- **Declined, recorded:**
+  - (1) the engine-sentence guard, now a ROADMAP line;
+  - (2) the spells cutoff, for the deferred spells increment;
+  - (3) 422 vs 503 for an engine outage, which 14512 may take;
+  - (4) **a watch item for CA-4.** A context piece is now profile-resolved fail-closed, so a Docker fixture whose `employee_profiles` row starts on the 1st while its window covers the opening week will refuse with `employment_record_gap`. This is correct behaviour, but it may surface as unlisted reds at the Stage A gate.
+
+**At TASK-14511-T's return** (`646b132` on `s145/task-14511`, on top of `48a8a7c`, a merge of master that brings O-10's test tidy; the implementer's `c775e92` is untouched).
+- **Every stub and fake answers `/api/rules/evaluate-timeline`** with a complete reply: three results, the full flex block, `["stub"]` and `weekly-timeline-v1`. The shared default emits `NORMAL_HOURS` only for in-month entries.
+- **Per-segment call counts and request shapes are rewritten.** The timeline's pieces and entries are asserted. No `SettlementCutoff` is asserted anywhere (C-T1), and no money or hours figure changed.
+- **Two facts are re-expressed** because the flex carry is retired: `FlexCarry_PassesThroughNotEmployedMiddleSegment_Unchanged` (unit) and `TwoSpells_FlexDeltaCarriesThroughNotEmployedMiddleSegment` (Docker). Now the opening balance reaches the one timeline call unchanged, and the gap days are left out of the pieces and entries.
+- **`MonthEndCrossingTests`** tells timeline requests from per-segment ones: October's timeline carries the 30 Sep context half, and no per-segment request does. **`RetroactiveCorrectionWindowTests`** asserts the pieces end on the leaver's last day, with no cutoff.
+- **The R-6 pins are added RED-first.** Four Unit facts are RED on `c775e92` by design: the two new refusal facts (`Assert.False` failure: a failed call still reports Success) and the two re-messaged asserts (the old sentence).
+- **Checks:** build 0 errors / 145 warnings · Unit 1434 + 4 RED of 1438 · DemoSeed 170 · Regression non-Docker 128.
+- **The R-6 fix-up returned** (`0281d5d`, implementer, +37/−30): any failed call refuses, with the fixed sentence and the refusal log line, and the doc wording updated. **One change beyond the list:** a refused result now carries **no rule results**; before, it carried the successful rows, which the host's 422 body would have sent while saying no figure was produced. The four RED facts went green: Unit **1438**, build 0 errors / 145 warnings, CA2100 115.
+- **Orchestrator `b5f29eb`:** `Payroll/Program.cs`'s audit-stamp comment names the R-6 refusal instead of the retired "total-rule-failure short-circuit" (comment only).
+- **Review in flight:** the build check, 5α, Fable and Codex, on `master...s145/task-14511`.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
