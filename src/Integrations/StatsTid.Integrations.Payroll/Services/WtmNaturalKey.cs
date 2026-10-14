@@ -5,10 +5,12 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// export time (ADR-020 D1 component 2 — replay-stable input).
 ///
 /// <para>
-/// The hydrator registered in <c>PeriodCalculationService.BuildPlanForLegacyCallersAsync</c>
-/// at the PCS L585 enrollment seam constructs this record from the in-scope
-/// <see cref="StatsTid.SharedKernel.Models.EmploymentProfile"/> once per plan
-/// (ADR-020 D1.5 uniform-per-plan binding). The planner lands the record at
+/// Since S145 (TASK-14512, A4) the hydrator is the dated overload of the enrollment seam: it
+/// receives each EMPLOYED segment's start and builds this record from the employee's dated record
+/// in force on that day (OK version, agreement code, position), never from the request body, so
+/// the export uses the same record the rule engine evaluated with (ADR-020 D1 amendment; it
+/// replaced the D1.5 uniform-per-plan binding). A NOT_EMPLOYED segment carries no key. The planner
+/// lands the record at
 /// <c>SegmentSnapshot.Values["WtmNaturalKey"]</c>; <c>MapSegmentToExportLinesAsync</c>
 /// reads it back to drive the dated wage-type-mapping lookup via
 /// <c>PayrollMappingService.GetMappingAsync(..., asOfDate: segmentStart)</c>.
