@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -861,31 +860,9 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
     {
         // The endpoints resolve the NAMED RuleEngine client and use RELATIVE request URIs; this stub
         // replaces the whole factory, so it supplies the BaseAddress the production registration sets.
-        public HttpClient CreateClient(string name) => new(new RuleEngineStubHandler(), disposeHandler: false)
+        public HttpClient CreateClient(string name) => new(new EntitlementValidationStubHandler(), disposeHandler: false)
         {
             BaseAddress = new Uri("http://rule-engine:8080"),
         };
-    }
-
-    private sealed class RuleEngineStubHandler : HttpMessageHandler
-    {
-        private static readonly JsonSerializerOptions Camel = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-            if (!path.EndsWith("/api/rules/validate-entitlement", StringComparison.Ordinal))
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
-
-            var json = await request.Content!.ReadAsStringAsync(cancellationToken);
-            var req = JsonSerializer.Deserialize<ValidateEntitlementRequest>(json, Camel)!;
-            var result = EntitlementValidationRule.Evaluate(req);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    JsonSerializer.Serialize(result, Camel), Encoding.UTF8, "application/json"),
-            };
-        }
     }
 }

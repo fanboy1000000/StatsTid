@@ -737,6 +737,7 @@ public sealed class WeeklyTimelineCoreTests
             [Piece(Sep1, Sep15, 1.0m, Hk26), Piece(Sep16, Sep30, 0.811m, Hk26)],
             entries, absences);
 
+        Assert.Empty(result.Overtime.LineItems);   // the docstring's "no overtime arises", made executable
         Assert.Equal(13.40m, result.Flex.AbsenceNormCredits);   // 7.40 (old day) + 6.00 (new day)
         Assert.Equal(147.40m, result.Flex.NormHours);
         Assert.Equal(134.00m, result.Flex.WorkedHours);

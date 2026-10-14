@@ -231,13 +231,17 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // RE3 — R14 over HTTP, closing week
+    // RE3 — R14 over HTTP, October's opening week (28 Sep–4 Oct; settled by October under F1)
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// RE3 (the R14 HTTP fact). Full-time HK; the closing week of September (Monday 28 September - Sunday 4
-    /// October) is worked 9 h on each of 28, 29 and 30 September and 7.40 h on 1 and 2 October (41.80 h in all);
-    /// the rest of October at norm. The hours exist ONLY as projection rows; the body carries none. September
+    /// RE3 (the R14 HTTP fact). Full-time HK; the week that straddles the September/October boundary (Monday 28
+    /// September - Sunday 4 October; under F1 a week is settled by the month containing its Sunday, so this week
+    /// belongs to OCTOBER, its opening week, and is dated Sunday 4 October) is worked 9 h on each of 28, 29 and 30
+    /// September and 7.40 h on 1 and 2 October (41.80 h in all); the rest of October at norm (October's last week,
+    /// Monday 26 October - Sunday 1 November, belongs to NOVEMBER under F1, not to October; its weekdays 26-30
+    /// October are at norm, so it carries no overtime in either month, and their <c>NORMAL_HOURS</c> lines are
+    /// still dated in October). The hours exist ONLY as projection rows; the body carries none. September
     /// and October are APPROVED (October because the route checks its own month, September because the opening
     /// week reaches it). <c>POST /api/payroll/calculate-and-export</c> for October answers <b>200</b> and pays
     /// exactly <c>OVERTIME_50</c> 3.00 + <c>OVERTIME_100</c> 1.80 — the 41.80 h against the 37 h norm and the 40
@@ -272,7 +276,8 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
         await SeedApprovedMonthAsync(employeeId, "HK", Sep01, Sep30);
         await SeedApprovedMonthAsync(employeeId, "HK", Oct01, Oct31);
 
-        // Closing week: 28-30 September at 9 h (the context days of October), 1-2 October at the day norm.
+        // October's opening week (28 Sep - 4 Oct, F1): 28-30 September at 9 h (context days of October),
+        // 1-2 October at the day norm.
         foreach (var date in WeekdaysBetween(Sep28, Sep30))
             await SeedHoursAsync(employeeId, "HK", date, 9.0m);
         // The rest of October at norm (1-2 October above are part of this loop: every October weekday).
