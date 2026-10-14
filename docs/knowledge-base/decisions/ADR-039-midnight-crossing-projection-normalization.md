@@ -110,6 +110,14 @@ shifts = a payroll underpayment → a tracked go-live precondition** (dispositio
 Reviewer ruling: document-as-contract + track, vs. an in-repo PCS guard that refuses/flags a request whose
 entries cannot cover `periodStart-1`).
 
+> **Amendment (S145, TASK-14508, 2026-10-14) — the caller-contract obligation is gone.** Payroll no longer
+> receives hours in the request: a body that carries them gets 400 `payroll-entries-not-accepted`, and PCS reads
+> the current rows itself through `IRecordedHoursReader` / `ProjectionHoursReader` over
+> `[WeekStart(periodStart) − 1, periodEnd]` (rulings R14, R25, R58; the window reaches back to the day before the
+> opening week's Monday, which is never later than the previous month's last day). So the widen this
+> paragraph required of "any assembler" is now payroll's own read, and the last-day-of-period drop it warned
+> of no longer exists. The two projection reads share one read-only REPEATABLE READ snapshot (QUAL-200).
+
 ### D6 — ONE shared normalization implementation, at the calc/compliance INPUT boundary
 **As delivered (Step-7a reconciliation):** the one shared `MidnightCrossingNormalizer.Normalize` runs at each
 calc/compliance INPUT boundary — the sole `PeriodCalculationService` logic entry point
@@ -153,6 +161,16 @@ segment-filter ORDERING** — `MidnightCrossingNormalizer` runs before `PeriodCa
 the filter only ever sees clock-correct per-day rows — plus (b) the **`AssertNoDroppedBoundaryCrossing`
 fail-closed guard**, which trips when a normalized half is dated after `periodEnd` with an in-period stint
 sibling (a boundary-last-day crossing whose post-half would be silently dropped → payroll underpayment).
+
+> **Amendment (S145, TASK-14508 fix-up, 2026-10-14) — (b) is retired.** The guard was interim by design until
+> payroll widened its read (QUAL-144; SPRINT-132:315-320 required the two to change in lockstep). TASK-14508 is
+> that read, so the guard is removed (adjudicator ruling at 14508's return). A month-end night shift's
+> post-midnight half, dated `periodEnd + 1`, is dropped in its month by the segment filter and counted in the
+> next month, whose read starts at `WeekStart(next.periodStart) − 1 ≤ this.periodEnd`. No hours are lost and
+> none are counted twice; (a), the normalize-before-filter ordering, remains the enforcement. Pinned by
+> `MonthEndCrossingTests` (a weekday and a Sunday month end, the exact read start, conservation of the
+> halves); mutation MU-43 restores the throw. A leaver whose last shift crosses past the employment end
+> date is a separate, pre-existing case (QUAL-199).
 
 **The `/time` `RequestValidator` tightening was CONSIDERED and REVERTED (S132).** Rejecting an un-split
 `end ≤ start` crossing at `/time` would force a TWO-registration model whose two per-day rows lack a shared
