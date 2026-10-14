@@ -171,6 +171,22 @@ describe('WorklistList — the Recalculate instruction card (OQ-2 (a))', () => {
   })
 })
 
+describe('WorklistList — trigger kind labels', () => {
+  it('a PRIOR_MONTH_REOPENED trigger renders the Danish label, not the raw kind', async () => {
+    const base = exportedMonthRow()
+    mockFetch.mockImplementationOnce(async () =>
+      jsonResponse([exportedMonthRow({
+        triggers: [{ ...(base.triggers[0] as object), kind: 'PRIOR_MONTH_REOPENED' }],
+      })]),
+    )
+
+    render(<WorklistList onResolved={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByText(/Forrige måned genåbnet — effektiv fra/)).toBeDefined())
+    expect(screen.queryByText(/PRIOR_MONTH_REOPENED/)).toBeNull()
+  })
+})
+
 describe('WorklistList — a blocked row never shows the run-instruction', () => {
   it('recalcBlockedBy non-empty renders the blocked notice, even for a Global Admin, and suppresses the card AND the Recalculated affordance — only Dismiss remains', async () => {
     const user = userEvent.setup()

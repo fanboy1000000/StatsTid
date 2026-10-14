@@ -99,6 +99,7 @@ function triggerKindLabel(kind: string): string {
     case 'PROFILE_CHANGE': return 'Profilændring'
     case 'AGREEMENT_CODE_CHANGE': return 'Overenskomstkode-ændring'
     case 'EMPLOYMENT_CATEGORY_CHANGE': return 'Ansættelseskategori-ændring'
+    case 'PRIOR_MONTH_REOPENED': return 'Forrige måned genåbnet'
     default: return kind
   }
 }
