@@ -304,7 +304,7 @@ internal static class EmploymentWindowPcsFixture
             decimal? TimelinePreviousFlexBalance = null);
 
         /// <summary>One piece of the timeline request: its inclusive range and part-time fraction.</summary>
-        public sealed record TimelinePiece(DateOnly From, DateOnly To, decimal PartTimeFraction, string? Position = null);
+        public sealed record TimelinePiece(DateOnly From, DateOnly To, decimal PartTimeFraction, string? Position = null, string? AgreementCode = null);
 
         /// <summary>One entry of the timeline request.</summary>
         public sealed record TimelineEntry(DateOnly Date, decimal Hours);
@@ -358,7 +358,8 @@ internal static class EmploymentWindowPcsFixture
                         DateOnly.Parse(p.GetProperty("from").GetString()!),
                         DateOnly.Parse(p.GetProperty("to").GetString()!),
                         p.GetProperty("partTimeFraction").GetDecimal(),
-                        p.TryGetProperty("position", out var pos) && pos.ValueKind == JsonValueKind.String ? pos.GetString() : null)).ToList()
+                        p.TryGetProperty("position", out var pos) && pos.ValueKind == JsonValueKind.String ? pos.GetString() : null,
+                        p.TryGetProperty("agreementCode", out var ac) && ac.ValueKind == JsonValueKind.String ? ac.GetString() : null)).ToList()
                     : null,
                 TimelineEntries: (request.RequestUri?.AbsolutePath ?? string.Empty).EndsWith(TimelinePath, StringComparison.Ordinal)
                     && root.TryGetProperty("entries", out var tents)

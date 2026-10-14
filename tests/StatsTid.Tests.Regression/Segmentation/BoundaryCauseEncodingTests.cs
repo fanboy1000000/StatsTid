@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
@@ -103,10 +104,13 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
             segmentsJson:
                 $"[{{\"startDate\":\"2026-01-01\",\"endDate\":\"2026-01-31\",\"boundaryCause\":{(int)ExpectedCause},\"snapshot\":null}}]");
 
-        var result = await pcs.ReplayAsync(manifestId);
+        // S145 R14: a hand-built manifest has no frozen inputs (it is a pre-S145 shape), so the replay
+        // loads it successfully and then refuses by name. The parse still succeeds (a parse failure
+        // would fail as a damaged row; S145 R-17), so the fact keeps its meaning.
+        var refused = await Assert.ThrowsAsync<ReplayRefusedException>(() => pcs.ReplayAsync(manifestId));
 
-        Assert.True(result.Success);
-        Assert.Equal(manifestId, result.ManifestId);
+        Assert.Equal("replay-manifest-without-frozen-inputs", refused.Reason);
+        Assert.Equal(manifestId, refused.ManifestId);
 
         await AssertStoredSegmentReplaysToEmployedAsync(manifestId);
     }
@@ -129,11 +133,14 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
             segmentsJson:
                 $"[{{\"startDate\":\"2026-01-01\",\"endDate\":\"2026-01-31\",\"boundaryCause\":\"{ExpectedCause}\",\"snapshot\":null}}]");
 
-        // Baseline: this throws (null load → "Manifest ... not found ... Cannot replay") → RED.
-        var result = await pcs.ReplayAsync(manifestId);
+        // Pre-fix baseline: the load returned null and this threw "not found". Now the load succeeds.
+        // S145 R14: a hand-built manifest has no frozen inputs (it is a pre-S145 shape), so the replay
+        // loads it successfully and then refuses by name. The parse still succeeds (a parse failure
+        // would fail as a damaged row; S145 R-17), so the fact keeps its meaning.
+        var refused = await Assert.ThrowsAsync<ReplayRefusedException>(() => pcs.ReplayAsync(manifestId));
 
-        Assert.True(result.Success);
-        Assert.Equal(manifestId, result.ManifestId);
+        Assert.Equal("replay-manifest-without-frozen-inputs", refused.Reason);
+        Assert.Equal(manifestId, refused.ManifestId);
 
         await AssertStoredSegmentReplaysToEmployedAsync(manifestId);
     }
@@ -221,7 +228,8 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
         // The reader replays the rebuilt (string-encoded) row end-to-end.
         var replay = await pcs.ReplayAsync(plan.ManifestId);
         Assert.True(replay.Success);
-        Assert.Equal(plan.ManifestId, replay.ManifestId);
+        // S145 R14: the result no longer carries a ManifestId; every rule result carries the original.
+        Assert.All(replay.RuleResults, r => Assert.Equal(plan.ManifestId, r.ManifestId));
     }
 
     // -------------------------------------------------------------------
@@ -278,9 +286,11 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
         Assert.Equal(ExpectedCause, seg.BoundaryCause);
 
         // (c) The real reader replays the rebuilt (omitted-key, null-snapshot) row end-to-end.
-        var replay = await pcs.ReplayAsync(manifestId);
-        Assert.True(replay.Success);
-        Assert.Equal(manifestId, replay.ManifestId);
+        // S145 R14: a hand-built (event-only) manifest has no frozen inputs: refused by name after a
+        // successful load (the omitted-key parse still works - a parse failure would fail as a damaged row; S145 R-17).
+        var refused = await Assert.ThrowsAsync<ReplayRefusedException>(() => pcs.ReplayAsync(manifestId));
+        Assert.Equal("replay-manifest-without-frozen-inputs", refused.Reason);
+        Assert.Equal(manifestId, refused.ManifestId);
     }
 
     private static void AssertStringEncoded(string segmentsJson, string which)

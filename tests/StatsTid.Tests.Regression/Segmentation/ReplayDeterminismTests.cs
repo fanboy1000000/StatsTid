@@ -95,7 +95,10 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
         }
 
         // Replay against M1 must succeed and carry M1 on every result.
-        var replay = await pcs.ReplayAsync(plan1.ManifestId, profile, 0m);
+        // S145 R14: replay takes the manifest id alone; it re-reads the recorded rows (by event id,
+        // through the same in-memory reader) and takes the pieces and opening balance from the
+        // manifest's frozen inputs.
+        var replay = await pcs.ReplayAsync(plan1.ManifestId);
         Assert.True(replay.Success);
         Assert.All(replay.RuleResults, r => Assert.Equal(plan1.ManifestId, r.ManifestId));
 
@@ -246,8 +249,8 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
 
         // Replay against M1 — must read the WTM via GetByKeyAtAsync(asOfDate = segment.StartDate
         // = 2026-01-01), which returns the CLOSED predecessor (effective at 2026-01-01).
-        var replay = await pcs.ReplayAsync(
-            forward1ManifestId, profile, previousFlexBalance: 0m);
+        // S145 R14: manifest id alone; the replay re-reads the same recorded rows by event id.
+        var replay = await pcs.ReplayAsync(forward1ManifestId);
         Assert.True(replay.Success);
         Assert.All(replay.RuleResults, r => Assert.Equal(forward1ManifestId, r.ManifestId));
 

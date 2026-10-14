@@ -6,7 +6,7 @@ using StatsTid.Tests.Regression.TestSupport;
 namespace StatsTid.Tests.Regression.Segmentation;
 
 /// <summary>
-/// Replay-determinism contract for <see cref="StatsTid.Integrations.Payroll.Services.PeriodCalculationService.ReplayAsync(System.Guid, EmploymentProfile, decimal, string?, System.Guid?, System.Threading.CancellationToken)"/>
+/// Replay-determinism contract for <see cref="StatsTid.Integrations.Payroll.Services.PeriodCalculationService.ReplayAsync(System.Guid, string?, System.Guid?, System.Threading.CancellationToken)"/>
 /// (ADR-016 D10): replay loads the persisted manifest, reconstructs the plan, and
 /// re-evaluates rules against the hours its recorded-hours reader supplies (S145 R14: payroll reads its own hours) WITHOUT minting a new manifest.
 /// The replay-emitted result MUST carry the original <c>ManifestId</c> end-to-end.
@@ -65,9 +65,9 @@ public sealed class ManifestReplayTests : IAsyncLifetime
         Assert.True(forward.Success);
 
         // Replay against the same manifest id with the same inputs.
-        var replay = await pcs.ReplayAsync(
-            plan.ManifestId, profile,
-            previousFlexBalance: 0m);
+        // S145 R14: the id alone; recorded rows re-read by event id, pieces and opening balance
+        // from the manifest's frozen inputs.
+        var replay = await pcs.ReplayAsync(plan.ManifestId);
 
         // Replay result is success, carries the same manifest id on every rule result,
         // and produces the same number of rule results / total hours as the forward calc.

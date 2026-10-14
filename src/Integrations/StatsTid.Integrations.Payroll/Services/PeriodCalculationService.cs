@@ -61,7 +61,7 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// opening balance and the hours rows, then merges, emits the manifest and maps wage types. Forward
 /// calculation and recalculation run both steps; replay runs evaluation only, because a replay proves
 /// what WAS calculated and today's approval state cannot change that (see
-/// <see cref="ReplayAsync(Guid, EmploymentProfile, decimal, string?, Guid?, CancellationToken)"/>).
+/// <see cref="ReplayAsync(Guid, string?, Guid?, CancellationToken)"/>).
 /// </para>
 ///
 /// <para>
@@ -94,18 +94,20 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
-/// <strong>Replay primitive (ADR-016 D10)</strong>:
-/// <see cref="ReplayAsync(Guid, CancellationToken)"/> loads a persisted manifest from the
-/// <c>segment_manifests</c> projection (with event-replay fallback over the event store),
-/// reconstructs the <see cref="PlannedCalculation"/> via
-/// <see cref="PeriodPlanner.FromManifest"/> using the same rule-set provider as a forward
-/// calculation, and returns a <see cref="CalculationResult"/> envelope carrying the
-/// <em>same</em> <see cref="CalculationResult.ManifestId"/>. The richer overload
-/// <see cref="ReplayAsync(Guid, EmploymentProfile, decimal, string?, Guid?, CancellationToken)"/>
-/// re-evaluates rules against the reconstructed plan (TASK-2012 manifest-replay tests use this
-/// overload). Since S145 / TASK-14508 it takes no hours: it re-reads the employee's current rows
-/// through <see cref="IRecordedHoursReader"/>, like a forward calculation (TASK-14513 moves replay to
-/// the recorded event ids).
+/// <strong>Replay primitive (ADR-016 D10; S145 / TASK-14513, refinement A7)</strong>: a replay re-runs a
+/// stored calculation on exactly the inputs it had and either reproduces it or refuses by name
+/// (<see cref="ReplayRefusedException"/>). Every successful calculation freezes its inputs into
+/// <see cref="PlanInputs"/> on the manifest, the event and <c>plan_inputs_jsonb</c>: what is DATA is stored
+/// (the timeline pieces, the settlement cutoff, the opening flex balance, the hours rows' event ids, the
+/// as-of outbox id and the rows' lossless digests), and what is CODE is fingerprinted (the Rule Engine's
+/// config fingerprints and evaluation-model marker). The one replay entry point,
+/// <see cref="ReplayAsync(Guid, string?, Guid?, CancellationToken)"/>, takes nothing but the manifest id
+/// (plus the auth header and correlation id for the engine call): it loads the manifest (the
+/// <c>segment_manifests</c> projection first, the event store as fallback), reconstructs the
+/// <see cref="PlannedCalculation"/> through <see cref="PeriodPlanner.FromManifest"/>, re-reads the recorded
+/// hours rows by event id, verifies them, evaluates from the frozen inputs only, and refuses when the
+/// engine's marker or fingerprint no longer matches. The result carries the <em>same</em> manifest id; no
+/// new manifest is minted.
 /// </para>
 ///
 /// <para>
@@ -181,11 +183,31 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// Stream id pattern for the <see cref="SegmentManifestCreated"/> event. Keying by
-    /// manifest id makes the event-replay fallback in <see cref="ReplayAsync(Guid, CancellationToken)"/>
+    /// manifest id makes the event-replay fallback in <see cref="ReplayAsync(Guid, string?, Guid?, CancellationToken)"/>
     /// a single <see cref="IEventStore.ReadStreamAsync"/> call rather than a full event-store scan.
     /// </summary>
     internal static string ManifestStreamId(Guid manifestId) =>
         $"segment-manifest-{manifestId}";
+
+    /// <summary>
+    /// S145 / TASK-14513 (TASK-14511 Step 5a, Fable NOTE 2) — the evaluation-model marker frozen into
+    /// <see cref="PlanInputs.EvaluationModel"/> for a plan that made NO rule-engine call: a plan with no
+    /// EMPLOYED segment (every day of the period is outside the employment), which succeeds with no rule
+    /// results and no export lines.
+    ///
+    /// <para>
+    /// <b>Why a dedicated value (plain language).</b> The marker names the arithmetic that produced a result,
+    /// and the Rule Engine returns it with each timeline call. A plan that makes no call has no engine answer
+    /// to record, yet <see cref="PlanInputs.EvaluationModel"/> must hold something for the replay's
+    /// <c>replay-evaluation-model-changed</c> check to compare. This value says exactly what happened:
+    /// nothing was evaluated, so the (empty) result depends on no engine version at all. A replay of such a
+    /// manifest again makes no call, records the same value, and matches. Recording the engine's CURRENT
+    /// marker instead was rejected: payroll would have to hard-code a copy of the engine's constant (the
+    /// marker lives in the Rule Engine, which payroll may not reference), and that copy would drift the day
+    /// the engine moves to its next version, refusing replays of these manifests for nothing.
+    /// </para>
+    /// </summary>
+    public const string NoEngineCallEvaluationModel = "no-engine-call";
 
     /// <summary>
     /// HttpContext.Items key carrying the <see cref="AuditState"/> alongside the manifest id
@@ -420,11 +442,11 @@ public sealed class PeriodCalculationService
     /// </para>
     ///
     /// <para>
-    /// <strong>What the week-by-week evaluation ran on (S145 / TASK-14511).</strong> The four init-only
-    /// members below record the per-plan lane's timeline call, so TASK-14513 can freeze them into
-    /// <see cref="PlanInputs"/>: the pieces sent, the settlement cutoff (R41), and the engine's config
-    /// fingerprints and evaluation-model marker. They are not positional, so every existing
-    /// construction and deconstruction of this record is unchanged.
+    /// <strong>What the week-by-week evaluation ran on (S145 / TASK-14511, TASK-14513).</strong> The
+    /// init-only members below record the per-plan lane's timeline call (the pieces sent, the settlement
+    /// cutoff — R41 — and the engine's config fingerprints and evaluation-model marker) and, on a successful
+    /// calculation, the complete <see cref="PlanInputs"/> frozen onto its manifest. They are not positional,
+    /// so every existing construction and deconstruction of this record is unchanged.
     /// </para>
     /// </summary>
     public sealed record PeriodCalculationOutcome(
@@ -441,8 +463,8 @@ public sealed class PeriodCalculationService
 
         /// <summary>
         /// The settlement cutoff sent with the timeline (ruling R41): the employment window's inclusive
-        /// <c>End</c> when it is on or before the period end, otherwise <c>null</c>. TASK-14513 freezes it,
-        /// because it cannot be recovered from the plan.
+        /// <c>End</c> when it is on or before the period end, otherwise <c>null</c>. Frozen into
+        /// <see cref="PlanInputs.SettlementCutoff"/>, because it cannot be recovered from the plan.
         /// </summary>
         public DateOnly? SettlementCutoff { get; init; }
 
@@ -467,6 +489,16 @@ public sealed class PeriodCalculationService
         /// cannot slip between this check and the export's commit.
         /// </summary>
         public (DateOnly PeriodStart, DateOnly PeriodEnd)? PriorMonthApprovalRequired { get; init; }
+
+        /// <summary>
+        /// S145 / TASK-14513 (refinement A7) — the frozen inputs of this calculation: exactly what a forward
+        /// calculation wrote onto its manifest, its <see cref="SegmentManifestCreated"/> event and
+        /// <c>plan_inputs_jsonb</c> (the same record, whatever the audit state of those writes). <c>null</c>
+        /// on a refused calculation (a rule-engine call failed, S145 ruling R-6), which freezes and writes
+        /// nothing. A replay's outcome carries what the replay ran on, which is what it compares with the
+        /// manifest's record.
+        /// </summary>
+        public PlanInputs? PlanInputs { get; init; }
     }
 
     // -------------------------------------------------------------------
@@ -531,7 +563,8 @@ public sealed class PeriodCalculationService
     /// <see cref="IRecordedHoursReader.ReadCurrentAsync"/>. The opening week is the Monday–Sunday week
     /// holding <see cref="PlannedCalculation.PeriodStart"/>; the extra day before its Monday catches a
     /// night shift filed on that day whose after-midnight hours land on the Monday (N5, the Compliance
-    /// precedent). The rows are kept exactly as read (TASK-14513 binds and digests them) and mapped
+    /// precedent). The rows are kept exactly as read (evaluation freezes their event ids and lossless
+    /// digests into the manifest's <see cref="PlanInputs"/>, TASK-14513) and mapped
     /// once to the <see cref="TimeEntry"/> / <see cref="AbsenceEntry"/> inputs the lanes consume. A
     /// service built without a reader throws <see cref="InvalidOperationException"/> before any read.
     /// </para>
@@ -569,10 +602,9 @@ public sealed class PeriodCalculationService
 
         // ── Admission (R42). A caller-built plan arrives without the histories its planning read, so
         // admission reads them here. TASK-14512 hoisted this read out of evaluation (TASK-14511 Step 5a,
-        // Fable NOTE 6): evaluation reads no history, so a replay entering evaluation does not reach it.
-        // (Until TASK-14513 freezes a replay's inputs, the replay re-derives them through its own,
-        // admission-free read — ReadReplayInputsUntilFrozenAsync.) The planless shims hand over the read
-        // that fed their planner instead, so no history is read twice in one calculation.
+        // Fable NOTE 6): evaluation reads no history, so a replay entering evaluation does not reach it
+        // (since TASK-14513 a replay's inputs are the frozen PlanInputs of its manifest). The planless shims
+        // hand over the read that fed their planner instead, so no history is read twice in one calculation.
         var histories = await ReadPlanHistoriesAsync(plan.EmployeeId, plan.PeriodStart, plan.PeriodEnd, ct);
         var admitted = await AdmitAsync(plan, histories, hoursReader, ct);
 
@@ -637,10 +669,10 @@ public sealed class PeriodCalculationService
         // worked; the day before that Monday catches a night shift whose after-midnight hours land
         // on the Monday (N5 — the same widened read as ComplianceEndpoints, ADR-039 GAP-B).
         //
-        // The rows are kept exactly as read (TASK-14513 binds their event ids and digests them).
-        // Since TASK-14512 this is admission's last step (R42). A replay never runs admission; until
-        // TASK-14513 freezes its inputs it still re-reads the current rows on its own
-        // (ReadReplayInputsUntilFrozenAsync), which TASK-14513 replaces with the by-id read.
+        // The rows are kept exactly as read: evaluation freezes their event ids, the highest outbox id and
+        // their lossless digests into the manifest's PlanInputs (TASK-14513). Since TASK-14512 this is
+        // admission's last step (R42). A replay never runs admission and never reads the current rows: it
+        // re-reads the recorded rows by event id (ReadByEventIdsAsync).
         // ---------------------------------------------------------------
         var recordedHours = await hoursReader.ReadCurrentAsync(
             plan.EmployeeId, HoursReadStart(plan.PeriodStart), plan.PeriodEnd, ct);
@@ -665,8 +697,10 @@ public sealed class PeriodCalculationService
     {
         var inputs = await DeriveEvaluationInputsAsync(admitted.Plan, admitted.Histories, profile, ct);
 
+        // S145 R-12: evaluation takes the employee id only. The caller's profile fed the derivation above
+        // (the fallback where no dated record is resolved); the result reports what the pieces ran under.
         var outcome = await EvaluateAsync(
-            admitted.Plan, inputs, admitted.Hours, profile,
+            admitted.Plan, inputs, admitted.Hours, profile.EmployeeId,
             previousFlexBalance, authorizationHeader, correlationId, emitAuditEvents, ct);
 
         return outcome with { PriorMonthApprovalRequired = admitted.PriorMonthApproved };
@@ -687,7 +721,8 @@ public sealed class PeriodCalculationService
     /// <item><see cref="SettlementCutoff"/> — the leaver's settlement cutoff (R41), or <c>null</c>.</item>
     /// </list>
     /// A forward calculation derives them from the histories admission read
-    /// (<see cref="DeriveEvaluationInputsAsync"/>). TASK-14513 feeds a replay the frozen ones instead.
+    /// (<see cref="DeriveEvaluationInputsAsync"/>); a replay builds them from its manifest's frozen
+    /// <see cref="PlanInputs"/> alone (<see cref="FrozenEvaluationInputs"/>, TASK-14513).
     /// </summary>
     private sealed record EvaluationInputs(
         IReadOnlyList<FrozenPiece> Pieces,
@@ -767,12 +802,30 @@ public sealed class PeriodCalculationService
     /// cutoff), the opening balance and <paramref name="recordedHours"/>. It consults no approval state, no
     /// change-date history, no employment window and makes no hours read of its own: whatever it needs
     /// arrives as an argument.
+    ///
+    /// <para>
+    /// <b>The frozen inputs (S145 / TASK-14513).</b> A successful evaluation records what it ran on as one
+    /// <see cref="PlanInputs"/> (<see cref="FreezePlanInputs"/>): the pieces and the cutoff it was given, the
+    /// opening balance, the hours rows' event ids, highest outbox id and lossless digests, and the engine's
+    /// fingerprints and marker. A forward calculation writes it onto the manifest; every outcome carries it,
+    /// which is what a replay compares with the manifest's record. A refused evaluation records nothing.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The agreement the result reports (S145 ruling R-12).</b> Evaluation takes the employee id, never a
+    /// caller profile: the success result, the refused result (R-6) and the legacy
+    /// <see cref="PeriodCalculationCompleted"/> event all report the agreement the period was EVALUATED under,
+    /// the first EMPLOYED segment's piece (<see cref="FirstEmployedSegmentPiece"/>), or empty when no segment
+    /// is EMPLOYED (nothing was evaluated under any agreement). One derivation serves a forward calculation and
+    /// a replay alike, so a request body that disagrees with the employee's dated record can never relabel the
+    /// month (the same principle as R-10 for the position).
+    /// </para>
     /// </summary>
     private async Task<PeriodCalculationOutcome> EvaluateAsync(
         PlannedCalculation plan,
         EvaluationInputs inputs,
         RecordedHours recordedHours,
-        EmploymentProfile profile,
+        string employeeId,
         decimal previousFlexBalance,
         string? authorizationHeader,
         Guid? correlationId,
@@ -782,7 +835,7 @@ public sealed class PeriodCalculationService
         // Belt + braces at the emission boundary: the manifest is about to be persisted as the
         // audit-of-record, so a corrupted or mismatched plan must surface here (the forward entry points
         // checked it before admission too; replay arrives here directly).
-        AssertPlanMatchesProfile(plan, profile);
+        AssertPlanMatchesEmployee(plan, employeeId);
 
         // `recordedHours` is kept exactly as read; `entries` / `absences` are the one mapping of it that
         // BOTH lanes consume. Since TASK-14511 the per-plan lane sends the context days' entries with its
@@ -840,6 +893,12 @@ public sealed class PeriodCalculationService
         var pieces = inputs.Pieces;
         var segmentProfiles = inputs.SegmentProfiles;
         var settlementCutoff = inputs.SettlementCutoff;
+
+        // S145 R-12 — the ONE derivation of the agreement this period is evaluated under: the first EMPLOYED
+        // segment's piece, or empty for a plan with no EMPLOYED segment. The success result, the R-6 refused
+        // result and the legacy completed event below all report it; never the request body's agreement.
+        var evaluatedAgreementCode = FirstEmployedSegmentPiece(pieces, plan.PeriodStart)?.AgreementCode ?? string.Empty;
+
         var employedIndices = new List<int>(plan.Segments.Count);
         for (int s = 0; s < plan.Segments.Count; s++)
         {
@@ -973,15 +1032,16 @@ public sealed class PeriodCalculationService
                 "per-segment calls of {EmployedSegmentCount} employed segment(s), of {SegmentCount}) for employee " +
                 "{EmployeeId} manifest {ManifestId} period {PeriodStart}-{PeriodEnd}. The calculation is REFUSED and " +
                 "no payroll figure is produced for this period.",
-                callsFailed, callsAttempted, employedIndices.Count, plan.Segments.Count, profile.EmployeeId,
+                callsFailed, callsAttempted, employedIndices.Count, plan.Segments.Count, employeeId,
                 plan.ManifestId, plan.PeriodStart, plan.PeriodEnd);
 
             var failResult = new PeriodCalculationResult
             {
-                EmployeeId = profile.EmployeeId,
+                EmployeeId = employeeId,
                 PeriodStart = plan.PeriodStart,
                 PeriodEnd = plan.PeriodEnd,
-                AgreementCode = profile.AgreementCode,
+                // S145 R-12: the agreement the period was evaluated under, as on the success result.
+                AgreementCode = evaluatedAgreementCode,
                 OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
                 // No figure leaves a refused calculation: the rows of the calls that DID succeed are
                 // not returned either (the host's 422 carries this result as its body). This is the
@@ -1015,26 +1075,32 @@ public sealed class PeriodCalculationService
         // ---------------------------------------------------------------
         var allExportLines = perSegmentExportLines.SelectMany(s => s).ToList();
         var allRuleResults = MergePerSegmentRuleResults(
-            perSegmentRuleResults, ruleSet, profile.EmployeeId, plan.ManifestId);
+            perSegmentRuleResults, ruleSet, employeeId, plan.ManifestId);
 
         // ---------------------------------------------------------------
-        // 5. Emit SegmentManifestCreated event (ADR-016 D10). Single audit-of-record per
-        //    successful calculation. The two-step persistence (event-store append +
-        //    projection insert) tracks an explicit AuditState so callers can react to
-        //    partial failures rather than silently treating success-with-degraded-audit
-        //    as success-with-complete-audit.
+        // 5. Freeze what this evaluation ran on (S145 TASK-14513, refinement A7): the data as stored
+        //    values, the code as the engine's fingerprints and marker. A replay re-runs exactly this.
+        // ---------------------------------------------------------------
+        var planInputs = FreezePlanInputs(inputs, recordedHours, previousFlexBalance, timeline);
+
+        // ---------------------------------------------------------------
+        // 6. Emit SegmentManifestCreated event (ADR-016 D10). Single audit-of-record per
+        //    successful calculation, carrying the frozen PlanInputs. The two-step persistence
+        //    (event-store append + projection insert) tracks an explicit AuditState so callers
+        //    can react to partial failures rather than silently treating success-with-degraded-
+        //    audit as success-with-complete-audit.
         // ---------------------------------------------------------------
         AuditState auditState;
         if (emitAuditEvents)
         {
-            var manifest = BuildManifest(plan);
+            var manifest = BuildManifest(plan, planInputs);
             auditState = await EmitManifestAsync(plan, manifest, correlationId, ct);
 
             // Legacy event for backward compatibility with the pre-S20 audit chain. Kept
             // alongside SegmentManifestCreated so existing audit queries against
             // PeriodCalculationCompleted continue to work; the new event is the source of
             // truth for segmentation, the legacy one for high-level period-result counts.
-            await EmitLegacyPeriodCompletedAsync(plan, profile, allRuleResults.Count, allExportLines.Count, allExportLines.Sum(l => l.Hours), correlationId, ct);
+            await EmitLegacyPeriodCompletedAsync(plan, employeeId, evaluatedAgreementCode, allRuleResults.Count, allExportLines.Count, allExportLines.Sum(l => l.Hours), correlationId, ct);
         }
         else
         {
@@ -1048,14 +1114,16 @@ public sealed class PeriodCalculationService
         _logger.LogInformation(
             "Period calculation complete for {EmployeeId} manifest {ManifestId}: " +
             "{SegmentCount} segment(s), {RuleCount} rule results, {LineCount} export lines, audit={AuditState}",
-            profile.EmployeeId, plan.ManifestId, plan.Segments.Count, allRuleResults.Count, allExportLines.Count, auditState);
+            employeeId, plan.ManifestId, plan.Segments.Count, allRuleResults.Count, allExportLines.Count, auditState);
 
         var okResult = new PeriodCalculationResult
         {
-            EmployeeId = profile.EmployeeId,
+            EmployeeId = employeeId,
             PeriodStart = plan.PeriodStart,
             PeriodEnd = plan.PeriodEnd,
-            AgreementCode = profile.AgreementCode,
+            // S145 R-12: the agreement the period was EVALUATED under (the first EMPLOYED segment's piece, or
+            // empty when none is EMPLOYED), never the request body's. No rule and no export line reads it.
+            AgreementCode = evaluatedAgreementCode,
             // The result-level OkVersion remains the period-start-resolved version for
             // legacy callers that read this field (RetroactiveCorrectionService, /export).
             // Per-line OK-version stamping on PayrollExportLine.OkVersion is the new
@@ -1072,8 +1140,66 @@ public sealed class PeriodCalculationService
             SettlementCutoff = settlementCutoff,
             ConfigFingerprints = timeline?.ConfigFingerprints ?? (IReadOnlyList<string>)Array.Empty<string>(),
             EvaluationModel = timeline?.EvaluationModel,
+            PlanInputs = planInputs,
         };
     }
+
+    /// <summary>
+    /// S145 / TASK-14513 (refinement A7; rulings R14, R15, R41) — the <see cref="PlanInputs"/> of one
+    /// successful evaluation, each member from what the evaluation actually consumed:
+    /// <list type="bullet">
+    /// <item><see cref="PlanInputs.Pieces"/> — the timeline pieces exactly as sent: the EMPLOYED context days of
+    /// the opening week, then one per EMPLOYED segment, each with its fraction, agreement and position;</item>
+    /// <item><see cref="PlanInputs.SettlementCutoff"/> — the cutoff as sent (R41: the window's inclusive
+    /// <c>End</c> when it is on or before the period end, else <c>null</c>; derived once, by
+    /// <see cref="SettlementCutoffFrom"/>, and not recoverable from the plan);</item>
+    /// <item><see cref="PlanInputs.OpeningFlexBalance"/> — the opening balance the timeline call received;</item>
+    /// <item><see cref="PlanInputs.EntryEventIds"/> / <see cref="PlanInputs.AbsenceEventIds"/> — the event ids of
+    /// every row the hours read returned (all of them, as read: the evaluation's own date filters are code and
+    /// re-run identically at replay), sorted ordinally on their <c>D</c> string form;</item>
+    /// <item><see cref="PlanInputs.AsOfOutboxId"/> — the highest <c>outbox_id</c> among those rows, or 0 when the
+    /// read returned none (outbox ids start at 1, so 0 means "nothing consumed");</item>
+    /// <item><see cref="PlanInputs.EntriesDigest"/> / <see cref="PlanInputs.AbsencesDigest"/> — the lossless
+    /// digests of the rows as read, before normalization (R15, <see cref="HoursDigest"/>);</item>
+    /// <item><see cref="PlanInputs.ConfigFingerprints"/> / <see cref="PlanInputs.EvaluationModel"/> — what the
+    /// Rule Engine returned for the timeline call; for a plan that made no call (no EMPLOYED segment), no
+    /// fingerprint and <see cref="NoEngineCallEvaluationModel"/>.</item>
+    /// </list>
+    /// Pure: it reads nothing. Only called on the success path, where a missing timeline answer can only mean
+    /// that no call was made (a failed call refuses the calculation before this point, R-6).
+    /// </summary>
+    private static PlanInputs FreezePlanInputs(
+        EvaluationInputs inputs,
+        RecordedHours recordedHours,
+        decimal openingFlexBalance,
+        TimelineEvaluationResponse? timeline)
+    {
+        var maxEntryOutboxId = recordedHours.Entries.Count > 0 ? recordedHours.Entries.Max(r => r.OutboxId) : 0L;
+        var maxAbsenceOutboxId = recordedHours.Absences.Count > 0 ? recordedHours.Absences.Max(r => r.OutboxId) : 0L;
+
+        return new PlanInputs(
+            Pieces: inputs.Pieces.ToArray(),
+            SettlementCutoff: inputs.SettlementCutoff,
+            OpeningFlexBalance: openingFlexBalance,
+            EntryEventIds: SortedEventIds(recordedHours.Entries.Select(r => r.EventId)),
+            AbsenceEventIds: SortedEventIds(recordedHours.Absences.Select(r => r.EventId)),
+            AsOfOutboxId: Math.Max(maxEntryOutboxId, maxAbsenceOutboxId),
+            EntriesDigest: HoursDigest.ComputeEntriesDigest(recordedHours.Entries),
+            AbsencesDigest: HoursDigest.ComputeAbsencesDigest(recordedHours.Absences),
+            ConfigFingerprints: timeline?.ConfigFingerprints.ToArray() ?? Array.Empty<string>(),
+            EvaluationModel: timeline?.EvaluationModel ?? NoEngineCallEvaluationModel);
+    }
+
+    /// <summary>
+    /// Event ids in the frozen order: ordinal over the <c>D</c> string form (lowercase, hyphenated) — the
+    /// order the digest lines sort in. Never <c>Guid.CompareTo</c> or <c>OrderBy(g =&gt; g)</c>, which order
+    /// Guids by their internal byte layout and disagree with the string order (TASK-14500 Step 5a finding).
+    /// </summary>
+    private static Guid[] SortedEventIds(IEnumerable<Guid> eventIds) =>
+        eventIds
+            .Distinct()
+            .OrderBy(id => id.ToString("D", System.Globalization.CultureInfo.InvariantCulture), StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>
     /// The plan's own integrity, checked before admission and again at the emission boundary: the
@@ -1086,15 +1212,22 @@ public sealed class PeriodCalculationService
     /// inputs. Both sides are strings per the ADR-016 D10 amendment of 2026-05-01 — no synthetic Guid
     /// round-trip.
     /// </summary>
-    private static void AssertPlanMatchesProfile(PlannedCalculation plan, EmploymentProfile profile)
+    private static void AssertPlanMatchesProfile(PlannedCalculation plan, EmploymentProfile profile) =>
+        AssertPlanMatchesEmployee(plan, profile.EmployeeId);
+
+    /// <summary>
+    /// The same check over an employee id: what evaluation receives since S145 ruling R-12 (a forward
+    /// calculation passes its caller profile's id, a replay its manifest's own). The message is unchanged.
+    /// </summary>
+    private static void AssertPlanMatchesEmployee(PlannedCalculation plan, string employeeId)
     {
         AssertGeometricInvariants(plan);
 
-        if (!string.Equals(plan.EmployeeId, profile.EmployeeId, StringComparison.Ordinal))
+        if (!string.Equals(plan.EmployeeId, employeeId, StringComparison.Ordinal))
         {
             throw new PlannerInvariantViolation(
                 $"PeriodCalculationService.CalculateAsync invariant violated: PlannedCalculation.EmployeeId " +
-                $"('{plan.EmployeeId}') does not match profile.EmployeeId ('{profile.EmployeeId}'). " +
+                $"('{plan.EmployeeId}') does not match profile.EmployeeId ('{employeeId}'). " +
                 $"ManifestId={plan.ManifestId}.");
         }
     }
@@ -1660,98 +1793,75 @@ public sealed class PeriodCalculationService
     }
 
     // -------------------------------------------------------------------
-    // Replay primitive (ADR-016 D10)
+    // Replay primitive (ADR-016 D10) — S145 TASK-14513: frozen inputs, verify and refuse
     // -------------------------------------------------------------------
 
     /// <summary>
-    /// Loads a persisted <see cref="SegmentManifest"/> by id and reconstructs the
-    /// <see cref="PlannedCalculation"/> for replay. Returns a <see cref="CalculationResult"/>
-    /// envelope carrying the original <see cref="CalculationResult.ManifestId"/>; for full
-    /// re-evaluation of rules against the reconstructed plan, use the richer overload that
-    /// accepts the original inputs.
+    /// Replays a stored calculation by its manifest id alone: re-runs it on exactly the inputs it had and
+    /// returns the result, or refuses BY NAME with <see cref="ReplayRefusedException"/> when it cannot do that
+    /// faithfully (S145 / TASK-14513, refinement A7; rulings R14, R15, R41, R42).
     ///
     /// <para>
-    /// Load order: the <c>segment_manifests</c> projection table first (single-statement
-    /// fetch); if the projection has been truncated or has not yet been populated for this
-    /// manifest id, fall back to replaying <see cref="SegmentManifestCreated"/> events from
-    /// the event store. Determinism (ADR-016 D10): rules see snapshots from the
-    /// reconstructed plan, NOT the live DB. The same
-    /// <see cref="IRuleClassificationProvider"/> used by forward calculations supplies the
-    /// rule set, so rule-side invariants are re-asserted against today's classifications
-    /// (this catches the case where a rule grew a new SnapshotContract after the manifest
-    /// was originally persisted).
+    /// <b>Plain language.</b> A payslip must be provable after the fact. A replay never asks today's world
+    /// anything that could have changed since the month was calculated. It reads what the calculation recorded
+    /// about its own inputs on the manifest (<see cref="PlanInputs"/>), re-reads the hours rows the calculation
+    /// recorded (by their event ids, so a row the employee has since re-saved is still found), and re-runs the
+    /// evaluation. Inputs that are data are checked against their record; inputs that are code (agreement
+    /// configs, the arithmetic version) are checked through the fingerprint and marker the Rule Engine returns.
+    /// Anything that no longer matches refuses the replay by name instead of producing a different figure.
     /// </para>
     ///
     /// <para>
-    /// S145 / TASK-14508 (R25): a replay, so it is never silent about its hours source either —
-    /// a service built without an <see cref="IRecordedHoursReader"/> throws before the manifest load.
-    /// This overload reads no hours today; TASK-14513 makes it THE replay, re-reading the rows a
-    /// calculation recorded by their event ids, and the check is already in place for it.
-    /// </para>
-    /// </summary>
-    public async Task<CalculationResult> ReplayAsync(Guid manifestId, CancellationToken ct = default)
-    {
-        // S145 TASK-14508 (R25): never silent, before any read (the manifest load is a read).
-        _ = RequireHoursReader(nameof(ReplayAsync));
-
-        var manifest = await LoadManifestAsync(manifestId, ct)
-            ?? throw new InvalidOperationException(
-                $"Manifest {manifestId} not found in segment_manifests projection or event store. " +
-                "Cannot replay.");
-
-        var plan = PeriodPlanner.FromManifest(manifest, _classificationProvider.GetClassifications());
-
-        return new CalculationResult
-        {
-            RuleId = "REPLAY",
-            EmployeeId = manifest.EmployeeId,
-            Success = true,
-            LineItems = new List<CalculationLineItem>(),
-            ManifestId = plan.ManifestId,
-        };
-    }
-
-    /// <summary>
-    /// Full replay: loads the manifest, reconstructs the plan, and re-evaluates rules
-    /// against it. The returned <see cref="PeriodCalculationResult"/> is
-    /// produced by the same rule evaluation pipeline as a forward calculation, so the
-    /// per-rule <see cref="CalculationResult.ManifestId"/> stamping and per-line OK-version
-    /// stamping are identical — only the <see cref="PlannedCalculation.ManifestId"/> is
-    /// the original (replay does NOT mint a new manifest).
-    ///
-    /// <para>
-    /// Note on snapshots: rules see <see cref="SegmentSnapshot"/> values from the
-    /// reconstructed plan, NOT live DB reads. Determinism (ADR-016 D10) holds even after
-    /// the live DB has changed.
+    /// <b>The steps, in order</b> (a replay writes nothing, so no refusal leaves a trace):
+    /// <list type="number">
+    /// <item>the never-silent hours-reader check (R25), before any read;</item>
+    /// <item>the manifest load (the projection first, the event store as fallback); an unknown id is an
+    /// <see cref="InvalidOperationException"/>, as before;</item>
+    /// <item>no (complete) frozen inputs on the manifest — every pre-S145 manifest, the ADR-016:242 exception —
+    /// → <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
+    /// <item>the plan from the manifest (<see cref="PeriodPlanner.FromManifest"/>), and the evaluation inputs from
+    /// the frozen pieces and cutoff alone (<see cref="FrozenEvaluationInputs"/>);</item>
+    /// <item>the recorded hours rows, re-read by event id (<see cref="IRecordedHoursReader.ReadByEventIdsAsync"/>,
+    /// current or superseded); a genuinely absent id → <see cref="ReplayRefusedException.EntriesMissing"/>;</item>
+    /// <item>the digests recomputed over the rows as re-read →
+    /// <see cref="ReplayRefusedException.EntriesDigestMismatch"/> /
+    /// <see cref="ReplayRefusedException.AbsencesDigestMismatch"/>;</item>
+    /// <item>evaluation (<see cref="EvaluateAsync"/>, no manifest minted), on the frozen opening balance;</item>
+    /// <item>the engine's marker, then its fingerprints, compared with the record →
+    /// <see cref="ReplayRefusedException.EvaluationModelChanged"/> /
+    /// <see cref="ReplayRefusedException.ConfigChanged"/>.</item>
+    /// </list>
+    /// A failed rule-engine call returns the refused result (<c>Success == false</c>, no figure; S145 ruling
+    /// R-6), exactly as a forward calculation does: an engine that cannot be reached proves nothing either way.
     /// </para>
     ///
     /// <para>
-    /// <strong>Evaluation only, never admission (S145 / TASK-14512, ruling R42).</strong> A replay proves
-    /// what WAS calculated; whether the previous month is approved TODAY, or whether today's agreement
-    /// history would now refuse the month, cannot change whether that result is reproducible. So a replay
-    /// enters evaluation directly: no planner refusal (the plan comes from the manifest), no week check,
-    /// no months-in-order check, and the <see cref="IPriorPeriodApprovalReader"/> is never consulted — a
-    /// replay on a service built without one succeeds. The R21/R26 never-silent throw is a CALCULATION
-    /// rule.
+    /// <b>Evaluation only, never admission (R42).</b> A replay proves what WAS calculated. Whether the previous
+    /// month is approved TODAY, today's employment window, today's agreement or profile history and today's
+    /// hours rows cannot change whether that result is reproducible. So a replay never consults the
+    /// <see cref="IPriorPeriodApprovalReader"/>, the agreement-code repository, the
+    /// <see cref="IEmploymentWindowResolver"/>, the <see cref="IEmploymentProfileResolver"/> or
+    /// <see cref="IRecordedHoursReader.ReadCurrentAsync"/>, and a replay on a service built without an approval
+    /// reader succeeds. The planner's refusal, the week check and the months-in-order check are calculation
+    /// rules.
     /// </para>
     ///
     /// <para>
-    /// <strong>Its inputs — an intermediate state until TASK-14513.</strong> Evaluation needs the
-    /// timeline pieces, the settlement cutoff and the hours rows, and nothing frozen carries them yet. So
-    /// until TASK-14513 this replay still derives them from LIVE reads
-    /// (<see cref="ReadReplayInputsUntilFrozenAsync"/>): the employee histories (the employment window and
-    /// the profile and agreement-code change dates), the dated profiles, and the employee's CURRENT hours
-    /// rows over the reconstructed plan's window. TASK-14513 replaces exactly that one method with the
-    /// frozen <see cref="PlanInputs"/> (the pieces, the cutoff — R41: not recoverable from the plan — and
-    /// the rows re-read by recorded event id), after which a replay consults no window resolver, no
-    /// agreement-code history and no <c>ReadCurrentAsync</c> either. A service built without an
-    /// <see cref="IRecordedHoursReader"/> throws before the manifest load.
+    /// <b>The signature (R14; ADR-016:149).</b> The earlier overloads took the caller's profile and opening
+    /// balance; this one takes neither, restoring the inputs-free signature ADR-016 D10 declares. It also
+    /// replaces the inputs-free envelope overload, which evaluated nothing and returned an empty result.
     /// </para>
     /// </summary>
+    /// <param name="manifestId">The manifest of the calculation to replay.</param>
+    /// <param name="authorizationHeader">Forwarded to the Rule Engine calls.</param>
+    /// <param name="correlationId">Forwarded to the Rule Engine calls.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <returns>The replayed result; every rule result and export line carries the original manifest id.</returns>
+    /// <exception cref="ReplayRefusedException">
+    /// The replay cannot reproduce the calculation faithfully; <see cref="ReplayRefusedException.Reason"/> names why.
+    /// </exception>
     public async Task<PeriodCalculationResult> ReplayAsync(
         Guid manifestId,
-        EmploymentProfile profile,
-        decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
         CancellationToken ct = default)
@@ -1764,47 +1874,242 @@ public sealed class PeriodCalculationService
                 $"Manifest {manifestId} not found in segment_manifests projection or event store. " +
                 "Cannot replay.");
 
+        // 1. The frozen inputs. A manifest without them is refused by name, never recomputed from live data.
+        var frozen = manifest.PlanInputs is { } recorded && IsComplete(recorded)
+            ? recorded
+            : throw Refuse(
+                ReplayRefusedException.ManifestWithoutFrozenInputs, manifestId, manifest.EmployeeId,
+                manifest.PlanInputs is null
+                    ? "the manifest carries no frozen inputs (a manifest written before S145, or a projection row whose plan_inputs_jsonb is NULL)"
+                    : "the manifest's frozen inputs are incomplete (a member is null or empty)");
+
+        // 2. The plan (today's rule set re-asserts the D9 invariants, as on a forward calculation) and the
+        //    evaluation inputs from the frozen pieces and cutoff alone: no employment window, no profile or
+        //    agreement history, no dated profile read (R41, R42).
         var plan = PeriodPlanner.FromManifest(manifest, _classificationProvider.GetClassifications());
+        var inputs = FrozenEvaluationInputs(plan, frozen);
 
-        AssertPlanMatchesProfile(plan, profile);
+        // 3. The hours: exactly the recorded rows, re-read by event id (current OR superseded), then verified.
+        var recordedHours = await hoursReader.ReadByEventIdsAsync(
+            plan.EmployeeId, frozen.EntryEventIds, frozen.AbsenceEventIds, ct);
+        EnsureRecordedRowsPresent(plan, frozen, recordedHours);
+        EnsureHoursDigestsMatch(plan, frozen, recordedHours);
 
-        // S145 TASK-14512 (R42): evaluation only — no admission. The inputs still come from live reads
-        // until TASK-14513 freezes them (see the method).
-        var (inputs, recordedHours) = await ReadReplayInputsUntilFrozenAsync(plan, profile, hoursReader, ct);
-
-        // Replay re-evaluates rules against the reconstructed plan but does NOT mint a
-        // new manifest event (ADR-016 D10 immutability). The original SegmentManifestCreated
-        // already exists from the forward-calc that produced this manifest id; calling the
-        // standard CalculateAsync path would unconditionally append a duplicate event with
-        // a fresh createdAt, mutating an immutable audit record (Codex sprint-end review).
-        // emitAuditEvents:false skips both EmitManifestAsync and EmitLegacyPeriodCompletedAsync.
+        // 4. Evaluation only (R42), on the frozen opening balance. emitAuditEvents:false — a replay re-evaluates
+        //    but does NOT mint a new SegmentManifestCreated or PeriodCalculationCompleted event (ADR-016 D10
+        //    immutability; Codex sprint-end review). The result's agreement comes from the frozen pieces by the
+        //    same derivation a forward calculation uses (R-12), so a replay needs no caller profile (R14).
         var outcome = await EvaluateAsync(
-            plan, inputs, recordedHours, profile,
-            previousFlexBalance, authorizationHeader, correlationId,
+            plan, inputs, recordedHours, plan.EmployeeId,
+            frozen.OpeningFlexBalance, authorizationHeader, correlationId,
             emitAuditEvents: false, ct);
+
+        // A failed engine call refused the result (R-6): there is no engine answer to compare.
+        if (!outcome.Result.Success || outcome.PlanInputs is not { } replayed)
+            return outcome.Result;
+
+        // 5. The code: the engine's marker and fingerprints must still be the recorded ones.
+        EnsureEvaluationModelUnchanged(plan, frozen, replayed);
+        EnsureConfigUnchanged(plan, frozen, replayed);
+
         return outcome.Result;
     }
 
     /// <summary>
-    /// S145 / TASK-14512 — the A.4 intermediate source of a replay's evaluation inputs, and the ONE place
-    /// TASK-14513 replaces with the frozen <see cref="PlanInputs"/>. It re-derives what the forward
-    /// calculation derived — the employee histories, the timeline pieces, the segments' dated profiles,
-    /// the settlement cutoff — and re-reads the employee's CURRENT hours rows, exactly as the forward
-    /// calculation read them. It runs NO admission check: no week check, no months-in-order check, no
-    /// approval read (R42). What it still consults — the window resolver, the change-date histories, the
-    /// profile resolver and <c>ReadCurrentAsync</c> — is what TASK-14513 retires.
+    /// True when every member of a loaded <see cref="PlanInputs"/> holds a usable value. This is the semantic
+    /// half of the completeness check: a MISSING member already fails the decode (<c>[JsonRequired]</c>, S145
+    /// ruling R-18: on the projection row it is refused by name in <see cref="DecodeProjectionRow"/>; on the
+    /// event the stream read fails, see <see cref="LoadManifestAsync"/>), but a member written as an explicit
+    /// JSON <c>null</c> list or an empty digest still decodes; it is refused by the same name
+    /// (<see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>) rather than crashing later. An empty
+    /// list is complete (no rows read; no fingerprint for a plan that made no engine call).
     /// </summary>
-    private async Task<(EvaluationInputs Inputs, RecordedHours Hours)> ReadReplayInputsUntilFrozenAsync(
-        PlannedCalculation plan,
-        EmploymentProfile profile,
-        IRecordedHoursReader hoursReader,
-        CancellationToken ct)
+    private static bool IsComplete(PlanInputs planInputs) =>
+        planInputs.Pieces is not null
+        && planInputs.EntryEventIds is not null
+        && planInputs.AbsenceEventIds is not null
+        && planInputs.ConfigFingerprints is not null
+        && !string.IsNullOrEmpty(planInputs.EntriesDigest)
+        && !string.IsNullOrEmpty(planInputs.AbsencesDigest)
+        && !string.IsNullOrEmpty(planInputs.EvaluationModel);
+
+    /// <summary>
+    /// S145 / TASK-14513 — a replay's <see cref="EvaluationInputs"/>, from its manifest's frozen
+    /// <see cref="PlanInputs"/> alone (refinement A7: both lanes build the profile from the piece covering the
+    /// day):
+    /// <list type="bullet">
+    /// <item>the per-plan lane sends the frozen pieces exactly as recorded, context days included;</item>
+    /// <item>each EMPLOYED segment's profile, which the per-segment lane sends and the wage-type mapping stamps
+    /// on its lines, is built from the frozen piece covering the segment's start (<see cref="ProfileFromPiece"/>).
+    /// The dated profile read a forward calculation makes at the segment start is not made;</item>
+    /// <item>the settlement cutoff is the frozen one (R41), never re-derived from the employment window.</item>
+    /// </list>
+    /// A NOT_EMPLOYED segment gets no profile and is not evaluated, as in a forward calculation (ADR-040 D10). A
+    /// frozen record with no piece covering an EMPLOYED segment's start cannot be replayed faithfully, so it is
+    /// refused as a manifest without (complete) frozen inputs. A forward calculation always freezes one piece per
+    /// EMPLOYED segment, starting on that segment's first day, so that is a damaged record, never a month.
+    /// </summary>
+    private EvaluationInputs FrozenEvaluationInputs(PlannedCalculation plan, PlanInputs frozen)
     {
-        var histories = await ReadPlanHistoriesAsync(plan.EmployeeId, plan.PeriodStart, plan.PeriodEnd, ct);
-        var recordedHours = await hoursReader.ReadCurrentAsync(
-            plan.EmployeeId, HoursReadStart(plan.PeriodStart), plan.PeriodEnd, ct);
-        var inputs = await DeriveEvaluationInputsAsync(plan, histories, profile, ct);
-        return (inputs, recordedHours);
+        var segmentProfiles = new EmploymentProfile?[plan.Segments.Count];
+        for (int s = 0; s < plan.Segments.Count; s++)
+        {
+            var segment = plan.Segments[s];
+            if (segment.EmploymentStatus == EmploymentWindowStatus.NOT_EMPLOYED)
+                continue;
+
+            // The segment's index, never its date, goes into the refusal: an EMPLOYED segment's first day can
+            // be a hire date (ADR-040 D7).
+            var piece = PieceCovering(frozen.Pieces, segment.StartDate)
+                ?? throw Refuse(
+                    ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
+                    $"no frozen piece covers the first day of EMPLOYED segment {s}");
+            segmentProfiles[s] = ProfileFromPiece(plan.EmployeeId, piece, segment.StartDate);
+        }
+
+        return new EvaluationInputs(frozen.Pieces, segmentProfiles, frozen.SettlementCutoff);
+    }
+
+    /// <summary>
+    /// S145 / TASK-14513 — the employment profile a replay evaluates a segment with, built from the frozen piece
+    /// covering it: the piece's part-time fraction, agreement code and position, and the OK version of
+    /// <paramref name="asOf"/> (a pure function of the date, ADR-003). These are the profile fields the Rule
+    /// Engine reads (agreement, OK version and position select the config; the absence rule scales by the
+    /// fraction); the wage-type mapping reads only the employee id.
+    ///
+    /// <para>
+    /// <b>What is not frozen.</b> The employment category and the organisation are read by no rule and by no
+    /// export line, so a piece does not carry them (refinement A7 freezes the per-piece inputs rules read; a rule
+    /// that starts reading another field adds it to the piece and bumps the evaluation-model marker). The replay
+    /// profile leaves the category empty and the organisation unset rather than guessing values.
+    /// </para>
+    /// </summary>
+    private static EmploymentProfile ProfileFromPiece(string employeeId, FrozenPiece piece, DateOnly asOf) => new()
+    {
+        EmployeeId = employeeId,
+        AgreementCode = piece.AgreementCode,
+        OkVersion = OkVersionResolver.ResolveVersion(asOf),
+        EmploymentCategory = string.Empty,
+        IsPartTime = piece.PartTimeFraction < 1.0m,
+        PartTimeFraction = piece.PartTimeFraction,
+        Position = piece.Position,
+        OrgId = null,
+    };
+
+    /// <summary>
+    /// S145 / TASK-14513 — the frozen piece of the period's first EMPLOYED segment: the first piece starting on
+    /// or after <paramref name="periodStart"/> (the opening week's context pieces all end before it), or
+    /// <c>null</c> when the plan has no EMPLOYED segment. It is what the period actually ran under (its
+    /// agreement, fraction and position), as opposed to what a caller sent. Two readers take their labels from
+    /// it and from nowhere else: <see cref="EvaluateAsync"/> reports its agreement on every result and on the
+    /// legacy completed event, forward and replay alike (ruling R-12), and
+    /// <c>RetroactiveCorrectionService</c> records its agreement and position on the
+    /// <c>RetroactiveCorrectionRequested</c> event (rulings R-10, R-11).
+    /// </summary>
+    internal static FrozenPiece? FirstEmployedSegmentPiece(IReadOnlyList<FrozenPiece> pieces, DateOnly periodStart)
+    {
+        foreach (var piece in pieces)
+        {
+            if (piece.From >= periodStart)
+                return piece;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// S145 / TASK-14513 (R14 as amended; A0 constraint 5) — every recorded event id must come back from the
+    /// by-id read. That read returns current AND superseded rows, so a row the employee re-saved after the
+    /// calculation is found, not missing; only an id with no row at all is refused, as
+    /// <see cref="ReplayRefusedException.EntriesMissing"/>, for a time-entry id and an absence id alike (the
+    /// refinement names one refusal for the hours rows). It runs before the digest check, so an absent row is
+    /// named as absent, not as a digest mismatch.
+    /// </summary>
+    private void EnsureRecordedRowsPresent(PlannedCalculation plan, PlanInputs frozen, RecordedHours reread)
+    {
+        var entriesFound = reread.Entries.Select(r => r.EventId).ToHashSet();
+        var absencesFound = reread.Absences.Select(r => r.EventId).ToHashSet();
+        var missingEntries = frozen.EntryEventIds.Count(id => !entriesFound.Contains(id));
+        var missingAbsences = frozen.AbsenceEventIds.Count(id => !absencesFound.Contains(id));
+        if (missingEntries == 0 && missingAbsences == 0)
+            return;
+
+        throw Refuse(
+            ReplayRefusedException.EntriesMissing, plan.ManifestId, plan.EmployeeId,
+            $"{missingEntries} recorded time-entry row(s) and {missingAbsences} recorded absence row(s) are " +
+            "absent from the hours read models");
+    }
+
+    /// <summary>
+    /// S145 / TASK-14513 (R15) — the digests recomputed over the rows as re-read must equal the recorded ones. A
+    /// row whose date, times, hours, activity or absence type changed after the calculation refuses the replay:
+    /// <see cref="ReplayRefusedException.EntriesDigestMismatch"/>, then
+    /// <see cref="ReplayRefusedException.AbsencesDigestMismatch"/>. Both comparisons live here.
+    /// </summary>
+    private void EnsureHoursDigestsMatch(PlannedCalculation plan, PlanInputs frozen, RecordedHours reread)
+    {
+        if (!string.Equals(HoursDigest.ComputeEntriesDigest(reread.Entries), frozen.EntriesDigest, StringComparison.Ordinal))
+        {
+            throw Refuse(
+                ReplayRefusedException.EntriesDigestMismatch, plan.ManifestId, plan.EmployeeId,
+                "the recorded time-entry rows no longer hash to the digest recorded with the calculation");
+        }
+
+        if (!string.Equals(HoursDigest.ComputeAbsencesDigest(reread.Absences), frozen.AbsencesDigest, StringComparison.Ordinal))
+        {
+            throw Refuse(
+                ReplayRefusedException.AbsencesDigestMismatch, plan.ManifestId, plan.EmployeeId,
+                "the recorded absence rows no longer hash to the digest recorded with the calculation");
+        }
+    }
+
+    /// <summary>
+    /// S145 / TASK-14513 (refinement A7) — the replay's evaluation-model marker (what the engine answers now, or
+    /// <see cref="NoEngineCallEvaluationModel"/> again for a plan that makes no call) must equal the recorded one.
+    /// An engine whose arithmetic changed is refused, never silently recomputed
+    /// (<see cref="ReplayRefusedException.EvaluationModelChanged"/>). Checked before the fingerprints: a new
+    /// arithmetic version may also change how configs are fingerprinted, and the marker is then the real cause.
+    /// </summary>
+    private void EnsureEvaluationModelUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
+    {
+        if (string.Equals(replayed.EvaluationModel, frozen.EvaluationModel, StringComparison.Ordinal))
+            return;
+
+        throw Refuse(
+            ReplayRefusedException.EvaluationModelChanged, plan.ManifestId, plan.EmployeeId,
+            $"the calculation was evaluated by '{frozen.EvaluationModel}' and the Rule Engine now answers " +
+            $"'{replayed.EvaluationModel}'");
+    }
+
+    /// <summary>
+    /// S145 / TASK-14513 (refinement A7) — the config fingerprints the engine returns for the frozen pieces must
+    /// equal the recorded ones, in order: agreement configs are code, so a config that changed since the
+    /// calculation is refused by name (<see cref="ReplayRefusedException.ConfigChanged"/>) rather than paying a
+    /// different figure.
+    /// </summary>
+    private void EnsureConfigUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
+    {
+        if (replayed.ConfigFingerprints.SequenceEqual(frozen.ConfigFingerprints, StringComparer.Ordinal))
+            return;
+
+        throw Refuse(
+            ReplayRefusedException.ConfigChanged, plan.ManifestId, plan.EmployeeId,
+            "the agreement configs the Rule Engine resolves for the frozen pieces no longer match the recorded " +
+            "fingerprints");
+    }
+
+    /// <summary>
+    /// Logs and returns a replay refusal; the caller throws it. The log line and the message carry the reason,
+    /// the manifest id, the employee id and a fixed description only: no hours and no dates (an EMPLOYED
+    /// segment's first day can be a hire date, ADR-040 D7).
+    /// </summary>
+    private ReplayRefusedException Refuse(string reason, Guid manifestId, string employeeId, string detail)
+    {
+        _logger.LogWarning(
+            "Replay of manifest {ManifestId} (employee {EmployeeId}) REFUSED: {Reason}: {Detail}. Nothing is " +
+            "recomputed from live data and nothing is written.",
+            manifestId, employeeId, reason, detail);
+
+        return new ReplayRefusedException(reason, manifestId, $"replay of manifest {manifestId} refused: {detail}.");
     }
 
     // -------------------------------------------------------------------
@@ -1992,7 +2297,12 @@ public sealed class PeriodCalculationService
     // Manifest persistence
     // -------------------------------------------------------------------
 
-    private static SegmentManifest BuildManifest(PlannedCalculation plan)
+    /// <summary>
+    /// The manifest of a successful calculation: the plan's segmentation plus, since S145 / TASK-14513, the
+    /// <see cref="PlanInputs"/> the evaluation froze (refinement A7), which the event and the projection row
+    /// carry beside the segments.
+    /// </summary>
+    private static SegmentManifest BuildManifest(PlannedCalculation plan, PlanInputs planInputs)
     {
         // Dedupe the boundary-cause names while preserving first-seen order — the projection
         // column boundary_cause_summary is queried by GIN index; predictable order makes
@@ -2015,7 +2325,8 @@ public sealed class PeriodCalculationService
             CalculationKind: plan.CalculationKind,
             BoundaryCauseSummary: boundaryCauseSummary,
             CreatedAt: DateTimeOffset.UtcNow,
-            Segments: plan.Segments);
+            Segments: plan.Segments,
+            PlanInputs: planInputs);
     }
 
     /// <summary>
@@ -2033,22 +2344,26 @@ public sealed class PeriodCalculationService
         bool eventOk = false;
         bool projectionOk = false;
 
-        // 1. Append the SegmentManifestCreated domain event (audit-of-record per ADR-016 D10).
+        // The SegmentManifestCreated domain event (audit-of-record per ADR-016 D10). Since S145 / TASK-14513
+        // it carries the frozen PlanInputs: the event is their record of truth, because the projection is
+        // rebuildable from events.
+        var manifestEvent = new SegmentManifestCreated
+        {
+            ManifestId = manifest.ManifestId,
+            EmployeeId = manifest.EmployeeId,
+            PeriodStart = manifest.PeriodStart,
+            PeriodEnd = manifest.PeriodEnd,
+            CalculationKind = manifest.CalculationKind,
+            BoundaryCauseSummary = manifest.BoundaryCauseSummary,
+            CreatedAt = manifest.CreatedAt,
+            Segments = manifest.Segments,
+            PlanInputs = manifest.PlanInputs,
+            CorrelationId = correlationId,
+        };
+
+        // 1. Append the event.
         try
         {
-            var manifestEvent = new SegmentManifestCreated
-            {
-                ManifestId = manifest.ManifestId,
-                EmployeeId = manifest.EmployeeId,
-                PeriodStart = manifest.PeriodStart,
-                PeriodEnd = manifest.PeriodEnd,
-                CalculationKind = manifest.CalculationKind,
-                BoundaryCauseSummary = manifest.BoundaryCauseSummary,
-                CreatedAt = manifest.CreatedAt,
-                Segments = manifest.Segments,
-                CorrelationId = correlationId,
-            };
-
             await _eventStore.AppendAsync(ManifestStreamId(manifest.ManifestId), manifestEvent, ct);
             eventOk = true;
         }
@@ -2069,15 +2384,16 @@ public sealed class PeriodCalculationService
             await conn.OpenAsync(ct);
 
             var segmentsJson = JsonSerializer.Serialize(manifest.Segments, JsonOptions);
+            var planInputsJson = PlanInputsJsonOf(manifestEvent);
 
             await using var cmd = new NpgsqlCommand(
                 """
                 INSERT INTO segment_manifests
                     (manifest_id, period_start, period_end, employee_id, calculation_kind,
-                     boundary_cause_summary, created_at, segments_jsonb)
+                     boundary_cause_summary, created_at, segments_jsonb, plan_inputs_jsonb)
                 VALUES
                     (@manifestId, @periodStart, @periodEnd, @employeeId, @calculationKind,
-                     @boundaryCauseSummary, @createdAt, @segmentsJson::jsonb)
+                     @boundaryCauseSummary, @createdAt, @segmentsJson::jsonb, @planInputsJson::jsonb)
                 ON CONFLICT (manifest_id) DO NOTHING
                 """, conn);
             cmd.Parameters.AddWithValue("manifestId", manifest.ManifestId);
@@ -2088,6 +2404,7 @@ public sealed class PeriodCalculationService
             cmd.Parameters.AddWithValue("boundaryCauseSummary", manifest.BoundaryCauseSummary.ToArray());
             cmd.Parameters.AddWithValue("createdAt", manifest.CreatedAt);
             cmd.Parameters.AddWithValue("segmentsJson", NpgsqlTypes.NpgsqlDbType.Text, segmentsJson);
+            cmd.Parameters.AddWithValue("planInputsJson", NpgsqlTypes.NpgsqlDbType.Text, (object?)planInputsJson ?? DBNull.Value);
 
             await cmd.ExecuteNonQueryAsync(ct);
             projectionOk = true;
@@ -2110,9 +2427,65 @@ public sealed class PeriodCalculationService
         };
     }
 
+    /// <summary>
+    /// S145 / TASK-14513 — the <c>plan_inputs_jsonb</c> value: exactly the <c>planInputs</c> object as
+    /// <see cref="EventSerializer"/> writes it on <paramref name="manifestEvent"/> (camelCase, null members
+    /// omitted), or <c>null</c> when the event carries none.
+    ///
+    /// <para>
+    /// <b>Why it is taken from the serialized event (TASK-14509's shape contract).</b> The projection rebuild and
+    /// its SQL twin copy <c>data-&gt;'planInputs'</c> verbatim into this column, so a live-written row and a
+    /// rebuilt one must hold the same JSON; reading it out of the event's own serialization makes that true by
+    /// construction instead of keeping a second copy of the serializer's options in step. (The segments column
+    /// keeps its own options: its documented null-snapshot residual, QUAL-146, is not this column's.)
+    /// </para>
+    /// </summary>
+    private static string? PlanInputsJsonOf(SegmentManifestCreated manifestEvent)
+    {
+        if (manifestEvent.PlanInputs is null)
+            return null;
+
+        using var serialized = JsonDocument.Parse(EventSerializer.Serialize(manifestEvent));
+        return serialized.RootElement.TryGetProperty("planInputs", out var planInputs)
+            && planInputs.ValueKind == JsonValueKind.Object
+                ? planInputs.GetRawText()
+                : throw new InvalidOperationException(
+                    "SegmentManifestCreated serialized without its planInputs object although the event carries " +
+                    "PlanInputs; the projection row would lose the frozen inputs. " +
+                    $"ManifestId={manifestEvent.ManifestId}.");
+    }
+
+    /// <summary>
+    /// The raw values of one <c>segment_manifests</c> row, read before anything is decoded (S145 ruling R-17):
+    /// the scalars as typed by the reader, and the two JSON columns as text (<c>plan_inputs_jsonb</c> is
+    /// <c>null</c> when the column is NULL).
+    /// </summary>
+    private sealed record ManifestProjectionRow(
+        Guid ManifestId,
+        DateOnly PeriodStart,
+        DateOnly PeriodEnd,
+        string EmployeeId,
+        string CalculationKind,
+        List<string> BoundaryCauseSummary,
+        DateTimeOffset CreatedAt,
+        string SegmentsJson,
+        string? PlanInputsJson);
+
     private async Task<SegmentManifest?> LoadManifestAsync(Guid manifestId, CancellationToken ct)
     {
-        // 1. Try the projection table first — single-row indexed lookup.
+        // 1. Try the projection table first — single-row indexed lookup. Since S145 / TASK-14513 the row's
+        //    plan_inputs_jsonb is read too. Three outcomes (S145 rulings R-14 vii, R-17):
+        //    - no row, or the projection unreachable (a connection failure, a missing table, a SQL error)
+        //      → the event (step 2 below);
+        //    - a found row with a NULL slot → refused by the replay (R-14 vii): a manifest without frozen inputs;
+        //    - a found row with an undecodable slot → refused here (R-17), by the same name.
+        //    A found row never falls back to the event for the slot: the row is what the projection says was
+        //    calculated, and a rebuild (not a replay) is what restores a damaged row. That is why the catch-all
+        //    below wraps ONLY the SQL read into raw values; the decoding happens after it, where no catch can
+        //    turn a damaged row into a silent event substitution.
+        //    A SegmentManifestCreated whose own planInputs cannot be decoded fails the stream read and surfaces
+        //    as "not found / cannot replay": a store-level fault in an append-only record.
+        ManifestProjectionRow? row = null;
         try
         {
             await using var conn = _connectionFactory.Create();
@@ -2121,7 +2494,7 @@ public sealed class PeriodCalculationService
             await using var cmd = new NpgsqlCommand(
                 """
                 SELECT manifest_id, period_start, period_end, employee_id, calculation_kind,
-                       boundary_cause_summary, created_at, segments_jsonb
+                       boundary_cause_summary, created_at, segments_jsonb, plan_inputs_jsonb
                 FROM segment_manifests
                 WHERE manifest_id = @manifestId
                 """, conn);
@@ -2130,11 +2503,7 @@ public sealed class PeriodCalculationService
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             if (await reader.ReadAsync(ct))
             {
-                var segmentsJson = reader.GetString(7);
-                var segments = JsonSerializer.Deserialize<List<PlannedSegment>>(segmentsJson, JsonOptions)
-                    ?? new List<PlannedSegment>();
-
-                return new SegmentManifest(
+                row = new ManifestProjectionRow(
                     ManifestId: reader.GetGuid(0),
                     PeriodStart: DateOnly.FromDateTime(reader.GetDateTime(1)),
                     PeriodEnd: DateOnly.FromDateTime(reader.GetDateTime(2)),
@@ -2142,15 +2511,23 @@ public sealed class PeriodCalculationService
                     CalculationKind: reader.GetString(4),
                     BoundaryCauseSummary: ((string[])reader.GetValue(5)).ToList(),
                     CreatedAt: reader.GetFieldValue<DateTimeOffset>(6),
-                    Segments: segments);
+                    SegmentsJson: reader.GetString(7),
+                    PlanInputsJson: reader.IsDBNull(8) ? null : reader.GetString(8));
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // A fault in the read means the projection could not be consulted; no decoding has happened yet,
+            // so nothing here can be a damaged row. A row already read stays read: a fault after it (closing
+            // the connection) does not hand a found row to the event (R-17). A cancelled replay propagates
+            // as cancellation, not as "manifest not found".
             _logger.LogWarning(ex,
                 "Projection lookup for manifest {ManifestId} failed; falling back to event-replay.",
                 manifestId);
         }
+
+        if (row is not null)
+            return DecodeProjectionRow(row);
 
         // 2. Event-replay fallback — read SegmentManifestCreated events on the manifest's
         //    stream and rehydrate the manifest. This path covers the projection-truncated /
@@ -2170,10 +2547,11 @@ public sealed class PeriodCalculationService
                     CalculationKind: created.CalculationKind,
                     BoundaryCauseSummary: created.BoundaryCauseSummary,
                     CreatedAt: created.CreatedAt,
-                    Segments: created.Segments);
+                    Segments: created.Segments,
+                    PlanInputs: created.PlanInputs);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex,
                 "Event-replay fallback for manifest {ManifestId} failed.", manifestId);
@@ -2182,9 +2560,76 @@ public sealed class PeriodCalculationService
         return null;
     }
 
+    /// <summary>
+    /// S145 ruling R-17 — decodes a FOUND <c>segment_manifests</c> row. Runs outside the projection read's
+    /// catch-all, so a damaged row fails loudly and is never replaced by the event:
+    /// <list type="bullet">
+    /// <item><c>segments_jsonb</c> not decodable → <see cref="InvalidOperationException"/> naming the manifest and
+    /// the column. The segments are the plan, not frozen inputs, so this is a damaged row, not a named replay
+    /// refusal;</item>
+    /// <item><c>plan_inputs_jsonb</c> present but not decodable as <see cref="PlanInputs"/> (the wrong shape, for
+    /// example <c>[]</c>, or a missing required member, R-18) → logged at Warning with the exception, then refused
+    /// <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
+    /// <item><c>plan_inputs_jsonb</c> NULL (or the JSON literal <c>null</c>) → a manifest without frozen inputs,
+    /// which <see cref="ReplayAsync"/> refuses by the same name (R-14 vii).</item>
+    /// </list>
+    /// </summary>
+    private SegmentManifest DecodeProjectionRow(ManifestProjectionRow row)
+    {
+        List<PlannedSegment> segments;
+        try
+        {
+            segments = JsonSerializer.Deserialize<List<PlannedSegment>>(row.SegmentsJson, JsonOptions)
+                ?? new List<PlannedSegment>();
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Damaged projection row: segment_manifests.segments_jsonb of manifest {row.ManifestId} could not be " +
+                "decoded as the planned segments; rebuild the projection. The replay does not fall back to the " +
+                "event for a found row.",
+                ex);
+        }
+
+        PlanInputs? planInputs = null;
+        if (row.PlanInputsJson is not null)
+        {
+            try
+            {
+                planInputs = JsonSerializer.Deserialize<PlanInputs>(row.PlanInputsJson, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex,
+                    "The segment_manifests row of manifest {ManifestId} holds a plan_inputs_jsonb that cannot be " +
+                    "decoded as frozen inputs.",
+                    row.ManifestId);
+                throw Refuse(
+                    ReplayRefusedException.ManifestWithoutFrozenInputs, row.ManifestId, row.EmployeeId,
+                    "the projection row's plan_inputs_jsonb could not be decoded as frozen inputs; rebuild the projection");
+            }
+        }
+
+        return new SegmentManifest(
+            ManifestId: row.ManifestId,
+            PeriodStart: row.PeriodStart,
+            PeriodEnd: row.PeriodEnd,
+            EmployeeId: row.EmployeeId,
+            CalculationKind: row.CalculationKind,
+            BoundaryCauseSummary: row.BoundaryCauseSummary,
+            CreatedAt: row.CreatedAt,
+            Segments: segments,
+            PlanInputs: planInputs);
+    }
+
+    /// <summary>
+    /// The legacy <see cref="PeriodCalculationCompleted"/> event. <paramref name="evaluatedAgreementCode"/> is the
+    /// agreement the period was evaluated under, the same single derivation the result reports (S145 R-12).
+    /// </summary>
     private async Task EmitLegacyPeriodCompletedAsync(
         PlannedCalculation plan,
-        EmploymentProfile profile,
+        string employeeId,
+        string evaluatedAgreementCode,
         int ruleResultCount,
         int exportLineCount,
         decimal totalHours,
@@ -2195,10 +2640,10 @@ public sealed class PeriodCalculationService
         {
             var calcEvent = new PeriodCalculationCompleted
             {
-                EmployeeId = profile.EmployeeId,
+                EmployeeId = employeeId,
                 PeriodStart = plan.PeriodStart,
                 PeriodEnd = plan.PeriodEnd,
-                AgreementCode = profile.AgreementCode,
+                AgreementCode = evaluatedAgreementCode,
                 OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
                 RuleCount = ruleResultCount,
                 ExportLineCount = exportLineCount,
@@ -2207,14 +2652,14 @@ public sealed class PeriodCalculationService
             };
 
             await _eventStore.AppendAsync(
-                $"period-calc-{profile.EmployeeId}-{plan.PeriodStart:yyyy-MM-dd}",
+                $"period-calc-{employeeId}-{plan.PeriodStart:yyyy-MM-dd}",
                 calcEvent, ct);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
                 "Failed to emit PeriodCalculationCompleted legacy event for {EmployeeId} manifest {ManifestId}",
-                profile.EmployeeId, plan.ManifestId);
+                employeeId, plan.ManifestId);
         }
     }
 
@@ -2304,8 +2749,9 @@ public sealed class PeriodCalculationService
         /// <summary>
         /// S145 / TASK-14512 (A4) — the employee's dated record at each EMPLOYED candidate segment start,
         /// as planning resolved it for the segments' wage-type keys; evaluation uses the same resolution as
-        /// the segment's profile. <c>null</c> when it was not resolved (a caller-built plan, a replay, or no
-        /// profile resolver wired): evaluation then resolves each segment's profile itself.
+        /// the segment's profile. <c>null</c> when it was not resolved (a caller-built plan, or no profile
+        /// resolver wired): evaluation then resolves each segment's profile itself. (A replay has no histories
+        /// at all: its segment profiles come from the frozen pieces, TASK-14513.)
         /// </summary>
         public IReadOnlyDictionary<DateOnly, DatedProfile>? SegmentStartProfiles { get; init; }
     }
@@ -2497,7 +2943,8 @@ public sealed class PeriodCalculationService
     /// S145 / TASK-14512 (A4) — an EMPLOYED segment's profile: the dated record planning already resolved
     /// at the segment's start for its wage-type key (<see cref="PlanHistories.SegmentStartProfiles"/>), so
     /// the rule engine and the export see the same agreement and position; or, when planning resolved none
-    /// (a caller-built plan, a replay, no profile resolver), a fresh <see cref="ResolveProfileAtAsync"/>.
+    /// (a caller-built plan, no profile resolver), a fresh <see cref="ResolveProfileAtAsync"/>. A replay never
+    /// comes here (its profiles are built from the frozen pieces, <see cref="FrozenEvaluationInputs"/>).
     /// A gap planning recorded is refused here exactly as a fresh resolution's gap is.
     /// </summary>
     private async Task<EmploymentProfile> SegmentProfileAsync(
@@ -2828,14 +3275,18 @@ public sealed class PeriodCalculationService
     }
 
     /// <summary>True when one of the timeline's <paramref name="pieces"/> covers <paramref name="day"/>.</summary>
-    private static bool IsCovered(IReadOnlyList<FrozenPiece> pieces, DateOnly day)
+    private static bool IsCovered(IReadOnlyList<FrozenPiece> pieces, DateOnly day) =>
+        PieceCovering(pieces, day) is not null;
+
+    /// <summary>The first of <paramref name="pieces"/> covering <paramref name="day"/> (bounds inclusive), or <c>null</c>.</summary>
+    private static FrozenPiece? PieceCovering(IReadOnlyList<FrozenPiece> pieces, DateOnly day)
     {
         foreach (var piece in pieces)
         {
             if (day >= piece.From && day <= piece.To)
-                return true;
+                return piece;
         }
-        return false;
+        return null;
     }
 
     /// <summary>
@@ -3039,14 +3490,16 @@ public sealed class PeriodCalculationService
         // registered in planning (BuildPlanWithHistoriesAsync, the body of
         // BuildPlanForLegacyCallersAsync) lands a WtmNaturalKey record at
         // Snapshot.Values["WtmNaturalKey"] — since S145 TASK-14512 (A4) the key of the employee's
-        // dated record at THIS segment's start. Reading from segmentProfile reverts
-        // to the pre-S29 profile-drift risk that ReplayAsync(Guid, EmploymentProfile, ...)
-        // accepts a caller-supplied profile that may differ from the forward-calc profile.
+        // dated record at THIS segment's start. Reading from segmentProfile would revert
+        // to the pre-S29 profile-drift risk (the replay of that era took a caller-supplied profile
+        // that could differ from the forward-calc profile). Since S145 TASK-14513 a replay takes no
+        // profile at all and builds segmentProfile from the frozen piece, but the key still comes from
+        // the snapshot: the manifest records it per segment, and that record is what replay reproduces.
         //
         // Two paths reach this site:
         //   - Forward calc: the hydrator just ran in-process; the value is a typed
         //     WtmNaturalKey reference.
-        //   - Replay: the value round-tripped through segments_jsonb. Snapshot.Values is
+        //   - Replay: the value round-tripped through segments_jsonb (or the event). Snapshot.Values is
         //     IReadOnlyDictionary<string, object?>, so System.Text.Json materialises the
         //     entry as JsonElement on load. Deserialize using the same JsonOptions that
         //     was used to write it (line 974) so the triple is byte-stable.
@@ -3301,7 +3754,8 @@ public sealed class PeriodCalculationService
     /// A 2xx answer is accepted only when it is complete AND successful: exactly the three rows
     /// <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and <c>FLEX_BALANCE</c>, each with
     /// <c>Success == true</c>; a flex block with <c>Success == true</c>; at least one config fingerprint;
-    /// and a non-empty evaluation-model marker (TASK-14513 records the last two for replay). Anything
+    /// and a non-empty evaluation-model marker (both are frozen into <see cref="PlanInputs"/> and checked
+    /// again by a replay, TASK-14513). Anything
     /// else is a failed call, not a partial result (<see cref="TimelineReplyDefect"/>).
     /// </para>
     /// </summary>
@@ -3410,14 +3864,14 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// Why a 2xx timeline answer cannot be used, or <c>null</c> when it can. Usable means complete AND
-    /// successful — what the per-plan lane and TASK-14513 rely on:
+    /// successful — what the per-plan lane and the frozen inputs (TASK-14513) rely on:
     /// <list type="bullet">
     /// <item>exactly one row each for <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and
     /// <c>FLEX_BALANCE</c> (and nothing else), each with a line-item list and <c>Success == true</c>
     /// (a failed row is a failed evaluation, not a payroll figure — Codex WARNING 2, R-6);</item>
     /// <item>a flex block with <c>Success == true</c>;</item>
-    /// <item>at least one config fingerprint, none blank (an answer without one cannot be replayed,
-    /// TASK-14513);</item>
+    /// <item>at least one config fingerprint, none blank (an answer without one could not be checked by a
+    /// replay, TASK-14513);</item>
     /// <item>a non-empty evaluation-model marker.</item>
     /// </list>
     /// The returned phrase is fixed text naming rule ids only, so it is safe to log; nothing from the

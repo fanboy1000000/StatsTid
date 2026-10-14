@@ -129,6 +129,12 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     // Marquee variant 1 — part_time_fraction (replay determinism)
     // ═════════════════════════════════════════════════════════════════════
     /// <summary>
+    /// S145 (refinement A7, "tests whose meaning changes"): this is now a PIN OF THE FREEZE. The
+    /// forward calculation freezes each piece's part_time_fraction on its manifest, and the replay
+    /// evaluates those frozen pieces without reading employee_profiles again, so the supersession
+    /// below cannot reach it. (The dated-resolver argument below still explains why the baseline
+    /// resolves 1.000; the stub reads the fraction from the request's pieces.)
+    ///
     /// Forward-calc against the seeded profile (part_time_fraction=1.000),
     /// supersede via Case C cross-day routing today (closes predecessor at
     /// today; new live row at part_time_fraction=0.800), then replay against
@@ -184,8 +190,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // ── Replay against the baseline's manifest id. Result must serialize
         // byte-identically because the resolver returns the predecessor row
         // for any asOfDate < Today.
-        var replay = await pcs.ReplayAsync(
-            baselineManifestId, profileSeed, previousFlexBalance: 0m);
+        // S145 R14: the id alone. The replay evaluates the pieces FROZEN on the baseline manifest
+        // (their part_time_fraction included); it does not read employee_profiles again.
+        var replay = await pcs.ReplayAsync(baselineManifestId);
         Assert.True(replay.Success);
 
         // The dated resolver returns the predecessor (fraction=1.000) for asOfDate=2026-04-01
@@ -204,6 +211,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     // Marquee variant 2 — part_time_fraction
     // ═════════════════════════════════════════════════════════════════════
     /// <summary>
+    /// S145: a pin of the freeze, as variant 1 (the replay evaluates the pieces frozen on the baseline
+    /// manifest, not the live row).
+    ///
     /// Same shape as variant 1 but mutates <c>part_time_fraction</c>
     /// 1.000 → 0.750 via Case C cross-day supersession. The factor
     /// <c>profile.PartTimeFraction</c> at <c>NormCheckRule.cs</c> is what
@@ -235,8 +245,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             newPartTimeFraction: 0.750m,
             effectiveFrom: Today);
 
-        var replay = await pcs.ReplayAsync(
-            baselineManifestId, profileSeed, previousFlexBalance: 0m);
+        // S145 R14: the id alone. The replay evaluates the pieces FROZEN on the baseline manifest
+        // (their part_time_fraction included); it does not read employee_profiles again.
+        var replay = await pcs.ReplayAsync(baselineManifestId);
         Assert.True(replay.Success);
         // Dated resolver returns the predecessor (1.000) → 37.0, identical to baseline. A
         // regression reading the live row (0.750) would yield 27.75 → byte-identity FAILS.

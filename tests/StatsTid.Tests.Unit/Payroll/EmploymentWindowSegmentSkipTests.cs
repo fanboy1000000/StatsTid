@@ -1,4 +1,5 @@
 using StatsTid.Integrations.Payroll.Services;
+using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
 using static StatsTid.Tests.Unit.Payroll.EmploymentWindowPcsFixture;
@@ -291,6 +292,48 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.All(pieces, p => Assert.Null(p.Position));
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    // S145 R-12 — the result reports the agreement the period was evaluated under
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>R-12 (adjudicator, at TASK-14513's return).</b> The result's <c>AgreementCode</c> is the agreement
+    /// the period was EVALUATED under (the first EMPLOYED segment's frozen piece), never the agreement the
+    /// request body carried. The caller's body says "HK" while the dated row for March says "AC": the engine
+    /// is sent AC pieces (the dated row decides, as with R-10's position), so a result and a
+    /// <c>PeriodCalculationCompleted</c> event saying "HK" would describe a month that never ran under HK.
+    ///
+    /// <para>Red conditions: today <c>EvaluateAsync</c> stamps <c>profile.AgreementCode</c> (the caller's) on
+    /// the success result and on the legacy completed event, so both assertions read "HK". Observed RED on
+    /// 9984173, before the fix-up. The same one-derivation mutation (read the caller's code instead of
+    /// <c>FirstEmployedSegmentPiece(...)?.AgreementCode</c>) trips them after it.</para>
+    /// </summary>
+    [Fact]
+    public async Task ForwardCalc_RequestAgreementDiffersFromDatedRecord_ResultReportsDatedAgreement()
+    {
+        // S145 R-12:
+        var caller = Profile(EmployeeId) with { AgreementCode = "HK" };
+        var plan = Plan(EmployeeId, Mar01, Mar31, windows: null);
+        var engine = new RecordingRuleEngine();
+        var resolver = new CountingProfileResolver(_ => null, agreementCode: "AC");
+        var eventStore = new InMemoryEventStore();
+        var pcs = BuildPcs(engine, eventStore, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
+
+        // The engine really ran under the dated agreement (so "AC" is what the period was evaluated under).
+        var pieces = Assert.Single(engine.TimelineCalls).Pieces!;
+        Assert.NotEmpty(pieces);
+        // S145 R-24: every piece the engine was sent carries the dated agreement, not the body's "HK".
+        Assert.All(pieces, p => Assert.Equal("AC", p.AgreementCode));
+
+        Assert.Equal("AC", outcome.Result.AgreementCode);
+        // The legacy completed event reports the same single derivation.
+        var completed = Assert.Single(eventStore.All.OfType<PeriodCalculationCompleted>());
+        Assert.Equal("AC", completed.AgreementCode);
+    }
+
     /// <summary>The healthy twin: the same leaver plan with a working rule engine must NOT
     /// short-circuit — the fix narrows the denominator, it must not over-trigger.</summary>
     [Fact]
@@ -372,6 +415,9 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.Empty(outcome.Result.ExportLines);
         Assert.Empty(engine.Calls);
         Assert.Empty(profileResolver.AsOfDates);
+        // S145 R-12: no EMPLOYED segment means nothing was evaluated under any agreement, so the result
+        // reports none (empty), not the caller's agreement.
+        Assert.Equal(string.Empty, outcome.Result.AgreementCode);
 
         // Manifest emission was attempted and the event half landed (not NoManifest).
         Assert.NotEqual(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);

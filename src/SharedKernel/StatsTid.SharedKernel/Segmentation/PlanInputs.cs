@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace StatsTid.SharedKernel.Segmentation;
 
 /// <summary>
@@ -14,6 +16,16 @@ namespace StatsTid.SharedKernel.Segmentation;
 /// Inputs that are CODE (agreement configs, the arithmetic version) cannot be stored as
 /// such, so only their fingerprint is stored, and a replay whose code has changed is refused
 /// by name rather than silently recomputed.
+/// </para>
+///
+/// <para>
+/// <b>Required members (S145 ruling R-18).</b> A missing member is a damaged record, refused at
+/// replay; a member that may legitimately be absent is nullable here and omitted in the JSON.
+/// Every non-nullable member therefore carries <c>[JsonRequired]</c>, so decoding a stored record
+/// that lacks one throws a <see cref="System.Text.Json.JsonException"/> instead of reading the
+/// missing member as its default (a missing opening flex balance read as 0 would replay a
+/// different month while every digest still matched). <see cref="SettlementCutoff"/> is not
+/// required: a null cutoff is legitimate (R41) and is written as an omitted key.
 /// </para>
 ///
 /// <para>
@@ -69,22 +81,29 @@ namespace StatsTid.SharedKernel.Segmentation;
 /// <c>weekly-timeline-v1</c>). A replay is refused when it no longer matches.
 /// </param>
 public sealed record PlanInputs(
-    IReadOnlyList<FrozenPiece> Pieces,
+    [property: JsonRequired] IReadOnlyList<FrozenPiece> Pieces,
     DateOnly? SettlementCutoff,
-    decimal OpeningFlexBalance,
-    IReadOnlyList<Guid> EntryEventIds,
-    IReadOnlyList<Guid> AbsenceEventIds,
-    long AsOfOutboxId,
-    string EntriesDigest,
-    string AbsencesDigest,
-    IReadOnlyList<string> ConfigFingerprints,
-    string EvaluationModel);
+    [property: JsonRequired] decimal OpeningFlexBalance,
+    [property: JsonRequired] IReadOnlyList<Guid> EntryEventIds,
+    [property: JsonRequired] IReadOnlyList<Guid> AbsenceEventIds,
+    [property: JsonRequired] long AsOfOutboxId,
+    [property: JsonRequired] string EntriesDigest,
+    [property: JsonRequired] string AbsencesDigest,
+    [property: JsonRequired] IReadOnlyList<string> ConfigFingerprints,
+    [property: JsonRequired] string EvaluationModel);
 
 /// <summary>
 /// The per-piece profile inputs of one stretch of employed days, frozen into
 /// <see cref="PlanInputs.Pieces"/> (S145 / A7): a date range, the part-time fraction and the
 /// agreement in force over it, and the position. Both replay lanes build the employment profile
 /// from the piece covering a day instead of reading the dated profile history.
+///
+/// <para>
+/// <b>Required members (S145 ruling R-18).</b> A missing member is a damaged record, refused at
+/// replay; a member that may legitimately be absent is nullable here and omitted in the JSON. The
+/// four non-nullable members carry <c>[JsonRequired]</c>; <see cref="Position"/> does not (null
+/// when no position applies, written as an omitted key).
+/// </para>
 /// </summary>
 /// <param name="From">First day of the piece (inclusive).</param>
 /// <param name="To">Last day of the piece (inclusive).</param>
@@ -92,8 +111,8 @@ public sealed record PlanInputs(
 /// <param name="AgreementCode">The agreement code in force over the piece.</param>
 /// <param name="Position">The position code in force over the piece, or <c>null</c> when none applies.</param>
 public sealed record FrozenPiece(
-    DateOnly From,
-    DateOnly To,
-    decimal PartTimeFraction,
-    string AgreementCode,
+    [property: JsonRequired] DateOnly From,
+    [property: JsonRequired] DateOnly To,
+    [property: JsonRequired] decimal PartTimeFraction,
+    [property: JsonRequired] string AgreementCode,
     string? Position);

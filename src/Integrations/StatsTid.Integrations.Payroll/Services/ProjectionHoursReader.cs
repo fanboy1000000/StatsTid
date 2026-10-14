@@ -34,8 +34,9 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// would then prove a state the database never held. In one snapshot, a save is seen whole or not at
 /// all: a save that commits after the snapshot was taken is simply not seen. That is plain staleness —
 /// the calculation used the hours as they stood — which the HR worklist's follow-up of later changes
-/// covers, and which the recorded binding of the rows read will make provable once TASK-14513 lands
-/// later in S145 (today PCS keeps the rows as read but does not yet persist their binding). The snapshot takes no row lock and
+/// covers, and which the recorded binding of the rows read makes provable: since TASK-14513 (S145) PCS
+/// freezes the event ids and digests of exactly these rows in the manifest's <c>PlanInputs</c>, and replay
+/// re-reads them by id and refuses on any difference. The snapshot takes no row lock and
 /// no advisory lock (only the ACCESS SHARE table lock any read takes), so it never blocks or waits on a
 /// save; nothing else runs inside it, and it is disposed as soon as the two reads return. Same pattern as
 /// the Skema save's quota pre-check (TASK-14507).

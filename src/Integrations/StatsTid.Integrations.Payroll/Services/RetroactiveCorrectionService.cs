@@ -229,12 +229,18 @@ public sealed class RetroactiveCorrectionService
         // rows itself over [the day before the opening week's Monday, periodEnd]. This call still
         // runs BEFORE the correction transaction below, so the hours read (like planning) holds no
         // lock and a refusal or failure here leaves the baseline, the event and the marker untouched.
+        //
+        // S145 ruling R-11: the OUTCOME-returning sibling (the same CalculatePlanlessAsync body, so the
+        // result and its export lines are bit-identical to the planless CalculateAsync — the switch
+        // /calculate-and-export made in S134, QUAL-003). The outcome carries the calculation's frozen
+        // inputs (PlanInputs), which is where the correction event's agreement and position come from.
         // ---------------------------------------------------------------
 #pragma warning disable CS0618 // RetroactiveCorrectionService intentionally calls the [Obsolete] shim overload during the TASK-2009 / TASK-2010 migration; remove once the service constructs PlannedCalculation explicitly.
-        var newResult = await _calculationService.CalculateAsync(
+        var outcome = await _calculationService.CalculateWithOutcomeAsync(
             profile, periodStart, periodEnd,
             previousFlexBalance, authorizationHeader, correlationId, ct);
 #pragma warning restore CS0618
+        var newResult = outcome.Result;
 
         if (!newResult.Success)
         {
@@ -257,7 +263,22 @@ public sealed class RetroactiveCorrectionService
         var resolvedOrgId = profile.OrgId
             ?? throw new InvalidOperationException(
                 $"Audit projection: employee {profile.EmployeeId} has no OrgId; cannot resolve target_org_id.");
-        var manifestId = newResult.RuleResults.FirstOrDefault()?.ManifestId ?? Guid.Empty;
+        // S145 ruling R-19: the manifest this recalculation persisted, straight from the outcome. Never derived
+        // from the first rule result: a month with no EMPLOYED day evaluates nothing and has no rule results,
+        // yet its manifest is still written, and the event must still link it.
+        var manifestId = outcome.ManifestId;
+
+        // S145 rulings R-10 / R-11 — what the calculation actually RAN under: the frozen piece of the first
+        // EMPLOYED segment (null when no segment is EMPLOYED, so nothing ran under any agreement or position).
+        // Every successful calculation freezes its inputs, so a success without them is a programmer error:
+        // refuse loudly here, BEFORE the correction transaction opens (nothing is written), never fall back to
+        // the caller's profile and never dereference blindly.
+        var frozenInputs = outcome.PlanInputs
+            ?? throw new InvalidOperationException(
+                $"RetroactiveCorrectionService invariant violated: the recalculation for employee " +
+                $"{profile.EmployeeId} succeeded without frozen inputs (PlanInputs), so the correction event " +
+                $"cannot record what ran. ManifestId={outcome.ManifestId}.");
+        var ran = PeriodCalculationService.FirstEmployedSegmentPiece(frozenInputs.Pieces, periodStart);
 
         // ── BLOCKER 2 + 3 — the baseline read + diff + event + audit + baseline-UPDATE + idempotency-
         // marker (S132/QUAL-006) are now ONE MANDATORY, SERIALIZED transactional unit. ──
@@ -306,17 +327,20 @@ public sealed class RetroactiveCorrectionService
             nextPeriod = await NextPeriodToRecalculateAsync(conn, tx, profile.EmployeeId, corrYear, corrMonth, ct);
 
             // Emit RetroactiveCorrectionRequested (MANDATORY — see BLOCKER 2 above).
-            // Persist the canonical (date-resolved) OK versions and the profile Position so the audit
-            // trail reflects what actually ran, not what the caller sent. ManifestId joins this event
-            // to SegmentManifestCreated for the actual N-segment plan (closes Codex P2 / Reviewer
-            // audit-event NOTE: the OkVersion/PreviousOkVersion pair only describes the canonicalized
-            // 2-version view — full segmentation is recoverable via the manifest).
+            // The audit trail records what actually ran, never what the request body said:
+            //   • AgreementCode and Position come from the calculation's frozen inputs — the first EMPLOYED
+            //     segment's piece (`ran`, above), the agreement and position the engine was actually sent
+            //     (S145 rulings R-10, R-11). Empty agreement and null position when no segment is EMPLOYED;
+            //   • the OK versions are the canonical (date-resolved) ones.
+            // ManifestId joins this event to SegmentManifestCreated for the actual N-segment plan (closes
+            // Codex P2 / Reviewer audit-event NOTE: the OkVersion/PreviousOkVersion pair only describes the
+            // canonicalized 2-version view — full segmentation is recoverable via the manifest).
             var correctionEvent = new RetroactiveCorrectionRequested
             {
                 EmployeeId = profile.EmployeeId,
                 OriginalPeriodStart = periodStart,
                 OriginalPeriodEnd = periodEnd,
-                AgreementCode = profile.AgreementCode,
+                AgreementCode = ran?.AgreementCode ?? string.Empty,
                 OkVersion = canonicalCurrentOkVersion,
                 Reason = reason,
                 CorrectedByActorId = actorId,
@@ -325,7 +349,7 @@ public sealed class RetroactiveCorrectionService
                 CorrelationId = correlationId,
                 IdempotencyToken = idempotencyToken,
                 PreviousOkVersion = canonicalPreviousOkVersion,
-                Position = profile.Position,
+                Position = ran?.Position,
                 ManifestId = manifestId,
                 // S145 TASK-14512 — Q7 (b), R37: the next month's pay period, when it must be recalculated
                 // too (null otherwise). The audit mapper carries both into the audit row's details.

@@ -108,6 +108,12 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// S145 (refinement A7, "tests whose meaning changes"): this is now a PIN OF THE FREEZE. The
+    /// forward calculation freezes the agreement code of each piece on its manifest, and the replay
+    /// evaluates those frozen pieces without reading the dated agreement history again; the
+    /// supersession below therefore cannot reach it. (The original dated-resolver argument follows;
+    /// it still describes why the baseline resolves AC.)
+    ///
     /// Forward-calc against the seeded user_agreement_codes live row (agreement_code='AC'
     /// at effective_from='0001-01-01'); supersede via Case C cross-day routing today
     /// (closes predecessor at today; new live row at agreement_code='HK'); replay
@@ -162,8 +168,9 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
         // byte-identically because the resolver returns the predecessor agreement_code
         // for any asOfDate < Today, and the agreement_code-branching rule stub
         // produces identical output for the same agreement_code input.
-        var replay = await pcs.ReplayAsync(
-            baselineManifestId, profileSeed, previousFlexBalance: 0m);
+        // S145 R14: the id alone. The replay evaluates the pieces FROZEN on the baseline manifest
+        // (their agreement code included); it neither reads user_agreement_codes nor takes a profile.
+        var replay = await pcs.ReplayAsync(baselineManifestId);
         Assert.True(replay.Success);
 
         var replayJson = JsonSerializer.Serialize(replay.RuleResults, SerializerOptions);
