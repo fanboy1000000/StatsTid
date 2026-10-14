@@ -351,6 +351,7 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
         Assert.Contains(timeline.Pieces!, p => p.To == firstSpellEnd);
         Assert.Contains(timeline.Pieces!, p => p.From == secondSpellStart);
         Assert.DoesNotContain(timeline.Pieces!, p => p.From < secondSpellStart && p.To > firstSpellEnd);
+        Assert.NotEmpty(timeline.EntryDates!); // S145 Step 5a: not vacuous
         Assert.DoesNotContain(timeline.EntryDates!, d => d > firstSpellEnd && d < secondSpellStart);
 
         // Nothing touched the not-employed middle span.

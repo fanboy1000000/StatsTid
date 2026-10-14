@@ -291,7 +291,7 @@ internal static class EmploymentWindowPcsFixture
             decimal? TimelinePreviousFlexBalance = null);
 
         /// <summary>One piece of the timeline request: its inclusive range and part-time fraction.</summary>
-        public sealed record TimelinePiece(DateOnly From, DateOnly To, decimal PartTimeFraction);
+        public sealed record TimelinePiece(DateOnly From, DateOnly To, decimal PartTimeFraction, string? Position = null);
 
         /// <summary>One entry of the timeline request.</summary>
         public sealed record TimelineEntry(DateOnly Date, decimal Hours);
@@ -344,7 +344,8 @@ internal static class EmploymentWindowPcsFixture
                     ? pcs.EnumerateArray().Select(p => new TimelinePiece(
                         DateOnly.Parse(p.GetProperty("from").GetString()!),
                         DateOnly.Parse(p.GetProperty("to").GetString()!),
-                        p.GetProperty("partTimeFraction").GetDecimal())).ToList()
+                        p.GetProperty("partTimeFraction").GetDecimal(),
+                        p.TryGetProperty("position", out var pos) && pos.ValueKind == JsonValueKind.String ? pos.GetString() : null)).ToList()
                     : null,
                 TimelineEntries: (request.RequestUri?.AbsolutePath ?? string.Empty).EndsWith(TimelinePath, StringComparison.Ordinal)
                     && root.TryGetProperty("entries", out var tents)
@@ -379,23 +380,24 @@ internal static class EmploymentWindowPcsFixture
         /// <c>configFingerprints: ["stub"]</c> and <c>evaluationModel: "weekly-timeline-v1"</c>. PCS
         /// refuses anything less as a failed call.
         /// </summary>
-        public static HttpResponseMessage TimelineSuccess()
+        public static HttpResponseMessage TimelineSuccess(
+            bool failedOvertimeRow = false, bool failedFlexBlock = false, bool emptyFingerprints = false)
         {
-            object Row(string ruleId) => new
+            object Row(string ruleId, bool ok = true) => new
             {
                 ruleId,
                 employeeId = "EMP",
-                success = true,
+                success = ok,
                 lineItems = Array.Empty<object>(),
             };
             return Json(new
             {
-                results = new[] { Row("OVERTIME_CALC"), Row("NORM_CHECK_37H"), Row("FLEX_BALANCE") },
+                results = new[] { Row("OVERTIME_CALC", !failedOvertimeRow), Row("NORM_CHECK_37H"), Row("FLEX_BALANCE") },
                 flex = new
                 {
                     ruleId = "FLEX_BALANCE",
                     employeeId = "EMP",
-                    success = true,
+                    success = !failedFlexBlock,
                     lineItems = Array.Empty<object>(),
                     previousBalance = 0m,
                     newBalance = 0m,
@@ -405,7 +407,7 @@ internal static class EmploymentWindowPcsFixture
                     effectiveNorm = 0m,
                     excessForPayout = 0m,
                 },
-                configFingerprints = new[] { "stub" },
+                configFingerprints = emptyFingerprints ? Array.Empty<string>() : new[] { "stub" },
                 evaluationModel = "weekly-timeline-v1",
             });
         }
@@ -476,13 +478,33 @@ internal static class EmploymentWindowPcsFixture
     public sealed class CountingProfileResolver : IEmploymentProfileResolver
     {
         private readonly List<DateOnly> _asOfDates = new();
+        private readonly Func<DateOnly, string?>? _positionFor;
+        private readonly string? _agreementCode;
+
+        public CountingProfileResolver() { }
+
+        /// <summary>
+        /// S145 R-10: a date-aware answer. <paramref name="positionFor"/> gives the DATED row's position
+        /// (null = "no position, base config"); <paramref name="agreementCode"/> overrides the default HK.
+        /// </summary>
+        public CountingProfileResolver(Func<DateOnly, string?> positionFor, string? agreementCode = null)
+        {
+            _positionFor = positionFor;
+            _agreementCode = agreementCode;
+        }
+
         public IReadOnlyList<DateOnly> AsOfDates => _asOfDates;
 
         public Task<EmploymentProfile?> GetByEmployeeIdAtAsync(
             string employeeId, DateOnly asOfDate, CancellationToken ct = default)
         {
             _asOfDates.Add(asOfDate);
-            return Task.FromResult<EmploymentProfile?>(Profile(employeeId));
+            var profile = Profile(employeeId);
+            if (_agreementCode is not null)
+                profile = profile with { AgreementCode = _agreementCode };
+            if (_positionFor is not null)
+                profile = profile with { Position = _positionFor(asOfDate) };
+            return Task.FromResult<EmploymentProfile?>(profile);
         }
     }
 

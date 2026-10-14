@@ -253,16 +253,16 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     // property the design promises for the Position field, so the assertion
     // here is the documented precedence rule, NOT byte-equality.
     //
-    // Reading PeriodCalculationService.cs:355-358 — the implementation
-    // fallback only applies when the DATED RESOLVER returns null Position
-    // (line 357: "if (segmentProfile.Position is null && profile.Position
-    // is not null) segmentProfile = segmentProfile with { Position =
-    // profile.Position };"). Thus:
+    // S145 R-10: the caller-position fallback this block used to describe
+    // (PCS substituting the request profile's Position when the dated
+    // resolver returned null) is retired for every piece; a null dated
+    // position means "no position (base config)". Thus:
     //   (a) DB row has Position="RESEARCHER", caller supplies null → dated
     //       value wins (segmentProfile.Position == "RESEARCHER").
     //   (b) DB row has Position="RESEARCHER", caller supplies "DEPARTMENT_HEAD"
     //       → DB value wins (segmentProfile.Position == "RESEARCHER"); the
-    //       caller-supplied value is only used when the resolver returns null.
+    //       caller-supplied value is never substituted; a null dated position
+    //       means none (S145 R-10).
     // ═════════════════════════════════════════════════════════════════════
     /// <summary>
     /// Sub-case (a) — caller-null + DB-non-null. Asserts the resolver-driven
@@ -299,9 +299,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
 
     /// <summary>
     /// Sub-case (b) — caller-non-null + DB-non-null. The dated DB value wins
-    /// because PCS L357 only swaps in caller-supplied Position when the
-    /// resolver returned null. Locks the precedence order per TASK-1802
-    /// fallback semantic (caller-fallback is a fallback, NOT an override).
+    /// because the caller-supplied Position is never substituted (S145 R-10:
+    /// a null dated position means none). Locks the precedence order: the
+    /// dated row decides, the caller's value is neither a fallback nor an override.
     /// </summary>
     [Fact]
     public async Task PCS_PositionResolution_DatedValueWinsOverCallerSupplied_NotReplayStabilityVerification()

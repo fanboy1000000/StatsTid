@@ -26,7 +26,7 @@ namespace StatsTid.Tests.Unit.Payroll;
 ///     zero rule results. Pinned in both directions — a fully-failed windowed plan DOES
 ///     short-circuit; a healthy one does NOT.</item>
 ///   <item><b>"Nothing to calculate" is a success:</b> a plan with zero employed segments
-///     has a zero budget, never short-circuits, and returns Success with no results, no
+///     makes no rule-engine call (so nothing can fail, S145 R-6), and returns Success with no results, no
 ///     lines, and a manifest of all-NOT_EMPLOYED segments — the ruled semantics.</item>
 ///   <item><b>The opening flex balance reaches the one timeline call, and a skipped middle span is never covered</b> (S145 F1; an empty
 ///     result list yields no flex delta, and no row is ever synthesized for it).</item>
@@ -140,6 +140,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.False(outcome.Result.Success);
         Assert.Equal(RuleEngineFailureMessage, outcome.Result.ErrorMessage);
         Assert.Empty(outcome.Result.ExportLines);
+        Assert.Empty(outcome.Result.RuleResults);
         Assert.Equal(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
         Assert.Null(eventStore.Manifest);
     }
@@ -168,8 +169,126 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.False(outcome.Result.Success);
         Assert.Equal(RuleEngineFailureMessage, outcome.Result.ErrorMessage);
         Assert.Empty(outcome.Result.ExportLines);
+        Assert.Empty(outcome.Result.RuleResults);
         Assert.Equal(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
         Assert.Null(eventStore.Manifest);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S145 R-6 (Codex WARNING 2) — a timeline reply is validated for SUCCESS, not just presence
+    // ═════════════════════════════════════════════════════════════════════
+
+    private async Task AssertTimelineReplyRefusedAsync(HttpResponseMessage reply)
+    {
+        var plan = Plan(EmployeeId, Mar01, Mar31, windows: null);
+        var engine = new RecordingRuleEngine(call =>
+            call.Path.EndsWith(RecordingRuleEngine.TimelinePath, StringComparison.Ordinal)
+                ? reply
+                : RecordingRuleEngine.AllSucceedWithNoLineItems(call));
+        var eventStore = new InMemoryEventStore();
+        var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+
+        // The timeline answered HTTP 200 and was structurally complete.
+        Assert.Single(engine.TimelineCalls);
+        Assert.False(outcome.Result.Success);
+        Assert.Equal(RuleEngineFailureMessage, outcome.Result.ErrorMessage);
+        Assert.Empty(outcome.Result.ExportLines);
+        Assert.Empty(outcome.Result.RuleResults);
+        Assert.Equal(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
+        Assert.Null(eventStore.Manifest);
+    }
+
+    /// <summary>
+    /// <b>R-6 (Codex WARNING 2).</b> A structurally complete HTTP 200 whose overtime row says
+    /// <c>success: false</c> is a failed evaluation, not a payroll figure. Red conditions: the timeline
+    /// validator checks presence only (the state on b5f29eb), so the month calculates as Success.
+    /// </summary>
+    [Fact]
+    public Task TimelineReply_FailedResultRow_CalculationRefused_NothingWritten()
+        => AssertTimelineReplyRefusedAsync(RecordingRuleEngine.TimelineSuccess(failedOvertimeRow: true));
+
+    /// <summary>
+    /// <b>R-6 (Codex WARNING 2).</b> The flex block carries a <c>success</c> field (<c>FlexEvaluationResponse</c>);
+    /// a 200 with <c>flex.success: false</c> is refused. Red conditions as above.
+    /// </summary>
+    [Fact]
+    public Task TimelineReply_FailedFlexBlock_CalculationRefused_NothingWritten()
+        => AssertTimelineReplyRefusedAsync(RecordingRuleEngine.TimelineSuccess(failedFlexBlock: true));
+
+    /// <summary>
+    /// <b>R-6 (Codex WARNING 2).</b> An empty <c>configFingerprints</c> list means the answer cannot be
+    /// replayed (TASK-14513 records it); a 200 with no fingerprint is refused. Red conditions as above.
+    /// </summary>
+    [Fact]
+    public Task TimelineReply_EmptyFingerprints_CalculationRefused_NothingWritten()
+        => AssertTimelineReplyRefusedAsync(RecordingRuleEngine.TimelineSuccess(emptyFingerprints: true));
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S145 R-10 — the caller-position fallback is retired for every piece
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>R-10 (adjudicator, on Codex WARNING 1).</b> A dated <c>employee_profiles</c> row with a null
+    /// position means "no position (base config)"; it is never filled in from the request's profile.
+    /// September 2026: the employee becomes DEPARTMENT_HEAD on 1 Sep (the resolver answers null before
+    /// that date). The context piece covering Monday 31 Aug must carry NO position; the pieces covering
+    /// 1-30 Sep carry DEPARTMENT_HEAD. The caller's profile also says DEPARTMENT_HEAD, which must NOT leak
+    /// back onto 31 Aug.
+    ///
+    /// <para>Red conditions: mutation MU-45 ("restore the caller-position fallback" in
+    /// <c>PeriodCalculationService</c>'s profile resolution) puts DEPARTMENT_HEAD on the 31 Aug piece and
+    /// trips the first position assertion. Observed RED on b5f29eb, before the fix-up.</para>
+    /// </summary>
+    [Fact]
+    public async Task ContextPiece_PromotedToDepartmentHead1Sep2026_31AugPieceCarriesNoPosition_CallerPositionNotInherited()
+    {
+        var sep01 = new DateOnly(2026, 9, 1);
+        var sep30 = new DateOnly(2026, 9, 30);
+        var aug31 = new DateOnly(2026, 8, 31);
+        Assert.Equal(DayOfWeek.Monday, aug31.DayOfWeek);
+        Assert.Equal(DayOfWeek.Tuesday, sep01.DayOfWeek);
+
+        var caller = Profile(EmployeeId) with { AgreementCode = "AC", Position = "DEPARTMENT_HEAD", OkVersion = "OK26" };
+        var plan = Plan(EmployeeId, sep01, sep30, windows: null);
+        var engine = new RecordingRuleEngine();
+        var resolver = new CountingProfileResolver(d => d >= sep01 ? "DEPARTMENT_HEAD" : null, agreementCode: "AC");
+        var pcs = BuildPcs(engine, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, aug31, sep30));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
+
+        var pieces = Assert.Single(engine.TimelineCalls).Pieces!;
+        AssertPiecesRun(pieces, aug31, sep30);
+        var onAug31 = Assert.Single(pieces, p => p.From <= aug31 && aug31 <= p.To);
+        Assert.Null(onAug31.Position);
+        var inSeptember = pieces.Where(p => p.To >= sep01).ToList();
+        Assert.NotEmpty(inSeptember);
+        Assert.All(inSeptember, p => Assert.Equal("DEPARTMENT_HEAD", p.Position));
+    }
+
+    /// <summary>
+    /// <b>R-10 (adjudicator, on Codex WARNING 1).</b> The dated row has no position on ANY date, while
+    /// the caller's profile says DEPARTMENT_HEAD: every piece sent carries <c>Position == null</c>. The
+    /// caller's position is never substituted. Red conditions: mutation MU-45 ("restore the caller-position
+    /// fallback") gives every piece DEPARTMENT_HEAD. Observed RED on b5f29eb, before the fix-up.
+    /// </summary>
+    [Fact]
+    public async Task InMonthPieces_DatedRowHasNoPosition_CallerPositionNotInherited()
+    {
+        var caller = Profile(EmployeeId) with { Position = "DEPARTMENT_HEAD" };
+        var plan = Plan(EmployeeId, Mar01, Mar31, windows: null);
+        var engine = new RecordingRuleEngine();
+        var resolver = new CountingProfileResolver(_ => null);
+        var pcs = BuildPcs(engine, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
+
+        var pieces = Assert.Single(engine.TimelineCalls).Pieces!;
+        Assert.NotEmpty(pieces);
+        Assert.All(pieces, p => Assert.Null(p.Position));
     }
 
     /// <summary>The healthy twin: the same leaver plan with a working rule engine must NOT
@@ -361,6 +480,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.Contains(timeline.Pieces, p => p.To == firstSpellEnd);
         Assert.Contains(timeline.Pieces, p => p.From == secondSpellStart);
         Assert.DoesNotContain(timeline.Pieces, p => p.From < secondSpellStart && p.To > firstSpellEnd);
+        Assert.NotEmpty(timeline.TimelineEntries!); // S145 Step 5a: not vacuous
         Assert.DoesNotContain(timeline.TimelineEntries!, e => e.Date > firstSpellEnd && e.Date < secondSpellStart);
 
         // No per-segment call touched the NOT_EMPLOYED span either.
