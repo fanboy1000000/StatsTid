@@ -42,9 +42,9 @@ namespace StatsTid.Tests.Regression.Migrations;
 /// that is not <c>'TIME_POST'</c>, a nullable <c>source</c>, a missing partial unique index (or one
 /// without the time-entry index's <c>NULLS NOT DISTINCT</c> clause, which <c>pg_indexes.indexdef</c> prints), a
 /// <c>hours</c> that is not <c>NUMERIC(8,4)</c>, or a renamed CHECK each put one named line on one
-/// side of the diff and fail the row. Until TASK-14500's <c>init.sql</c> change is on the same branch
-/// the copies are AHEAD of <c>init.sql</c> and the rows fail on the five new columns and two indexes:
-/// that ordering is expected, and the Orchestrator reconciles the names at the merge.</para>
+/// side of the diff and fail the row. TASK-14500's <c>init.sql</c> change has merged (S145 wave A.1), so the
+/// copies and <c>init.sql</c> now agree and every row is expected to pass; a row that fails means the next
+/// <c>init.sql</c> change did not reach the copies (or the reverse).</para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime

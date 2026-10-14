@@ -912,6 +912,25 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     private static readonly DateOnly Nov17 = new(2026, 11, 17);
     private const string MidWeekReason = "agreement-change-mid-week";
 
+    /// <summary>
+    /// The calendar premise the AR facts share, asserted ONCE here rather than left to the prose above: the
+    /// 1st-of-month change dates are a Tuesday (AR1-AR4) and a Monday (AR9), the late-month change is a
+    /// Tuesday inside the week that starts on Monday 28 September (AR5-AR8), and AR10's March change is a
+    /// Wednesday. If a date moved onto a different weekday, the fact built on it would stop testing what it
+    /// says (a mid-week change versus a week-start one) while still passing or failing for another reason.
+    /// Pure date arithmetic; it touches no database.
+    /// </summary>
+    [Fact]
+    public void AgreementChangeDates_AreTheWeekdaysTheArFactsRelyOn()
+    {
+        Assert.Multiple(
+            () => Assert.Equal(DayOfWeek.Tuesday, Sep01.DayOfWeek),
+            () => Assert.Equal(DayOfWeek.Tuesday, Sep29.DayOfWeek),
+            () => Assert.Equal(DayOfWeek.Monday, Sep29.AddDays(-1).DayOfWeek),
+            () => Assert.Equal(DayOfWeek.Monday, Jun01.DayOfWeek),
+            () => Assert.Equal(DayOfWeek.Wednesday, Mar18.DayOfWeek));
+    }
+
     // ── 1 September 2026 (Tuesday): the change is ON the 1st, inside September's opening week ──
 
     /// <summary>
@@ -927,7 +946,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         const string employeeId = "EMP-S145-AR1";
         var token = Guid.NewGuid();
         await SeedEmployeeOk26Async(employeeId);
-        await SeedMonthApprovalAsync(employeeId, Aug01, Aug31);
+        await SeedMonthApprovalAsync(employeeId, Aug01, Aug31, "OK26");
         await PersistMonthExportRecordAsync(employeeId, 2026, 9);
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Sep01);
         var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId, 2026, 9);
@@ -952,8 +971,8 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     {
         const string employeeId = "EMP-S145-AR2";
         await SeedEmployeeOk26Async(employeeId);
-        await SeedMonthApprovalAsync(employeeId, Aug01, Aug31);
-        await SeedMonthApprovalAsync(employeeId, Sep01, Sep30);
+        await SeedMonthApprovalAsync(employeeId, Aug01, Aug31, "OK26");
+        await SeedMonthApprovalAsync(employeeId, Sep01, Sep30, "OK26");
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Sep01);
 
         var response = await PostAsGlobalAdminAsync("/api/payroll/calculate-and-export",
@@ -1048,7 +1067,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         const string employeeId = "EMP-S145-AR5";
         var token = Guid.NewGuid();
         await SeedEmployeeOk26Async(employeeId);
-        await SeedMonthApprovalAsync(employeeId, Sep01, Sep30);
+        await SeedMonthApprovalAsync(employeeId, Sep01, Sep30, "OK26");
         await PersistMonthExportRecordAsync(employeeId, 2026, 10);
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Sep29);
         var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId, 2026, 10);
@@ -1074,8 +1093,8 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     {
         const string employeeId = "EMP-S145-AR6";
         await SeedEmployeeOk26Async(employeeId);
-        await SeedMonthApprovalAsync(employeeId, Sep01, Sep30);
-        await SeedMonthApprovalAsync(employeeId, Oct01, Oct31);
+        await SeedMonthApprovalAsync(employeeId, Sep01, Sep30, "OK26");
+        await SeedMonthApprovalAsync(employeeId, Oct01, Oct31, "OK26");
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Sep29);
 
         var response = await PostAsGlobalAdminAsync("/api/payroll/calculate-and-export",
@@ -1168,7 +1187,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     {
         const string employeeId = "EMP-S145-AR9";
         await SeedEmployeeOk26Async(employeeId);
-        await SeedMonthApprovalAsync(employeeId, Jun01, Jun30);
+        await SeedMonthApprovalAsync(employeeId, Jun01, Jun30, "OK26");
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Jun01);
 
         var response = await PostAsGlobalAdminAsync(DeliveringFactory(), "/api/payroll/calculate-and-export",
@@ -1197,7 +1216,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     {
         const string employeeId = "EMP-S145-AR10";
         await SeedEmployeeAsync(employeeId);
-        await SeedMonthApprovalAsync(employeeId, Feb01, Feb28);
+        await SeedMonthApprovalAsync(employeeId, Feb01, Feb28, OkVersion);
         await SeedApprovedPeriodAsync(employeeId);
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar18);
 
@@ -1309,8 +1328,11 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     }
 
     /// <summary>An APPROVED monthly approval row for any month — the month's own approval (the
-    /// <c>/calculate-and-export</c> 403 guard) or "the previous month is APPROVED" (C-H1).</summary>
-    private async Task SeedMonthApprovalAsync(string employeeId, DateOnly periodStart, DateOnly periodEnd)
+    /// <c>/calculate-and-export</c> 403 guard) or "the previous month is APPROVED" (C-H1). The row's
+    /// <c>ok_version</c> label is passed in and matches the profile's OK version (a fixture label; no
+    /// assertion reads it).</summary>
+    private async Task SeedMonthApprovalAsync(
+        string employeeId, DateOnly periodStart, DateOnly periodEnd, string okVersion)
     {
         await using var conn = _db.Create();
         await conn.OpenAsync();
@@ -1328,7 +1350,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("start", periodStart);
         cmd.Parameters.AddWithValue("end", periodEnd);
         cmd.Parameters.AddWithValue("agreement", InitialAgreementCode);
-        cmd.Parameters.AddWithValue("ok", OkVersion);
+        cmd.Parameters.AddWithValue("ok", okVersion);
         Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
     }
 

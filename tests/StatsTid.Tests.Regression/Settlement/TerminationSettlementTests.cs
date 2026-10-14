@@ -1081,29 +1081,6 @@ public sealed class TerminationSettlementTests : IAsyncLifetime
         };
     }
 
-    /// <summary>Answers <c>/api/rules/validate-entitlement</c> with the real rule; everything else is 404.</summary>
-    private sealed class EntitlementValidationStubHandler : HttpMessageHandler
-    {
-        private static readonly JsonSerializerOptions Camel = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-            if (!path.EndsWith("/api/rules/validate-entitlement", StringComparison.Ordinal))
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
-
-            var json = await request.Content!.ReadAsStringAsync(cancellationToken);
-            var req = JsonSerializer.Deserialize<StatsTid.RuleEngine.Api.Contracts.ValidateEntitlementRequest>(json, Camel)!;
-            var result = StatsTid.RuleEngine.Api.Rules.EntitlementValidationRule.Evaluate(req);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    JsonSerializer.Serialize(result, Camel), System.Text.Encoding.UTF8, "application/json"),
-            };
-        }
-    }
-
     private static async Task<HttpResponseMessage> ResolveAsync(
         HttpClient client, string employeeId, int year, string disposition, string ifMatch)
     {

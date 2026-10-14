@@ -278,8 +278,9 @@ public sealed class ProjectionBackfillTests : IAsyncLifetime
 
     /// <summary>
     /// Serializes the event the way the product does, then stamps <c>source</c> into the payload.
-    /// <c>TimeEntryRegistered.Source</c> is created by S145 (TASK-14500), so the property is written
-    /// into the JSON rather than set on the type: this file compiles against today's code. The
+    /// <c>TimeEntryRegistered.Source</c> was created by S145 (TASK-14500, since merged); the helper still writes
+    /// it into the JSON rather than setting it on the type, so it can omit the key entirely (the pre-S145
+    /// shape of a stored event). The
     /// serializer is camelCase (<c>EventSerializer</c>); the guard below proves that on an existing
     /// property (<c>employeeId</c>) before the lower-case <c>source</c> key is written, so a change of
     /// naming policy fails here with a clear message instead of silently dropping the stamp.
