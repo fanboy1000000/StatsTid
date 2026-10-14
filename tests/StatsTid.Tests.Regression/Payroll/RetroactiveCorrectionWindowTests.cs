@@ -133,6 +133,8 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
             Assert.Equal(Apr01, c.PeriodStart);
             Assert.Equal(Apr30, c.PeriodEnd);
         });
+        // S145 F1: the windowless export's timeline pieces are [30 Mar, 31 Mar] (context) + [1 Apr, 30 Apr].
+        Assert.Equal((Apr01, Apr30), Assert.Single(exportEngine.TimelineCalls).Pieces![^1]);
 
         // The windowless manifest: one segment, no employment cause (the byte-identity shape).
         var exportManifest = await LoadManifestAsync(exportOutcome.ManifestId);
@@ -161,12 +163,23 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
 
         // (1) The re-run evaluated ONLY the employed span: every rule-engine call covers
         //     [04-01 .. 04-15] — none for the post-end days, and the 15th is inside.
-        Assert.NotEmpty(correctionEngine.Calls);
-        Assert.All(correctionEngine.Calls, c =>
+        //     S145 F1: the per-segment calls end on the leaver's last day; the timeline call carries the
+        //     period end (30 Apr), so what ends on the last day is its PIECES: 1 Apr 2026 is a Wednesday, so
+        //     they are the context piece [30 Mar, 31 Mar] and [1 Apr, 15 Apr]. Asserted as "the last piece is
+        //     [Apr01, lastDay] and no piece's To exceeds lastDay" (the context split is not the contract).
+        //     The request's SettlementCutoff is deliberately not asserted (C-T1).
+        Assert.NotEmpty(correctionEngine.PerSegmentCalls);
+        Assert.All(correctionEngine.PerSegmentCalls, c =>
         {
             Assert.Equal(Apr01, c.PeriodStart);
             Assert.Equal(lastDay, c.PeriodEnd);
         });
+        var correctionTimeline = Assert.Single(correctionEngine.TimelineCalls);
+        Assert.Equal(Apr01, correctionTimeline.PeriodStart);
+        Assert.Equal(Apr30, correctionTimeline.PeriodEnd);
+        Assert.Equal((Apr01, lastDay), correctionTimeline.Pieces![^1]);
+        Assert.All(correctionTimeline.Pieces, p => Assert.True(p.To <= lastDay, $"a piece ends on {p.To}, after the last employed day"));
+        Assert.Equal(new DateOnly(2026, 3, 30), correctionTimeline.Pieces[0].From);
 
         // (2) Deltas are NEGATIVE and equal exactly the post-end days; the pre-end days are
         //     unchanged (CorrectedHours == the pre-end sum, the last employed day INCLUDED).
@@ -418,9 +431,20 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
     /// </summary>
     private sealed class RecordingRuleEngine : HttpMessageHandler
     {
-        public sealed record Call(string Path, DateOnly PeriodStart, DateOnly PeriodEnd);
+        // S145 F1: the timeline call also records its pieces (inclusive ranges); null on per-segment calls.
+        public sealed record Call(
+            string Path,
+            DateOnly PeriodStart,
+            DateOnly PeriodEnd,
+            IReadOnlyList<(DateOnly From, DateOnly To)>? Pieces = null);
 
         private readonly List<Call> _calls = new();
+
+        public IReadOnlyList<Call> TimelineCalls =>
+            Calls.Where(c => c.Path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal)).ToList();
+
+        public IReadOnlyList<Call> PerSegmentCalls =>
+            Calls.Where(c => !c.Path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal)).ToList();
 
         public IReadOnlyList<Call> Calls
         {
@@ -436,7 +460,12 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
                 var call = new Call(
                     request.RequestUri?.AbsolutePath ?? string.Empty,
                     DateOnly.Parse(root.GetProperty("periodStart").GetString()!, CultureInfo.InvariantCulture),
-                    DateOnly.Parse(root.GetProperty("periodEnd").GetString()!, CultureInfo.InvariantCulture));
+                    DateOnly.Parse(root.GetProperty("periodEnd").GetString()!, CultureInfo.InvariantCulture),
+                    Pieces: root.TryGetProperty("pieces", out var pcs) && pcs.ValueKind == JsonValueKind.Array
+                        ? pcs.EnumerateArray().Select(p => (
+                            DateOnly.Parse(p.GetProperty("from").GetString()!, CultureInfo.InvariantCulture),
+                            DateOnly.Parse(p.GetProperty("to").GetString()!, CultureInfo.InvariantCulture))).ToList()
+                        : null);
                 lock (_calls) _calls.Add(call);
             }
 

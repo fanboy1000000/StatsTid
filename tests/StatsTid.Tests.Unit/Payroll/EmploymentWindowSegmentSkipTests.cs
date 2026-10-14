@@ -26,9 +26,9 @@ namespace StatsTid.Tests.Unit.Payroll;
 ///     zero rule results. Pinned in both directions — a fully-failed windowed plan DOES
 ///     short-circuit; a healthy one does NOT.</item>
 ///   <item><b>"Nothing to calculate" is a success:</b> a plan with zero employed segments
-///     has a zero budget, never short-circuits, and returns Success with no results, no
+///     makes no rule-engine call (so nothing can fail, S145 R-6), and returns Success with no results, no
 ///     lines, and a manifest of all-NOT_EMPLOYED segments — the ruled semantics.</item>
-///   <item><b>Flex carry passes THROUGH a skipped middle segment</b> unchanged (an empty
+///   <item><b>The opening flex balance reaches the one timeline call, and a skipped middle span is never covered</b> (S145 F1; an empty
 ///     result list yields no flex delta, and no row is ever synthesized for it).</item>
 /// </list>
 /// </para>
@@ -36,6 +36,9 @@ namespace StatsTid.Tests.Unit.Payroll;
 public sealed class EmploymentWindowSegmentSkipTests
 {
     private const string EmployeeId = "EMP-S137-SKIP";
+
+    /// <summary>S145 R-6 (adjudicator): the one fixed sentence of a refused (partially or wholly failed) calculation.</summary>
+    private const string RuleEngineFailureMessage = "Rule engine evaluation failed; no payroll figure is produced for this period";
 
     // ═════════════════════════════════════════════════════════════════════
     // Codex-B2 — the short-circuit, both halves
@@ -60,12 +63,19 @@ public sealed class EmploymentWindowSegmentSkipTests
             previousFlexBalance: 0m);
 
         Assert.False(outcome.Result.Success);
-        Assert.Equal("All rule evaluations failed", outcome.Result.ErrorMessage);
+        // S145 R-6 (adjudicator): any failed rule-engine call refuses the whole calculation, one fixed sentence.
+        Assert.Equal(RuleEngineFailureMessage, outcome.Result.ErrorMessage);
         Assert.Equal(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
 
-        // Exactly one employed segment's worth of attempts, none for the pre-hire span.
-        Assert.Equal(RuleCallsPerEmployedSegment, engine.Calls.Count);
-        Assert.All(engine.Calls, c => Assert.Equal(hire, c.PeriodStart));
+        // S145 R14: exactly one employed segment's worth of attempts, none for the pre-hire span: the
+        // plan's one timeline call + 3 per-segment calls (was 6 per-segment calls).
+        Assert.Equal(TimelineCallsPerPlan + PerSegmentCallsPerEmployedSegment, engine.Calls.Count);
+        // S145 F1: the per-segment calls start at the hire date; the timeline call is the whole month's
+        // (its range is the period), so what must start at the hire is its PIECES and its entries.
+        Assert.All(engine.PerSegmentCalls, c => Assert.Equal(hire, c.PeriodStart));
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(hire, timeline.Pieces![0].From);
+        Assert.All(timeline.TimelineEntries!, e => Assert.True(e.Date >= hire, $"{e.Date} is before the hire date"));
     }
 
     /// <summary>Second half — the denominator. A leaver plan (EMPLOYED / NOT_EMPLOYED) whose
@@ -87,10 +97,198 @@ public sealed class EmploymentWindowSegmentSkipTests
             previousFlexBalance: 0m);
 
         Assert.False(outcome.Result.Success);
-        Assert.Equal("All rule evaluations failed", outcome.Result.ErrorMessage);
+        // S145 R-6 (adjudicator): any failed rule-engine call refuses the whole calculation, one fixed sentence.
+        Assert.Equal(RuleEngineFailureMessage, outcome.Result.ErrorMessage);
         Assert.Empty(outcome.Result.ExportLines);
         Assert.Equal(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
-        Assert.Equal(RuleCallsPerEmployedSegment, engine.Calls.Count);
+        // S145 R14: the real calls are the plan's one timeline call + 3 per-segment calls = 4 (was 6).
+        Assert.Equal(TimelineCallsPerPlan + PerSegmentCallsPerEmployedSegment, engine.Calls.Count);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S145 R-6 — any failed rule-engine call refuses the whole calculation
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Adjudicator R-6 (at TASK-14511's return): a partial failure is a refusal.</b> The timeline
+    /// call (overtime, norm, flex, judged week by week) returns 500 while every per-segment call
+    /// succeeds. Before the ruling the month reported Success with overtime, norm and flex silently
+    /// missing; now no payroll figure is produced: Success false, no export lines, no manifest event,
+    /// the fixed sentence.
+    ///
+    /// <para>Red conditions: mutation MU-44 ("partial failure tolerated: restore
+    /// <c>callsFailed &gt;= callsAttempted</c>" in <c>PeriodCalculationService</c>) lets the month
+    /// through as Success and trips the first assertion. Observed RED on c775e92, before the fix-up.</para>
+    /// </summary>
+    [Fact]
+    public async Task TimelineCallFails_PerSegmentCallsSucceed_CalculationRefused_NothingWritten()
+    {
+        var plan = Plan(EmployeeId, Mar01, Mar31, windows: null);
+        var engine = new RecordingRuleEngine(call =>
+            call.Path.EndsWith(RecordingRuleEngine.TimelinePath, StringComparison.Ordinal)
+                ? RecordingRuleEngine.AllFail(call)
+                : RecordingRuleEngine.AllSucceedWithNoLineItems(call));
+        var eventStore = new InMemoryEventStore();
+        var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+
+        // The timeline WAS attempted and the per-segment calls DID run: this is a partial failure.
+        Assert.Single(engine.TimelineCalls);
+        Assert.NotEmpty(engine.PerSegmentCalls);
+
+        Assert.False(outcome.Result.Success);
+        Assert.Equal(RuleEngineFailureMessage, outcome.Result.ErrorMessage);
+        Assert.Empty(outcome.Result.ExportLines);
+        Assert.Empty(outcome.Result.RuleResults);
+        Assert.Equal(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
+        Assert.Null(eventStore.Manifest);
+    }
+
+    /// <summary>
+    /// <b>Adjudicator R-6, the other direction:</b> the timeline succeeds and ONE per-segment call
+    /// (absence) returns 500. Still a refusal: Success false, no export lines, no manifest event,
+    /// the fixed sentence. Red conditions: mutation MU-44 (see above) lets this month through.
+    /// </summary>
+    [Fact]
+    public async Task OnePerSegmentCallFails_TimelineSucceeds_CalculationRefused_NothingWritten()
+    {
+        var plan = Plan(EmployeeId, Mar01, Mar31, windows: null);
+        var engine = new RecordingRuleEngine(call =>
+            call.Path.EndsWith("/evaluate-absence", StringComparison.Ordinal)
+                ? RecordingRuleEngine.AllFail(call)
+                : RecordingRuleEngine.AllSucceedWithNoLineItems(call));
+        var eventStore = new InMemoryEventStore();
+        var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+
+        Assert.Single(engine.TimelineCalls);
+        Assert.Contains(engine.Calls, c => c.Path.EndsWith("/evaluate-absence", StringComparison.Ordinal));
+
+        Assert.False(outcome.Result.Success);
+        Assert.Equal(RuleEngineFailureMessage, outcome.Result.ErrorMessage);
+        Assert.Empty(outcome.Result.ExportLines);
+        Assert.Empty(outcome.Result.RuleResults);
+        Assert.Equal(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
+        Assert.Null(eventStore.Manifest);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S145 R-6 (Codex WARNING 2) — a timeline reply is validated for SUCCESS, not just presence
+    // ═════════════════════════════════════════════════════════════════════
+
+    private async Task AssertTimelineReplyRefusedAsync(HttpResponseMessage reply)
+    {
+        var plan = Plan(EmployeeId, Mar01, Mar31, windows: null);
+        var engine = new RecordingRuleEngine(call =>
+            call.Path.EndsWith(RecordingRuleEngine.TimelinePath, StringComparison.Ordinal)
+                ? reply
+                : RecordingRuleEngine.AllSucceedWithNoLineItems(call));
+        var eventStore = new InMemoryEventStore();
+        var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+
+        // The timeline answered HTTP 200 and was structurally complete.
+        Assert.Single(engine.TimelineCalls);
+        Assert.False(outcome.Result.Success);
+        Assert.Equal(RuleEngineFailureMessage, outcome.Result.ErrorMessage);
+        Assert.Empty(outcome.Result.ExportLines);
+        Assert.Empty(outcome.Result.RuleResults);
+        Assert.Equal(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
+        Assert.Null(eventStore.Manifest);
+    }
+
+    /// <summary>
+    /// <b>R-6 (Codex WARNING 2).</b> A structurally complete HTTP 200 whose overtime row says
+    /// <c>success: false</c> is a failed evaluation, not a payroll figure. Red conditions: the timeline
+    /// validator checks presence only (the state on b5f29eb), so the month calculates as Success.
+    /// </summary>
+    [Fact]
+    public Task TimelineReply_FailedResultRow_CalculationRefused_NothingWritten()
+        => AssertTimelineReplyRefusedAsync(RecordingRuleEngine.TimelineSuccess(failedOvertimeRow: true));
+
+    /// <summary>
+    /// <b>R-6 (Codex WARNING 2).</b> The flex block carries a <c>success</c> field (<c>FlexEvaluationResponse</c>);
+    /// a 200 with <c>flex.success: false</c> is refused. Red conditions as above.
+    /// </summary>
+    [Fact]
+    public Task TimelineReply_FailedFlexBlock_CalculationRefused_NothingWritten()
+        => AssertTimelineReplyRefusedAsync(RecordingRuleEngine.TimelineSuccess(failedFlexBlock: true));
+
+    /// <summary>
+    /// <b>R-6 (Codex WARNING 2).</b> An empty <c>configFingerprints</c> list means the answer cannot be
+    /// replayed (TASK-14513 records it); a 200 with no fingerprint is refused. Red conditions as above.
+    /// </summary>
+    [Fact]
+    public Task TimelineReply_EmptyFingerprints_CalculationRefused_NothingWritten()
+        => AssertTimelineReplyRefusedAsync(RecordingRuleEngine.TimelineSuccess(emptyFingerprints: true));
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S145 R-10 — the caller-position fallback is retired for every piece
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>R-10 (adjudicator, on Codex WARNING 1).</b> A dated <c>employee_profiles</c> row with a null
+    /// position means "no position (base config)"; it is never filled in from the request's profile.
+    /// September 2026: the employee becomes DEPARTMENT_HEAD on 1 Sep (the resolver answers null before
+    /// that date). The context piece covering Monday 31 Aug must carry NO position; the pieces covering
+    /// 1-30 Sep carry DEPARTMENT_HEAD. The caller's profile also says DEPARTMENT_HEAD, which must NOT leak
+    /// back onto 31 Aug.
+    ///
+    /// <para>Red conditions: mutation MU-45 ("restore the caller-position fallback" in
+    /// <c>PeriodCalculationService</c>'s profile resolution) puts DEPARTMENT_HEAD on the 31 Aug piece and
+    /// trips the first position assertion. Observed RED on b5f29eb, before the fix-up.</para>
+    /// </summary>
+    [Fact]
+    public async Task ContextPiece_PromotedToDepartmentHead1Sep2026_31AugPieceCarriesNoPosition_CallerPositionNotInherited()
+    {
+        var sep01 = new DateOnly(2026, 9, 1);
+        var sep30 = new DateOnly(2026, 9, 30);
+        var aug31 = new DateOnly(2026, 8, 31);
+        Assert.Equal(DayOfWeek.Monday, aug31.DayOfWeek);
+        Assert.Equal(DayOfWeek.Tuesday, sep01.DayOfWeek);
+
+        var caller = Profile(EmployeeId) with { AgreementCode = "AC", Position = "DEPARTMENT_HEAD", OkVersion = "OK26" };
+        var plan = Plan(EmployeeId, sep01, sep30, windows: null);
+        var engine = new RecordingRuleEngine();
+        var resolver = new CountingProfileResolver(d => d >= sep01 ? "DEPARTMENT_HEAD" : null, agreementCode: "AC");
+        var pcs = BuildPcs(engine, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, aug31, sep30));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
+
+        var pieces = Assert.Single(engine.TimelineCalls).Pieces!;
+        AssertPiecesRun(pieces, aug31, sep30);
+        var onAug31 = Assert.Single(pieces, p => p.From <= aug31 && aug31 <= p.To);
+        Assert.Null(onAug31.Position);
+        var inSeptember = pieces.Where(p => p.To >= sep01).ToList();
+        Assert.NotEmpty(inSeptember);
+        Assert.All(inSeptember, p => Assert.Equal("DEPARTMENT_HEAD", p.Position));
+    }
+
+    /// <summary>
+    /// <b>R-10 (adjudicator, on Codex WARNING 1).</b> The dated row has no position on ANY date, while
+    /// the caller's profile says DEPARTMENT_HEAD: every piece sent carries <c>Position == null</c>. The
+    /// caller's position is never substituted. Red conditions: mutation MU-45 ("restore the caller-position
+    /// fallback") gives every piece DEPARTMENT_HEAD. Observed RED on b5f29eb, before the fix-up.
+    /// </summary>
+    [Fact]
+    public async Task InMonthPieces_DatedRowHasNoPosition_CallerPositionNotInherited()
+    {
+        var caller = Profile(EmployeeId) with { Position = "DEPARTMENT_HEAD" };
+        var plan = Plan(EmployeeId, Mar01, Mar31, windows: null);
+        var engine = new RecordingRuleEngine();
+        var resolver = new CountingProfileResolver(_ => null);
+        var pcs = BuildPcs(engine, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
+
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
+
+        var pieces = Assert.Single(engine.TimelineCalls).Pieces!;
+        Assert.NotEmpty(pieces);
+        Assert.All(pieces, p => Assert.Null(p.Position));
     }
 
     /// <summary>The healthy twin: the same leaver plan with a working rule engine must NOT
@@ -111,18 +309,29 @@ public sealed class EmploymentWindowSegmentSkipTests
 
         Assert.True(outcome.Result.Success);
         Assert.Null(outcome.Result.ErrorMessage);
-        // One employed segment → one result per stubbed rule (4 time + absence + flex).
-        Assert.Equal(RuleCallsPerEmployedSegment, outcome.Result.RuleResults.Count);
+        // One employed segment → one result per stubbed rule (overtime, norm and flex from the timeline; supplement, on-call and absence per segment).
+        Assert.Equal(RuleResultsPerPlan, outcome.Result.RuleResults.Count);
         Assert.All(outcome.Result.RuleResults, r => Assert.True(r.Success));
         Assert.NotEqual(PeriodCalculationService.AuditState.NoManifest, outcome.AuditState);
 
         // The rule engine was only ever asked about the employed span [03-01 .. 03-15].
-        Assert.Equal(RuleCallsPerEmployedSegment, engine.Calls.Count);
-        Assert.All(engine.Calls, c =>
+        // S145 R14: 1 timeline call + 3 per-segment calls = 4 (was 6 per-segment calls).
+        Assert.Equal(TimelineCallsPerPlan + PerSegmentCallsPerEmployedSegment, engine.Calls.Count);
+        Assert.All(engine.PerSegmentCalls, c =>
         {
             Assert.Equal(Mar01, c.PeriodStart);
             Assert.Equal(lastDay, c.PeriodEnd); // the last employed day IS inside the evaluated range
         });
+        // S145 F1: the timeline call carries the period's range; its PIECES end on the last employed
+        // day, start on the month's opening Monday (23 Feb: the week holding Sunday 1 Mar is March's)
+        // and leave no day uncovered between; no entry is sent after the last employed day.
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(Mar01, timeline.PeriodStart);
+        Assert.Equal(Mar31, timeline.PeriodEnd);
+        AssertPiecesRun(timeline.Pieces, new DateOnly(2026, 2, 23), lastDay);
+        Assert.All(timeline.TimelineEntries!, e => Assert.True(e.Date <= lastDay, $"{e.Date} is after the last employed day"));
+        // 10 weekdays (2-6 and 9-13 March) fall in the employed span of the hours read.
+        Assert.Equal(10, timeline.TimelineEntries!.Count);
 
         // ...and the manifest still records the NOT_EMPLOYED suffix (auditability).
         var manifest = eventStore.Manifest;
@@ -206,7 +415,9 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.Equal((EmployeeId, Mar01, Mar31), Assert.Single(windowResolver.Calls));
 
         // Rule engine only saw the employed span; the manifest carries the typed prefix.
-        Assert.All(engine.Calls, c => Assert.Equal(hire, c.PeriodStart));
+        // S145 F1: per-segment calls start at the hire date; the timeline's pieces do too.
+        Assert.All(engine.PerSegmentCalls, c => Assert.Equal(hire, c.PeriodStart));
+        Assert.Equal(hire, Assert.Single(engine.TimelineCalls).Pieces![0].From);
         var manifest = eventStore.Manifest;
         Assert.NotNull(manifest);
         Assert.Equal(2, manifest!.Segments.Count);
@@ -216,16 +427,20 @@ public sealed class EmploymentWindowSegmentSkipTests
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // Flex carry passes THROUGH a NOT_EMPLOYED middle segment
+    // The opening flex balance reaches the ONE timeline call; a NOT_EMPLOYED
+    // middle span is never covered (S145 F1 — the per-segment carry is retired)
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>Two spells (the planner is list-shaped/spells-proof) give EMPLOYED /
-    /// NOT_EMPLOYED / EMPLOYED. The third segment's flex call must receive exactly the carry
-    /// the first segment produced; the middle segment issues no flex call and synthesizes
-    /// no row. The stub's flex delta is zero (no wage-type mapping exists in this DB-free
-    /// harness — see the fixture doc), so the pin is structural: a carry RESET on the skip
-    /// (e.g. to 0) or a synthesized FLEX row would fail it; the non-zero-delta variant is
-    /// the Docker-gated <c>EmploymentWindowPayrollTests</c>.</summary>
+    /// NOT_EMPLOYED / EMPLOYED. S145 F1 retired the per-segment flex carry: there is no flex call
+    /// per segment any more, and the opening balance goes to the plan's ONE timeline call, which
+    /// carries it across the whole month itself. What the old pin protected survives in this form:
+    /// the opening balance reaches the engine unchanged (not reset, not shifted by the skipped
+    /// span); no flex call and no per-segment call touches the NOT_EMPLOYED span; the timeline's
+    /// pieces and entries leave that span out (so no day of it is judged or paid); and no row is
+    /// synthesized for it. The stub's flex delta is zero (no wage-type mapping exists in this
+    /// DB-free harness — see the fixture doc), so a non-zero carry is the Docker-gated
+    /// <c>EmploymentWindowPayrollTests</c>.</summary>
     [Fact]
     public async Task FlexCarry_PassesThroughNotEmployedMiddleSegment_Unchanged()
     {
@@ -251,24 +466,30 @@ public sealed class EmploymentWindowSegmentSkipTests
 
         Assert.True(outcome.Result.Success);
 
-        // Exactly two flex calls — segments 0 and 2, in order; none for the middle span.
-        var flexCalls = engine.FlexCalls;
-        Assert.Equal(2, flexCalls.Count);
-        Assert.Equal(Mar01, flexCalls[0].PeriodStart);
-        Assert.Equal(firstSpellEnd, flexCalls[0].PeriodEnd);
-        Assert.Equal(secondSpellStart, flexCalls[1].PeriodStart);
-        Assert.Equal(Mar31, flexCalls[1].PeriodEnd);
+        // S145 R14 / F1: the per-segment flex call is retired — none at all.
+        Assert.Empty(engine.FlexCalls);
 
-        // The carry the third segment receives == the first segment's carry (+ its zero delta).
-        Assert.Equal(openingBalance, flexCalls[0].PreviousBalance);
-        Assert.Equal(openingBalance, flexCalls[1].PreviousBalance);
+        // One timeline call carries the opening balance, unchanged.
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(openingBalance, timeline.TimelinePreviousFlexBalance);
 
-        // No call of any kind touched the NOT_EMPLOYED span.
-        Assert.DoesNotContain(engine.Calls, c => c.PeriodStart > firstSpellEnd && c.PeriodStart < secondSpellStart);
-        Assert.Equal(2 * RuleCallsPerEmployedSegment, engine.Calls.Count);
+        // Its pieces cover 23 Feb (March's opening Monday) to 10 Mar, then 21 Mar to 31 Mar — and
+        // nothing in between: the NOT_EMPLOYED span is never judged.
+        Assert.Equal(new DateOnly(2026, 2, 23), timeline.Pieces![0].From);
+        Assert.Equal(Mar31, timeline.Pieces[^1].To);
+        Assert.Contains(timeline.Pieces, p => p.To == firstSpellEnd);
+        Assert.Contains(timeline.Pieces, p => p.From == secondSpellStart);
+        Assert.DoesNotContain(timeline.Pieces, p => p.From < secondSpellStart && p.To > firstSpellEnd);
+        Assert.NotEmpty(timeline.TimelineEntries!); // S145 Step 5a: not vacuous
+        Assert.DoesNotContain(timeline.TimelineEntries!, e => e.Date > firstSpellEnd && e.Date < secondSpellStart);
+
+        // No per-segment call touched the NOT_EMPLOYED span either.
+        Assert.DoesNotContain(engine.PerSegmentCalls, c => c.PeriodStart > firstSpellEnd && c.PeriodStart < secondSpellStart);
+        // S145 R14: 1 timeline call + 3 per-segment calls for each of the 2 employed segments = 7 (was 12).
+        Assert.Equal(TimelineCallsPerPlan + 2 * PerSegmentCallsPerEmployedSegment, engine.Calls.Count);
 
         // No synthesized rows: 6 rule ids, each merged from the two employed segments only.
-        Assert.Equal(RuleCallsPerEmployedSegment, outcome.Result.RuleResults.Count);
-        Assert.Equal(RuleCallsPerEmployedSegment, outcome.Result.RuleResults.Select(r => r.RuleId).Distinct().Count());
+        Assert.Equal(RuleResultsPerPlan, outcome.Result.RuleResults.Count);
+        Assert.Equal(RuleResultsPerPlan, outcome.Result.RuleResults.Select(r => r.RuleId).Distinct().Count());
     }
 }

@@ -35,7 +35,17 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
-/// Per-segment rule evaluation calls the Rule Engine over HTTP (PAT-005) and maps results to
+/// <strong>Two evaluation lanes (S145 / TASK-14511, the QUAL-186 fix).</strong> Overtime /
+/// merarbejde, the norm check and flex are evaluated ONCE per plan, week by week, by one
+/// <c>POST /api/rules/evaluate-timeline</c> call over the plan's EMPLOYED days plus the EMPLOYED
+/// context days of the month's opening week (a week is settled by the month holding its Sunday —
+/// owner ruling Q3 = F1 — and a leaver's last week on their last employed day, R41). Supplement,
+/// on-call and absence stay per segment. Before S145 the three were evaluated per segment, which
+/// judged a whole month as if it were one week.
+/// </para>
+///
+/// <para>
+/// Rule evaluation calls the Rule Engine over HTTP (PAT-005) and maps results to
 /// wage types via <see cref="PayrollMappingService"/>. Per-segment payroll lines are kept
 /// segment-stamped (each <see cref="PayrollExportLine.OkVersion"/> reflects the segment's
 /// resolved version) and the per-segment rule outputs are merged via the strategy resolved
@@ -342,9 +352,9 @@ public sealed class PeriodCalculationService
         /// audit-of-record is unsafe.</summary>
         BothFailed,
 
-        /// <summary>No manifest emission was attempted. Set on the total-failure
-        /// short-circuit (every rule across every segment failed — typically Rule Engine
-        /// outage or auth misconfiguration) and on replay (the original manifest already
+        /// <summary>No manifest emission was attempted. Set on the refused calculation
+        /// (any rule-engine call failed — typically Rule Engine outage, auth misconfiguration
+        /// or a rejected input; S145 ruling R-6) and on replay (the original manifest already
         /// exists in the audit chain; replay re-evaluates rules but does NOT mint a new
         /// manifest event — ADR-016 D10 immutability). The ManifestId carried alongside
         /// this state references the in-memory plan; in the failure case it does not
@@ -367,11 +377,46 @@ public sealed class PeriodCalculationService
     /// which would let us drop this wrapper entirely. Until that lands, callers needing the
     /// audit state must use this wrapper API.
     /// </para>
+    ///
+    /// <para>
+    /// <strong>What the week-by-week evaluation ran on (S145 / TASK-14511).</strong> The four init-only
+    /// members below record the per-plan lane's timeline call, so TASK-14513 can freeze them into
+    /// <see cref="PlanInputs"/>: the pieces sent, the settlement cutoff (R41), and the engine's config
+    /// fingerprints and evaluation-model marker. They are not positional, so every existing
+    /// construction and deconstruction of this record is unchanged.
+    /// </para>
     /// </summary>
     public sealed record PeriodCalculationOutcome(
         PeriodCalculationResult Result,
         AuditState AuditState,
-        Guid ManifestId);
+        Guid ManifestId)
+    {
+        /// <summary>
+        /// The pieces the per-plan lane sent to <c>POST /api/rules/evaluate-timeline</c>: one per
+        /// EMPLOYED segment of the plan, preceded by the pieces for the EMPLOYED context days of the
+        /// month's opening week. Empty when the plan has no EMPLOYED segment (no call was made).
+        /// </summary>
+        public IReadOnlyList<FrozenPiece> TimelinePieces { get; init; } = Array.Empty<FrozenPiece>();
+
+        /// <summary>
+        /// The settlement cutoff sent with the timeline (ruling R41): the employment window's inclusive
+        /// <c>End</c> when it is on or before the period end, otherwise <c>null</c>. TASK-14513 freezes it,
+        /// because it cannot be recovered from the plan.
+        /// </summary>
+        public DateOnly? SettlementCutoff { get; init; }
+
+        /// <summary>
+        /// The config fingerprints the Rule Engine returned for the timeline call. Empty when no call
+        /// was made or the call failed.
+        /// </summary>
+        public IReadOnlyList<string> ConfigFingerprints { get; init; } = Array.Empty<string>();
+
+        /// <summary>
+        /// The evaluation-model marker the Rule Engine returned for the timeline call (for example
+        /// <c>weekly-timeline-v1</c>). <c>null</c> when no call was made or the call failed.
+        /// </summary>
+        public string? EvaluationModel { get; init; }
+    }
 
     // -------------------------------------------------------------------
     // Sole logic entry point — D8 always-on planner
@@ -428,6 +473,20 @@ public sealed class PeriodCalculationService
     /// once to the <see cref="TimeEntry"/> / <see cref="AbsenceEntry"/> inputs the lanes consume. A
     /// service built without a reader throws <see cref="InvalidOperationException"/> before any read.
     /// </para>
+    ///
+    /// <para>
+    /// <strong>Two lanes (S145 / TASK-14511, the QUAL-186 fix).</strong> Overtime / merarbejde, the
+    /// norm check and flex are evaluated ONCE for the whole plan, week by week, by one
+    /// <c>POST /api/rules/evaluate-timeline</c> call (the per-plan lane). Its timeline covers every
+    /// EMPLOYED day of the plan plus the EMPLOYED "context days" of the month's opening week (the
+    /// previous month's days of a week this month settles, owner ruling Q3 = F1), and carries the
+    /// settlement cutoff (R41). Supplement, on-call and absence stay per segment (the per-segment
+    /// lane). The per-plan results are joined to the EMPLOYED segment's result list, so the merge and
+    /// the wage-type mapping see exactly one result per rule per EMPLOYED segment, as before. A plan
+    /// handed in by the caller does not carry the histories the per-plan lane needs (the employment
+    /// window, the profile and agreement-code change dates), so this entry point reads them; the
+    /// planless shims hand over the ones their planning already read.
+    /// </para>
     /// </summary>
     public async Task<PeriodCalculationOutcome> CalculateWithOutcomeAsync(
         PlannedCalculation plan,
@@ -441,11 +500,38 @@ public sealed class PeriodCalculationService
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(profile);
 
-        // S145 TASK-14508 (R25) — never silent, and FIRST: before the hours read below and the
-        // rule-classification fetch further down. (The planless shims and the replay overloads run
-        // the same check before THEIR first read — planning or the manifest load — and re-enter here.)
+        // S145 TASK-14508 (R25) — never silent, and FIRST: before the history and hours reads and the
+        // rule-classification fetch. (The planless shims and the replay overloads run the same check
+        // before THEIR first read — planning or the manifest load.)
         var hoursReader = RequireHoursReader(nameof(CalculateWithOutcomeAsync));
 
+        // histories: null — a caller-built plan (tests, replay) arrives without the histories planning
+        // read, so the calculation reads them itself. The planless shims pass the ones their planning
+        // already read, so no history is read twice in one calculation.
+        return await CalculatePlanAsync(
+            plan, histories: null, profile,
+            previousFlexBalance, authorizationHeader, correlationId,
+            emitAuditEvents, hoursReader, ct);
+    }
+
+    /// <summary>
+    /// The calculation itself, shared by the plan-first entry point above and the two planless shims:
+    /// the hours read, the per-plan lane (one timeline call), the per-segment lane, the strategy-driven
+    /// merge, the manifest emission and the wage-type mapping. <paramref name="histories"/> is what
+    /// planning read about the employee; <c>null</c> means "not read yet" and the method reads it.
+    /// <paramref name="hoursReader"/> is the reader the caller's never-silent check returned.
+    /// </summary>
+    private async Task<PeriodCalculationOutcome> CalculatePlanAsync(
+        PlannedCalculation plan,
+        PlanHistories? histories,
+        EmploymentProfile profile,
+        decimal previousFlexBalance,
+        string? authorizationHeader,
+        Guid? correlationId,
+        bool emitAuditEvents,
+        IRecordedHoursReader hoursReader,
+        CancellationToken ct)
+    {
         // -------------------------------------------------------------------
         // Belt + braces re-check of geometric invariants. The planner already ran them when
         // it constructed `plan`, but this is the emission boundary — if the manifest is
@@ -469,6 +555,14 @@ public sealed class PeriodCalculationService
         }
 
         // ---------------------------------------------------------------
+        // S145 TASK-14511 — the histories the per-plan lane builds its timeline from: the employment
+        // window(s) (which context days were employed, and the settlement cutoff, R41) and the profile
+        // and agreement-code change dates (where a context piece must end). The planless shims pass
+        // the very read that fed their planner; a caller-built plan gets one read here.
+        // ---------------------------------------------------------------
+        histories ??= await ReadPlanHistoriesAsync(plan.EmployeeId, plan.PeriodStart, plan.PeriodEnd, ct);
+
+        // ---------------------------------------------------------------
         // S145 TASK-14508 (R14) — payroll reads its own hours. Nobody hands a calculation its
         // hours any more: it reads the employee's CURRENT recorded rows (one current row per Skema
         // cell plus every additive registration; a re-saved cell's earlier row is superseded and
@@ -479,11 +573,10 @@ public sealed class PeriodCalculationService
         // on the Monday (N5 — the same widened read as ComplianceEndpoints, ADR-039 GAP-B).
         //
         // `recordedHours` is kept exactly as read (TASK-14513 binds its event ids and digests it);
-        // `entries` / `absences` are the one mapping of it that BOTH lanes consume. Context rows are
-        // carried in both, and the per-segment lane's date filter below keeps them out of the
-        // segment evaluation, so until TASK-14511's per-plan lane they change nothing — apart from
-        // the post-midnight half of a crossing filed the day before the period's first day, which
-        // normalization dates INSIDE the period (that is the GAP-B hours the widened read exists for).
+        // `entries` / `absences` are the one mapping of it that BOTH lanes consume. Since TASK-14511
+        // the per-plan lane sends the context days' entries with its timeline (they count toward the
+        // opening week's overtime judgement); the per-segment lane's date filter still keeps them out
+        // of the segment evaluation.
         // ---------------------------------------------------------------
         var recordedHours = await hoursReader.ReadCurrentAsync(
             plan.EmployeeId, HoursReadStart(plan.PeriodStart), plan.PeriodEnd, ct);
@@ -491,7 +584,7 @@ public sealed class PeriodCalculationService
         var absences = ToAbsenceEntries(recordedHours.Absences);
 
         // ADR-039 (S132 TASK-132-1b-1) — midnight-crossing normalization on the calculation
-        // INPUT, BEFORE the per-segment filter below. A shift crossing midnight (e.g.
+        // INPUT, BEFORE either lane filters by date. A shift crossing midnight (e.g.
         // 23:00→02:00) is filed as one row under its start-date; its post-midnight hours belong
         // (by wall clock + ADR-003) to the next calendar day, which at 2026-04-01 is a different
         // OK-version. Normalizing here splits the crossing entry into a day-D half and a day-D+1
@@ -510,17 +603,18 @@ public sealed class PeriodCalculationService
         // to the NEXT month (ADR-039 D3: post-midnight hours are the next calendar day's), and the
         // next month reads it: its hours read starts at HoursReadStart(next.PeriodStart), the day
         // before its opening Monday, which is never later than this.PeriodEnd. So the half is
-        // dropped HERE by the per-segment date filter below and counted THERE — no hours are lost
-        // and none are counted twice. The fail-closed guard that refused such a month
-        // (AssertNoDroppedBoundaryCrossing, ADR-039 BLOCKER-3) was interim until payroll widened its
-        // own read (QUAL-144; SPRINT-132); S145 TASK-14508 is that read, and the guard was retired
-        // with it (adjudicator ruling, 2026-10-14). Pinned by
+        // dropped HERE and counted THERE — no hours are lost and none are counted twice: the
+        // per-segment date filter below drops it, and the per-plan lane sends only entries dated on
+        // a day its timeline covers, which never runs past PeriodEnd (and the engine's weekly core
+        // never evaluates a day after PeriodEnd either). The fail-closed guard that refused such a
+        // month (AssertNoDroppedBoundaryCrossing, ADR-039 BLOCKER-3) was interim until payroll
+        // widened its own read (QUAL-144; SPRINT-132); S145 TASK-14508 is that read, and the guard
+        // was retired with it (adjudicator ruling, 2026-10-14). Pinned by
         // MonthEndCrossingTests.MonthEndNightShift_Wed30Sep2300To0200_SeptemberNotRefused_PostMidnightHoursReachOctober
         // (mutation MU-43: restore the throw).
 
-        // Resolve the rule classification set once per call. Used for per-rule MergeStrategy
-        // dispatch below AND for the "rules attempted per segment" budget in the
-        // total-failure short-circuit.
+        // Resolve the rule classification set once per call — used for the per-rule
+        // MergeStrategy dispatch below.
         var ruleSet = _classificationProvider.GetClassifications();
 
         var client = _httpClientFactory.CreateClient();
@@ -530,68 +624,43 @@ public sealed class PeriodCalculationService
             client.DefaultRequestHeaders.TryAddWithoutValidation("X-Correlation-Id", correlationId.Value.ToString());
 
         // ---------------------------------------------------------------
-        // 1. Per-segment rule evaluation. Each segment carries its own OK version (resolved
-        //    from segment.StartDate per ADR-003); entries/absences are filtered to the
-        //    segment's date range before being shipped to the rule engine.
-        //
-        //    For the FlexBalanceRule (CrossPeriod, Mergeable, Custom merge), the previous
-        //    segment's flex delta becomes the next segment's "previousBalance" — preserving
-        //    the carry-forward semantics that RetroactiveCorrectionService used to encode
-        //    explicitly in RecalculateWithVersionSplitAsync (ADR-013, S11), which was
-        //    retired by TASK-2009 / wave 2.
+        // 1. "Employed?" before "what profile?" (ADR-040 D10), and every profile BEFORE any
+        //    rule-engine call, so a missing employment record refuses the month before anything is
+        //    evaluated. The context days' pieces come first (they precede the period); then each
+        //    EMPLOYED segment's profile, which BOTH lanes use.
         // ---------------------------------------------------------------
-        var perSegmentRuleResults = new List<List<CalculationResult>>(plan.Segments.Count);
-        var perSegmentExportLines = new List<List<PayrollExportLine>>(plan.Segments.Count);
-        decimal flexBalanceCarry = previousFlexBalance;
-        int totalFailures = 0;
-        // S137 TASK-13702 (Codex-B2, first half): the per-segment attempt budget is captured
-        // from the FIRST EMPLOYED segment actually evaluated — NOT from segment 0, which may
-        // be a NOT_EMPLOYED (pre-hire) segment that evaluates nothing. Capturing from segment
-        // 0 would leave this at 0 and silently disarm the total-failure short-circuit below.
-        int rulesAttemptedPerSegment = 0;
-        // S137 TASK-13702 (Codex-B2, second half): the short-circuit denominator counts only
-        // the segments that were evaluated. Multiplying by plan.Segments.Count would over-
-        // state the budget by 6 per skipped segment, so a plan with one EMPLOYED segment
-        // whose every call failed (6 failures) would compare against 12 and NOT short-circuit
-        // — returning a "successful" calculation with zero rule results.
-        int employedSegmentCount = 0;
+        var contextPieces = await BuildContextPiecesAsync(plan, histories, profile, ct);
 
+        var segmentProfiles = new EmploymentProfile?[plan.Segments.Count];
+        var employedIndices = new List<int>(plan.Segments.Count);
         for (int s = 0; s < plan.Segments.Count; s++)
         {
             var segment = plan.Segments[s];
 
             // ---------------------------------------------------------------
-            // ADR-040 D5 / D10 (S137 TASK-13702) — the NOT_EMPLOYED skip point. This branch
-            // runs FIRST in the loop body, BEFORE the profile resolution below: callers ask
-            // "employed?" before "what profile?" (D10). A post-S136 employee's profile row
-            // starts at hire, so resolving a profile for a pre-hire segment would hit the
-            // resolver's fail-closed path (EmployeeProfileNotFoundException → a real 500).
+            // ADR-040 D5 / D10 (S137 TASK-13702) — the NOT_EMPLOYED skip point. It runs BEFORE
+            // the profile resolution below: callers ask "employed?" before "what profile?" (D10).
+            // A post-S136 employee's profile row starts at hire, so resolving a profile for a
+            // pre-hire segment would hit the resolver's fail-closed path
+            // (EmployeeProfileNotFoundException → a real 500).
             //
-            // What a NOT_EMPLOYED segment does NOT do: no profile resolution, no rule
-            // evaluation (zero rule-engine calls), no export-line mapping. What it DOES do:
-            // contribute an EMPTY rule-result list and an EMPTY export-line list at its own
-            // index — never a synthesized row. A synthesized zero-delta FLEX_BALANCE row
-            // would perturb MergePerSegmentRuleResults (which seeds rule order from the
-            // first non-empty segment) and corrupt the flex carry. With an empty list,
-            // ExtractFlexDelta yields null and flexBalanceCarry passes through UNCHANGED
-            // to the next EMPLOYED segment. The segment itself stays in plan.Segments, so
-            // BuildManifest still records it — non-employment is structurally explicit in
-            // the audit-of-record (D5), never encoded as "norm 0".
+            // What a NOT_EMPLOYED segment does NOT do: no profile resolution, no rule evaluation
+            // in either lane (no piece of the timeline covers its days, and it makes zero
+            // per-segment calls), no export-line mapping. What it DOES do: contribute an EMPTY
+            // rule-result list and an EMPTY export-line list at its own index — never a
+            // synthesized row, which would perturb MergePerSegmentRuleResults (it seeds rule order
+            // from the first non-empty segment). The segment itself stays in plan.Segments, so
+            // BuildManifest still records it — non-employment is structurally explicit in the
+            // audit-of-record (D5), never encoded as "norm 0".
             // ---------------------------------------------------------------
             if (segment.EmploymentStatus == EmploymentWindowStatus.NOT_EMPLOYED)
-            {
-                perSegmentRuleResults.Add(new List<CalculationResult>());
-                perSegmentExportLines.Add(new List<PayrollExportLine>());
                 continue;
-            }
-            employedSegmentCount++;
-
-            var segmentOkVersion = OkVersionResolver.ResolveVersion(segment.StartDate);
+            employedIndices.Add(s);
 
             // Caller-supplied profile.OkVersion may be stale (pre-S20 callers commonly send
-            // a single OK version even for straddling periods). Build a per-segment effective
-            // profile with the resolved value; preserve Position so position-specific
-            // overrides (TASK-1802) keep applying within the segment.
+            // a single OK version even for straddling periods). The profile used for the segment
+            // carries the date-resolved value (ResolveProfileAtAsync).
+            var segmentOkVersion = OkVersionResolver.ResolveVersion(segment.StartDate);
             if (!string.Equals(profile.OkVersion, segmentOkVersion, StringComparison.Ordinal) && plan.Segments.Count == 1)
             {
                 _logger.LogWarning(
@@ -600,126 +669,103 @@ public sealed class PeriodCalculationService
                     profile.OkVersion, segmentOkVersion, profile.EmployeeId, segment.StartDate, segment.EndDate);
             }
 
-            // ADR-023 D1 cutover: resolve segmentProfile from dated employee_profiles
-            // (via EmploymentProfileResolver) instead of copying caller-supplied profile.
-            // Legacy test-fixture path preserved when resolver is null (refinement
-            // cycle 2 Codex W absorption — S29 _localAgreementProfileRepo precedent).
-            // ADR-040 D7 (S137 Step-7a Codex cycle-2 WARNING, absorbed): the resolver is asked at
-            // segment.StartDate (the correct D10 as-of), but the fail-closed exception is anchored on
-            // plan.PeriodStart — CALLER INPUT. For a starter's first EMPLOYED segment, StartDate IS the
-            // hire date, and EmployeeProfileNotFoundException embeds its as-of date in the message,
-            // which reaches exception logs and could reach a detailed 500 body — an employment date
-            // must not leak through either. Diagnostics keep the employee id + the period.
-            //
-            // ── S141 / TASK-14114 — THE FAIL-CLOSED PATH IS NOW CAUGHT AND NAMED ────────────────
-            // WHY THIS CHANGED. Before S141 this branch could only be reached by a seeding or
-            // backfill defect, so an anonymous unhandled exception was an acceptable "should never
-            // happen". S141 lets HR date an employment change into the FUTURE, which makes "no
-            // employment record covers this date" a state the PRODUCT ITSELF can now produce — a
-            // record ended in September whose replacement does not start until November leaves the
-            // employee with no record describing them today. From then on every payroll calculation
-            // touching that hole would surface as an unnamed crash, and whoever read the log could
-            // not tell a broken server from an employee whose records have a gap. Failing closed
-            // was always right; failing closed ANONYMOUSLY is what was wrong.
-            //
-            // ONE CONDITION, ONE NAME — `employment_record_gap`, the same name ComplianceEndpoints
-            // uses for the same state (S141 / TASK-14105), so one grep finds every refusal caused
-            // by a record gap regardless of which read hit it. The resolver reports this one state
-            // two different ways: it RETURNS NULL when no employee_profiles row covers the as-of
-            // date, and it THROWS EmployeeProfileNotFoundException when a profile row covers it but
-            // no user_agreement_codes row does (its documented data-integrity fail-loud). Both mean
-            // "this employee has no complete employment record on this date", so both land on the
-            // one named condition instead of escaping two different ways.
-            //
-            // STILL FAIL-CLOSED — DELIBERATELY UNCHANGED. No fallback profile is substituted, the
-            // segment is NOT skipped, and the calculation does not continue on a guess: a payroll
-            // figure derived from a guessed agreement code or part-time fraction puts wrong money
-            // on a real wage line, which is worse than producing no figure at all. The same
-            // EmployeeProfileNotFoundException, anchored on the same caller-supplied
-            // plan.PeriodStart, is still thrown and still reaches the caller.
-            //
-            // ADR-040 D7 — THE CAUGHT EXCEPTION IS NOT ATTACHED TO THE LOG, AND IS NOT WRAPPED AS
-            // AN INNER EXCEPTION. The resolver's own exception carries asOfDate == segment.StartDate
-            // in its Message, and per the paragraph above that date IS the hire date for a starter's
-            // first EMPLOYED segment. Passing it as ILogger's exception argument (or as an inner
-            // exception a handler later renders) would write that employment date straight into the
-            // very logs this site exists to keep it out of. The diagnostics below therefore carry
-            // only the employee id, the replay-stable manifest id, and the CALLER'S OWN period —
-            // nothing date-shaped that describes the employment itself. The log line replaces the
-            // discarded exception as the diagnosis.
-            EmploymentProfile segmentProfile;
-            if (_profileResolver is null)
+            segmentProfiles[s] = await ResolveProfileAtAsync(profile, segment.StartDate, plan, ct);
+        }
+
+        // ---------------------------------------------------------------
+        // 2. The per-plan lane (S145 TASK-14511, QUAL-186). ONE timeline call evaluates overtime /
+        //    merarbejde, the norm check and flex for the whole plan, week by week:
+        //    - the pieces cover the EMPLOYED context days, then each EMPLOYED segment with the
+        //      profile resolved for it above (a NOT_EMPLOYED day is covered by no piece, so it is
+        //      not evaluated);
+        //    - a week is settled by the month holding its Sunday and dated that Sunday (Q3 = F1), so
+        //      a closing week that ends in the next month is paid THERE, not here; a leaver's last
+        //      week is settled on their last employed day — the settlement cutoff (R41);
+        //    - the opening flex balance goes in as given: flex is settled once for the month, so the
+        //      per-segment flex carry is retired.
+        //    No call is made for a plan with no EMPLOYED segment: there is nothing to settle (a week
+        //    whose employed days all lie in the previous month was settled by that month).
+        // ---------------------------------------------------------------
+        var pieces = new List<FrozenPiece>(contextPieces.Count + employedIndices.Count);
+        pieces.AddRange(contextPieces);
+        foreach (var s in employedIndices)
+        {
+            var segment = plan.Segments[s];
+            var segmentProfile = segmentProfiles[s]!;
+            pieces.Add(new FrozenPiece(
+                segment.StartDate, segment.EndDate,
+                segmentProfile.PartTimeFraction, segmentProfile.AgreementCode, segmentProfile.Position));
+        }
+
+        var settlementCutoff = SettlementCutoffFrom(histories.EmploymentWindows, plan.PeriodEnd);
+
+        // The rule-engine CALLS actually made — the one timeline call plus three per EMPLOYED segment —
+        // and how many of them failed. ANY failed call refuses the calculation (S145 ruling R-6, below);
+        // a plan that made no call is never refused. (S137 Codex-B2 hazards — a budget captured from a
+        // skipped segment, or multiplied by segments that made no call — cannot recur: nothing is
+        // multiplied.)
+        int callsAttempted = 0;
+        int callsFailed = 0;
+
+        TimelineEvaluationResponse? timeline = null;
+        if (employedIndices.Count > 0)
+        {
+            // With the timeline go the entries dated on a day it covers (context days included) and
+            // the month's absences on a covered day; nothing outside the evaluated days is sent.
+            var timelineEntries = normalizedEntries.Where(e => IsCovered(pieces, e.Date)).ToList();
+            // Asymmetric on purpose: context-day ENTRIES count toward the opening week's overtime, but
+            // context-day absences would be dead weight — the core reads absences only on in-period
+            // covered days (flex), and overtime reads no absences at all.
+            var timelineAbsences = absences
+                .Where(a => a.Date >= plan.PeriodStart && IsCovered(pieces, a.Date))
+                .ToList();
+
+            callsAttempted++;
+            timeline = await CallTimelineAsync(
+                client, plan.EmployeeId, plan.PeriodStart, plan.PeriodEnd, settlementCutoff,
+                pieces, timelineEntries, timelineAbsences, previousFlexBalance, ct);
+            if (timeline is null)
+                callsFailed++;
+        }
+
+        var perPlanRows = DistributePerPlanResults(timeline, plan, employedIndices);
+
+        // ---------------------------------------------------------------
+        // 3. The per-segment lane. Supplement, on-call and absence stay per segment; each segment
+        //    carries its own OK version (resolved from segment.StartDate per ADR-003) and its own
+        //    profile; entries/absences are filtered to the segment's date range before being shipped
+        //    to the rule engine. The per-plan rows assigned to the segment join its result list.
+        // ---------------------------------------------------------------
+        var perSegmentRuleResults = new List<List<CalculationResult>>(plan.Segments.Count);
+        var perSegmentExportLines = new List<List<PayrollExportLine>>(plan.Segments.Count);
+
+        for (int s = 0; s < plan.Segments.Count; s++)
+        {
+            var segment = plan.Segments[s];
+            if (segment.EmploymentStatus == EmploymentWindowStatus.NOT_EMPLOYED)
             {
-                segmentProfile = profile;
-            }
-            else
-            {
-                EmploymentProfile? resolvedProfile = null;
-                // WHICH effective-dated record is missing, named with the table an HR administrator's
-                // repair actually touches. The initial value covers the NULL return (no
-                // employee_profiles row spans the as-of date); the catch below narrows it to the
-                // agreement-code hole. Neither value is date-shaped.
-                var missingRecord = "employee_profiles";
-                try
-                {
-                    resolvedProfile = await _profileResolver.GetByEmployeeIdAtAsync(
-                        profile.EmployeeId, segment.StartDate, ct);
-                }
-                catch (EmployeeProfileNotFoundException)
-                {
-                    missingRecord = "user_agreement_codes";
-                }
-
-                if (resolvedProfile is null)
-                {
-                    _logger.LogError(
-                        "employment_record_gap: no effective-dated employment record ({MissingRecord}) covers " +
-                        "this calculation segment for employee {EmployeeId} manifest {ManifestId} period " +
-                        "{PeriodStart}-{PeriodEnd}. The calculation is REFUSED and no payroll figure is " +
-                        "produced for this period — a figure derived from a guessed employment record would " +
-                        "be worse than none. This is a data gap, not a server fault: the employee should " +
-                        "appear on the HR follow-up 'cannot register' list (HRP-015), which names the missing " +
-                        "record and whether a scheduled one will close the gap, and an HR administrator " +
-                        "repairs it there.",
-                        missingRecord, profile.EmployeeId, plan.ManifestId, plan.PeriodStart, plan.PeriodEnd);
-
-                    throw new EmployeeProfileNotFoundException(profile.EmployeeId, plan.PeriodStart);
-                }
-
-                segmentProfile = resolvedProfile;
+                perSegmentRuleResults.Add(new List<CalculationResult>());
+                perSegmentExportLines.Add(new List<PayrollExportLine>());
+                continue;
             }
 
-            // OkVersion server-resolution overlay (ADR-003: the OK version is a pure
-            // function of the date). S137 (TASK-13703, QUAL-147) made the resolver return
-            // the DATE-resolved OK version for segment.StartDate, so on the DI-wired path
-            // this overlay is a no-op — it is KEPT as defense-in-depth for the nullable-
-            // resolver fixture path (segmentProfile == the caller-supplied profile, whose
-            // OkVersion may be stale for a straddling period) and as a guard should the
-            // resolver ever regress to a live read.
-            if (!string.Equals(segmentProfile.OkVersion, segmentOkVersion, StringComparison.Ordinal))
-                segmentProfile = segmentProfile with { OkVersion = segmentOkVersion };
+            var segmentProfile = segmentProfiles[s]!;
 
-            // Position caller-fallback (TASK-1802 preservation — when resolver has no
-            // Position but caller supplied one, prefer caller's).
-            if (segmentProfile.Position is null && profile.Position is not null)
-                segmentProfile = segmentProfile with { Position = profile.Position };
-
-            // S145 TASK-14508: this date filter is UNCHANGED and load-bearing. Since payroll reads its
-            // own hours from the day before the opening week's Monday, `normalizedEntries` / `absences`
-            // also carry the context days before the period's first day; segments never start before
-            // it, so those rows stay out of the per-segment evaluation here (TASK-14511's per-plan
-            // lane is what will consume them).
+            // This date filter is UNCHANGED and load-bearing. `normalizedEntries` / `absences` also
+            // carry the context days before the period's first day (and a month-end crossing's
+            // post-midnight half after its last); segments never reach outside the period, so those
+            // rows stay out of the per-segment evaluation here (the per-plan lane consumes the
+            // context rows).
             var segmentEntries = normalizedEntries.Where(e => e.Date >= segment.StartDate && e.Date <= segment.EndDate).ToList();
             var segmentAbsences = absences.Where(a => a.Date >= segment.StartDate && a.Date <= segment.EndDate).ToList();
 
-            var (segmentRuleResults, segmentFailureCount, segmentAttempted) = await EvaluateSegmentAsync(
+            var lane = await EvaluateSegmentAsync(
                 client, segmentProfile, segmentEntries, segmentAbsences,
-                segment.StartDate, segment.EndDate, flexBalanceCarry, ct);
+                segment.StartDate, segment.EndDate, ct);
+            callsAttempted += lane.Attempted;
+            callsFailed += lane.Failures;
 
-            totalFailures += segmentFailureCount;
-            // First EMPLOYED segment evaluated (not `s == 0` — see the Codex-B2 note above).
-            if (employedSegmentCount == 1)
-                rulesAttemptedPerSegment = segmentAttempted;
+            var segmentRuleResults = AssembleSegmentResults(perPlanRows[s], lane);
 
             // Stamp every rule result on this segment with the manifest id so downstream
             // consumers (audit_log payload, SLS export, in-memory diff in
@@ -728,13 +774,6 @@ public sealed class PeriodCalculationService
             for (int i = 0; i < segmentRuleResults.Count; i++)
             {
                 segmentRuleResults[i] = WithManifestId(segmentRuleResults[i], plan.ManifestId);
-            }
-
-            // Carry the flex delta from this segment forward (FlexBalanceRule is Span.CrossPeriod).
-            var segmentFlexDelta = ExtractFlexDelta(segmentRuleResults);
-            if (segmentFlexDelta.HasValue)
-            {
-                flexBalanceCarry += segmentFlexDelta.Value;
             }
 
             // Map this segment's line items to wage types using the segment's resolved OK version.
@@ -749,28 +788,27 @@ public sealed class PeriodCalculationService
             perSegmentExportLines.Add(segmentExportLines);
         }
 
-        // If ALL rule evaluations across ALL EMPLOYED segments failed, treat the whole
-        // calculation as failed. The denominator is the first evaluated segment's actual
-        // attempt count (no magic constant) times the number of segments actually evaluated
-        // (S137 TASK-13702 / Codex-B2 — NOT plan.Segments.Count, which counts skipped
-        // NOT_EMPLOYED segments that attempted nothing). Two consequences, both pinned by
-        // EmploymentWindowSegmentSkipTests:
-        //   (i)  a plan whose segment 0 is NOT_EMPLOYED still short-circuits when every
-        //        EMPLOYED evaluation fails (the budget is captured from the first EMPLOYED
-        //        segment, not from segment 0);
-        //   (ii) a plan with ZERO employed segments has totalRules == 0, so it never
-        //        short-circuits: it returns Success == true with no rule results, no export
-        //        lines, and a manifest whose segments are all NOT_EMPLOYED. That is the RULED
-        //        semantics — "nothing to calculate" is a successful, auditable calculation
-        //        (the manifest records WHY nothing was paid), not a failure.
-        var totalRules = rulesAttemptedPerSegment * employedSegmentCount;
-        if (totalRules > 0 && totalFailures >= totalRules)
+        // If ANY rule-engine call failed, the calculation is refused: a month exported without one of
+        // its rules is wrong money labelled Success (S145 ruling R-6, adjudicator 2026-10-14). Since
+        // TASK-14511 one failed timeline call would otherwise drop overtime, norm and flex together
+        // while supplement, on-call and absence still exported. The refusal covers a Rule Engine
+        // outage, an auth misconfiguration and a rejected input alike; the failed call itself was
+        // already logged with its bounded diagnostic. Nothing is written: no manifest event, no
+        // projection row, no export lines (the host answers 422 on !Success, so no export record).
+        //
+        // A plan with ZERO employed segments made no call, so it is never refused: it returns
+        // Success == true with no rule results, no export lines, and a manifest whose segments are
+        // all NOT_EMPLOYED. That is the RULED semantics — "nothing to calculate" is a successful,
+        // auditable calculation (the manifest records WHY nothing was paid), not a failure.
+        if (callsFailed > 0)
         {
             _logger.LogError(
-                "All {TotalRules} rule evaluations failed across {EmployedSegmentCount} employed segment(s) " +
-                "(of {SegmentCount}) for employee {EmployeeId} manifest {ManifestId} period {PeriodStart}-{PeriodEnd}",
-                totalRules, employedSegmentCount, plan.Segments.Count, profile.EmployeeId, plan.ManifestId,
-                plan.PeriodStart, plan.PeriodEnd);
+                "{CallsFailed} of {CallsAttempted} rule-engine calls failed (the plan's timeline call and the " +
+                "per-segment calls of {EmployedSegmentCount} employed segment(s), of {SegmentCount}) for employee " +
+                "{EmployeeId} manifest {ManifestId} period {PeriodStart}-{PeriodEnd}. The calculation is REFUSED and " +
+                "no payroll figure is produced for this period.",
+                callsFailed, callsAttempted, employedIndices.Count, plan.Segments.Count, profile.EmployeeId,
+                plan.ManifestId, plan.PeriodStart, plan.PeriodEnd);
 
             var failResult = new PeriodCalculationResult
             {
@@ -779,20 +817,27 @@ public sealed class PeriodCalculationService
                 PeriodEnd = plan.PeriodEnd,
                 AgreementCode = profile.AgreementCode,
                 OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
-                RuleResults = MergePerSegmentRuleResults(perSegmentRuleResults, ruleSet, profile.EmployeeId, plan.ManifestId),
+                // No figure leaves a refused calculation: the rows of the calls that DID succeed are
+                // not returned either (the host's 422 carries this result as its body). This is the
+                // shape the all-calls-failed case always had — a failed call yields no row.
+                RuleResults = [],
                 ExportLines = [],
                 Success = false,
-                ErrorMessage = "All rule evaluations failed"
+                ErrorMessage = "Rule engine evaluation failed; no payroll figure is produced for this period"
             };
-            // No manifest was emitted on this short-circuit (BuildManifest +
+            // No manifest was emitted on this refusal (BuildManifest +
             // EmitManifestAsync run later). Return AuditState.NoManifest so callers do
             // not treat plan.ManifestId as a valid audit-query key — it does not exist
             // in segment_manifests or the event store. (Codex sprint-end review fix.)
-            return new PeriodCalculationOutcome(failResult, AuditState.NoManifest, plan.ManifestId);
+            return new PeriodCalculationOutcome(failResult, AuditState.NoManifest, plan.ManifestId)
+            {
+                TimelinePieces = pieces,
+                SettlementCutoff = settlementCutoff,
+            };
         }
 
         // ---------------------------------------------------------------
-        // 2. Strategy-driven merge of per-segment rule results (ADR-016 D3 / D7). Each rule
+        // 4. Strategy-driven merge of per-segment rule results (ADR-016 D3 / D7). Each rule
         //    is merged according to the strategy resolved at registration time; when the
         //    classification provider returns nothing for a rule (e.g. legacy / unwired
         //    callers), we default to Concatenate with a warning. Per-segment export lines
@@ -807,7 +852,7 @@ public sealed class PeriodCalculationService
             perSegmentRuleResults, ruleSet, profile.EmployeeId, plan.ManifestId);
 
         // ---------------------------------------------------------------
-        // 3. Emit SegmentManifestCreated event (ADR-016 D10). Single audit-of-record per
+        // 5. Emit SegmentManifestCreated event (ADR-016 D10). Single audit-of-record per
         //    successful calculation. The two-step persistence (event-store append +
         //    projection insert) tracks an explicit AuditState so callers can react to
         //    partial failures rather than silently treating success-with-degraded-audit
@@ -855,7 +900,13 @@ public sealed class PeriodCalculationService
             Success = true
         };
 
-        return new PeriodCalculationOutcome(okResult, auditState, plan.ManifestId);
+        return new PeriodCalculationOutcome(okResult, auditState, plan.ManifestId)
+        {
+            TimelinePieces = pieces,
+            SettlementCutoff = settlementCutoff,
+            ConfigFingerprints = timeline?.ConfigFingerprints ?? (IReadOnlyList<string>)Array.Empty<string>(),
+            EvaluationModel = timeline?.EvaluationModel,
+        };
     }
 
     // -------------------------------------------------------------------
@@ -894,16 +945,21 @@ public sealed class PeriodCalculationService
         ArgumentNullException.ThrowIfNull(profile);
 
         // S145 TASK-14508 (R25): never silent, before any read.
-        _ = RequireHoursReader(nameof(CalculateAsync));
+        var hoursReader = RequireHoursReader(nameof(CalculateAsync));
 
         // BuildPlanForLegacyCallers became async in S21 TASK-2108 (ADR-017 D9c) so the
         // shim can hydrate LocalProfileActivations from the local_agreement_profiles
-        // table. Other than the await, the method body is unchanged.
-        var plan = await BuildPlanForLegacyCallersAsync(profile, periodStart, periodEnd, ct);
+        // table. S145 TASK-14511: the plan comes back WITH the histories its planning read, and
+        // the calculation re-uses them for the per-plan lane, so nothing is read twice.
+        var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
 
-        return await CalculateAsync(
-            plan, profile,
-            previousFlexBalance, authorizationHeader, correlationId, ct);
+        // A forward calc: emitAuditEvents is true, exactly as the plan-first CalculateAsync
+        // re-enters the logic.
+        var outcome = await CalculatePlanAsync(
+            plan, histories, profile,
+            previousFlexBalance, authorizationHeader, correlationId,
+            emitAuditEvents: true, hoursReader, ct);
+        return outcome.Result;
     }
 
     // -------------------------------------------------------------------
@@ -919,11 +975,12 @@ public sealed class PeriodCalculationService
     ///
     /// <para>
     /// <strong>Byte-identical export by construction (QUAL-003 payroll-boundary invariant).</strong>
-    /// This method builds the plan via the SAME <see cref="BuildPlanForLegacyCallersAsync"/> and
-    /// re-enters the SAME sole logic entry point
-    /// (<see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, bool, CancellationToken)"/>)
-    /// as the planless <c>CalculateAsync</c> — which is literally
-    /// <c>CalculateWithOutcomeAsync(plan, …).Result</c>. So <c>this(…).Result</c> is bit-identical
+    /// This method builds the plan via the SAME planning (<see cref="BuildPlanWithHistoriesAsync"/>,
+    /// the body of <see cref="BuildPlanForLegacyCallersAsync"/>) and re-enters the SAME calculation
+    /// (<see cref="CalculatePlanAsync"/>, which the plan-first
+    /// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, bool, CancellationToken)"/>
+    /// also runs) as the planless <c>CalculateAsync</c> — which is literally
+    /// <c>CalculatePlanAsync(plan, …).Result</c>. So <c>this(…).Result</c> is bit-identical
     /// to <c>CalculateAsync(profile, …)</c> for the same inputs; the ONLY difference across two
     /// separate invocations is the freshly-minted <see cref="PlannedCalculation.ManifestId"/>, which
     /// was already non-deterministic per call before this method existed. The added value is the
@@ -965,18 +1022,19 @@ public sealed class PeriodCalculationService
         ArgumentNullException.ThrowIfNull(profile);
 
         // S145 TASK-14508 (R25): never silent, before any read.
-        _ = RequireHoursReader(nameof(CalculateWithOutcomeAsync));
+        var hoursReader = RequireHoursReader(nameof(CalculateWithOutcomeAsync));
 
         // Mirrors the planless CalculateAsync shim EXACTLY (build the plan via the same
-        // BuildPlanForLegacyCallersAsync), then returns the PeriodCalculationOutcome INSTEAD of its
-        // .Result — this shared plan-building is what makes the export output bit-identical.
-        var plan = await BuildPlanForLegacyCallersAsync(profile, periodStart, periodEnd, ct);
+        // BuildPlanWithHistoriesAsync, re-enter the same CalculatePlanAsync), then returns the
+        // PeriodCalculationOutcome INSTEAD of its .Result — this shared plan-building is what makes
+        // the export output bit-identical.
+        var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
 
-        // Named ct: so the plan-first overload's emitAuditEvents parameter keeps its default (true) —
-        // identical to how the plan-first CalculateAsync re-enters this method.
-        return await CalculateWithOutcomeAsync(
-            plan, profile,
-            previousFlexBalance, authorizationHeader, correlationId, ct: ct);
+        // emitAuditEvents: true — a forward calc, identical to the planless CalculateAsync.
+        return await CalculatePlanAsync(
+            plan, histories, profile,
+            previousFlexBalance, authorizationHeader, correlationId,
+            emitAuditEvents: true, hoursReader, ct);
     }
 
     // -------------------------------------------------------------------
@@ -1087,6 +1145,24 @@ public sealed class PeriodCalculationService
         DateOnly periodStart,
         DateOnly periodEnd,
         CancellationToken ct)
+        => (await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct)).Plan;
+
+    /// <summary>
+    /// The body of <see cref="BuildPlanForLegacyCallersAsync"/> (see its documentation for every
+    /// boundary source), returning ALSO the employee histories the planning read — S145 / TASK-14511.
+    /// The planless shims hand those histories to the calculation, whose per-plan lane builds its
+    /// timeline from the SAME read that fed the planner: the employment window that typed the
+    /// segments also gives the context days and the settlement cutoff (R41), and the widened profile
+    /// and agreement-code date reads (from the opening week's Monday) give the context pieces' edges.
+    /// The planner itself ignores every date on or before the period start
+    /// (<c>BoundaryDetector.IsInsidePeriod</c> keeps only <c>periodStart &lt; d &lt;= periodEnd</c>),
+    /// so the widened reads change no plan.
+    /// </summary>
+    private async Task<(PlannedCalculation Plan, PlanHistories Histories)> BuildPlanWithHistoriesAsync(
+        EmploymentProfile profile,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        CancellationToken ct)
     {
         // Extract OK transitions whose dates fall strictly inside (periodStart, periodEnd]
         // — the planner's BoundaryDetector expects "first day of the new segment" semantics.
@@ -1117,20 +1193,22 @@ public sealed class PeriodCalculationService
                     ct);
         }
 
+        // The employee histories — ONE read each, shared with the calculation's per-plan lane
+        // (S145 TASK-14511; see ReadPlanHistoriesAsync for the ranges and why the two date reads
+        // start at the opening week's Monday).
+        var histories = await ReadPlanHistoriesAsync(profile.EmployeeId, periodStart, periodEnd, ct);
+
         // Employment window(s) — ADR-040 D5/D7 (S137 TASK-13702). Read server-side inside
         // this host via IEmploymentWindowResolver (the DTO never carries the dates, D7). The
         // resolver's list is spells-proof: 0-or-1 entries today, a genuine list once re-hire
         // spells land — this loop is already list-shaped. An EMPTY list means "the window is
         // known and no employed day falls in the period" → the planner types every segment
         // NOT_EMPLOYED. null (resolver not wired) means "windowless" → every segment EMPLOYED.
-        IReadOnlyList<EmploymentWindow>? employmentWindows = null;
+        var employmentWindows = histories.EmploymentWindows;
         List<DateOnly>? employmentStartedDates = null;
         List<DateOnly>? employmentEndedDates = null;
-        if (_employmentWindowResolver is not null)
+        if (employmentWindows is not null)
         {
-            employmentWindows = await _employmentWindowResolver.GetWindowsAsync(
-                profile.EmployeeId, periodStart, periodEnd, ct);
-
             employmentStartedDates = new List<DateOnly>(employmentWindows.Count);
             employmentEndedDates = new List<DateOnly>(employmentWindows.Count);
             foreach (var window in employmentWindows)
@@ -1147,29 +1225,21 @@ public sealed class PeriodCalculationService
             }
         }
 
-        // employee_profiles effective_from dates STRICTLY inside (periodStart, periodEnd]
-        // — ADR-040 D5 activates the ADR-016 D5b-reserved EmployeeProfileChange cause. A
-        // row taking effect ON periodStart is not an interior boundary (the segment already
-        // starts there), hence afterExclusive = periodStart (documented on the repository).
-        IReadOnlyList<DateOnly>? employeeProfileEffectiveDates = null;
-        if (_employeeProfileRepo is not null)
-        {
-            employeeProfileEffectiveDates = await _employeeProfileRepo.GetEffectiveFromDatesAsync(
-                profile.EmployeeId, afterExclusive: periodStart, toInclusive: periodEnd, ct);
-        }
+        // employee_profiles effective_from dates — ADR-040 D5 activates the ADR-016 D5b-reserved
+        // EmployeeProfileChange cause. Since S145 TASK-14511 the read starts at the opening week's
+        // Monday (the per-plan lane needs the context days' changes); the planner still turns only
+        // the dates STRICTLY inside (periodStart, periodEnd] into boundaries: a row taking effect ON
+        // periodStart is not an interior boundary (the segment already starts there), and
+        // BoundaryDetector.IsInsidePeriod drops it and every earlier date. No second filter here.
+        var employeeProfileEffectiveDates = histories.EmployeeProfileEffectiveDates;
 
-        // user_agreement_codes effective_from dates STRICTLY inside (periodStart, periodEnd]
-        // — S144 (QUAL-150 groundwork) feeds the AgreementCodeChange cause. Same fencepost as the
-        // profile read above and for the same reason: a code taking effect ON periodStart is not
-        // an interior boundary (the segment already starts there), hence afterExclusive =
-        // periodStart. The read applies no effective_to filter and no exclusion (see its XML doc):
+        // user_agreement_codes effective_from dates — S144 (QUAL-150 groundwork) feeds the
+        // AgreementCodeChange cause. Widened exactly like the profile read above (S145 TASK-14511:
+        // this one read feeds the planner, the timeline's context pieces, TASK-14512's week check and
+        // A4), and planned exactly as before: only the dates inside (periodStart, periodEnd] become
+        // boundaries. The read applies no effective_to filter and no exclusion (see its XML doc):
         // over-detecting only refuses a month, under-detecting pays it under the wrong agreement.
-        IReadOnlyList<DateOnly>? agreementCodeEffectiveDates = null;
-        if (_userAgreementCodeRepo is not null)
-        {
-            agreementCodeEffectiveDates = await _userAgreementCodeRepo.GetEffectiveFromDatesAsync(
-                profile.EmployeeId, afterExclusive: periodStart, toInclusive: periodEnd, ct);
-        }
+        var agreementCodeEffectiveDates = histories.AgreementCodeEffectiveDates;
 
         var sources = new BoundarySources(
             OkTransitions: okTransitions,
@@ -1209,7 +1279,7 @@ public sealed class PeriodCalculationService
 
         // EmployeeId is now string end-to-end (ADR-016 D10 amendment 2026-05-01) — pass
         // profile.EmployeeId directly with no synthetic Guid derivation.
-        return PeriodPlanner.Plan(
+        var plan = PeriodPlanner.Plan(
             employeeId: profile.EmployeeId,
             periodStart: periodStart,
             periodEnd: periodEnd,
@@ -1222,6 +1292,8 @@ public sealed class PeriodCalculationService
             // ADR-040 D5: the SAME windows that fed the boundary dates above type the
             // segments (null → windowless → all EMPLOYED, byte-identical to pre-S137).
             employmentWindows: employmentWindows);
+
+        return (plan, histories);
     }
 
     // -------------------------------------------------------------------
@@ -1297,6 +1369,15 @@ public sealed class PeriodCalculationService
     /// calculation does (it re-enters the same entry point); TASK-14513 replaces that read with
     /// the by-id read of the recorded rows. A service built without an
     /// <see cref="IRecordedHoursReader"/> throws before the manifest load.
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>The timeline (S145 / TASK-14511) — an intermediate state.</strong> The per-plan lane's
+    /// pieces and settlement cutoff are likewise rebuilt from the LIVE histories (the employment
+    /// window, the dated profile and the change dates) when the plan-first entry point is re-entered
+    /// here. That is what TASK-14513 ends: it freezes the pieces and the cutoff into
+    /// <see cref="PlanInputs"/> and feeds them to replay (R41 — the cutoff is not recoverable from the
+    /// plan), so a replay never re-derives them.
     /// </para>
     /// </summary>
     public async Task<PeriodCalculationResult> ReplayAsync(
@@ -1801,60 +1882,498 @@ public sealed class PeriodCalculationService
         }).ToList();
 
     // -------------------------------------------------------------------
+    // The per-plan lane — S145 TASK-14511 (QUAL-186)
+    // -------------------------------------------------------------------
+
+    // The rules each lane evaluates. The per-plan lane's three come back from one timeline call;
+    // the per-segment lane makes the other calls (absence has its own endpoint and no rule id).
+    private const string NormRuleId = "NORM_CHECK_37H";
+    private const string OvertimeRuleId = "OVERTIME_CALC";
+    private const string FlexRuleId = "FLEX_BALANCE";
+    private const string SupplementRuleId = "SUPPLEMENT_CALC";
+    private const string OnCallRuleId = "ON_CALL_DUTY";
+
+    /// <summary>
+    /// What a calculation reads about its employee besides the hours, ONCE: the employment window(s)
+    /// (<c>null</c> = no window resolver wired, "windowless"; empty = no employed day in the period)
+    /// and the <c>employee_profiles</c> / <c>user_agreement_codes</c> effective-from dates from the
+    /// opening week's Monday to the period end (<c>null</c> = that repository is not wired). Planning
+    /// feeds them to the planner; the per-plan lane builds its timeline from the same values.
+    /// </summary>
+    private sealed record PlanHistories(
+        IReadOnlyList<EmploymentWindow>? EmploymentWindows,
+        IReadOnlyList<DateOnly>? EmployeeProfileEffectiveDates,
+        IReadOnlyList<DateOnly>? AgreementCodeEffectiveDates);
+
+    /// <summary>
+    /// Reads the <see cref="PlanHistories"/> for one calculation.
+    /// <list type="bullet">
+    /// <item><b>The employment window</b> — over exactly <c>[periodStart, periodEnd]</c>, server side
+    /// (ADR-040 D7), as before S145. The resolver hands back each overlapping window unclipped, so the
+    /// window covering the period's first day also says which context days of the opening week were
+    /// employed; a window that ended BEFORE the period is (rightly) not returned — its last week was
+    /// settled by its own month, on its own last day (R41).</item>
+    /// <item><b>The profile and agreement-code change dates</b> — widened (S145 TASK-14511) to
+    /// <c>[opening week's Monday, periodEnd]</c>: the per-plan lane needs the changes inside the
+    /// context days, and TASK-14512's week check needs an agreement change on the 1st or in the
+    /// context days. The planner turns only dates inside <c>(periodStart, periodEnd]</c> into
+    /// boundaries (<c>BoundaryDetector.IsInsidePeriod</c>), so the extra dates change no plan and are
+    /// not filtered twice.</item>
+    /// </list>
+    /// </summary>
+    private async Task<PlanHistories> ReadPlanHistoriesAsync(
+        string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct)
+    {
+        IReadOnlyList<EmploymentWindow>? windows = null;
+        if (_employmentWindowResolver is not null)
+        {
+            windows = await _employmentWindowResolver.GetWindowsAsync(employeeId, periodStart, periodEnd, ct);
+        }
+
+        // The repositories' reads are "effective_from > afterExclusive AND <= toInclusive", so the day
+        // before the opening Monday makes the read START at the Monday (inclusive).
+        var afterExclusive = WeeklyContext.WeekStart(periodStart).AddDays(-1);
+
+        IReadOnlyList<DateOnly>? profileDates = null;
+        if (_employeeProfileRepo is not null)
+        {
+            profileDates = await _employeeProfileRepo.GetEffectiveFromDatesAsync(
+                employeeId, afterExclusive: afterExclusive, toInclusive: periodEnd, ct);
+        }
+
+        IReadOnlyList<DateOnly>? agreementDates = null;
+        if (_userAgreementCodeRepo is not null)
+        {
+            agreementDates = await _userAgreementCodeRepo.GetEffectiveFromDatesAsync(
+                employeeId, afterExclusive: afterExclusive, toInclusive: periodEnd, ct);
+        }
+
+        return new PlanHistories(windows, profileDates, agreementDates);
+    }
+
+    /// <summary>
+    /// The timeline pieces for the <b>context days</b>: the days of the month's opening Monday–Sunday
+    /// week that fall before the period (owner ruling Q3 = F1 — this month settles that week, so its
+    /// earlier days count toward the week's overtime judgement; they never enter this month's norm
+    /// total, <c>NORMAL_HOURS</c> lines or flex, which the engine's core enforces, R6).
+    ///
+    /// <para>
+    /// <b>Which context days.</b> Only days in the SAME employment as the period's first day: the
+    /// first segment must be EMPLOYED, and the days run from the later of the opening Monday and the
+    /// covering window's start. A starter hired inside the month has no context days (their first
+    /// segment is NOT_EMPLOYED); one hired inside the opening week gets the days from the hire on.
+    /// Without a window resolver (windowless) an employee employed on the 1st is employed on every
+    /// context day. A month opening on a Monday has none.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Where a piece ends.</b> At every profile or agreement-code change inside the context days,
+    /// so each piece carries one fraction, agreement and position; each piece's profile is resolved
+    /// at its first day by the same dated resolution as a segment's (<see cref="ResolveProfileAtAsync"/>),
+    /// fail-closed on a missing employment record. A change ON the period's first day needs no
+    /// split here: the first segment starts there.
+    /// </para>
+    /// </summary>
+    private async Task<List<FrozenPiece>> BuildContextPiecesAsync(
+        PlannedCalculation plan, PlanHistories histories, EmploymentProfile callerProfile, CancellationToken ct)
+    {
+        var pieces = new List<FrozenPiece>();
+
+        var openingMonday = WeeklyContext.WeekStart(plan.PeriodStart);
+        if (openingMonday == plan.PeriodStart)
+            return pieces; // the month opens on a Monday: its opening week has no context days
+
+        // "Employed?" before "what profile?" (ADR-040 D10): not employed on the period's first day
+        // means the context days belong to no employment this month continues.
+        if (plan.Segments[0].EmploymentStatus != EmploymentWindowStatus.EMPLOYED)
+            return pieces;
+
+        var contextEnd = plan.PeriodStart.AddDays(-1);
+        var contextStart = openingMonday;
+        if (histories.EmploymentWindows is { } windows)
+        {
+            EmploymentWindow? covering = null;
+            foreach (var window in windows)
+            {
+                if (window.Overlaps(plan.PeriodStart, plan.PeriodStart))
+                {
+                    covering = window;
+                    break;
+                }
+            }
+
+            // ClipTo gives the employed days of [opening Monday, the day before the period], or null.
+            if (covering?.ClipTo(openingMonday, contextEnd)?.Start is not { } employedFrom)
+                return pieces;
+            contextStart = employedFrom;
+        }
+
+        // Piece edges: every change strictly after the first context day, up to the last; the
+        // period's first day closes the last context piece.
+        var edges = new SortedSet<DateOnly>();
+        foreach (var d in histories.EmployeeProfileEffectiveDates ?? Array.Empty<DateOnly>())
+        {
+            if (d > contextStart && d <= contextEnd)
+                edges.Add(d);
+        }
+        foreach (var d in histories.AgreementCodeEffectiveDates ?? Array.Empty<DateOnly>())
+        {
+            if (d > contextStart && d <= contextEnd)
+                edges.Add(d);
+        }
+        edges.Add(plan.PeriodStart);
+
+        var from = contextStart;
+        foreach (var edge in edges)
+        {
+            var piecesProfile = await ResolveProfileAtAsync(callerProfile, from, plan, ct);
+            pieces.Add(new FrozenPiece(
+                from, edge.AddDays(-1),
+                piecesProfile.PartTimeFraction, piecesProfile.AgreementCode, piecesProfile.Position));
+            from = edge;
+        }
+
+        return pieces;
+    }
+
+    /// <summary>
+    /// The employment profile in force on <paramref name="asOf"/> — for an EMPLOYED segment (asked at
+    /// its start) and for a context piece (asked at its first day). Moved out of the per-segment loop
+    /// in S145 / TASK-14511 so both uses share one resolution and one fail-closed path. One change was
+    /// made here (S145 ruling R-10): the TASK-1802 caller-position fallback was retired. A dated
+    /// <c>employee_profiles</c> row with no position means "no position" (the base agreement config)
+    /// and is never filled in from the request's profile — otherwise a context day before a promotion
+    /// would carry the new position into the timeline and the frozen record.
+    /// </summary>
+    private async Task<EmploymentProfile> ResolveProfileAtAsync(
+        EmploymentProfile callerProfile, DateOnly asOf, PlannedCalculation plan, CancellationToken ct)
+    {
+        // ADR-023 D1 cutover: resolve the profile from dated employee_profiles
+        // (via EmploymentProfileResolver) instead of copying caller-supplied profile.
+        // Legacy test-fixture path preserved when resolver is null (refinement
+        // cycle 2 Codex W absorption — S29 _localAgreementProfileRepo precedent).
+        // ADR-040 D7 (S137 Step-7a Codex cycle-2 WARNING, absorbed): the resolver is asked at
+        // the as-of day (the correct D10 as-of), but the fail-closed exception is anchored on
+        // plan.PeriodStart — CALLER INPUT. For a starter's first EMPLOYED segment, the as-of IS the
+        // hire date, and EmployeeProfileNotFoundException embeds its as-of date in the message,
+        // which reaches exception logs and could reach a detailed 500 body — an employment date
+        // must not leak through either. Diagnostics keep the employee id + the period.
+        //
+        // ── S141 / TASK-14114 — THE FAIL-CLOSED PATH IS NOW CAUGHT AND NAMED ────────────────
+        // WHY THIS CHANGED. Before S141 this branch could only be reached by a seeding or
+        // backfill defect, so an anonymous unhandled exception was an acceptable "should never
+        // happen". S141 lets HR date an employment change into the FUTURE, which makes "no
+        // employment record covers this date" a state the PRODUCT ITSELF can now produce — a
+        // record ended in September whose replacement does not start until November leaves the
+        // employee with no record describing them today. From then on every payroll calculation
+        // touching that hole would surface as an unnamed crash, and whoever read the log could
+        // not tell a broken server from an employee whose records have a gap. Failing closed
+        // was always right; failing closed ANONYMOUSLY is what was wrong.
+        //
+        // ONE CONDITION, ONE NAME — `employment_record_gap`, the same name ComplianceEndpoints
+        // uses for the same state (S141 / TASK-14105), so one grep finds every refusal caused
+        // by a record gap regardless of which read hit it. The resolver reports this one state
+        // two different ways: it RETURNS NULL when no employee_profiles row covers the as-of
+        // date, and it THROWS EmployeeProfileNotFoundException when a profile row covers it but
+        // no user_agreement_codes row does (its documented data-integrity fail-loud). Both mean
+        // "this employee has no complete employment record on this date", so both land on the
+        // one named condition instead of escaping two different ways.
+        //
+        // STILL FAIL-CLOSED — DELIBERATELY UNCHANGED. No fallback profile is substituted, the
+        // day is NOT skipped, and the calculation does not continue on a guess: a payroll
+        // figure derived from a guessed agreement code or part-time fraction puts wrong money
+        // on a real wage line, which is worse than producing no figure at all. The same
+        // EmployeeProfileNotFoundException, anchored on the same caller-supplied
+        // plan.PeriodStart, is still thrown and still reaches the caller. (S145 TASK-14511: a
+        // context day of the opening week is evaluated too, so a gap there refuses the month
+        // the same way — its hours would otherwise be judged under a guessed contract.)
+        //
+        // ADR-040 D7 — THE CAUGHT EXCEPTION IS NOT ATTACHED TO THE LOG, AND IS NOT WRAPPED AS
+        // AN INNER EXCEPTION. The resolver's own exception carries asOfDate in its Message, and
+        // per the paragraph above that date IS the hire date for a starter's first EMPLOYED
+        // segment. Passing it as ILogger's exception argument (or as an inner exception a
+        // handler later renders) would write that employment date straight into the very logs
+        // this site exists to keep it out of. The diagnostics below therefore carry only the
+        // employee id, the replay-stable manifest id, and the CALLER'S OWN period — nothing
+        // date-shaped that describes the employment itself. The log line replaces the discarded
+        // exception as the diagnosis.
+        EmploymentProfile resolved;
+        if (_profileResolver is null)
+        {
+            resolved = callerProfile;
+        }
+        else
+        {
+            EmploymentProfile? resolvedProfile = null;
+            // WHICH effective-dated record is missing, named with the table an HR administrator's
+            // repair actually touches. The initial value covers the NULL return (no
+            // employee_profiles row spans the as-of date); the catch below narrows it to the
+            // agreement-code hole. Neither value is date-shaped.
+            var missingRecord = "employee_profiles";
+            try
+            {
+                resolvedProfile = await _profileResolver.GetByEmployeeIdAtAsync(
+                    callerProfile.EmployeeId, asOf, ct);
+            }
+            catch (EmployeeProfileNotFoundException)
+            {
+                missingRecord = "user_agreement_codes";
+            }
+
+            if (resolvedProfile is null)
+            {
+                _logger.LogError(
+                    "employment_record_gap: no effective-dated employment record ({MissingRecord}) covers " +
+                    "this calculation segment for employee {EmployeeId} manifest {ManifestId} period " +
+                    "{PeriodStart}-{PeriodEnd}. The calculation is REFUSED and no payroll figure is " +
+                    "produced for this period — a figure derived from a guessed employment record would " +
+                    "be worse than none. This is a data gap, not a server fault: the employee should " +
+                    "appear on the HR follow-up 'cannot register' list (HRP-015), which names the missing " +
+                    "record and whether a scheduled one will close the gap, and an HR administrator " +
+                    "repairs it there.",
+                    missingRecord, callerProfile.EmployeeId, plan.ManifestId, plan.PeriodStart, plan.PeriodEnd);
+
+                throw new EmployeeProfileNotFoundException(callerProfile.EmployeeId, plan.PeriodStart);
+            }
+
+            resolved = resolvedProfile;
+        }
+
+        // OkVersion server-resolution overlay (ADR-003: the OK version is a pure function of the
+        // date). S137 (TASK-13703, QUAL-147) made the resolver return the DATE-resolved OK version
+        // for the as-of date, so on the DI-wired path this overlay is a no-op — it is KEPT as
+        // defense-in-depth for the nullable-resolver fixture path (the caller-supplied profile,
+        // whose OkVersion may be stale for a straddling period) and as a guard should the resolver
+        // ever regress to a live read.
+        var okVersion = OkVersionResolver.ResolveVersion(asOf);
+        if (!string.Equals(resolved.OkVersion, okVersion, StringComparison.Ordinal))
+            resolved = resolved with { OkVersion = okVersion };
+
+        // S145 R-10: no position fallback. A dated row's null Position means "no position" (the base
+        // agreement config — ADR-040 D4) and is never substituted from the request's profile. The
+        // resolver-free path above keeps the caller's WHOLE profile by construction, position included.
+        return resolved;
+    }
+
+    /// <summary>
+    /// The settlement cutoff (ruling R41): the <c>End</c> of the employment window — the inclusive last
+    /// employed day — when it is on or before <paramref name="periodEnd"/>, otherwise <c>null</c>. It
+    /// comes from the SAME window read that typed the segments. It is deliberately NOT "the last
+    /// EMPLOYED day of the period", which is the period end for a stayer and for a leaver on the
+    /// month's last day alike: only the window tells them apart, and F1 settles their closing week in
+    /// different months. With several windows (re-hire spells; 0-or-1 today) the latest-ending one
+    /// decides. No window information (windowless, or an empty list) gives <c>null</c>.
+    /// </summary>
+    private static DateOnly? SettlementCutoffFrom(IReadOnlyList<EmploymentWindow>? windows, DateOnly periodEnd)
+    {
+        if (windows is null || windows.Count == 0)
+            return null;
+
+        var latest = windows[0];
+        foreach (var window in windows)
+        {
+            if ((window.End ?? DateOnly.MaxValue) > (latest.End ?? DateOnly.MaxValue))
+                latest = window;
+        }
+
+        return latest.End is { } end && end <= periodEnd ? end : null;
+    }
+
+    /// <summary>True when one of the timeline's <paramref name="pieces"/> covers <paramref name="day"/>.</summary>
+    private static bool IsCovered(IReadOnlyList<FrozenPiece> pieces, DateOnly day)
+    {
+        foreach (var piece in pieces)
+        {
+            if (day >= piece.From && day <= piece.To)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// The per-plan rows assigned to one EMPLOYED segment (<c>null</c> = that row is absent, because the
+    /// timeline call failed).
+    /// </summary>
+    private sealed record PerPlanRows(CalculationResult? Norm, CalculationResult? Overtime, CalculationResult? Flex)
+    {
+        public static readonly PerPlanRows None = new(null, null, null);
+    }
+
+    /// <summary>
+    /// Joins the timeline's three results to the plan's EMPLOYED segments.
+    ///
+    /// <para>
+    /// <b>One EMPLOYED segment</b> — every month the live rule set lets through (R1: a month with two
+    /// or more EMPLOYED segments is still refused at planning): the segment receives the three rows
+    /// whole, so <c>MergePerSegmentRuleResults</c> sees exactly one result per rule and every line is
+    /// mapped under that segment.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Several EMPLOYED segments</b> — reachable only under a rule set that does not refuse the split
+    /// (test fixtures; Stage B's merger is what opens it for real): each EMPLOYED segment receives one
+    /// row per rule holding the lines dated inside it, so every line is still mapped under the segment
+    /// whose OK version and wage-type key govern its date, and the merge strategies see the same
+    /// "one row per EMPLOYED segment" shape as before (a <c>RejectIfMultipleSegments</c> rule is still
+    /// rejected by the merger). A line dated in no EMPLOYED segment goes to the last EMPLOYED segment
+    /// starting on or before its date (else the first). The period-level figures (norm totals,
+    /// <c>NormPeriodWeeks</c>) are carried on the LAST EMPLOYED segment's row only, so no merge can count
+    /// them twice.
+    /// </para>
+    /// </summary>
+    private static Dictionary<int, PerPlanRows> DistributePerPlanResults(
+        TimelineEvaluationResponse? timeline, PlannedCalculation plan, IReadOnlyList<int> employedIndices)
+    {
+        var rows = new Dictionary<int, PerPlanRows>(employedIndices.Count);
+        if (timeline is null || employedIndices.Count == 0)
+        {
+            foreach (var s in employedIndices)
+                rows[s] = PerPlanRows.None;
+            return rows;
+        }
+
+        var norm = SplitBySegment(RowOf(timeline, NormRuleId), plan, employedIndices);
+        var overtime = SplitBySegment(RowOf(timeline, OvertimeRuleId), plan, employedIndices);
+        var flex = SplitBySegment(RowOf(timeline, FlexRuleId), plan, employedIndices);
+
+        foreach (var s in employedIndices)
+            rows[s] = new PerPlanRows(norm[s], overtime[s], flex[s]);
+        return rows;
+
+        static CalculationResult RowOf(TimelineEvaluationResponse response, string ruleId) =>
+            response.Results.Single(r => string.Equals(r.RuleId, ruleId, StringComparison.Ordinal));
+    }
+
+    private static Dictionary<int, CalculationResult> SplitBySegment(
+        CalculationResult row, PlannedCalculation plan, IReadOnlyList<int> employedIndices)
+    {
+        var linesBySegment = new Dictionary<int, List<CalculationLineItem>>(employedIndices.Count);
+        foreach (var s in employedIndices)
+            linesBySegment[s] = new List<CalculationLineItem>();
+
+        foreach (var line in row.LineItems)
+            linesBySegment[SegmentIndexForLine(plan, employedIndices, line.Date)].Add(line);
+
+        var last = employedIndices[^1];
+        var split = new Dictionary<int, CalculationResult>(employedIndices.Count);
+        foreach (var s in employedIndices)
+            split[s] = CopyWithLines(row, linesBySegment[s], carryPeriodFigures: s == last);
+        return split;
+    }
+
+    /// <summary>
+    /// The EMPLOYED segment a per-plan line belongs to: the one containing its date; else the last
+    /// EMPLOYED segment starting on or before it; else the first EMPLOYED segment.
+    /// <paramref name="employedIndices"/> is in segment (calendar) order.
+    /// </summary>
+    private static int SegmentIndexForLine(PlannedCalculation plan, IReadOnlyList<int> employedIndices, DateOnly date)
+    {
+        foreach (var s in employedIndices)
+        {
+            var segment = plan.Segments[s];
+            if (date >= segment.StartDate && date <= segment.EndDate)
+                return s;
+        }
+
+        var chosen = employedIndices[0];
+        foreach (var s in employedIndices)
+        {
+            if (plan.Segments[s].StartDate <= date)
+                chosen = s;
+        }
+        return chosen;
+    }
+
+    private static CalculationResult CopyWithLines(
+        CalculationResult row, List<CalculationLineItem> lines, bool carryPeriodFigures) =>
+        new()
+        {
+            RuleId = row.RuleId,
+            EmployeeId = row.EmployeeId,
+            Success = row.Success,
+            LineItems = lines,
+            ErrorMessage = row.ErrorMessage,
+            NormPeriodWeeks = carryPeriodFigures ? row.NormPeriodWeeks : null,
+            NormHoursTotal = carryPeriodFigures ? row.NormHoursTotal : null,
+            ActualHoursTotal = carryPeriodFigures ? row.ActualHoursTotal : null,
+            Deviation = carryPeriodFigures ? row.Deviation : null,
+            NormFulfilled = carryPeriodFigures ? row.NormFulfilled : null,
+            ManifestId = row.ManifestId,
+        };
+
+    /// <summary>
+    /// One EMPLOYED segment's result list: the per-plan rows assigned to it and its own per-segment
+    /// results, in the order the single per-segment evaluation produced before S145 — norm,
+    /// supplement, overtime, on-call, absence, flex — so the export lines of a month keep their order.
+    /// A row whose call failed is simply absent (never synthesized).
+    /// </summary>
+    private static List<CalculationResult> AssembleSegmentResults(PerPlanRows perPlan, SegmentLaneResults lane)
+    {
+        var results = new List<CalculationResult>(6);
+        AddIfPresent(perPlan.Norm);
+        AddIfPresent(lane.Supplement);
+        AddIfPresent(perPlan.Overtime);
+        AddIfPresent(lane.OnCall);
+        AddIfPresent(lane.Absence);
+        AddIfPresent(perPlan.Flex);
+        return results;
+
+        void AddIfPresent(CalculationResult? result)
+        {
+            if (result is not null)
+                results.Add(result);
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Per-segment helpers
     // -------------------------------------------------------------------
 
-    private async Task<(List<CalculationResult> Results, int FailureCount, int RulesAttempted)> EvaluateSegmentAsync(
+    /// <summary>
+    /// What the per-segment lane got back for one EMPLOYED segment: the supplement, on-call and
+    /// absence results (<c>null</c> where that call failed — a bounded diagnostic is logged and the
+    /// calculation is refused, S145 ruling R-6), how many of its calls failed and how many it made.
+    /// </summary>
+    private sealed record SegmentLaneResults(
+        CalculationResult? Supplement,
+        CalculationResult? OnCall,
+        CalculationResult? Absence,
+        int Failures,
+        int Attempted);
+
+    /// <summary>
+    /// The per-segment lane for one EMPLOYED segment: the rules that are judged entry by entry or
+    /// day by day, and so stay per segment — supplement and on-call (<c>/api/rules/evaluate</c>) and
+    /// absence (<c>/api/rules/evaluate-absence</c>), run in parallel. Since S145 / TASK-14511 the
+    /// norm check, overtime / merarbejde and flex are NOT evaluated here: the per-plan lane evaluates
+    /// them once for the whole plan, week by week, and there is no per-segment flex carry any more.
+    /// </summary>
+    private async Task<SegmentLaneResults> EvaluateSegmentAsync(
         HttpClient client,
         EmploymentProfile segmentProfile,
         IReadOnlyList<TimeEntry> segmentEntries,
         IReadOnlyList<AbsenceEntry> segmentAbsences,
         DateOnly segmentStart,
         DateOnly segmentEnd,
-        decimal flexBalanceCarry,
         CancellationToken ct)
     {
-        var results = new List<CalculationResult>();
-        var failureCount = 0;
+        var supplementTask = CallTimeRuleAsync(
+            client, SupplementRuleId, segmentProfile, segmentEntries, segmentStart, segmentEnd, ct);
+        var onCallTask = CallTimeRuleAsync(
+            client, OnCallRuleId, segmentProfile, segmentEntries, segmentStart, segmentEnd, ct);
+        var absenceTask = CallAbsenceRuleAsync(
+            client, segmentProfile, segmentAbsences, segmentStart, segmentEnd, ct);
 
-        // Parallelize independent rules: 4 time rules + absence (FlexBalanceRule has carry-state
-        // and runs sequentially after the others).
-        var timeRuleIds = new[] { "NORM_CHECK_37H", "SUPPLEMENT_CALC", "OVERTIME_CALC", "ON_CALL_DUTY" };
-        var timeRuleTasks = timeRuleIds
-            .Select(ruleId => CallTimeRuleAsync(client, ruleId, segmentProfile, segmentEntries, segmentStart, segmentEnd, ct))
-            .ToList();
-        var absenceTask = CallAbsenceRuleAsync(client, segmentProfile, segmentAbsences, segmentStart, segmentEnd, ct);
+        await Task.WhenAll(supplementTask, onCallTask, absenceTask);
 
-        var allTasks = timeRuleTasks.Append(absenceTask).ToArray();
-        await Task.WhenAll(allTasks);
+        var supplement = await supplementTask;
+        var onCall = await onCallTask;
+        var absence = await absenceTask;
 
-        foreach (var task in timeRuleTasks)
-        {
-            var result = await task;
-            if (result is not null)
-                results.Add(result);
-            else
-                failureCount++;
-        }
+        var failures = (supplement is null ? 1 : 0) + (onCall is null ? 1 : 0) + (absence is null ? 1 : 0);
 
-        var absenceResult = await absenceTask;
-        if (absenceResult is not null)
-            results.Add(absenceResult);
-        else
-            failureCount++;
-
-        // FlexBalanceRule — sequential; uses the carried balance.
-        var flexResult = await CallFlexRuleAsync(
-            client, segmentProfile, segmentEntries, segmentAbsences,
-            segmentStart, segmentEnd, flexBalanceCarry, ct);
-        if (flexResult is not null)
-            results.Add(flexResult);
-        else
-            failureCount++;
-
-        // RulesAttempted: 4 time rules + absence + flex == 6 (computed, not magic).
-        var rulesAttempted = timeRuleIds.Length + 1 /* absence */ + 1 /* flex */;
-        return (results, failureCount, rulesAttempted);
+        // Three calls: supplement + on-call + absence (counted, not a magic constant elsewhere).
+        return new SegmentLaneResults(supplement, onCall, absence, failures, Attempted: 3);
     }
 
     private async Task<List<PayrollExportLine>> MapSegmentToExportLinesAsync(
@@ -1977,15 +2496,6 @@ public sealed class PeriodCalculationService
             NormFulfilled = result.NormFulfilled,
             ManifestId = manifestId,
         };
-
-    private static decimal? ExtractFlexDelta(IReadOnlyList<CalculationResult> ruleResults)
-    {
-        var flexResult = ruleResults.FirstOrDefault(r =>
-            r.RuleId.Equals("FLEX_BALANCE", StringComparison.OrdinalIgnoreCase));
-        if (flexResult is null || !flexResult.Success)
-            return null;
-        return flexResult.LineItems.Sum(li => li.Hours);
-    }
 
     /// <summary>
     /// Re-asserts the geometric invariants from <see cref="PlannedCalculation"/>'s ctor at
@@ -2119,49 +2629,189 @@ public sealed class PeriodCalculationService
         }
     }
 
-    private async Task<CalculationResult?> CallFlexRuleAsync(
+    /// <summary>
+    /// S145 / TASK-14511 — the per-plan lane's one rule-engine call:
+    /// <c>POST /api/rules/evaluate-timeline</c>, which evaluates overtime / merarbejde, the norm check
+    /// and flex for the whole plan, week by week. Returns the engine's response, or <c>null</c> when the
+    /// call failed — the same failure contract as the per-segment calls: never silent (a bounded
+    /// diagnostic is logged and the calculation is refused, S145 ruling R-6), and never a guess (no
+    /// result is synthesized for the three rules).
+    ///
+    /// <para>
+    /// <b>The endpoint's 400 has its own shape.</b> A rejected timeline answers 400 with an anonymous
+    /// <c>{ success: false, error: "&lt;fixed sentence&gt;" }</c> body — NOT the
+    /// <see cref="CalculationResult"/> / <c>ErrorMessage</c> shape the other rule endpoints use — so it
+    /// is never deserialized as a result. The engine guarantees the sentence is fixed and value-free (no
+    /// employee id, dates or hours: SEC-039), so it is logged, bounded in length, to name WHY the input
+    /// was refused. Any other non-success status logs the status only: those bodies can echo the
+    /// request (SEC-039 / QUAL-061), so they are never read.
+    /// </para>
+    ///
+    /// <para>
+    /// A 2xx answer is accepted only when it is complete AND successful: exactly the three rows
+    /// <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and <c>FLEX_BALANCE</c>, each with
+    /// <c>Success == true</c>; a flex block with <c>Success == true</c>; at least one config fingerprint;
+    /// and a non-empty evaluation-model marker (TASK-14513 records the last two for replay). Anything
+    /// else is a failed call, not a partial result (<see cref="TimelineReplyDefect"/>).
+    /// </para>
+    /// </summary>
+    private async Task<TimelineEvaluationResponse?> CallTimelineAsync(
         HttpClient client,
-        EmploymentProfile profile,
-        IReadOnlyList<TimeEntry> entries,
-        IReadOnlyList<AbsenceEntry> absences,
+        string employeeId,
         DateOnly periodStart,
         DateOnly periodEnd,
-        decimal previousBalance,
+        DateOnly? settlementCutoff,
+        IReadOnlyList<FrozenPiece> pieces,
+        IReadOnlyList<TimeEntry> entries,
+        IReadOnlyList<AbsenceEntry> absences,
+        decimal previousFlexBalance,
         CancellationToken ct)
     {
         try
         {
+            // The body of EvaluateTimelineRequest (Rule Engine contract, TASK-14505). Each piece
+            // serializes as { from, to, partTimeFraction, agreementCode, position }; the OK version is
+            // not sent — the engine derives it from the dates and splits a piece at 1 April itself.
             var payload = new
             {
-                profile,
-                entries,
-                absences,
+                employeeId,
                 periodStart,
                 periodEnd,
-                previousBalance
+                settlementCutoff,
+                pieces,
+                entries,
+                absences,
+                previousFlexBalance,
             };
 
             var response = await client.PostAsJsonAsync(
-                $"{_ruleEngineUrl}/api/rules/evaluate-flex", payload, JsonOptions, ct);
+                $"{_ruleEngineUrl}/api/rules/evaluate-timeline", payload, JsonOptions, ct);
 
             if (!response.IsSuccessStatusCode)
             {
-                // SEC-039 / QUAL-061: do not log the response body — it echoes confidential
-                // employment data (see CallTimeRuleAsync). Bounded diagnostic only.
-                _logger.LogWarning(
-                    "Rule engine returned {StatusCode} for flex evaluation (employee {EmployeeId})",
-                    (int)response.StatusCode, profile.EmployeeId);
+                if (response.StatusCode == System.Net.HttpStatusCode.BadRequest)
+                {
+                    var reason = await ReadTimelineRejectionAsync(response, ct);
+                    _logger.LogWarning(
+                        "Rule engine rejected the timeline (400) for employee {EmployeeId}: {Reason}",
+                        employeeId, reason);
+                }
+                else
+                {
+                    // SEC-039 / QUAL-061: do not log the response body — it can echo confidential
+                    // employment data (see CallTimeRuleAsync). Bounded diagnostic only.
+                    _logger.LogWarning(
+                        "Rule engine returned {StatusCode} for the timeline evaluation (employee {EmployeeId})",
+                        (int)response.StatusCode, employeeId);
+                }
                 return null;
             }
 
             var json = await response.Content.ReadAsStringAsync(ct);
-            return JsonSerializer.Deserialize<CalculationResult>(json, JsonOptions);
+            var timeline = JsonSerializer.Deserialize<TimelineEvaluationResponse>(json, JsonOptions);
+            if (TimelineReplyDefect(timeline) is { } defect)
+            {
+                // The defect is a fixed phrase naming rule ids only — never anything from the body. That holds
+                // because TimelineReplyDefect checks the rule-id set before it names a failed row: the
+                // ordering is load-bearing (SEC-039; S145 TASK-14511 Step 5a cycle 2, Fable NOTE 1).
+                _logger.LogWarning(
+                    "Rule engine answered the timeline evaluation for employee {EmployeeId} with an unusable " +
+                    "response ({Defect}); the call is treated as failed",
+                    employeeId, defect);
+                return null;
+            }
+
+            return timeline;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to call rule engine for flex evaluation");
+            _logger.LogError(ex, "Failed to call rule engine for the timeline evaluation (employee {EmployeeId})", employeeId);
             return null;
         }
+    }
+
+    /// <summary>
+    /// The fixed sentence of the timeline endpoint's 400 body (<c>{ success: false, error }</c>),
+    /// bounded to 200 characters, or a placeholder when the body does not have that shape. Nothing
+    /// else of the body is ever returned.
+    /// </summary>
+    private static async Task<string> ReadTimelineRejectionAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        const int maxLength = 200;
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("error", out var error)
+                && error.ValueKind == JsonValueKind.String)
+            {
+                var sentence = error.GetString() ?? string.Empty;
+                return sentence.Length <= maxLength ? sentence : sentence[..maxLength];
+            }
+        }
+        catch (JsonException)
+        {
+            // Not the documented shape: fall through to the placeholder; the body is not logged.
+        }
+
+        return "(the response named no reason)";
+    }
+
+    /// <summary>
+    /// Why a 2xx timeline answer cannot be used, or <c>null</c> when it can. Usable means complete AND
+    /// successful — what the per-plan lane and TASK-14513 rely on:
+    /// <list type="bullet">
+    /// <item>exactly one row each for <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and
+    /// <c>FLEX_BALANCE</c> (and nothing else), each with a line-item list and <c>Success == true</c>
+    /// (a failed row is a failed evaluation, not a payroll figure — Codex WARNING 2, R-6);</item>
+    /// <item>a flex block with <c>Success == true</c>;</item>
+    /// <item>at least one config fingerprint, none blank (an answer without one cannot be replayed,
+    /// TASK-14513);</item>
+    /// <item>a non-empty evaluation-model marker.</item>
+    /// </list>
+    /// The returned phrase is fixed text naming rule ids only, so it is safe to log; nothing from the
+    /// response body is ever echoed (SEC-039).
+    /// </summary>
+    private static string? TimelineReplyDefect(TimelineEvaluationResponse? timeline)
+    {
+        if (timeline?.Results is null || timeline.Results.Count != 3)
+            return $"incomplete: it must carry exactly the {OvertimeRuleId}, {NormRuleId} and {FlexRuleId} rows";
+
+        foreach (var row in timeline.Results)
+        {
+            if (row?.LineItems is null)
+                return "incomplete: a result row without a line-item list";
+        }
+
+        foreach (var ruleId in new[] { OvertimeRuleId, NormRuleId, FlexRuleId })
+        {
+            if (timeline.Results.Count(r => string.Equals(r.RuleId, ruleId, StringComparison.Ordinal)) != 1)
+                return $"incomplete: it must carry exactly the {OvertimeRuleId}, {NormRuleId} and {FlexRuleId} rows";
+        }
+
+        foreach (var row in timeline.Results)
+        {
+            if (!row.Success)
+                return $"failed result row {row.RuleId}";
+        }
+
+        if (timeline.Flex is null)
+            return "incomplete: no flex block";
+        if (!timeline.Flex.Success)
+            return "failed flex block";
+
+        if (timeline.ConfigFingerprints is null
+            || timeline.ConfigFingerprints.Count == 0
+            || timeline.ConfigFingerprints.Any(string.IsNullOrWhiteSpace))
+        {
+            return "no config fingerprint";
+        }
+
+        if (string.IsNullOrWhiteSpace(timeline.EvaluationModel))
+            return "no evaluation-model marker";
+
+        return null;
     }
 }
 

@@ -43,8 +43,8 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// <para>
 /// Deliberately NOT asserted: any overtime or hour totals (they change when TASK-14511 lands). Only what is
 /// stable across A.2 and A.3 is pinned: no refusal, no entry past the month end, the read starts EXACTLY
-/// on the day before the opening Monday, and the halves are 1.00 h (30 Sep) and 2.00 h (1 Oct), each once per
-/// request, adding to the registered 3.00 h. The Step 5a fix-up added the exact-window theory and the Sunday
+/// on the day before the opening Monday, and the halves are 1.00 h (30 Sep) and 2.00 h (1 Oct), each once per per-segment
+/// request (S145 F1: the timeline request also carries the previous month's half as a context entry), adding to the registered 3.00 h. The Step 5a fix-up added the exact-window theory and the Sunday
 /// month-end fact (31 Jan 2027), where the extra read day is the only thing that keeps the hours.
 /// </para>
 /// </summary>
@@ -65,7 +65,9 @@ public sealed class MonthEndCrossingTests
         // September: 1. completes (no throw); 2. nothing after 30 Sep; 3. 1.00 h on 30 Sep, once per request.
         var september = await RunMonthAsync(Sep01, Sep30, NightShiftRow(Sep30));
         Assert.True(september.Outcome.Result.Success, september.Outcome.Result.ErrorMessage);
-        var septHours = AssertShiftHalfInEveryRequest(september.Engine, Sep30, expectedHours: 1.00m, nothingAfter: Sep30);
+        var septHours = AssertShiftHalfInEveryRequest(
+            september.Engine, Sep30, expectedHours: 1.00m, nothingAfter: Sep30,
+            monthStart: Sep01, openingMonday: new DateOnly(2026, 8, 31)); // 1 Sep 2026 is a Tuesday: the week reaches back to Mon 31 Aug, but no shift row lies there
 
         // October
         var october = await RunMonthAsync(Oct01, Oct31, NightShiftRow(Sep30));
@@ -76,7 +78,11 @@ public sealed class MonthEndCrossingTests
         Assert.Equal(new DateOnly(2026, 9, 27), from);
 
         // 4. October sends the after-midnight half: one entry dated 1 Oct, 2.00 h (no Distinct()).
-        var octHours = AssertShiftHalfInEveryRequest(october.Engine, Oct01, expectedHours: 2.00m, nothingAfter: Oct31);
+        // S145 F1: the timeline ALSO carries 30 Sep's 1.00 h as a context entry (the week of Mon 28 Sep to Sun 4 Oct
+        // is October's); the per-segment requests carry 1 Oct's 2.00 h only.
+        var octHours = AssertShiftHalfInEveryRequest(
+            october.Engine, Oct01, expectedHours: 2.00m, nothingAfter: Oct31,
+            monthStart: Oct01, openingMonday: new DateOnly(2026, 9, 28), contextHalf: (Sep30, 1.00m));
 
         // Conservation: the two halves add back to the 3.00 h that was registered.
         Assert.Equal(3.00m, septHours + octHours);
@@ -116,7 +122,9 @@ public sealed class MonthEndCrossingTests
         // January completes; nothing dated after 31 Jan; the pre-midnight half is 1.00 h on 31 Jan, once per request.
         var january = await RunMonthAsync(new DateOnly(2027, 1, 1), jan31, NightShiftRow(jan31));
         Assert.True(january.Outcome.Result.Success, january.Outcome.Result.ErrorMessage);
-        var janHours = AssertShiftHalfInEveryRequest(january.Engine, jan31, expectedHours: 1.00m, nothingAfter: jan31);
+        var janHours = AssertShiftHalfInEveryRequest(
+            january.Engine, jan31, expectedHours: 1.00m, nothingAfter: jan31,
+            monthStart: new DateOnly(2027, 1, 1), openingMonday: new DateOnly(2026, 12, 28)); // its own opening-week context days carry no shift row
 
         // February read starts exactly on Sunday 31 Jan: the extra day is the ONLY thing that keeps
         // these hours, since a read from 1 Feb would never see the row.
@@ -125,7 +133,12 @@ public sealed class MonthEndCrossingTests
         Assert.Equal(jan31, Assert.Single(february.Reader.FromInclusiveCalls));
 
         // February sends exactly one entry dated Mon 1 Feb, 2.00 h.
-        var febHours = AssertShiftHalfInEveryRequest(february.Engine, feb01, expectedHours: 2.00m, nothingAfter: new DateOnly(2027, 2, 28));
+        // S145 F1: 1 Feb is a Monday, so there are no context days: every request, the timeline included,
+        // carries exactly the one 1 Feb entry. 31 Jan is READ (the window starts the day before) but sent nowhere:
+        // no piece covers it, January settles it.
+        var febHours = AssertShiftHalfInEveryRequest(
+            february.Engine, feb01, expectedHours: 2.00m, nothingAfter: new DateOnly(2027, 2, 28),
+            monthStart: feb01, openingMonday: feb01);
         Assert.Equal(3.00m, janHours + febHours);
     }
 
@@ -147,27 +160,68 @@ public sealed class MonthEndCrossingTests
     }
 
     /// <summary>
-    /// Shape found: PCS sends the segment entries to every engine call that carries entries — the four time
-    /// rules and the flex call, five requests per segment — so the half appears once PER request, never twice
-    /// within one. Asserted per request, without Distinct(): at least one request carries entries, and EVERY
-    /// such request carries EXACTLY ONE entry, the half dated the given date with the expected hours. In
-    /// these one-row scenarios that pins both leak directions: the other month's half can neither leak in
-    /// after the month end nor before the month start (a double-paid hour). Returns the observed hours, so
-    /// the conservation sum checks observed values (S145 TASK-14508 Step 5a cycle 2, WARNING 1, NOTEs 1-2).
+    /// Shape found (S145 F1: two kinds of request). PCS sends the month's entries to the per-segment
+    /// <c>/api/rules/evaluate</c> calls (supplement, on-call) and, since the week-by-week lane, ONE
+    /// <c>/api/rules/evaluate-timeline</c> call per month. Asserted per request, without Distinct():
+    /// <list type="bullet">
+    ///   <item><b>Per-segment requests</b> (at least one): EXACTLY ONE entry, the in-month half, dated
+    ///     <paramref name="date"/> with <paramref name="expectedHours"/>, never after
+    ///     <paramref name="nothingAfter"/>.</item>
+    ///   <item><b>The timeline request</b> (exactly one): the in-month half, once; and, ONLY when the
+    ///     month's opening week reaches back into the previous month (<paramref name="contextHalf"/> is
+    ///     not null), exactly one context entry for the previous month's half, dated on or after the
+    ///     opening Monday and before the 1st; with no context half, no entry outside the month at all.
+    ///     No entry after the month end, none before the opening Monday. (F1, ruling Q3: the week
+    ///     holding a month's Sunday is that month's, so its days before the 1st are sent as context.)</item>
+    /// </list>
+    /// The previous month's half is SENT to the month as a context entry by design (the week-by-week
+    /// lane needs the opening week's hours); the engine itself keeps it out of the month's norm lines
+    /// (ruling R6). The PCS-level pin is therefore: the only entry dated before the 1st is the context
+    /// half, and it appears in no per-segment request.
+    /// Returns the observed in-month hours (taken from the per-segment requests and required to equal the
+    /// timeline's), so the conservation sum checks observed values and counts the context entry once, in
+    /// the month that owns it (S145 TASK-14508 Step 5a cycle 2, WARNING 1, NOTEs 1-2).
     /// </summary>
     private static decimal AssertShiftHalfInEveryRequest(
-        CapturingEngine engine, DateOnly date, decimal expectedHours, DateOnly nothingAfter)
+        CapturingEngine engine, DateOnly date, decimal expectedHours, DateOnly nothingAfter,
+        DateOnly monthStart, DateOnly openingMonday, (DateOnly Date, decimal Hours)? contextHalf = null)
     {
-        var requests = engine.RequestsWithEntries;
-        Assert.NotEmpty(requests);
+        // Per-segment requests: exactly the in-month half.
+        var perSegment = engine.PerSegmentRequestsWithEntries;
+        Assert.NotEmpty(perSegment);
         decimal observed = 0m;
-        foreach (var request in requests)
+        foreach (var request in perSegment)
         {
             var half = Assert.Single(request);
             Assert.Equal(date, half.Date);
             Assert.True(half.Date <= nothingAfter, $"The half is dated {half.Date:yyyy-MM-dd}, after {nothingAfter:yyyy-MM-dd}.");
             Assert.Equal(expectedHours, half.Hours);
             observed = half.Hours;
+        }
+
+        // The timeline request: the in-month half + (only if the opening week reaches back) one context half.
+        var timeline = Assert.Single(engine.TimelineRequests);
+        Assert.All(timeline, e =>
+        {
+            Assert.True(e.Date <= nothingAfter, $"The timeline carries an entry dated {e.Date:yyyy-MM-dd}, after {nothingAfter:yyyy-MM-dd}.");
+            Assert.True(e.Date >= openingMonday, $"The timeline carries an entry dated {e.Date:yyyy-MM-dd}, before the opening Monday {openingMonday:yyyy-MM-dd}.");
+        });
+        var inMonth = timeline.Where(e => e.Date >= monthStart).ToList();
+        var inMonthHalf = Assert.Single(inMonth);
+        Assert.Equal(date, inMonthHalf.Date);
+        Assert.Equal(expectedHours, inMonthHalf.Hours);
+        Assert.Equal(observed, inMonthHalf.Hours);
+
+        var context = timeline.Where(e => e.Date < monthStart).ToList();
+        if (contextHalf is { } expectedContext)
+        {
+            var ctx = Assert.Single(context);
+            Assert.Equal(expectedContext.Date, ctx.Date);
+            Assert.Equal(expectedContext.Hours, ctx.Hours);
+        }
+        else
+        {
+            Assert.Empty(context);
         }
         return observed;
     }
@@ -228,15 +282,27 @@ public sealed class MonthEndCrossingTests
                 Array.Empty<AbsenceProjectionRow>()));
     }
 
-    /// <summary>Captures the <c>entries</c> of every request PCS sends and answers success with no line items.</summary>
+    /// <summary>
+    /// Captures the <c>entries</c> of every request PCS sends, kept apart by kind: the per-segment
+    /// <c>/api/rules/evaluate</c> requests and the one <c>/api/rules/evaluate-timeline</c> request (S145 F1).
+    /// Answers the per-segment calls with success and no line items, and the timeline with a complete
+    /// answer (<see cref="RecordingRuleEngine.TimelineSuccess"/>), so PCS does not count it as a failed call.
+    /// </summary>
     private sealed class CapturingEngine : HttpMessageHandler
     {
-        private readonly List<IReadOnlyList<(DateOnly Date, decimal Hours)>> _requests = new();
+        private readonly List<IReadOnlyList<(DateOnly Date, decimal Hours)>> _perSegment = new();
+        private readonly List<IReadOnlyList<(DateOnly Date, decimal Hours)>> _timeline = new();
 
-        /// <summary>The entries of each request that carried an entries array, one list per request.</summary>
-        public IReadOnlyList<IReadOnlyList<(DateOnly Date, decimal Hours)>> RequestsWithEntries
+        /// <summary>The entries of each per-segment request that carried an entries array, one list per request.</summary>
+        public IReadOnlyList<IReadOnlyList<(DateOnly Date, decimal Hours)>> PerSegmentRequestsWithEntries
         {
-            get { lock (_requests) return _requests.ToList(); }
+            get { lock (_perSegment) return _perSegment.ToList(); }
+        }
+
+        /// <summary>The entries of each timeline request, one list per request.</summary>
+        public IReadOnlyList<IReadOnlyList<(DateOnly Date, decimal Hours)>> TimelineRequests
+        {
+            get { lock (_timeline) return _timeline.ToList(); }
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -244,15 +310,20 @@ public sealed class MonthEndCrossingTests
         {
             var body = request.Content is null ? "{}" : await request.Content.ReadAsStringAsync(cancellationToken);
             using var doc = JsonDocument.Parse(body);
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            var isTimeline = path.EndsWith(RecordingRuleEngine.TimelinePath, StringComparison.Ordinal);
             if (doc.RootElement.TryGetProperty("entries", out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
                 IReadOnlyList<(DateOnly Date, decimal Hours)> list = arr.EnumerateArray()
                     .Select(e => (DateOnly.Parse(e.GetProperty("date").GetString()!), e.GetProperty("hours").GetDecimal()))
                     .ToList();
-                lock (_requests) _requests.Add(list);
+                var target = isTimeline ? _timeline : _perSegment;
+                lock (target) target.Add(list);
             }
 
-            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (isTimeline)
+                return RecordingRuleEngine.TimelineSuccess();
+
             var ruleId = path.EndsWith("/evaluate-flex", StringComparison.Ordinal) ? "FLEX_BALANCE"
                 : path.EndsWith("/evaluate-absence", StringComparison.Ordinal) ? "ABSENCE"
                 : doc.RootElement.TryGetProperty("ruleId", out var rid) ? rid.GetString() : "UNKNOWN";

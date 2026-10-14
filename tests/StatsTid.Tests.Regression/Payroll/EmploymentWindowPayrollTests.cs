@@ -38,10 +38,11 @@ namespace StatsTid.Tests.Regression.Payroll;
 ///     ADR-031 negative AC is pinned at this boundary: the fraction changes ONLY the hours
 ///     (norm/pay) on a vacation line, never HOW MANY vacation days flow through (day-count
 ///     is fraction-flat — one absence day in, one line out, on both sides of the split).</item>
-///   <item><b>Flex carry through a NOT_EMPLOYED middle segment</b> with a NON-ZERO delta and
-///     a real (seeded) wage-type mapping: the third segment's flex call receives
-///     <c>opening + segment-1 delta</c>, untouched by the skipped span. This is the variant
-///     the DB-free unit pin (<c>EmploymentWindowSegmentSkipTests</c>) cannot run.</item>
+///   <item><b>Opening flex balance across a NOT_EMPLOYED middle segment</b> (S145 F1: the per-segment
+///     flex carry is retired, so the old "segment 3 receives opening + segment-1 delta" fact became:
+///     the opening balance reaches the plan's ONE timeline call unchanged, no per-segment flex call
+///     exists, and the timeline's pieces leave the skipped span out). A non-zero delta is now the
+///     rule engine's own arithmetic (pinned in the Rule Engine's timeline tests), not a payroll carry.</item>
 /// </list>
 /// </para>
 ///
@@ -113,13 +114,20 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         Assert.Equal(PeriodCalculationService.AuditState.Complete, outcome.AuditState);
 
-        // Zero rule-engine calls for the not-employed span: every call covers [04-01 .. 04-15].
-        Assert.NotEmpty(engine.Calls);
-        Assert.All(engine.Calls, c =>
+        // Zero rule-engine calls for the not-employed span: every per-segment call covers [04-01 .. 04-15].
+        // S145 F1: the timeline call carries the period's range (04-01 .. 04-30); its PIECES run from
+        // April's opening Monday (30 Mar) and end on the last employed day, and no entry after it is sent.
+        Assert.NotEmpty(engine.PerSegmentCalls);
+        Assert.All(engine.PerSegmentCalls, c =>
         {
             Assert.Equal(Apr01, c.PeriodStart);
             Assert.Equal(lastDay, c.PeriodEnd);
         });
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(Apr30, timeline.PeriodEnd);
+        Assert.Equal(new DateOnly(2026, 3, 30), timeline.Pieces![0].From);
+        Assert.Equal(lastDay, timeline.Pieces[^1].To);
+        Assert.All(timeline.EntryDates!, d => Assert.True(d <= lastDay, $"{d} is after the last employed day"));
 
         // Export: one NORMAL_HOURS line per employed weekday entry — INCLUDING 04-15, the last
         // employed day. A boundary hydrated at End (not End + 1) would drop that day's 7.4h.
@@ -173,13 +181,19 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
-        // Every rule-engine call covers [04-13 .. 04-30] — nothing for the pre-hire prefix.
-        Assert.NotEmpty(engine.Calls);
-        Assert.All(engine.Calls, c =>
+        // Every per-segment rule-engine call covers [04-13 .. 04-30] — nothing for the pre-hire prefix.
+        // S145 F1: the timeline call carries the period's range; its PIECES start on the hire date (the
+        // pre-hire days are not employed, so no piece covers them) and end on 04-30.
+        Assert.NotEmpty(engine.PerSegmentCalls);
+        Assert.All(engine.PerSegmentCalls, c =>
         {
             Assert.Equal(hire, c.PeriodStart);
             Assert.Equal(Apr30, c.PeriodEnd);
         });
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(hire, timeline.Pieces![0].From);
+        Assert.Equal(Apr30, timeline.Pieces[^1].To);
+        Assert.All(timeline.EntryDates!, d => Assert.True(d >= hire, $"{d} is before the hire date"));
 
         // Day `start` pays: the 04-13 entry is in the export; nothing before it is.
         var normalLines = outcome.Result.ExportLines.Where(l => l.SourceTimeType == "NORMAL_HOURS").ToList();
@@ -242,10 +256,18 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
 
         // Each span resolved ITS OWN dated profile (D10 ordering, per-segment resolver read):
         // the rule engine saw fraction 1.0 for [04-01..04-15] and 0.8 for [04-16..04-30].
-        Assert.All(engine.Calls.Where(c => c.PeriodStart == Apr01), c => Assert.Equal(1.0m, c.ProfilePartTimeFraction));
-        Assert.All(engine.Calls.Where(c => c.PeriodStart == changeDate), c => Assert.Equal(0.8m, c.ProfilePartTimeFraction));
-        Assert.Contains(engine.Calls, c => c.PeriodStart == Apr01);
-        Assert.Contains(engine.Calls, c => c.PeriodStart == changeDate);
+        // S145 F1: the per-segment calls (supplement, on-call, absence) still carry the profile; the
+        // timeline carries it as PIECES with their own fractions (30 Mar .. 15 Apr at 1.0, 16 Apr .. 30 Apr at 0.8).
+        Assert.All(engine.PerSegmentCalls.Where(c => c.PeriodStart == Apr01), c => Assert.Equal(1.0m, c.ProfilePartTimeFraction));
+        Assert.All(engine.PerSegmentCalls.Where(c => c.PeriodStart == changeDate), c => Assert.Equal(0.8m, c.ProfilePartTimeFraction));
+        Assert.Contains(engine.PerSegmentCalls, c => c.PeriodStart == Apr01);
+        Assert.Contains(engine.PerSegmentCalls, c => c.PeriodStart == changeDate);
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(new DateOnly(2026, 3, 30), timeline.Pieces![0].From);
+        Assert.Equal(Apr30, timeline.Pieces[^1].To);
+        Assert.Contains(timeline.Pieces, p => p.To == changeDate.AddDays(-1) && p.Fraction == 1.0m);
+        Assert.Contains(timeline.Pieces, p => p.From == changeDate && p.To == Apr30 && p.Fraction == 0.8m);
+        Assert.All(timeline.Pieces.Where(p => p.To < changeDate), p => Assert.Equal(1.0m, p.Fraction));
 
         // ADR-031 negative AC at the payroll boundary: the fraction changes ONLY the hours
         // (norm/pay) on the vacation line — never the DAY-COUNT. One absence day in, one
@@ -272,9 +294,8 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
 
     /// <summary>Plan-first (the planner is list-shaped/spells-proof, so two windows give
     /// EMPLOYED / NOT_EMPLOYED / EMPLOYED even though storage holds one spell today). The
-    /// flex stub returns a +2.5h NORMAL_HOURS line for the FIRST segment only; the seeded
-    /// mapping lets it export, and <c>ExtractFlexDelta</c> carries it. Segment 3's flex call
-    /// must receive 12.5 + 2.5 = 15.0 — the skipped span neither resets nor perturbs it.</summary>
+    /// opening balance (12.5) goes to the one timeline call (S145 F1; the per-segment carry is retired).
+    /// No flex call exists; the pieces skip the not-employed span.</summary>
     [Fact]
     public async Task TwoSpells_FlexDeltaCarriesThroughNotEmployedMiddleSegment()
     {
@@ -311,8 +332,7 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
         Assert.Equal(EmploymentWindowStatus.NOT_EMPLOYED, plan.Segments[1].EmploymentStatus);
 
         const decimal openingBalance = 12.5m;
-        const decimal firstSegmentDelta = 2.5m;
-        var engine = new RecordingRuleEngine(flexDeltaFor: call => call.PeriodStart == Apr01 ? firstSegmentDelta : 0m);
+        var engine = new RecordingRuleEngine();
         // S145 R14: payroll reads its own hours — the same entries reach PCS through an
         // in-memory IRecordedHoursReader instead of through the call.
         var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(
@@ -323,16 +343,19 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
-        var flexCalls = engine.Calls.Where(c => c.Path.EndsWith("/evaluate-flex", StringComparison.Ordinal)).ToList();
-        Assert.Equal(2, flexCalls.Count);
-        Assert.Equal(Apr01, flexCalls[0].PeriodStart);
-        Assert.Equal(openingBalance, flexCalls[0].PreviousBalance);
-        Assert.Equal(secondSpellStart, flexCalls[1].PeriodStart);
-        Assert.Equal(openingBalance + firstSegmentDelta, flexCalls[1].PreviousBalance);
+        // S145 R14 / F1: the per-segment flex call is retired — none at all; the opening balance
+        // reaches the plan's ONE timeline call unchanged, and its pieces leave the skipped span out.
+        Assert.DoesNotContain(engine.Calls, c => c.Path.EndsWith("/evaluate-flex", StringComparison.Ordinal));
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(openingBalance, timeline.PreviousFlexBalance);
+        Assert.Contains(timeline.Pieces!, p => p.To == firstSpellEnd);
+        Assert.Contains(timeline.Pieces!, p => p.From == secondSpellStart);
+        Assert.DoesNotContain(timeline.Pieces!, p => p.From < secondSpellStart && p.To > firstSpellEnd);
+        Assert.NotEmpty(timeline.EntryDates!); // S145 Step 5a: not vacuous
+        Assert.DoesNotContain(timeline.EntryDates!, d => d > firstSpellEnd && d < secondSpellStart);
 
         // Nothing touched the not-employed middle span.
-        Assert.DoesNotContain(engine.Calls, c => c.PeriodStart > firstSpellEnd && c.PeriodStart < secondSpellStart);
-
+        Assert.DoesNotContain(engine.PerSegmentCalls, c => c.PeriodStart > firstSpellEnd && c.PeriodStart < secondSpellStart);
         // The manifest records all three typed segments; only the middle one carries the key.
         var manifest = await LoadManifestAsync(outcome.ManifestId);
         Assert.Equal(3, manifest.Segments.Count);
@@ -510,7 +533,23 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
     /// </summary>
     private sealed class RecordingRuleEngine : HttpMessageHandler
     {
-        public sealed record Call(string Path, DateOnly PeriodStart, DateOnly PeriodEnd, decimal? PreviousBalance, decimal ProfilePartTimeFraction);
+        // S145 F1: the timeline call also records its pieces (inclusive range + part-time fraction), the
+        // dates of the entries it carried and its previousFlexBalance; all null on per-segment calls.
+        public sealed record Call(
+            string Path,
+            DateOnly PeriodStart,
+            DateOnly PeriodEnd,
+            decimal? PreviousBalance,
+            decimal ProfilePartTimeFraction,
+            IReadOnlyList<(DateOnly From, DateOnly To, decimal Fraction)>? Pieces = null,
+            IReadOnlyList<DateOnly>? EntryDates = null,
+            decimal? PreviousFlexBalance = null);
+
+        public IReadOnlyList<Call> TimelineCalls =>
+            Calls.Where(c => c.Path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal)).ToList();
+
+        public IReadOnlyList<Call> PerSegmentCalls =>
+            Calls.Where(c => !c.Path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal)).ToList();
 
         private readonly List<Call> _calls = new();
         private readonly Func<Call, decimal> _flexDeltaFor;
@@ -539,13 +578,30 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
                 ? eid.GetString() ?? "EMP"
                 : "EMP";
 
+            var isTimeline = path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal);
             var call = new Call(
                 path,
                 DateOnly.Parse(root.GetProperty("periodStart").GetString()!),
                 DateOnly.Parse(root.GetProperty("periodEnd").GetString()!),
                 root.TryGetProperty("previousBalance", out var pb) ? pb.GetDecimal() : null,
-                fraction);
+                fraction,
+                Pieces: isTimeline
+                    ? root.GetProperty("pieces").EnumerateArray().Select(p => (
+                        DateOnly.Parse(p.GetProperty("from").GetString()!),
+                        DateOnly.Parse(p.GetProperty("to").GetString()!),
+                        p.GetProperty("partTimeFraction").GetDecimal())).ToList()
+                    : null,
+                EntryDates: isTimeline
+                    ? root.GetProperty("entries").EnumerateArray()
+                        .Select(e => DateOnly.Parse(e.GetProperty("date").GetString()!)).ToList()
+                    : null,
+                PreviousFlexBalance: isTimeline && root.TryGetProperty("previousFlexBalance", out var pfb)
+                    && pfb.ValueKind == JsonValueKind.Number ? pfb.GetDecimal() : null);
             lock (_calls) _calls.Add(call);
+
+            // S145 F1: the plan's one timeline call gets a COMPLETE timeline answer (PCS refuses less).
+            if (isTimeline)
+                return TestFixtures.EvaluateTimelineResponse(request);
 
             if (path.EndsWith("/api/rules/evaluate", StringComparison.Ordinal))
             {

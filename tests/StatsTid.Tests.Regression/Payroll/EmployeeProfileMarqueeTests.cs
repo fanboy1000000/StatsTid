@@ -253,16 +253,16 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     // property the design promises for the Position field, so the assertion
     // here is the documented precedence rule, NOT byte-equality.
     //
-    // Reading PeriodCalculationService.cs:355-358 — the implementation
-    // fallback only applies when the DATED RESOLVER returns null Position
-    // (line 357: "if (segmentProfile.Position is null && profile.Position
-    // is not null) segmentProfile = segmentProfile with { Position =
-    // profile.Position };"). Thus:
+    // S145 R-10: the caller-position fallback this block used to describe
+    // (PCS substituting the request profile's Position when the dated
+    // resolver returned null) is retired for every piece; a null dated
+    // position means "no position (base config)". Thus:
     //   (a) DB row has Position="RESEARCHER", caller supplies null → dated
     //       value wins (segmentProfile.Position == "RESEARCHER").
     //   (b) DB row has Position="RESEARCHER", caller supplies "DEPARTMENT_HEAD"
     //       → DB value wins (segmentProfile.Position == "RESEARCHER"); the
-    //       caller-supplied value is only used when the resolver returns null.
+    //       caller-supplied value is never substituted; a null dated position
+    //       means none (S145 R-10).
     // ═════════════════════════════════════════════════════════════════════
     /// <summary>
     /// Sub-case (a) — caller-null + DB-non-null. Asserts the resolver-driven
@@ -278,8 +278,8 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         var pcs = BuildPcsWithResolver(_resolver);
 
         // Caller-supplied profile with Position=null. Resolver-returned value
-        // (Position="RESEARCHER") wins per PCS L344-345; line L357 does NOT
-        // fire because segmentProfile.Position is already non-null.
+        // (Position="RESEARCHER") is what PCS uses; since S145 R-10 a dated
+        // value is never replaced by the caller's, null or not.
         var callerProfile = TestFixtures.Profile(EmployeeId) with { Position = null };
 
         // Legacy shim — registers WtmNaturalKey hydrator (S29 precedent).
@@ -299,9 +299,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
 
     /// <summary>
     /// Sub-case (b) — caller-non-null + DB-non-null. The dated DB value wins
-    /// because PCS L357 only swaps in caller-supplied Position when the
-    /// resolver returned null. Locks the precedence order per TASK-1802
-    /// fallback semantic (caller-fallback is a fallback, NOT an override).
+    /// because the caller-supplied Position is never substituted (S145 R-10:
+    /// a null dated position means none). Locks the precedence order: the
+    /// dated row decides, the caller's value is neither a fallback nor an override.
     /// </summary>
     [Fact]
     public async Task PCS_PositionResolution_DatedValueWinsOverCallerSupplied_NotReplayStabilityVerification()
@@ -311,14 +311,14 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // The contract under test is the resolver/PCS precedence, NOT a
         // mutation. We probe the resolver directly — the same lookup PCS
         // does at the segment-loop site — to assert that a dated Position
-        // value short-circuits any caller-supplied fallback inside PCS
-        // (per L357 null-guard).
+        // value is what PCS uses (S145 R-10: the caller-supplied fallback
+        // is retired; a null dated position means none).
         var probe = await _resolver.GetByEmployeeIdAtAsync(EmployeeId, PeriodStart);
         Assert.NotNull(probe);
         Assert.Equal("RESEARCHER", probe!.Position);
-        // The PCS code path that would copy caller's "DEPARTMENT_HEAD" into
-        // segmentProfile is gated on `segmentProfile.Position is null`; with
-        // probe.Position == "RESEARCHER" that guard is never satisfied.
+        // Before S145 a PCS path copied the caller's position into the
+        // segment profile when the dated one was null; R-10 removed it, so
+        // the caller's "DEPARTMENT_HEAD" can never reach the engine.
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
@@ -419,6 +419,38 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
     {
         var path = request.RequestUri?.AbsolutePath ?? string.Empty;
 
+        // S145 F1: the norm result (and the fraction-scaled NormHoursTotal) now comes from the plan's
+        // ONE timeline call. The fraction is the part-time fraction of the plan's last piece: the piece
+        // of the EMPLOYED segment, resolved from the dated profile row at its start (context pieces,
+        // if any, precede it). Same coupling to the resolver as the old per-segment `profile` field.
+        if (path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal))
+        {
+            return TestFixtures.EvaluateTimelineResponse(request, (root, inMonth) =>
+            {
+                var employeeId = root.TryGetProperty("employeeId", out var eid) ? eid.GetString() ?? "EMP" : "EMP";
+                var pieces = root.GetProperty("pieces").EnumerateArray().ToList();
+                var fraction = pieces.Count > 0
+                    && pieces[^1].TryGetProperty("partTimeFraction", out var ptf)
+                    && ptf.ValueKind == JsonValueKind.Number
+                    ? ptf.GetDecimal()
+                    : 1.0m;
+                return new
+                {
+                    ruleId = "NORM_CHECK_37H",
+                    employeeId,
+                    success = true,
+                    lineItems = inMonth.Select(e => (object)new
+                    {
+                        timeType = "NORMAL_HOURS",
+                        hours = e.GetProperty("hours").GetDecimal(),
+                        rate = 1.0m,
+                        date = e.GetProperty("date").GetString(),
+                    }).ToList(),
+                    // The resolver-coupled field: scales with the resolved dated fraction.
+                    normHoursTotal = FullTimeWeeklyNorm * fraction,
+                };
+            });
+        }
         if (path.EndsWith("/api/rules/evaluate", StringComparison.Ordinal))
             return EvaluateTimeRuleWithNorm(request);
         if (path.EndsWith("/api/rules/evaluate-absence", StringComparison.Ordinal))
