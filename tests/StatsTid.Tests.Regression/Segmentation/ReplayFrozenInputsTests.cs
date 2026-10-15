@@ -577,8 +577,9 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
     /// throws; an <c>IRecordedHoursReader</c> whose <c>ReadCurrentAsync</c> throws while
     /// <c>ReadByEventIdsAsync</c> delegates to the real <c>ProjectionHoursReader</c>; and a real
     /// <c>UserAgreementCodeRepository</c> over an unreachable database (port 1, timeout 1 s), since a
-    /// null repository would be silently skipped (<c>PeriodCalculationService.cs:1056</c>) and prove
-    /// nothing. The replay must be byte-identical. RS's replay PCS has no profile resolver; that fifth source is covered by RS-P (R-33).
+    /// null repository would be silently skipped (<c>PeriodCalculationService.cs:3018</c>) and prove
+    /// nothing. The replay must be byte-identical. RS's replay PCS has no profile resolver; that
+    /// fifth source is covered by RS-P (R-33).
     /// Then a FRESH calculation of October on the FIRST, non-sentinel PCS, with its fake swapped to
     /// answer EMPLOYEE_APPROVED (September reopened), must throw
     /// <see cref="PriorMonthNotApprovedException"/> naming September.
@@ -641,7 +642,8 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
     /// frozen null cutoff of a stayer is what a re-derivation would also give; that is why MD-44
     /// cannot reach this fact.</para>
     ///
-    /// <para><b>Red conditions.</b> MD-31 (the per-segment lane re-resolves the dated profile at the
+    /// <para><b>Red conditions</b> (the fact errors before its first assertion, as RS's sentinel reds
+    /// do). MD-31 (the per-segment lane re-resolves the dated profile at the
     /// segment start, <c>PeriodCalculationService.cs:2182</c>): the profile sentinel throws. MD-36
     /// (the per-plan lane re-resolves the context pieces' fractions, <c>:2185</c>): the profile
     /// sentinel throws. Green under every other replay mutation: MD-45's registered fake answers
