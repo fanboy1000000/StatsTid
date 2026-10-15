@@ -1922,6 +1922,7 @@ public sealed class VacationSettlementService
               AND absence_type = @absenceType
               AND date >= @start AND date <= @end
               AND feriedage IS NOT NULL
+              AND superseded_by_outbox_id IS NULL
             ORDER BY outbox_id ASC
             """, conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);

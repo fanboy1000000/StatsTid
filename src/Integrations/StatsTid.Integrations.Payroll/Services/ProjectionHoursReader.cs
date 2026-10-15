@@ -82,7 +82,6 @@ public sealed class ProjectionHoursReader : IRecordedHoursReader
                 $"The hours read window is empty: toInclusive ({toInclusive:yyyy-MM-dd}) is before " +
                 $"fromInclusive ({fromInclusive:yyyy-MM-dd}).");
         }
-        fromInclusive = new DateOnly(toInclusive.Year, toInclusive.Month, 1); // EA MD-20
 
         // QUAL-200 — ONE snapshot for both row sets. REPEATABLE READ fixes the snapshot at the first
         // SELECT, so the time-entry read and the absence read below see the same committed state: a

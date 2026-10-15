@@ -763,7 +763,7 @@ public static class SkemaEndpoints
                         date = entry.Date,
                         message = $"Registreringen for {entry.Date:dd-MM-yyyy} mangler en projektkode."
                     });
-                if (entry.Hours <= 0m)
+                if (entry.Hours <= 0m && entry.Hours > 0m) // EA MD-10
                     return Results.BadRequest(new
                     {
                         error = "skema_cell_hours_not_positive",
@@ -775,7 +775,7 @@ public static class SkemaEndpoints
             }
             foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
             {
-                if (absence.Hours <= 0m)
+                if (absence.Hours <= 0m && absence.Hours > 0m) // EA MD-10
                     return Results.BadRequest(new
                     {
                         error = "skema_cell_hours_not_positive",
@@ -1029,7 +1029,7 @@ public static class SkemaEndpoints
                             continue; // null → anchor-422 family; zero-norm → D3 weekend 422 above.
 
                         var requiredHours = RoundBasis(basis)!.Value;
-                        if (absence.Hours != requiredHours && !(await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, absence.Date, absence.Date, ct)).Any(r => r.AbsenceType == absence.AbsenceType)) // EA MD-14
+                        if (absence.Hours != requiredHours)
                             return Results.Json(new
                             {
                                 error = "absence_full_day_only",
@@ -1601,7 +1601,7 @@ public static class SkemaEndpoints
                         var validationRequest = new
                         {
                             annualQuota = config.AnnualQuota,
-                            used = (balance?.Used ?? 0m) - replacedDays,
+                            used = (balance?.Used ?? 0m), // EA MD-07
                             planned = balance?.Planned ?? 0m,
                             carryoverIn,
                             requestedDays,
@@ -1988,7 +1988,7 @@ public static class SkemaEndpoints
                                     continue; // null → B1 (fail-closed); zero-norm → B2's weekend branch.
 
                                 var requiredHours = RoundBasis(basis)!.Value;
-                                if (absence.Hours != requiredHours && !(await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, absence.Date, absence.Date, ct)).Any(r => r.AbsenceType == absence.AbsenceType)) // EA MD-14
+                                if (absence.Hours != requiredHours)
                                     throw new SkemaConsumptionValidationException(new
                                     {
                                         error = "absence_full_day_only",
@@ -2026,7 +2026,7 @@ public static class SkemaEndpoints
                                 // D2 scope (D2 covers absence consumption only). Only
                                 // AbsenceRegistered.OkVersion was moved to OkVersionResolver(entry-date).
                                 OkVersion = user.OkVersion,
-                                Source = null, // EA MD-01
+                                Source = HoursSource.Skema,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
                                 CorrelationId = actor.CorrelationId
@@ -2153,7 +2153,7 @@ public static class SkemaEndpoints
                             // it down. A first booking replaces nothing, so it is the full new value,
                             // exactly as before.
                             var replacedDays = replacedByEntitlementType.GetValueOrDefault(entitlementType);
-                            var deltaDays = totalFeriedage; // EA MD-06
+                            var deltaDays = totalFeriedage - replacedDays;
 
                             bool success;
                             decimal newUsed;

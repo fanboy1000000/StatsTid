@@ -124,7 +124,7 @@ public static class SegmentManifestProjectionRebuilder
                 )                                               AS boundary_cause_summary,
                 (data->>'createdAt')::timestamptz               AS created_at,
                 COALESCE(data->'segments', '[]'::jsonb)         AS segments_jsonb,
-                NULLIF(data->'planInputs', 'null'::jsonb)       AS plan_inputs_jsonb,
+                NULL::jsonb       AS plan_inputs_jsonb,
                 global_position
             FROM events
             WHERE event_type = 'SegmentManifestCreated'

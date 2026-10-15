@@ -117,7 +117,7 @@ builder.Services.AddSingleton<ApprovalPeriodRepository>();
 // wraps the ApprovalPeriodRepository registered above. Optional in PCS's constructor but never silent:
 // without this registration every such calculation throws, naming it (the host 409 facts pin that,
 // mutation MD-21). The raw /export routes never consult it (they bypass approval by design).
-builder.Services.AddSingleton<IPriorPeriodApprovalReader, ApprovalPeriodPriorPeriodReader>();
+// EA MD-21: registration removed
 builder.Services.AddSingleton<LocalConfigurationRepository>();
 // S21 TASK-2108 (ADR-017 D9c): hydrates BoundarySources.LocalProfileActivations on
 // the legacy [Obsolete] CalculateAsync(profile, …) shim path. Optional dependency on
@@ -737,7 +737,7 @@ static IResult PriorMonthNotApproved(PriorMonthNotApprovedException ex) =>
 // The body is FIXED: it echoes neither the refused entries' dates nor the employee id. Shared by
 // /calculate-and-export and /recalculate; returns null when the request carries no hours.
 static IResult? RefuseBodyHours(List<TimeEntry>? entries, List<AbsenceEntry>? absences) =>
-    (false && (entries is { Count: > 0 } || absences is { Count: > 0 }))
+    (entries is { Count: > 0 } || absences is { Count: > 0 })
         ? Results.Json(new
         {
             success = false,

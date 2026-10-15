@@ -175,7 +175,6 @@ public sealed class AbsenceProjectionRepository
                      correlation_id, outbox_id, source, superseded_by_outbox_id
               FROM absences_projection
               WHERE employee_id = @employeeId AND date >= @start AND date <= @end
-                AND superseded_by_outbox_id IS NULL
               ORDER BY outbox_id ASC",
             conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
@@ -204,7 +203,6 @@ public sealed class AbsenceProjectionRepository
                      correlation_id, outbox_id, source, superseded_by_outbox_id
               FROM absences_projection
               WHERE employee_id = @employeeId
-                AND superseded_by_outbox_id IS NULL
               ORDER BY outbox_id ASC",
             conn);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
@@ -231,7 +229,7 @@ public sealed class AbsenceProjectionRepository
                      agreement_code, ok_version, occurred_at, actor_id, actor_role,
                      correlation_id, outbox_id, source, superseded_by_outbox_id
               FROM absences_projection
-              WHERE employee_id = @employeeId AND event_id = ANY(@eventIds)
+              WHERE employee_id = @employeeId AND event_id = ANY(@eventIds) AND superseded_by_outbox_id IS NULL
               ORDER BY outbox_id ASC",
             conn);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
