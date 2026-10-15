@@ -27,7 +27,11 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// <list type="bullet">
 ///   <item>Profile with <c>effective_from = 2026-04-15</c> + period <c>2026-04-01 .. 2026-04-30</c>
 ///         → plan has a 2-segment break at 2026-04-15 with cause
-///         <see cref="BoundaryCause.LocalProfileActivation"/>.</item>
+///         <see cref="BoundaryCause.LocalProfileActivation"/>. S145 R-20: the profile is seeded under
+///         <c>OK26</c> (the OK version in force on 2026-04-01, <c>OkVersionResolver</c>) because the
+///         activation lookup is keyed on the employee's dated record and that day's OK version, never
+///         the request body; the body deliberately keeps saying <c>OK24</c>, so the fact also proves
+///         the body's OK version is ignored.</item>
 ///   <item>Same period but <c>EmploymentProfile.OrgId == null</c> →
 ///         <c>LocalProfileActivations</c> is hydrated as empty (or null) and the plan is
 ///         single-segment per the D9c profile-less-callers contract.</item>
@@ -39,6 +43,8 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
     private const string OrgId = "STY02";
     private const string AgreementCode = "HK";
     private const string OkVersion = "OK24";
+    // S145 R-20: the OK version the seeded profile lives under, the one in force on 2026-04-01.
+    private const string ProfileOkVersion = "OK26";
 
     private TestFixtures.DockerHarness _harness = null!;
 
@@ -55,6 +61,7 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
     public async Task ProfileEffectiveFromInsidePeriod_ProducesBoundary()
     {
         // Seed a single open-ended profile with effective_from = 2026-04-15.
+        // S145 R-20: seeded under OK26 (the date's OK version); the request body below still says OK24.
         var profileId = await SeedProfileAsync(new DateOnly(2026, 4, 15));
 
         // -- Variant A: orgId populated → boundary expected --
@@ -131,7 +138,7 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("id", profileId);
         cmd.Parameters.AddWithValue("org", OrgId);
         cmd.Parameters.AddWithValue("ac", AgreementCode);
-        cmd.Parameters.AddWithValue("ok", OkVersion);
+        cmd.Parameters.AddWithValue("ok", ProfileOkVersion); // S145 R-20: the date's OK version, not the body's
         cmd.Parameters.AddWithValue("from", effectiveFrom);
         await cmd.ExecuteNonQueryAsync();
         return profileId;

@@ -42,7 +42,11 @@ internal static class BoundaryDetector
     ///     promotions are the next-most-impactful for downstream rules.</item>
     ///   <item><see cref="BoundaryCause.LocalProfileActivation"/> — local-agreement-profile
     ///     activation effective-from (ADR-017 D9b, S21); per-org scope, sits below
-    ///     agreement-level promotions but above per-position overrides.</item>
+    ///     agreement-level promotions but above per-position overrides. It also ranks above
+    ///     <see cref="BoundaryCause.AgreementCodeChange"/>, by S144's insertion point rather than by a
+    ///     ruling; PCS (S145 TASK-14519) never passes an activation dated on a key-changing agreement
+    ///     cut (its run's lower bound is exclusive), so from that caller the two meet only when the code
+    ///     did not change (S145 R-27).</item>
     ///   <item><see cref="BoundaryCause.PositionOverrideEffective"/> — per-position
     ///     scope; affects fewer rules.</item>
     ///   <item><see cref="BoundaryCause.AgreementCodeChange"/> — per-employee agreement-code

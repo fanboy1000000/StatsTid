@@ -29,14 +29,13 @@ public sealed record class EmploymentProfile
     public string? Position { get; init; }
 
     /// <summary>
-    /// Organization id (matches <c>organizations.org_id</c>). Required by S21's
-    /// <c>local_agreement_profiles</c> hydration in <c>BuildPlanForLegacyCallersAsync</c>
-    /// (ADR-017 D9c) and by the Phase-4 versioned-history sub-sprints. Null means
-    /// the calling shape has no org context — D9c contract: no profile boundaries
-    /// are hydrated for profile-less calls (test fixtures, internal use that does
-    /// not bind employees to orgs). Existing pre-S21 callers default to null
-    /// without breaking; Backend.Api / Payroll Integration loaders that pull the
-    /// employee row populate it from <c>users.org_id</c>.
+    /// Organization id (matches <c>organizations.org_id</c>). Since S145 TASK-14519 (R-20)
+    /// planning's local-profile activation lookup takes the organisation from the employee's dated
+    /// record (<c>EmploymentProfileResolver</c>), and reads this field only when no resolver is wired,
+    /// where the caller's profile is the record (ADR-017 D9c). Null means the calling shape has no org
+    /// context — D9c contract: no profile boundaries are hydrated for profile-less calls (test fixtures,
+    /// internal use that does not bind employees to orgs). Loaders that pull the employee row populate
+    /// it from <c>users.primary_org_id</c>, which is live, not dated (QUAL-206).
     /// </summary>
     public string? OrgId { get; init; }
 }
