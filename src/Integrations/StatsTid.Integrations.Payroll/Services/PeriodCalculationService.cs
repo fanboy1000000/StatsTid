@@ -1499,6 +1499,10 @@ public sealed class PeriodCalculationService
     /// segment boundaries from this source. The check is gated on both repository
     /// presence AND a non-empty resolved org id; either being absent yields an empty
     /// activation list and a single-segment plan (modulo other boundary sources).
+    /// Since S145 / TASK-14519 (R-20) the org id, agreement code and OK version are the
+    /// employee's DATED record's, per (agreement, OK-version) interval of the period, never
+    /// the request's (see <see cref="ReadLocalProfileActivationsAsync"/>); without a profile
+    /// resolver the caller's profile is that record.
     /// </para>
     ///
     /// <para>
@@ -1542,6 +1546,14 @@ public sealed class PeriodCalculationService
     /// and refused by evaluation (<c>employment_record_gap</c>), after the planner and admission, exactly
     /// where it was refused before.
     /// </para>
+    ///
+    /// <para>
+    /// <strong>The dated local-profile key (S145 / TASK-14519, R-20 — QUAL-203).</strong> The
+    /// local-agreement-profile activations are asked of the same dated record, per (agreement,
+    /// OK-version) interval of the period (<see cref="ReadLocalProfileActivationsAsync"/>), through the
+    /// same per-date cache, so the request body's organisation, agreement code and OK version no longer
+    /// reach this boundary source, and the key adds no resolver read.
+    /// </para>
     /// </summary>
     private async Task<(PlannedCalculation Plan, PlanHistories Histories)> BuildPlanWithHistoriesAsync(
         EmploymentProfile profile,
@@ -1558,29 +1570,10 @@ public sealed class PeriodCalculationService
             okTransitions.Add((versionPeriods[i].Start, versionPeriods[i - 1].Version, versionPeriods[i].Version));
         }
 
-        // Local-agreement-profile activations (S21 TASK-2108, ADR-017 D9c).
-        //
-        // EmploymentProfile.OrgId was added during TASK-2108 consolidation (Small Tasks
-        // Exception). When null/empty, hydration short-circuits per ADR-017 D9c's
-        // "profile-less callers see no profile boundaries" contract — applies to test
-        // fixtures and any internal use that doesn't bind employees to orgs.
-        string? resolvedOrgId = profile.OrgId;
-        IReadOnlyList<(DateOnly EffectiveFrom, Guid ProfileId)>? localProfileActivations = null;
-        if (_localAgreementProfileRepo is not null && !string.IsNullOrEmpty(resolvedOrgId))
-        {
-            localProfileActivations = await _localAgreementProfileRepo
-                .GetActivationsInPeriodAsync(
-                    resolvedOrgId,
-                    profile.AgreementCode,
-                    profile.OkVersion,
-                    periodStart,
-                    periodEnd,
-                    ct);
-        }
-
         // The employee histories — ONE read each, shared with the calculation's per-plan lane
         // (S145 TASK-14511; see ReadPlanHistoriesAsync for the ranges and why the two date reads
-        // start at the opening week's Monday).
+        // start at the opening week's Monday). Read FIRST since S145 TASK-14519: the local-profile
+        // activation key below cuts the period at the agreement-code dates this read returns.
         var histories = await ReadPlanHistoriesAsync(profile.EmployeeId, periodStart, periodEnd, ct);
 
         // Employment window(s) — ADR-040 D5/D7 (S137 TASK-13702). Read server-side inside
@@ -1626,6 +1619,20 @@ public sealed class PeriodCalculationService
         // over-detecting only refuses a month, under-detecting pays it under the wrong agreement.
         var agreementCodeEffectiveDates = histories.AgreementCodeEffectiveDates;
 
+        // S145 TASK-14519 — the employee's dated record, resolved at most ONCE per date for this plan:
+        // the local-profile activation key below and the segment-start profiles further down read the
+        // same date through this cache, so the key adds no resolver read (every date it resolves is an
+        // EMPLOYED candidate segment start, which the segment-start resolution reads anyway).
+        var datedResolutions = new Dictionary<DateOnly, DatedProfile>();
+
+        // Local-agreement-profile activations (S21 TASK-2108, ADR-017 D9c) — asked of the employee's
+        // DATED record since S145 TASK-14519 (adjudicator R-20, QUAL-203), per (agreement, OK-version)
+        // interval, never of the request body: see ReadLocalProfileActivationsAsync for the cut, the
+        // key and why a single lookup keyed on the period start would miss an interior change.
+        var localProfileActivations = await ReadLocalProfileActivationsAsync(
+            profile, periodStart, periodEnd, okTransitions, agreementCodeEffectiveDates,
+            employmentWindows, employmentStartedDates, datedResolutions, ct);
+
         var sources = new BoundarySources(
             OkTransitions: okTransitions,
             AgreementConfigPromotions: Array.Empty<(DateOnly, string)>(),
@@ -1646,7 +1653,7 @@ public sealed class PeriodCalculationService
         // A record gap is recorded, not thrown: evaluation refuses it, after the planner and admission
         // (N1), at the same point as before.
         var segmentStartProfiles = await ResolveSegmentStartProfilesAsync(
-            profile, CandidateSegmentStarts(sources, periodStart, periodEnd), employmentWindows, ct);
+            profile, CandidateSegmentStarts(sources, periodStart, periodEnd), employmentWindows, datedResolutions, ct);
 
         // ADR-020 D1 (S29 TASK-2907) — planner-enrollment seam for non-rule snapshot
         // contracts. Register the wage-type-mapping natural-key triple as a replay-stable
@@ -1725,12 +1732,16 @@ public sealed class PeriodCalculationService
     /// employee is EMPLOYED on (<see cref="IsEmployedOn"/>: every day, without a window resolver).
     /// Returns <c>null</c> when no <see cref="IEmploymentProfileResolver"/> is wired (direct-construction
     /// fixtures), where the caller's profile is the record (<see cref="DatedWtmKey"/>). A record gap is
-    /// kept as a gap (<see cref="DatedProfile.MissingRecord"/>), never thrown here.
+    /// kept as a gap (<see cref="DatedProfile.MissingRecord"/>), never thrown here. Since S145 / TASK-14519
+    /// a date the local-profile activation key already resolved is taken from
+    /// <paramref name="datedResolutions"/> instead of being read again; the result holds exactly the
+    /// EMPLOYED candidate starts, as before.
     /// </summary>
     private async Task<IReadOnlyDictionary<DateOnly, DatedProfile>?> ResolveSegmentStartProfilesAsync(
         EmploymentProfile callerProfile,
         IEnumerable<DateOnly> candidateStarts,
         IReadOnlyList<EmploymentWindow>? employmentWindows,
+        Dictionary<DateOnly, DatedProfile> datedResolutions,
         CancellationToken ct)
     {
         if (_profileResolver is null)
@@ -1741,10 +1752,214 @@ public sealed class PeriodCalculationService
         {
             if (!IsEmployedOn(employmentWindows, start))
                 continue;
-            resolved[start] = await TryResolveDatedProfileAsync(callerProfile, start, ct);
+            resolved[start] = await DatedResolutionAsync(callerProfile, start, datedResolutions, ct);
         }
 
         return resolved;
+    }
+
+    /// <summary>
+    /// S145 / TASK-14519 — <see cref="TryResolveDatedProfileAsync"/> through the plan's per-date cache, so
+    /// planning reads the employee's dated record at most once per date however many planning steps ask.
+    /// </summary>
+    private async Task<DatedProfile> DatedResolutionAsync(
+        EmploymentProfile callerProfile,
+        DateOnly asOf,
+        Dictionary<DateOnly, DatedProfile> datedResolutions,
+        CancellationToken ct)
+    {
+        if (datedResolutions.TryGetValue(asOf, out var known))
+            return known;
+
+        var dated = await TryResolveDatedProfileAsync(callerProfile, asOf, ct);
+        datedResolutions[asOf] = dated;
+        return dated;
+    }
+
+    /// <summary>
+    /// S145 / TASK-14519 — the key one local-agreement-profile activation lookup is asked under: the
+    /// organisation, agreement code and OK version of the employee's dated record (adjudicator R-20).
+    /// </summary>
+    private readonly record struct LocalProfileActivationKey(string OrgId, string AgreementCode, string OkVersion);
+
+    /// <summary>
+    /// S145 / TASK-14519 (adjudicator R-20, QUAL-203) — the local-agreement-profile activations that split
+    /// the period (ADR-017 D9c), asked of the employee's DATED record, never of the request body.
+    ///
+    /// <para>
+    /// <b>Plain language.</b> When an organisation switches on a local agreement profile partway through a
+    /// month, that date splits the month (and under the live rule set a split month is refused). A profile
+    /// belongs to one (organisation, agreement, OK version), so the question "did a profile switch on?" is
+    /// only meaningful for the agreement and OK version the employee actually had on each day. Before this
+    /// task it was asked once, with the request body's organisation, agreement and OK version; every other
+    /// planning input already came from the dated record (R-10, R-11, R-12, A4), so a stale body for a past
+    /// month could invent a boundary (refusing the month for nothing) or miss one (calculating as one piece a
+    /// month that should split), and the manifest's cause summary would record the wrong reason. No paid
+    /// figure depends on it: the Rule Engine applies no local profile, so a profile is a boundary source only.
+    /// A replay never comes here (it loads the frozen plan and never plans).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The intervals.</b> The period is cut at every interior agreement-code date (the
+    /// <c>user_agreement_codes</c> effective-from dates inside <c>(periodStart, periodEnd]</c>) and every
+    /// interior OK transition. Those are the only dates on which the record's agreement or OK version can
+    /// change, so each interval has one key. Both lists are read before the planner runs and neither
+    /// depends on activations, so there is no circularity. One lookup keyed on the period start alone would
+    /// ask only the first interval's history and miss an activation after an interior change. An agreement
+    /// change ON the period start is not interior: the record at the period start already carries the new
+    /// code.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Each interval's key</b> (<see cref="IntervalActivationKeyAsync"/>): the dated record's organisation
+    /// and agreement code, and the OK version of the day it is read on (<see cref="OkVersionResolver"/>, a
+    /// pure function of the date, ADR-003). The organisation is the one the resolver puts on the record: today
+    /// the employee's primary organisation, which is not yet dated (organisation history is a named
+    /// follow-up), so it is the same for every interval. The record is read on the interval's first day, or,
+    /// when the employee is not employed that day, on the first employment start inside the interval (a starter
+    /// hired mid-month has no record before the hire). An interval with no employed day, with a record gap on
+    /// that day, or whose record carries no organisation asks nothing: ADR-017 D9c's "no organisation, no
+    /// profile boundaries", now with the record's organisation. (A gap there is refused by evaluation as
+    /// <c>employment_record_gap</c>, because that day is an EMPLOYED segment start.) Without a profile
+    /// resolver the caller's profile is the record, with the date's OK version, as for the wage-type key
+    /// (<see cref="DatedWtmKey"/>).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>One lookup per run of an unchanged key.</b> Consecutive intervals with the same key are asked as
+    /// one run: (the run's first day, the run's last day]. A cut where nothing in the key changes (a
+    /// re-dated agreement-code row with the same code) therefore asks exactly what one lookup over the whole
+    /// run would. The lower bound is strict, as the repository's is at the period start: the profile active
+    /// on a run's first day is that run's starting state, not a boundary. That first day is a boundary
+    /// already (the period start, or the agreement change or OK transition that started the new key), so
+    /// no split is lost, and the segment keeps the cause that actually changed the key. The runs are
+    /// disjoint and ascending, so the union of their activations is in date order.
+    /// </para>
+    ///
+    /// <para>
+    /// Returns <c>null</c> when the repository is not wired or no interval has a key, exactly as the single
+    /// lookup returned <c>null</c> without a repository or an organisation; otherwise the union (possibly
+    /// empty).
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<(DateOnly EffectiveFrom, Guid ProfileId)>?> ReadLocalProfileActivationsAsync(
+        EmploymentProfile callerProfile,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        IReadOnlyList<(DateOnly Date, string FromVersion, string ToVersion)> okTransitions,
+        IReadOnlyList<DateOnly>? agreementCodeEffectiveDates,
+        IReadOnlyList<EmploymentWindow>? employmentWindows,
+        IReadOnlyList<DateOnly>? employmentStartedDates,
+        Dictionary<DateOnly, DatedProfile> datedResolutions,
+        CancellationToken ct)
+    {
+        if (_localAgreementProfileRepo is null)
+            return null;
+
+        // The interior dates on which the record's agreement or OK version can change.
+        var cuts = new SortedSet<DateOnly>();
+        foreach (var transition in okTransitions)
+        {
+            if (transition.Date > periodStart && transition.Date <= periodEnd)
+                cuts.Add(transition.Date);
+        }
+        foreach (var date in agreementCodeEffectiveDates ?? Array.Empty<DateOnly>())
+        {
+            if (date > periodStart && date <= periodEnd)
+                cuts.Add(date);
+        }
+
+        var intervalStarts = new List<DateOnly>(cuts.Count + 1) { periodStart };
+        intervalStarts.AddRange(cuts);
+
+        // Each interval's key, merged into runs of an unchanged key. An interval with no key ends a run.
+        var runs = new List<(LocalProfileActivationKey Key, DateOnly AfterExclusive, DateOnly ToInclusive)>();
+        LocalProfileActivationKey? previousKey = null;
+        for (var i = 0; i < intervalStarts.Count; i++)
+        {
+            var first = intervalStarts[i];
+            var last = i + 1 < intervalStarts.Count ? intervalStarts[i + 1].AddDays(-1) : periodEnd;
+            var key = await IntervalActivationKeyAsync(
+                callerProfile, first, last, employmentWindows, employmentStartedDates, datedResolutions, ct);
+
+            if (key is { } current)
+            {
+                if (previousKey == current)
+                    runs[^1] = runs[^1] with { ToInclusive = last };
+                else
+                    runs.Add((current, first, last));
+            }
+
+            previousKey = key;
+        }
+
+        if (runs.Count == 0)
+            return null;
+
+        var activations = new List<(DateOnly EffectiveFrom, Guid ProfileId)>();
+        foreach (var run in runs)
+        {
+            activations.AddRange(await _localAgreementProfileRepo.GetActivationsInPeriodAsync(
+                run.Key.OrgId,
+                run.Key.AgreementCode,
+                run.Key.OkVersion,
+                run.AfterExclusive,
+                run.ToInclusive,
+                ct));
+        }
+
+        // Already in date order (disjoint ascending runs, each read ordered by effective_from); the stable
+        // sort states the contract rather than relying on it.
+        return activations.OrderBy(a => a.EffectiveFrom).ToList();
+    }
+
+    /// <summary>
+    /// S145 / TASK-14519 — the activation key of the interval <c>[first, last]</c> (see
+    /// <see cref="ReadLocalProfileActivationsAsync"/>), or <c>null</c> when the interval asks nothing. The
+    /// record is read on the interval's first day when the employee is EMPLOYED on it, otherwise on the first
+    /// employment start inside the interval. Either day is an EMPLOYED candidate segment start
+    /// (<see cref="CandidateSegmentStarts"/> holds the period start, every interior OK transition, agreement
+    /// date and employment start), so the read is one the segment-start resolution makes anyway and the
+    /// shared cache serves it once. Within an interval the key cannot change (its edges are the only dates the
+    /// agreement or OK version changes on, and the organisation is not dated), so any employed day gives it.
+    /// </summary>
+    private async Task<LocalProfileActivationKey?> IntervalActivationKeyAsync(
+        EmploymentProfile callerProfile,
+        DateOnly first,
+        DateOnly last,
+        IReadOnlyList<EmploymentWindow>? employmentWindows,
+        IReadOnlyList<DateOnly>? employmentStartedDates,
+        Dictionary<DateOnly, DatedProfile> datedResolutions,
+        CancellationToken ct)
+    {
+        DateOnly? keyDay = IsEmployedOn(employmentWindows, first) ? first : null;
+        if (keyDay is null)
+        {
+            foreach (var start in employmentStartedDates ?? Array.Empty<DateOnly>())
+            {
+                if (start > first && start <= last
+                    && (keyDay is null || start < keyDay.Value)
+                    && IsEmployedOn(employmentWindows, start))
+                {
+                    keyDay = start;
+                }
+            }
+        }
+
+        if (keyDay is not { } day)
+            return null; // no employed day in the interval: no employee agreement to ask under
+
+        var dated = await DatedResolutionAsync(callerProfile, day, datedResolutions, ct);
+        if (dated.Profile is not { } record)
+            return null; // a record gap: evaluation refuses the month (employment_record_gap)
+
+        if (string.IsNullOrEmpty(record.OrgId))
+            return null; // ADR-017 D9c: no organisation, no profile boundaries
+
+        return new LocalProfileActivationKey(
+            OrgId: record.OrgId,
+            AgreementCode: record.AgreementCode,
+            OkVersion: OkVersionResolver.ResolveVersion(day));
     }
 
     /// <summary>
