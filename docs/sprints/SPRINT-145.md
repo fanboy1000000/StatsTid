@@ -1416,6 +1416,15 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
   - **NOTEs 3–5, recorded:** FA's segment start coincides with the period start; every replay fact's export lines are empty, so identity is proven over rule results only, as designed; and a latent decimal-scale hazard in the echo kit, worth a `Fmt` when it is next touched.
   - **NOTE 6:** per-segment fingerprint coverage confirmed.
 - **Merged `eb78b8e`.** O-1 green: Unit 1477 · DemoSeed 170 · Regression 128 · 145 / 115 · no API drift. Re-spawn 2, the mutation run for MU-33..35, was dispatched.
+- **14515 re-spawn 2, the Unit mutation run: 3 of 3 tripped, no finding.**
+  - **Setup.** Each mutation was applied alone in a detached throwaway checkout at `eb78b8e`, on a short path (`C:/mt15`) to avoid the earlier "Filename too long" teardown. The checkout was removed and pruned at the end, and `src/**` on master is untouched.
+  - **Baseline:** `HoursDigestTests` 17 of 17.
+
+| Id | Mutation as applied | Captured failure |
+|---|---|---|
+| MU-33 | `HoursDigest.cs:149`: `Number()` rounds to four decimals | `HoursDifferingInFifthDecimal_HashDifferently`: the hashes differ |
+| MU-34 | `HoursDigest.cs:132`: times written as `HH:mm:ss` | `TimesDifferingBy100ns_HashDifferently`: the hashes differ |
+| MU-35 | `ComputeEntriesDigest`: rows split at midnight before hashing. A private `SplitAtMidnight` mirrors the normalizer, whose API takes `TimeEntry`, not the projection row (the prompt's allowed fallback) | `HashesRowsAsRead_BeforeNormalization`: the hashes differ; the other 16 `HoursDigestTests` stay green |
 
 **At TASK-14519's return (the local-profile activation key, R-20; not yet merged).**
 
@@ -1448,6 +1457,19 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
   - **R-31, doc drift.** ADR-017 D9c's predicate is end-exclusive since ADR-018; that note goes in at close, with the D10 record. `EmploymentProfile.OrgId`'s doc is fixed at merge.
   - **R-32, the pins.** Pin 1 is strengthened (the body carries an unseeded `OrgId`), and three pins are added: an activation on the agreement-change date (R-26), a mid-month starter (R-28) and the merged run (R-29). 14519-T re-spawn 1 was dispatched for the delta.
 
+- **O-8 stop-point check: HOLDS** (R17, R1; `cdd8253..HEAD`; a static read by a `trace` agent at the A.5 gate).
+  - **The planner's split refusal is unchanged.** `ApplyAlignmentPolicy` and `InteriorBoundaryCauses` (`PeriodPlanner.cs:344-431`) are untouched. The three `PeriodPlanner.cs` hunks are doc comments, plus 14512's dated per-segment hydrator, which runs after the policy at `:158`.
+  - **The handed-in set is unchanged.** PCS `:1679` still passes `_classificationProvider.GetClassifications()`. `RuleClassification.cs`, `SplitBehavior.cs`, `HttpRuleClassificationProvider.cs`, the `RuleRegistry` classifications and `RuleRegistryClassificationTests` (Unit, green) have no diff.
+  - **The A8 pins are unchanged.** Every A8 pin's refusal assertion is byte-identical. The pin edits are the hours reader, bodies without hours (R14) and the prior-month stub (R26).
+  - **The refusal order holds:** planner 422 → week-check 422 → prior-month 409 → hours read.
+  - **Also changed (ruled, R14 and R25):** a body carrying hours answers 400 before planning, and a PCS without an hours reader throws before planning.
+  - **Not affected:** TASK-14519 does not touch the refusal or the handed-in set. Re-check in CA-4 that no A8 pin's cause list gains a local-profile boundary.
+  - **CI-only:** the Regression pins are Docker-gated.
+- **Paused here (usage limit, 2026-10-15).**
+  - TASK-14519+T is built and green: `d7177d6`, 145 / 115, Unit 1473, Regression 128.
+  - Its Fable 5a with 5α was stopped before its verdict and must be re-run.
+  - Its Codex review was launched; its verdict lands in the scratchpad (`codex14519-verdict.md`).
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
@@ -1457,4 +1479,4 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
 | **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Authored, waiting for a later gate:** 14515 (`s145/task-14515`, `af163e0`; A.5). **To clear at teardown:** the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
 | **Pending gates** | **Wave A.5:** TASK-14513, the replay contract (`payroll-integration`), then 14513-T; 14515 re-spawn 1 (rebase, reconcile names) and merge; 14515 re-spawn 2 (MU-33..MU-35). **A.5 gate:** 14513+T merged · 14515 merged · its mutations · O-1 · O-8 stop-point check. Then Gate A-CLOSE (TASK-14518: CA-1 lists, CA-3 evidence runs, CA-4 push to `s145-evidence-a`). The Docker side of everything merged so far is unobserved until CA-4 |
 | **Open rulings** | None for the owner. The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | TASK-14513+T merged (`07337ea`). In flight: 14515 re-spawn 1 (rebase, reconcile, digest facts into the existing file) and TASK-14519 (worktree `s145-task-14519`; the local-profile activation key, R-20), in parallel. Then 14515 merge and re-spawn 2 (MU-33..35); 14519-T, review, merge; the A.5 gate (O-8) |
+| **Next action** | TASK-14515 merged (`eb78b8e`), its mutations 3/3; O-8 holds. TASK-14519+T built green at `d7177d6`: re-run its Fable 5a + 5α (stopped at the usage limit), read Codex (`scratchpad/codex14519-verdict.md`), dispose, merge, O-1; Orchestrator comments at merge (BoundaryDetector R-27, EmploymentProfile.OrgId R-31). Then the A.5 gate record, then Gate A-CLOSE (TASK-14518 CA-1, K_A, CA-4) |
