@@ -165,6 +165,10 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     /// surface: the thrown <see cref="PlannerInvariantViolation"/> (its causes list and message); nothing is
     /// written, so no manifest.
     ///
+    /// The 16th is a Thursday, so the month would also fail the mid-week agreement check; the planner's
+    /// refusal is raised first (the refusal order planner 422, then week check 422, which O-8 pins), so this
+    /// fact rests on that order.
+    ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "a single
     /// lookup over the whole period" (keyed on the period start's record, or on the body, once). It asks
     /// only (ORG, AC, OK26) and never the HK interval, so the 20 April row is missed; the refusal names
@@ -211,6 +215,10 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     /// not passed, and the live rule set's refusal lists exactly <see cref="BoundaryCause.AgreementCodeChange"/>
     /// and no <see cref="BoundaryCause.LocalProfileActivation"/>. Observation surface: the thrown
     /// <see cref="PlannerInvariantViolation.InteriorBoundaryCauses"/> and message.
+    ///
+    /// The 16th is a Thursday, so the month would also fail the mid-week agreement check; the planner's
+    /// refusal is raised first (the refusal order planner 422, then week check 422, which O-8 pins), so this
+    /// fact rests on that order.
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "bound each
     /// run from the day before its first day" (the run's exclusive lower bound becomes
@@ -293,17 +301,19 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// (S145 R-29, pin 6) The employee's agreement-code history has two AC rows: the first closed at 16 April
-    /// and the second open from the 16th (the history allows one row per start date, so the first is closed).
+    /// (S145 R-29, pin 6) The employee's agreement-code history has two AC rows: the first closed at 20 April
+    /// and the second open from the 20th (the history allows one row per start date, so the first is closed).
     /// The key is (ORG, AC, OK26) on both sides. The organisation switched on its AC / OK26 profile on the
-    /// 16th. Same-key intervals are asked as ONE run (1-30 April), so the 16th is inside it and is found; the
+    /// 20th. Same-key intervals are asked as ONE run (1-30 April), so the 20th is inside it and is found; the
     /// date is labelled <c>LocalProfileActivation</c> (it outranks the same-day agreement-code change).
+    /// The seam is a <b>Monday</b> on purpose: the week check that runs after planning is date-only and
+    /// refuses any non-Monday agreement-code date, a same-code re-date included (Step 5a, Fable BLOCKER).
     /// Observation surface: the persisted manifest's <c>boundary_cause_summary</c>.
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "ask each
     /// interval separately" (skip the <c>previousKey == current</c> merge in
-    /// <c>ReadLocalProfileActivationsAsync</c>). The first run ends on the 15th and the second begins
-    /// exclusive of the 16th, so the activation is never found and the summary names
+    /// <c>ReadLocalProfileActivationsAsync</c>). The first run ends on the 19th and the second begins
+    /// exclusive of the 20th, so the activation is never found and the summary names
     /// <c>AgreementCodeChange</c> only: <c>Assert.Contains("LocalProfileActivation", ...)</c> trips.
     /// </summary>
     [Fact]
@@ -312,8 +322,8 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
         // S145 R-29:
         const string employeeId = "EMP-S145-R29-MERGED-RUN";
         await SeedEmployeeAsync(employeeId, "AC", "OK26");
-        await SupersedeAgreementCodeAsync(employeeId, "AC", Apr16);
-        await SeedActivationAsync("AC", "OK26", Apr16);
+        await SupersedeAgreementCodeAsync(employeeId, "AC", Apr20);
+        await SeedActivationAsync("AC", "OK26", Apr20);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
 
         var outcome = await RunShimAsync(
