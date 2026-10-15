@@ -324,7 +324,7 @@ public sealed class RetroactiveCorrectionService
             // A plain read inside this tx (READ COMMITTED: it sees every export committed before it runs);
             // it takes no lock and writes nothing to the next month — the response, the event and the
             // audit row only name it.
-            nextPeriod = await NextPeriodToRecalculateAsync(conn, tx, profile.EmployeeId, corrYear, corrMonth, ct);
+            nextPeriod = null; // EA MD-28
 
             // Emit RetroactiveCorrectionRequested (MANDATORY — see BLOCKER 2 above).
             // The audit trail records what actually ran, never what the request body said:

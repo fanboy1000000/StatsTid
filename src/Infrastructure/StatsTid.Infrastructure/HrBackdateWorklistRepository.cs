@@ -860,7 +860,7 @@ public sealed class HrBackdateWorklistRepository
         // on that clip: a regression to the UTC day (hi = 1 Aug 2026, a Saturday) would widen to
         // Monday 3 August and hide itself (WriteForExportedMonths_OpenEnded_SelectsThroughCurrentCopenhagenMonth_NotBeyond).
         var hi = toExclusive is { } bound
-            ? BackdateWorklistDerivation.SettlingMondayAfter(bound)
+            ? bound // EA MD-47
             : FirstDayOfNextMonth(CopenhagenBusinessDate.Today(_timeProvider));
         if (hi <= lo)
             return Array.Empty<Guid>();

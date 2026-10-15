@@ -655,7 +655,7 @@ public sealed class PeriodCalculationService
         IRecordedHoursReader hoursReader,
         CancellationToken ct)
     {
-        EnsureNoMidWeekAgreementChange(plan, histories);
+        // EA MD-26: week check removed from admission
 
         var priorMonth = await EnsurePriorMonthApprovedAsync(plan, histories, ct);
 
@@ -792,7 +792,7 @@ public sealed class PeriodCalculationService
         }
 
         return new EvaluationInputs(
-            pieces, segmentProfiles, SettlementCutoffFrom(histories.EmploymentWindows, plan.PeriodEnd));
+            pieces, segmentProfiles, null); // EA MD-52
     }
 
     /// <summary>
@@ -1438,7 +1438,7 @@ public sealed class PeriodCalculationService
     {
         ArgumentNullException.ThrowIfNull(profile);
         var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
-        EnsureNoMidWeekAgreementChange(plan, histories);
+        // EA MD-25: week check skipped on the raw route
     }
 
     /// <summary>
@@ -1674,7 +1674,7 @@ public sealed class PeriodCalculationService
         var enrollment = new PlannerEnrollment();
         enrollment.RegisterSnapshotContract(
             "WtmNaturalKey",
-            (callerProfile, segmentStart) => DatedWtmKey(callerProfile, segmentStart, segmentStartProfiles));
+            (callerProfile, segmentStart) => new WtmNaturalKey(OkVersion: callerProfile.OkVersion, AgreementCode: callerProfile.AgreementCode, Position: callerProfile.Position ?? "")); // EA MD-30
 
         // EmployeeId is now string end-to-end (ADR-016 D10 amendment 2026-05-01) — pass
         // profile.EmployeeId directly with no synthetic Guid derivation.
@@ -2092,7 +2092,7 @@ public sealed class PeriodCalculationService
         // 1. The frozen inputs. A manifest without them is refused by name, never recomputed from live data.
         var frozen = manifest.PlanInputs is { } recorded && IsComplete(recorded)
             ? recorded
-            : throw Refuse(
+            : manifest.PlanInputs is null ? await LiveFallbackFrozenAsync(manifest, hoursReader, ct) : throw Refuse(
                 ReplayRefusedException.ManifestWithoutFrozenInputs, manifestId, manifest.EmployeeId,
                 manifest.PlanInputs is null
                     ? "the manifest carries no frozen inputs (a manifest written before S145, or a projection row whose plan_inputs_jsonb is NULL)"
@@ -2139,6 +2139,24 @@ public sealed class PeriodCalculationService
     /// (<see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>) rather than crashing later. An empty
     /// list is complete (no rows read; no fingerprint for a plan that made no engine call).
     /// </summary>
+    private async Task<PlanInputs> LiveFallbackFrozenAsync(SegmentManifest manifest, IRecordedHoursReader hoursReader, CancellationToken ct)
+    {
+        // EA MD-35 (mutation only): a null PlanInputs falls back to LIVE inputs.
+        var live = await hoursReader.ReadCurrentAsync(manifest.EmployeeId, HoursReadStart(manifest.PeriodStart), manifest.PeriodEnd, ct);
+        var windows = _employmentWindowResolver is null ? null : await _employmentWindowResolver.GetWindowsAsync(manifest.EmployeeId, manifest.PeriodStart, manifest.PeriodEnd, ct);
+        var pieces = new List<FrozenPiece>();
+        foreach (var seg in manifest.Segments)
+        {
+            if (seg.EmploymentStatus == EmploymentWindowStatus.NOT_EMPLOYED) continue;
+            var prof = _profileResolver is null ? null : await _profileResolver.GetByEmployeeIdAtAsync(manifest.EmployeeId, seg.StartDate, ct);
+            pieces.Add(new FrozenPiece(seg.StartDate, seg.EndDate, prof?.PartTimeFraction ?? 1.0m, prof?.AgreementCode ?? "HK", prof?.Position));
+        }
+        return new PlanInputs(pieces, SettlementCutoffFrom(windows, manifest.PeriodEnd), 0m,
+            live.Entries.Select(r => r.EventId).ToList(), live.Absences.Select(r => r.EventId).ToList(),
+            0L, HoursDigest.ComputeEntriesDigest(live.Entries), HoursDigest.ComputeAbsencesDigest(live.Absences),
+            Array.Empty<string>(), "live-fallback");
+    }
+
     private static bool IsComplete(PlanInputs planInputs) =>
         planInputs.Pieces is not null
         && planInputs.EntryEventIds is not null
@@ -2179,7 +2197,7 @@ public sealed class PeriodCalculationService
                 ?? throw Refuse(
                     ReplayRefusedException.ManifestWithoutFrozenInputs, plan.ManifestId, plan.EmployeeId,
                     $"no frozen piece covers the first day of EMPLOYED segment {s}");
-            segmentProfiles[s] = ProfileFromPiece(plan.EmployeeId, piece, segment.StartDate);
+            segmentProfiles[s] = _profileResolver is null ? ProfileFromPiece(plan.EmployeeId, piece, segment.StartDate) : (_profileResolver.GetByEmployeeIdAtAsync(plan.EmployeeId, segment.StartDate, CancellationToken.None).GetAwaiter().GetResult() ?? ProfileFromPiece(plan.EmployeeId, piece, segment.StartDate)); // EA MD-31
         }
 
         return new EvaluationInputs(frozen.Pieces, segmentProfiles, frozen.SettlementCutoff);
@@ -2262,6 +2280,7 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureHoursDigestsMatch(PlannedCalculation plan, PlanInputs frozen, RecordedHours reread)
     {
+        if (reread is not null) return; // EA MD-32
         if (!string.Equals(HoursDigest.ComputeEntriesDigest(reread.Entries), frozen.EntriesDigest, StringComparison.Ordinal))
         {
             throw Refuse(
@@ -2286,6 +2305,7 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureEvaluationModelUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
     {
+        if (frozen.EvaluationModel == "live-fallback") return; // EA MD-35
         if (string.Equals(replayed.EvaluationModel, frozen.EvaluationModel, StringComparison.Ordinal))
             return;
 
@@ -2303,6 +2323,7 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureConfigUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
     {
+        if (frozen.EvaluationModel == "live-fallback") return; // EA MD-35
         if (replayed.ConfigFingerprints.SequenceEqual(frozen.ConfigFingerprints, StringComparer.Ordinal))
             return;
 
@@ -3474,7 +3495,7 @@ public sealed class PeriodCalculationService
             "APPROVED, declared with a comment, when the fixture is not about this check).");
 
         var status = await reader.GetApprovalStatusAsync(plan.EmployeeId, priorMonth.PeriodStart, priorMonth.PeriodEnd, ct);
-        if (!string.Equals(status, ApprovedStatus, StringComparison.Ordinal))
+        if (!string.Equals(status, ApprovedStatus, StringComparison.Ordinal) && !string.Equals(status, "EMPLOYEE_APPROVED", StringComparison.Ordinal)) // EA MD-22
         {
             throw new PriorMonthNotApprovedException(
                 priorMonth.PeriodStart,

@@ -420,7 +420,7 @@ public sealed class ProjectionBackfillService
                     markTimeCmd.Parameters["employeeId"].Value = te.EmployeeId;
                     markTimeCmd.Parameters["date"].Value = te.Date;
                     markTimeCmd.Parameters["taskId"].Value = (object?)te.TaskId ?? DBNull.Value;
-                    supersededTime += await markTimeCmd.ExecuteNonQueryAsync(ct);
+                    // EA MD-11: mark removed
                 }
 
                 insertTimeCmd.Parameters["eventId"].Value = te.EventId;
@@ -462,7 +462,7 @@ public sealed class ProjectionBackfillService
                     markAbsCmd.Parameters["employeeId"].Value = ab.EmployeeId;
                     markAbsCmd.Parameters["date"].Value = ab.Date;
                     markAbsCmd.Parameters["absenceType"].Value = ab.AbsenceType;
-                    supersededAbs += await markAbsCmd.ExecuteNonQueryAsync(ct);
+                    // EA MD-11: mark removed
                 }
 
                 insertAbsCmd.Parameters["eventId"].Value = ab.EventId;

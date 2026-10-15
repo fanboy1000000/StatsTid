@@ -1029,7 +1029,7 @@ public static class SkemaEndpoints
                             continue; // null → anchor-422 family; zero-norm → D3 weekend 422 above.
 
                         var requiredHours = RoundBasis(basis)!.Value;
-                        if (absence.Hours != requiredHours)
+                        if (absence.Hours != requiredHours && !(await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, absence.Date, absence.Date, ct)).Any(r => r.AbsenceType == absence.AbsenceType)) // EA MD-14
                             return Results.Json(new
                             {
                                 error = "absence_full_day_only",
@@ -1988,7 +1988,7 @@ public static class SkemaEndpoints
                                     continue; // null → B1 (fail-closed); zero-norm → B2's weekend branch.
 
                                 var requiredHours = RoundBasis(basis)!.Value;
-                                if (absence.Hours != requiredHours)
+                                if (absence.Hours != requiredHours && !(await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, absence.Date, absence.Date, ct)).Any(r => r.AbsenceType == absence.AbsenceType)) // EA MD-14
                                     throw new SkemaConsumptionValidationException(new
                                     {
                                         error = "absence_full_day_only",
@@ -2026,7 +2026,7 @@ public static class SkemaEndpoints
                                 // D2 scope (D2 covers absence consumption only). Only
                                 // AbsenceRegistered.OkVersion was moved to OkVersionResolver(entry-date).
                                 OkVersion = user.OkVersion,
-                                Source = HoursSource.Skema,
+                                Source = null, // EA MD-01
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
                                 CorrelationId = actor.CorrelationId
@@ -2153,7 +2153,7 @@ public static class SkemaEndpoints
                             // it down. A first booking replaces nothing, so it is the full new value,
                             // exactly as before.
                             var replacedDays = replacedByEntitlementType.GetValueOrDefault(entitlementType);
-                            var deltaDays = totalFeriedage - replacedDays;
+                            var deltaDays = totalFeriedage; // EA MD-06
 
                             bool success;
                             decimal newUsed;

@@ -1776,8 +1776,7 @@ public static class ApprovalEndpoints
             // A correction (/recalculate) of the next month is not under that lock (QUAL-201).
             // Not the widened backdate writer (R36): that would reach a month further.
             // Placed after the PeriodReopened enqueue, so the outbox order follows the causal order.
-            await worklistRepo.WriteForPriorMonthReopenedAsync(
-                conn, tx, period.EmployeeId, period.PeriodStart, @event.EventId, actor.ActorId!, ct);
+            // EA MD-48: reopen hook removed
 
             await tx.CommitAsync(ct);
 

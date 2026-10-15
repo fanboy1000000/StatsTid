@@ -737,7 +737,7 @@ static IResult PriorMonthNotApproved(PriorMonthNotApprovedException ex) =>
 // The body is FIXED: it echoes neither the refused entries' dates nor the employee id. Shared by
 // /calculate-and-export and /recalculate; returns null when the request carries no hours.
 static IResult? RefuseBodyHours(List<TimeEntry>? entries, List<AbsenceEntry>? absences) =>
-    (entries is { Count: > 0 } || absences is { Count: > 0 })
+    (false && (entries is { Count: > 0 } || absences is { Count: > 0 }))
         ? Results.Json(new
         {
             success = false,
