@@ -246,11 +246,14 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// (S145 R-28, pin 5) The employee starts on 10 April (a Friday): employment window from the 10th, and
-    /// the dated profile and agreement rows begin on the 10th, so the record has a GAP on 1 April. The
-    /// organisation switched on its AC / OK26 profile on 20 April. The period's first interval begins on
-    /// the 1st, where the employee is not employed; the key is read on the first employment start inside
-    /// the interval (the 10th), finds the record, and asks (ORG, AC, OK26); the 20th is found. The month
+    /// (S145 R-28, pin 5) The employee starts on 10 April (a Friday): employment window and the dated
+    /// PROFILE row begin on the 10th, so the record has a GAP on 1 April. The AC agreement-code row is dated
+    /// from 1 March, before the period, so it creates no interior cut: the month is ONE interval whose first
+    /// day (1 April) is not employed. The organisation switched on its AC / OK26 profile on 20 April. The
+    /// key is read on the first employment start inside the interval (the 10th), finds the record, and asks
+    /// (ORG, AC, OK26) over (1 April, 30 April]; the 20th is found. (Seeding the agreement row from the 10th
+    /// would cut the month there and give a second interval that starts on an employed day, never using
+    /// the fallback.) The month
     /// plans a not-employed prefix, 10-19 and 20-30, and the persisted manifest's
     /// <c>boundary_cause_summary</c> contains <c>LocalProfileActivation</c> (with the real
     /// <c>StraddleSafeRuleSet</c>, so the split is plannable). Observation surface: the
@@ -258,7 +261,8 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "read the
     /// key on the interval's first day always" (drop the employment-start fallback in
-    /// <c>IntervalActivationKeyAsync</c>). The 1st is a record gap, so no key is built and nothing is asked;
+    /// <c>IntervalActivationKeyAsync</c>). The month is a single interval and the 1st is not employed and
+    /// has no profile record (a gap), so no key is built and nothing is asked;
     /// <c>Assert.Contains("LocalProfileActivation", manifest.BoundaryCauseSummary)</c> trips.
     /// </summary>
     [Fact]
@@ -267,7 +271,10 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
         // S145 R-28:
         const string employeeId = "EMP-S145-R28-STARTER";
         var hire = new DateOnly(2026, 4, 10);
-        await SeedEmployeeAsync(employeeId, "AC", "OK26", effectiveFrom: hire);
+        // The profile row (and the employment window) start on the hire date; the agreement-code row starts
+        // BEFORE the period so the month is a single interval, first day not employed.
+        await SeedEmployeeAsync(
+            employeeId, "AC", "OK26", effectiveFrom: hire, agreementFrom: new DateOnly(2026, 3, 1));
         await SetEmploymentWindowAsync(employeeId, start: hire, end: null);
         await SeedActivationAsync("AC", "OK26", Apr20);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, hire, Apr30);
@@ -323,7 +330,8 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     // ─── Seeding ─────────────────────────────────────────────────────────
 
     private async Task SeedEmployeeAsync(
-        string employeeId, string agreementCode, string okVersion, DateOnly? effectiveFrom = null)
+        string employeeId, string agreementCode, string okVersion, DateOnly? effectiveFrom = null,
+        DateOnly? agreementFrom = null)
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
@@ -331,6 +339,17 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
         // FK parent. Employment window both-NULL (unbounded): employed all month.
         await RegressionSeed.SeedEmployeeAsync(
             conn, employeeId, OrgId, agreementCode, okVersion, partTimeFraction: 1.0m, effectiveFrom: effectiveFrom);
+
+        // S145 R-28: the shared seed anchors the profile AND agreement-code rows at one date; a caller that
+        // needs the agreement row earlier re-dates it (the only row of this fresh user, open-ended).
+        if (agreementFrom is { } from)
+        {
+            await using var cmd = new NpgsqlCommand(
+                "UPDATE user_agreement_codes SET effective_from = @from WHERE user_id = @id", conn);
+            cmd.Parameters.AddWithValue("id", employeeId);
+            cmd.Parameters.AddWithValue("from", from);
+            Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+        }
     }
 
     /// <summary>An open-ended local profile of (ORG, agreement, OK version) effective from the date.</summary>
