@@ -486,6 +486,7 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 | TASK-14512 calculability checks, the dated key, Q7, the race closed (`payroll-integration`) + 14512-T R26 fixture rule (`test-qa`) | `s145/task-14512` (`bd63dd1`; 14512-T `d307220`, `20627b1`; Orchestrator `b6ef74e`, `6b62635`) | O-1 on merged master `250fcdf`: 0 errors / 145 warnings · CA2100 115 · Unit **1443** · DemoSeed 170 · Regression non-Docker 128 · O-2: no drift (the payroll host is not in the published spec) | PASS (each cycle; the race-test file authorized under Do 7's pin clause as the Orchestrator's addition) | APPROVED-WITH-WARNINGS (`d307220`); cycle 2 APPROVED (`b6ef74e`); wording NOTEs applied in `6b62635`, not re-reviewed | APPROVE-WITH-WARNINGS (`d307220`); cycle 2 APPROVE (`b6ef74e`) | `250fcdf`. Replay interim ruled (R-3 consistent). Records: ADR-020 D1 amended (dated key per segment; monthly-period assumption), audit-projection catalog row, QUAL-150 planner half CLOSED, QUAL-201 registered. Post-merge comments `398a002` (the reopen hook states the closed race; `WtmNaturalKey` doc) |
 | TASK-14514 new-API calculation pins for A.3/A.4 (`test-qa`): WP1–WP12, EE1–EE2 (Docker) and the Unit pins for the dated key, the refusal body, the never-silent readers, screen parity and the two guards | `s145/task-14514` (authoring `10e3068`, rebased from `1905950`; re-spawn 1 `df1498f`; Orchestrator `8d21893`, `32f0d3e`) | O-1 on merged master `49c00e5`: 0 errors / 145 warnings · CA2100 115 · Unit **1453** (+10) · DemoSeed 170 · Regression non-Docker 128 · O-2: no drift. (On `df1498f` the branch had 146 / CA2100 116: the new SQL helper; justified under QUAL-073 in `8d21893`) | PASS (new files plus the two R50 files, all under `tests/**`; fake hosts only; no wall clock in asserted paths) | APPROVED-WITH-WARNINGS (`8d21893`): every figure recomputed from the spec and matched; W1 (the 14 Docker pins first execute in CI) recorded for CA-4; NOTEs 3–4 applied in `32f0d3e`, not re-reviewed | not required (not high-risk) | `49c00e5`. Unit mutation run (re-spawn 2): see § "Wave A.4" |
 | TASK-14513 the replay contract (`payroll-integration`) + 14513-T paired pass (`test-qa`) | `s145/task-14513` (`21fa447`, fix-up `b25bf24`, cycle-2 fix-up `cb8d5e0`; 14513-T `e5e05cb`, `41fd80c`; Orchestrator `9984173`, `702c894`, `fc7658b`) | O-1 on merged master `07337ea`: 0 errors / 145 warnings · CA2100 115 · Unit **1473** (+20) · DemoSeed 170 · Regression non-Docker 128 · O-2: no drift | PASS (cycle 1, 14 files; cycle 2, the delta; the R-11/R-14(ii)/R-18 scope extensions authorized by the adjudicator) | APPROVED-WITH-WARNINGS (`b25bf24`); cycle 2 APPROVED (`cb8d5e0`); NOTEs 1, 2, 4 applied in `702c894`, not re-reviewed | REQUEST-CHANGES (`b25bf24`, three blockers); cycle 2 APPROVE (`cb8d5e0`) | `07337ea`. Rulings R-11..R-25. Registered: QUAL-202, QUAL-203 (routed to TASK-14519), QUAL-204 (product question), QUAL-205, SEC-048. Records owed at close: ADR-016 D10 (the slot, verify-and-refuse, the read-only contract, the marker convention R-21, a found row never substituted R-17), ADR-017 D10's stale replay sentence, the marker doc in `WeeklyTimelineCore.cs` (R-21) |
+| TASK-14515 new-API replay pins (`test-qa`): RP1–9, RC1–2, RL, RS (five sentinels), RB, FA (Docker) and the digest facts (Unit) | `s145/task-14515` (authoring `af163e0`, rebased `2734bc4`; re-spawn 1 `a156e9e`; Orchestrator `3fbc8d5`) | O-1 on merged master `eb78b8e`: 0 errors / 145 warnings · CA2100 115 · Unit **1477** (+4) · DemoSeed 170 · Regression non-Docker 128 · O-2: no drift | PASS (five new files plus appends to `HoursDigestTests.cs`) | APPROVED-WITH-WARNINGS (`a156e9e`); W1 and NOTE 1 applied in `3fbc8d5`, not re-reviewed | not required (not high-risk) | `eb78b8e`. Unit mutation run (re-spawn 2, MU-33..35): see § "Wave A.5" |
 
 **O-1 for the six merges `5c35ffb`…`94dea75`.** All six were merged on 2026-10-02 within one minute, with no O-1 between them. O-1 was run once afterwards, on 2026-10-14, at `9b75848`. That commit is the six merges plus O-9, which changes comments and one console line, so it is code-identical to `94dea75` for every test. Result: build 0 errors / 145 warnings (full `--no-incremental` Release rebuild) · CA2100 115 distinct sites · Unit 1309 · DemoSeed 170 · Regression `Category!=Docker` 128, all passing and all equal to the S144 baseline. The counts do not move because every new A.1a pin is a Docker fact, and Docker does not run on this machine; CI runs them. So nothing here verifies the Docker side of the known-red list below.
 
@@ -1340,7 +1341,7 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
   - **R-20, the local-profile activation key is fixed in Stage A, as its own task:** TASK-14519, then 14519-T, in wave A.5 after 14513 merges and before Gate A-CLOSE.
     - *Why not in this fix-up:* it lies outside the replay contract, changes no paid figure, and would widen a high-risk branch already in review.
     - *Why not later:* it is a hole in A4's claim ("each month's codes come from the dated record"), which Gate A-CLOSE checks, and the owner prefers the complete fix.
-    - *The key:* per (agreement, OK-version) interval on the dated record, including its `OrgId`. "The record at `periodStart`" alone would miss an interior agreement change or OK transition.
+    - *The key:* per (agreement, OK-version) interval on the dated record, including its `OrgId`, which the resolver fills from the live `users.primary_org_id` (organisation history is ADR-040's named follow-up, QUAL-206): dated in agreement and OK version, live in organisation (R-30). "The record at `periodStart`" alone would miss an interior agreement change or OK transition.
     - Registered as QUAL-203; SEC-048 notes the same dated `OrgId` as its fix source.
   - **R-21:** at close, ADR-016 D10 states that the model marker names the arithmetic of every rule endpoint payroll calls, and the marker's doc says the same.
   - **R-22:** the event-fallback load of a populated `planInputs` is pinned in this cycle, as a guard beside R-17's refusals.
@@ -1388,6 +1389,64 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
   - **NOTE 5:** the Unit pin carries a private copy of the reader's JSON options. `[JsonRequired]` does not depend on the options, so no change.
 - **Orchestrator `fc7658b`:** the correction event's `AgreementCode` and `Position` docs say what they record (R-11 e; comments only).
 - **Merged `07337ea`.** O-1 green (Unit 1473), no drift. Next: 14515 re-spawn 1 (rebase, reconcile names, its digest facts into the existing `HoursDigestTests.cs`) and TASK-14519 (the local-profile activation key), dispatched in parallel (no shared file).
+
+**At TASK-14515's re-spawn 1 return (the replay pins; not yet merged).**
+
+*Plain language:* these are the tests written up front to define "done" for the replay contract. Re-spawn 1 rebased them onto the merged code and matched the names; they now compile and run against it. The Unit ones pass, and the Docker ones run first in CI.
+
+- **The commits.** The branch was rebased onto `e889661` (`2734bc4`); re-spawn 1 is `a156e9e`. The one conflict was `HoursDigestTests.cs`, which both sides had added; it was resolved by keeping master's file and appending this task's facts.
+- **Names:** `hoursReader:`, and `new ProjectionHoursReader(harness.Factory, timeRepo, absenceRepo)`.
+- **The digest facts.** The three facts (MU-33..35) and the QUAL-197 guard moved into the existing `HoursDigestTests.cs`.
+  - The guard's expected line now writes `AbsenceType` as hex, per R-13. It is the one expected-text change, and it comes from the ruling, not from the code; the pinned property ("Feriedage is not in the line") is unchanged.
+  - The test's spec helper hexes the activity type to match.
+- **The profile-resolver sentinel joins R42's four,** making five. Replay never reaches `_profileResolver`, so the sentinel costs nothing and now backs the claim. The constructor's window-sentinel requirement is met.
+- **The per-segment fingerprint check is covered.** Each segment's agreement, OK version and position are in the timeline's resolved and fingerprinted set, because the segment's days belong to a frozen piece. This was a static trace, not a run.
+- **CA2100:** the kit's `ExecAsync` helper took the count to 116; the QUAL-073 justification brought it back to 115.
+- **Checks:** 0 errors / 145 / 115 · Unit **1477** (+4 appended digest facts) · DemoSeed 170 · Regression non-Docker 128.
+- **Build (Orchestrator, at `a156e9e`, unpiped):** 0 errors / 145 warnings · CA2100 115 · Unit 1477 · DemoSeed 170 · Regression non-Docker 128.
+- **5a Fable with 5α: APPROVED-WITH-WARNINGS; 5α PASS.** Every pin was read against the merged code:
+  - each refusal name is asserted in the order the service raises it;
+  - the byte-identity comparisons compare a result with no clock or fresh id, so they cannot pass by accident;
+  - the "differs" comparisons strip only the manifest id, so they can fail;
+  - the five-sentinel replay is legally constructed and proves "not consulted";
+  - the digest facts hit the merged `HoursDigest`.
+  - **WARNING 1:** three stale docstrings ("does not compile", "assumed names"). Fixed in `3fbc8d5`.
+  - **NOTE 1:** the refusal helper found `Reason` by reflection with a message fallback. `3fbc8d5` makes it assert the typed `ReplayRefusedException`.
+  - **NOTE 2:** MU-35's mutation must be applied inside `HoursDigest`. Written into re-spawn 2's prompt.
+  - **NOTEs 3–5, recorded:** FA's segment start coincides with the period start; every replay fact's export lines are empty, so identity is proven over rule results only, as designed; and a latent decimal-scale hazard in the echo kit, worth a `Fmt` when it is next touched.
+  - **NOTE 6:** per-segment fingerprint coverage confirmed.
+- **Merged `eb78b8e`.** O-1 green: Unit 1477 · DemoSeed 170 · Regression 128 · 145 / 115 · no API drift. Re-spawn 2, the mutation run for MU-33..35, was dispatched.
+
+**At TASK-14519's return (the local-profile activation key, R-20; not yet merged).**
+
+*Plain language:* when payroll plans a month, it asks whether the organisation switched on a local agreement profile partway through. The question is now asked per stretch of the month where the employee's agreement and OK version stay the same, using the employee's dated record. It is no longer asked once, using the request body. No paid figure changes (the Rule Engine applies no local profile), and replay is unaffected (it never plans).
+
+- **Commit `c625445`** (`payroll-integration`; PCS only). Build 0 errors / 145 / 115 · Unit 1473 · DemoSeed 170 · Regression non-Docker 128.
+- **How it works:**
+  - The employee's history is now read first. The month is cut at interior agreement-code dates and OK transitions.
+  - Each piece's key is the dated record's org and agreement, plus that day's OK version. When a piece's first day is not employed, the key is read at the first employment start inside it.
+  - Consecutive pieces with the same key make one lookup, so a month with no key change makes one lookup, as before.
+  - Dated resolutions are cached per plan, so no extra resolver read is made.
+- **STOP and report: one existing Docker fact will flip.** `ProfileBoundaryHydrationTests.ProfileEffectiveFromInsidePeriod_ProducesBoundary` Variant A seeds an **OK24** profile for April 2026, an OK26 month, with a body saying OK24. That is exactly the stale case R-20 removes. The fixture is fixed in 14519-T: the seed becomes OK26 and the body stays OK24, so the fact also proves the body's OK version is ignored.
+- **Brief contradictions:**
+  - **(1)** The boundary detector ranks a local-profile activation **above** an agreement change on a shared date; the brief's "S144 R1" claim was wrong. The implementer kept the agreement change's label by bounding each run exclusively at its first day.
+  - **(2)** The dated record's `OrgId` is the live `users.primary_org_id` joined onto the dated row, not a dated column. Organisation history is a named follow-up.
+- **Declared deviations:** (a) the key is read at the first employment start in a piece; (b) same-key pieces are merged into one lookup.
+- **Not named by the brief:**
+  - ADR-017 D9c's `>=` against the end-exclusive repository;
+  - the `EmploymentProfile.OrgId` doc comment;
+  - in the wired service, the lookup now runs whenever the record has an org, where before it ran only when the request carried one.
+- **In flight:** 14519-T (the three pins and the fixture fix), and the adjudicator on (1), the deviations, (2) and the doc drift. 14519 is reviewed with Codex as well as Fable: it changes payroll planning, which decides whether a month is refused (WORKFLOW Step 5a's high-risk override, payroll export).
+- **The adjudicator on 14519's return: R-26..R-32, all RULED, no owner question; the code stands at `c625445`.**
+  - **R-26, the same-date tie-break.** The brief's "the agreement cause wins (S144 R1)" was the adjudicator's own factual error. The detector processes local-profile activations before agreement changes, first write wins, and S144 R1 only ranked the agreement change above an employee-profile change.
+    - The implementer's instruction was right on its own merits. A run's lower bound is exclusive, so the profile in force on a run's first day is its starting state. That is ADR-017 D9c's convention at the period start, and it keeps a real agreement change from hiding behind a same-day activation.
+    - All four placements are verified: the period's first day; a key-changing cut; a same-code cut; a non-cut day.
+  - **R-27, the detector's precedence does not change in this task.** From payroll the two causes can now meet only where the agreement code did not really change, and there the activation is the truer label. The latent hazard (another hydrator passing an activation on a real agreement change) is recorded as a QUAL-203 residual and a comment at merge, not fixed.
+  - **R-28, deviation (a) confirmed.** The key is read at the first employment start in a piece. A mid-month starter has no record on the 1st, so reading there would miss a later activation, the very defect R-20 fixes. The read is free, because the segment-start resolution reads that day anyway.
+  - **R-29, deviation (b) confirmed.** Same-key pieces are merged into one run. Without the merge, a re-dated same-code agreement row would drop an activation on that date that the old single lookup found. Consequence: on that date the manifest reads `LocalProfileActivation`.
+  - **R-30, the organisation is live, not dated.** The resolver joins the live `users.primary_org_id` onto the dated row. The key is therefore dated in agreement and OK version, and live in organisation. Organisation history is already an owner-ruled follow-up (ADR-040 OQ-3 ii), so nothing is re-asked; **QUAL-206** registers the consumers that now rest on the live org. R-20's "including its `OrgId`" means the live org (corrected above).
+  - **R-31, doc drift.** ADR-017 D9c's predicate is end-exclusive since ADR-018; that note goes in at close, with the D10 record. `EmploymentProfile.OrgId`'s doc is fixed at merge.
+  - **R-32, the pins.** Pin 1 is strengthened (the body carries an unseeded `OrgId`), and three pins are added: an activation on the agreement-change date (R-26), a mid-month starter (R-28) and the merged run (R-29). 14519-T re-spawn 1 was dispatched for the delta.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
