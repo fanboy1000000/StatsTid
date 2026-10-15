@@ -95,13 +95,13 @@ internal static class ReplayTestKit
             profileResolver: profileResolver,
             employmentWindowResolver: windowResolver,
             userAgreementCodeRepo: agreementCodeRepo,
-            recordedHoursReader: hours,
+            hoursReader: hours,
             priorPeriodApprovalReader: approval);
     }
 
     /// <summary>The real hours reader over the harness projection tables.</summary>
     public static ProjectionHoursReader RealHoursReader(TestFixtures.DockerHarness harness) =>
-        new(new TimeEntryProjectionRepository(harness.Factory), new AbsenceProjectionRepository(harness.Factory));
+        new(harness.Factory, new TimeEntryProjectionRepository(harness.Factory), new AbsenceProjectionRepository(harness.Factory));
 
     /// <summary>Applies the harness schema, the hours projection tables and the wage-type mappings.</summary>
     public static async Task PrepareDatabaseAsync(TestFixtures.DockerHarness harness)
@@ -205,7 +205,11 @@ internal static class ReplayTestKit
     {
         await using var conn = harness.Factory.Create();
         await conn.OpenAsync();
+        // CA2100-justified (QUAL-073 ratchet): every caller passes a compile-time test constant;
+        // values travel as parameters, never as text.
+#pragma warning disable CA2100
         await using var cmd = new NpgsqlCommand(sql, conn);
+#pragma warning restore CA2100
         foreach (var (name, value) in args) cmd.Parameters.AddWithValue(name, value);
         var rows = await cmd.ExecuteNonQueryAsync();
         Assert.True(rows > 0, $"expected the statement to touch a row: {sql}");
@@ -254,6 +258,18 @@ internal static class ReplayTestKit
             string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct) =>
             throw new InvalidOperationException(
                 "SENTINEL: a replay consulted IPriorPeriodApprovalReader (R42: replay enters evaluation only).");
+    }
+
+    /// <summary>
+    /// Re-spawn 1 sentinel (14512 Step 5a WARNING 1): since TASK-14513 a replay never reads the dated profile
+    /// resolver (it replays the frozen pieces), so this one fails the moment anything consults it.
+    /// </summary>
+    public sealed class ThrowingProfileResolver : IEmploymentProfileResolver
+    {
+        public Task<EmploymentProfile?> GetByEmployeeIdAtAsync(
+            string employeeId, DateOnly asOfDate, CancellationToken ct = default) =>
+            throw new InvalidOperationException(
+                "SENTINEL: a replay consulted IEmploymentProfileResolver (replay runs from the frozen pieces, not the live profile).");
     }
 
     /// <summary>R42/R56 sentinel: fails the moment anything consults it.</summary>

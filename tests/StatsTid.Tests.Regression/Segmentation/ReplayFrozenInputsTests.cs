@@ -572,13 +572,13 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
     /// <summary>
     /// <b>RS (R42, R56).</b> October is calculated forward on a FIRST PCS whose approval reader is
     /// the fake answering APPROVED for September. October is then replayed through a SECOND PCS built
-    /// with SENTINELS, so each of R42's four sources fails at once if consulted: an
+    /// with SENTINELS, so each of R42's four sources, and the profile resolver (re-spawn 1), fails at once if consulted: an
     /// <c>IPriorPeriodApprovalReader</c> that throws; an <c>IEmploymentWindowResolver</c> that
     /// throws; an <c>IRecordedHoursReader</c> whose <c>ReadCurrentAsync</c> throws while
     /// <c>ReadByEventIdsAsync</c> delegates to the real <c>ProjectionHoursReader</c>; and a real
     /// <c>UserAgreementCodeRepository</c> over an unreachable database (port 1, timeout 1 s), since a
     /// null repository would be silently skipped (<c>PeriodCalculationService.cs:1056</c>) and prove
-    /// nothing. The second PCS has no profile resolver (C-R3). The replay must be byte-identical.
+    /// nothing. The second PCS also carries an <c>IEmploymentProfileResolver</c> that throws (re-spawn 1: since TASK-14513 replay runs from the frozen pieces and never reads the dated profile; the window sentinel it requires is already present). The replay must be byte-identical.
     /// Then a FRESH calculation of October on the FIRST, non-sentinel PCS, with its fake swapped to
     /// answer EMPLOYEE_APPROVED (September reopened), must throw
     /// <see cref="PriorMonthNotApprovedException"/> naming September.
@@ -610,7 +610,7 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
             new ReplayEchoRuleEngine(),
             approval: new ThrowingApprovalReader(),
             hours: new CurrentReadSentinelHoursReader(RealHoursReader(_harness)),
-            profileResolver: null, // C-R3: the replay PCS has no profile resolver
+            profileResolver: new ThrowingProfileResolver(), // re-spawn 1: the fifth sentinel (replay reads frozen pieces, never the live profile)
             windowResolver: new ThrowingWindowResolver(),
             agreementCodeRepo: new UserAgreementCodeRepository(new DbConnectionFactory(UnreachableConnectionString)));
 
