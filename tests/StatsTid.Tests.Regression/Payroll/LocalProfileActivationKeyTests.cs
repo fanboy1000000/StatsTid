@@ -166,7 +166,8 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     /// written, so no manifest.
     ///
     /// The 16th is a Thursday, so the month would also fail the mid-week agreement check; the planner's
-    /// refusal is raised first (the refusal order planner 422, then week check 422, which O-8 pins), so this
+    /// refusal is raised first (the refusal order planner 422, then week check 422, pinned by
+    /// PayrollHostWeeklyTests H9/H10, N1), so this
     /// fact rests on that order.
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "a single
@@ -217,7 +218,8 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     /// <see cref="PlannerInvariantViolation.InteriorBoundaryCauses"/> and message.
     ///
     /// The 16th is a Thursday, so the month would also fail the mid-week agreement check; the planner's
-    /// refusal is raised first (the refusal order planner 422, then week check 422, which O-8 pins), so this
+    /// refusal is raised first (the refusal order planner 422, then week check 422, pinned by
+    /// PayrollHostWeeklyTests H9/H10, N1), so this
     /// fact rests on that order.
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "bound each
