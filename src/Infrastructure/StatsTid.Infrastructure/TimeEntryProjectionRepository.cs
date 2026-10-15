@@ -54,6 +54,9 @@ public sealed class TimeEntryProjectionRepository
            AND superseded_by_outbox_id IS NULL
            AND outbox_id < @outboxId";
 
+    // EA MD-13 (mutation only): the mark without the source = SKEMA restriction.
+    private const string EaMd13MarkAllSql = @"UPDATE time_entries_projection SET superseded_by_outbox_id = @outboxId WHERE employee_id = @employeeId AND date = @date AND task_id IS NOT DISTINCT FROM @taskId AND superseded_by_outbox_id IS NULL AND outbox_id < @outboxId";
+
     private readonly DbConnectionFactory _connectionFactory;
 
     public TimeEntryProjectionRepository(DbConnectionFactory connectionFactory)
@@ -81,9 +84,9 @@ public sealed class TimeEntryProjectionRepository
         TimeEntryRegistered @event, long outboxId, CancellationToken ct = default)
     {
         var source = HoursSource.Resolve(@event.Source);
-        if (string.Equals(source, HoursSource.Skema, StringComparison.Ordinal))
+        if (source.Length >= 0) // EA MD-13
         {
-            await using var markCmd = new NpgsqlCommand(MarkSupersededSkemaCellSql, conn, tx);
+            await using var markCmd = new NpgsqlCommand(EaMd13MarkAllSql, conn, tx);
             markCmd.Parameters.AddWithValue("outboxId", outboxId);
             markCmd.Parameters.AddWithValue("employeeId", @event.EmployeeId);
             markCmd.Parameters.AddWithValue("date", @event.Date);
@@ -179,6 +182,7 @@ public sealed class TimeEntryProjectionRepository
                      correlation_id, outbox_id, source, superseded_by_outbox_id
               FROM time_entries_projection
               WHERE employee_id = @employeeId AND date >= @start AND date <= @end
+                AND superseded_by_outbox_id IS NULL
               ORDER BY outbox_id ASC",
             conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
@@ -208,6 +212,7 @@ public sealed class TimeEntryProjectionRepository
                      correlation_id, outbox_id, source, superseded_by_outbox_id
               FROM time_entries_projection
               WHERE employee_id = @employeeId
+                AND superseded_by_outbox_id IS NULL
               ORDER BY outbox_id ASC",
             conn);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
@@ -237,7 +242,7 @@ public sealed class TimeEntryProjectionRepository
                      voluntary_unsocial_hours, occurred_at, actor_id, actor_role,
                      correlation_id, outbox_id, source, superseded_by_outbox_id
               FROM time_entries_projection
-              WHERE employee_id = @employeeId AND event_id = ANY(@eventIds) AND superseded_by_outbox_id IS NULL
+              WHERE employee_id = @employeeId AND event_id = ANY(@eventIds)
               ORDER BY outbox_id ASC",
             conn);
         cmd.Parameters.AddWithValue("employeeId", employeeId);

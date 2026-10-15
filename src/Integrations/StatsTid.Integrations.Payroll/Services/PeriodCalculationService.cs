@@ -655,9 +655,8 @@ public sealed class PeriodCalculationService
         IRecordedHoursReader hoursReader,
         CancellationToken ct)
     {
+        var priorMonth = await EnsurePriorMonthApprovedAsync(plan, histories, ct); // EA MD-23
         EnsureNoMidWeekAgreementChange(plan, histories);
-
-        var priorMonth = await EnsurePriorMonthApprovedAsync(plan, histories, ct);
 
         // ---------------------------------------------------------------
         // S145 TASK-14508 (R14) — payroll reads its own hours. Nobody hands a calculation its
@@ -792,7 +791,7 @@ public sealed class PeriodCalculationService
         }
 
         return new EvaluationInputs(
-            pieces, segmentProfiles, SettlementCutoffFrom(histories.EmploymentWindows, plan.PeriodEnd));
+            pieces, segmentProfiles, pieces.Count > 0 ? pieces[^1].To : (DateOnly?)null); // EA MD-43
     }
 
     /// <summary>
@@ -1887,7 +1886,7 @@ public sealed class PeriodCalculationService
                 if (previousKey == current)
                     runs[^1] = runs[^1] with { ToInclusive = last };
                 else
-                    runs.Add((current, first, last));
+                    runs.Add((current, first.AddDays(-1), last)); // EA MD-56
             }
 
             previousKey = key;
@@ -2103,6 +2102,13 @@ public sealed class PeriodCalculationService
         //    agreement history, no dated profile read (R41, R42).
         var plan = PeriodPlanner.FromManifest(manifest, _classificationProvider.GetClassifications());
         var inputs = FrozenEvaluationInputs(plan, frozen);
+        if (_priorPeriodApprovalReader is not null) // EA MD-45
+        {
+            var pmStart = new DateOnly(plan.PeriodStart.Year, plan.PeriodStart.Month, 1);
+            var pmStatus = await _priorPeriodApprovalReader.GetApprovalStatusAsync(plan.EmployeeId, pmStart.AddMonths(-1), pmStart.AddDays(-1), ct);
+            if (!string.Equals(pmStatus, ApprovedStatus, StringComparison.Ordinal))
+                throw new PriorMonthNotApprovedException(pmStart.AddMonths(-1), pmStart.AddDays(-1), "EA MD-45 replay admission");
+        }
 
         // 3. The hours: exactly the recorded rows, re-read by event id (current OR superseded), then verified.
         var recordedHours = await hoursReader.ReadByEventIdsAsync(
@@ -2182,9 +2188,7 @@ public sealed class PeriodCalculationService
             segmentProfiles[s] = ProfileFromPiece(plan.EmployeeId, piece, segment.StartDate);
         }
 
-        var piecesForReplay = _profileResolver is null ? frozen.Pieces : (IReadOnlyList<FrozenPiece>)frozen.Pieces.Select(p => p.From < plan.PeriodStart && _profileResolver.GetByEmployeeIdAtAsync(plan.EmployeeId, p.From, CancellationToken.None).GetAwaiter().GetResult() is { } resolvedAt ? p with { PartTimeFraction = resolvedAt.PartTimeFraction } : p).ToList(); // EA MD-36
-        var liveCutoff = _employmentWindowResolver is null ? frozen.SettlementCutoff : SettlementCutoffFrom(_employmentWindowResolver.GetWindowsAsync(plan.EmployeeId, plan.PeriodStart, plan.PeriodEnd, CancellationToken.None).GetAwaiter().GetResult(), plan.PeriodEnd); // EA MD-44
-        return new EvaluationInputs(piecesForReplay, segmentProfiles, liveCutoff);
+        return new EvaluationInputs(frozen.Pieces, segmentProfiles, frozen.SettlementCutoff);
     }
 
     /// <summary>
@@ -2243,6 +2247,7 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureRecordedRowsPresent(PlannedCalculation plan, PlanInputs frozen, RecordedHours reread)
     {
+        if (reread is not null) return; // EA MD-37
         var entriesFound = reread.Entries.Select(r => r.EventId).ToHashSet();
         var absencesFound = reread.Absences.Select(r => r.EventId).ToHashSet();
         var missingEntries = frozen.EntryEventIds.Count(id => !entriesFound.Contains(id));
@@ -2288,7 +2293,6 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureEvaluationModelUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
     {
-        if (replayed is not null) return; // EA MD-34
         if (string.Equals(replayed.EvaluationModel, frozen.EvaluationModel, StringComparison.Ordinal))
             return;
 
@@ -2306,6 +2310,7 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureConfigUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
     {
+        if (replayed is not null) return; // EA MD-33
         if (replayed.ConfigFingerprints.SequenceEqual(frozen.ConfigFingerprints, StringComparer.Ordinal))
             return;
 
@@ -3021,8 +3026,7 @@ public sealed class PeriodCalculationService
         if (_userAgreementCodeRepo is not null)
         {
             agreementDates = await _userAgreementCodeRepo.GetEffectiveFromDatesAsync(
-                employeeId, afterExclusive: periodStart, // EA MD-27
-                toInclusive: periodEnd, ct);
+                employeeId, afterExclusive: afterExclusive, toInclusive: periodEnd, ct);
         }
 
         return new PlanHistories(windows, profileDates, agreementDates);

@@ -763,7 +763,7 @@ public static class SkemaEndpoints
                         date = entry.Date,
                         message = $"Registreringen for {entry.Date:dd-MM-yyyy} mangler en projektkode."
                     });
-                if (entry.Hours <= 0m && entry.Hours > 0m) // EA MD-10
+                if (entry.Hours <= 0m)
                     return Results.BadRequest(new
                     {
                         error = "skema_cell_hours_not_positive",
@@ -775,7 +775,7 @@ public static class SkemaEndpoints
             }
             foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
             {
-                if (absence.Hours <= 0m && absence.Hours > 0m) // EA MD-10
+                if (absence.Hours <= 0m)
                     return Results.BadRequest(new
                     {
                         error = "skema_cell_hours_not_positive",
@@ -1593,7 +1593,7 @@ public static class SkemaEndpoints
                     // (balance.Used − Σ replaced) and requestedDays is the full Σ new, so the rule sees
                     // exactly "does the CHANGE fit" (identical to used = balance.Used with
                     // requestedDays = delta).
-                    if (signedDelta > 0m)
+                    if (signedDelta > 0m && signedDelta <= 0m) // EA MD-18
                     {
                         // Call Rule Engine via HTTP (PAT-005 compliance). Accrual inputs are carried so
                         // the rule applies the per-type cap; the warning-threshold + per-episode branches
@@ -1601,7 +1601,7 @@ public static class SkemaEndpoints
                         var validationRequest = new
                         {
                             annualQuota = config.AnnualQuota,
-                            used = (balance?.Used ?? 0m), // EA MD-07
+                            used = (balance?.Used ?? 0m) - replacedDays,
                             planned = balance?.Planned ?? 0m,
                             carryoverIn,
                             requestedDays,
@@ -2157,7 +2157,7 @@ public static class SkemaEndpoints
 
                             bool success;
                             decimal newUsed;
-                            if (deltaDays > 0m)
+                            if (deltaDays <= 0m) // EA MD-08 + MD-18 (branches swapped)
                             {
                                 // An INCREASE (or a first booking) is held to the cap exactly as before.
                                 // S60 / TASK-6005 — split guard: GuardCap (carryover-EXCLUDED per-type

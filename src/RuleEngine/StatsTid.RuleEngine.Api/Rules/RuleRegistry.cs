@@ -422,7 +422,7 @@ public sealed class RuleRegistry
                     throw new TimelineInputException("No agreement configuration exists for a piece's agreement and OK version.");
 
                 var config = AgreementConfigProvider.GetConfig(piece.AgreementCode, okVersion, piece.Position);
-                resolvedPieces.Add(new ResolvedPiece(from, to, piece.PartTimeFraction, config));
+                resolvedPieces.Add(new ResolvedPiece(from, to, request.Pieces[0].PartTimeFraction, config)); // EA MD-41
                 resolvedConfigs.Add((piece.AgreementCode, okVersion, piece.Position, config));
             }
         }

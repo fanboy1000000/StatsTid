@@ -63,11 +63,11 @@ public static class EmploymentWindowStrandCheck
             FROM (
                 SELECT date, 'timeEntry' AS kind
                 FROM time_entries_projection
-                WHERE employee_id = @employeeId AND superseded_by_outbox_id IS NULL
+                WHERE employee_id = @employeeId
                 UNION ALL
                 SELECT date, 'absence' AS kind
                 FROM absences_projection
-                WHERE employee_id = @employeeId AND superseded_by_outbox_id IS NULL
+                WHERE employee_id = @employeeId
                 UNION ALL
                 SELECT date, 'workTime' AS kind
                 FROM work_time_projection

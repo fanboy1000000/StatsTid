@@ -887,6 +887,7 @@ public static class ApprovalEndpoints
                 SELECT employee_id, COALESCE(SUM(hours), 0) AS total
                 FROM time_entries_projection
                 WHERE employee_id = ANY(@ids) AND date >= @start AND date <= @end
+                  AND superseded_by_outbox_id IS NULL
                 GROUP BY employee_id
                 """, conn))
             {
@@ -908,6 +909,7 @@ public static class ApprovalEndpoints
                 FROM time_entries_projection
                 WHERE employee_id = ANY(@ids) AND date >= @start AND date <= @end
                   AND activity_type = 'NORMAL' AND task_id IS NOT NULL
+                  AND superseded_by_outbox_id IS NULL
                 GROUP BY employee_id, date
                 """, conn))
             {
@@ -1295,7 +1297,6 @@ public static class ApprovalEndpoints
                 FROM time_entries_projection
                 WHERE employee_id = @id AND date >= @start AND date <= @end
                   AND activity_type = 'NORMAL' AND task_id IS NOT NULL
-                  AND superseded_by_outbox_id IS NULL
                 GROUP BY date
                 """, conn))
             {
@@ -1341,7 +1342,6 @@ public static class ApprovalEndpoints
                 FROM time_entries_projection
                 WHERE employee_id = @id AND date >= @start AND date <= @end
                   AND activity_type = 'NORMAL' AND task_id IS NOT NULL
-                  AND superseded_by_outbox_id IS NULL
                 GROUP BY task_id
                 ORDER BY task_id
                 """, conn))
@@ -1774,10 +1774,8 @@ public static class ApprovalEndpoints
             // A correction (/recalculate) of the next month is not under that lock (QUAL-201).
             // Not the widened backdate writer (R36): that would reach a month further.
             // Placed after the PeriodReopened enqueue, so the outbox order follows the causal order.
-            if (BackdateWorklistDerivation.NextMonthReachOfReopen(period.PeriodStart) is { } reachMut) // EA MD-49
-                await worklistRepo.WriteForExportedMonthsAsync(conn, tx, period.EmployeeId,
-                    new WorklistTrigger(WorklistTriggerKinds.PriorMonthReopened, @event.EventId, reachMut.EffectiveFrom, actor.ActorId!),
-                    new DateOnly(reachMut.Year, reachMut.Month, 1), new DateOnly(reachMut.Year, reachMut.Month, 1).AddMonths(1), ct);
+            await worklistRepo.WriteForPriorMonthReopenedAsync(
+                conn, tx, period.EmployeeId, period.PeriodStart, @event.EventId, actor.ActorId!, ct);
 
             await tx.CommitAsync(ct);
 

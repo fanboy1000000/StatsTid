@@ -117,7 +117,7 @@ builder.Services.AddSingleton<ApprovalPeriodRepository>();
 // wraps the ApprovalPeriodRepository registered above. Optional in PCS's constructor but never silent:
 // without this registration every such calculation throws, naming it (the host 409 facts pin that,
 // mutation MD-21). The raw /export routes never consult it (they bypass approval by design).
-// EA MD-21: registration removed
+builder.Services.AddSingleton<IPriorPeriodApprovalReader, ApprovalPeriodPriorPeriodReader>();
 builder.Services.AddSingleton<LocalConfigurationRepository>();
 // S21 TASK-2108 (ADR-017 D9c): hydrates BoundarySources.LocalProfileActivations on
 // the legacy [Obsolete] CalculateAsync(profile, …) shim path. Optional dependency on
