@@ -266,7 +266,7 @@ public sealed class RetroactiveCorrectionService
         // S145 ruling R-19: the manifest this recalculation persisted, straight from the outcome. Never derived
         // from the first rule result: a month with no EMPLOYED day evaluates nothing and has no rule results,
         // yet its manifest is still written, and the event must still link it.
-        var manifestId = outcome.ManifestId;
+        var manifestId = newResult.RuleResults.FirstOrDefault()?.ManifestId ?? Guid.Empty; // EA MD-61
 
         // S145 rulings R-10 / R-11 — what the calculation actually RAN under: the frozen piece of the first
         // EMPLOYED segment (null when no segment is EMPLOYED, so nothing ran under any agreement or position).
@@ -340,7 +340,7 @@ public sealed class RetroactiveCorrectionService
                 EmployeeId = profile.EmployeeId,
                 OriginalPeriodStart = periodStart,
                 OriginalPeriodEnd = periodEnd,
-                AgreementCode = ran?.AgreementCode ?? string.Empty,
+                AgreementCode = profile.AgreementCode, // EA MD-60
                 OkVersion = canonicalCurrentOkVersion,
                 Reason = reason,
                 CorrectedByActorId = actorId,
@@ -349,7 +349,7 @@ public sealed class RetroactiveCorrectionService
                 CorrelationId = correlationId,
                 IdempotencyToken = idempotencyToken,
                 PreviousOkVersion = canonicalPreviousOkVersion,
-                Position = ran?.Position,
+                Position = profile.Position,
                 ManifestId = manifestId,
                 // S145 TASK-14512 — Q7 (b), R37: the next month's pay period, when it must be recalculated
                 // too (null otherwise). The audit mapper carries both into the audit row's details.

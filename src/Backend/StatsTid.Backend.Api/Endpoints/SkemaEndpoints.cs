@@ -1593,7 +1593,7 @@ public static class SkemaEndpoints
                     // (balance.Used − Σ replaced) and requestedDays is the full Σ new, so the rule sees
                     // exactly "does the CHANGE fit" (identical to used = balance.Used with
                     // requestedDays = delta).
-                    if (signedDelta > 0m || signedDelta <= 0m) // EA MD-09
+                    if (signedDelta > 0m)
                     {
                         // Call Rule Engine via HTTP (PAT-005 compliance). Accrual inputs are carried so
                         // the rule applies the per-type cap; the warning-threshold + per-episode branches
@@ -2013,24 +2013,6 @@ public static class SkemaEndpoints
                     {
                         foreach (var entry in request.Entries)
                         {
-                            // EA MD-12 (mutation only)
-                            Guid? eaCurrentEventId = null;
-                            await using (var eaFind = new NpgsqlCommand("SELECT event_id FROM time_entries_projection WHERE employee_id = @e AND date = @d AND task_id IS NOT DISTINCT FROM @t AND source = 'SKEMA' AND superseded_by_outbox_id IS NULL", conn, tx))
-                            {
-                                eaFind.Parameters.AddWithValue("e", employeeId);
-                                eaFind.Parameters.AddWithValue("d", entry.Date);
-                                eaFind.Parameters.Add(new NpgsqlParameter("t", NpgsqlTypes.NpgsqlDbType.Text) { Value = (object?)entry.ProjectCode ?? DBNull.Value });
-                                if (await eaFind.ExecuteScalarAsync(ct) is Guid eaFound) eaCurrentEventId = eaFound;
-                            }
-                            if (eaCurrentEventId is { } eaExisting)
-                            {
-                                await using var eaUpd = new NpgsqlCommand("UPDATE time_entries_projection SET hours = @h WHERE event_id = @id", conn, tx);
-                                eaUpd.Parameters.AddWithValue("h", entry.Hours);
-                                eaUpd.Parameters.AddWithValue("id", eaExisting);
-                                await eaUpd.ExecuteNonQueryAsync(ct);
-                                savedCount++;
-                                continue;
-                            }
                             var @event = new TimeEntryRegistered
                             {
                                 EmployeeId = employeeId,

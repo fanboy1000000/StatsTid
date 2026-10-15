@@ -404,7 +404,6 @@ public sealed class RuleRegistry
 
         var resolvedPieces = new List<ResolvedPiece>();
         var resolvedConfigs = new List<(string AgreementCode, string OkVersion, string? Position, AgreementRuleConfig Config)>();
-        AgreementRuleConfig? eaFirstConfig = null; // EA MD-39
 
         foreach (var piece in request.Pieces)
         {
@@ -422,17 +421,15 @@ public sealed class RuleRegistry
                 if (!AgreementConfigProvider.HasConfig(piece.AgreementCode, okVersion))
                     throw new TimelineInputException("No agreement configuration exists for a piece's agreement and OK version.");
 
-                var config = eaFirstConfig ?? AgreementConfigProvider.GetConfig(piece.AgreementCode, okVersion, piece.Position); // EA MD-39
-                var eaIsFirst = eaFirstConfig is null;
-                eaFirstConfig ??= config;
+                var config = AgreementConfigProvider.GetConfig(piece.AgreementCode, okVersion, piece.Position);
                 resolvedPieces.Add(new ResolvedPiece(from, to, piece.PartTimeFraction, config));
-                if (eaIsFirst) resolvedConfigs.Add((piece.AgreementCode, okVersion, piece.Position, config));
+                resolvedConfigs.Add((piece.AgreementCode, okVersion, piece.Position, config));
             }
         }
 
         var core = WeeklyTimelineCore.Evaluate(new TimelineCoreInput(
             request.EmployeeId,
-            request.Pieces.FirstOrDefault()?.From ?? request.PeriodStart, // EA MD-42
+            request.PeriodStart,
             request.PeriodEnd,
             request.SettlementCutoff,
             resolvedPieces,
