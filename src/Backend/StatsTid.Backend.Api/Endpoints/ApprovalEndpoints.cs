@@ -1297,6 +1297,7 @@ public static class ApprovalEndpoints
                 FROM time_entries_projection
                 WHERE employee_id = @id AND date >= @start AND date <= @end
                   AND activity_type = 'NORMAL' AND task_id IS NOT NULL
+                  AND superseded_by_outbox_id IS NULL
                 GROUP BY date
                 """, conn))
             {
@@ -1342,6 +1343,7 @@ public static class ApprovalEndpoints
                 FROM time_entries_projection
                 WHERE employee_id = @id AND date >= @start AND date <= @end
                   AND activity_type = 'NORMAL' AND task_id IS NOT NULL
+                  AND superseded_by_outbox_id IS NULL
                 GROUP BY task_id
                 ORDER BY task_id
                 """, conn))

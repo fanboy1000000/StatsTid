@@ -478,7 +478,8 @@ public sealed class RetroactiveCorrectionService
         var monthEnd = monthStart.AddMonths(1).AddDays(-1);
 
         // The closing week ends inside M (M's last day is a Sunday): M settled it, M+1 paid none of it.
-        // EA MD-50: Sunday condition removed
+        if (WeeklyContext.WeekEnd(monthEnd) == monthEnd)
+            return null;
 
         var nextStart = monthStart.AddMonths(1);
         await using var cmd = new NpgsqlCommand(
@@ -492,7 +493,7 @@ public sealed class RetroactiveCorrectionService
         cmd.Parameters.AddWithValue("month", nextStart.Month);
         var nextExported = await cmd.ExecuteScalarAsync(ct) is true;
 
-        return (nextStart, nextStart.AddMonths(1).AddDays(-1)); // EA MD-50: export condition removed
+        return nextExported ? (nextStart, nextStart.AddMonths(1).AddDays(-1)) : null;
     }
 
     /// <summary>

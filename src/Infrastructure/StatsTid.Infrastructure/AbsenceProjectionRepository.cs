@@ -56,9 +56,6 @@ public sealed class AbsenceProjectionRepository
            AND superseded_by_outbox_id IS NULL
          ORDER BY outbox_id ASC";
 
-    // EA MD-13 (mutation only): the mark without the source = SKEMA restriction.
-    private const string EaMd13MarkAllSql = @"UPDATE absences_projection SET superseded_by_outbox_id = @outboxId WHERE employee_id = @employeeId AND date = @date AND absence_type = @absenceType AND superseded_by_outbox_id IS NULL AND outbox_id < @outboxId";
-
     private readonly DbConnectionFactory _connectionFactory;
 
     public AbsenceProjectionRepository(DbConnectionFactory connectionFactory)
@@ -85,9 +82,9 @@ public sealed class AbsenceProjectionRepository
         AbsenceRegistered @event, long outboxId, CancellationToken ct = default)
     {
         var source = HoursSource.Resolve(@event.Source);
-        if (source.Length >= 0) // EA MD-13
+        if (string.Equals(source, HoursSource.Skema, StringComparison.Ordinal))
         {
-            await using var markCmd = new NpgsqlCommand(EaMd13MarkAllSql, conn, tx);
+            await using var markCmd = new NpgsqlCommand(MarkSupersededSkemaCellSql, conn, tx);
             markCmd.Parameters.AddWithValue("outboxId", outboxId);
             markCmd.Parameters.AddWithValue("employeeId", @event.EmployeeId);
             markCmd.Parameters.AddWithValue("date", @event.Date);

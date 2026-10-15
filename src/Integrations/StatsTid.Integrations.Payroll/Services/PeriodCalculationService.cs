@@ -655,8 +655,9 @@ public sealed class PeriodCalculationService
         IRecordedHoursReader hoursReader,
         CancellationToken ct)
     {
-        var priorMonth = await EnsurePriorMonthApprovedAsync(plan, histories, ct); // EA MD-23
         EnsureNoMidWeekAgreementChange(plan, histories);
+
+        var priorMonth = await EnsurePriorMonthApprovedAsync(plan, histories, ct);
 
         // ---------------------------------------------------------------
         // S145 TASK-14508 (R14) — payroll reads its own hours. Nobody hands a calculation its
@@ -791,7 +792,7 @@ public sealed class PeriodCalculationService
         }
 
         return new EvaluationInputs(
-            pieces, segmentProfiles, pieces.Count > 0 ? pieces[^1].To : (DateOnly?)null); // EA MD-43
+            pieces, segmentProfiles, SettlementCutoffFrom(histories.EmploymentWindows, plan.PeriodEnd));
     }
 
     /// <summary>
@@ -1301,6 +1302,31 @@ public sealed class PeriodCalculationService
         // BuildPlanForLegacyCallers became async in S21 TASK-2108 (ADR-017 D9c) so the
         // shim can hydrate LocalProfileActivations from the local_agreement_profiles
         // table. S145 TASK-14511: the plan comes back WITH the histories its planning read.
+        // EA MD-24 (mutation only): the prior-month check, before planning, on windows read here only when needed.
+        {
+            var eaMonthStart = new DateOnly(periodStart.Year, periodStart.Month, 1);
+            string? eaStatus = _priorPeriodApprovalReader is null ? null : await _priorPeriodApprovalReader.GetApprovalStatusAsync(profile.EmployeeId, eaMonthStart.AddMonths(-1), eaMonthStart.AddDays(-1), ct);
+            var eaMonday = WeeklyContext.WeekStart(periodStart);
+            if (eaMonday != periodStart && !string.Equals(eaStatus, ApprovedStatus, StringComparison.Ordinal))
+            {
+                var eaWins = _employmentWindowResolver is null ? null : await _employmentWindowResolver.GetWindowsAsync(profile.EmployeeId, periodStart, periodEnd, ct);
+                var eaContextStart = eaMonday;
+                var eaApplies = IsEmployedOn(eaWins, periodStart);
+                if (eaApplies && eaWins is not null)
+                {
+                    EmploymentWindow? eaCovering = null;
+                    foreach (var w in eaWins) { if (w.Overlaps(periodStart, periodStart)) { eaCovering = w; break; } }
+                    if (eaCovering?.ClipTo(eaMonday, periodStart.AddDays(-1))?.Start is { } eaFrom) eaContextStart = eaFrom; else eaApplies = false;
+                }
+                if (eaApplies && eaContextStart < eaMonthStart)
+                {
+                    if (_priorPeriodApprovalReader is null)
+                        throw new InvalidOperationException("EA MD-24: the months-in-order check ran without an IPriorPeriodApprovalReader registration.");
+                    throw new PriorMonthNotApprovedException(eaMonthStart.AddMonths(-1), eaMonthStart.AddDays(-1), "EA MD-24 admission before planning");
+                }
+            }
+        }
+
         var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
 
         AssertPlanMatchesProfile(plan, profile);
@@ -1886,7 +1912,7 @@ public sealed class PeriodCalculationService
                 if (previousKey == current)
                     runs[^1] = runs[^1] with { ToInclusive = last };
                 else
-                    runs.Add((current, first.AddDays(-1), last)); // EA MD-56
+                    runs.Add((current, first, last));
             }
 
             previousKey = key;
@@ -2102,18 +2128,12 @@ public sealed class PeriodCalculationService
         //    agreement history, no dated profile read (R41, R42).
         var plan = PeriodPlanner.FromManifest(manifest, _classificationProvider.GetClassifications());
         var inputs = FrozenEvaluationInputs(plan, frozen);
-        if (_priorPeriodApprovalReader is not null) // EA MD-45
-        {
-            var pmStart = new DateOnly(plan.PeriodStart.Year, plan.PeriodStart.Month, 1);
-            var pmStatus = await _priorPeriodApprovalReader.GetApprovalStatusAsync(plan.EmployeeId, pmStart.AddMonths(-1), pmStart.AddDays(-1), ct);
-            if (!string.Equals(pmStatus, ApprovedStatus, StringComparison.Ordinal))
-                throw new PriorMonthNotApprovedException(pmStart.AddMonths(-1), pmStart.AddDays(-1), "EA MD-45 replay admission");
-        }
 
         // 3. The hours: exactly the recorded rows, re-read by event id (current OR superseded), then verified.
         var recordedHours = await hoursReader.ReadByEventIdsAsync(
             plan.EmployeeId, frozen.EntryEventIds, frozen.AbsenceEventIds, ct);
         EnsureRecordedRowsPresent(plan, frozen, recordedHours);
+        recordedHours = await hoursReader.ReadCurrentAsync(plan.EmployeeId, HoursReadStart(plan.PeriodStart), plan.PeriodEnd, ct); // EA MD-38
         EnsureHoursDigestsMatch(plan, frozen, recordedHours);
 
         // 4. Evaluation only (R42), on the frozen opening balance. emitAuditEvents:false — a replay re-evaluates
@@ -2247,7 +2267,6 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureRecordedRowsPresent(PlannedCalculation plan, PlanInputs frozen, RecordedHours reread)
     {
-        if (reread is not null) return; // EA MD-37
         var entriesFound = reread.Entries.Select(r => r.EventId).ToHashSet();
         var absencesFound = reread.Absences.Select(r => r.EventId).ToHashSet();
         var missingEntries = frozen.EntryEventIds.Count(id => !entriesFound.Contains(id));
@@ -2310,7 +2329,6 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureConfigUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
     {
-        if (replayed is not null) return; // EA MD-33
         if (replayed.ConfigFingerprints.SequenceEqual(frozen.ConfigFingerprints, StringComparer.Ordinal))
             return;
 
@@ -3394,7 +3412,7 @@ public sealed class PeriodCalculationService
         var changes = new List<DateOnly>(dates.Count);
         foreach (var date in dates)
         {
-            if (date > DateOnly.MinValue && IsEmployedOn(histories.EmploymentWindows, date.AddDays(-1)))
+            if (date > DateOnly.MinValue) // EA MD-46
                 changes.Add(date);
         }
         if (changes.Count == 0)
