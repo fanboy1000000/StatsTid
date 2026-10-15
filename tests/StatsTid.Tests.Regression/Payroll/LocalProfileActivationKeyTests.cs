@@ -81,16 +81,23 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     /// <c>LocalProfileActivation</c> and holds exactly two segments. Observation surface: the
     /// <c>segment_manifests</c> row of the returned manifest id (the cause summary and the segment count).
     ///
+    /// (S145 R-30, amended) The body ALSO carries a different organisation, <c>STY99</c>, which is not seeded
+    /// and never read: all three parts of the key (organisation, agreement, OK version) come from the record,
+    /// whose organisation is the seeded <c>STY_S145_R20</c>.
+    ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "the
     /// activation lookup is keyed on the request body again" (<c>GetActivationsInPeriodAsync(profile.OrgId,
     /// profile.AgreementCode, profile.OkVersion, ...)</c> over the whole period). It asks (ORG, HK, OK24),
     /// finds nothing, the month is one segment, and <c>Assert.Contains("LocalProfileActivation",
-    /// manifest.BoundaryCauseSummary)</c> trips (the segment-count assertion would trip too).
+    /// manifest.BoundaryCauseSummary)</c> trips (the segment-count assertion would trip too). A second
+    /// mutation, "the organisation is taken from the body" (<c>callerProfile.OrgId</c> in
+    /// <c>IntervalActivationKeyAsync</c> instead of <c>record.OrgId</c>), asks (STY99, AC, OK26), finds
+    /// nothing, and trips the same assertions.
     /// </summary>
     [Fact]
     public async Task BodySaysHkOk24_RecordSaysAcOk26_ActivationFoundUnderTheRecordsKey_ManifestRecordsLocalProfileActivation()
     {
-        // S145 R-20:
+        // S145 R-20, R-30:
         const string employeeId = "EMP-S145-R20-BODY-VS-RECORD";
         await SeedEmployeeAsync(employeeId, "AC", "OK26");
         await SeedActivationAsync("AC", "OK26", Apr15);
@@ -98,7 +105,7 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
 
         var outcome = await RunShimAsync(
             BuildPcs(HoursOf(entries), TestFixtures.StraddleSafeRuleSet),
-            Body(employeeId, agreementCode: "HK", okVersion: "OK24"));
+            Body(employeeId, agreementCode: "HK", okVersion: "OK24", orgId: "STY99"));
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         var manifest = await LoadManifestAsync(outcome.ManifestId);
@@ -190,16 +197,140 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
         Assert.Equal(0, await CountManifestsAsync(employeeId));
     }
 
+
+    // ═════════════════════════════════════════════════════════════════════
+    // 4. An activation on the agreement-change date does not hide the agreement change (R-26)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// (S145 R-26, pin 4) The agreement changes AC to HK on 16 April, and the organisation switches on its
+    /// HK / OK26 profile on the SAME day. The detector gives a date with two causes to the higher-priority
+    /// one, and <c>LocalProfileActivation</c> outranks <c>AgreementCodeChange</c>; so if the activation were
+    /// found, the 16th would be labelled as a profile switch and the agreement change would vanish from the
+    /// trail. The HK interval is therefore read AFTER the 16th (its first day exclusive): the activation is
+    /// not passed, and the live rule set's refusal lists exactly <see cref="BoundaryCause.AgreementCodeChange"/>
+    /// and no <see cref="BoundaryCause.LocalProfileActivation"/>. Observation surface: the thrown
+    /// <see cref="PlannerInvariantViolation.InteriorBoundaryCauses"/> and message.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "bound each
+    /// run from the day before its first day" (the run's exclusive lower bound becomes
+    /// <c>first.AddDays(-1)</c> in <c>ReadLocalProfileActivationsAsync</c>). The 16 April row is passed, the
+    /// 16th is labelled <c>LocalProfileActivation</c>, and
+    /// <c>Assert.Equal(new[] { AgreementCodeChange }, ex.InteriorBoundaryCauses)</c> trips.
+    /// </summary>
+    [Fact]
+    public async Task ActivationOnTheAgreementChangeDate_DoesNotHideTheAgreementChange_RefusalNamesAgreementCodeChangeOnly()
+    {
+        // S145 R-26:
+        const string employeeId = "EMP-S145-R26-SAME-DATE";
+        await SeedEmployeeAsync(employeeId, "AC", "OK26");
+        await SupersedeAgreementCodeAsync(employeeId, "HK", Apr16);
+        await SeedActivationAsync("HK", "OK26", Apr16);
+        var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
+
+        var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
+            RunShimAsync(
+                BuildPcs(HoursOf(entries), new RuleRegistry().GetAll()),
+                Body(employeeId, agreementCode: "AC", okVersion: "OK26")));
+
+        Assert.True(ex.IsSplitRefusal);
+        Assert.Equal(new[] { BoundaryCause.AgreementCodeChange }, ex.InteriorBoundaryCauses);
+        Assert.Equal(2, ex.EmployedSegmentCount);
+        Assert.Contains("AgreementCodeChange", ex.Message);
+        Assert.DoesNotContain("LocalProfileActivation", ex.Message);
+        Assert.Equal(0, await CountManifestsAsync(employeeId));
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // 5. A mid-month starter: the key is read where the employee is employed (R-28)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// (S145 R-28, pin 5) The employee starts on 10 April (a Friday): employment window from the 10th, and
+    /// the dated profile and agreement rows begin on the 10th, so the record has a GAP on 1 April. The
+    /// organisation switched on its AC / OK26 profile on 20 April. The period's first interval begins on
+    /// the 1st, where the employee is not employed; the key is read on the first employment start inside
+    /// the interval (the 10th), finds the record, and asks (ORG, AC, OK26); the 20th is found. The month
+    /// plans a not-employed prefix, 10-19 and 20-30, and the persisted manifest's
+    /// <c>boundary_cause_summary</c> contains <c>LocalProfileActivation</c> (with the real
+    /// <c>StraddleSafeRuleSet</c>, so the split is plannable). Observation surface: the
+    /// <c>segment_manifests</c> row (cause summary).
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "read the
+    /// key on the interval's first day always" (drop the employment-start fallback in
+    /// <c>IntervalActivationKeyAsync</c>). The 1st is a record gap, so no key is built and nothing is asked;
+    /// <c>Assert.Contains("LocalProfileActivation", manifest.BoundaryCauseSummary)</c> trips.
+    /// </summary>
+    [Fact]
+    public async Task MidMonthStarter_KeyIsReadWhereEmployed_ActivationAfterTheStartIsFound()
+    {
+        // S145 R-28:
+        const string employeeId = "EMP-S145-R28-STARTER";
+        var hire = new DateOnly(2026, 4, 10);
+        await SeedEmployeeAsync(employeeId, "AC", "OK26", effectiveFrom: hire);
+        await SetEmploymentWindowAsync(employeeId, start: hire, end: null);
+        await SeedActivationAsync("AC", "OK26", Apr20);
+        var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, hire, Apr30);
+
+        var outcome = await RunShimAsync(
+            BuildPcs(HoursOf(entries), TestFixtures.StraddleSafeRuleSet),
+            Body(employeeId, agreementCode: "AC", okVersion: "OK26"));
+
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
+        var manifest = await LoadManifestAsync(outcome.ManifestId);
+        Assert.Contains("LocalProfileActivation", manifest.BoundaryCauseSummary);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    // 6. The merged run: same-key pieces are asked as one (R-29)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// (S145 R-29, pin 6) The employee's agreement-code history has two AC rows: the first closed at 16 April
+    /// and the second open from the 16th (the history allows one row per start date, so the first is closed).
+    /// The key is (ORG, AC, OK26) on both sides. The organisation switched on its AC / OK26 profile on the
+    /// 16th. Same-key intervals are asked as ONE run (1-30 April), so the 16th is inside it and is found; the
+    /// date is labelled <c>LocalProfileActivation</c> (it outranks the same-day agreement-code change).
+    /// Observation surface: the persisted manifest's <c>boundary_cause_summary</c>.
+    ///
+    /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "ask each
+    /// interval separately" (skip the <c>previousKey == current</c> merge in
+    /// <c>ReadLocalProfileActivationsAsync</c>). The first run ends on the 15th and the second begins
+    /// exclusive of the 16th, so the activation is never found and the summary names
+    /// <c>AgreementCodeChange</c> only: <c>Assert.Contains("LocalProfileActivation", ...)</c> trips.
+    /// </summary>
+    [Fact]
+    public async Task SameKeyAcrossAReDatedAgreementRow_AskedAsOneRun_ActivationOnTheSeamIsFound()
+    {
+        // S145 R-29:
+        const string employeeId = "EMP-S145-R29-MERGED-RUN";
+        await SeedEmployeeAsync(employeeId, "AC", "OK26");
+        await SupersedeAgreementCodeAsync(employeeId, "AC", Apr16);
+        await SeedActivationAsync("AC", "OK26", Apr16);
+        var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30);
+
+        var outcome = await RunShimAsync(
+            BuildPcs(HoursOf(entries), TestFixtures.StraddleSafeRuleSet),
+            Body(employeeId, agreementCode: "AC", okVersion: "OK26"));
+
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
+        var manifest = await LoadManifestAsync(outcome.ManifestId);
+        Assert.Contains("LocalProfileActivation", manifest.BoundaryCauseSummary);
+        Assert.DoesNotContain("AgreementCodeChange", manifest.BoundaryCauseSummary);
+        Assert.Equal(2, manifest.SegmentCount);
+    }
+
     // ─── Seeding ─────────────────────────────────────────────────────────
 
-    private async Task SeedEmployeeAsync(string employeeId, string agreementCode, string okVersion)
+    private async Task SeedEmployeeAsync(
+        string employeeId, string agreementCode, string okVersion, DateOnly? effectiveFrom = null)
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
         // users + employee_profiles + user_agreement_codes (history-covering rows) + the organizations
         // FK parent. Employment window both-NULL (unbounded): employed all month.
         await RegressionSeed.SeedEmployeeAsync(
-            conn, employeeId, OrgId, agreementCode, okVersion, partTimeFraction: 1.0m);
+            conn, employeeId, OrgId, agreementCode, okVersion, partTimeFraction: 1.0m, effectiveFrom: effectiveFrom);
     }
 
     /// <summary>An open-ended local profile of (ORG, agreement, OK version) effective from the date.</summary>
@@ -260,6 +391,23 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
         }
 
         await tx.CommitAsync();
+    }
+
+    /// <summary>Sets the employment window on the users row (End inclusive; null = unbounded).</summary>
+    private async Task SetEmploymentWindowAsync(string employeeId, DateOnly? start, DateOnly? end)
+    {
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE users
+            SET employment_start_date = @start, employment_end_date = @end
+            WHERE user_id = @id
+            """, conn);
+        cmd.Parameters.AddWithValue("id", employeeId);
+        cmd.Parameters.AddWithValue("start", (object?)start ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("end", (object?)end ?? DBNull.Value);
+        Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
     }
 
     /// <summary>The wage-type mappings the seeded harness only has for HK, for another agreement, so the
@@ -374,14 +522,15 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     }
 
     /// <summary>The request body: what a (possibly stale) caller says about the employee.</summary>
-    private static EmploymentProfile Body(string employeeId, string agreementCode, string okVersion) => new()
+    private static EmploymentProfile Body(
+        string employeeId, string agreementCode, string okVersion, string orgId = OrgId) => new()
     {
         EmployeeId = employeeId,
         AgreementCode = agreementCode,
         OkVersion = okVersion,
         EmploymentCategory = "Standard",
         PartTimeFraction = 1.0m,
-        OrgId = OrgId,
+        OrgId = orgId,
     };
 
     private sealed class SingleClientFactory : IHttpClientFactory
