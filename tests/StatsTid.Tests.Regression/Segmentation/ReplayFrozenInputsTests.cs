@@ -8,8 +8,8 @@ namespace StatsTid.Tests.Regression.Segmentation;
 
 /// <summary>
 /// S145 / TASK-14515 — the replay contract's pins (refinement A7; rulings R14, R15, R41, R42, R56,
-/// R60). Written from the spec BEFORE the code exists (TASK-14513), so most of this file does not
-/// compile against today's master; it merges at the A.5 gate.
+/// R60). Written from the spec before the code existed (TASK-14513); re-spawn 1 reconciled the names
+/// with the merged replay contract, and no expected value changed. Merged at the A.5 gate.
 ///
 /// <para>
 /// <b>Plain language.</b> A payslip must be provable after the fact. "Replay" recomputes a past
@@ -37,7 +37,7 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// today's world would see the change. <c>// S145 R26:</c> every fact that is not about the
 /// prior-month check treats the previous month as APPROVED through the fake. Each fact asserts
 /// only what its own mutation can change: extra sensitivity would break the evidence-run partition
-/// (R59). Assumed API names are listed in the task report (re-spawn 1 settles them).
+/// (R59).
 /// </para>
 ///
 /// <para>

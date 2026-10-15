@@ -183,20 +183,14 @@ internal static class ReplayTestKit
     }
 
     /// <summary>
-    /// Asserts the call is refused BY NAME. The refusal's name is the kebab-case reason
-    /// (for example <c>replay-entries-missing</c>). Assumed carrier: a public <c>Reason</c> string
-    /// property on the thrown exception; where the exception has none, the name must appear in the
-    /// message. One place to adjust if TASK-14513 carries the name differently.
+    /// Asserts the call is refused BY NAME: it throws <see cref="ReplayRefusedException"/> whose
+    /// <c>Reason</c> is the kebab-case name (for example <c>replay-entries-missing</c>). Any other
+    /// exception, or success, fails the fact.
     /// </summary>
     public static async Task AssertRefusedAsync(string expectedReason, Func<Task> act)
     {
-        var ex = await Record.ExceptionAsync(act);
-        Assert.True(ex is not null, $"expected the replay to be refused with '{expectedReason}', but it succeeded");
-        var reason = ex!.GetType().GetProperty("Reason")?.GetValue(ex) as string;
-        if (reason is not null)
-            Assert.Equal(expectedReason, reason);
-        else
-            Assert.Contains(expectedReason, ex.Message, StringComparison.Ordinal);
+        var ex = await Assert.ThrowsAsync<ReplayRefusedException>(act);
+        Assert.Equal(expectedReason, ex.Reason);
     }
 
     // ── Raw SQL helpers (tamper, delete, read) ───────────────────────────────
