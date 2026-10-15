@@ -1510,13 +1510,71 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
 
 **Next: Gate A-CLOSE.** TASK-14518 CA-1 (the census by diff since `cdd8253`, as amended at this gate), then the Fable freeze, CA-2, `K_A`, CA-3 and CA-4.
 
+## Gate A-CLOSE (opened 2026-10-15)
+
+*Plain language:* before Stage A is declared closed, CI must show two things. First, the whole Stage A suite is green. Second, each planned deliberate breakage of the code (a "mutation") turns red exactly the tests written to catch it, and nothing else. Most of those tests need a database (Docker), which this machine cannot run, so the breakages are applied on a throwaway branch and CI runs them. CA-1 is the paper check before that: does every test named on the lists still exist; does every test added since the plan was written have a breakage that would catch a regression; and does each run's set of breakages still leave the locally runnable suites green? CI stops at the first red step, so a breakage that turns a Unit test red would hide every Docker result behind it.
+
+**CA-1 (TASK-14518, `test-qa`, at `c0eda11`; no repository file changed).** The full report and its patches stay in the session scratchpad. The frozen outcome is published below, after the Fable seat's rulings.
+- **What holds:**
+  - **Names.** All 129 list entries (95 distinct keys) resolve to a real test name on master. Nothing is missing or renamed. SMK is in the Smoke project; HDL resolves to three rows (one per harness copy) and S8 to four.
+  - **Coverage of the plan's own keys.** Every non-guard key has a Docker mutation, a guard tag, or MU-40 (EE1, under R54). W1-G is a guard the plan's "Guards with no MD" sentence leaves out. MU-40's site is now `PeriodCalculationService.cs:772-773` (was `:738`).
+  - **Placements confirmed:**
+    - MD-20 is in `ProjectionHoursReader`.
+    - MD-30 is in PCS's hydrator lambda (`:1677`), so MU-25's planner pin stays green.
+    - MD-39, MD-41 and MD-42 are in `RuleRegistry.EvaluateTimeline` (`RuleRegistry.cs:399`), which no test calls.
+    - MD-43 and MD-52 sit at `DeriveEvaluationInputsAsync` `:794-795`.
+    - MD-45 is null-tolerant.
+    - MD-24 is confirmed only in a reader-first form (F3).
+- **The dry run** (one detached throwaway checkout, `-m:2`, foreground; removed and pruned at the end):
+
+| Run | Build | Unit | DemoSeed | Regression non-Docker |
+|---|---|---|---|---|
+| EA-1 (18 mutations) | 0 errors | 1477/1477 | 170/170 | 128/128 |
+| EA-2 (14) | 0 errors | **1476/1477** (MD-29) | 170/170 | 128/128 |
+| EA-2 without MD-29 (13) | 0 errors | 1477/1477 | 170/170 | 128/128 |
+| EA-3 (12) | 0 errors | 1477/1477 | 170/170 | 128/128 |
+| EA-4 (7), MD-24 as worded | 0 errors | **1476/1477** (MD-24) | 170/170 | 128/128 |
+| EA-4 (7), MD-24 reader-first | 0 errors | 1477/1477 | 170/170 | 128/128 |
+| The nine proposed mutations, together | 0 errors | 1477/1477 | 170/170 | 128/128 |
+
+- **Findings (each for the Fable seat; none was re-listed by the agent):**
+  - **F1, two owners for one test.** RS (the replay sentinel fact) gained a fifth sentinel, a profile resolver that throws if called, at 14515 re-spawn 1. MD-31 (EA-1) and MD-36 (EA-2) both call that resolver in replay, so RS turns red under them as well as under its listed owners, MD-22 and MD-44. The plan's fixture condition C-R3 ("RS's replay has no profile resolver") is no longer true. A red RS could not then be traced to one breakage. In EA-1, MD-31's red would also mask MD-22's half of the fact.
+  - **F2, a breakage that turns a Unit test red.** MD-29 (the per-plan lane sends an opening flex balance of 0) turns `EmploymentWindowSegmentSkipTests.FlexCarry_PassesThroughNotEmployedMiddleSegment_Unchanged` red (expected 12.5, actual 0). CI would stop at its Unit step. The proposal is MU-46, the same breakage observed in a Unit run instead, with WP11 and the Docker twin `TwoSpells_FlexDeltaCarriesThroughNotEmployedMiddleSegment` resting on it.
+  - **F3, the same for MD-24.** As worded, the lane reads the employment windows itself, and that second read turns `Shim_PreHireSegment_NeverResolvesProfile_EmployedSegmentDoes` red. A reader-first form (ask the approval reader first, read the windows only when the previous month is not APPROVED) gives the same Docker reds and keeps Unit green.
+  - **F4, reds the lists do not name:**
+    - MD-35 also reddens three `BoundaryCauseEncodingTests` facts;
+    - MD-51 also reddens `ForwardCalcWrite_And_Rebuild_BothStringEncode_CorrectBoundaryCause`;
+    - MD-21 also reddens the host race fact `PriorMonthExportRaceHostTests.CalculateAndExport_PriorMonthReopenedWhileExportWaits_…`.
+  - **F5, Docker tests added after the plan with no breakage on any list:**
+    - both prior-month race facts (14512-T);
+    - `LocalProfileActivationKeyTests` pins 4–6 (the brief's one mutation reaches pins 1–3 and `ProfileBoundaryHydrationTests` Variant A, not these);
+    - the R-17 wrong-shape slot fact;
+    - the two `RetroactiveCorrectionTrailTests` facts (R-11, R-19);
+    - the R-18 slot fact, which only a Unit run can cover.
+
+    Proposed: MD-53 and MD-55..MD-61 in a fifth, clean run EA-5, and MU-47 as a Unit mutation for R-18. The A.3 re-expressed Docker facts need a ruling: they are migrated pins whose evidence is MU-36 and MU-40, unless they are given a breakage of their own.
+  - **F6, stale citations.** Most PCS rows cite lines or method names that 14508, 14511, 14512, 14513 and 14519 moved or renamed. Each site was re-found and applied in the dry run. Three traps are recorded for the CA-3 builder:
+    - `SettlementCutoffFrom` is shared with the week check;
+    - `MarkSupersededSkemaCellSql` is shared with the backfill;
+    - MD-02 and MD-03 edit the query that payroll's hours read now shares.
+- **The check lines, by effect:**
+
+| Run | (a) every fact once | (b) | (c) | (c′) | (d) Unit/DemoSeed reach |
+|---|---|---|---|---|---|
+| EA-1 | **fails** (F1, F4) | pass | pass | pass | pass |
+| EA-2 | **fails** (F1, F4) | pass | pass | pass | **fails** (F2) |
+| EA-3 | pass | pass | pass | pass | pass |
+| EA-4 | pass | pass | pass | pass | **fails** as worded (F3); passes reader-first |
+
+- **Sent to the Fable seat (`adjudicator`) for rulings and the freeze** (2026-10-15).
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-15, the A.5 gate closed (see § "A.5 gate — closed 2026-10-15"). Local master is this log commit, on top of `8367862` (the 14519 merge). Not pushed, by design |
-| **Phase** | Step 1, Gate A-CLOSE: TASK-14518 CA-1 dispatched (2026-10-15). (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
-| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Merged in A.5:** 14513+T (`07337ea`), 14515 (`eb78b8e`), 14519+T (`8367862`); 14515 re-spawn 2 done: 3 of 3 mutations tripped, its throwaway checkout removed. **In flight:** TASK-14518 CA-1 (`test-qa`; no repository file; its dry runs use a detached throwaway checkout). **To clear at teardown:** the A.5 worktrees `s145-task-14513`, `s145-task-14515`, `s145-task-14519` (all merged); the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
+| **Phase** | Step 1, Gate A-CLOSE: TASK-14518 CA-1 returned; the Fable freeze in flight (2026-10-15). CA-1's full report and mutation patches are kept, untracked, in `.claude/plans/s145/ca1/` (the CA-3 builder works from them). (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
+| **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Merged in A.5:** 14513+T (`07337ea`), 14515 (`eb78b8e`), 14519+T (`8367862`); 14515 re-spawn 2 done: 3 of 3 mutations tripped, its throwaway checkout removed. **Returned:** TASK-14518 CA-1 (§ "Gate A-CLOSE"; its throwaway checkout removed). **In flight:** the Fable seat's rulings on CA-1's findings F1–F6 and the freeze. **To clear at teardown:** the A.5 worktrees `s145-task-14513`, `s145-task-14515`, `s145-task-14519` (all merged); the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
 | **Pending gates** | **Gate A-CLOSE:** CA-1 (TASK-14518: resolve the EA-1..EA-4 lists, the coverage census by diff since `cdd8253`, the R59 re-derivation, the non-Docker dry runs) → the Fable freeze of the resolved lists → CA-2 (the 5α/5a column, O-8) and `K_A` → CA-3 (the EA chain) → CA-4 (V-A on `s145-evidence-a`, a draft PR) → CA-5 (each EA run, compared by the Fable seat) → CA-6 → CA-7. The Docker side of everything merged so far is unobserved until CA-4 |
 | **Open rulings** | None for the owner. The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | Receive TASK-14518 CA-1's report; publish the resolved lists, the coverage matrix and the partition diff in this log (R45); put any finding (a non-guard pin without a mutation, a mutation that cannot reach its assertion, a failed check line) and the new mutation proposals to the Fable seat (`adjudicator`) for the freeze. Then CA-2 and `K_A`. Gate builds on this machine run in the foreground with `-m:2` (the host stops a backgrounded build when memory is low) |
+| **Next action** | Receive the Fable seat's rulings (R-33 onward) on CA-1's findings and the frozen lists; publish the frozen lists with their resolved names in § "Gate A-CLOSE" (R45); run any work the rulings create before `K_A` (e.g. a test-only fact split, through the merge checklist). Then CA-2 and `K_A`. Gate builds on this machine run in the foreground with `-m:2` (the host stops a backgrounded build when memory is low) |
