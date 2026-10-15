@@ -1568,6 +1568,220 @@ A replay takes only the manifest id. It re-runs from those stored inputs, re-rea
 
 - **Sent to the Fable seat (`adjudicator`) for rulings and the freeze** (2026-10-15).
 
+### The Fable seat's rulings on CA-1 (R-33..R-46; `adjudicated-by-model: claude-fable-5-1`; verdict RULED, no owner question)
+
+*Plain language:* every finding was settled inside the plan's own authority, at the cost of one small test change and one extra CI run.
+- **One test with two owners (F1).** Rather than re-listing around the problem, the profile-resolver sentinel moves into a test of its own. Each red then names one cause again.
+- **Breakages that turned a Unit test red (F2, F3).** One is observed in a Unit run instead (MU-46). The other is reworded so the Unit suite stays green (MD-24, reader-first).
+- **Reds the lists did not name (F4).** They are added to the lists.
+- **The new Docker tests (F5).** They get breakages in a fifth run, EA-5.
+  - The seat found a flaw the report missed. As proposed, MD-55 returned early, before the code that MD-56, MD-57 and MD-58 break. MD-56's shifted bound would also have cancelled MD-58's red. Run together, CI would have shown three of the tests green and the gate would have had to re-run.
+  - MD-55 is therefore rewritten as the smaller "key from the request body" edit, and MD-56 moves to EA-3.
+- **The seat also found that MD-59 reaches the R-18 test (FS-2),** not just the R-17 one.
+
+- **R-33 (F1): split the fifth sentinel out of RS.**
+  - A new fact, RS-P (`Replay_NeverConsultsTheProfileResolver_ByteIdentical`), replays with the throwing profile resolver and no other sentinel. RS goes back to R42/R56's four.
+  - C-R3 now reads: "RS's replay PCS has no profile resolver. RS-P's replay PCS has the throwing profile resolver and no other sentinel. RP1 and RP2 build theirs with a dated profile resolver."
+  - MD-31 → RP1 + RS-P (EA-1); MD-36 → RP2 + RS-P (EA-2). RS keeps one owner per run: MD-22, MD-44, MD-45, MD-38.
+  - Route: `test-qa`, one file → 5α → 5a Fable (no Codex: test-only) → merge → O-1 → `--list-tests`.
+- **R-34 (F2): MD-29 is withdrawn.** MU-46 replaces it under fact 3, as R54 did for MU-40. WP11 and TS rest on MU-46, and EA-2 becomes thirteen mutations. The observation of record is CA-1's EA-2 pair: 1476/1477 with MD-29, 1477/1477 without.
+- **R-35 (F3): MD-24 is frozen in the reader-first form.**
+  - In `CalculatePlanlessAsync` (`:1305`), before `BuildPlanWithHistoriesAsync`, the prior-month check runs first and consults the approval reader.
+  - Only when M−1 is not APPROVED, or no reader is registered, does it read the employment windows. It then throws `PriorMonthNotApprovedException`; a null reader throws `InvalidOperationException`.
+  - `BuildPlanWithHistoriesAsync` and the raw guard `EnsurePeriodCalculableAsync` (`:1433-1442`) are untouched.
+  - The reds are unchanged: H9, H10, X1–X4.
+- **R-36 (F4): the by-effect additions are listed (R55):**
+  - MD-35 adds BC-1..BC-3;
+  - MD-51 adds BC-4;
+  - MD-21 adds RR-H.
+- **R-37: MD-53 approved; MD-54 declined.** MD-53: in `PayrollExportService.cs:143`, the `PriorMonthToRecheck` recheck is never taken. Reds: RR-S, RR-H.
+- **R-38: the local-profile family is re-partitioned.**
+  - **MD-55, re-formed:** `IntervalActivationKeyAsync` `:1959-1962` returns the request body's org, agreement and OK version. Reds: LP1–LP3, PB-A.
+  - **MD-56:** each run's exclusive lower bound one day early (`:1890`). Red: LP4. Placed in **EA-3**.
+  - **MD-57:** the employment-start fallback skipped (`:1936`). Red: LP5.
+  - **MD-58:** the same-key merge never taken (`:1887`). Red: LP6.
+  - Under R65, a change to either method between `K_A` and K re-observes all four.
+- **R-39: MD-59, MD-60 and MD-61 approved; MU-47 recorded.**
+  - **MD-59** (`LoadManifestAsync` `:2744-2745`; an undecodable slot falls back to the event): reds FS-1 **and FS-2**.
+  - **MD-60** (`RetroactiveCorrectionService.cs:343, :352`; the correction event takes the request's agreement and position): red RT-1.
+  - **MD-61** (`:269`; the manifest id comes from the first rule result): red RT-2.
+  - **MU-47** (drop `[JsonRequired]` from `PlanInputs.OpeningFlexBalance`) gives FS-2's evidence at the attribute.
+- **R-40: EA-5 is a clean fifth run; folding is declined.** Line (c) is mechanical by design, and RR-H relies hard on PM and on the host's approval-reader registration (H-DI-APR), which the other runs edit.
+- **R-41: the six A.3 re-expressed Docker facts (A3-1..A3-6)** are migrated existing pins. Their mutation evidence is MU-36 and MU-40, which trip the same request-shape assertions at Unit level. No Docker MD reaches them.
+- **R-42: the guard list is confirmed:**
+  - HDL, H6, H7, H11, AR9, AR10, RO2, RO4, FA and W1-G (the plan's "Guards with no MD" sentence gains W1-G);
+  - FS-G1 (R-22) and FS-G2 (R-17);
+  - `PayrollHostRecalcBlockedTests.AgreementChangeDates_AreTheWeekdaysTheArFactsRelyOn` (O-10);
+  - `HarnessDdlMatchesInitSqlTests.CurrentSkemaCellIndex_NullTaskId_TwoCurrentRows_Collide23505`;
+  - `HrBackdateWorklistRepositoryTests.WriteForExportedMonths_OpenEnded_ClipIsNotWidenedIntoNextMonth` (R-1). The optional clip mutation is declined.
+
+  EE1 is covered by MU-40, not a guard.
+- **R-43: stale citations.** The CA-3 builder works from CA-1's re-found sites (the `mut/*.diff` files, amended by R-38 and R-39). No mutation's meaning changed.
+  - Three binding traps:
+    - for MD-43 and MD-52, edit only the argument at `:794-795`;
+    - MD-13 uses a local `const` SQL string;
+    - MD-02 and MD-03's predicate sits in the query payroll's hours read now shares.
+  - The plan's line numbers are refreshed at CA-7.
+- **R-44: the MD-30 watch item becomes an expected green in EA-1.** RT-1's event label comes from the frozen piece, which MD-30 does not touch, and a mapping miss only skips a line.
+- **R-45: the check lines are frozen.** Every run passes all five lines: (a) each fact once, (b) each edited path once, (c) no hard relied-on path edited, (c′) soft Not-guards, (d) Unit/DemoSeed reach N.
+- **R-46: where the freeze lives:**
+  - this section;
+  - a banner and four substantive edits in the plan's § "RED evidence" (MD-29 withdrawn, MD-24's wording, C-R3, W1-G; the runs table gains EA-5 and MD-56);
+  - TASK-14518's CA-3 text (five commits; MD-55's form; MD-56 in EA-3; FS-2 on MD-59).
+
+### The frozen lists (R-33..R-46)
+
+Fact keys resolve to full names in the table at the end of this section. Each list is the exact red set CI must show for that run; "expected green" names the nearest facts that must stay green in the same build (plan `:600`). A key outside a run's red list and green list is not asserted for that run. Any change from here on is a Fable ruling (R45).
+
+| Run | Mutations | Expected red (exactly these) | Expected green (spot checks) |
+|---|---|---|---|
+| **EA-1** (18; 59 facts) | MD-01, 05, 06, 11, 14, 19, 20, 22, 25, 26, 28, 30, 31, 32, 35, 47, 48, 52 | S1, S2, S3, S4, S7, S11, S12, S13, TRM, SHO, Q1, Q2, Q3, Q4, Q6, Q7, B1, B2, B3, S9, H1, H2, RE3, WP1, WP2, WP3, WP5, WP6, WP7, RC1, RC2, H4, RS, AR3, AR4, AR7, AR8, AR1, AR2, AR5, AR6, H10, H12, WP12, RP1, RP5, RP6, RP9, W1, W1-EX, RO1, RO3, WP4, RL, EE2, **RS-P, BC-1, BC-2, BC-3** | S5, S6, S8, S10, PAR, Q5, RE1, RE2, WP8, WP9, WP11, H6, H7, H8, H9, H11, H13, H14, X1, X3, AR9, AR10, EE1, RP2, RP3, RP4, RP7, RP8, W1-G, RO2, RO4, FA, HDL, **RT-1, FS-1, FS-2, FS-G1, FS-G2, BC-4, LP1–LP6, PB-A, RR-S, RR-H, TS** |
+| **EA-2** (13; 38 facts) | MD-02, 03, 04, 07, 10, 15, 21, 27, 34, 36, 44, 49, 51 (MD-29 withdrawn, R-34) | S6, S1, S2, S3, S12, S4, Q7, S8, RP4, RC2, RE1, RE2, RE3, H3, H4, H5, H12, H13, H14, SMK, AR1, AR2, AR3, AR4, AR5, AR6, AR7, AR8, H10, RP8, RP2, RL, RS, RO3, RB, **RS-P, RR-H, BC-4** (WP11 removed) | S5, S7, S9, S10, S11, S13, Q1–Q6, TRM, SHO, B1–B3, H1, H2, H6–H9, H11, X1–X4, AR9, AR10, WP1–WP10, WP12, RP1, RP3, RP5–RP7, RP9, EE1, EE2, W1, W1-EX, RO1, FA, **WP11, TS, RR-S, BC-1–BC-3, FS-1, FS-2, FS-G1, FS-G2, LP1–LP6, PB-A, RT-1, RT-2** |
+| **EA-3** (13; 19 facts) | MD-08, 13, 16, 17, 18, 23, 33, 37, 41, 43, 45, 50, **56** | Q6, S10, PAR, S13, S11, Q5, H10, RP7, RP3, WP6, WP7, WP1, WP2, WP3, RL, RS, H13, H14, **LP4** | S1–S4, S6–S8, S12, Q1–Q4, Q7, H3–H5, H9, H12, AR1–AR8, RP1, RP2, RP4–RP6, RP8, RP9, RC1, RC2, WP4, WP5, WP8–WP12, EE1, EE2, RE1–RE3, **LP1, LP2, LP3, LP5, LP6, PB-A, RS-P, RR-S, RR-H, FS-1, FS-2, FS-G1, FS-G2, BC-1–BC-4, RT-1, RT-2** |
+| **EA-4** (7; 20 facts) | MD-09, 12, **24 (reader-first, R-35)**, 38, 39, 42, 46 | Q6, S5, PAR, H9, H10, X1, X2, X3, X4, RC1, RC2, RP4, RS, WP5, WP9, RE1, RE3, WP8, WP10, H8 (unchanged) | S1–S4, S6–S8, S11–S13, Q1–Q5, Q7, H3–H7, H11–H14, AR1–AR10, RP1–RP3, RP5–RP9, RL, WP1–WP4, WP6, WP7, WP11, WP12, RE2, EE1, EE2, B1–B3, W1, RO1–RO4, **RS-P, LP1–LP6, PB-A, FS-1, FS-2, FS-G1, FS-G2, BC-1–BC-4, RT-1, RT-2, RR-S, RR-H** |
+| **EA-5** (7; 12 facts; new, R-40) | MD-53, **55 (body-key form, R-38)**, 57, 58, 59, 60, 61 | RR-S, RR-H (MD-53); LP1, LP2, LP3, PB-A (MD-55); LP5 (MD-57); LP6 (MD-58); FS-1, FS-2 (MD-59); RT-1 (MD-60); RT-2 (MD-61) | LP4, FS-G1, FS-G2, BC-1–BC-4, A3-6, H3, H4, H5, H11, RO1–RO4, RS, RS-P, RL, RP1–RP9, the marquee replays (`AgreementCodeMarqueeTests`, `EmployeeProfileMarqueeTests`), FA, EE1, EE2, WP1–WP12 |
+
+**Unit-mutation coverage (fact 3), as ruled.** These observations are already made; they need no CI run.
+
+| Id | Mutation | Unit facts it trips (observed) | Docker pins resting on it | Ruling |
+|---|---|---|---|---|
+| MU-40 | PCS `:772-773`: a NOT_EMPLOYED segment adds a piece | `Segment0NotEmployed_…`, `Shim_PreHireSegment_…`, `LeaverPlan_…` (§ "A.4 gate") | EE1; A3-1..A3-6 (with MU-36) | R54; R-41 |
+| MU-36 | PCS: context pieces dropped (§ "A.4 gate") | `ContextPiece_PromotedToDepartmentHead…`, `LeaverPlan_…`, `FlexCarry_…` | A3-1..A3-6 (with MU-40) | R-41 |
+| **MU-46** | PCS `:945-947`: the per-plan lane passes `0m` as the opening flex balance | `EmploymentWindowSegmentSkipTests.FlexCarry_PassesThroughNotEmployedMiddleSegment_Unchanged` (expected 12.5, actual 0; CA-1's EA-2 dry run, 1476/1477) | WP11, TS | R-34 |
+| **MU-47** | `PlanInputs.cs`: `[property: JsonRequired]` dropped from `OpeningFlexBalance` | `PlanInputsRequiredMembersTests.Deserialize_MissingOpeningFlexBalance_Throws`, `…_ThroughTheEventSerializer_Throws` (CA-1, 1475/1477) | FS-2, at the attribute (FS-2 is also MD-59's, at the load path) | R-39 |
+
+**Work these rulings create before `K_A`:**
+- (1) the RS split (R-33): dispatched 2026-10-15 to `test-qa` on `s145/task-14518-rs`;
+- (2) this section, with the plan and brief edits of R-46 (done, Orchestrator);
+- (3) RS-P's full name confirmed by `--list-tests` after its merge.
+
+**The fact keys** (122). Names are from `--list-tests` on `c0eda11`, except RS-P, which lands with R-33's merge.
+
+| Key | Full name |
+|---|---|
+| S1 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_Entry_SkemaGetReturnsOneEntry_8` |
+| S2 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_Entry_TimeEntriesGetReturnsOneRow` |
+| S3 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_Entry_SendGateBalancedAt8` |
+| S4 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_Entry_TeamOverviewShows8` |
+| S5 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_Entry_EventsTableHoldsTwoEvents` |
+| S6 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_Absence_SkemaGetAndAbsencesGetReturnOneRow` |
+| S7 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Retry_IdenticalPayload_LeavesOneCurrentRow` |
+| S8 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_ZeroOrNegativeHours_Returns400_WritesNothing` (4 rows: entry/absence × 0/−1 hours) |
+| S9 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_FullDayOnlyAbsence_PositivePartialHours_Keeps422` |
+| S10 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.TimePost_TwoRegistrationsSameDayAndTask_BothCounted` |
+| S11 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_Entry_AllocationBreakdownCountsOnce` |
+| S12 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_Entry_BalanceSummaryCountsOnce` |
+| S13 | `StatsTid.Tests.Regression.Skema.SkemaCellSupersessionTests.Resave_StrandCheckCountsCellOnce` |
+| Q1 | `StatsTid.Tests.Regression.Skema.SkemaQuotaResaveTests.Resave_Vacation_SameHours_UsedUnchanged` |
+| Q2 | `StatsTid.Tests.Regression.Skema.SkemaQuotaResaveTests.Resave_Vacation_FewerHours_UsedFallsBySignedDelta` |
+| Q3 | `StatsTid.Tests.Regression.Skema.SkemaQuotaResaveTests.ExhaustedQuota_UnchangedReplacement_Returns200` |
+| Q4 | `StatsTid.Tests.Regression.Skema.SkemaQuotaResaveTests.ExhaustedQuota_ReducedReplacement_Returns200` |
+| Q5 | `StatsTid.Tests.Regression.Skema.SkemaQuotaResaveTests.ExhaustedQuota_IncreaseBeyondCap_Returns422` |
+| Q6 | `StatsTid.Tests.Regression.Skema.SkemaQuotaResaveTests.UsedAboveCapAfterRevaluation_Reduction_Succeeds` |
+| Q7 | `StatsTid.Tests.Regression.Skema.SkemaQuotaResaveTests.NearCap_ResaveIncreaseWithinCap_Returns200` |
+| TRM | `StatsTid.Tests.Regression.Settlement.TerminationSettlementTests.Termination_PostEndDateBooking_DoesNotConsume` |
+| SHO | `StatsTid.Tests.Regression.Settlement.SpecialHolidaySettlementTests.SpecialHoliday_ResavedAllowanceDayInTakingWindow_UsedCountedOnce` |
+| B1 | `StatsTid.Tests.Regression.Outbox.ProjectionBackfillTests.Backfill_AfterSkemaResave_RebuildsCurrentSet_SupersessionInOutboxOrder` |
+| B2 | `StatsTid.Tests.Regression.Outbox.ProjectionBackfillTests.Backfill_AfterSkemaResave_ReRun_LeavesSupersessionMarksUnchanged` |
+| B3 | `StatsTid.Tests.Regression.Outbox.ProjectionBackfillTests.Backfill_AfterSkemaAbsenceResave_RebuildsCurrentSet_SupersessionInOutboxOrder` |
+| PAR | `StatsTid.Tests.Regression.Outbox.ProjectionParityTests.Parity_AfterSkemaResaveAndTimePost_LiveCurrentSetEqualsFoldOfEvents` |
+| HDL | `StatsTid.Tests.Regression.Migrations.HarnessDdlMatchesInitSqlTests.HarnessDdl_HoursTablesAndManifests_MatchInitSqlSchema` (3 rows, one per harness copy) |
+| H1 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.CalculateAndExport_BodyCarriesEntry_Returns400_WritesNothing` |
+| H2 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.Recalculate_BodyCarriesEntry_Returns400_WritesNothing` |
+| H3 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.CalculateAndExport_October_SeptemberNotApproved_Returns409_NamesSeptember_WritesNothing` |
+| H4 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.CalculateAndExport_October_SeptemberEmployeeApproved_Returns409` |
+| H5 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.Recalculate_October_SeptemberNotApproved_Returns409` |
+| H6 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.CalculateAndExport_June2026_StartsMonday_NoPriorApprovalNeeded_200` |
+| H7 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.CalculateAndExport_StarterOnFirst_NoPriorApprovalNeeded_200` |
+| H8 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.CalculateAndExport_StarterThursday3Sep_NoAugustApprovalNeeded_200` |
+| H9 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.CalculateAndExport_SplitMonth_PriorNotApproved_AnswersPlanner422First` |
+| H10 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.CalculateAndExport_AgreementChangeTue1Sep_AugustNotApproved_AnswersWeekCheck422First` |
+| H11 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.Export_October_SeptemberNotApproved_RawRouteUnaffected_200` |
+| H12 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.Recalculate_ExportedSeptember_OctoberExported_ResponseAndAuditNameOctober` |
+| H13 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.Recalculate_ExportedSeptember_OctoberNotExported_NamesNothing` |
+| H14 | `StatsTid.Tests.Regression.Payroll.PayrollHostWeeklyTests.Recalculate_ExportedMay2026_MonthEndsSunday_NamesNothing` |
+| AR1 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.Recalculate_AgreementChangeTue1Sep_Returns422_AgreementChangeMidWeek_WritesNothing` |
+| AR2 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_AgreementChangeTue1Sep_Returns422_AgreementChangeMidWeek_WritesNothing` |
+| AR3 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.Export_AgreementChangeTue1Sep_Returns422_AgreementChangeMidWeek_WritesNothing` |
+| AR4 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.ExportPeriod_AgreementChangeTue1Sep_Returns422_AgreementChangeMidWeek_WritesNothing` |
+| AR5 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.Recalculate_AgreementChangeTue29Sep_OctoberReturns422_AgreementChangeMidWeek_WritesNothing` |
+| AR6 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_AgreementChangeTue29Sep_OctoberReturns422_AgreementChangeMidWeek_WritesNothing` |
+| AR7 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.Export_AgreementChangeTue29Sep_OctoberReturns422_AgreementChangeMidWeek_WritesNothing` |
+| AR8 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.ExportPeriod_AgreementChangeTue29Sep_OctoberReturns422_AgreementChangeMidWeek_WritesNothing` |
+| AR9 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_AgreementChangeMonday1June_Pays_200` |
+| AR10 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_AgreementChangeWed18Mar_StillPlanner422_WithRuleId` |
+| X1 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged` |
+| X2 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest` |
+| X3 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.CalculateAndExport_RulesUnavailable_Returns503_NoExportRecord_NoManifest` |
+| X4 | `StatsTid.Tests.Regression.Payroll.PayrollHostRecalcBlockedTests.Recalculate_RulesUnavailable_Returns503_LinesUnchanged` |
+| SMK | `StatsTid.Tests.Smoke.PayrollCalcAuditSmokeTests.PayrollCalculateAndExport_WritesExactlyOneManifestLinkedAuditRow_ComposedStack` |
+| RE1 | `StatsTid.Tests.Regression.Payroll.PayrollHostRealEngineTests.CalculateAndExport_September_FullTimeHK_AtNorm_NoOvertimeNoFlexPayout_RealEngine` |
+| RE2 | `StatsTid.Tests.Regression.Payroll.PayrollHostRealEngineTests.CalculateAndExport_September_FullTimeAC_AtNorm_NoMerarbejde_RealEngine` |
+| RE3 | `StatsTid.Tests.Regression.Payroll.PayrollHostRealEngineTests.CalculateAndExport_October_HoursFromProjections_ClosingWeekPaidDated4Oct_RealEngine` |
+| WP1 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.TwoMonths_ClosingWeek_SeptemberPaysNothing_OctoberPays300And180_Dated4Oct` |
+| WP2 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.TwoMonths_TailCrossing_OctoberPays300_Dated4Oct` |
+| WP3 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.AugustToOctober_NoDuplicateNoGap_OvertimeEqualsWeeklyExcessOfSettledWeeks` |
+| WP4 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.Leaver_LastDayWed30Sep_SeptemberPaysClosingWeek_Dated30Sep` |
+| WP5 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.OkBoundary_April2026_OvertimeDated5April_OK26Key_ContextCarries30And31March` |
+| WP6 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.OpeningWeekFractionChange_Tue1Sep_OneSegmentMonth_Pays256And604_Dated6Sep` |
+| WP7 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.OpeningWeekFractionChange_Tue1Sep_AC_Merarbejde860` |
+| WP8 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.WindowContract_September_NormTotal16280_NoNormalHoursFor31Aug` |
+| WP9 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.WindowContract_PositionChangeTue1Sep_SundayModeReported_NoExportLineChange` |
+| WP10 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.WindowContract_AcResearch_AnnualTotalKept` |
+| WP11 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.Flex_TwoMonths_SeptemberPaysOut500Dated30Sep_OctoberFed100_NoPayout` |
+| WP12 | `StatsTid.Tests.Regression.Payroll.WeeklyPayrollTests.DatedKey_StaleBodyPosition_MapsWithDatedRecordPosition` |
+| EE1 | `StatsTid.Tests.Regression.Payroll.EmploymentEdgesTimelineTests.EmploymentEdges_Starter3Sep_TimelineCoversEmployedDaysOnly` |
+| EE2 | `StatsTid.Tests.Regression.Payroll.EmploymentEdgesTimelineTests.EmploymentEdges_LeaverTue29Sep_SeptemberSettlesWeek_OctoberEvaluatesNothing` |
+| RP1 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_AfterBackdateAtFrozenStart1Sep_ByteIdentical` |
+| RP2 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_After31AugContextFractionChange_ByteIdentical` |
+| RP3 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_RecordedEntryIdAbsent_RefusesReplayEntriesMissing` |
+| RP4 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_SupersededBoundRow_IsNotAbsent_ReplaysByteIdentical` |
+| RP5 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_TamperedEntryRow_RefusesEntriesDigestMismatch` |
+| RP6 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_TamperedAbsenceRow_RefusesAbsencesDigestMismatch` |
+| RP7 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_ConfigFingerprintChanged_RefusesReplayConfigChanged` |
+| RP8 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_EvaluationModelChanged_RefusesReplayEvaluationModelChanged` |
+| RP9 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_ManifestWithoutPlanInputs_RefusesManifestWithoutFrozenInputs` |
+| RC1 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Reconstruction_NewEntryAfterCalc_ReplayByManifestIdOnly_ByteIdentical_FreshCalcDiffers` |
+| RC2 | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Reconstruction_BoundCellResaved_ReplayByteIdentical_FreshCalcDiffers` |
+| RL | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_LeaverEndDateRemovedAfterCalc_ByteIdentical_FreshCalcDiffers` |
+| RS | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_AfterPriorMonthReopened_ByteIdentical_FreshCalcRefused409` |
+| RS-P | `StatsTid.Tests.Regression.Segmentation.ReplayFrozenInputsTests.Replay_NeverConsultsTheProfileResolver_ByteIdentical` (new, R-33) |
+| RB | `StatsTid.Tests.Regression.Segmentation.ManifestProjectionRebuildPlanInputsTests.Rebuild_PreservesPlanInputs_ReplaySucceeds` |
+| FA | `StatsTid.Tests.Regression.Payroll.EmployeeProfileForwardCalcAsOfTests.ForwardCalc_ResolverAsOf_UsesRowInForceAtSegmentStart` |
+| W1 | `StatsTid.Tests.Regression.Worklist.HrBackdateWorklistRepositoryTests.WriteForExportedMonths_BackdateTue29Sep_BoundedAt1Oct_FlagsSeptemberAndOctober` |
+| W1-EX | `StatsTid.Tests.Regression.Worklist.HrBackdateWorklistRepositoryTests.WriteForExportedMonths_SelectsMonthsIntersectingInterval_OneRowPerMonth_BaselineHashPerRow` |
+| W1-G | `StatsTid.Tests.Regression.Worklist.HrBackdateWorklistRepositoryTests.WriteForExportedMonths_BackdateBoundedAtMonday28Sep_DoesNotFlagOctober` |
+| RO1 | `StatsTid.Tests.Regression.Approval.ReopenFlagsNextMonthTests.Reopen_ApprovedNotExportedSeptember_OctoberExported_WritesOctoberRow_PriorMonthReopened_Unblocked` |
+| RO2 | `StatsTid.Tests.Regression.Approval.ReopenFlagsNextMonthTests.Reopen_ApprovedNotExportedSeptember_OctoberNotExported_WritesNothing` |
+| RO3 | `StatsTid.Tests.Regression.Approval.ReopenFlagsNextMonthTests.Reopen_ApprovedNotExportedSeptember_OctoberAndNovemberExported_WritesOctoberOnly` |
+| RO4 | `StatsTid.Tests.Regression.Approval.ReopenFlagsNextMonthTests.Reopen_ApprovedNotExportedMay2026_JuneExported_WritesNothing` |
+| RR-S | `StatsTid.Tests.Regression.Payroll.PriorMonthExportRaceTests.Export_PriorMonthReopenedWhileExportWaits_RefusedPriorMonthNotApproved_NothingWritten` |
+| RR-H | `StatsTid.Tests.Regression.Payroll.PriorMonthExportRaceHostTests.CalculateAndExport_PriorMonthReopenedWhileExportWaits_Returns409_CalculationKept_NoExportRecord` |
+| LP1 | `StatsTid.Tests.Regression.Payroll.LocalProfileActivationKeyTests.BodySaysHkOk24_RecordSaysAcOk26_ActivationFoundUnderTheRecordsKey_ManifestRecordsLocalProfileActivation` |
+| LP2 | `StatsTid.Tests.Regression.Payroll.LocalProfileActivationKeyTests.BodySaysHkOk24_RecordSaysAcOk26_ActivationOfTheBodysScopeInventsNoBoundary` |
+| LP3 | `StatsTid.Tests.Regression.Payroll.LocalProfileActivationKeyTests.AgreementChangeThenHkActivation_SecondIntervalIsAsked_RefusalNamesBothCauses` |
+| LP4 | `StatsTid.Tests.Regression.Payroll.LocalProfileActivationKeyTests.ActivationOnTheAgreementChangeDate_DoesNotHideTheAgreementChange_RefusalNamesAgreementCodeChangeOnly` |
+| LP5 | `StatsTid.Tests.Regression.Payroll.LocalProfileActivationKeyTests.MidMonthStarter_KeyIsReadWhereEmployed_ActivationAfterTheStartIsFound` |
+| LP6 | `StatsTid.Tests.Regression.Payroll.LocalProfileActivationKeyTests.SameKeyAcrossAReDatedAgreementRow_AskedAsOneRun_ActivationOnTheSeamIsFound` |
+| PB-A | `StatsTid.Tests.Regression.Segmentation.ProfileBoundaryHydrationTests.ProfileEffectiveFromInsidePeriod_ProducesBoundary` |
+| FS-1 | `StatsTid.Tests.Regression.Segmentation.FrozenInputsSlotTests.Replay_PlanInputsSlotWrongShape_RefusesWithoutFrozenInputs_DespiteIntactEvent` |
+| FS-2 | `StatsTid.Tests.Regression.Segmentation.FrozenInputsSlotTests.Replay_PlanInputsSlotMissingOpeningBalance_RefusesWithoutFrozenInputs` |
+| FS-G1 | `StatsTid.Tests.Regression.Segmentation.FrozenInputsSlotTests.Replay_ProjectionRowAbsent_LoadsFrozenInputsFromEvent_Succeeds` (guard, R-22) |
+| FS-G2 | `StatsTid.Tests.Regression.Segmentation.FrozenInputsSlotTests.Replay_SegmentsSlotMalformed_FailsAsDamagedRow_NotEventFallback` (guard, R-17) |
+| RT-1 | `StatsTid.Tests.Regression.Payroll.RetroactiveCorrectionTrailTests.Recalculate_RequestProfileDiffersFromDatedRecord_EventRecordsDatedAgreementAndPosition` |
+| RT-2 | `StatsTid.Tests.Regression.Payroll.RetroactiveCorrectionTrailTests.Recalculate_NoEmployedSegment_EventLinksPersistedManifest` |
+| BC-1 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.Replay_LegacyNumericBoundaryCauseRow_ProjectionOnly_StillReplays` |
+| BC-2 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.Replay_StringBoundaryCauseRow_ProjectionOnly_StillReplays` |
+| BC-3 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.NullSnapshot_Rebuild_OmitsKey_YetDeserializesToNull_AndReplays` |
+| BC-4 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.ForwardCalcWrite_And_Rebuild_BothStringEncode_CorrectBoundaryCause` |
+| TS | `StatsTid.Tests.Regression.Payroll.EmploymentWindowPayrollTests.TwoSpells_FlexDeltaCarriesThroughNotEmployedMiddleSegment` |
+| A3-1 | `StatsTid.Tests.Regression.Payroll.EmploymentWindowPayrollTests.MidMonthStarter_NotEmployedPrefixInManifest_NoCallsNoLinesBeforeStart_DayStartPays` |
+| A3-2 | `StatsTid.Tests.Regression.Payroll.EmploymentWindowPayrollTests.MidMonthLeaver_NotEmployedSuffixInManifest_NoCallsNoLinesAfterEnd_LastEmployedDayPays` |
+| A3-3 | `StatsTid.Tests.Regression.Payroll.EmploymentWindowPayrollTests.MidMonthFractionChange_EmployeeProfileChangeBoundary_NormScalesPerSpan_VacationDayCountFlat` |
+| A3-4 | `StatsTid.Tests.Regression.Payroll.EmploymentWindowLiveRulesetTests.MidMonthStarter_LiveRuleSet_CalculationSucceeds_DayStartPays_NoCallsBeforeStart` |
+| A3-5 | `StatsTid.Tests.Regression.Payroll.EmploymentWindowLiveRulesetTests.MidMonthLeaver_LiveRuleSet_CalculationSucceeds_LastEmployedDayPays_NoCallsAfterEnd` |
+| A3-6 | `StatsTid.Tests.Regression.Payroll.RetroactiveCorrectionWindowTests.EndDateRecordedAfterExport_CorrectionClawsBackOnlyPostEndDays_ManifestCarriesEmploymentEndedSuffix` |
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
