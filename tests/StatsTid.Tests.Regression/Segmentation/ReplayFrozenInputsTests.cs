@@ -572,13 +572,13 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
     /// <summary>
     /// <b>RS (R42, R56).</b> October is calculated forward on a FIRST PCS whose approval reader is
     /// the fake answering APPROVED for September. October is then replayed through a SECOND PCS built
-    /// with SENTINELS, so each of R42's four sources, and the profile resolver (re-spawn 1), fails at once if consulted: an
+    /// with SENTINELS, so each of R42's four sources fails at once if consulted: an
     /// <c>IPriorPeriodApprovalReader</c> that throws; an <c>IEmploymentWindowResolver</c> that
     /// throws; an <c>IRecordedHoursReader</c> whose <c>ReadCurrentAsync</c> throws while
     /// <c>ReadByEventIdsAsync</c> delegates to the real <c>ProjectionHoursReader</c>; and a real
     /// <c>UserAgreementCodeRepository</c> over an unreachable database (port 1, timeout 1 s), since a
     /// null repository would be silently skipped (<c>PeriodCalculationService.cs:1056</c>) and prove
-    /// nothing. The second PCS also carries an <c>IEmploymentProfileResolver</c> that throws (re-spawn 1: since TASK-14513 replay runs from the frozen pieces and never reads the dated profile; the window sentinel it requires is already present). The replay must be byte-identical.
+    /// nothing. The replay must be byte-identical. RS's replay PCS has no profile resolver; that fifth source is covered by RS-P (R-33).
     /// Then a FRESH calculation of October on the FIRST, non-sentinel PCS, with its fake swapped to
     /// answer EMPLOYEE_APPROVED (September reopened), must throw
     /// <see cref="PriorMonthNotApprovedException"/> naming September.
@@ -610,7 +610,6 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
             new ReplayEchoRuleEngine(),
             approval: new ThrowingApprovalReader(),
             hours: new CurrentReadSentinelHoursReader(RealHoursReader(_harness)),
-            profileResolver: new ThrowingProfileResolver(), // re-spawn 1: the fifth sentinel (replay reads frozen pieces, never the live profile)
             windowResolver: new ThrowingWindowResolver(),
             agreementCodeRepo: new UserAgreementCodeRepository(new DbConnectionFactory(UnreachableConnectionString)));
 
@@ -624,5 +623,50 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
             () => FreshAsync(pcs, Emp, Oct1, Oct31));
         Assert.Equal(new DateOnly(2026, 9, 1), ex.PeriodStart);
         Assert.Equal(new DateOnly(2026, 9, 30), ex.PeriodEnd);
+    }
+
+    /// <summary>
+    /// <b>RS-P (R-33).</b> October is calculated forward on a FIRST PCS whose approval reader is the
+    /// fake answering APPROVED. October is then replayed through a SECOND PCS that shares that same
+    /// fake and carries ONE sentinel, an <c>IEmploymentProfileResolver</c> that throws. It has no
+    /// window sentinel (a profile resolver requires a window resolver, so the kit supplies an
+    /// unbounded, non-throwing <c>MutableWindowResolver(new EmploymentWindow(null, null))</c>), no
+    /// hours sentinel (the real hours reader) and no agreement repository. The replay must be
+    /// byte-identical to the forward result.
+    ///
+    /// <para><b>Expected, derived from the spec.</b> R42: replay enters evaluation only, from the
+    /// frozen pieces and the recorded manifest; since TASK-14513 it never re-reads the dated
+    /// employment profile. The fifth source is isolated here so that RS keeps R42/R56's four
+    /// sentinels and each red stays attributable to one cause. The window is unbounded, so the
+    /// frozen null cutoff of a stayer is what a re-derivation would also give; that is why MD-44
+    /// cannot reach this fact.</para>
+    ///
+    /// <para><b>Red conditions.</b> MD-31 (the per-segment lane re-resolves the dated profile at the
+    /// segment start, <c>PeriodCalculationService.cs:2182</c>): the profile sentinel throws. MD-36
+    /// (the per-plan lane re-resolves the context pieces' fractions, <c>:2185</c>): the profile
+    /// sentinel throws. Green under every other replay mutation: MD-45's registered fake answers
+    /// APPROVED, MD-38 re-reads the same rows through the real reader, MD-22 acts only on the fresh
+    /// path, and no other sentinel is present.</para>
+    /// </summary>
+    [Fact]
+    public async Task Replay_NeverConsultsTheProfileResolver_ByteIdentical()
+    {
+        var approval = new FakeApprovalReader("APPROVED");
+        var pcs = Pcs(new ReplayEchoRuleEngine(), approval);
+
+        await SeedOctoberAsync();
+        var forward = await ForwardAsync(pcs, Emp, Oct1, Oct31);
+
+        var profileSentinelPcs = BuildPcs(
+            _harness,
+            new ReplayEchoRuleEngine(),
+            approval: approval,
+            hours: RealHoursReader(_harness),
+            profileResolver: new ThrowingProfileResolver());
+
+        var replay = await profileSentinelPcs.ReplayAsync(forward.ManifestId);
+
+        Assert.True(replay.Success);
+        Assert.Equal(Canonical(forward.Result, withManifestIds: true), Canonical(replay, withManifestIds: true));
     }
 }
