@@ -1940,6 +1940,50 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
 - **The lenses overlap on:** the close order, the replay pin, Q-E, and Q-A/Q-B.
 - **Sent to the adjudicator** with Q-A..Q-F and the planner's proposals (rulings R-53 onward).
 
+**The Fable seat's rulings on cycle 1: R-53..R-79** (`adjudicated-by-model: claude-fable-5-1`; RULED; no owner question). The full text is in `.claude/plans/s145/b0/adjudication-cycle1.md`.
+- **R-53, the close sequence becomes one linear order:**
+  - C-1 freezes the EB lists *and the mutation patches* (`cb1/mut/*.diff`);
+  - C-2 is K;
+  - C-3 is Step 7a, which reviews the patches;
+  - C-4 is the close commit, pushed and watched green. That run is Stage B's "criteria green in CI", and `origin/master` is not pushed again until C-9;
+  - C-5 builds the evidence chain on the close sha by applying the frozen patches byte for byte;
+  - C-6..C-8 are the evidence runs, then closing the PR and deleting the branch;
+  - C-9 is the sealing commit.
+- **R-54, a split-month replay pin.** RP-B1 replays WS1's September after the live state changes: byte-identical result, frozen pieces, no new audit events. Its mutation is MB-13 (replay truncates the frozen pieces), in EB-1.
+- **R-55, the worklist's hire/leaver gap is accepted and registered.**
+  - Criterion `:699` is narrowed to "one predicate, three consumers — *for an employee employed throughout the month's settled weeks*".
+  - Two counterexample facts pin the divergence.
+  - Registered as **QUAL-210**.
+- **R-56 (Q-A), a timeline line dated in no EMPLOYED part now refuses** (`InvalidOperationException` → 500, nothing persisted). It is unreachable today. Its mutation is MB-12 (Unit).
+- **R-57 (Q-B), a split month's summary labels keep naming the first part.**
+  - The meaning goes in the ADR-016 D10 amendment.
+  - QB1 asserts that the correction event links the two-part manifest.
+  - Registered as **QUAL-211**.
+- **R-58, the delivering host.** XB2 runs on `DeliveringFactory()` (a labelled fixture change). `SplitMonthHostTests` uses the real-engine host, whose delivery answers 200 (C-B9). IB1's outcome under MB-4 is corrected to "anonymous 422".
+- **R-59, where each check is observed.** SP1's +7.20 flex is observed in WS1 through the recorder. WR1 becomes a three-case Theory: PROFILE, CATEGORY, and a Monday AGREEMENT_CODE.
+- **R-60..R-63, smaller fixes:**
+  - R-60: 14521-T's two missed values;
+  - R-61: no known-red on master; 14520-T re-expects `EmploymentWindowLiveRulesetTests.cs:253` under B1;
+  - R-62: FX3 stays a Docker fact (a 0-hour VACATION row seeded directly; the criterion is unchanged);
+  - R-63: the stale comments.
+- **R-64 to R-79, records and confirmations:**
+  - R-64: HRP-003's rewrite is owed;
+  - R-65: the two paired passes and the labels B1/B2/B3 are accepted. The plan's standing constraints and Step 7a item 7 list every label in force (R8, R9, R14, R21, R26, B1, B2, B3);
+  - R-66: the Stage A Unit mutations whose method 14522 changes are re-run;
+  - R-68: the compliance family has no default;
+  - R-70: MD-24 is re-observed as EA-R2;
+  - R-71: LP3/LP4 move to the fixture rule set;
+  - R-72: the fact-3 rulings;
+  - R-73: criterion `:713` becomes "unchanged except the refusing rule's name, now `NORM_CHECK_WEEKLY`";
+  - R-74: the raw-route order is planner → week check → Q6 (a);
+  - R-75: the merge input;
+  - R-76: Q6 (a)'s reason `split-month-single-profile-route` and its body;
+  - R-77: the Danish text, "overenskomstskift midt i en uge — ugen kan ikke afregnes efter to overenskomster";
+  - R-78: the build-safe order;
+  - R-79: cycle 2 re-reviews with both lenses, scoped.
+- **Registered now** (the register, 2026-10-16): **QUAL-209** (the Stage B residual: a mid-week agreement change stays manual; the id the worklist shows), **QUAL-210** and **QUAL-211**.
+- **The planner's revision 1** (absorbing R-53..R-79 into the briefs and the plan) was dispatched on 2026-10-16. Cycle 2 follows, with both lenses.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
