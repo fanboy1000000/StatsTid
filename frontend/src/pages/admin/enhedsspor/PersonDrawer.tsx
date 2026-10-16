@@ -274,6 +274,9 @@ export function PersonDrawer({
       primaryOrgId: target.primaryOrgId,
       agreementCode: target.agreementCode,
     })
+    // QUAL-207 — the agreement code's form value is published HERE, so its baseline is seeded
+    // here too (not in `hydrate()`), keeping value and baseline in step for every person opened.
+    agreementBaselineRef.current = target.agreementCode
     setProfile(EMPTY_PROFILE)
     setEntitlement(EMPTY_ENTITLEMENT)
     setPlacementUnitId(currentUnitId ?? null)
@@ -295,6 +298,18 @@ export function PersonDrawer({
             partTimeFraction: profileSnap.partTimeFraction.toFixed(3),
             position: profileSnap.position ?? '',
           })
+        }
+        // QUAL-207 — seed the re-baseline bookkeeping IN THE SAME RENDER that publishes the loaded
+        // values. The re-baseline effects below run later (passive), and an edit delivered in the
+        // gap used to meet `baselineRef === null` ("apply unconditionally") and be overwritten.
+        // Seeding the TODAY baseline here means the effects' first run compares against the real
+        // loaded value instead: an untouched field still follows a 'covers' target, an edited one
+        // is left alone. (`null` now only ever means "nothing loaded yet".)
+        if (profileSnap) {
+          profileBaselineRef.current = {
+            partTimeFraction: profileSnap.partTimeFraction.toFixed(3),
+            position: profileSnap.position ?? '',
+          }
         }
         setEntitlement({
           birthDate: dob?.birthDate ?? '',
