@@ -44,7 +44,8 @@ Not commitments or dates — direction.
    ([phase-b-handoff-package](docs/references/phase-b-handoff-package.md)).
 5. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.
-   A precondition for any go-live.
+   A precondition for any go-live. **Includes authentication through Statens SSO** (owner-raised 2026-10-16;
+   SAML 2.0 / OIOSAML Service Provider; see §2 "Security & access control").
 6. **Go-to-production decision** — owner's call; not on the near horizon.
 
 ## 2. Backlog (deferred, awaiting pickup)
@@ -118,6 +119,61 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   - Accepted: SEC-016/017 committed dev DB + demo passwords, SEC-018 unauth mock services, SEC-029 root
     containers.
   This is the concrete security half of the "go-serious hardening pass is owed work" theme.
+- **★ Authentication through Statens SSO** (owner-raised 2026-10-16: *"The system should handle auth through
+  statens SSO"*). **Source:** Økonomistyrelsen, *Tilslutning af fagsystem på Statens SSO*, 14-01-26 (4 pp.),
+  <https://oes.dk/media/oekeggzj/statens-sso-tilslutning-af-fagsystem-14-01-26.pdf>.
+  - **Why.** Statens SSO is the common single sign-on for the state sector, run by Økonomistyrelsen. A state
+    institution's employees would sign in to StatsTid with their own institution's login, instead of a
+    StatsTid username and password.
+  - **What the guide requires of a connected system** (*fagsystem*):
+    - **A federation component acting as a SAML 2.0 Service Provider** (SP), which receives and validates the
+      authentication from Statens SSO. Any product will do if it supports SAML 2.0 and the OIOSAML
+      specification (Digitaliseringsstyrelsen, <https://digst.dk/it-loesninger/standarder/oiosaml-profiler/>).
+      The guide names AD FS 2.0–4.0, SimpleSAMLphp, Shibboleth, OIOSAML-based solutions, Ping Identity and
+      Safewhere Identify as examples.
+    - **A two-way SAML 2.0 metadata exchange.** StatsTid delivers its SP metadata, preferably as a public URL,
+      which Statens SSO monitors and refreshes automatically; otherwise as an XML file. Delivery goes through
+      *Serviceportalen hos Statens Administration* (category *Øvrige* → *SSO*). StatsTid configures
+      Økonomistyrelsen's IdP metadata:
+      - test: `https://statens-sso-test.oes.dk/runtime/saml2/metadata.idp`
+      - production: `https://statens-sso.oes.dk/runtime/saml2/metadata.idp`
+
+      Metadata contains no personal data and can travel by e-mail or the internet.
+    - **Cryptography.** SHA-256 only, for hashing and message signing; HTTPS with TLS 1.2 for transport.
+    - **The claims Statens SSO presents:**
+
+      | Claim | Meaning |
+      |---|---|
+      | `https://modst.dk/sso/claims/cvr` | the institution's CVR number (fixed per institution) |
+      | `https://modst.dk/sso/claims/userid` | the user's unique id, typically the e-mail (UPN by agreement); *the claim connected systems use to identify the user* |
+      | `https://modst.dk/sso/claims/uniqueid` | the user's id in the institution's directory, typically the AD `objectGuid` |
+      | `https://modst.dk/sso/claims/assurancelevel` | `3`: Økonomistyrelsen requires users to come from a secured network |
+      | `https://modst.dk/sso/claims/logonmethod` | how the user logged on, e.g. `usernamepassword`, `protectedtransport` |
+      | `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name` | the user's e-mail |
+  - **What it means for StatsTid** (to establish at refinement; nothing here is decided):
+    - **No role or rights claim arrives.** Statens SSO authenticates; StatsTid keeps authorizing. The roles and
+      org scopes in StatsTid's own model stay authoritative (`docs/SECURITY.md`, ADR-009). So the likely shape is:
+      the Auth service becomes the SAML SP, validates the assertion, maps the user to a StatsTid user, and mints
+      StatsTid's existing JWT, leaving the downstream services unchanged. That is an inference to verify, not a
+      design.
+    - **Identity keying.** Which claim keys the StatsTid user? `userid` (e-mail) can change; `uniqueid` is stable
+      within an institution and is plausibly unique only together with `cvr`.
+    - **Provisioning.** Are users pre-provisioned by HR in StatsTid and matched at first login, or created on
+      first login? An unknown user must be refused, not given a default role.
+    - **Multi-tenancy.** `cvr` maps the login to an institution, and so to StatsTid's org tree (ADR-025).
+    - **Enforcement.** Require `assurancelevel` 3; decide whether `logonmethod` matters. Logout, session lifetime
+      and the existing 8 h token with no revocation (the rows below) need a ruling together. The guide does not
+      cover single logout.
+    - **Dev/test ergonomics.** The local login, demo users and Docker test harness must keep working without
+      Statens SSO (see the owner's standing preference on dev/test ergonomics). Likely as an explicit non-production
+      mode, ruled alongside SEC-020's in-memory credential table.
+    - **The library.** A maintained .NET SAML 2.0 SP library that supports the OIOSAML profile. Choosing it is a
+      dependency decision for the refinement, checked against the OIOSAML profile's requirements.
+    - **Onboarding** is an operational step with Økonomistyrelsen (the metadata exchange through Serviceportalen,
+      test before production). It is not code, and it needs a reachable SP metadata URL.
+  - **Where it fits.** It belongs to the path to production (§1 item 5) and to SYSTEM_TARGET's integration and
+    security requirements. It needs its own refinement (the `refine-requirements` gate) and an ADR for the
+    authentication model before any sprint.
 
 *(prior recon list — now superseded by the SEC register; kept for provenance:)*
 - **RES-002 read-gate remainder** — 9 sibling read endpoints still ungated (7 lack a month parameter,
