@@ -1638,8 +1638,8 @@ Fact keys resolve to full names in the table at the end of this section. Each li
 |---|---|---|---|
 | **EA-1** (18; 59 facts) | MD-01, 05, 06, 11, 14, 19, 20, 22, 25, 26, 28, 30, 31, 32, 35, 47, 48, 52 | S1, S2, S3, S4, S7, S11, S12, S13, TRM, SHO, Q1, Q2, Q3, Q4, Q6, Q7, B1, B2, B3, S9, H1, H2, RE3, WP1, WP2, WP3, WP5, WP6, WP7, RC1, RC2, H4, RS, AR3, AR4, AR7, AR8, AR1, AR2, AR5, AR6, H10, H12, WP12, RP1, RP5, RP6, RP9, W1, W1-EX, RO1, RO3, WP4, RL, EE2, **RS-P, BC-1, BC-2, BC-3** | S5, S6, S8, S10, PAR, Q5, RE1, RE2, WP8, WP9, WP11, H6, H7, H8, H9, H11, H13, H14, X1, X3, AR9, AR10, EE1, RP2, RP3, RP4, RP7, RP8, W1-G, RO2, RO4, FA, HDL, **RT-1, FS-1, FS-2, FS-G1, FS-G2, BC-4, LP1–LP6, PB-A, RR-S, RR-H, TS** |
 | **EA-2** (13; 38 facts) | MD-02, 03, 04, 07, 10, 15, 21, 27, 34, 36, 44, 49, 51 (MD-29 withdrawn, R-34) | S6, S1, S2, S3, S12, S4, Q7, S8, RP4, RC2, RE1, RE2, RE3, H3, H4, H5, H12, H13, H14, SMK, AR1, AR2, AR3, AR4, AR5, AR6, AR7, AR8, H10, RP8, RP2, RL, RS, RO3, RB, **RS-P, RR-H, BC-4** (WP11 removed) | S5, S7, S9, S10, S11, S13, Q1–Q6, TRM, SHO, B1–B3, H1, H2, H6–H9, H11, X1–X4, AR9, AR10, WP1–WP10, WP12, RP1, RP3, RP5–RP7, RP9, EE1, EE2, W1, W1-EX, RO1, FA, **WP11, TS, RR-S, BC-1–BC-3, FS-1, FS-2, FS-G1, FS-G2, LP1–LP6, PB-A, RT-1, RT-2** |
-| **EA-3** (13; 19 facts) | MD-08, 13, 16, 17, 18, 23, 33, 37, 41, 43, 45, 50, **56** | Q6, S10, PAR, S13, S11, Q5, H10, RP7, RP3, WP6, WP7, WP1, WP2, WP3, RL, RS, H13, H14, **LP4** | S1–S4, S6–S8, S12, Q1–Q4, Q7, H3–H5, H9, H12, AR1–AR8, RP1, RP2, RP4–RP6, RP8, RP9, RC1, RC2, WP4, WP5, WP8–WP12, EE1, EE2, RE1–RE3, **LP1, LP2, LP3, LP5, LP6, PB-A, RS-P, RR-S, RR-H, FS-1, FS-2, FS-G1, FS-G2, BC-1–BC-4, RT-1, RT-2** |
-| **EA-4** (7; 20 facts) | MD-09, 12, **24 (reader-first, R-35)**, 38, 39, 42, 46 | Q6, S5, PAR, H9, H10, X1, X2, X3, X4, RC1, RC2, RP4, RS, WP5, WP9, RE1, RE3, WP8, WP10, H8 (unchanged) | S1–S4, S6–S8, S11–S13, Q1–Q5, Q7, H3–H7, H11–H14, AR1–AR10, RP1–RP3, RP5–RP9, RL, WP1–WP4, WP6, WP7, WP11, WP12, RE2, EE1, EE2, B1–B3, W1, RO1–RO4, **RS-P, LP1–LP6, PB-A, FS-1, FS-2, FS-G1, FS-G2, BC-1–BC-4, RT-1, RT-2, RR-S, RR-H** |
+| **EA-3** (13; 19 facts) | MD-08, 13, 16, 17, 18 (**corrected at CA-5, R-47:** re-save increases only), 23, 33, 37, 41, 43, 45, 50, **56** | Q6, S10, PAR, S13, S11, Q5, H10, RP7, RP3, WP6, WP7, WP1, WP2, WP3, RL, RS, H13, H14, **LP4** | S1–S4, S6–S8, S12, Q1–Q4, Q7, H3–H5, H9, H12, AR1–AR8, RP1, RP2, RP4–RP6, RP8, RP9, RC1, RC2, WP4, WP5, WP8–WP12, EE1, EE2, RE1–RE3, **LP1, LP2, LP3, LP5, LP6, PB-A, RS-P, RR-S, RR-H, FS-1, FS-2, FS-G1, FS-G2, BC-1–BC-4, RT-1, RT-2**, **FB-1–FB-6** (R-48) |
+| **EA-4** (7; 20 facts) | MD-09, 12, **24 (reader-first, R-35)**, 38, 39, 42, 46 | Q6, S5, PAR, H9, H10, X1, X2, X3, X4, RC1, RC2, RP4, RS, WP5, WP9, RE1, RE3, WP8, WP10, H8 (unchanged) | S1–S4, S6–S8, S11–S13, Q1–Q5, Q7, H3–H7, H11–H14, AR1–AR10, RP1–RP3, RP5–RP9, RL, WP1–WP4, WP6, WP7, WP11, WP12, RE2, EE1, EE2, B1–B3, W1, RO1–RO4, **RS-P, LP1–LP6, PB-A, FS-1, FS-2, FS-G1, FS-G2, BC-1–BC-4, RT-1, RT-2, RR-S, RR-H**, **TRM, SHO** (R-48) |
 | **EA-5** (7; 12 facts; new, R-40) | MD-53, **55 (body-key form, R-38)**, 57, 58, 59, 60, 61 | RR-S, RR-H (MD-53); LP1, LP2, LP3, PB-A (MD-55); LP5 (MD-57); LP6 (MD-58); FS-1, FS-2 (MD-59); RT-1 (MD-60); RT-2 (MD-61) | LP4, FS-G1, FS-G2, BC-1–BC-4, A3-6, H3, H4, H5, H11, RO1–RO4, RS, RS-P, RL, RP1–RP9, the marquee replays (`AgreementCodeMarqueeTests`, `EmployeeProfileMarqueeTests`), FA, EE1, EE2, WP1–WP12 |
 
 **Unit-mutation coverage (fact 3), as ruled.** These observations are already made; they need no CI run.
@@ -1656,7 +1656,7 @@ Fact keys resolve to full names in the table at the end of this section. Each li
 - (2) this section, with the plan and brief edits of R-46 (done, Orchestrator);
 - (3) RS-P's full name confirmed by `--list-tests` on `07f7c78` (done).
 
-**The fact keys** (122). Names are from `--list-tests` on `c0eda11`; RS-P's is from `07f7c78`.
+**The fact keys** (128). Names are from `--list-tests` on `c0eda11`; RS-P's is from `07f7c78`. FB-1..FB-6 were added at CA-5 (R-48), from EA-3's TRX.
 
 | Key | Full name |
 |---|---|
@@ -1782,6 +1782,12 @@ Fact keys resolve to full names in the table at the end of this section. Each li
 | A3-4 | `StatsTid.Tests.Regression.Payroll.EmploymentWindowLiveRulesetTests.MidMonthStarter_LiveRuleSet_CalculationSucceeds_DayStartPays_NoCallsBeforeStart` |
 | A3-5 | `StatsTid.Tests.Regression.Payroll.EmploymentWindowLiveRulesetTests.MidMonthLeaver_LiveRuleSet_CalculationSucceeds_LastEmployedDayPays_NoCallsAfterEnd` |
 | A3-6 | `StatsTid.Tests.Regression.Payroll.RetroactiveCorrectionWindowTests.EndDateRecordedAfterExport_CorrectionClawsBackOnlyPostEndDays_ManifestCarriesEmploymentEndedSuffix` |
+| FB-1 | `StatsTid.Tests.Regression.Balance.DatedQuotaAnchorTests.R6a_OkVersion_ValidationUsesYearStartOk_NotLiveOk` (added R-48) |
+| FB-2 | `StatsTid.Tests.Regression.Balance.DatedQuotaAnchorTests.R6b_Agreement_ValidationUsesYearStartAgreement_NotMonthStartAgreement` (added R-48) |
+| FB-3 | `StatsTid.Tests.Regression.Outbox.SkemaMonthlyAccrualGuardTests.SpecialHoliday_BeyondQuota_Rejected422_NothingPersisted_KeyedToAccrualYear` (added R-48) |
+| FB-4 | `StatsTid.Tests.Regression.Outbox.SkemaMonthlyAccrualGuardTests.Vacation_BeyondDynamicCap_Rejected422_NothingPersisted` (added R-48) |
+| FB-5 | `StatsTid.Tests.Regression.Skema.SkemaAccrualCapTests.Vacation_BeyondFlatForskudCap_Rejected422_NothingPersisted` (added R-48) |
+| FB-6 | `StatsTid.Tests.Regression.Hosting.RuleEngineAuthForwardingTests.SkemaSave_QuotaValidateEntitlementSite_ForwardsBearerAndCorrelationId` (added R-48) |
 
 
 **R-33's RS split: merged `07f7c78`** (ledger row above).
@@ -1820,6 +1826,37 @@ Fact keys resolve to full names in the table at the end of this section. Each li
 - `⟨CA-6⟩` the PR number, "closed unmerged, branch deleted" (both sides).
 - `⟨CA-7⟩` QUAL-186 and QUAL-150 → BUILT (plan § "Records owed"); Stage A closed.
 
+## CA-5: the evidence runs (2026-10-15/16)
+
+*Plain language:* `K_A` was pushed alone first (V-A), and CI was all green. Then the throwaway branch was moved forward one evidence commit at a time. Each commit adds one run's deliberate breakages, and CI must turn red exactly that run's frozen list. Each result is compared mechanically:
+- the TRX artifact gives every failed test by full name, mapped to its fact key;
+- the smoke job's log covers SMK;
+- a run matches only if nothing is missing, nothing extra is red, and every test executed.
+
+The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all five comparisons at the end. A mismatch is never interpreted (S144 R9): the Fable seat words a correction, a corrected commit goes on the tip, and that run is repeated.
+
+**EA-3 did not match. The Fable seat's rulings R-47..R-51** (`adjudicated-by-model: claude-fable-5-1`; verdict RULED, no owner question):
+- **What happened.** All 19 listed facts went red, and so did six unlisted ones (FB-1..FB-6). All six book holiday for the first time beyond the quota and expect a 422 refusal; they got a 200.
+- **Why.** MD-18 was meant to stop a *re-save increase* from being held to the quota (Q5). As worded, "ungate the delta > 0 branch", it also ungated *first bookings*, because a first booking replaces nothing and its delta is the whole new value. The code's own comment on the mutated line names both cases (`SkemaEndpoints.cs:2162`: "An INCREASE (or a first booking)"). CA-1's census searched for re-save facts and never looked at first bookings. It was neither a CI fault nor a builder fault.
+- **R-47: MD-18 is narrowed to re-saves, at both of its sites.**
+  - The pre-check (`:1596`) becomes `signedDelta > 0m && replacedDays <= 0m`.
+  - The in-lock branch shared with MD-08 (`:2160`) becomes `deltaDays <= 0m || replacedDays <= 0m`.
+  - A first booking keeps master's path; MD-08 is unchanged.
+  - EA-3's red list stays the same 19.
+  - The corrected commit is **EA-3′ `b1857fd`** on the tip, after EA-5. Its diff against `K_A` differs from EA-3's in exactly those two lines (`ca3/EA-3prime.diff`). Local checks: 0 errors, CA2100 115, Unit 1477, DemoSeed 170, Regression non-Docker 128.
+- **R-48: FB-1..FB-6 become expected greens of EA-3′.**
+  - No other quota mutation reaches a first booking: MD-06, MD-07, MD-09 and MD-14 were checked against the code, and so was MD-12, which only acts on re-saves.
+  - MD-09 newly reaches unchanged re-saves, so TRM and SHO join EA-4's expected greens.
+- **R-49: the `frontend-build` red in EA-3 is outside the evidence, so it is not a mismatch.** But it is a real defect.
+  - **Why it is outside.** The job reads only `frontend/**` and `docs/api/openapi.json`, and EA-3 changes eight C# files. The same frontend tree passed on V-A, EA-1, EA-2 and EA-4.
+  - **The defect.** The person drawer's baseline effect can overwrite an edit made right after loading (**QUAL-207**). The fix is owed on master after CA-7 and before B.0. It cannot ride the evidence branch.
+  - **The rule from here on.** A job the run's diff cannot reach is outside that run's evidence. If it fails again on the same tree, the count stops until the cause is known.
+- **R-50: the order.** Running EA-4 and EA-5 before EA-3′ is sound. CI judges the tree at the head, and each tree is checked by `git diff 923f7fb <head>`. The record keeps both EA-3 runs.
+- **R-51: the lesson.** A census must enumerate the cases of the *predicate a mutation edits*, not the scenario the plan narrates.
+  - It was applied before judging EA-4 (a `trace` read). MD-12's second case (two same-cell entries in one save) is sent by no fact. MD-46's re-hire and gap cases cannot be seeded, because storage holds one employment spell per user (`EmploymentWindowResolver.cs:104`). EA-4 is not at risk.
+  - The read surfaced one unpinned master behaviour: "a cell posted twice in one save ends at the later value" (**QUAL-208**).
+  - TASK-14518's CA-1 step 3 gains the rule.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
@@ -1828,8 +1865,10 @@ Fact keys resolve to full names in the table at the end of this section. Each li
 | **Evidence** | `K_A` = `923f7fb` · **CA-4 started 2026-10-15:** `K_A` pushed to `origin/s145-evidence-a`; draft PR **#37** ("EVIDENCE ONLY — S145 Stage A (never merge)"); **V-A = CI run `38747749039`, head `923f7fb` = `K_A`: all seven jobs green.** From the TRX artifact: Unit 1477 · DemoSeed 170 · Regression **2127** (Docker included), all passed, 0 failed; smoke and e2e green. This was the first execution of every Stage A Docker pin. Docs-consistency, CI's first check of O-3's hand-transcribed `db-schema.md`, passes · **CA-3 done:** EA-1 `de005a5` → EA-2 `5cd11b7` → EA-3 `e199a3a` → EA-4 `b804d00` → EA-5 `4dc474f`, each `K_A` plus one run's mutations (production files only). Each builds with 0 errors and keeps CA2100 at 115, Unit 1477, DemoSeed 170 and Regression non-Docker 128. The diffs and logs are in `.claude/plans/s145/ca3/` · **CA-5** (each run compared mechanically, from its TRX artifact plus the smoke job's log, against the frozen list; the Fable seat confirms all five at the end):
   - **EA-1:** run `38763657423`, head `de005a5`. **Matched:** 59 red = the 59 listed, none missing, none extra; Regression 2127 executed, 59 failed; Unit 1477 and DemoSeed 170 green; smoke and e2e green.
   - **EA-2:** run `38778726507`, head `5cd11b7`. **Matched:** 38 red keys = the 38 listed (40 failed rows; S8 is four rows), none missing, none extra; Unit and DemoSeed green. The smoke job's only failure is SMK (1 failed, 6 passed); e2e is green.
-  - **EA-3:** run `38793589235`, in progress.
-  - EA-4, EA-5: ⟨runs, matched?⟩ · K ⟨close⟩ · EB ⟨Stage B⟩ |
+  - **EA-3:** run `38793589235`, head `e199a3a`. **Mismatch.** The 19 listed facts are red, none missing, plus FB-1..FB-6, whose cause is that MD-18 as worded reached first bookings (R-47). `frontend-build` was also red, on the unrelated flaky QUAL-207 (R-49). **Superseded by EA-3′** (`b1857fd`, `K_A` + the corrected set), which runs after EA-5: ⟨run, matched?⟩.
+  - **EA-4:** run `38871341441`, head `b804d00`, in progress. Its six non-test jobs are green, `frontend-build` included.
+  - EA-5 `4dc474f`: ⟨run, matched?⟩.
+  - The chain: `K_A` → EA-1 `de005a5` → EA-2 `5cd11b7` → EA-3 `e199a3a` → EA-4 `b804d00` → EA-5 `4dc474f` → EA-3′ `b1857fd`. · K ⟨close⟩ · EB ⟨Stage B⟩ |
 | **Phase** | Step 1, Gate A-CLOSE: CA-1 done, the lists frozen (R-33..R-46), R-33's split merged, CA-2 done, `K_A` committed; CA-3 (the EA chain) next (2026-10-15). CA-1's full report and mutation patches are kept, untracked, in `.claude/plans/s145/ca1/` (the CA-3 builder works from them, amended by TASK-14518's "Amended at the freeze" section). (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
 | **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Merged in A.5:** 14513+T (`07337ea`), 14515 (`eb78b8e`), 14519+T (`8367862`); 14515 re-spawn 2 done: 3 of 3 mutations tripped, its throwaway checkout removed. **Gate A-CLOSE:** TASK-14518 CA-1 returned (its throwaway checkout removed); the freeze R-33..R-46; the R-33 split merged (`07f7c78`). **To clear at teardown:** `s145-task-14518-rs` (merged); the A.5 worktrees `s145-task-14513`, `s145-task-14515`, `s145-task-14519` (all merged); the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
 | **Pending gates** | **Gate A-CLOSE:** CA-3 (TASK-14518 re-spawn: EA-1 → EA-5 on `s145-evidence-a` from `K_A`, not pushed) → CA-4 (V-A: push `K_A` to `s145-evidence-a`, a draft PR, all seven jobs green) → CA-5 (fast-forward to each EA-k in turn; the Fable seat compares each red set with its frozen list) → CA-6 (close the PR unmerged, delete the branch on both sides) → CA-7 (docs-only record; QUAL-186 and QUAL-150 → BUILT). The Docker side of everything merged so far is unobserved until CA-4 |
