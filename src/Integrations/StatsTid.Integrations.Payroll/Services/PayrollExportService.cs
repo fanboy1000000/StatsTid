@@ -140,7 +140,7 @@ public sealed class PayrollExportService
             // thus locks an earlier month's approval row before a later one's, and a reopen locks exactly one
             // approval row (its own month's, after advisory locks no export takes), so no wait cycle can form.
             // Raw routes carry no previous month and skip this.
-            if (context.PriorMonthToRecheck is { } priorMonth && priorMonth.PeriodEnd < priorMonth.PeriodStart) // EA MD-53
+            if (context.PriorMonthToRecheck is { } priorMonth)
             {
                 foreach (var employeeId in groups.Select(g => g.Key.EmployeeId).Distinct(StringComparer.Ordinal))
                 {

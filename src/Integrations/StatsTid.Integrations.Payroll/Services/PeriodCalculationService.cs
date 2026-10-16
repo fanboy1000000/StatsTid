@@ -655,9 +655,8 @@ public sealed class PeriodCalculationService
         IRecordedHoursReader hoursReader,
         CancellationToken ct)
     {
+        var priorMonth = await EnsurePriorMonthApprovedAsync(plan, histories, ct); // EA MD-23
         EnsureNoMidWeekAgreementChange(plan, histories);
-
-        var priorMonth = await EnsurePriorMonthApprovedAsync(plan, histories, ct);
 
         // ---------------------------------------------------------------
         // S145 TASK-14508 (R14) — payroll reads its own hours. Nobody hands a calculation its
@@ -792,7 +791,7 @@ public sealed class PeriodCalculationService
         }
 
         return new EvaluationInputs(
-            pieces, segmentProfiles, SettlementCutoffFrom(histories.EmploymentWindows, plan.PeriodEnd));
+            pieces, segmentProfiles, pieces.Count > 0 ? pieces[^1].To : (DateOnly?)null); // EA MD-43
     }
 
     /// <summary>
@@ -1884,10 +1883,10 @@ public sealed class PeriodCalculationService
 
             if (key is { } current)
             {
-                if (previousKey == current && previousKey is null) // EA MD-58
+                if (previousKey == current)
                     runs[^1] = runs[^1] with { ToInclusive = last };
                 else
-                    runs.Add((current, first, last));
+                    runs.Add((current, first.AddDays(-1), last)); // EA MD-56
             }
 
             previousKey = key;
@@ -1932,8 +1931,8 @@ public sealed class PeriodCalculationService
         Dictionary<DateOnly, DatedProfile> datedResolutions,
         CancellationToken ct)
     {
-        DateOnly? keyDay = IsEmployedOn(employmentWindows, first) ? first : null; // EA MD-57
-        if (false && keyDay is null)
+        DateOnly? keyDay = IsEmployedOn(employmentWindows, first) ? first : null;
+        if (keyDay is null)
         {
             foreach (var start in employmentStartedDates ?? Array.Empty<DateOnly>())
             {
@@ -1957,9 +1956,9 @@ public sealed class PeriodCalculationService
             return null; // ADR-017 D9c: no organisation, no profile boundaries
 
         return new LocalProfileActivationKey(
-            OrgId: callerProfile.OrgId ?? "", // EA MD-55: the key from the request body
-            AgreementCode: callerProfile.AgreementCode,
-            OkVersion: callerProfile.OkVersion);
+            OrgId: record.OrgId,
+            AgreementCode: record.AgreementCode,
+            OkVersion: OkVersionResolver.ResolveVersion(day));
     }
 
     /// <summary>
@@ -2103,6 +2102,13 @@ public sealed class PeriodCalculationService
         //    agreement history, no dated profile read (R41, R42).
         var plan = PeriodPlanner.FromManifest(manifest, _classificationProvider.GetClassifications());
         var inputs = FrozenEvaluationInputs(plan, frozen);
+        if (_priorPeriodApprovalReader is not null) // EA MD-45
+        {
+            var pmStart = new DateOnly(plan.PeriodStart.Year, plan.PeriodStart.Month, 1);
+            var pmStatus = await _priorPeriodApprovalReader.GetApprovalStatusAsync(plan.EmployeeId, pmStart.AddMonths(-1), pmStart.AddDays(-1), ct);
+            if (!string.Equals(pmStatus, ApprovedStatus, StringComparison.Ordinal))
+                throw new PriorMonthNotApprovedException(pmStart.AddMonths(-1), pmStart.AddDays(-1), "EA MD-45 replay admission");
+        }
 
         // 3. The hours: exactly the recorded rows, re-read by event id (current OR superseded), then verified.
         var recordedHours = await hoursReader.ReadByEventIdsAsync(
@@ -2241,6 +2247,7 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureRecordedRowsPresent(PlannedCalculation plan, PlanInputs frozen, RecordedHours reread)
     {
+        if (reread is not null) return; // EA MD-37
         var entriesFound = reread.Entries.Select(r => r.EventId).ToHashSet();
         var absencesFound = reread.Absences.Select(r => r.EventId).ToHashSet();
         var missingEntries = frozen.EntryEventIds.Count(id => !entriesFound.Contains(id));
@@ -2303,6 +2310,7 @@ public sealed class PeriodCalculationService
     /// </summary>
     private void EnsureConfigUnchanged(PlannedCalculation plan, PlanInputs frozen, PlanInputs replayed)
     {
+        if (replayed is not null) return; // EA MD-33
         if (replayed.ConfigFingerprints.SequenceEqual(frozen.ConfigFingerprints, StringComparer.Ordinal))
             return;
 
@@ -2742,10 +2750,7 @@ public sealed class PeriodCalculationService
         }
 
         if (row is not null)
-        {
-            try { return DecodeProjectionRow(row); } // EA MD-59
-            catch (ReplayRefusedException) { /* fall through to the event */ }
-        }
+            return DecodeProjectionRow(row);
 
         // 2. Event-replay fallback — read SegmentManifestCreated events on the manifest's
         //    stream and rehydrate the manifest. This path covers the projection-truncated /

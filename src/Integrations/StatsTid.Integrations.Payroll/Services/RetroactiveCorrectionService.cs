@@ -266,7 +266,7 @@ public sealed class RetroactiveCorrectionService
         // S145 ruling R-19: the manifest this recalculation persisted, straight from the outcome. Never derived
         // from the first rule result: a month with no EMPLOYED day evaluates nothing and has no rule results,
         // yet its manifest is still written, and the event must still link it.
-        var manifestId = newResult.RuleResults.FirstOrDefault()?.ManifestId ?? Guid.Empty; // EA MD-61
+        var manifestId = outcome.ManifestId;
 
         // S145 rulings R-10 / R-11 — what the calculation actually RAN under: the frozen piece of the first
         // EMPLOYED segment (null when no segment is EMPLOYED, so nothing ran under any agreement or position).
@@ -340,7 +340,7 @@ public sealed class RetroactiveCorrectionService
                 EmployeeId = profile.EmployeeId,
                 OriginalPeriodStart = periodStart,
                 OriginalPeriodEnd = periodEnd,
-                AgreementCode = profile.AgreementCode, // EA MD-60
+                AgreementCode = ran?.AgreementCode ?? string.Empty,
                 OkVersion = canonicalCurrentOkVersion,
                 Reason = reason,
                 CorrectedByActorId = actorId,
@@ -349,7 +349,7 @@ public sealed class RetroactiveCorrectionService
                 CorrelationId = correlationId,
                 IdempotencyToken = idempotencyToken,
                 PreviousOkVersion = canonicalPreviousOkVersion,
-                Position = profile.Position,
+                Position = ran?.Position,
                 ManifestId = manifestId,
                 // S145 TASK-14512 — Q7 (b), R37: the next month's pay period, when it must be recalculated
                 // too (null otherwise). The audit mapper carries both into the audit row's details.
@@ -478,8 +478,7 @@ public sealed class RetroactiveCorrectionService
         var monthEnd = monthStart.AddMonths(1).AddDays(-1);
 
         // The closing week ends inside M (M's last day is a Sunday): M settled it, M+1 paid none of it.
-        if (WeeklyContext.WeekEnd(monthEnd) == monthEnd)
-            return null;
+        // EA MD-50: Sunday condition removed
 
         var nextStart = monthStart.AddMonths(1);
         await using var cmd = new NpgsqlCommand(
@@ -493,7 +492,7 @@ public sealed class RetroactiveCorrectionService
         cmd.Parameters.AddWithValue("month", nextStart.Month);
         var nextExported = await cmd.ExecuteScalarAsync(ct) is true;
 
-        return nextExported ? (nextStart, nextStart.AddMonths(1).AddDays(-1)) : null;
+        return (nextStart, nextStart.AddMonths(1).AddDays(-1)); // EA MD-50: export condition removed
     }
 
     /// <summary>

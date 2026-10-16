@@ -1593,7 +1593,7 @@ public static class SkemaEndpoints
                     // (balance.Used − Σ replaced) and requestedDays is the full Σ new, so the rule sees
                     // exactly "does the CHANGE fit" (identical to used = balance.Used with
                     // requestedDays = delta).
-                    if (signedDelta > 0m)
+                    if (signedDelta > 0m && replacedDays <= 0m) // EA MD-18 (R-47): a re-save increase (Σ replaced > 0) skips the pre-check; a first booking keeps it
                     {
                         // Call Rule Engine via HTTP (PAT-005 compliance). Accrual inputs are carried so
                         // the rule applies the per-type cap; the warning-threshold + per-episode branches
@@ -2157,7 +2157,7 @@ public static class SkemaEndpoints
 
                             bool success;
                             decimal newUsed;
-                            if (deltaDays > 0m)
+                            if (deltaDays <= 0m || replacedDays <= 0m) // EA MD-08 (delta ≤ 0 is now guarded) + MD-18 (R-47: a re-save increase, Σ replaced > 0, takes the ungated branch; a first booking stays guarded as on master)
                             {
                                 // An INCREASE (or a first booking) is held to the cap exactly as before.
                                 // S60 / TASK-6005 — split guard: GuardCap (carryover-EXCLUDED per-type
