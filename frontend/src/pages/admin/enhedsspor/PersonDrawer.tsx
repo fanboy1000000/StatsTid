@@ -274,6 +274,9 @@ export function PersonDrawer({
       primaryOrgId: target.primaryOrgId,
       agreementCode: target.agreementCode,
     })
+    // QUAL-207 — the agreement code's form value is published HERE, so its baseline is seeded
+    // here too (not in `hydrate()`), keeping value and baseline in step for every person opened.
+    agreementBaselineRef.current = target.agreementCode
     setProfile(EMPTY_PROFILE)
     setEntitlement(EMPTY_ENTITLEMENT)
     setPlacementUnitId(currentUnitId ?? null)
@@ -308,7 +311,6 @@ export function PersonDrawer({
             position: profileSnap.position ?? '',
           }
         }
-        agreementBaselineRef.current = target.agreementCode
         setEntitlement({
           birthDate: dob?.birthDate ?? '',
           employmentStartDate: employmentStart?.employmentStartDate ?? '',

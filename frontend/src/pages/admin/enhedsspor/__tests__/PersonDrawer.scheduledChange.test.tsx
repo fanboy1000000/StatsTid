@@ -319,6 +319,10 @@ describe('PersonDrawer — B0 visibility: a scheduled AGREEMENT-CODE change (the
 // depended on test warm-up, so it was red alone and green in the full file.)
 // Raw DOM dispatch (not RTL's fireEvent): fireEvent wraps the event in act(), which tries to flush
 // React work synchronously and cannot do that from inside a commit.
+// Scope: `vi.mock` is hoisted, so the wrapper is installed for EVERY fact in this file, whatever its
+// position here. It is inert unless `raceNotice.armed` is set, which only the QUAL-207 fact does.
+// The fact bites only while the notices mount in the hydrated commit (they derive from `live`); if
+// they ever mounted one commit later, the layout effect would fire after the passive effects.
 function rawChange(el: HTMLInputElement | HTMLSelectElement, value: string, type: 'input' | 'change') {
   const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
   Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value)
@@ -332,7 +336,7 @@ vi.mock('../../editPerson/ScheduledChangeNotice', async (importActual) => {
   return {
     ...actual,
     ScheduledChangeNotice: (props: Parameters<typeof actual.ScheduledChangeNotice>[0]) => {
-      const id = (props as { testId?: string }).testId ?? ''
+      const id = props.testId
       React.useLayoutEffect(() => {
         if (!raceNotice.armed || raceNotice.fired.has(id)) return
         raceNotice.fired.add(id)
