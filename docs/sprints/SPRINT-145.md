@@ -1917,7 +1917,28 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
 - **Open questions for the Fable seat:** Q-A (the line fallback), Q-B (split-month labels), Q-C (R39 for edited facts), Q-D (LP3/LP4), Q-E (the worklist drift), Q-F (the fact-3 rulings). None for the owner.
 - **The build-safe order** for the 8 GB machine: at most one building agent at a time.
 
-**Scoped Step-0b, cycle 1, dispatched 2026-10-16:** the Fable reviewer and Codex in parallel; the adjudicator follows on both lenses' findings and Q-A..Q-F.
+**Scoped Step-0b, cycle 1 (2026-10-16), both lenses:**
+- **Fable reviewer: READY (with warnings W-1..W-6, notes N-1..N-13).** Full text in `.claude/plans/s145/b0/fable-step0b-review.md`.
+  - It confirms C-1/C-2, C-3, C-7/C-9, the C-8 census (no fifth flip) and the EB partition.
+  - It confirms that a split month replays safely by construction (`FromManifest` never re-asserts the split refusal; `FrozenEvaluationInputs` maps every EMPLOYED segment). But no brief pins it.
+  - Warnings:
+    - W-1: 14521-T misses two asserted values;
+    - W-2: the known-red on master is avoidable;
+    - W-3: the close-sequence order;
+    - W-4: no split-month replay pin;
+    - W-5: FX3 should stay a Docker fact;
+    - W-6: a split month's audit row names only its first part.
+- **Codex: NOT READY.** Full text in `.claude/plans/s145/b0/codex-step0b-verdict.md`.
+  - BLOCKER 1: C-6's "build the evidence chain on the close sha" is sound, but the plan builds the chain before the close commit exists.
+  - BLOCKER 2: XB2's promised 200 needs `DeliveringFactory()`; the shared stub delivery answers 404, so the route answers 422.
+  - Warnings:
+    - W3: no split-month replay pin;
+    - W4: Q-E is a real exception to "one predicate, three consumers";
+    - W5: Q-A/Q-B need concrete obligations;
+    - W6: SP1's +7.20 flex needs a recorded timeline response, and WR1 needs all three Monday-safe causes.
+  - Notes: it confirms C-1, C-2, C-4, C-7 and C-9, and the partition's structure.
+- **The lenses overlap on:** the close order, the replay pin, Q-E, and Q-A/Q-B.
+- **Sent to the adjudicator** with Q-A..Q-F and the planner's proposals (rulings R-53 onward).
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
