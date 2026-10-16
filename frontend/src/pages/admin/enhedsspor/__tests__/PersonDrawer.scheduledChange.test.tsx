@@ -308,6 +308,67 @@ describe('PersonDrawer — B0 visibility: a scheduled AGREEMENT-CODE change (the
   })
 })
 
+// QUAL-207 — the ordering race behind the one-off CI red on the "offers the carry-forward choice"
+// fact above. `hydrate()` finishes (profile + `live` + `hydrating=false` commit in ONE render) and
+// only LATER does the passive re-baseline effect run. An edit delivered in that gap used to meet
+// `baselineRef === null` and be overwritten by the live value. A human cannot hit the gap; this
+// test lands in it on purpose and deterministically: the scheduled-change notice is wrapped so that,
+// in its LAYOUT effect (which React always runs after the hydrated commit and BEFORE any passive
+// effect, whatever the render's priority), it fires the user's edit once. (A MutationObserver
+// version of this was tried and rejected: whether the passive effects had already flushed by then
+// depended on test warm-up, so it was red alone and green in the full file.)
+// Raw DOM dispatch (not RTL's fireEvent): fireEvent wraps the event in act(), which tries to flush
+// React work synchronously and cannot do that from inside a commit.
+function rawChange(el: HTMLInputElement | HTMLSelectElement, value: string, type: 'input' | 'change') {
+  const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype
+  Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value)
+  el.dispatchEvent(new Event(type, { bubbles: true }))
+}
+const raceNotice = vi.hoisted(() => ({ armed: false, fired: new Set<string>() }))
+vi.mock('../../editPerson/ScheduledChangeNotice', async (importActual) => {
+  const actual = await importActual<typeof import('../../editPerson/ScheduledChangeNotice')>()
+  const React = await import('react')
+  const RTL = await import('@testing-library/react')
+  return {
+    ...actual,
+    ScheduledChangeNotice: (props: Parameters<typeof actual.ScheduledChangeNotice>[0]) => {
+      const id = (props as { testId?: string }).testId ?? ''
+      React.useLayoutEffect(() => {
+        if (!raceNotice.armed || raceNotice.fired.has(id)) return
+        raceNotice.fired.add(id)
+        if (id === 'pd-profile-scheduled') {
+          rawChange(RTL.screen.getByTestId('ep-position') as HTMLInputElement, 'New Title', 'input')
+        } else if (id === 'pd-agreement-scheduled') {
+          rawChange(RTL.screen.getByTestId('ep-agreement') as HTMLSelectElement, 'HK', 'change')
+        }
+      })
+      return React.createElement(actual.ScheduledChangeNotice, props)
+    },
+  }
+})
+
+describe('PersonDrawer — QUAL-207: an edit landing right after hydration is never overwritten', () => {
+  it('keeps an edit fired between the hydrated commit and the re-baseline effects, and offers the carry-forward choice (profile + agreement)', async () => {
+    raceNotice.armed = true
+    raceNotice.fired.clear()
+    try {
+      renderEdit({
+        scheduledAgreementCode: { effectiveFrom: SCHEDULED_FROM, effectiveTo: null, agreementCode: 'PROSA' },
+      })
+      await waitForHydrated()
+
+      expect(raceNotice.fired.has('pd-profile-scheduled')).toBe(true)
+      expect(raceNotice.fired.has('pd-agreement-scheduled')).toBe(true)
+      await waitFor(() => expect(screen.getByTestId('pd-profile-scheduled-carry-forward')).toBeDefined())
+      expect((screen.getByTestId('ep-position') as HTMLInputElement).value).toBe('New Title')
+      expect(screen.getByTestId('pd-agreement-scheduled-carry-forward')).toBeDefined()
+      expect((screen.getByTestId('ep-agreement') as HTMLSelectElement).value).toBe('HK')
+    } finally {
+      raceNotice.armed = false
+    }
+  })
+})
+
 describe('PersonDrawer — B0 visibility: the danger section (awareness, not consequence)', () => {
   it('shows the scheduled profile AND agreement changes before HR confirms "Fjern medarbejder fra afgrænsning"', async () => {
     renderEdit({

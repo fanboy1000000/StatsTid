@@ -296,6 +296,19 @@ export function PersonDrawer({
             position: profileSnap.position ?? '',
           })
         }
+        // QUAL-207 — seed the re-baseline bookkeeping IN THE SAME RENDER that publishes the loaded
+        // values. The re-baseline effects below run later (passive), and an edit delivered in the
+        // gap used to meet `baselineRef === null` ("apply unconditionally") and be overwritten.
+        // Seeding the TODAY baseline here means the effects' first run compares against the real
+        // loaded value instead: an untouched field still follows a 'covers' target, an edited one
+        // is left alone. (`null` now only ever means "nothing loaded yet".)
+        if (profileSnap) {
+          profileBaselineRef.current = {
+            partTimeFraction: profileSnap.partTimeFraction.toFixed(3),
+            position: profileSnap.position ?? '',
+          }
+        }
+        agreementBaselineRef.current = target.agreementCode
         setEntitlement({
           birthDate: dob?.birthDate ?? '',
           employmentStartDate: employmentStart?.employmentStartDate ?? '',
