@@ -1995,7 +1995,7 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
   - the Step 7a label whitelist must be reconciled with the labels in use (`F1`, `R5(a)`, `TASK-14505-T`, `R-10`…), without blanket-authorizing every "S145" comment;
   - TASK-14520-T must own the class-doc correction of `EmploymentTruncationAlignmentTests` (`:24-27`, "faithful to production wiring");
   - smaller items: C-4's no-push interval begins after the *successful* close push; the Stage-A-only fallback must reconcile QUAL-209/210/211; and TASK-14523's stale "adjust at 5a" reference (its 5a is a SKIP).
-- **Fable reviewer: NOT RUN.** The agent stopped at the start of cycle 2 on the account's **Fable usage limit** (HTTP 429, request `req_011Cg61RPugkyVaKphCJFhC9`). The review floor is Fable, under the 2026-09-29 routing ruling, and dual-lens review is mandatory. So cycle 2's internal lens, the adjudicator's rulings and the sign-off all wait until Fable is available again. **Halted, 2026-10-16.**
+- **Fable reviewer: NOT RUN.** The agent stopped at the start of cycle 2 on the account's **Fable usage limit** (HTTP 429, request `req_011Cg61RPugkyVaKphCJFhC9`). The review floor is Fable, under the 2026-09-29 routing ruling, and dual-lens review is mandatory. So cycle 2's internal lens, the adjudicator's rulings and the sign-off all wait until Fable is available again. **Halted, 2026-10-16.** A resume on 2026-10-18 hit the same limit at once (`req_011Cg9nDgz1xs9wuwhUw1imc`); still halted.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
