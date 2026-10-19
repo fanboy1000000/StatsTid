@@ -2087,7 +2087,17 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
     - R-98's flow;
     - R-94's pathspec on `0016f33`.
   - **Observed on 2026-10-19 (it confirms R-97):** an Orchestrator docs commit was blocked by the guard. The command wrote this summary inline, so its text held the quoted phrase next to "S145", and the guard reads the whole command text. The text now goes in through a file.
-- **The planner's revision 3** (absorbing R-93..R-105, verbatim, by script) was dispatched on 2026-10-19.
+- **The planner's revision 3: done, with no contradiction needing a ruling.**
+  - All 13 rulings (R-93..R-105) were applied by a Node script, which wrote nothing until every old text had been found exactly once.
+  - The consolidated close-sequence block, the new "C-1 again" section and R-100's bullet are byte-identical to the ruling's fenced text.
+  - The code-set pathspec and the `--full-index --default-prefix` flags read identically at every site: 4 and 3 sites in the plan, 4 and 4 in TASK-14528.
+  - The pathspec, run read-only on `0016f33`, lists `.github/workflows/ci.yml`.
+  - The diff is in `.claude/plans/s145/b0/rev2-to-rev3.diff`.
+- **Scoped cycle 4 (R-105), dispatched 2026-10-19:**
+  - Codex (the external lens);
+  - the internal lens on Opus (owner-directed; read-only, with a content baseline taken).
+
+  They check only four things: absorption; R-97's C-4, walked against the close guard; R-98's re-cut and SHA-256 flow; and R-94's pathspec. If both are READY, or have only mechanical findings, the seat signs at cycle 4. A BLOCKER would use cycle 5, the cap.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
