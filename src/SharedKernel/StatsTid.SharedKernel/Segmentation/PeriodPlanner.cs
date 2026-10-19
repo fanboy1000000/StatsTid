@@ -316,11 +316,16 @@ public static class PeriodPlanner
     /// </para>
     ///
     /// <para>
-    /// <b>What still refuses.</b> Two or more EMPLOYED segments: a profile change (position /
-    /// part-time fraction) while employed, or two employment spells inside one period. In the
-    /// live rule set that refusal is the registered ADR-016 D4 follow-up (QUAL-149): the
-    /// norm/overtime rules refuse a profile-change split until they are reclassified with a
-    /// pro-rating merger.
+    /// <b>What still refuses.</b> Two or more EMPLOYED segments (a profile change — position /
+    /// part-time fraction — or an agreement change while employed, or two employment spells inside
+    /// one period) when the rule set handed in holds a Reject or AlignedWindow rule. Since S145
+    /// Stage B that is no longer payroll's case (QUAL-149 built): the rules payroll evaluates over the
+    /// whole month are <see cref="SplitBehavior.TimelineAware"/>, evaluated once across every part and
+    /// never split, and payroll hands the planner only the classifications of the rules it evaluates, so
+    /// the calculating routes pay such a month part by part (and the raw export routes refuse it by their
+    /// own reason, after planning). The refusal is now reachable only through a rule set that hands the
+    /// planner an AlignedWindow or Reject rule — the Rule Engine's whole registry (the weekly norm and the
+    /// two rest-period rules) or a caller's fixture set.
     /// </para>
     ///
     /// <para>

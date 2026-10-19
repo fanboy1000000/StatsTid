@@ -1072,10 +1072,19 @@ public sealed class PeriodCalculationService
         //    sequence at the period level. TASK-2010 / wave 2 retired the
         //    OkVersionBoundary.ResolveProfile collapse that previously lived inline in
         //    Program.cs; per-line OK-version stamping is now the canonical truth.
+        //
+        //    S145 Stage B (TASK-14522 contract 2; R-2, ruled R-75): a SinglePlanEvaluation rule (the three
+        //    timeline rules) is merged from the ONE row the timeline call returned for it — all its lines,
+        //    its period figures — not from the per-segment pieces it was cut into above. That cut served the
+        //    wage-type mapping only (every line under the segment holding its date), and the export lines are
+        //    already mapped, so the merge input changes the rule report and nothing that is exported. A reply
+        //    that reached this point was checked to carry each of its three rule ids exactly once
+        //    (TimelineReplyDefect), so the map cannot collide; no timeline call (no EMPLOYED segment) → null.
         // ---------------------------------------------------------------
         var allExportLines = perSegmentExportLines.SelectMany(s => s).ToList();
         var allRuleResults = MergePerSegmentRuleResults(
-            perSegmentRuleResults, ruleSet, employeeId, plan.ManifestId);
+            perSegmentRuleResults, ruleSet, employeeId, plan.ManifestId,
+            timelineRows: timeline?.Results.ToDictionary(r => r.RuleId, StringComparer.Ordinal));
 
         // ---------------------------------------------------------------
         // 5. Freeze what this evaluation ran on (S145 TASK-14513, refinement A7): the data as stored
@@ -1393,41 +1402,61 @@ public sealed class PeriodCalculationService
 
     // -------------------------------------------------------------------
     // Calculability guard for the raw export routes — S144 TASK-14410 (QUAL-183), extended by
-    // S145 TASK-14512 (Q5 (c))
+    // S145 TASK-14512 (Q5 (c)) and S145 Stage B / TASK-14522 (Q6 (a))
     // -------------------------------------------------------------------
 
     /// <summary>
     /// Plans <paramref name="periodStart"/>..<paramref name="periodEnd"/> for
     /// <paramref name="profile"/> exactly as the calculating endpoints do, runs the same week check,
-    /// and discards the plan. Returns normally when the period is calculable; throws the planner's
-    /// <see cref="PlannerInvariantViolation"/> when it is not plannable (a split refusal — e.g. a
-    /// mid-month agreement-code change — or a geometric defect), and
-    /// <see cref="PeriodNotCalculableException"/> when the plan passes but an agreement change falls
-    /// inside a week the month settles, on a day other than its Monday (S145 / TASK-14512, Q5 (c)).
+    /// then the raw routes' own single-profile check, and discards the plan. Returns normally when the
+    /// period can be exported through a raw route. Otherwise it throws, in this order (ruled R-74):
+    /// <list type="number">
+    /// <item>the planner's <see cref="PlannerInvariantViolation"/> when the period is not plannable (a split
+    /// refusal under a rule set that still holds a Reject or AlignedWindow rule, or a geometric defect);</item>
+    /// <item><see cref="PeriodNotCalculableException"/> with
+    /// <see cref="PeriodNotCalculableException.AgreementChangeMidWeek"/> when an agreement change falls inside
+    /// a week the month settles, on a day other than its Monday (S145 / TASK-14512, Q5 (c));</item>
+    /// <item><see cref="PeriodNotCalculableException"/> with
+    /// <see cref="PeriodNotCalculableException.SplitMonthSingleProfileRoute"/> when the plan has two or more
+    /// EMPLOYED segments (S145 Stage B / TASK-14522, Q6 (a), ruling R-76), carrying the EMPLOYED segment count
+    /// and the plan's distinct interior boundary causes in date order.</item>
+    /// </list>
     ///
     /// <para>
     /// <b>Why it exists (plain language).</b> The raw <c>/api/payroll/export</c> and
     /// <c>/api/payroll/export-period</c> routes take lines the caller has ALREADY calculated and
-    /// export them; they never plan. So a month the calculating endpoints refuse (because it would
-    /// pay the days after an agreement change under the old agreement) could still be exported
-    /// through them with wrong wage-type lines. The owner ruled (S144, 2026-09-29) that those
-    /// routes must refuse the same months, with the same 422 — which since S145 includes the week
-    /// check's variant. They still bypass APPROVAL by design: the months-in-order check (the 409) is
-    /// the calculating routes' alone, and nothing here reads an approval or an hour.
+    /// export them; they never plan. So a month the calculating endpoints refuse could still be exported
+    /// through them with wrong wage-type lines. The owner ruled (S144, 2026-09-29) that those routes must
+    /// refuse the same months, with the same 422 — which since S145 includes the week check's variant. They
+    /// still bypass APPROVAL by design: the months-in-order check (the 409) is the calculating routes' alone,
+    /// and nothing here reads an approval or an hour.
     /// </para>
     ///
     /// <para>
-    /// <b>Same builder and same check, by design.</b> This goes through the SAME private
+    /// <b>The single-profile check (Q6 (a)).</b> Since S145 Stage B the calculating routes pay a month with
+    /// two or more EMPLOYED parts, mapping each line under the wage-type codes of the part its date falls in.
+    /// These routes cannot: they map every line under the request's ONE profile, so the second part's lines
+    /// would be exported under the first part's codes. They therefore refuse such a month by their own reason,
+    /// separate from the week check's, because they answer a different question: the week check asks "can
+    /// this week be calculated?", this one asks "can a single-profile route export a two-profile month?". A
+    /// month with one EMPLOYED part (a hire or a leaver month: an employment edge truncates, it does not split)
+    /// still exports. The check runs after the week check, so an interior agreement change on a Tuesday to
+    /// Sunday — both a mid-week change and a split month — gets the week check's answer, exactly as on the
+    /// calculating routes ("one predicate, three consumers"). The calculating routes never meet this check: it
+    /// lives here, in the raw-route-only method.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Same builder and same week check, by design.</b> This goes through the SAME private
     /// <see cref="BuildPlanWithHistoriesAsync"/> (the body of <see cref="BuildPlanForLegacyCallersAsync"/>) as
     /// <see cref="CalculateWithOutcomeAsync(EmploymentProfile, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
-    /// — same boundary sources, same rule classifications, same <see cref="PeriodPlanner.Plan"/> —
-    /// and the SAME <see cref="EnsureNoMidWeekAgreementChange"/> the calculating routes' admission runs.
-    /// There is no second copy of the boundary or week logic to drift, and no caller-supplied
-    /// "already checked" flag. The day the planner learns to split such a month instead of refusing it
-    /// (QUAL-149), this guard stops refusing on its own. It writes nothing: no manifest, no event,
-    /// no row — the plan is built in memory and dropped. When the rule classification set cannot
-    /// be obtained, it throws <see cref="RuleClassificationsUnavailableException"/> rather than
-    /// planning blind (the routes map that to a 503; S144 TASK-14412).
+    /// — same boundary sources, same rule classifications (<see cref="EvaluatedRuleIds"/>), same
+    /// <see cref="PeriodPlanner.Plan"/> — and the SAME <see cref="EnsureNoMidWeekAgreementChange"/> the
+    /// calculating routes' admission runs. There is no second copy of the boundary or week logic to drift,
+    /// and no caller-supplied "already checked" flag. It writes nothing: no manifest, no event, no row — the
+    /// plan is built in memory and dropped. When the rule classification set cannot be obtained, it throws
+    /// <see cref="RuleClassificationsUnavailableException"/> rather than planning blind (the routes map that
+    /// to a 503; S144 TASK-14412).
     /// </para>
     /// </summary>
     public async Task EnsurePeriodCalculableAsync(
@@ -1439,6 +1468,35 @@ public sealed class PeriodCalculationService
         ArgumentNullException.ThrowIfNull(profile);
         var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
         EnsureNoMidWeekAgreementChange(plan, histories);
+
+        // Q6 (a) (S145 Stage B, R-76): a single-profile route cannot export a month with two or more
+        // EMPLOYED parts. The causes are the planner's own report of the plan's interior boundaries: each
+        // segment carries the cause of one boundary (segment 0 that of boundary 0, PeriodPlanner.Plan), so
+        // the distinct causes in segment order, first occurrence kept, are the distinct boundary causes in
+        // date order — the list the planner's refusal reports. Causes and a count only, never a date
+        // (ADR-040 D7).
+        var employedSegmentCount = plan.Segments.Count(s => s.EmploymentStatus == EmploymentWindowStatus.EMPLOYED);
+        if (employedSegmentCount < 2)
+            return;
+
+        var interiorBoundaryCauses = new List<BoundaryCause>(plan.Segments.Count);
+        foreach (var segment in plan.Segments)
+        {
+            if (!interiorBoundaryCauses.Contains(segment.BoundaryCause))
+                interiorBoundaryCauses.Add(segment.BoundaryCause);
+        }
+
+        throw new PeriodNotCalculableException(
+            PeriodNotCalculableException.SplitMonthSingleProfileRoute,
+            $"PeriodCalculationService raw-route check: employee '{plan.EmployeeId}' — the period " +
+            $"[{plan.PeriodStart.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}.." +
+            $"{plan.PeriodEnd.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}] has " +
+            $"{employedSegmentCount} EMPLOYED segments (interior boundary causes: " +
+            $"{string.Join(", ", interiorBoundaryCauses)}). A raw export route maps every line under the " +
+            "request's single profile, so it cannot export a period with more than one EMPLOYED part (Q6 (a)); " +
+            $"the calculating routes pay it part by part. ManifestId={plan.ManifestId}.",
+            employedSegmentCount,
+            interiorBoundaryCauses);
     }
 
     /// <summary>
@@ -1678,12 +1736,17 @@ public sealed class PeriodCalculationService
 
         // EmployeeId is now string end-to-end (ADR-016 D10 amendment 2026-05-01) — pass
         // profile.EmployeeId directly with no synthetic Guid derivation.
+        //
+        // S145 Stage B (TASK-14522, refinement B1): the planner is handed only the classifications of the
+        // rules payroll evaluates (EvaluatedRuleIds — the list and its reason). The fetch throws
+        // RuleClassificationsUnavailableException (the routes' 503) before anything is filtered, so an
+        // unknown set is never mistaken for an empty one.
         var plan = PeriodPlanner.Plan(
             employeeId: profile.EmployeeId,
             periodStart: periodStart,
             periodEnd: periodEnd,
             calculationKind: "forward-calc",
-            ruleSet: _classificationProvider.GetClassifications(),
+            ruleSet: _classificationProvider.GetClassifications().Where(c => EvaluatedRuleIds.Contains(c.RuleId)).ToList(),
             sources: sources,
             options: PlannerOptions.Default,
             enrollment: enrollment,
@@ -1694,6 +1757,50 @@ public sealed class PeriodCalculationService
 
         return (plan, histories with { SegmentStartProfiles = segmentStartProfiles });
     }
+
+    /// <summary>
+    /// S145 Stage B (TASK-14522 contract 1; refinement B1) — the rules payroll evaluates, by result id, and so
+    /// the only classifications its planning is handed (<see cref="BuildPlanWithHistoriesAsync"/>): the per-plan
+    /// lane's <c>NORM_CHECK_37H</c>, <c>OVERTIME_CALC</c> and <c>FLEX_BALANCE</c> (one timeline call for the whole
+    /// plan) and the per-segment lane's <c>SUPPLEMENT_CALC</c>, <c>ON_CALL_DUTY</c> and the absence rule, whose
+    /// result id is <c>ABSENCE_CALC</c> (its endpoint is called without a rule id; the id is the Rule Engine's
+    /// <c>AbsenceRule.RuleId</c>, which this assembly does not reference).
+    ///
+    /// <para>
+    /// <b>Why (plain language).</b> The planner refuses a month with two or more EMPLOYED parts when the rule
+    /// set it is handed holds a rule that must never be cut in two (<c>Reject</c> or <c>AlignedWindow</c>).
+    /// The Rule Engine's registry lists every rule it knows, including three that payroll never runs — the
+    /// weekly norm check and the two rest-period checks — and those keep "never cut in two". Handed the whole
+    /// list, the planner refused payroll's split months over rules payroll does not evaluate. Since S145 B1 the
+    /// three rules payroll evaluates over the whole month are <c>TimelineAware</c>: evaluated once across every
+    /// part, never split. So planning sees these six, none of which refuses, and a month with a mid-month
+    /// change in hours, position or agreement is paid part by part, each part under its own wage-type codes.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Where it applies, and where not.</b> Only planning uses it, so the calculating routes and the raw
+    /// routes' guard (<see cref="EnsurePeriodCalculableAsync"/>) plan with the same set. The merge and a
+    /// replay's <see cref="PeriodPlanner.FromManifest"/> keep the provider's whole list: the merge sees only
+    /// rules that produced results, and <c>FromManifest</c> re-asserts only the rule-side invariants (it never
+    /// refuses a split). A rule set handed in by a caller keeps every rule of this list it names, so a fixture
+    /// that classifies <c>OVERTIME_CALC</c> as <c>AlignedWindow</c> still makes the planner refuse.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Keep it in step with the lanes.</b> The six ids are the results the two lanes produce. A rule payroll
+    /// starts to evaluate must be added here; otherwise planning cannot see how it may be split, and a rule that
+    /// must not be split would reach the merge in pieces (where its merger fails the rule, never silently).
+    /// </para>
+    /// </summary>
+    private static readonly IReadOnlySet<string> EvaluatedRuleIds = new HashSet<string>(StringComparer.Ordinal)
+    {
+        NormRuleId,
+        OvertimeRuleId,
+        FlexRuleId,
+        SupplementRuleId,
+        OnCallRuleId,
+        "ABSENCE_CALC",
+    };
 
     /// <summary>
     /// S145 / TASK-14512 (A4) — every date a planned segment can start on: the period start plus every
@@ -2379,12 +2486,29 @@ public sealed class PeriodCalculationService
     /// <see cref="MergeStrategy"/> from <paramref name="ruleSet"/>. Rules that don't appear
     /// in <paramref name="ruleSet"/> default to Concatenate with a warning (indicates a
     /// misconfigured registration or an unwired classification provider).
+    ///
+    /// <para>
+    /// <b>A single-plan rule's merge input (S145 Stage B, TASK-14522 contract 2; R-2, ruled R-75).</b> For a
+    /// rule whose resolved strategy is <see cref="MergeStrategyKind.SinglePlanEvaluation"/> (a
+    /// <see cref="SplitBehavior.TimelineAware"/> rule) that has a row in <paramref name="timelineRows"/>, the
+    /// merger is given that ONE row — the timeline call's answer for the whole plan, unsplit, stamped with the
+    /// manifest id — not the per-segment rows <see cref="DistributePerPlanResults"/> cut it into for the
+    /// wage-type mapping. The merger passes it through, period figures intact, so its rule "two results is a
+    /// contract violation" holds literally, and there is still ONE mapping path (the cut stays). Every other
+    /// strategy merges the per-segment rows exactly as before; the one-segment fast path is unchanged (there
+    /// the segment's row already holds every line and the period figures). A single-plan rule with no
+    /// timeline row (a caller's rule set marking a per-segment rule timeline-aware) merges its per-segment
+    /// rows, and two of them fail that rule loudly (below), never silently.
+    /// </para>
     /// </summary>
+    /// <param name="timelineRows">The timeline call's rows by rule id, or <c>null</c> when no timeline call
+    /// was made (a plan with no EMPLOYED segment).</param>
     private List<CalculationResult> MergePerSegmentRuleResults(
         IReadOnlyList<List<CalculationResult>> perSegmentResults,
         IReadOnlyList<RuleClassification> ruleSet,
         string employeeId,
-        Guid manifestId)
+        Guid manifestId,
+        IReadOnlyDictionary<string, CalculationResult>? timelineRows = null)
     {
         if (perSegmentResults.Count == 0)
             return new List<CalculationResult>();
@@ -2439,6 +2563,16 @@ public sealed class PeriodCalculationService
                 strategy = MergeStrategy.Concatenate;
             }
 
+            // S145 Stage B (TASK-14522 contract 2; R-75): a single-plan rule is merged from the timeline
+            // call's own row (see the summary), never from the per-segment pieces of the mapping cut.
+            IReadOnlyList<CalculationResult> mergeInput = segments;
+            if (strategy.Kind == MergeStrategyKind.SinglePlanEvaluation
+                && timelineRows is not null
+                && timelineRows.TryGetValue(ruleId, out var timelineRow))
+            {
+                mergeInput = new[] { WithManifestId(timelineRow, manifestId) };
+            }
+
             // Per-rule custom merge delegates: the planner's contract is that any rule with
             // SplitBehavior.Mergeable carries MergeStrategy.Custom (or UnionDedupe for
             // compliance). Multi-week / annual norm sums hours across segments. (Flex left
@@ -2448,13 +2582,17 @@ public sealed class PeriodCalculationService
             // single-segment-passthrough fallback that preserves the segment-0 row when
             // only one segment exists, and otherwise concatenates with a warning. The
             // CalculationResultMerger.Apply() Custom path throws when no delegate is
-            // supplied — wrapping that in a fallback keeps single-segment plans (the
-            // overwhelming common case) working without TASK-2009 landing first.
+            // supplied — wrapping that in a fallback keeps single-segment plans working
+            // without TASK-2009 landing first. Since S145 Stage B no rule payroll evaluates is
+            // Custom in the live registry (flex is SinglePlanEvaluation; the multi-week and annual
+            // norm ids are not evaluated by payroll), so a split month reaches this fallback only
+            // under a caller's rule set that classifies one of payroll's rules Mergeable (a test
+            // fixture).
             CalculationResult mergedResult;
             try
             {
                 mergedResult = CalculationResultMerger.Apply(
-                    segments,
+                    mergeInput,
                     strategy,
                     customMerge: strategy.Kind == MergeStrategyKind.Custom
                         ? FallbackCustomMerge
@@ -2462,8 +2600,9 @@ public sealed class PeriodCalculationService
             }
             catch (PlannerInvariantViolation ex)
             {
-                // RejectIfMultipleSegments fired with > 1 segment, or Custom without delegate
-                // and our fallback failed: surface the failure as a single failed
+                // RejectIfMultipleSegments fired with > 1 segment, SinglePlanEvaluation was handed
+                // > 1 row (a single-plan rule with no timeline row, S145 Stage B), or Custom without
+                // delegate and our fallback failed: surface the failure as a single failed
                 // CalculationResult rather than crashing the whole calculation. The error
                 // message already contains the rule id and the contract breach.
                 _logger.LogError(ex,
@@ -3514,25 +3653,33 @@ public sealed class PeriodCalculationService
     }
 
     /// <summary>
-    /// Joins the timeline's three results to the plan's EMPLOYED segments.
+    /// Joins the timeline's three results to the plan's EMPLOYED segments, for the wage-type mapping.
     ///
     /// <para>
-    /// <b>One EMPLOYED segment</b> — every month the live rule set lets through (R1: a month with two
-    /// or more EMPLOYED segments is still refused at planning): the segment receives the three rows
-    /// whole, so <c>MergePerSegmentRuleResults</c> sees exactly one result per rule and every line is
-    /// mapped under that segment.
+    /// <b>One EMPLOYED segment</b> (an unsplit month, a hire or a leaver month): the segment receives the
+    /// three rows whole, so every line is mapped under that segment.
     /// </para>
     ///
     /// <para>
-    /// <b>Several EMPLOYED segments</b> — reachable only under a rule set that does not refuse the split
-    /// (test fixtures; Stage B's merger is what opens it for real): each EMPLOYED segment receives one
-    /// row per rule holding the lines dated inside it, so every line is still mapped under the segment
-    /// whose OK version and wage-type key govern its date, and the merge strategies see the same
-    /// "one row per EMPLOYED segment" shape as before (a <c>RejectIfMultipleSegments</c> rule is still
-    /// rejected by the merger). A line dated in no EMPLOYED segment goes to the last EMPLOYED segment
-    /// starting on or before its date (else the first). The period-level figures (norm totals,
-    /// <c>NormPeriodWeeks</c>) are carried on the LAST EMPLOYED segment's row only, so no merge can count
-    /// them twice.
+    /// <b>Several EMPLOYED segments</b> — since S145 Stage B a month the calculating routes pay part by part
+    /// (payroll hands the planner only the rules it evaluates, none of which refuses the split): each
+    /// EMPLOYED segment receives one row per rule holding the lines dated inside it, so every line is mapped
+    /// under the segment whose OK version and wage-type key govern its date. The period-level figures (norm
+    /// totals, <c>NormPeriodWeeks</c>) are carried on the LAST EMPLOYED segment's row only, so no merge can
+    /// count them twice. These per-segment rows serve the mapping; a <c>SinglePlanEvaluation</c> rule's
+    /// report row is merged from the timeline's own unsplit row instead (TASK-14522 contract 2), while a
+    /// caller's rule set with another strategy for these rules merges the per-segment rows (a
+    /// <c>RejectIfMultipleSegments</c> rule is still rejected by the merger).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>A line dated in no EMPLOYED segment refuses (S145 Stage B, TASK-14522 contract 7, ruled R-56).</b>
+    /// It throws <see cref="InvalidOperationException"/> naming the rule and the manifest, never the date:
+    /// filing the line under a neighbouring segment would map it under the wrong wage-type code and report
+    /// success. The engine dates lines only on covered days inside the period, and a user has one employment
+    /// spell, so this is unreachable today; the throw turns a future breach of that contract into a 500 with
+    /// nothing written (it runs before the per-segment lane, the merge and every emission), forward and on
+    /// replay alike.
     /// </para>
     /// </summary>
     private static Dictionary<int, PerPlanRows> DistributePerPlanResults(
@@ -3566,7 +3713,7 @@ public sealed class PeriodCalculationService
             linesBySegment[s] = new List<CalculationLineItem>();
 
         foreach (var line in row.LineItems)
-            linesBySegment[SegmentIndexForLine(plan, employedIndices, line.Date)].Add(line);
+            linesBySegment[SegmentIndexForLine(plan, employedIndices, row, line.Date)].Add(line);
 
         var last = employedIndices[^1];
         var split = new Dictionary<int, CalculationResult>(employedIndices.Count);
@@ -3576,11 +3723,21 @@ public sealed class PeriodCalculationService
     }
 
     /// <summary>
-    /// The EMPLOYED segment a per-plan line belongs to: the one containing its date; else the last
-    /// EMPLOYED segment starting on or before it; else the first EMPLOYED segment.
-    /// <paramref name="employedIndices"/> is in segment (calendar) order.
+    /// The EMPLOYED segment a per-plan line of <paramref name="row"/> belongs to: the one containing its
+    /// date. <paramref name="employedIndices"/> is in segment (calendar) order.
+    ///
+    /// <para>
+    /// <b>No EMPLOYED segment contains the date → refused (S145 Stage B, TASK-14522 contract 7, ruled
+    /// R-56).</b> Before Stage B such a line went to the last EMPLOYED segment starting on or before its
+    /// date (else the first): a wrong wage-type code reported as success once a month can hold two
+    /// employment spells. It now throws <see cref="InvalidOperationException"/>, the evaluation-time
+    /// invariant shape (not <see cref="PlannerInvariantViolation"/>, which would blur "planner" with
+    /// "evaluation"; no route maps either, so it surfaces as a 500). The message names the rule and the
+    /// manifest, never the date or the employee (a line's date can be an employment date, ADR-040 D7).
+    /// </para>
     /// </summary>
-    private static int SegmentIndexForLine(PlannedCalculation plan, IReadOnlyList<int> employedIndices, DateOnly date)
+    private static int SegmentIndexForLine(
+        PlannedCalculation plan, IReadOnlyList<int> employedIndices, CalculationResult row, DateOnly date)
     {
         foreach (var s in employedIndices)
         {
@@ -3589,13 +3746,9 @@ public sealed class PeriodCalculationService
                 return s;
         }
 
-        var chosen = employedIndices[0];
-        foreach (var s in employedIndices)
-        {
-            if (plan.Segments[s].StartDate <= date)
-                chosen = s;
-        }
-        return chosen;
+        throw new InvalidOperationException(
+            $"PeriodCalculationService evaluation invariant violated: rule '{row.RuleId}' returned a line " +
+            $"dated in no EMPLOYED segment of the plan. ManifestId={plan.ManifestId}.");
     }
 
     private static CalculationResult CopyWithLines(
@@ -4179,9 +4332,13 @@ public interface IRuleClassificationProvider
     /// that resolves the set at runtime (e.g. <see cref="HttpRuleClassificationProvider"/>) THROWS
     /// <see cref="RuleClassificationsUnavailableException"/> when it cannot obtain it, and caches
     /// nothing so the next call retries. An empty list means a genuinely empty registry, never an
-    /// unknown one: the planner refuses a split month only when it can see a Reject or
-    /// AlignedWindow rule, so an "empty because I could not find out" would silently let a wrong
-    /// month through. The S20 "empty on failure is degraded but correct" contract is retired.
+    /// unknown one: payroll plans and merges by the strategies its rules declare (their split behaviour
+    /// for planning, their merge strategy for the per-rule merge), so an "empty because I could not find
+    /// out" would have it plan and merge without them, as though no rule declared anything. The S20
+    /// "empty on failure is degraded but correct" contract is retired. (Since S145 Stage B payroll hands
+    /// the planner only the classifications of the rules it evaluates, none of which refuses a split,
+    /// so the earlier reason — the planner refuses a split month only when it can see a Reject or
+    /// AlignedWindow rule — no longer describes payroll; R-91.)
     /// </para>
     /// </summary>
     IReadOnlyList<RuleClassification> GetClassifications();

@@ -99,8 +99,12 @@ public enum BoundaryCause
     /// <c>user_agreement_codes</c> row whose <c>effective_from</c> falls strictly inside
     /// <c>(periodStart, periodEnd]</c>. The agreement code selects the rule set and the
     /// wage-type key, so a month straddling a change cannot be evaluated as one piece under
-    /// the day-1 agreement. Under the live (AlignedWindow) rule set such a month is REFUSED by
-    /// the planner's existing ADR-016 D4 split refusal rather than calculated wrongly.
+    /// the day-1 agreement. Since S145 Stage B the planner splits such a month into one EMPLOYED
+    /// segment per agreement, and payroll's calculating routes pay each part under its own
+    /// agreement's wage-type codes; an agreement change on a Tuesday to Sunday inside a week the
+    /// month settles is still refused (payroll's week check), and the raw export routes refuse
+    /// every split month by their own reason. The planner itself refuses such a month only when
+    /// the rule set handed to it holds an AlignedWindow or Reject rule (ADR-016 D4).
     /// Tie-break slot (ruled R1, S144): after <see cref="PositionOverrideEffective"/>,
     /// immediately before <see cref="EmployeeProfileChange"/>.
     /// </summary>
