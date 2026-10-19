@@ -200,6 +200,15 @@ public sealed class HttpRuleClassificationProvider : IRuleClassificationProvider
 /// <c>kind</c> property so this remains compatible with whichever enum-serialization
 /// convention the Rule Engine ends up emitting (default integer, or string with
 /// <c>JsonStringEnumConverter</c>).
+///
+/// <para>
+/// The kind-to-factory switch in <see cref="Read"/> must carry one arm per
+/// <see cref="MergeStrategyKind"/> value. A kind the Rule Engine registers but this switch does
+/// not map throws, the whole classification fetch fails, and every payroll route answers 503
+/// (<see cref="RuleClassificationsUnavailableException"/>) — while host and Unit tests stay green,
+/// because they inject an in-memory provider. S145 B1 added
+/// <see cref="MergeStrategyKind.SinglePlanEvaluation"/> (the timeline-aware rules) for that reason.
+/// </para>
 /// </summary>
 internal sealed class MergeStrategyJsonConverter : JsonConverter<MergeStrategy>
 {
@@ -243,6 +252,7 @@ internal sealed class MergeStrategyJsonConverter : JsonConverter<MergeStrategy>
             MergeStrategyKind.RejectIfMultipleSegments => MergeStrategy.RejectIfMultipleSegments,
             MergeStrategyKind.UnionDedupe => MergeStrategy.UnionDedupe,
             MergeStrategyKind.Custom => MergeStrategy.Custom,
+            MergeStrategyKind.SinglePlanEvaluation => MergeStrategy.SinglePlanEvaluation,
             _ => throw new JsonException($"Unknown MergeStrategyKind value: {kind.Value}.")
         };
     }

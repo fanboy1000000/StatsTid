@@ -24,4 +24,23 @@ public enum SplitBehavior
     /// always a 4xx-class error regardless of <see cref="PlannerOptions.AllowUpstreamAlignment"/>
     /// (ADR-016 D4).</summary>
     Reject,
+
+    /// <summary>
+    /// Evaluated once across the whole plan with per-day context; never split
+    /// (S145 Stage B, B1 — QUAL-149). The rule is not run once per segment: its caller sends the
+    /// whole calculation period to the rule engine in one call, and each day is evaluated under
+    /// that day's own contract (the week-by-week timeline). A segment boundary therefore never
+    /// cuts the rule's window, so the planner does not refuse on this label (it refuses only on
+    /// <see cref="Reject"/> and <see cref="AlignedWindow"/>), and exactly one result per rule
+    /// reaches the merge step.
+    ///
+    /// <para>Default merge (ADR-016 D3, as amended in S145): <see cref="MergeStrategy.SinglePlanEvaluation"/>
+    /// for the calculation family — one result passes through unchanged; two or more is a
+    /// contract violation. The compliance family has no default (its merger has no single-plan
+    /// arm), so a compliance registration must supply its strategy explicitly.</para>
+    ///
+    /// <para>Appended last on purpose: the enum crosses the wire as an integer
+    /// (<c>GET /api/rules/classifications</c>), so the existing values keep their ordinals.</para>
+    /// </summary>
+    TimelineAware,
 }

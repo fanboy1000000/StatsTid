@@ -22,6 +22,10 @@ namespace StatsTid.SharedKernel.Segmentation;
 ///     (compliance-only; ADR-016 §D3); calling with this strategy throws.</item>
 ///   <item><see cref="MergeStrategyKind.Custom"/> requires a non-null
 ///     <c>customMerge</c> delegate; calling without one throws.</item>
+///   <item><see cref="MergeStrategyKind.SinglePlanEvaluation"/> (a
+///     <see cref="SplitBehavior.TimelineAware"/> rule, evaluated once for the whole plan) passes
+///     exactly one result through unchanged; two or more results throws — the rule is never
+///     split, so a second result means the caller broke the single-plan contract.</item>
 /// </list>
 ///
 /// Pure function: no I/O, no logging, no static mutable state.
@@ -41,7 +45,8 @@ public static class CalculationResultMerger
     /// <exception cref="PlannerInvariantViolation">
     /// Thrown for empty segment lists, cross-segment id mismatch under
     /// <see cref="MergeStrategyKind.Concatenate"/>, multi-segment input under
-    /// <see cref="MergeStrategyKind.RejectIfMultipleSegments"/>,
+    /// <see cref="MergeStrategyKind.RejectIfMultipleSegments"/> or
+    /// <see cref="MergeStrategyKind.SinglePlanEvaluation"/>,
     /// <see cref="MergeStrategyKind.UnionDedupe"/> applied to calculation results, or
     /// <see cref="MergeStrategyKind.Custom"/> without a delegate.
     /// </exception>
@@ -66,6 +71,7 @@ public static class CalculationResultMerger
                 $"CalculationResultMerger.Apply: UnionDedupe is not defined for CalculationResult " +
                 $"(compliance-only per ADR-016 §D3). RuleId={segments[0].RuleId}."),
             MergeStrategyKind.Custom => MergeByCustom(segments, customMerge),
+            MergeStrategyKind.SinglePlanEvaluation => MergeBySinglePlanEvaluation(segments),
             _ => throw new PlannerInvariantViolation(
                 $"CalculationResultMerger.Apply: unknown MergeStrategyKind '{strategy.Kind}'. " +
                 $"RuleId={segments[0].RuleId}."),
@@ -160,6 +166,36 @@ public static class CalculationResultMerger
             $"CalculationResultMerger.RejectIfMultipleSegments: rule '{ruleId}' produced " +
             $"{segments.Count} segments but its merge strategy requires exactly one — " +
             $"the planner contract was violated — an aligned-window rule reached merge with multiple segments.");
+    }
+
+    /// <summary>
+    /// Single-plan-evaluation implementation (S145 Stage B, B1 — the ADR-016 §D3 default for
+    /// <c>(*, timeline-aware, calculation)</c>).
+    ///
+    /// A <see cref="SplitBehavior.TimelineAware"/> rule is evaluated once across the whole plan
+    /// (one rule-engine call, each day under its own contract), so exactly one result reaches
+    /// merge. That one result is returned unchanged — the same instance, its period figures
+    /// (<c>NormHoursTotal</c>, <c>ActualHoursTotal</c>, <c>Deviation</c>, …) intact, unlike
+    /// <see cref="MergeStrategyKind.Concatenate"/>, which nulls them.
+    ///
+    /// Two or more results is a contract violation: the caller produced per-segment results
+    /// for a rule that is never split, and summing or picking one of them would silently
+    /// double-count or drop a period figure. It throws the message-only
+    /// <see cref="PlannerInvariantViolation"/> (a bug, never a refusable month — so
+    /// <see cref="PlannerInvariantViolation.IsSplitRefusal"/> stays false), naming the rule id
+    /// and the result count, never a date.
+    /// </summary>
+    private static CalculationResult MergeBySinglePlanEvaluation(IReadOnlyList<CalculationResult> segments)
+    {
+        if (segments.Count == 1)
+            return segments[0];
+
+        var ruleId = segments[0].RuleId;
+        throw new PlannerInvariantViolation(
+            $"CalculationResultMerger.SinglePlanEvaluation: rule '{ruleId}' produced " +
+            $"{segments.Count} results but its merge strategy requires exactly one — " +
+            $"a timeline-aware rule is evaluated once for the whole plan and is never split, " +
+            $"so the single-plan contract was violated.");
     }
 
     /// <summary>
