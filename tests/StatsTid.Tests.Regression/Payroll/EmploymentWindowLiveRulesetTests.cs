@@ -250,7 +250,7 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         Assert.Empty(engine.Calls);
 
         // Message contract: rule id, count, cause — and the rule a reader learns from it.
-        Assert.Contains($"'{OvertimeRule.RuleId}'", ex.Message);
+        Assert.Contains($"'{NormCheckRule.WeeklyRuleId}'", ex.Message); // S145 B1: was OvertimeRule.RuleId (R-61)
         Assert.Contains("AlignedWindow", ex.Message);
         Assert.Contains("2 EMPLOYED segments", ex.Message);
         Assert.Contains("EmployeeProfileChange", ex.Message);

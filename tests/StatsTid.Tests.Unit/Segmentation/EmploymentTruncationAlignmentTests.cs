@@ -23,7 +23,7 @@ namespace StatsTid.Tests.Unit.Segmentation;
 /// <para>
 /// Every pin here uses the LIVE classification set (<c>new RuleRegistry().GetAll()</c> — the
 /// same set the payroll host reads over HTTP), so the pins are faithful to production wiring:
-/// the live set has four AlignedWindow rules (OVERTIME_CALC first in registration order) and
+/// the live set has three AlignedWindow rules (NORM_CHECK_WEEKLY first in registration order; OVERTIME_CALC is TimelineAware since S145 Stage B) and
 /// no Reject rule. Where a Reject rule is needed one is constructed explicitly.
 /// </para>
 /// </summary>
@@ -100,13 +100,14 @@ public sealed class EmploymentTruncationAlignmentTests
     /// <summary>If the registry ever gains a Reject rule or loses its AlignedWindow rules,
     /// the pins below change meaning — fail here first, legibly.</summary>
     [Fact]
-    public void LiveSet_HasAlignedWindowRules_NoRejectRules_OvertimeFirst()
+    public void LiveSet_HasAlignedWindowRules_NoRejectRules_NormCheckWeeklyFirst() // S145 B1: renamed from ..._OvertimeFirst
     {
         Assert.Contains(LiveSet, r => r.SplitBehavior == SplitBehavior.AlignedWindow);
         Assert.DoesNotContain(LiveSet, r => r.SplitBehavior == SplitBehavior.Reject);
         // FindFirst semantics: the refusal names the first AlignedWindow rule in
-        // registration order — OVERTIME_CALC (RuleRegistry ctor).
-        Assert.Equal("OVERTIME_CALC", LiveSet.First(r => r.SplitBehavior == SplitBehavior.AlignedWindow).RuleId);
+        // registration order — NORM_CHECK_WEEKLY (RuleRegistry ctor).
+        Assert.Equal("NORM_CHECK_WEEKLY", LiveSet.First(r => r.SplitBehavior == SplitBehavior.AlignedWindow).RuleId); // S145 B1: was OVERTIME_CALC
+        Assert.Equal(SplitBehavior.TimelineAware, LiveSet.Single(r => r.RuleId == "OVERTIME_CALC").SplitBehavior); // S145 B1: new assertion
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -115,7 +116,7 @@ public sealed class EmploymentTruncationAlignmentTests
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>The classic OK-straddle (March 15 – April 15 across 2026-04-01) with the live
-    /// set and no windows STILL refuses, naming OVERTIME_CALC — the unchanged-behavior pin.</summary>
+    /// set and no windows STILL refuses, naming NORM_CHECK_WEEKLY — the unchanged-behavior pin.</summary>
     [Fact]
     public void Windowless_InteriorOkBoundary_LiveSet_StillRefuses()
     {
@@ -129,7 +130,7 @@ public sealed class EmploymentTruncationAlignmentTests
                 sources: Sources(okTransitions: new[] { (OkTransitionDate, "OK24", "OK26") }),
                 options: PlannerOptions.Default));
 
-        Assert.Contains("'OVERTIME_CALC'", ex.Message);
+        Assert.Contains("'NORM_CHECK_WEEKLY'", ex.Message); // S145 B1: was OVERTIME_CALC (R-73)
         Assert.Contains("AlignedWindow", ex.Message);
         Assert.Contains("AllowUpstreamAlignment", ex.Message);
         Assert.Contains("2 EMPLOYED segments", ex.Message);
@@ -158,7 +159,7 @@ public sealed class EmploymentTruncationAlignmentTests
         var ex = Assert.Throws<PlannerInvariantViolation>(() =>
             PlanMarch("EMP-13707-WINDOWLESS-" + sourceKind, LiveSet, sources, windows: null));
 
-        Assert.Contains("'OVERTIME_CALC'", ex.Message);
+        Assert.Contains("'NORM_CHECK_WEEKLY'", ex.Message); // S145 B1: was OVERTIME_CALC (R-73)
         Assert.Contains("2 EMPLOYED segments", ex.Message);
         Assert.Contains(sourceKind, ex.Message);
     }
@@ -258,7 +259,7 @@ public sealed class EmploymentTruncationAlignmentTests
 
     /// <summary>A leaver (last day 03-20) whose part-time fraction changed on 03-10 WHILE
     /// employed: EMPLOYED [03-01..03-09], EMPLOYED [03-10..03-20], NOT_EMPLOYED from 03-21.
-    /// Two EMPLOYED segments ⇒ OVERTIME_CALC would run twice ⇒ refuse. This is the
+    /// Two EMPLOYED segments ⇒ NORM_CHECK_WEEKLY would run twice ⇒ refuse. This is the
     /// registered live-set limitation (QUAL-149 / ADR-016 D4 follow-up).</summary>
     [Fact]
     public void LeaverWithProfileChangeWhileEmployed_LiveSet_Refuses_MessageCarriesCountAndCauses()
@@ -274,7 +275,7 @@ public sealed class EmploymentTruncationAlignmentTests
                     employeeProfileEffectiveDates: new[] { change }),
                 windows: new[] { new EmploymentWindow(Start: null, End: lastDay) }));
 
-        Assert.Contains("'OVERTIME_CALC'", ex.Message);
+        Assert.Contains("'NORM_CHECK_WEEKLY'", ex.Message); // S145 B1: was OVERTIME_CALC (R-73)
         Assert.Contains("AlignedWindow", ex.Message);
         Assert.Contains("2 EMPLOYED segments", ex.Message);
         Assert.Contains("EmployeeProfileChange", ex.Message);
@@ -310,7 +311,7 @@ public sealed class EmploymentTruncationAlignmentTests
                     new EmploymentWindow(secondSpellStart, null),
                 }));
 
-        Assert.Contains("'OVERTIME_CALC'", ex.Message);
+        Assert.Contains("'NORM_CHECK_WEEKLY'", ex.Message); // S145 B1: was OVERTIME_CALC (R-73)
         Assert.Contains("2 EMPLOYED segments", ex.Message);
         Assert.Contains("EmploymentEnded", ex.Message);
         Assert.Contains("EmploymentStarted", ex.Message);

@@ -28,13 +28,13 @@ namespace StatsTid.Tests.Unit.Rules;
 public sealed class RuleRegistryClassificationTests
 {
     /// <summary>
-    /// The hand-derived expected classification for every registered rule (16 total, per
+    /// The hand-derived expected classification for every registered rule (17 total, per
     /// <c>RuleRegistry</c>'s own inventory comment). Each row is
     /// <c>(ruleId, span, splitBehavior, family, mergeStrategyKind)</c>.
     ///
     /// <para><b>Falsifiability (QUAL-019):</b> the real guard is each <c>Register(…)</c> call in
-    /// <c>RuleRegistry.cs</c> (lines 53–94). Mutating any single axis of a real registration —
-    /// e.g. changing <c>Register(OvertimeRule.RuleId, Span.Window, SplitBehavior.AlignedWindow, …)</c>
+    /// <c>RuleRegistry.cs</c> (lines 74–123). Mutating any single axis of a real registration —
+    /// e.g. changing <c>Register(OvertimeRule.RuleId, Span.Window, SplitBehavior.TimelineAware, …)</c>
     /// to <c>SplitBehavior.SegmentSafe</c> — turns exactly the <c>OVERTIME_CALC</c> row RED at the
     /// <see cref="SplitBehavior"/> assertion, while every other row stays green (one inversion →
     /// one localized failure, per PAT-014 Rule 1).</para>
@@ -51,8 +51,14 @@ public sealed class RuleRegistryClassificationTests
         // (window, segment-safe, compliance) -> default merge UnionDedupe
         { RestPeriodRule.MaxDailyRuleId, Span.Window, SplitBehavior.SegmentSafe, Family.Compliance, MergeStrategyKind.UnionDedupe },
 
+        // S145 B1: (timeline-aware, calculation) -> default merge SinglePlanEvaluation. The three rules
+        // payroll evaluates once over the whole plan (refinement B1, QUAL-149): overtime, the legacy
+        // 37-hour norm id (now registered), and flex (its former Custom override is gone).
+        { OvertimeRule.RuleId,    Span.Window,      SplitBehavior.TimelineAware, Family.Calculation, MergeStrategyKind.SinglePlanEvaluation }, // S145 B1: was AlignedWindow / RejectIfMultipleSegments
+        { NormCheckRule.RuleId,   Span.Period,      SplitBehavior.TimelineAware, Family.Calculation, MergeStrategyKind.SinglePlanEvaluation }, // S145 B1: new row (NORM_CHECK_37H, previously unregistered)
+        { FlexBalanceRule.RuleId, Span.CrossPeriod, SplitBehavior.TimelineAware, Family.Calculation, MergeStrategyKind.SinglePlanEvaluation }, // S145 B1: was Mergeable / Custom
+
         // (window, aligned-window, calculation) -> default merge RejectIfMultipleSegments
-        { OvertimeRule.RuleId,        Span.Window, SplitBehavior.AlignedWindow, Family.Calculation, MergeStrategyKind.RejectIfMultipleSegments },
         { NormCheckRule.WeeklyRuleId, Span.Window, SplitBehavior.AlignedWindow, Family.Calculation, MergeStrategyKind.RejectIfMultipleSegments },
 
         // (window, aligned-window, compliance) -> default merge RejectIfMultipleSegments
@@ -67,9 +73,6 @@ public sealed class RuleRegistryClassificationTests
         { RestPeriodRule.Weekly48HCeilingRuleId,    Span.Period, SplitBehavior.Mergeable, Family.Compliance, MergeStrategyKind.UnionDedupe },
         { OvertimeGovernanceRule.MaxHoursRuleId,    Span.Period, SplitBehavior.Mergeable, Family.Compliance, MergeStrategyKind.UnionDedupe },
         { OvertimeGovernanceRule.PreApprovalRuleId, Span.Period, SplitBehavior.Mergeable, Family.Compliance, MergeStrategyKind.UnionDedupe },
-
-        // (cross-period, mergeable, calculation) -> explicit override Custom (chained carry)
-        { FlexBalanceRule.RuleId, Span.CrossPeriod, SplitBehavior.Mergeable, Family.Calculation, MergeStrategyKind.Custom },
     };
 
     /// <summary>
@@ -98,7 +101,7 @@ public sealed class RuleRegistryClassificationTests
     }
 
     /// <summary>
-    /// Pins the FULL inventory: the shipped registry must register exactly these 16 ids — no
+    /// Pins the FULL inventory: the shipped registry must register exactly these 17 ids — no
     /// more, no fewer. Catches a rule that is dropped from registration (would silently stop
     /// being segmented) or an unexpected new registration added without a matching pin above.
     /// </summary>
@@ -114,6 +117,7 @@ public sealed class RuleRegistryClassificationTests
             TravelTimeRule.RuleId, AbsenceRule.RuleId,
             RestPeriodRule.MaxDailyRuleId,
             OvertimeRule.RuleId, NormCheckRule.WeeklyRuleId,
+            NormCheckRule.RuleId, // S145 B1: NORM_CHECK_37H is now registered (16 -> 17)
             RestPeriodRule.DailyRestRuleId, RestPeriodRule.WeeklyRestRuleId,
             NormCheckRule.MultiWeekRuleId, NormCheckRule.AnnualRuleId,
             RestPeriodRule.Weekly48HCeilingRuleId,
@@ -127,21 +131,20 @@ public sealed class RuleRegistryClassificationTests
         Assert.True(
             missing.Count == 0 && unexpected.Count == 0,
             $"Registry inventory drift. Missing: [{string.Join(", ", missing)}]. Unexpected: [{string.Join(", ", unexpected)}].");
-        Assert.Equal(16, registry.GetAll().Count);
+        Assert.Equal(17, registry.GetAll().Count); // S145 B1: was 16
     }
 
     /// <summary>
-    /// Pins the documented out-of-segmentation-scope decisions so they cannot be silently
-    /// reversed. The legacy <c>NORM_CHECK_37H</c> dispatch id is a config-aware time-rule alias,
-    /// NOT a segmentation classification (only the S20-decomposed Weekly/MultiWeek/Annual ids
-    /// are registered); and a genuinely unknown id must raise, not resolve to a default.
+    /// Pins that a genuinely unknown id raises, rather than resolving to a default.
+    /// S145 B1: the legacy <c>NORM_CHECK_37H</c> id is no longer unclassified — it is registered
+    /// <c>TimelineAware</c> (see its row in <see cref="RegistryEntries"/>), so its former
+    /// "not a segmentation classification" assertion moved into that table.
     /// </summary>
     [Fact]
-    public void ShippedRegistry_DoesNotClassify_LegacyNormIdOrUnknownIds()
+    public void ShippedRegistry_DoesNotClassify_UnknownIds() // S145 B1: renamed from ShippedRegistry_DoesNotClassify_LegacyNormIdOrUnknownIds
     {
         var registry = new RuleRegistry();
 
-        Assert.Throws<KeyNotFoundException>(() => registry.Get(NormCheckRule.RuleId));
         Assert.Throws<KeyNotFoundException>(() => registry.Get("NOT_A_REGISTERED_RULE"));
     }
 }
