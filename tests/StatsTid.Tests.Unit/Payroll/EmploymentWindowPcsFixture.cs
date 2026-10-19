@@ -60,10 +60,13 @@ internal static class EmploymentWindowPcsFixture
     };
 
     /// <summary>
-    /// S137 Step-5a (Reviewer WARNING 2): the same five rules, but OVERTIME_CALC carries the
-    /// PRODUCTION classification shape from <c>RuleRegistry</c> — <c>Span.Window /
-    /// SplitBehavior.AlignedWindow / MergeStrategy.RejectIfMultipleSegments</c>. Lets the
-    /// DB-free suite pin the MERGE half of the 2026-09-02 truncation ruling: a whole-window
+    /// S137 Step-5a (Reviewer WARNING 2): the same five rules, but OVERTIME_CALC is an
+    /// <c>AlignedWindow</c> FIXTURE — <c>Span.Window / SplitBehavior.AlignedWindow /
+    /// MergeStrategy.RejectIfMultipleSegments</c>. It was the production classification shape when this was
+    /// written; since S145 B1 production's <c>OVERTIME_CALC</c> is <c>TimelineAware</c> (and this set's
+    /// <c>FLEX_BALANCE</c> stays Mergeable/Custom, which is also not production's), so this set is no longer
+    /// production's classification — it is the fixture that keeps the merger's backstop pinned (S145 B2, R-63).
+    /// Lets the DB-free suite pin the MERGE half of the 2026-09-02 truncation ruling: a whole-window
     /// rule evaluated in exactly ONE EMPLOYED segment reaches the merger as a single segment
     /// and passes; one that reaches it with TWO EMPLOYED segments gets the merger's failure
     /// row (the backstop the ruling assumes). See <c>EmploymentWindowAlignedWindowMergeTests</c>.

@@ -24,17 +24,25 @@ using Testcontainers.PostgreSql;
 namespace StatsTid.Tests.Regression.Payroll;
 
 /// <summary>
-/// S144 / TASK-14403 — HOST-LEVEL pins: the two payroll endpoints refuse a month with a mid-month
-/// agreement-code change with a redacted 422, and write nothing.
+/// S144 / TASK-14403, re-expected at S145 Stage B (TASK-14522-T, refinement B2) — HOST-LEVEL pins for a month
+/// with a mid-month agreement-code change. The two CALCULATING endpoints now PAY such a month part by part (when
+/// the change is on a Monday); the two RAW export routes refuse it with their own 422; a change in the middle
+/// of a week is refused by the week check on every route.
 ///
 /// <para>
-/// <b>The story, in plain language.</b> An employee is employed all of March 2026. On 16 March
-/// their agreement code changes (HK → AC). The live rule set cannot evaluate its whole-period rules
-/// in two pieces, so the planner refuses the month. Before S144 the payroll host never saw the
-/// change (it paid March under one agreement), and when the planner DID refuse a month (a profile
-/// change) the refusal escaped as a bare 500. Now both endpoints answer 422 with
-/// <c>kind = "payroll-recalc-blocked"</c>, the segment count and the cause names — and no date and
-/// no employee id, because the planner's own message (which names both) never reaches the body.
+/// <b>The story, in plain language.</b> An employee is employed all of March 2026. On Monday 16 March
+/// their agreement code changes (HK → AC). Before S144 the payroll host never saw the change (it paid March
+/// under one agreement), and when the planner DID refuse a month (a profile change) the refusal escaped as a
+/// bare 500. S144 made every route answer 422 with <c>kind = "payroll-recalc-blocked"</c>, because the live
+/// rule set could not evaluate its whole-period rules in two pieces. S145 Stage B lifted that limit on the
+/// calculating routes: payroll hands the planner only the rules it runs, the month plans into two parts, and
+/// <c>/recalculate</c> and <c>/calculate-and-export</c> answer 200 and pay each part under its own codes
+/// (XB1, XB2). The raw routes (<c>/export</c>, <c>/export-period</c>) take lines the caller already
+/// calculated and map every line under the request's ONE profile, so they cannot pay a month with two parts
+/// correctly: they refuse it with the single-profile-route 422 (<c>reason = split-month-single-profile-route</c>,
+/// RB1, RB2). An agreement change on a Wednesday is also in the middle of a Monday–Sunday week, which one
+/// agreement cannot judge: every route answers the week check's 422 (IB1). All bodies carry no date and no
+/// employee id.
 /// </para>
 ///
 /// <para>
@@ -60,6 +68,11 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// entirely on the OK24 side of the 2026-04-01 OK transition, no local-profile activation — so the
 /// agreement-code change on 16 March is the ONLY interior boundary and the EMPLOYED segment count
 /// is exactly 2. A stray employment edge or profile change would make it 3 (or cut a segment off).
+/// March 2026 opens on a Sunday, so its opening week (23 February – 1 March) holds February's EMPLOYED days:
+/// the calculating-route facts seed February APPROVED (the months-in-order check). Since S145 B2 XB1 and XB2
+/// also seed recorded weekday hours for March (7.4 h on each weekday from 2 to 31 March): the stub engine
+/// answers one NORMAL_HOURS line per recorded entry, and /calculate-and-export writes an export record only
+/// when the calculation produced lines.
 /// </para>
 ///
 /// <para>
@@ -109,7 +122,10 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         _db = new DbConnectionFactory(cs);
         await TestFixtures.SeedWageTypeMappingsAsync(_db);
 
-        // The LIVE rule set — three AlignedWindow rules since S145 B1 — is what refuses the split.
+        // The LIVE rule set (the registry's full classification set; it carries three AlignedWindow rules).
+        // S145 B2: payroll hands the planner only the six rules it evaluates, so the live set no longer
+        // refuses a split month at the planner — the raw routes refuse it by Q6 (a), and the week check
+        // answers an agreement change in the middle of a week.
         _factory = new PayrollHostFactory(cs, new RuleRegistry().GetAll());
     }
 
@@ -126,41 +142,34 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
+    /// <b>S145 B2: was <c>Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged</c>.</b>
     /// (a) <c>POST /api/payroll/recalculate</c> as Global Admin, for an exported March with an
-    /// agreement-code change recorded on 16 March → <b>422</b>, <c>kind = payroll-recalc-blocked</c>,
-    /// <c>employedSegmentCount = 2</c>, <c>interiorBoundaryCauses = ["AgreementCodeChange"]</c>; the
-    /// body contains no ISO date and not the employee id; <c>current_effective_lines</c> is
-    /// byte-for-byte unchanged (the correction service plans before its transaction opens).
+    /// agreement-code change recorded on MONDAY 16 March (February APPROVED, because March's opening week
+    /// begins on 23 February) → <b>200</b>: the correction commits — <c>current_effective_lines</c> changed,
+    /// one <c>RetroactiveCorrectionRequested</c> event, one manifest. No per-line wage-type assertion here
+    /// (the per-part codes are pinned at service level, <c>RecalcBlockedLiveRulesetTests</c>).
     ///
     /// <para>
     /// This fact also proves the host's DI wiring of
     /// <see cref="PeriodCalculationService"/>'s <c>userAgreementCodeRepo</c>: with a null repository
-    /// the planner sees one segment, nothing refuses, and the endpoint answers 200.
+    /// the planner sees one segment and the manifest's segment count is 1, not 2.
     /// </para>
     ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
-    /// (1) mutation M-14 — <c>BuildPlanForLegacyCallersAsync</c> skips the
-    /// <c>AgreementCodeEffectiveDates</c> hydration (passes null): the month plans as ONE segment,
-    /// the stubbed rule engine answers, the correction commits, and the endpoint returns <b>200</b> —
-    /// <c>Assert.Equal(422, status)</c> trips (and the baseline changes). If instead the host stops
-    /// registering <c>UserAgreementCodeRepository</c> in DI, the resolution error escapes (500 on
-    /// Kestrel) — the request never answers 200 — because <c>EmploymentProfileResolver</c> needs the
-    /// same repository (Program.cs:58-63) and is built when the request first resolves the calculation
-    /// service; the fact fails before its 422 assertion. (S145 R38 / N-c4-2: the earlier "200, or …"
-    /// hedge was wider than the code — only "escapes" is reachable.)
-    /// (2) the <c>/recalculate</c> <c>PlannerInvariantViolation</c> catch is removed → escapes (500 on Kestrel),
-    /// the fact fails before or at the 422 assertion.
-    /// (3) mutation M-13 (<c>error = ex.Message</c>) → the body carries the period start
-    /// (2026-03-01) and end (2026-03-31) — in ISO, and in machine-culture form where the message
-    /// renders them so — and the employee id; <c>AssertRedactedProblem</c> asserts the body
-    /// contains neither date in ISO, machine-culture or invariant-culture form, nor the employee id,
-    /// so those assertions trip.
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-7 (TASK-14528: the
+    /// evaluated-set filter disabled, so the planner sees NORM_CHECK_WEEKLY as AlignedWindow again): the
+    /// planner refuses the split and the endpoint answers <b>422</b>, tripping the 200 assertion (and
+    /// <c>current_effective_lines</c> stays unchanged). Mutation M-14 (hydration of the agreement-code dates
+    /// skipped): one segment, so the manifest's two-segment assertion trips.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged()
+    public async Task Recalculate_MondayAgreementCodeChange16Mar_FebruaryApproved_Recalculates_200() // S145 B2: was Recalculate_MidMonthAgreementCodeChange_Returns422_RedactedProblem_LinesUnchanged
     {
         const string employeeId = "EMP-S144-HOST-RECALC";
         await SeedEmployeeAsync(employeeId);
+        await SeedMonthApprovalAsync(employeeId, Feb01, Feb28, OkVersion); // S145 B2: March's opening week holds February's days
+        await SeedMarchWeekdayHoursAsync(employeeId); // S145 B2: recorded hours, so the month has lines
         await PersistFirstExportRecordAsync(employeeId);
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
         var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId);
@@ -178,11 +187,14 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         var response = await PostAsGlobalAdminAsync("/api/payroll/recalculate", body);
         var json = await response.Content.ReadAsStringAsync();
 
-        Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
-            $"expected 422, got {(int)response.StatusCode}: {json}");
-        AssertRedactedProblem(json, employeeId);
-
-        Assert.Equal(linesBefore, await ReadCurrentEffectiveLinesAsync(employeeId));
+        // S145 B2: the correction commits (it used to answer the redacted 422 and write nothing).
+        Assert.True(response.StatusCode == HttpStatusCode.OK,
+            $"expected 200, got {(int)response.StatusCode}: {json}");
+        Assert.NotEqual(linesBefore, await ReadCurrentEffectiveLinesAsync(employeeId)); // S145 B2: the baseline moved
+        Assert.Equal(1, await CountCorrectionEventsAsync(employeeId)); // S145 B2
+        var manifest = await LoadSingleManifestAsync(employeeId); // S145 B2: exactly one manifest, written by the recalculation
+        Assert.Equal(2, manifest.SegmentCount);
+        Assert.Contains("AgreementCodeChange", manifest.BoundaryCauseSummary);
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -190,28 +202,33 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// (b) <c>POST /api/payroll/calculate-and-export</c> as Global Admin, for an APPROVED March with
-    /// an agreement-code change on 16 March → <b>422</b> with the same redacted problem; no
-    /// <c>payroll_export_records</c> row is created and no <c>segment_manifests</c> row is written
-    /// (the planner refuses before anything is calculated or persisted).
+    /// <b>S145 B2: was <c>CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest</c>.</b>
+    /// (b) <c>POST /api/payroll/calculate-and-export</c> as Global Admin, for an APPROVED March (February
+    /// APPROVED too) with an agreement-code change on MONDAY 16 March → <b>200</b>: ONE
+    /// <c>payroll_export_records</c> row, and ONE <c>segment_manifests</c> row with two EMPLOYED segments and
+    /// <c>AgreementCodeChange</c>. No per-line wage-type assertion here (the per-part codes are pinned at
+    /// service level, <c>RecalcBlockedLiveRulesetTests</c>). This fact runs on <see cref="DeliveringFactory"/>
+    /// (S145 B2, R-58): the shared host's stub answers the post-commit delivery POST with 404, which would turn
+    /// the committed export into a 422 even though the month was paid; the delivering host answers 200, so a 200
+    /// means what it says. <i>Plain language: after a successful export, payroll posts the file to the mock
+    /// payroll system; the shared test host answers that post with "not found", which the route reports as a
+    /// 422. The delivering host answers "OK".</i>
     ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
-    /// (1) the export handler's <c>PlannerInvariantViolation</c> catch around
-    /// <c>CalculateWithOutcomeAsync</c> is removed → the refusal escapes (500 on Kestrel);
-    /// the fact fails before or at the 422 assertion.
-    /// (2) mutation M-14 → one segment; the month calculates and the export record and manifest are
-    /// committed; on this shared factory the post-commit delivery stub answers 404, so the handler
-    /// returns 422 with an anonymous body (the calculation's fields plus <c>Success = false</c>,
-    /// <c>ErrorMessage</c> and <c>ExportId</c>, Program.cs:414-426) that carries no <c>kind</c> —
-    /// <c>AssertRedactedProblem</c> fails on the missing property (and both row counts are 1). Red,
-    /// but not the 200 that (a) sees.
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-7 (the evaluated-set filter
+    /// disabled): the planner refuses the split month, the route answers <b>422</b> with the planner's body, the
+    /// 200 assertion trips (and no record or manifest exists). Mutation M-14 (hydration skipped): one segment, so
+    /// the manifest's two-segment assertion trips.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest()
+    public async Task CalculateAndExport_MondayAgreementCodeChange16Mar_FebruaryApproved_Pays_200() // S145 B2: was CalculateAndExport_MidMonthAgreementCodeChange_Returns422_NoExportRecord_NoManifest
     {
         const string employeeId = "EMP-S144-HOST-EXPORT";
         await SeedEmployeeAsync(employeeId);
+        await SeedMonthApprovalAsync(employeeId, Feb01, Feb28, OkVersion); // S145 B2: March's opening week holds February's days
         await SeedApprovedPeriodAsync(employeeId);
+        await SeedMarchWeekdayHoursAsync(employeeId); // S145 B2: recorded hours, so the month has lines to export
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
 
         var body = new
@@ -222,15 +239,17 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
             previousFlexBalance = 0m,
         };
 
-        var response = await PostAsGlobalAdminAsync("/api/payroll/calculate-and-export", body);
+        // S145 B2 (R-58): the delivering host, so a committed export answers 200, not a look-alike 422.
+        var response = await PostAsGlobalAdminAsync(DeliveringFactory(), "/api/payroll/calculate-and-export", body);
         var json = await response.Content.ReadAsStringAsync();
 
-        Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
-            $"expected 422, got {(int)response.StatusCode}: {json}");
-        AssertRedactedProblem(json, employeeId);
-
-        Assert.Equal(0, await CountAsync("payroll_export_records", employeeId));
-        Assert.Equal(0, await CountAsync("segment_manifests", employeeId));
+        Assert.True(response.StatusCode == HttpStatusCode.OK,
+            $"expected 200, got {(int)response.StatusCode}: {json}");
+        Assert.Equal(1, await CountAsync("payroll_export_records", employeeId)); // S145 B2
+        Assert.Equal(1, await CountAsync("segment_manifests", employeeId)); // S145 B2
+        var manifest = await LoadSingleManifestAsync(employeeId);
+        Assert.Equal(2, manifest.SegmentCount);
+        Assert.Contains("AgreementCodeChange", manifest.BoundaryCauseSummary);
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -247,22 +266,25 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     // exported" a clean 200, so a blinded guard is a status flip and not a look-alike 422.
 
     /// <summary>
-    /// (c1) <c>POST /api/payroll/export</c> as Global Admin, with a caller-calculated March-2026
+    /// (c1) <b>RB1.</b> <c>POST /api/payroll/export</c> as Global Admin, with a caller-calculated March-2026
     /// <c>CalculationResult</c> (NORMAL_HOURS lines on 2 March and 20 March, either side of the
-    /// agreement-code change on 16 March) and the employee's profile → <b>422</b>,
-    /// <c>kind = payroll-recalc-blocked</c>, <c>employedSegmentCount = 2</c>, causes
-    /// <c>["AgreementCodeChange"]</c>, redacted (no date, no employee id); NO
-    /// <c>payroll_export_records</c> row for the employee's March.
+    /// agreement-code change on Monday 16 March) and the employee's profile → <b>422</b>,
+    /// <c>kind = payroll-recalc-blocked</c>, <b>S145 B2: <c>reason = split-month-single-profile-route</c></b>
+    /// (the raw routes map every line under the request's one profile, so they cannot pay a month with two
+    /// parts — Q6 (a)), <c>employedSegmentCount = 2</c>, causes <c>["AgreementCodeChange"]</c>, no
+    /// <c>ruleId</c>, no date, no employee id; NO <c>payroll_export_records</c> row for the employee's
+    /// March. (Name kept; the body changed from the planner's to the single-profile body.)
     ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
-    /// (1) mutation M-14 — <c>BuildPlanForLegacyCallersAsync</c> passes null
-    /// <c>AgreementCodeEffectiveDates</c>: the guard plans ONE segment and is blind, the route maps
-    /// and exports, the delivery stub answers, and the endpoint returns <b>200</b> —
-    /// the 422 assertion trips (and a March record exists).
-    /// (2) the guard call is removed from the <c>/export</c> handler → the route exports → <b>200</b>,
-    /// same assertion trips.
-    /// (3) the guard is moved AFTER <c>ExportAsync</c> → the 422 may still come back, but the March
-    /// record has already been committed — the zero-row assertion trips.
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-5 (TASK-14528: the Q6 (a)
+    /// check removed from <c>EnsurePeriodCalculableAsync</c>): the guard plans two segments, finds nothing to
+    /// refuse (the planner no longer refuses, the change is on a Monday), the route maps and exports, and answers
+    /// <b>200</b>; the 422 assertion trips (and a March record exists). MB-7 (the evaluated-set filter
+    /// disabled): the planner refuses first with ITS body, which carries a <c>ruleId</c> and no
+    /// <c>reason</c>, so the <c>reason</c> assertion trips. Mutation M-14 (hydration nulled): the guard plans
+    /// ONE segment and is blind → <b>200</b>. The guard moved AFTER <c>ExportAsync</c>: the March record is
+    /// already committed, so the zero-row assertion trips.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task Export_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord()
@@ -282,24 +304,27 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
         Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
             $"expected 422, got {(int)response.StatusCode}: {json}");
-        AssertRedactedProblem(json, employeeId);
+        AssertSingleProfileRouteRefusal(json, employeeId); // S145 B2: was AssertRedactedProblem (the planner's body)
 
         Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, Month));
     }
 
     /// <summary>
-    /// (c2) <c>POST /api/payroll/export-period</c> as Global Admin, with TWO caller-calculated
+    /// (c2) <b>RB2.</b> <c>POST /api/payroll/export-period</c> as Global Admin, with TWO caller-calculated
     /// results: February 2026 (no change inside it — it would export on its own, see (c3)) and
-    /// March 2026 (the agreement-code change on 16 March) → <b>422</b> with the same redacted
-    /// problem, and NO export record for EITHER month. All-or-nothing: the guard runs over every
-    /// result's months before the first one is mapped, so the clean February is not written either.
+    /// March 2026 (the agreement-code change on Monday 16 March) → <b>422</b> with the S145 B2 single-profile
+    /// body (<c>reason = split-month-single-profile-route</c>), and NO export record for EITHER month.
+    /// All-or-nothing: the guard runs over every result's months before the first one is mapped, so the clean
+    /// February is not written either. (Name kept; the body changed from the planner's.)
     ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified):
-    /// (1) mutation M-14 (hydration nulled) → the guard is blind to March → both months export →
-    /// <b>200</b>; the 422 assertion trips (and both records exist).
-    /// (2) the guard call is removed from the <c>/export-period</c> handler → <b>200</b>, same trip.
-    /// (3) the guard is moved AFTER <c>ExportAsync</c> → February and March records are already
-    /// committed — the zero-row assertions trip.
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-5 (the Q6 (a) check removed):
+    /// the guard finds nothing to refuse in March → both months export → <b>200</b>; the 422 assertion trips
+    /// (and both records exist). MB-7 (the evaluated-set filter disabled): the planner refuses March first with
+    /// its own body (a <c>ruleId</c>, no <c>reason</c>), so the <c>reason</c> assertion trips. Mutation M-14:
+    /// the guard is blind to March → <b>200</b>. The guard moved AFTER <c>ExportAsync</c>: February and March
+    /// records are already committed — the zero-row assertions trip.
+    /// </para>
     /// </summary>
     [Fact]
     public async Task ExportPeriod_MidMonthAgreementCodeChange_Returns422_RedactedProblem_NoExportRecord()
@@ -323,7 +348,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
         Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
             $"expected 422, got {(int)response.StatusCode}: {json}");
-        AssertRedactedProblem(json, employeeId);
+        AssertSingleProfileRouteRefusal(json, employeeId); // S145 B2: was AssertRedactedProblem (the planner's body)
 
         Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, 2));
         Assert.Equal(0, await CountExportRecordsAsync(employeeId, Year, Month));
@@ -634,6 +659,43 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
     // ─── Assertions ──────────────────────────────────────────────────────
 
+    /// <summary>The fixed sentence of the single-profile-route variant (S145 B2, Q6 (a), R-76), word for word.
+    /// It carries no date, id or digit.</summary>
+    private const string SingleProfileRouteSentence =
+        "This period cannot be exported through this route: a change inside the period splits it into parts " +
+        "with different profiles, and this route maps every line under a single profile. Use the calculating " +
+        "routes (recalculate, or calculate-and-export) to pay the period.";
+
+    private const string SingleProfileRouteReason = "split-month-single-profile-route";
+
+    /// <summary>S145 B2: the raw routes' Q6 (a) 422 body — <c>kind</c> payroll-recalc-blocked, <c>reason</c>
+    /// split-month-single-profile-route, <c>employedSegmentCount</c> 2, causes <c>["AgreementCodeChange"]</c>,
+    /// the fixed sentence, no <c>ruleId</c>, no date (in any rendering) and no employee id.</summary>
+    private static void AssertSingleProfileRouteRefusal(string json, string employeeId)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal(Kind, root.GetProperty("kind").GetString());
+        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.Equal(SingleProfileRouteReason, root.GetProperty("reason").GetString());
+        Assert.Equal(2, root.GetProperty("employedSegmentCount").GetInt32());
+        Assert.Equal(new[] { "AgreementCodeChange" },
+            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.Equal(SingleProfileRouteSentence, root.GetProperty("error").GetString());
+        Assert.True(
+            !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
+            "the single-profile-route variant carries no ruleId (it is not a rule's refusal)");
+
+        Assert.DoesNotMatch(IsoDatePattern, json);
+        foreach (var date in new[] { Mar01, Mar16, Mar31 })
+        {
+            Assert.DoesNotContain(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), json);
+            Assert.DoesNotContain(date.ToString(), json);
+            Assert.DoesNotContain(date.ToString(CultureInfo.InvariantCulture), json);
+        }
+        Assert.DoesNotContain(employeeId, json);
+    }
+
     private static void AssertRedactedProblem(string json, string employeeId)
     {
         using var doc = JsonDocument.Parse(json);
@@ -794,6 +856,37 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
     }
 
+    private long _outboxSeq = 1000;
+
+    /// <summary>S145 B2: recorded hours for March 2026 — 7.4 h on each weekday from 2 to 31 March, as RAW
+    /// <c>time_entries_projection</c> rows (the shape <c>PayrollHostRealEngineTests</c> seeds). Payroll reads
+    /// the employee's hours itself; the stub engine answers one NORMAL_HOURS line per recorded entry, and
+    /// <c>/calculate-and-export</c> writes an export record only when the calculation produced lines.</summary>
+    private async Task SeedMarchWeekdayHoursAsync(string employeeId)
+    {
+        await using var conn = _db.Create();
+        await conn.OpenAsync();
+        for (var day = new DateOnly(2026, 3, 2); day <= Mar31; day = day.AddDays(1))
+        {
+            if (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                continue;
+            await using var cmd = new NpgsqlCommand(
+                """
+                INSERT INTO time_entries_projection
+                    (event_id, employee_id, date, hours, agreement_code, ok_version,
+                     voluntary_unsocial_hours, occurred_at, outbox_id)
+                VALUES
+                    (gen_random_uuid(), @emp, @date, 7.4, @agreement, @ok, FALSE, NOW(), @outbox)
+                """, conn);
+            cmd.Parameters.AddWithValue("emp", employeeId);
+            cmd.Parameters.AddWithValue("date", day);
+            cmd.Parameters.AddWithValue("agreement", InitialAgreementCode);
+            cmd.Parameters.AddWithValue("ok", OkVersion);
+            cmd.Parameters.AddWithValue("outbox", _outboxSeq++);
+            Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+        }
+    }
+
     /// <summary>The APPROVED monthly approval period the /calculate-and-export guard requires.</summary>
     private async Task SeedApprovedPeriodAsync(string employeeId)
     {
@@ -834,6 +927,27 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         await using var reader = await cmd.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync(), "no payroll_export_records row");
         return reader.GetString(0);
+    }
+
+    private sealed record ManifestRow(int SegmentCount, IReadOnlyList<string> BoundaryCauseSummary);
+
+    /// <summary>S145 B2: the employee's ONE <c>segment_manifests</c> row (asserts there is exactly one).</summary>
+    private async Task<ManifestRow> LoadSingleManifestAsync(string employeeId)
+    {
+        await using var conn = _db.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT jsonb_array_length(segments_jsonb), boundary_cause_summary
+            FROM segment_manifests
+            WHERE employee_id = @e
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), $"no segment_manifests row for {employeeId}");
+        var row = new ManifestRow(reader.GetInt32(0), ((string[])reader.GetValue(1)).ToList());
+        Assert.False(await reader.ReadAsync(), $"more than one segment_manifests row for {employeeId}");
+        return row;
     }
 
     /// <summary>Row count for the employee in one of two fixed tables (the table name is a
@@ -1201,18 +1315,26 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// AR10 <b>(guard)</b>. HK → AC effective WEDNESDAY 18 March 2026 (inside March, and mid-week too),
-    /// February and March APPROVED → still the PLANNER's <b>422</b>: the S144 body with <c>ruleId</c>
-    /// present and two EMPLOYED segments — not the week check's variant. A month the planner refuses
-    /// keeps its own, richer refusal; the week check is only for what the planner cannot see.
+    /// AR10 / <b>IB1</b> <b>(guard)</b>. <b>S145 B2: was
+    /// <c>CalculateAndExport_AgreementChangeWed18Mar_StillPlanner422_WithRuleId</c>.</b> HK → AC effective
+    /// WEDNESDAY 18 March 2026 (inside March, and in the middle of a week too), February and March APPROVED →
+    /// <b>422</b>, the WEEK CHECK's variant (<c>reason = agreement-change-mid-week</c>, no <c>ruleId</c>, no
+    /// date, no employee id), and nothing written. The planner no longer refuses this month (payroll hands it
+    /// only the rules it evaluates, so a split month plans), so the week check, which runs over every settled
+    /// week, answers: the interior residual of Stage B (refinement B2). It keeps the calculating routes and the
+    /// raw routes in agreement ("one predicate, three consumers"): the change is a Wednesday, so no route can
+    /// judge that week under one agreement.
     ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified): passes today, and carries no
-    /// MD-id. It trips the day the week check is run BEFORE the planner (or replaces its refusal): the
-    /// body is then the variant, with no <c>ruleId</c> — <c>AssertRedactedProblem</c>'s
-    /// <c>ruleId</c> assertion and the <c>reason</c> assertion below trip.
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-4 (TASK-14528: the week check
+    /// ignores interior dates): the check finds nothing in the month, the route calculates and answers
+    /// <b>200</b>, so the 422 assertion trips (and a record and a manifest would exist). MB-7 (the evaluated-set
+    /// filter disabled): the planner refuses first with ITS body, which has a <c>ruleId</c> and no
+    /// <c>reason</c> — <c>AssertWeekCheckRefusal</c>'s <c>reason</c> assertion trips (C-B4).
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task CalculateAndExport_AgreementChangeWed18Mar_StillPlanner422_WithRuleId()
+    public async Task CalculateAndExport_AgreementChangeWed18Mar_Returns422_AgreementChangeMidWeek_NoRuleId() // S145 B2: was CalculateAndExport_AgreementChangeWed18Mar_StillPlanner422_WithRuleId
     {
         const string employeeId = "EMP-S145-AR10";
         await SeedEmployeeAsync(employeeId);
@@ -1226,13 +1348,8 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
         Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
             $"expected 422, got {(int)response.StatusCode}: {json}");
-        AssertRedactedProblem(json, employeeId);
-        using (var doc = JsonDocument.Parse(json))
-        {
-            Assert.False(
-                doc.RootElement.TryGetProperty("reason", out var reason) && reason.GetString() == MidWeekReason,
-                "the week check's variant must not answer a month the planner refuses");
-        }
+        // S145 B2: the week variant (reason agreement-change-mid-week, no ruleId, no date, no employee id).
+        AssertWeekCheckRefusal(json, employeeId, Mar18, Mar01, Mar31);
         Assert.Equal(0, await CountAsync("payroll_export_records", employeeId));
         Assert.Equal(0, await CountAsync("segment_manifests", employeeId));
     }
