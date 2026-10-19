@@ -2047,6 +2047,19 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
   - the internal lens on Opus (owner-directed; read-only, with a content baseline taken).
 
   The adjudication on Opus follows.
+- **Cycle 3, both lenses:**
+  - **Codex: NOT READY, narrowly** (`b0/codex-step0b-c3-verdict.md`).
+    - Passes: absorption fidelity, R-81's table, and R-87/R-89.
+    - Open: `--full-index` (confirmed by experiment: the same commit pair gave 7- and 8-character `index` hashes); the patch-validity path set must cover `.github/`, `Directory.Build.props` and `StatsTid.sln`; the forward pointer, option (a); and TASK-14528:139's wording.
+  - **The internal lens on Opus: NOT READY, no BLOCKER** (`b0/opus-step0b-c3-review.md`; read-only, verified).
+    - W1: `--full-index`, confirmed.
+    - W2: red branch (c) would be refused by the sprint-close guard while master's last push run is red. The fix: push the fix and the new K green first, then the close commit, and define "the green push" as the close commit's.
+    - W3: one "code set" pathspec, excluding only `docs`, `.claude` and `*.md`.
+    - W4: a re-cut must not overwrite the frozen patch; sha256 records.
+    - W5: new Docker facts added by a fix enter the census.
+    - W6: **RP-B1's replay sends no login token**, so it would get a 401 from the real Rule Engine and fail on correct code. It must pass a minted bearer token, as the forward call does.
+    - N1–N7. **N7, for later:** the close guard requires the Step 7a review artifact to show the Fable model id. If Step 7a also runs on Opus, the close will need a waiver or an owner decision.
+- **The cycle-3 adjudication on Opus** (owner-directed; rulings R-93 onward) was dispatched on 2026-10-19, with a content baseline taken.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
