@@ -73,6 +73,10 @@ public sealed class SinglePlanEvaluationMergerTests
         Assert.Contains(RuleId, ex.Message);
         Assert.Matches(@"\b2\b", ex.Message);
         Assert.DoesNotMatch(@"\d{4}-\d{2}-\d{2}", ex.Message); // no ISO date
+        // A bug, not a split refusal: the structured split-refusal members stay unset, so the
+        // handlers answer 500, never a split 422 (5a NOTE-3 on TASK-14520, Orchestrator).
+        Assert.False(ex.IsSplitRefusal);
+        Assert.Null(ex.SplitRefusalRuleId);
 
         // The count is the real count, not a constant: three results name 3, not 2.
         var three = Assert.Throws<PlannerInvariantViolation>(() =>
