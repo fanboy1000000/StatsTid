@@ -2098,6 +2098,19 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
   - the internal lens on Opus (owner-directed; read-only, with a content baseline taken).
 
   They check only four things: absorption; R-97's C-4, walked against the close guard; R-98's re-cut and SHA-256 flow; and R-94's pathspec. If both are READY, or have only mechanical findings, the seat signs at cycle 4. A BLOCKER would use cycle 5, the cap.
+- **Cycle 4, both lenses READY:**
+  - **Codex: READY** (`b0/codex-step0b-c4-verdict.md`).
+    - No new findings; all nine briefs READY; every cycle-3 item CLOSED.
+    - Absorption passes (all 81 added diff lines present).
+    - R-97's C-4, walked against the guard, passes.
+    - R-98's flow passes.
+    - R-94's pathspec lists `ci.yml`.
+  - **The internal lens on Opus: READY** (`b0/opus-step0b-c4-review.md`; read-only, verified).
+    - All nine briefs READY, and all of cycle 3's W1–W6 and N1–N6 are CLOSED.
+    - It walked every prescribed commit of C-4 through `sprint-close-guard.ps1`. The guard passes the normal close and the (c) and R-100 closes, and does not see the K, fix, (b), evidence or C-9 commits. The no-push window holds.
+    - It left one mechanical WARNING, W1: the records written at C-2 after K must ride in the close commit, or the guard refuses the close as stale.
+    - It left five mechanical NOTEs: create the `cb1/mut/` directories before saving; record all four SHA-256 values at a re-freeze; R-100 moves the old patches aside; name the guard's other gates (worktrees, untracked files, the ledger); and wording. Each has verbatim fix text.
+- **The cycle-4 sign-off** (the seat on Opus, owner-directed; rulings R-106 onward) was dispatched on 2026-10-19.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
