@@ -714,8 +714,9 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// S144 / TASK-14401 — the resolve version guard, and (S144) the FENCEPOST pin for the
-    /// recalculation-blocked refusal.
+    /// S144 / TASK-14401 — the resolve version guard, and the pin that the recalculation-blocked
+    /// refusal does not fire on an unblocked row (S144's FENCEPOST pin; since S145 Stage B the row
+    /// is unblocked by its trigger's kind, not its date).
     ///
     /// <para><b>Plain language.</b> S145 B3 (docstring reworded; the seed is unchanged): the seeded
     /// trigger is a PROFILE_CHANGE effective on 1 August. Since Stage B a profile change never
@@ -725,12 +726,12 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     /// resolution on this row must therefore succeed and record an EMPTY block set — this is the pin
     /// that the refusal does not fire on an unblocked row.</para>
     ///
-    /// <para><b>Red conditions.</b> (1) S145 B3: mutation MB-6p (TASK-14521's Unit mutation: a
-    /// PROFILE_CHANGE trigger still derives QUAL-149) → the row counts as blocked, the fresh
-    /// RECALCULATED call throws the blocked exception and the fact fails at the resolve. The old
-    /// <c>&gt;=</c> in <c>IsStrictlyInsideMonth</c> can no longer trip it: the derivation does not
-    /// call that method, and none of this sprint's other derivation mutations (MB-6, MB-6r) can
-    /// either, as the seed is a PROFILE trigger. (2) Stamp a
+    /// <para><b>Red conditions.</b> (1) S145 B3 (R-117): no derivation mutation of this sprint trips
+    /// it. MB-6p restores Stage A's profile arm (QUAL-149 only strictly inside the month), and the 1st
+    /// is not strictly inside; MB-6 and MB-6r touch only AGREEMENT triggers; and the old <c>&gt;=</c>
+    /// in <c>IsStrictlyInsideMonth</c> no longer applies, because the derivation does not call that
+    /// method. A derivation that blocked a PROFILE trigger on any date would trip it: the fresh
+    /// RECALCULATED call would throw the blocked exception. (2) Stamp a
     /// non-empty or NULL set for an unblocked row → the event's <c>blockedBy</c> is not an empty array
     /// / <c>resolution_blocked_by = '{}'</c> counts 0. (3) Run the already-resolved check AFTER the
     /// version guard → the stale-version-1 repeat throws <see cref="OptimisticConcurrencyException"/>
@@ -774,7 +775,7 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         Assert.Equal(1L, resolved.GetProperty("versionBefore").GetInt64());
         Assert.Equal(2L, resolved.GetProperty("versionAfter").GetInt64());
         Assert.Equal(1, resolved.GetProperty("triggerCount").GetInt32());
-        // S144: nothing blocked (trigger on the 1st) → the event carries an EMPTY array and the row
+        // S144: nothing blocked (S145 B3: a PROFILE trigger never blocks) → the event carries an EMPTY array and the row
         // is stamped with the EMPTY set (not NULL — NULL means "still open").
         var blockedBy = resolved.GetProperty("blockedBy");
         Assert.Equal(JsonValueKind.Array, blockedBy.ValueKind);

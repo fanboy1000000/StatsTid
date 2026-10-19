@@ -52,8 +52,9 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         _ = _factory.CreateClient(); // boots the host (seeders run)
 
         // Subject: an employee in EmployeeOrg with ONE exported month (March 2026) and ONE open
-        // EXPORTED_MONTH worklist row raised by an AGREEMENT_CODE_CHANGE effective Wed 18 Mar (S145 B3: was a PROFILE_CHANGE on 15 Mar, which no longer blocks; Wed 18 Mar is a non-Monday inside a week March settles
-        // → the residual QUAL-209 visible). Also seed the foreign org so a foreign-HR scope is real.
+        // EXPORTED_MONTH worklist row raised by an AGREEMENT_CODE_CHANGE effective Wed 18 Mar
+        // (S145 B3: was a PROFILE_CHANGE on 15 Mar, which no longer blocks; Wed 18 Mar is a
+        // non-Monday inside a week March settles → the residual QUAL-209 visible). Also seed the foreign org so a foreign-HR scope is real.
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, Employee, EmployeeOrg);
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, "wl_ep_foreign_emp", ForeignOrg);
         await ExecAsync(
@@ -118,6 +119,8 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal("h-mar", trigger.GetProperty("baselineContentHash").GetString());
         Assert.False(trigger.GetProperty("recalculatedSince").GetBoolean());
         Assert.Equal(JsonValueKind.Null, trigger.GetProperty("reversedSince").ValueKind);
+        // S145 B3: MB-6r (TASK-14521's Unit mutation: the residual arm returns null) → the trigger's
+        // recalcBlockedBy is null and the row's set is empty, tripping both QUAL-209 assertions.
         Assert.Equal("QUAL-209", trigger.GetProperty("recalcBlockedBy").GetString()); // S145 B3: the residual (was QUAL-149)
 
         Assert.Equal(new[] { "QUAL-209" }, row.GetProperty("recalcBlockedBy").EnumerateArray().Select(e => e.GetString()).ToArray()); // S145 B3: the residual (was QUAL-149)
@@ -216,7 +219,9 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         // the derived set → the row count is 0; drop blockedBy from the event → the payload count is
         // 0; drop it from the audit mapper's details → the details count is 0; drop
         // ResolutionBlockedBy from ToDto / the repository read → the open=false GetProperty below
-        // throws or the array differs.
+        // throws or the array differs. S145 B3: MB-6r (the residual arm returns null) → the derived
+        // set is empty and all three counts are 0.
+        // S145 B3: the residual QUAL-209 (was QUAL-149) in the three stamp assertions below.
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution_blocked_by = '{QUAL-209}'", _openRowId));
         Assert.Equal(1, await CountAsync(
@@ -288,7 +293,9 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     /// unconditional (refuse every actor, or ignore the actor's role) → the Global-Admin leg 403s
     /// and fails. (4) Move the gate BEFORE the org-scope validation → the foreign-HR leg's 403
     /// reason changes from the scope reason to the rule reason and fails, which is the pin that the
-    /// refusal is not an existence/kind oracle for a row the caller may not see.</para>
+    /// refusal is not an existence/kind oracle for a row the caller may not see. (5) S145 B3: MB-6r
+    /// (the residual arm returns null) → the setup row is unblocked, so the Global-Admin leg returns
+    /// 200 instead of 409 and fails.</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_AsRecalculated_Hr403_LocalAdmin403_GlobalAdmin409Blocked_ForeignHrStillScope403()
@@ -363,15 +370,15 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
 
     /// <summary>
     /// S144 / TASK-14401 leg (5), a SEPARATE fact (a test stops at its first failed assertion, so a
-    /// leg after the deliberately-red 409 leg would never run in evidence run 1). The trigger is
-    /// effective on the FIRST of April 2026, so the correction does not reach into the exported month
-    /// (S145 B3, reworded: the seeded trigger is a PROFILE_CHANGE, and a profile change never blocks
-    /// since Stage B) → the row is UNBLOCKED → a Global Admin RECALCULATED
+    /// leg after the deliberately-red 409 leg would never run in evidence run 1). The trigger is a
+    /// PROFILE_CHANGE effective on the FIRST of April 2026 (S145 B3, reworded: a profile change never
+    /// blocks since Stage B; before it, the 1st was the fencepost of QUAL-149's strictly-inside-the-
+    /// month test) → the row is UNBLOCKED → a Global Admin RECALCULATED
     /// succeeds, and the resolution is stamped with the EMPTY set (not NULL: NULL means open).
     ///
     /// <para><b>Red conditions.</b> (1) Refuse RECALCULATED for a Global Admin unconditionally, or
-    /// treat a PROFILE trigger as blocked (MB-6p) → 409,
-    /// not 200. (2) Stamp NULL (the widened CHECK refuses it, so 500) or a non-empty set → the
+    /// treat a PROFILE trigger on the 1st as blocked → 409, not 200 (S145 R-117: MB-6p restores
+    /// Stage A's profile arm, which never blocked the 1st, so MB-6p does not trip this fact). (2) Stamp NULL (the widened CHECK refuses it, so 500) or a non-empty set → the
     /// <c>resolution_blocked_by = '{}'</c> count is 0. (3) Omit <c>blockedBy</c> from the event, or
     /// emit <c>null</c> instead of <c>[]</c> → the event assertion's <c>ValueKind</c>/emptiness fails.</para>
     /// </summary>
@@ -422,7 +429,8 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     /// <para><b>Red conditions.</b> Move the block check before the version guard (in the handler or
     /// the repository) → the response is 409 <c>worklist-recalc-blocked</c>, not 412, and the status
     /// assertion fails. Drop the block check's precedence differently — e.g. return 409 for a stale
-    /// token on any blocked row — same failure.</para>
+    /// token on any blocked row — same failure. (S145 B3: MB-6r, the residual arm returning null,
+    /// does not trip it: the stale token answers 412 whether or not the row is blocked.)</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_Blocked_AsRecalculated_StaleIfMatch_Is412_Not409()
@@ -458,7 +466,8 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     /// assertions trip. (6) Drop blockedBy from the audit mapper → the <c>details</c> assertion
     /// trips. (7) Drop ResolutionBlockedBy from <c>ToDto</c> → the read-back <c>GetProperty</c> throws.
     /// (8) Reword the 403 so it omits <c>GlobalAdmin</c>/<c>RECALCULATED</c> or names the employee →
-    /// the reason assertions trip.</para>
+    /// the reason assertions trip. (9) S145 B3: MB-6r (the residual arm returns null) → the stamp is
+    /// <c>{}</c>, not <c>{QUAL-209}</c>, and the row, event and audit assertions trip.</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_AsHandledManually_Hr403_LocalAdmin403_GlobalAdmin200_StampsBlockSet()
@@ -492,6 +501,7 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, admin.StatusCode);
         Assert.Equal("\"2\"", admin.Headers.ETag!.Tag);
 
+        // S145 B3: the residual QUAL-209 (was QUAL-149) in the row, event and audit assertions below.
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'HANDLED_MANUALLY' AND resolved_by = 'wl_ep_admin' AND version = 2 AND resolution_blocked_by = '{QUAL-209}'", _openRowId));
 
@@ -576,7 +586,8 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     /// <para><b>S144 red conditions.</b> Let HANDLED_MANUALLY on an EXPORTED_MONTH row through for a
     /// non-GlobalAdmin → leg (a2) returns 200 instead of 403. Stamp <c>{}</c> instead of the derived
     /// set on the DISMISSED → the <c>'{QUAL-209}'</c> row assertion and the event <c>blockedBy</c>
-    /// assertion in leg (b) trip.</para>
+    /// assertion in leg (b) trip. S145 B3: MB-6r (the residual arm returns null) → the stamp is
+    /// <c>{}</c> and the same two assertions trip.</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_AsRecalculated_MixedRoleHrWithGlobalAdminScope_Is403_ButMayStillDismiss()
@@ -629,7 +640,8 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, dismiss.StatusCode);
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'DISMISSED' AND resolved_by = 'wl_ep_hr_globalscope' AND version = 2", _openRowId));
-        // S144: the DISMISSED is stamped with the derived block set (the row is blocked by QUAL-209, S145 B3).
+        // S144: the DISMISSED is stamped with the derived block set.
+        // S145 B3: the residual QUAL-209 (was QUAL-149) in the two stamp assertions below.
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution_blocked_by = '{QUAL-209}'", _openRowId));
         Assert.Equal(1, await CountAsync(

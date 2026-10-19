@@ -24,7 +24,7 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// an agreement-code change dated on a non-Monday inside a Monday–Sunday week the month settles
 /// (Q5 (c): a week cannot be judged under two agreements, so that month stays manual). Profile,
 /// category and Monday agreement changes no longer block — payroll pays such a month part by part.
-/// (S138–S144 showed QUAL-149 / QUAL-150 for any such change strictly inside the month.)
+/// (Before S145 Stage B it showed QUAL-149 / QUAL-150 for any such change strictly inside the month.)
 /// </para>
 ///
 /// <list type="bullet">

@@ -9,10 +9,11 @@ namespace StatsTid.Tests.Unit.Worklist;
 /// operator's resolution verb.
 ///
 /// <list type="bullet">
-///   <item><b>recalcBlockedBy</b> — the full interior/edge × trigger-kind matrix: a change ON the
-///     1st does not split the month (no blocker), a change on the 2nd..last day does — QUAL-149 for
-///     PROFILE / EMPLOYMENT_CATEGORY (≥ 2 EMPLOYED segments), QUAL-150 for AGREEMENT_CODE (plan-
-///     wide wage-type key). The row-level value is a SET; SETTLED_YEAR rows never block.</item>
+///   <item><b>recalcBlockedBy</b> — the trigger-kind × date matrix. Since S145 Stage B only an
+///     AGREEMENT_CODE change on a non-Monday inside a week the month settles blocks (QUAL-209);
+///     PROFILE / EMPLOYMENT_CATEGORY changes never block. (Before Stage B: QUAL-149 / QUAL-150 for
+///     any such change strictly inside the month.) The row-level value is a SET; SETTLED_YEAR rows
+///     never block.</item>
 ///   <item><b>recalculatedSince</b> — per trigger vs row: exact hash comparison against EACH
 ///     trigger's own baseline; the row is recalculated only when EVERY trigger is.</item>
 ///   <item><b>reversedSince</b> — both legs: a later sequence (reverse-then-re-settle) OR the
@@ -122,7 +123,10 @@ public sealed class BackdateWorklistDerivationTests
     {
         var row = SettledYearRow("VACATION", 2024, highest: 1, reversed: Array.Empty<int>(), new[]
         {
-            // S145 B3: re-seeded from a PROFILE trigger (which never blocks, so the fact proved nothing) to a mid-week AGREEMENT trigger, Wed 12 Mar 2025.
+            // S145 B3 (R-115): re-seeded from a PROFILE trigger to a mid-week AGREEMENT trigger, Wed 12 Mar 2025.
+            // The row overload answers empty for any row without a year and month, which is a
+            // SETTLED_YEAR row's stored shape; so this pins that shape. The kind check itself is
+            // pinned by the factored-overload fact below (M-4).
             Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2025, 3, 12), baselineSequence: 1),
         });
 

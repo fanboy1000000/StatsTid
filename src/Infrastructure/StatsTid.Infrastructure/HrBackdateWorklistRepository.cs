@@ -251,11 +251,13 @@ public static class WorklistTriggerJson
 ///     the month settles (context days before the 1st included). A week cannot be judged under
 ///     two agreements (Q5 (c)), so payroll refuses that month and HR resolves it by hand. The
 ///     test is payroll's own shared week rule (<see cref="WeeklyContext.MidWeekAgreementChange"/>
-///     over <see cref="WeeklyContext.SettledWeeks"/>), so the worklist and payroll agree for an
-///     employee employed throughout the month's settled weeks; for hires and leavers they can
-///     differ (QUAL-210). A Monday change starts a clean week and never blocks. PROFILE and
+///     over <see cref="WeeklyContext.SettledWeeks"/>), so the worklist and payroll agree on each
+///     trigger's own date for an employee employed throughout the month's settled weeks. For
+///     hires and leavers they can differ (QUAL-210), and the worklist judges only the open row's
+///     own triggers, not an agreement change already resolved on an earlier row of the same month
+///     (QUAL-212). A Monday change starts a clean week and never blocks. PROFILE and
 ///     EMPLOYMENT_CATEGORY triggers no longer block: payroll pays such a month part by part.
-///     (S138–S144 derived <c>QUAL-149</c> / <c>QUAL-150</c> for any such change strictly inside
+///     (Before S145 Stage B it derived <c>QUAL-149</c> / <c>QUAL-150</c> for any such change strictly inside
 ///     the month; rows resolved then keep those ids in their stamp.) SETTLED_YEAR rows are never
 ///     blocked this way — their fix is ADR-033's reverse-then-re-settle, not a re-plan. A
 ///     PRIOR_MONTH_REOPENED trigger (S145 R5(c)) never blocks either: it changes no agreement
@@ -307,7 +309,7 @@ public static class BackdateWorklistDerivation
             WorklistTriggerKinds.AgreementCodeChange =>
                 IsAgreementChangeInsideSettledWeek(effectiveFrom, year, month) ? RecalcBlockedAgreementMidWeek : null,
             // S145 Stage B (refinement :702): payroll pays a profile or category split part by part,
-            // so neither blocks the re-plan any more (S138–S144 derived QUAL-149 for them).
+            // so neither blocks the re-plan any more (before S145 Stage B: QUAL-149).
             WorklistTriggerKinds.ProfileChange => null,
             WorklistTriggerKinds.EmploymentCategoryChange => null,
             // S145 R5(c): a reopen of the previous month changes no agreement row, so it never
