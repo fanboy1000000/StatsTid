@@ -286,7 +286,7 @@ public static class PeriodPlanner
     ///
     /// <para>
     /// <b>Why a split is unsafe (the rule D4 protects).</b> An <see cref="SplitBehavior.AlignedWindow"/>
-    /// rule (weekly norm, overtime, daily/weekly rest) reasons over a whole window. If the
+    /// rule (weekly norm, daily/weekly rest; overtime until S145 B1, now TimelineAware) reasons over a whole window. If the
     /// planner cut that window into two segments, the rule would run twice and produce two
     /// half-results that cannot be combined into one correct answer — which is exactly what
     /// <see cref="MergeStrategy.RejectIfMultipleSegments"/> refuses at merge time. A

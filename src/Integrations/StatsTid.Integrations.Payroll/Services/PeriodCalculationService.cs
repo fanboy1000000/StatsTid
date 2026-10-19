@@ -2441,8 +2441,8 @@ public sealed class PeriodCalculationService
 
             // Per-rule custom merge delegates: the planner's contract is that any rule with
             // SplitBehavior.Mergeable carries MergeStrategy.Custom (or UnionDedupe for
-            // compliance). FlexBalanceRule chains carry-state; multi-week / annual norm
-            // sums hours across segments. The actual merge arithmetic for these rules is
+            // compliance). Multi-week / annual norm sums hours across segments. (Flex left
+            // this path at S145 B1: it is TimelineAware → SinglePlanEvaluation.) The actual merge arithmetic for these rules is
             // out of S20 wave 1's scope (TASK-2009 wires per-rule delegates as part of
             // RetroactiveCorrectionService cleanup); for now we provide a defensive
             // single-segment-passthrough fallback that preserves the segment-0 row when
@@ -2492,7 +2492,7 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// Defensive fallback for the Custom merge path: single-segment plans pass through
     /// unchanged; multi-segment plans concatenate with a warning. Real per-rule custom
-    /// delegates (FlexBalanceRule chained-carry, NormCheckRule.MULTI_WEEK summing) are
+    /// delegates (NormCheckRule.MULTI_WEEK / ANNUAL summing; flex left this path at S145 B1) are
     /// wired in TASK-2009 alongside RetroactiveCorrectionService's segmentation migration;
     /// until then, this fallback keeps the dominant single-segment case working.
     /// </summary>

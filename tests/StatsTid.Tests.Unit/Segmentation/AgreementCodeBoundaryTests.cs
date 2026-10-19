@@ -26,7 +26,7 @@ namespace StatsTid.Tests.Unit.Segmentation;
 ///
 /// <para>
 /// The Reject case uses a SYNTHETIC rule: the live set has no Reject rule
-/// (<c>EmploymentTruncationAlignmentTests.LiveSet_HasAlignedWindowRules_NoRejectRules_OvertimeFirst</c>).
+/// (<c>EmploymentTruncationAlignmentTests.LiveSet_HasAlignedWindowRules_NoRejectRules_NormCheckWeeklyFirst</c>).
 /// All planner calls are windowless, so every segment types EMPLOYED and an interior boundary means
 /// two EMPLOYED segments (the pre-S137 rule, unchanged).
 /// </para>

@@ -109,7 +109,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         _db = new DbConnectionFactory(cs);
         await TestFixtures.SeedWageTypeMappingsAsync(_db);
 
-        // The LIVE rule set — four AlignedWindow rules — is what refuses the split.
+        // The LIVE rule set — three AlignedWindow rules since S145 B1 — is what refuses the split.
         _factory = new PayrollHostFactory(cs, new RuleRegistry().GetAll());
     }
 

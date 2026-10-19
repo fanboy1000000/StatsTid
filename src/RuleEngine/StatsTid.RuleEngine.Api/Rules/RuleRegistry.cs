@@ -21,8 +21,20 @@ namespace StatsTid.RuleEngine.Api.Rules;
 /// <para>
 /// S145 / TASK-14505: overtime, the four norm ids and flex dispatch onto the week-by-week
 /// <see cref="WeeklyTimelineCore"/> (one arithmetic path, R8); <see cref="EvaluateTimeline"/>
-/// serves <c>POST /api/rules/evaluate-timeline</c>. The registered classifications are unchanged
+/// serves <c>POST /api/rules/evaluate-timeline</c>. The registered classifications were unchanged
 /// in Stage A (R17).
+/// </para>
+///
+/// <para>
+/// S145 Stage B / TASK-14520 (B1, QUAL-149): the three rules payroll evaluates through that one
+/// timeline call — <c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c> and <c>FLEX_BALANCE</c> — are
+/// classified <see cref="SplitBehavior.TimelineAware"/> ("evaluated once across the whole plan with
+/// per-day context; never split"), merging by <see cref="MergeStrategy.SinglePlanEvaluation"/>.
+/// <c>NORM_CHECK_37H</c>, until now only a dispatch alias, is registered for segmentation so its
+/// merge no longer falls back to <c>Concatenate</c> (which nulls the norm totals). Every other rule
+/// keeps its classification: <c>NORM_CHECK_WEEKLY</c> and the two rest rules stay
+/// <see cref="SplitBehavior.AlignedWindow"/>, and <c>NORM_CHECK_WEEKLY</c> is now the first
+/// AlignedWindow rule in registration order, so it is the rule a refused split month names.
 /// </para>
 /// </summary>
 public sealed class RuleRegistry
@@ -68,8 +80,22 @@ public sealed class RuleRegistry
         // Compliance, window-span, segment-safe (default merge -> UnionDedupe):
         Register(RestPeriodRule.MaxDailyRuleId, Span.Window, SplitBehavior.SegmentSafe, Family.Compliance);
 
-        // Calculation, window-span, aligned-window (default merge -> RejectIfMultipleSegments):
-        Register(OvertimeRule.RuleId,           Span.Window, SplitBehavior.AlignedWindow, Family.Calculation);
+        // Calculation, timeline-aware (default merge -> SinglePlanEvaluation) — S145 Stage B, B1.
+        // Payroll evaluates these three in ONE call over the whole period (POST
+        // /api/rules/evaluate-timeline), each day under its own contract, so a segment boundary
+        // never cuts their window: the planner does not refuse on them, and exactly one result
+        // per rule reaches the merger (two is a contract violation). The Span stays descriptive
+        // (the planner reads no Span): overtime keeps Window (its week), flex keeps CrossPeriod
+        // (its carried balance), and NORM_CHECK_37H takes Period (its totals cover the period's
+        // own days). FLEX_BALANCE's former explicit Custom override is gone — it takes the
+        // default, so no Register call here passes a strategy.
+        Register(OvertimeRule.RuleId,    Span.Window,      SplitBehavior.TimelineAware, Family.Calculation);
+        Register(NormCheckRule.RuleId,   Span.Period,      SplitBehavior.TimelineAware, Family.Calculation);
+        Register(FlexBalanceRule.RuleId, Span.CrossPeriod, SplitBehavior.TimelineAware, Family.Calculation);
+
+        // Calculation, window-span, aligned-window (default merge -> RejectIfMultipleSegments).
+        // Unchanged by B1, and now the FIRST AlignedWindow rule in registration order — the rule
+        // a refused split month names (the planner reports the first refusing rule it finds).
         Register(NormCheckRule.WeeklyRuleId,    Span.Window, SplitBehavior.AlignedWindow, Family.Calculation);
 
         // Compliance, window-span, aligned-window (default merge -> RejectIfMultipleSegments):
@@ -96,16 +122,10 @@ public sealed class RuleRegistry
         Register(OvertimeGovernanceRule.PreApprovalRuleId, Span.Period, SplitBehavior.Mergeable, Family.Compliance,
             mergeStrategy: MergeStrategy.UnionDedupe);
 
-        // Calculation, cross-period, mergeable — chained-carry via per-rule custom
-        // delegate (segment k+1's previousBalance = segment k's NewBalance). TASK-2008/
-        // TASK-2009 wire the actual delegate into the merger.
-        Register(FlexBalanceRule.RuleId, Span.CrossPeriod, SplitBehavior.Mergeable, Family.Calculation,
-            mergeStrategy: MergeStrategy.Custom);
-
         // EntitlementValidationRule: explicitly OUT of segmentation scope per ADR-016
         // (request-validator, not period-based, returns ValidateEntitlementResponse —
         // not a CalculationResult or ComplianceCheckResult). Not registered. Total
-        // segmentation-classified rules: 16 (see Get/GetAll).
+        // segmentation-classified rules: 17 (see Get/GetAll) — S145 B1 added NORM_CHECK_37H.
     }
 
     /// <summary>
@@ -161,6 +181,11 @@ public sealed class RuleRegistry
             SplitBehavior.SegmentSafe when family == Family.Compliance => MergeStrategy.UnionDedupe,
             SplitBehavior.AlignedWindow => MergeStrategy.RejectIfMultipleSegments,
             SplitBehavior.Reject => MergeStrategy.RejectIfMultipleSegments,
+            // S145 B1: evaluated once for the whole plan -> exactly one result passes through.
+            // (TimelineAware, Compliance) deliberately has NO default and falls to the throw
+            // below: ComplianceCheckResultMerger has no single-plan arm and throws on an unknown
+            // kind, so such a registration must name its strategy (as a Mergeable rule must).
+            SplitBehavior.TimelineAware when family == Family.Calculation => MergeStrategy.SinglePlanEvaluation,
             _ => throw new InvalidOperationException(
                 $"No default merge strategy for rule '{ruleId}' with ({span}, {splitBehavior}, {family}). Pass mergeStrategy explicitly."),
         };

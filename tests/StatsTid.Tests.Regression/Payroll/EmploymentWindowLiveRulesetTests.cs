@@ -20,7 +20,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// S137 / TASK-13707 — ADR-016 D4 after the owner ruling of 2026-09-02 ("hire and leave
 /// edges are truncations, not splits"), proven END-TO-END through the payroll host against a
 /// real Postgres and with the <b>LIVE rule-classification set</b>
-/// (<c>new RuleRegistry().GetAll()</c> — four AlignedWindow rules, OVERTIME_CALC first).
+/// (<c>new RuleRegistry().GetAll()</c> — three AlignedWindow rules, NORM_CHECK_WEEKLY first since S145 B1).
 ///
 /// <para>
 /// Why a second file next to <see cref="EmploymentWindowPayrollTests"/>: that suite proves
@@ -219,7 +219,7 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
     /// <b>Limitation pinned: "AlignedWindow norm/overtime rules refuse a profile-change split
     /// until reclassified — ADR-016 D4 follow-up" (QUAL-149).</b> A part-time-fraction change
     /// on 04-16 while employed all month is EMPLOYED [04-01..04-15] + EMPLOYED [04-16..04-30]:
-    /// two EMPLOYED segments, so OVERTIME_CALC would be evaluated twice and its halves cannot
+    /// two EMPLOYED segments, so NORM_CHECK_WEEKLY would be evaluated twice and its halves cannot
     /// be merged — the planner refuses before any rule runs. The SAME input calculates under
     /// <see cref="TestFixtures.StraddleSafeRuleSet"/>
     /// (<see cref="EmploymentWindowPayrollTests.MidMonthFractionChange_EmployeeProfileChangeBoundary_NormScalesPerSpan_VacationDayCountFlat"/>),
@@ -250,7 +250,7 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         Assert.Empty(engine.Calls);
 
         // Message contract: rule id, count, cause — and the rule a reader learns from it.
-        Assert.Contains($"'{OvertimeRule.RuleId}'", ex.Message);
+        Assert.Contains($"'{NormCheckRule.WeeklyRuleId}'", ex.Message); // S145 B1: was OvertimeRule.RuleId (R-61)
         Assert.Contains("AlignedWindow", ex.Message);
         Assert.Contains("2 EMPLOYED segments", ex.Message);
         Assert.Contains("EmployeeProfileChange", ex.Message);

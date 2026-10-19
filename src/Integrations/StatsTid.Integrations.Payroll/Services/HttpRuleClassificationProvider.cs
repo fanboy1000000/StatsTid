@@ -59,7 +59,8 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// exported. An empty list means a genuinely empty registry, and a successful 200 <c>[]</c> is
 /// accepted and cached like any other success (so is <see cref="EmptyRuleClassificationProvider"/>,
 /// the test-only fallback). The live registry cannot answer <c>[]</c>: <c>RuleRegistry</c>
-/// registers its 16 classifications in its constructor, and
+/// registers its 17 classifications in its constructor (16 until S145 B1 registered
+/// <c>NORM_CHECK_37H</c>), and
 /// <c>RuleClassificationsLeastPrivilegeAcceptTests</c> pins the real endpoint non-empty. The
 /// provider deliberately does not reject an empty set — a count check would guard a state the
 /// code cannot produce and would not catch the case that matters (a set missing the
@@ -200,6 +201,15 @@ public sealed class HttpRuleClassificationProvider : IRuleClassificationProvider
 /// <c>kind</c> property so this remains compatible with whichever enum-serialization
 /// convention the Rule Engine ends up emitting (default integer, or string with
 /// <c>JsonStringEnumConverter</c>).
+///
+/// <para>
+/// The kind-to-factory switch in <see cref="Read"/> must carry one arm per
+/// <see cref="MergeStrategyKind"/> value. A kind the Rule Engine registers but this switch does
+/// not map throws, the whole classification fetch fails, and every payroll route answers 503
+/// (<see cref="RuleClassificationsUnavailableException"/>) — while host and Unit tests stay green,
+/// because they inject an in-memory provider. S145 B1 added
+/// <see cref="MergeStrategyKind.SinglePlanEvaluation"/> (the timeline-aware rules) for that reason.
+/// </para>
 /// </summary>
 internal sealed class MergeStrategyJsonConverter : JsonConverter<MergeStrategy>
 {
@@ -243,6 +253,7 @@ internal sealed class MergeStrategyJsonConverter : JsonConverter<MergeStrategy>
             MergeStrategyKind.RejectIfMultipleSegments => MergeStrategy.RejectIfMultipleSegments,
             MergeStrategyKind.UnionDedupe => MergeStrategy.UnionDedupe,
             MergeStrategyKind.Custom => MergeStrategy.Custom,
+            MergeStrategyKind.SinglePlanEvaluation => MergeStrategy.SinglePlanEvaluation,
             _ => throw new JsonException($"Unknown MergeStrategyKind value: {kind.Value}.")
         };
     }

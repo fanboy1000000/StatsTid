@@ -6,7 +6,7 @@ namespace StatsTid.SharedKernel.Segmentation;
 ///
 /// Design choice — discriminated-union via <see cref="MergeStrategyKind"/> rather than an
 /// abstract base with concrete subclasses: the full set of named strategies is closed and
-/// small (4 values); a kind enum + single record is cheaper to pattern-match over than a
+/// small (5 values); a kind enum + single record is cheaper to pattern-match over than a
 /// virtual-dispatch hierarchy, and the kind is directly serialisable into the manifest JSONB
 /// without a custom converter.
 ///
@@ -45,12 +45,23 @@ public sealed record MergeStrategy
 
     /// <summary>
     /// Per-rule custom merge logic — required for <c>(period, mergeable, calculation)</c>
-    /// rules and for rules with carry-state across segments (e.g. <c>FlexBalanceRule</c>).
+    /// rules (the multi-week and annual norm ids). Flex used it until S145 B1; it is now
+    /// <c>TimelineAware</c> → <c>SinglePlanEvaluation</c>.
     /// The actual merge delegate lives in the concrete merger class (TASK-2005); this record
     /// carries the kind marker so the planner can identify which rules need the custom path.
     /// </summary>
     public static readonly MergeStrategy Custom =
         new(MergeStrategyKind.Custom);
+
+    /// <summary>
+    /// The rule was evaluated once for the whole plan (<see cref="SplitBehavior.TimelineAware"/>),
+    /// so exactly one result reaches merge and passes through unchanged — its period figures
+    /// (e.g. the norm totals) intact. Two or more results is a contract violation, never a
+    /// refusable month: the caller produced per-segment results for a rule that is never split.
+    /// Default for <c>(*, timeline-aware, calculation)</c> rules (S145 Stage B, B1).
+    /// </summary>
+    public static readonly MergeStrategy SinglePlanEvaluation =
+        new(MergeStrategyKind.SinglePlanEvaluation);
 
     /// <summary>Discriminant for pattern-matching in merger implementations.</summary>
     public MergeStrategyKind Kind { get; }
@@ -62,6 +73,11 @@ public sealed record MergeStrategy
 
 /// <summary>
 /// Discriminant values for <see cref="MergeStrategy"/>.
+/// The kind crosses the wire as an integer (<c>GET /api/rules/classifications</c>), so new
+/// values are appended and existing ordinals never move. Every consumer that maps a kind
+/// exhaustively must gain an arm for a new value — notably Payroll's
+/// <c>MergeStrategyJsonConverter</c>, which throws on an unmapped kind and would make every
+/// payroll route answer 503.
 /// </summary>
 public enum MergeStrategyKind
 {
@@ -69,4 +85,6 @@ public enum MergeStrategyKind
     RejectIfMultipleSegments,
     UnionDedupe,
     Custom,
+    /// <summary>See <see cref="MergeStrategy.SinglePlanEvaluation"/> (S145 Stage B, B1).</summary>
+    SinglePlanEvaluation,
 }
