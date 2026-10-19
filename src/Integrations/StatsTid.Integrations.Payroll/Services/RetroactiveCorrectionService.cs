@@ -255,9 +255,9 @@ public sealed class RetroactiveCorrectionService
             };
         }
 
-        // Flex delta is extracted from the merged rule results; FlexBalanceRule's
-        // own chained-balance hand-off (in-period across segments) means
-        // newResult.RuleResults already carries the across-segment net delta.
+        // Flex delta is extracted from the merged rule results. Flex is evaluated once
+        // across the whole plan (S145 B1: TimelineAware → SinglePlanEvaluation), so
+        // newResult.RuleResults already carries the period's net delta.
         decimal? flexDelta = ExtractFlexDelta(newResult.RuleResults);
 
         var resolvedOrgId = profile.OrgId

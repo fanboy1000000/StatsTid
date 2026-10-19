@@ -201,7 +201,7 @@ public static class CalculationResultMerger
     /// <summary>
     /// Custom-strategy delegation. The planner is expected to register a per-rule custom merge
     /// delegate at rule-registration time for <c>(period, mergeable, calculation)</c> rules
-    /// and for cross-period carry-state rules (e.g. <c>FlexBalanceRule</c>).
+    /// (the multi-week and annual norm ids).
     /// </summary>
     private static CalculationResult MergeByCustom(
         IReadOnlyList<CalculationResult> segments,

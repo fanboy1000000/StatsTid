@@ -45,7 +45,8 @@ public sealed record MergeStrategy
 
     /// <summary>
     /// Per-rule custom merge logic — required for <c>(period, mergeable, calculation)</c>
-    /// rules and for rules with carry-state across segments (e.g. <c>FlexBalanceRule</c>).
+    /// rules (the multi-week and annual norm ids). Flex used it until S145 B1; it is now
+    /// <c>TimelineAware</c> → <c>SinglePlanEvaluation</c>.
     /// The actual merge delegate lives in the concrete merger class (TASK-2005); this record
     /// carries the kind marker so the planner can identify which rules need the custom path.
     /// </summary>

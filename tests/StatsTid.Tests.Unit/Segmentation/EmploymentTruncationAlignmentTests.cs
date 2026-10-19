@@ -23,8 +23,8 @@ namespace StatsTid.Tests.Unit.Segmentation;
 /// <para>
 /// Every pin here uses the LIVE classification set (<c>new RuleRegistry().GetAll()</c> — the
 /// same set the payroll host reads over HTTP), so the pins are faithful to production wiring:
-/// the live set has three AlignedWindow rules (NORM_CHECK_WEEKLY first in registration order; OVERTIME_CALC is TimelineAware since S145 Stage B) and
-/// no Reject rule. Where a Reject rule is needed one is constructed explicitly.
+/// the live set has three AlignedWindow rules (NORM_CHECK_WEEKLY first in registration
+/// order) and no Reject rule; OVERTIME_CALC is TimelineAware since S145 Stage B. Where a Reject rule is needed one is constructed explicitly.
 /// </para>
 /// </summary>
 public sealed class EmploymentTruncationAlignmentTests

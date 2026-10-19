@@ -59,7 +59,8 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// exported. An empty list means a genuinely empty registry, and a successful 200 <c>[]</c> is
 /// accepted and cached like any other success (so is <see cref="EmptyRuleClassificationProvider"/>,
 /// the test-only fallback). The live registry cannot answer <c>[]</c>: <c>RuleRegistry</c>
-/// registers its 16 classifications in its constructor, and
+/// registers its 17 classifications in its constructor (16 until S145 B1 registered
+/// <c>NORM_CHECK_37H</c>), and
 /// <c>RuleClassificationsLeastPrivilegeAcceptTests</c> pins the real endpoint non-empty. The
 /// provider deliberately does not reject an empty set — a count check would guard a state the
 /// code cannot produce and would not catch the case that matters (a set missing the

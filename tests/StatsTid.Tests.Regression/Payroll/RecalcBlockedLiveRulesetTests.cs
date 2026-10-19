@@ -42,7 +42,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// </para>
 ///
 /// <para>
-/// Live set = <c>new RuleRegistry().GetAll()</c> (four AlignedWindow rules, OVERTIME_CALC first;
+/// Live set = <c>new RuleRegistry().GetAll()</c> (three AlignedWindow rules, NORM_CHECK_WEEKLY first since S145 B1;
 /// a straddle-safe set would refuse nothing). All facts are Docker-gated: CI-verified, never
 /// locally green.
 /// </para>

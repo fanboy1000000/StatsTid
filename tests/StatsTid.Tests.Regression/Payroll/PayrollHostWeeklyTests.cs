@@ -147,7 +147,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         _db = new DbConnectionFactory(cs);
         await TestFixtures.SeedWageTypeMappingsAsync(_db);
 
-        // The LIVE rule set — four AlignedWindow rules — is what refuses a split month (H9).
+        // The LIVE rule set — three AlignedWindow rules since S145 B1 — is what refuses a split month (H9).
         _factory = new PayrollHostFactory(cs, new RuleRegistry().GetAll());
     }
 
