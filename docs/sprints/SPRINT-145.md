@@ -2060,6 +2060,34 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
     - W6: **RP-B1's replay sends no login token**, so it would get a 401 from the real Rule Engine and fail on correct code. It must pass a minted bearer token, as the forward call does.
     - N1–N7. **N7, for later:** the close guard requires the Step 7a review artifact to show the Fable model id. If Step 7a also runs on Opus, the close will need a waiver or an owner decision.
 - **The cycle-3 adjudication on Opus** (owner-directed; rulings R-93 onward) was dispatched on 2026-10-19, with a content baseline taken.
+- **The cycle-3 rulings, R-93..R-105** (`adjudicated-by-model: claude-opus-5-5`, owner-directed; read-only, verified; the full text is in `.claude/plans/s145/b0/adjudication-cycle3.md`).
+  - **R-93:** every patch is saved and compared with `--full-index --default-prefix`.
+  - **R-94:** "the code set" is every tracked path except `docs/`, `.claude/` and the root-level `*.md` files, as one pathspec. It replaces the close sequence's path list everywhere: C-2's validity check, C-3's routing, C-4's split and C-5. It is checked to catch a past CI-workflow change. R33's revert contract is unchanged.
+  - **R-95:** the B.2 class-doc comment names the B.2 classes that pin split months (`EmploymentWindowLiveRulesetTests`, `RecalcBlockedLiveRulesetTests`), with no forward reference.
+  - **R-96:** any Docker fact added or changed by a code-set fix after the freeze enters the census.
+  - **R-97 (amends R-83's C-4).** These were walked against `sprint-close-guard.ps1`:
+    - in red branch (c), the fix and its new K are pushed and must come back green before a new close commit is made;
+    - "the green push" is the close commit's (or a docs-only (b) commit's above it), never a K's;
+    - only the close commit's command may contain the words "sprint close" (not a K, a fix, an evidence commit or C-9);
+    - a new branch (d), anything else, halts for a ruling;
+    - no waiver.
+  - **R-98 (amends R-83's re-freeze):**
+    - a re-cut is saved beside the frozen patch, never over it;
+    - each frozen patch's SHA-256 is recorded here, and re-checked at C-3 and C-5;
+    - `B` becomes K mechanically when every re-cut is byte-identical and nothing else changed; otherwise the seat re-freezes;
+    - C-3's rescope covers re-frozen lists.
+  - **R-99:** RP-B1 passes a minted bearer token on both the forward call and the replay.
+  - **R-100:** a fallback after the green push replaces the close of record; the close re-runs in its Stage-A-only form.
+  - **R-101:** a label is the ids it names, and qualifiers add none. 14513-T's relocated assertion (`BoundaryCauseEncodingTests.cs:231-232`) is outside item 7.
+  - **R-102, R-103:** the line range and method name, and the stale spots.
+  - **R-104 (recorded neutrally).** The close guard accepts the Step 7a internal review only if it ran on Fable (`claude-fable-5-1`). If Fable is still on its limit at C-1 (the B.3 gate), the owner is asked then, with three options worded in the ruling: wait for Fable; run it on Opus with a guard change for S145, which is itself reviewed; or run it on Opus under the all-gates waiver. Not decided now.
+  - **R-105:** after revision 3, a scoped cycle 4 by both lenses checks only:
+    - absorption;
+    - R-97's C-4, walked against the guard;
+    - R-98's flow;
+    - R-94's pathspec on `0016f33`.
+  - **Observed on 2026-10-19 (it confirms R-97):** an Orchestrator docs commit was blocked by the guard. The command wrote this summary inline, so its text held the quoted phrase next to "S145", and the guard reads the whole command text. The text now goes in through a file.
+- **The planner's revision 3** (absorbing R-93..R-105, verbatim, by script) was dispatched on 2026-10-19.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
@@ -2071,4 +2099,4 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
 | **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Merged in A.5:** 14513+T (`07337ea`), 14515 (`eb78b8e`), 14519+T (`8367862`); 14515 re-spawn 2 done: 3 of 3 mutations tripped, its throwaway checkout removed. **Gate A-CLOSE (closed 2026-10-16):** TASK-14518 CA-1 and CA-3 done; the freeze R-33..R-46; the R-33 split merged (`07f7c78`); `K_A` `923f7fb`; the evidence branch and PR #37 closed and deleted (CA-6); the CA-5 rulings R-47..R-52. **After CA-7:** QUAL-207 merged (`499771c`); its worktree `s145-qual-207` to clear at teardown. **To clear at teardown:** `s145-task-14518-rs` (merged); the A.5 worktrees `s145-task-14513`, `s145-task-14515`, `s145-task-14519` (all merged); the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
 | **Pending gates** | **B.0** (`planner` revises the Stage B briefs TASK-14520..14524 against `K_A`; the Fable seat reviews; a scoped Step-0b cycle if any criterion or file list changes beyond line numbers; the Fable seat signs the B briefs) → waves B.1, B.2, B.3 → the close sequence C-1..C-9 (incl. TASK-14528, the Stage B evidence on `s145-evidence-b`, with R-52's base check). This machine is memory-constrained (8 GB): one build-heavy agent at a time, `-m:2`, foreground; `dotnet build-server shutdown` after builds |
 | **Open rulings** | None for the owner. The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | Step-0b cycle 3 (R-92): receive the Opus internal lens (Codex returned NOT READY narrowly: `--full-index`, a wider patch-validity path set, the B.2 forward pointer, TASK-14528:139 wording). Then the Opus adjudication of cycle 3 (owner direction 2026-10-19), the planner's revision 3, a confirmation if the seat requires one (cap 5), the sign-off, and B.1 in the build-safe order (one build at a time) |
+| **Next action** | Receive the planner's revision 3 (R-93..R-105). Then the scoped cycle 4 (R-105) by both lenses: Codex, and the Opus internal lens (owner direction 2026-10-19). Then the sign-off on Opus, and B.1 in the build-safe order (one build at a time). At C-1, if Fable is still on its limit, ask the owner R-104's close-guard question |
