@@ -46,14 +46,18 @@ public sealed class BackdateWorklistDerivationTests
     }
 
     [Theory]
-    [InlineData(WorklistTriggerKinds.ProfileChange, 15, "QUAL-149")]
-    [InlineData(WorklistTriggerKinds.EmploymentCategoryChange, 15, "QUAL-149")]
-    [InlineData(WorklistTriggerKinds.AgreementCodeChange, 15, "QUAL-150")]
-    [InlineData(WorklistTriggerKinds.ProfileChange, 30, "QUAL-149")]           // last day of April
-    [InlineData(WorklistTriggerKinds.AgreementCodeChange, 30, "QUAL-150")]
-    [InlineData(WorklistTriggerKinds.ProfileChange, 1, null)]                  // on the 1st: no split
+    // S145 B3: PROFILE and CATEGORY triggers never block any more (payroll pays such a month part by part) -> null on every day.
+    [InlineData(WorklistTriggerKinds.ProfileChange, 15, null)]
+    [InlineData(WorklistTriggerKinds.EmploymentCategoryChange, 15, null)]
+    // S145 B3: Wed 15 Apr is a non-Monday inside a week April settles -> the residual id (was QUAL-150).
+    [InlineData(WorklistTriggerKinds.AgreementCodeChange, 15, "QUAL-209")]
+    [InlineData(WorklistTriggerKinds.ProfileChange, 30, null)]                 // S145 B3: last day of April; a PROFILE trigger no longer blocks
+    // S145 B3 (R-114): Thu 30 Apr sits in the week Mon 27 Apr - Sun 3 May, which MAY settles (Q3 F1: the month holding the Sunday settles the week), so April is not blocked and May's row would carry it (was QUAL-150).
+    [InlineData(WorklistTriggerKinds.AgreementCodeChange, 30, null)]
+    [InlineData(WorklistTriggerKinds.ProfileChange, 1, null)]                  // S145 B3: PROFILE never blocks (was: on the 1st, no split)
     [InlineData(WorklistTriggerKinds.EmploymentCategoryChange, 1, null)]
-    [InlineData(WorklistTriggerKinds.AgreementCodeChange, 1, null)]
+    // S145 B3: Wed 1 Apr is a weekday 1st inside the week Mon 30 Mar - Sun 5 Apr, which April settles -> the residual id (Stage A's rule missed this: refinement A8).
+    [InlineData(WorklistTriggerKinds.AgreementCodeChange, 1, "QUAL-209")]
     public void RecalcBlockedByForTrigger_April2026_KindByDateMatrix(string kind, int day, string? expected)
     {
         Assert.Equal(expected, BackdateWorklistDerivation.RecalcBlockedByForTrigger(kind, new DateOnly(2026, 4, day), 2026, 4));
@@ -75,18 +79,30 @@ public sealed class BackdateWorklistDerivationTests
         Assert.Null(BackdateWorklistDerivation.RecalcBlockedByForTrigger("SOMETHING_ELSE", new DateOnly(2026, 4, 15), 2026, 4));
     }
 
+    /// <summary>
+    /// The row-level value is a SET. After the S145 B3 re-seed, two blocking AGREEMENT triggers
+    /// (Wed 22 Apr and Thu 16 Apr) must collapse to ONE id, so "distinct" bites; "sorted" is
+    /// vacuous (a set of one id is always sorted). PROFILE and CATEGORY triggers contribute nothing.
+    ///
+    /// Red conditions: MB-6r (the residual arm returns null) gives an empty set; a derivation that
+    /// stops de-duplicating gives <c>["QUAL-209","QUAL-209"]</c>; MB-6p (PROFILE/CATEGORY still
+    /// return QUAL-149) adds <c>"QUAL-149"</c>. Each trips the <c>Assert.Equal</c>.
+    /// </summary>
     [Fact]
     public void RecalcBlockedBy_Row_IsASet_SortedDistinct()
     {
         var row = ExportedMonthRow(2026, 4, "h1", new[]
         {
-            Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 4, 20), baselineHash: "h1"),
+            // S145 B3: re-seeded - the old Monday 20 Apr trigger never blocks. Two blocking triggers (Wed 22 Apr, Thu 16 Apr) keep "distinct" biting.
+            Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 4, 22), baselineHash: "h1"),
+            Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 4, 16), baselineHash: "h1"),
             Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 4, 10), baselineHash: "h1"),
-            Trigger(WorklistTriggerKinds.EmploymentCategoryChange, new DateOnly(2026, 4, 12), baselineHash: "h1"), // same id as PROFILE
-            Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 4, 1), baselineHash: "h1"),             // on the 1st: contributes nothing
+            Trigger(WorklistTriggerKinds.EmploymentCategoryChange, new DateOnly(2026, 4, 12), baselineHash: "h1"),
+            Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 4, 1), baselineHash: "h1"),
         });
 
-        Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, BackdateWorklistDerivation.RecalcBlockedBy(row));
+        // S145 B3: [residual] only (was ["QUAL-149", "QUAL-150"]).
+        Assert.Equal(new[] { "QUAL-209" }, BackdateWorklistDerivation.RecalcBlockedBy(row));
     }
 
     [Fact]
@@ -106,7 +122,8 @@ public sealed class BackdateWorklistDerivationTests
     {
         var row = SettledYearRow("VACATION", 2024, highest: 1, reversed: Array.Empty<int>(), new[]
         {
-            Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2025, 3, 15), baselineSequence: 1),
+            // S145 B3: re-seeded from a PROFILE trigger (which never blocks, so the fact proved nothing) to a mid-week AGREEMENT trigger, Wed 12 Mar 2025.
+            Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2025, 3, 12), baselineSequence: 1),
         });
 
         Assert.Empty(BackdateWorklistDerivation.RecalcBlockedBy(row));
@@ -385,7 +402,7 @@ public sealed class BackdateWorklistDerivationTests
     {
         var triggers = new[]
         {
-            Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 4, 20), baselineHash: "h1"),
+            Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 4, 22), baselineHash: "h1"), // S145 B3: Wed 22 Apr (was Mon 20 Apr, which never blocks)
             Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 4, 10), baselineHash: "h1"),
             Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 4, 1), baselineHash: "h1"),
         };
@@ -394,25 +411,24 @@ public sealed class BackdateWorklistDerivationTests
         var viaRow = BackdateWorklistDerivation.RecalcBlockedBy(row);
         var viaCore = BackdateWorklistDerivation.RecalcBlockedBy(WorklistKinds.ExportedMonth, 2026, 4, triggers);
 
-        Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, viaCore);
+        Assert.Equal(new[] { "QUAL-209" }, viaCore); // S145 B3: [residual] (was ["QUAL-149", "QUAL-150"])
         Assert.Equal(viaRow, viaCore);
     }
 
     /// <summary>
     /// The month fenceposts through the factored core, with a PROFILE_CHANGE trigger in August
-    /// 2026: the 1st coincides with the period start (one segment, nothing blocked); the 2nd and
-    /// the LAST day split the month (QUAL-149).
+    /// 2026. S145 B3: a PROFILE trigger no longer blocks on ANY day (payroll pays a profile split
+    /// part by part), so the 1st, the 2nd and the LAST day all derive an empty set (they derived
+    /// QUAL-149 on the 2nd and 31st before Stage B).
     ///
-    /// Red conditions: no named mutation (the fencepost predicate <c>IsStrictlyInsideMonth</c> is
-    /// already pinned; this pins that the factored core applies it). Goes red if the core stops
-    /// calling it or shifts the fencepost, tripping the <c>Assert.Empty</c> on the 1st or the
-    /// <c>Assert.Equal(["QUAL-149"], …)</c> on the 2nd / 31st.
+    /// Red conditions: MB-6p (PROFILE and CATEGORY still return QUAL-149) gives <c>["QUAL-149"]</c>
+    /// on the 2nd and 31st, tripping <c>Assert.Empty</c>.
     /// </summary>
     [Theory]
     [InlineData(1, false)]
-    [InlineData(2, true)]
-    [InlineData(31, true)]
-    public void RecalcBlockedBy_FactoredOverload_AugustFenceposts_ProfileChange(int day, bool blocked)
+    [InlineData(2, false)]  // S145 B3: was true (QUAL-149)
+    [InlineData(31, false)] // S145 B3: was true (QUAL-149)
+    public void RecalcBlockedBy_FactoredOverload_AugustFenceposts_ProfileChange_NeverBlocks(int day, bool blocked)
     {
         var triggers = new[] { Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 8, day), baselineHash: "h1") };
 
@@ -427,16 +443,18 @@ public sealed class BackdateWorklistDerivationTests
     /// <summary>
     /// A SETTLED_YEAR row is never blocked this way (its fix is reverse-then-re-settle, not a
     /// re-plan) — pinned through the factored core with year AND month supplied and a trigger
-    /// strictly inside that month, so the KIND check is the only thing that can make the answer empty.
+    /// mid-week (S145 B3: an AGREEMENT trigger on Wed 19 Aug 2026), so the KIND check is the only
+    /// thing that can make the answer empty.
     ///
     /// Red conditions: mutation M-4 — factored <c>RecalcBlockedBy</c> drops the EXPORTED_MONTH
     /// kind check. The trigger is then evaluated against 2026-08 and the call returns
-    /// <c>["QUAL-149"]</c>, tripping <c>Assert.Empty</c>.
+    /// <c>["QUAL-209"]</c>, tripping <c>Assert.Empty</c>.
     /// </summary>
     [Fact]
     public void RecalcBlockedBy_FactoredOverload_SettledYearKind_Empty_EvenWithYearMonthAndInteriorTrigger()
     {
-        var triggers = new[] { Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 8, 15), baselineSequence: 1) };
+        // S145 B3: re-seeded from PROFILE on 15 Aug (never blocks, so the fact proved nothing) to AGREEMENT on Wed 19 Aug 2026.
+        var triggers = new[] { Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 8, 19), baselineSequence: 1) };
 
         Assert.Empty(BackdateWorklistDerivation.RecalcBlockedBy(WorklistKinds.SettledYear, 2026, 8, triggers));
     }
