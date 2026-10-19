@@ -2012,6 +2012,32 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
     - NOTEs 1–9.
   - **Where it differs from Codex:** the class doc of `EmploymentTruncationAlignmentTests` goes to TASK-14522-T, as a comment-only edit at B.2; and the pasted standing-constraints block can stay.
 - **The adjudication of cycle 2 on Opus** (owner-directed; rulings R-80 onward) was dispatched on 2026-10-19, with a content baseline taken.
+- **The cycle-2 rulings, R-80..R-92** (`adjudicated-by-model: claude-opus-5-5`, owner-directed; read-only, verified; no owner question). The full text is in `.claude/plans/s145/b0/adjudication-cycle2.md`.
+  - **R-80:** F-1 is accepted, so EB-1 = **14 facts**. SR1 = `ManifestReplayTests.ReplayAsync_ReturnsResult_WithOriginalManifestId_AndMatchingShape` and SR2 = `FrozenInputsSlotTests.Replay_ProjectionRowAbsent_LoadsFrozenInputsFromEvent_Succeeds` are added. Two success-only straddle replays become EB-1 expected greens.
+  - **R-81:** Step 7a item 7 becomes a **per-pass table** of the labels each paired pass was authorized to use on a changed *existing* value, built from this log. It replaces R-65's list: `R21` was never a label, and `F1`, `R5(a)`, `R-6`, `R-10`, `R37`, `R-11..R-30` and the rest are now in their passes' rows. No blanket approval and no relabelling. The pasted standing-constraints block stays unchanged.
+  - **R-82:** the fifth truncation fact (`:313`) falls under R-73, so R-73's class covers five facts. TASK-14522-T owns the two production-wiring sentences of `EmploymentTruncationAlignmentTests`, as a comment-only edit at B.2, where they become untrue.
+  - **R-83 (amends R-53): the close sequence's failure path.**
+    - C-1 records the patch base `B` and saves the patches as raw bytes, with a round trip.
+    - C-2 checks patch validity at every new K (`git diff --name-only B K -- src tests frontend docker tools`). If anything changed, the dry runs are redone and the patches re-cut, then re-frozen if they differ.
+    - C-4 gets three red branches: a re-run for a non-build failure; a docs-only fix; a code fix, which goes back through the merge checklist, a new K and a scoped Step 7a.
+    - **The no-push freeze starts at the green push.**
+    - C-5 checks byte-identity with `cmp`.
+  - **R-84:** if Stage A ships alone, QUAL-209 and QUAL-211 are WITHDRAWN, and QUAL-210 is re-worded to the A8 drift.
+  - **R-85..R-91:**
+    - R-85: 14523's copy is adjusted at its return (its 5a is a SKIP), and the dead "another id" hedges are removed;
+    - R-86: the MU-43 re-run is certain;
+    - R-87: RP-B1 uses one PCS and one recorder;
+    - R-88: FX3's flex is settled month-wide (149.40 + 6.00 − 147.40 = 8.00);
+    - R-89: the QUAL-210 hire fact's payroll half is illustrative;
+    - R-90: Step 7a item 6 names all four patches;
+    - R-91: two more comment-only edits.
+  - **R-92: cycle 3 is a scoped confirmation by both lenses** (Codex and the Opus internal lens), checking:
+    - absorption fidelity;
+    - R-83's close sequence;
+    - R-81's table against the tests;
+    - the comment-only additions;
+    - R-87 and R-89.
+- **The planner's revision 2** (absorbing R-80..R-92) was dispatched on 2026-10-19.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
