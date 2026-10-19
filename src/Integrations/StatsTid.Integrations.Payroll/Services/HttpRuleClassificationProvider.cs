@@ -54,7 +54,10 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// whether a month with a mid-month change (for example an agreement-code change) may be
 /// calculated at all — it refuses the month only when it can see a Reject or AlignedWindow rule.
 /// An empty list reads as "there is nothing to refuse", so an outage used to make every payroll
-/// route plan blind and export a split month with wrong lines. "I could not find out" is now a
+/// route plan blind and export a split month with wrong lines. (Since S145 B2 payroll hands the
+/// planner only the rules it evaluates, none of which refuses a split, and the raw routes refuse a
+/// split month by their own check; the distinction still matters because payroll plans and merges
+/// by the strategies its rules declare, and an unknown set is not an empty one — R-91.) "I could not find out" is now a
 /// distinct signal, and the routes answer it with a 503 before anything is calculated, written or
 /// exported. An empty list means a genuinely empty registry, and a successful 200 <c>[]</c> is
 /// accepted and cached like any other success (so is <see cref="EmptyRuleClassificationProvider"/>,
@@ -122,7 +125,8 @@ public sealed class HttpRuleClassificationProvider : IRuleClassificationProvider
             }
 
             // Fetch failed (TASK-14412): signal "unavailable" distinctly — never an empty list,
-            // which the planner would read as "no rule forbids a split". Nothing is cached, so
+            // which payroll would plan and merge with as though no rule declared a strategy
+            // (R-91; before S145 B2: "no rule forbids a split"). Nothing is cached, so
             // the next call retries and a transient Rule Engine outage auto-recovers.
             throw new RuleClassificationsUnavailableException();
         }

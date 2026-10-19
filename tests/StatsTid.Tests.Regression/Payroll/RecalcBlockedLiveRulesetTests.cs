@@ -326,8 +326,8 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
     {
         const string employeeId = "EMP-S144-STRADDLE-AGR";
         await SeedEmployeeAsync(employeeId);
-        // The seeded wage-type mappings cover HK only. This AC row is the successor mapping (a
-        // distinct, test-only NORMAL_HOURS code, S145 B2): since S145 A4 / Stage B each EMPLOYED
+        // The full schema also seeds an AC NORMAL_HOURS row under HK's code; this upserts it to the
+        // successor mapping (a distinct, test-only NORMAL_HOURS code, S145 B2): since S145 A4 / Stage B each EMPLOYED
         // segment maps under its own dated agreement key (QUAL-150), so the second part uses it.
         // This fact asserts the manifest only; the per-part codes are asserted by the recalculate
         // and planless facts above.
@@ -433,6 +433,8 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
+        // S145 B2: a distinct test-only AC code, upserted, with an explicit effective_from (was
+        // SLS_0110 and ON CONFLICT DO NOTHING, a no-op over the full schema's AC row).
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description, effective_from)

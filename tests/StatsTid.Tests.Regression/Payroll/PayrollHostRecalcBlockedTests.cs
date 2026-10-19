@@ -358,7 +358,8 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// (c3) No-regression: the SAME seed (agreement-code change on 16 March), but a February-2026
     /// result — no interior change in February — through <c>POST /api/payroll/export</c> →
     /// <b>200</b> and exactly one February <c>payroll_export_records</c> row. The guard refuses only
-    /// the months the planner refuses; it does not turn every raw export into a 422.
+    /// the months a raw route cannot export correctly (since S145 B2: a split month, Q6 (a), or an
+    /// agreement change inside a settled week); it does not turn every raw export into a 422.
     ///
     /// Green before AND after the guard (no mutation targets it); in neither frozen RED list — it is
     /// a GREEN spot check for both runs. It would go red if the guard over-refused (e.g. planned a
@@ -394,7 +395,10 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     // Reject / AlignedWindow rule. Before TASK-14412 the HTTP provider answered a Rule Engine outage
     // with an EMPTY set, so every route planned blind and the (c) months exported. Now the provider
     // throws RuleClassificationsUnavailableException and every planning route answers a fixed 503
-    // before anything is written.
+    // before anything is written. (Since S145 B2 payroll hands the planner only the rules it
+    // evaluates, none of which refuses a split, and the raw routes refuse a split month by their own
+    // Q6 (a) check; so an empty set would now answer that 422, not export. The 503 still matters: an
+    // unknown set must never be planned and merged with as though it were an empty one.)
     //
     // WORDING NOTE (S145 R38 / N-c4-4). "Nothing written" in this block, and the 503's own sentence
     // ("Nothing was calculated, written or exported"), mean PAYROLL DATA: no export record, no manifest,
@@ -407,7 +411,8 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     // These facts run on UnavailableRulesFactory(): the REAL HttpRuleClassificationProvider over a
     // client whose every call answers 503 (so the real provider throws inside the real host, and the
     // real handler maps it), plus the (c) delivering handler — so that a provider reverted to "empty"
-    // lets the export complete as a clean 200 rather than a look-alike 422.
+    // answers something other than the 503: before S145 B2 a clean 200 export, since B2 the Q6 (a)
+    // single-profile 422 for the split March. Either way the 503 assertion trips.
 
     /// <summary>
     /// (d1) <c>POST /api/payroll/export</c> with the (c1) seed and body, while the Rule Engine's
@@ -415,8 +420,9 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// <c>success = false</c>, no ISO date and no employee id in the body; NO March export record.
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified):
-    /// (1) the provider reverts to returning an empty set on failure → the guard is blind, the route
-    /// maps and exports → <b>200</b> plus a March record; the 503 assertion trips.
+    /// (1) the provider reverts to returning an empty set on failure → planning no longer fails, and
+    /// the guard's Q6 (a) check answers the split March with the single-profile <b>422</b> (before
+    /// S145 B2: a 200 plus a March record); the 503 assertion trips.
     /// (2) the <c>RuleClassificationsUnavailableException</c> catch in
     /// <c>RefuseUnplannableMonthsAsync</c> is removed → escapes (500 on Kestrel); the fact fails before or at the 503 assertion.
     /// </summary>
@@ -446,8 +452,9 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// NO February and NO March export record.
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified):
-    /// (1) the provider reverts to returning an empty set on failure → both months export →
-    /// <b>200</b> plus two records; the 503 assertion trips.
+    /// (1) the provider reverts to returning an empty set on failure → planning no longer fails, and
+    /// the guard's Q6 (a) check answers the split March with the single-profile <b>422</b> (before
+    /// S145 B2: both months exported, a 200 plus two records); the 503 assertion trips.
     /// (2) the catch in <c>RefuseUnplannableMonthsAsync</c> is removed → escapes (500 on Kestrel); the fact fails before or at the 503 assertion.
     /// </summary>
     [Fact]
@@ -688,31 +695,6 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
         Assert.DoesNotMatch(IsoDatePattern, json);
         foreach (var date in new[] { Mar01, Mar16, Mar31 })
-        {
-            Assert.DoesNotContain(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), json);
-            Assert.DoesNotContain(date.ToString(), json);
-            Assert.DoesNotContain(date.ToString(CultureInfo.InvariantCulture), json);
-        }
-        Assert.DoesNotContain(employeeId, json);
-    }
-
-    private static void AssertRedactedProblem(string json, string employeeId)
-    {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        Assert.Equal(Kind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.Equal(2, root.GetProperty("employedSegmentCount").GetInt32());
-        Assert.Equal(new[] { "AgreementCodeChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("ruleId").GetString()));
-
-        Assert.DoesNotMatch(IsoDatePattern, json);
-        // The refusal's OWN period dates, in every rendering the exception message could use
-        // (ISO, the machine-culture form, the invariant-culture form) — a bare "no ISO date"
-        // regex would pass a message that rendered them culture-formatted.
-        foreach (var date in new[] { Mar01, Mar31 })
         {
             Assert.DoesNotContain(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), json);
             Assert.DoesNotContain(date.ToString(), json);
@@ -971,8 +953,10 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     // (e) S145 / TASK-14503b — the agreement-change residual on every payroll route (Q5 (c))
     // ═════════════════════════════════════════════════════════════════════
     //
-    // In plain language. S144 refuses a month with an agreement-code change INSIDE the month: the
-    // planner sees it. Two cases slip past the planner, because the agreement read starts at the
+    // In plain language. S144 refused a month with an agreement-code change INSIDE the month: the
+    // planner saw it. (Since S145 B2 the planner no longer refuses it: an interior Monday change is
+    // paid part by part, and an interior mid-week change is answered by this same week check, IB1.)
+    // Two cases slipped past the planner, because the agreement read starts at the
     // 1st of the month. (1) A change dated ON a non-Monday 1st: 1 September 2026 is a Tuesday, so
     // it is not "interior", yet it falls inside the week 31 August – 6 September, which September
     // settles. (2) A change in the PREVIOUS month's last days that the month's first week includes:
@@ -1328,7 +1312,8 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// <para>
     /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-4 (TASK-14528: the week check
     /// ignores interior dates): the check finds nothing in the month, the route calculates and answers
-    /// <b>200</b>, so the 422 assertion trips (and a record and a manifest would exist). MB-7 (the evaluated-set
+    /// <b>200</b>, so the 422 assertion trips. (A manifest is written, but no export record: IB1 seeds no
+    /// recorded hours, so the calculation has no lines and the route skips the export; R-119.) MB-7 (the evaluated-set
     /// filter disabled): the planner refuses first with ITS body, which has a <c>ruleId</c> and no
     /// <c>reason</c> — <c>AssertWeekCheckRefusal</c>'s <c>reason</c> assertion trips (C-B4).
     /// </para>

@@ -1790,6 +1790,10 @@ public sealed class PeriodCalculationService
     /// <b>Keep it in step with the lanes.</b> The six ids are the results the two lanes produce. A rule payroll
     /// starts to evaluate must be added here; otherwise planning cannot see how it may be split, and a rule that
     /// must not be split would reach the merge in pieces (where its merger fails the rule, never silently).
+    /// One asymmetry to know: planning decides whether to gather snapshots from THIS set
+    /// (<c>HasAnySnapshotContract</c>), while a replay's <c>FromManifest</c> re-checks snapshot contracts against
+    /// the whole list. No rule declares a contract today, so nothing differs; a future contract on a rule payroll
+    /// does not run could make replay refuse a manifest a forward run wrote (5a NOTE N-7 on TASK-14522).
     /// </para>
     /// </summary>
     private static readonly IReadOnlySet<string> EvaluatedRuleIds = new HashSet<string>(StringComparer.Ordinal)

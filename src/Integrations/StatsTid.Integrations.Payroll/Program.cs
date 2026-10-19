@@ -142,8 +142,11 @@ builder.Services.AddSingleton<JwtTokenService>();
 // TESTS ONLY — the constructor fallback when no provider is registered. It is never a stand-in
 // for an unreachable Rule Engine: since S144 (TASK-14412, ruling B1) this provider throws
 // RuleClassificationsUnavailableException when it cannot fetch the set, and every route that
-// plans answers that with a 503 (RulesUnavailable below) — never a silent empty set, which the
-// planner would read as "no rule forbids a split".
+// plans answers that with a 503 (RulesUnavailable below) — never a silent empty set: payroll plans
+// and merges by the strategies its rules declare, so an unknown set read as an empty one would plan
+// and merge as though no rule declared anything. (Before S145 B2 the reason was that the planner
+// would read it as "no rule forbids a split"; payroll now hands the planner only the rules it
+// evaluates, none of which refuses one — R-91.)
 builder.Services.AddHttpClient<IRuleClassificationProvider, HttpRuleClassificationProvider>(client =>
 {
     var ruleEngineUrl = builder.Configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
@@ -375,7 +378,8 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
     {
         // S144 TASK-14403: the planner REFUSED the month (a whole-period rule would be evaluated in
-        // 2+ segments — e.g. a mid-month agreement-code change). The plan is built before anything
+        // 2+ segments). Since S145 B2 payroll's own rule set never refuses a split month here, so
+        // this answers only a rule set that holds such a rule (a test fixture). The plan is built before anything
         // is calculated or written, so no manifest and no export record exist. 422 with the
         // redacted problem (counts + causes, never dates or the employee id); any OTHER planner
         // violation is a bug and falls through as a 500.
@@ -576,7 +580,8 @@ app.MapPost("/api/payroll/recalculate", async (
     catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
     {
         // S144 TASK-14403: the planner REFUSED the month (a whole-period rule would be evaluated in
-        // 2+ segments — e.g. an agreement-code change recorded mid-month after the export). The
+        // 2+ segments). Since S145 B2 payroll's own rule set never refuses a split month here, so
+        // this answers only a rule set that holds such a rule (a test fixture). The
         // correction service plans BEFORE it opens its transaction, so nothing was written: the
         // export baseline, the correction event and the idempotency marker are all untouched. 422
         // with the redacted problem (counts + causes, never dates or the employee id); any OTHER
@@ -698,8 +703,10 @@ static async Task<IResult?> RefuseUnplannableMonthsAsync(
         }
         catch (PeriodNotCalculableException ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
         {
-            // Same mapping as the calculating handlers: the week check's 422 variant (reason
-            // "agreement-change-mid-week", no ruleId, no date, no employee id).
+            // The same mapper as the calculating handlers: the week check's 422 variant (reason
+            // "agreement-change-mid-week") and, on these raw routes only, the single-profile variant
+            // (reason "split-month-single-profile-route", S145 B2, Q6 (a)); no ruleId, no date, no
+            // employee id.
             return Results.Json(problem, statusCode: 422);
         }
         catch (RuleClassificationsUnavailableException)

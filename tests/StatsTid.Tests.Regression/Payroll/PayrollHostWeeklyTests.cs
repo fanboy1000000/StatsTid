@@ -728,29 +728,6 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         Assert.DoesNotContain(employeeId, json);
     }
 
-    /// <summary>The planner's S144 split refusal, as H9 expects it: <c>ruleId</c> present, two
-    /// EMPLOYED segments, no date (period start/end or the change date, in any rendering) and no
-    /// employee id — and NOT the week check's variant.</summary>
-    private static void AssertPlannerRefusal(
-        string json, string employeeId, DateOnly periodStart, DateOnly periodEnd, DateOnly changeDate)
-    {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        Assert.Equal(RecalcBlockedKind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.Equal(2, root.GetProperty("employedSegmentCount").GetInt32());
-        Assert.Equal(new[] { "AgreementCodeChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("ruleId").GetString()),
-            "the planner's refusal names the whole-period rule that refused the split");
-        Assert.False(
-            root.TryGetProperty("reason", out var reason) && reason.GetString() == MidWeekReason,
-            "the week check's variant must not answer a month the planner refuses");
-
-        AssertNoDatesOrEmployee(json, employeeId, periodStart, periodEnd, changeDate);
-    }
-
     /// <summary>The week check's 422 variant (A5, Q5 (c)): <c>kind</c> payroll-recalc-blocked,
     /// <c>reason</c> agreement-change-mid-week, cause <c>AgreementCodeChange</c>, no <c>ruleId</c>,
     /// no date and no employee id. (Copied, not shared, with <c>PayrollHostRecalcBlockedTests</c>:
