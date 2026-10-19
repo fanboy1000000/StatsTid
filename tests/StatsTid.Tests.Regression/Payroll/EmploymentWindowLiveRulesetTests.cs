@@ -20,7 +20,8 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// S137 / TASK-13707 — ADR-016 D4 after the owner ruling of 2026-09-02 ("hire and leave
 /// edges are truncations, not splits"), proven END-TO-END through the payroll host against a
 /// real Postgres and with the <b>LIVE rule-classification set</b>
-/// (<c>new RuleRegistry().GetAll()</c> — three AlignedWindow rules, NORM_CHECK_WEEKLY first since S145 B1).
+/// (<c>new RuleRegistry().GetAll()</c> — three AlignedWindow rules, NORM_CHECK_WEEKLY first since S145 B1;
+/// since S145 B2 payroll hands the planner only the six rules it evaluates).
 ///
 /// <para>
 /// Why a second file next to <see cref="EmploymentWindowPayrollTests"/>: that suite proves
@@ -33,13 +34,14 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// </para>
 ///
 /// <para>
-/// The third pin records the LIMITATION the ruling leaves in place, by name:
-/// <b>"AlignedWindow norm/overtime rules refuse a profile-change split until reclassified —
-/// ADR-016 D4 follow-up"</b> (QUAL-149, the S64 F4-1(b) gap with its true scope). A mid-month
-/// part-time-fraction change while employed is two EMPLOYED segments — a genuine split — and
-/// the live set refuses it with <see cref="PlannerInvariantViolation"/>. When the norm/overtime
-/// rules are reclassified with a pro-rating merger, this pin turns RED and the flip is made
-/// consciously.
+/// The third pin used to record the LIMITATION the ruling left in place (QUAL-149): a mid-month
+/// part-time-fraction change while employed is two EMPLOYED segments — a genuine split — and the
+/// live set refused it with <see cref="PlannerInvariantViolation"/>. S145 Stage B lifted it:
+/// payroll now hands the planner only the six rules it evaluates (<c>NORM_CHECK_37H</c>,
+/// <c>OVERTIME_CALC</c> and <c>FLEX_BALANCE</c> are <c>TimelineAware</c>; the registry's three
+/// AlignedWindow rules — NORM_CHECK_WEEKLY and the two rest-period rules — are rules payroll never
+/// runs and never reach planning), so the split month calculates and the third pin now asserts
+/// that (<c>MidMonthFractionChange_LiveRuleSet_Calculates_TimelineSpansBothSegments</c>).
 /// </para>
 ///
 /// <para>
@@ -211,27 +213,40 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // (c) The registered limitation — a profile change WHILE EMPLOYED still
-    //     refuses under the live set
+    // (c) A profile change WHILE EMPLOYED — the month CALCULATES under the live
+    //     set (S145 Stage B lifted the registered limitation, QUAL-149)
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>Limitation pinned: "AlignedWindow norm/overtime rules refuse a profile-change split
-    /// until reclassified — ADR-016 D4 follow-up" (QUAL-149).</b> A part-time-fraction change
-    /// on 04-16 while employed all month is EMPLOYED [04-01..04-15] + EMPLOYED [04-16..04-30]:
-    /// two EMPLOYED segments, so NORM_CHECK_WEEKLY would be evaluated twice and its halves cannot
-    /// be merged — the planner refuses before any rule runs. The SAME input calculates under
-    /// <see cref="TestFixtures.StraddleSafeRuleSet"/>
-    /// (<see cref="EmploymentWindowPayrollTests.MidMonthFractionChange_EmployeeProfileChangeBoundary_NormScalesPerSpan_VacationDayCountFlat"/>),
-    /// which is what proves the per-span mechanics work once the rules are reclassified.
-    /// If this test turns RED because the month now calculates, the registry was reclassified:
-    /// close QUAL-149 consciously and retire this pin.
+    /// <b>S145 B2: was <c>MidMonthFractionChange_LiveRuleSet_RefusesAsRegisteredLimitation</c>
+    /// (QUAL-149, "AlignedWindow norm/overtime rules refuse a profile-change split until
+    /// reclassified"). Stage B reclassified them (B1) and made payroll hand the planner only the
+    /// rules it evaluates (B2), so the pin now asserts the opposite.</b> A part-time-fraction change
+    /// 1.0 → 0.800 on Thursday 16 Apr 2026 while employed all month is EMPLOYED [04-01..04-15] +
+    /// EMPLOYED [04-16..04-30]: two EMPLOYED segments. The month CALCULATES: <c>Success</c>; ONE
+    /// timeline call whose pieces end on 15 Apr and start on 16 Apr (the timeline spans both
+    /// segments); two EMPLOYED segments and <c>EmployeeProfileChange</c> in the persisted manifest;
+    /// the three timeline rules (norm, overtime, flex) are evaluated by that one call and NOT per
+    /// segment (the per-segment lane makes supplement, on-call and absence calls only). The merged
+    /// rows are the timeline's, one per rule, each a success. March is approved through the suite's
+    /// R26 fake (<see cref="TestFixtures.AlwaysApprovedPriorPeriods"/>, injected in
+    /// <see cref="BuildPcs"/>).
+    ///
+    /// <para>
+    /// <b>Red conditions</b> (docs/AGENTS.md § "RED evidence"). MB-7 (TASK-14528: the evaluated-set
+    /// filter disabled, so the planner sees NORM_CHECK_WEEKLY as AlignedWindow again): the month is
+    /// refused with <see cref="PlannerInvariantViolation"/> and the call throws before any assertion.
+    /// MB-3 (the Unit mutation of the per-plan lane covering only the first EMPLOYED segment,
+    /// <c>PeriodCalculationService.DeriveEvaluationInputsAsync</c>'s pieces): no piece starts on
+    /// 16 Apr, so the piece assertions trip.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task MidMonthFractionChange_LiveRuleSet_RefusesAsRegisteredLimitation()
+    public async Task MidMonthFractionChange_LiveRuleSet_Calculates_TimelineSpansBothSegments() // S145 B2: was ..._RefusesAsRegisteredLimitation
     {
         const string employeeId = "EMP-S137-LIVE-FRACTION";
         var changeDate = new DateOnly(2026, 4, 16);
+        var lastOfFirstPart = new DateOnly(2026, 4, 15);
         await SeedEmployeeAsync(employeeId, partTimeFraction: 1.0m);
         await SupersedeFractionAsync(employeeId, newFraction: 0.800m, effectiveFrom: changeDate);
         // Window stays unbounded (both NULL) — every segment EMPLOYED; the split is the
@@ -243,25 +258,45 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         // in-memory IRecordedHoursReader instead of through the call.
         var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(entries));
 
-        var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
-            RunShimAsync(pcs, employeeId));
+        // S145 B2: this call used to throw PlannerInvariantViolation naming NORM_CHECK_WEEKLY (R-61).
+        var outcome = await RunShimAsync(pcs, employeeId);
 
-        // The refusal happened at plan time — nothing was evaluated, nothing exported.
-        Assert.Empty(engine.Calls);
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage); // S145 B2
+        Assert.Equal(PeriodCalculationService.AuditState.Complete, outcome.AuditState); // S145 B2
+        Assert.All(outcome.Result.RuleResults, r => Assert.True(r.Success, r.ErrorMessage)); // S145 B2
 
-        // Message contract: rule id, count, cause — and the rule a reader learns from it.
-        Assert.Contains($"'{NormCheckRule.WeeklyRuleId}'", ex.Message); // S145 B1: was OvertimeRule.RuleId (R-61)
-        Assert.Contains("AlignedWindow", ex.Message);
-        Assert.Contains("2 EMPLOYED segments", ex.Message);
-        Assert.Contains("EmployeeProfileChange", ex.Message);
-        Assert.Contains("employment edge alone", ex.Message);
+        // S145 B2: ONE timeline call spans both segments — its pieces end on 15 Apr and start on 16 Apr,
+        // and the last piece is the second part, ending with the period.
+        var timeline = Assert.Single(engine.TimelineCalls);
+        Assert.Equal(Apr01, timeline.PeriodStart);
+        Assert.Equal(Apr30, timeline.PeriodEnd);
+        Assert.Contains(timeline.Pieces!, p => p.To == lastOfFirstPart);
+        Assert.Contains(timeline.Pieces!, p => p.From == changeDate);
+        Assert.Equal(changeDate, timeline.Pieces![^1].From);
+        Assert.Equal(Apr30, timeline.Pieces[^1].To);
 
-        // ADR-040 D7: no segment date in the message (the change date would reveal the
-        // profile row's effective date; only the period — the caller's own input — appears).
-        Assert.DoesNotContain(changeDate.ToString(), ex.Message);
-        Assert.DoesNotContain(changeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), ex.Message);
-        Assert.DoesNotContain(changeDate.AddDays(-1).ToString(), ex.Message);
-        Assert.DoesNotContain(changeDate.AddDays(-1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), ex.Message);
+        // S145 B2: no per-segment call for the three timeline rules — they run only in the timeline call.
+        Assert.DoesNotContain(engine.PerSegmentCalls, c => c.RuleId == OvertimeRule.RuleId);
+        Assert.DoesNotContain(engine.PerSegmentCalls, c => c.RuleId == "NORM_CHECK_37H");
+        Assert.DoesNotContain(engine.PerSegmentCalls, c => c.RuleId == "FLEX_BALANCE");
+
+        // S145 B2: the merged rows are the timeline's one row each (a SinglePlanEvaluation rule), all successes.
+        var overtime = Assert.Single(outcome.Result.RuleResults, r => r.RuleId == OvertimeRule.RuleId);
+        Assert.True(overtime.Success, overtime.ErrorMessage);
+        Assert.Single(outcome.Result.RuleResults, r => r.RuleId == "NORM_CHECK_37H");
+        Assert.Single(outcome.Result.RuleResults, r => r.RuleId == "FLEX_BALANCE");
+
+        // S145 B2: every weekday's hours export once (the timeline's lines, split by date into the two parts).
+        var normalLines = outcome.Result.ExportLines.Where(l => l.SourceTimeType == "NORMAL_HOURS").ToList();
+        Assert.Equal(entries.Count, normalLines.Count);
+
+        // S145 B2: the persisted manifest holds two EMPLOYED segments and names the profile change.
+        var manifest = await LoadManifestAsync(outcome.ManifestId);
+        Assert.Contains("EmployeeProfileChange", manifest.BoundaryCauseSummary);
+        Assert.Equal(2, manifest.Segments.Count);
+        Assert.All(manifest.Segments, seg => Assert.False(seg.TryGetProperty("employmentStatus", out _)));
+        Assert.Equal("2026-04-15", manifest.Segments[0].GetProperty("endDate").GetString());
+        Assert.Equal("2026-04-16", manifest.Segments[1].GetProperty("startDate").GetString());
     }
 
     // ─── Seeding ─────────────────────────────────────────────────────────
@@ -427,7 +462,8 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
             DateOnly PeriodStart,
             DateOnly PeriodEnd,
             IReadOnlyList<(DateOnly From, DateOnly To)>? Pieces = null,
-            IReadOnlyList<DateOnly>? EntryDates = null);
+            IReadOnlyList<DateOnly>? EntryDates = null,
+            string? RuleId = null); // S145 B2: the per-segment calls record their rule id (LB1)
 
         public IReadOnlyList<Call> TimelineCalls =>
             Calls.Where(c => c.Path.EndsWith("/api/rules/evaluate-timeline", StringComparison.Ordinal)).ToList();
@@ -468,7 +504,8 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
                 EntryDates: isTimeline
                     ? root.GetProperty("entries").EnumerateArray()
                         .Select(e => DateOnly.Parse(e.GetProperty("date").GetString()!, CultureInfo.InvariantCulture)).ToList()
-                    : null);
+                    : null,
+                RuleId: root.TryGetProperty("ruleId", out var callRuleId) ? callRuleId.GetString() : null);
             lock (_calls) _calls.Add(call);
 
             // S145 F1: the plan's one timeline call is answered with a COMPLETE timeline response (the

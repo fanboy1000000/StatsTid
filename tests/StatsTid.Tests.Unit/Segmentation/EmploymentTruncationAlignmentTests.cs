@@ -22,9 +22,12 @@ namespace StatsTid.Tests.Unit.Segmentation;
 ///
 /// <para>
 /// Every pin here uses the LIVE classification set (<c>new RuleRegistry().GetAll()</c> — the
-/// same set the payroll host reads over HTTP), so the pins are faithful to production wiring:
+/// same set the payroll host reads over HTTP), so the pins state the planner's contract for a caller that passes the whole live set:
 /// the live set has three AlignedWindow rules (NORM_CHECK_WEEKLY first in registration
 /// order) and no Reject rule; OVERTIME_CALC is TimelineAware since S145 Stage B. Where a Reject rule is needed one is constructed explicitly.
+/// Since S145 B2 payroll passes the planner only the classifications of the rules it evaluates; payroll's own
+/// split months are pinned through that wiring in <c>EmploymentWindowLiveRulesetTests</c> and
+/// <c>RecalcBlockedLiveRulesetTests</c> (Regression).
 /// </para>
 /// </summary>
 public sealed class EmploymentTruncationAlignmentTests
@@ -259,8 +262,9 @@ public sealed class EmploymentTruncationAlignmentTests
 
     /// <summary>A leaver (last day 03-20) whose part-time fraction changed on 03-10 WHILE
     /// employed: EMPLOYED [03-01..03-09], EMPLOYED [03-10..03-20], NOT_EMPLOYED from 03-21.
-    /// Two EMPLOYED segments ⇒ NORM_CHECK_WEEKLY would run twice ⇒ refuse. This is the
-    /// registered live-set limitation (QUAL-149 / ADR-016 D4 follow-up).</summary>
+    /// Two EMPLOYED segments ⇒ NORM_CHECK_WEEKLY would run twice ⇒ refuse. Handed the WHOLE live
+    /// set, the planner still refuses (ADR-016 D4); payroll no longer hands it that set (since S145 B2 it
+    /// passes only the rules it evaluates), so payroll pays this month part by part (QUAL-149 built).</summary>
     [Fact]
     public void LeaverWithProfileChangeWhileEmployed_LiveSet_Refuses_MessageCarriesCountAndCauses()
     {

@@ -147,7 +147,9 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         _db = new DbConnectionFactory(cs);
         await TestFixtures.SeedWageTypeMappingsAsync(_db);
 
-        // The LIVE rule set — three AlignedWindow rules since S145 B1 — is what refuses a split month (H9).
+        // The LIVE rule set (the registry's full classification set; three AlignedWindow rules). S145 B2: payroll
+        // hands the planner only the six rules it evaluates, so the planner no longer refuses a split month; an
+        // interior mid-week agreement change is refused by the week check instead (IB2, formerly H9).
         _factory = new PayrollHostFactory(cs, new RuleRegistry().GetAll());
     }
 
@@ -438,25 +440,35 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// H9. A SPLIT month with an unapproved earlier month: September 2026 with an agreement-code
-    /// change on Wednesday 16 September (an interior boundary the live rule set cannot evaluate in
-    /// two pieces) and August with no approval row → the planner's <b>422</b> comes first: the S144
-    /// body, <c>ruleId</c> present, two EMPLOYED segments, cause <c>AgreementCodeChange</c>, no date
-    /// and no employee id — NOT the 409.
+    /// H9 / <b>IB2</b>. <b>S145 B2: was <c>CalculateAndExport_SplitMonth_PriorNotApproved_AnswersPlanner422First</c>.</b>
+    /// An INTERIOR mid-week agreement change with an unapproved earlier month: September 2026 with an
+    /// agreement-code change HK → AC on Wednesday 16 September, September APPROVED and August with no approval
+    /// row → the week check's <b>422</b> comes first (<c>kind = payroll-recalc-blocked</c>,
+    /// <c>reason = agreement-change-mid-week</c>, cause <c>AgreementCodeChange</c>, no <c>ruleId</c>, no date,
+    /// no employee id) — NOT the 409. The seed is unchanged; what moved is who answers. Before Stage B the
+    /// planner refused this month first (the live rule set could not be evaluated in two pieces); since Stage B
+    /// payroll hands the planner only the rules it evaluates, so the planner passes the split month on and the
+    /// week check, which runs over every settled week, answers an interior Wednesday change. This is the N1
+    /// order pin (planner 422 → week-check 422 → prior-month 409) for an interior change.
     ///
     /// <para>
-    /// <i>Plain language:</i> the planner refuses a month whose own data cannot be calculated at all.
-    /// Approving August would not change that, so telling the operator to approve August first would
-    /// send them on a detour. The month's own problem is reported first.
+    /// <i>Plain language:</i> a week with two different agreements cannot be judged, whether the change is on
+    /// the 1st or in the middle of the month. Approving August would not change that, so telling the operator to
+    /// approve August first would send them on a detour. The month's own problem is reported first.
     /// </para>
     ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified): this fact passes today (no
-    /// prior-month check exists), so it carries no pre-implementation RED. Mutation MD-24 (the
-    /// prior-month check runs before the per-plan lane's call to <c>BuildPlanForLegacyCallersAsync</c>,
-    /// i.e. before the planner) → <b>409</b> instead of 422; <c>Assert.True(status == 422)</c> trips.
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-4 (TASK-14528: the week check
+    /// ignores interior dates, EB-1): no week refusal, the prior-month check answers <b>409</b> (August has no
+    /// approval row), so the 422 assertion trips. MB-7 (the evaluated-set filter disabled, EB-2): the planner
+    /// refuses first with ITS body (a <c>ruleId</c> and no <c>reason</c>), so <c>AssertWeekCheckRefusal</c>'s
+    /// <c>reason</c> assertion trips (C-B4). Stage A's mutation MD-24 (the prior-month check runs before the
+    /// per-plan lane's call to <c>BuildPlanForLegacyCallersAsync</c>, i.e. before planning) → <b>409</b> instead
+    /// of 422; <c>Assert.True(status == 422)</c> trips (re-observed at the close, TASK-14528).
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task CalculateAndExport_SplitMonth_PriorNotApproved_AnswersPlanner422First()
+    public async Task CalculateAndExport_InteriorAgreementChangeWed16Sep_AugustNotApproved_AnswersWeekCheck422First() // S145 B2: was CalculateAndExport_SplitMonth_PriorNotApproved_AnswersPlanner422First
     {
         const string employeeId = "EMP-S145-H9";
         await SeedEmployeeAsync(employeeId);
@@ -468,7 +480,8 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
             CalculateBody(employeeId, Sep01, Sep30));
 
         Assert.True(status == HttpStatusCode.UnprocessableEntity, $"expected 422, got {(int)status}: {json}");
-        AssertPlannerRefusal(json, employeeId, Sep01, Sep30, Sep16);
+        // S145 B2: the week check's variant (reason agreement-change-mid-week, no ruleId), not the planner's body.
+        AssertWeekCheckRefusal(json, employeeId, Sep01, Sep30, Sep16);
 
         Assert.Equal(0, await CountExportRecordsAsync(employeeId));
         Assert.Equal(0, await CountManifestsAsync(employeeId));
@@ -713,29 +726,6 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
             new[] { priorStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), priorEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) },
             datesInBody);
         Assert.DoesNotContain(employeeId, json);
-    }
-
-    /// <summary>The planner's S144 split refusal, as H9 expects it: <c>ruleId</c> present, two
-    /// EMPLOYED segments, no date (period start/end or the change date, in any rendering) and no
-    /// employee id — and NOT the week check's variant.</summary>
-    private static void AssertPlannerRefusal(
-        string json, string employeeId, DateOnly periodStart, DateOnly periodEnd, DateOnly changeDate)
-    {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        Assert.Equal(RecalcBlockedKind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.Equal(2, root.GetProperty("employedSegmentCount").GetInt32());
-        Assert.Equal(new[] { "AgreementCodeChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("ruleId").GetString()),
-            "the planner's refusal names the whole-period rule that refused the split");
-        Assert.False(
-            root.TryGetProperty("reason", out var reason) && reason.GetString() == MidWeekReason,
-            "the week check's variant must not answer a month the planner refuses");
-
-        AssertNoDatesOrEmployee(json, employeeId, periodStart, periodEnd, changeDate);
     }
 
     /// <summary>The week check's 422 variant (A5, Q5 (c)): <c>kind</c> payroll-recalc-blocked,

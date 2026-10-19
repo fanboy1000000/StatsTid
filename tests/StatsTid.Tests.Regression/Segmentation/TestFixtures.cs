@@ -133,7 +133,11 @@ internal static class TestFixtures
     /// <summary>
     /// The five canonical cell-test rule shapes, registered with the merge strategies
     /// that <see cref="PeriodCalculationService"/> uses to dispatch per-rule merges.
-    /// Matches the production registry's coverage of the 5 populated cells.
+    /// A hand-built FIXTURE set, not production's classification (S145 B2, R-63): it carries payroll's own
+    /// rule ids and covers the 5 populated cells, but production's <c>OVERTIME_CALC</c> has been
+    /// <c>TimelineAware</c> since S145 B1 (as are <c>NORM_CHECK_37H</c> and <c>FLEX_BALANCE</c>), while this set
+    /// keeps <c>OVERTIME_CALC</c> as <c>AlignedWindow</c> (so the planner's split refusal stays reachable and
+    /// payroll's evaluated-set filter keeps it) and <c>FLEX_BALANCE</c> as Mergeable/Custom.
     /// </summary>
     public static readonly RuleClassification[] RuleSet =
     {

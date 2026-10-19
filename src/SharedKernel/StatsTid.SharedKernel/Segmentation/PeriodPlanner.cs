@@ -124,9 +124,12 @@ public static class PeriodPlanner
         //     segment 0 by introducing segment 1. This makes BoundaryCause act as
         //     "what will introduce the NEXT split"; the final segment carries the cause of
         //     the boundary that started it (boundary[N-1]).
-        //   - This convention is uniform: every segment's BoundaryCause names the
-        //     transition at its leading edge (segment 0's leading edge is the period start
-        //     itself, but absent a real boundary we use the cause of the first split).
+        //   - So every segment except the last names the boundary at its TRAILING edge (the
+        //     one that ends it: segment i carries boundary[i]), and the last names the
+        //     boundary that started it. Read in order, the segments' causes are the
+        //     boundaries' causes in order with the last one repeated. (Corrected S145 B2,
+        //     5a NOTE N-3: this said "every segment names its leading edge", which the code
+        //     below never did for segment 0 or a middle segment.)
         //
         // Each range is typed EMPLOYED / NOT_EMPLOYED here (ADR-040 D5) because the D4
         // alignment policy below keys on the EMPLOYED count — typing must precede it.
@@ -316,11 +319,16 @@ public static class PeriodPlanner
     /// </para>
     ///
     /// <para>
-    /// <b>What still refuses.</b> Two or more EMPLOYED segments: a profile change (position /
-    /// part-time fraction) while employed, or two employment spells inside one period. In the
-    /// live rule set that refusal is the registered ADR-016 D4 follow-up (QUAL-149): the
-    /// norm/overtime rules refuse a profile-change split until they are reclassified with a
-    /// pro-rating merger.
+    /// <b>What still refuses.</b> Two or more EMPLOYED segments (a profile change — position /
+    /// part-time fraction — or an agreement change while employed, or two employment spells inside
+    /// one period) when the rule set handed in holds a Reject or AlignedWindow rule. Since S145
+    /// Stage B that is no longer payroll's case (QUAL-149 built): the rules payroll evaluates over the
+    /// whole month are <see cref="SplitBehavior.TimelineAware"/>, evaluated once across every part and
+    /// never split, and payroll hands the planner only the classifications of the rules it evaluates, so
+    /// the calculating routes pay such a month part by part (and the raw export routes refuse it by their
+    /// own reason, after planning). The refusal is now reachable only through a rule set that hands the
+    /// planner an AlignedWindow or Reject rule — the Rule Engine's whole registry (the weekly norm and the
+    /// two rest-period rules) or a caller's fixture set.
     /// </para>
     ///
     /// <para>

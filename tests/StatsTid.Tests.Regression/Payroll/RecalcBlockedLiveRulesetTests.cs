@@ -16,24 +16,28 @@ using StatsTid.Tests.Regression.TestSupport;
 namespace StatsTid.Tests.Regression.Payroll;
 
 /// <summary>
-/// S144 / TASK-14405 (TASK-14403's definition of done, service level) — a mid-month change of an
-/// employee's AGREEMENT CODE is now a segment boundary the payroll service can SEE, so under the
-/// LIVE rule set the month is REFUSED instead of being silently paid under one agreement.
+/// S144 / TASK-14405 (TASK-14403's definition of done, service level), re-expected at S145 Stage B (TASK-14522-T,
+/// refinement B2) — a mid-month change of an employee's AGREEMENT CODE is a segment boundary the payroll
+/// service can SEE, and, since Stage B, the LIVE rule set PAYS such a month part by part instead of refusing it.
 ///
 /// <para>
-/// <b>The story, in plain language.</b> An employee is employed all of March 2026. On 16 March
+/// <b>The story, in plain language.</b> An employee is employed all of March 2026. On Monday 16 March
 /// their agreement code changes (say from HK to AC). Before S144 the calculation never looked at
 /// <c>user_agreement_codes</c> for boundaries, so March was one segment under one agreement and
-/// payroll got wrong lines for half the month — with no warning. Now the service hydrates the
-/// agreement-code dates into the planner; the live rule set cannot evaluate its whole-window
-/// rules in two pieces, so the calculation THROWS a structured split refusal naming
-/// <c>AgreementCodeChange</c>, and — because the correction service plans BEFORE it opens its
-/// transaction — nothing is written: the export baseline is untouched, no correction event is
-/// queued, no manifest is persisted.
+/// payroll got wrong lines for half the month — with no warning. S144 made the service hydrate the
+/// agreement-code dates into the planner; the live rule set then could not evaluate its whole-window
+/// rules in two pieces, so the calculation THREW a structured split refusal naming
+/// <c>AgreementCodeChange</c>, and nothing was written. S145 Stage B lifted that refusal (QUAL-149):
+/// payroll now hands the planner only the six rules it runs, and the three of them that read a whole
+/// week or period are timeline-aware, so the month plans into two parts and every line is mapped under
+/// the wage-type codes of the part it falls in — 1–15 March under HK's mapping, 16–31 March under AC's
+/// (QUAL-150). The correction commits, and its audit event links the new manifest, which carries both parts.
+/// (An agreement change in the MIDDLE of a week, say on a Wednesday, still refuses — the week check, pinned
+/// in the host suites.)
 /// </para>
 ///
 /// <para>
-/// <b>Harness contract (M-14).</b> The three refusal facts and the straddle-safe fact build
+/// <b>Harness contract (M-14).</b> The three facts and the straddle-safe fact build
 /// <see cref="PeriodCalculationService"/> with the NEW optional constructor parameter
 /// <c>userAgreementCodeRepo</c> set to a real <see cref="UserAgreementCodeRepository"/> over the
 /// harness factory. Without it the hydration is skipped regardless of the production code, the
@@ -42,9 +46,15 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// </para>
 ///
 /// <para>
+/// <b>Distinct codes (S145 B2).</b> The successor mapping seeds a distinct, test-only wage-type code
+/// (<see cref="AcNormalHoursWageType"/>) for AC's NORMAL_HOURS, so the two parts' codes differ and a
+/// per-part key is observable in the exported lines.
+/// </para>
+///
+/// <para>
 /// Live set = <c>new RuleRegistry().GetAll()</c> (three AlignedWindow rules, NORM_CHECK_WEEKLY first since S145 B1;
-/// a straddle-safe set would refuse nothing). All facts are Docker-gated: CI-verified, never
-/// locally green.
+/// since S145 B2 payroll hands the planner only the six rules it evaluates, so none of the three reaches planning).
+/// All facts are Docker-gated: CI-verified, never locally green.
 /// </para>
 /// </summary>
 [Trait("Category", "Docker")]
@@ -54,6 +64,11 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
     private const string InitialAgreementCode = "HK";
     private const string SuccessorAgreementCode = "AC";
     private const string OkVersion = "OK24";
+
+    /// <summary>S145 B2: a distinct, test-only wage-type code for AC's NORMAL_HOURS (HK's is SLS_0110), so the
+    /// two parts of a split month map under different, observable codes.</summary>
+    private const string AcNormalHoursWageType = "SLS_TEST_AC_0110";
+    private const string HkNormalHoursWageType = "SLS_0110";
 
     // March 2026 sits entirely on the OK24 side of the OK24→OK26 transition (2026-04-01), so the
     // ONLY interior boundary in every fact below is the one the fact seeds. 16 March is a Monday.
@@ -83,80 +98,123 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // 7a. /recalculate path, live set, agreement-code change → refusal, nothing written
+    // 7a. /recalculate path, live set, Monday agreement-code change → recalculates per part
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// (7a) The correction service (<c>RecalculateAsync</c>, as <c>/api/payroll/recalculate</c>
-    /// drives it) refuses a month with a mid-month agreement-code change: a
-    /// <see cref="PlannerInvariantViolation"/> that is a split refusal naming
-    /// <see cref="BoundaryCause.AgreementCodeChange"/>. The employee is employed all month with NO
-    /// profile change and no employment edge, so the agreement-code date is the only interior
-    /// boundary. Nothing is written: <c>payroll_export_records.current_effective_lines</c> is
-    /// byte-for-byte unchanged, no <c>RetroactiveCorrectionRequested</c> event, and no new
-    /// <c>segment_manifests</c> row (the count stays at the ONE row the original export wrote).
+    /// <b>S145 B2: was <c>Recalculate_MidMonthAgreementCodeChange_LiveSet_RefusesWithAgreementCodeCause_WritesNothing</c></b>
+    /// (S144 refused the month; Stage B pays it). (7a) The correction service (<c>RecalculateAsync</c>, as
+    /// <c>/api/payroll/recalculate</c> drives it) recalculates a month with an agreement-code change on
+    /// Monday 16 March: the correction COMMITS; the lines dated 1–15 March map under HK's mapping
+    /// (<see cref="HkNormalHoursWageType"/>) and those dated 16–31 March under AC's
+    /// (<see cref="AcNormalHoursWageType"/>, a distinct test-only code). One <c>RetroactiveCorrectionRequested</c>
+    /// event is written and it LINKS the new manifest (R-57): a second manifest, with two EMPLOYED segments and
+    /// <c>AgreementCodeChange</c>, whose frozen pieces hold both agreements, HK then AC. March 2026 opens on a
+    /// Sunday, so its opening week starts on Mon 23 Feb and the frozen pieces ALSO hold the context piece for
+    /// 23–28 Feb (HK), which comes first: three pieces, the context piece first, then 1–15 March (HK) and
+    /// 16–31 March (AC).
     ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified): mutation M-14 —
-    /// <c>PeriodCalculationService.BuildPlanForLegacyCallersAsync</c> skips the
-    /// <c>AgreementCodeEffectiveDates</c> hydration (passes <c>null</c>). The planner sees one
-    /// segment, no refusal is thrown, the correction writes lines, and
-    /// <c>Assert.ThrowsAsync&lt;PlannerInvariantViolation&gt;</c> trips. The PCS in this fact is
-    /// built WITH <c>userAgreementCodeRepo</c>, so the mutation (not the harness) is what is
-    /// detected.
+    /// <para>
+    /// The event's <c>AgreementCode</c> names the FIRST part of a split month (HK), by design (R-11 / R-12): the
+    /// one-line summary on the audit event names the first agreement only, and an auditor follows the event's
+    /// manifest id to see both parts. Adding list fields would change the event schema, which is outside
+    /// Stage B, so the gap is registered instead (QUAL-211).
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-2 (TASK-14528: every EMPLOYED
+    /// segment hydrated with the FIRST EMPLOYED segment's wage-type key): the 16–31 March lines map under HK's
+    /// code, so the AC-code assertion trips. MB-7 (the evaluated-set filter disabled): the planner sees
+    /// NORM_CHECK_WEEKLY as AlignedWindow again and <c>RecalculateAsync</c> throws
+    /// <see cref="PlannerInvariantViolation"/> before any assertion. Mutation M-14 (hydration skipped) leaves one
+    /// segment, so the two-segment and AC-code assertions trip.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Recalculate_MidMonthAgreementCodeChange_LiveSet_RefusesWithAgreementCodeCause_WritesNothing()
+    public async Task Recalculate_MondayAgreementCodeChange_LiveSet_RecalculatesWithPerSegmentCodes() // S145 B2: was Recalculate_MidMonthAgreementCodeChange_LiveSet_RefusesWithAgreementCodeCause_WritesNothing
     {
         const string employeeId = "EMP-S144-LIVE-AGR-RECALC";
         await SeedEmployeeAsync(employeeId);
+        // S145 B2: AC's NORMAL_HOURS maps to a distinct test-only code, so the per-part key is observable.
+        await SeedSuccessorWageTypeMappingAsync();
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31);
 
         // The ORIGINAL export happens BEFORE the agreement change exists: one segment, succeeds.
         var first = await RunShimAsync(BuildPcs(HoursOf(entries)), employeeId);
         Assert.True(first.Result.Success, first.Result.ErrorMessage);
         await PersistFirstExportRecordAsync(employeeId, first.Result.ExportLines);
-        var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId);
         Assert.Equal(1, await CountManifestsAsync(employeeId));
 
-        // HR records an agreement change effective mid-March, afterwards.
+        // HR records an agreement change effective Monday 16 March, afterwards.
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
 
         var service = BuildCorrectionService(BuildPcs(HoursOf(entries)));
-        var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
-            service.RecalculateAsync(
-                Profile(employeeId),
-                periodStart: Mar01, periodEnd: Mar31, previousFlexBalance: 0m,
-                reason: "S144 pin — agreement change recorded after export", actorId: "hr-s144"));
+        var result = await service.RecalculateAsync(
+            Profile(employeeId),
+            periodStart: Mar01, periodEnd: Mar31, previousFlexBalance: 0m,
+            reason: "S145 B2 pin — agreement change recorded after export", actorId: "hr-s145");
 
-        Assert.True(ex.IsSplitRefusal);
-        Assert.Equal(2, ex.EmployedSegmentCount);
-        Assert.Equal(new[] { BoundaryCause.AgreementCodeChange }, ex.InteriorBoundaryCauses);
+        // S145 B2: the correction commits.
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Equal(1, await CountOutboxAsync("RetroactiveCorrectionRequested", employeeId));
+        Assert.Equal(2, await CountManifestsAsync(employeeId));
 
-        // Nothing written.
-        Assert.Equal(linesBefore, await ReadCurrentEffectiveLinesAsync(employeeId));
-        Assert.Equal(0, await CountOutboxAsync("RetroactiveCorrectionRequested", employeeId));
-        Assert.Equal(1, await CountManifestsAsync(employeeId));
+        // S145 B2: the exported lines map per part — 1–15 March under HK's code, 16–31 March under AC's.
+        var linesAfterJson = await ReadCurrentEffectiveLinesAsync(employeeId);
+        var lines = PayrollExportManifest.Deserialize(linesAfterJson);
+        Assert.Equal(entries.Count, lines.Count);
+        var hkLines = lines.Where(l => l.PeriodStart == Mar01).ToList();
+        var acLines = lines.Where(l => l.PeriodStart == Mar16).ToList();
+        Assert.Equal(entries.Count, hkLines.Count + acLines.Count);
+        Assert.Equal(entries.Count(e => e.Date < Mar16), hkLines.Count);
+        Assert.Equal(entries.Count(e => e.Date >= Mar16), acLines.Count);
+        Assert.All(hkLines, l => Assert.Equal(HkNormalHoursWageType, l.WageType));
+        Assert.All(hkLines, l => Assert.Equal(Mar16.AddDays(-1), l.PeriodEnd));
+        Assert.All(acLines, l => Assert.Equal(AcNormalHoursWageType, l.WageType));
+        Assert.All(acLines, l => Assert.Equal(Mar31, l.PeriodEnd));
+
+        // S145 B2 (R-57): the event links the NEW manifest (not the first export's), and that manifest carries both parts.
+        using var payload = System.Text.Json.JsonDocument.Parse(await ReadCorrectionEventPayloadAsync(employeeId));
+        var linked = payload.RootElement.GetProperty("manifestId").GetGuid();
+        Assert.NotEqual(Guid.Empty, linked);
+        Assert.NotEqual(first.ManifestId, linked);
+        // The summary label names the FIRST part of a split month (R-11 / R-12, QUAL-211).
+        Assert.Equal(InitialAgreementCode, payload.RootElement.GetProperty("agreementCode").GetString());
+
+        var manifest = await LoadManifestAsync(linked);
+        Assert.Equal(2, manifest.Segments.Count);
+        Assert.All(manifest.Segments, s => Assert.False(s.TryGetProperty("employmentStatus", out _)));
+        Assert.Contains("AgreementCodeChange", manifest.BoundaryCauseSummary);
+
+        // Three frozen pieces: the context piece (23–28 Feb, HK) first, then the two in-period parts, HK then AC.
+        var pieces = await ReadFrozenPiecesAsync(linked);
+        Assert.Equal(3, pieces.Count);
+        Assert.Equal((new DateOnly(2026, 2, 23), new DateOnly(2026, 2, 28), InitialAgreementCode), pieces[0]);
+        Assert.Equal((Mar01, Mar16.AddDays(-1), InitialAgreementCode), pieces[1]);
+        Assert.Equal((Mar16, Mar31, SuccessorAgreementCode), pieces[2]);
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // 7b. The S137 behaviour, unchanged: a mid-month PROFILE change still refuses
+    // 7b. A mid-month PROFILE change recalculates too (S145 B2)
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// (7b) NO-REGRESSION pin of S137 behaviour — a mid-month <c>employee_profiles</c> change
-    /// (a part-time-fraction change while employed all month) still refuses through
-    /// <c>RecalculateAsync</c>, now as a structured split refusal naming
-    /// <see cref="BoundaryCause.EmployeeProfileChange"/>, and writes nothing. It is the control
-    /// that shows S144's new source did not change or shadow the existing one.
+    /// <b>S145 B2: was <c>Recalculate_MidMonthProfileChange_LiveSet_StillRefuses_NoRegression</c></b> (the S137
+    /// no-regression pin of the refusal, retired with it). (7b) A mid-month <c>employee_profiles</c> change
+    /// (a part-time-fraction change while employed all month) recalculates through <c>RecalculateAsync</c>:
+    /// the correction COMMITS (one <c>RetroactiveCorrectionRequested</c> event), and the new manifest, which
+    /// the event links, holds two EMPLOYED segments and <c>EmployeeProfileChange</c>. A fraction change keeps
+    /// the wage-type key, so there is no code assertion here (the code facts are 7a and 7c).
     ///
-    /// Red conditions: NONE — this fact is GREEN before and after S144 (the planner has refused a
-    /// profile-change split since S137), so it has no RED and no mutation. It exists so that a
-    /// change to the tie-break or to the hydration cannot silently alter the profile case. (It does
-    /// use the S144 members <c>IsSplitRefusal</c> / <c>InteriorBoundaryCauses</c>, so it compiles
-    /// only after TASK-14402 merges.) Docker-gated: CI-verified.
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated: CI-verified). MB-7 (the evaluated-set filter disabled): the planner
+    /// refuses the split again, <c>RecalculateAsync</c> throws <see cref="PlannerInvariantViolation"/> before the
+    /// first assertion. MB-3 (the Unit mutation of the per-plan lane covering only the first EMPLOYED segment): the
+    /// frozen pieces lack the second part, so the piece assertion trips.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Recalculate_MidMonthProfileChange_LiveSet_StillRefuses_NoRegression()
+    public async Task Recalculate_MidMonthProfileChange_LiveSet_Recalculates() // S145 B2: was Recalculate_MidMonthProfileChange_LiveSet_StillRefuses_NoRegression
     {
         const string employeeId = "EMP-S144-LIVE-PROFILE-RECALC";
         await SeedEmployeeAsync(employeeId);
@@ -165,58 +223,80 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         var first = await RunShimAsync(BuildPcs(HoursOf(entries)), employeeId);
         Assert.True(first.Result.Success, first.Result.ErrorMessage);
         await PersistFirstExportRecordAsync(employeeId, first.Result.ExportLines);
-        var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId);
         Assert.Equal(1, await CountManifestsAsync(employeeId));
 
         await SupersedeFractionAsync(employeeId, newFraction: 0.800m, effectiveFrom: Mar16);
 
         var service = BuildCorrectionService(BuildPcs(HoursOf(entries)));
-        var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
-            service.RecalculateAsync(
-                Profile(employeeId),
-                periodStart: Mar01, periodEnd: Mar31, previousFlexBalance: 0m,
-                reason: "S144 no-regression pin — profile change", actorId: "hr-s144"));
+        var result = await service.RecalculateAsync(
+            Profile(employeeId),
+            periodStart: Mar01, periodEnd: Mar31, previousFlexBalance: 0m,
+            reason: "S145 B2 pin — profile change recorded after export", actorId: "hr-s145");
 
-        Assert.True(ex.IsSplitRefusal);
-        Assert.Equal(2, ex.EmployedSegmentCount);
-        Assert.Equal(new[] { BoundaryCause.EmployeeProfileChange }, ex.InteriorBoundaryCauses);
+        // S145 B2: the correction commits (it used to refuse with a split refusal and write nothing).
+        Assert.True(result.Success, result.ErrorMessage);
+        Assert.Equal(1, await CountOutboxAsync("RetroactiveCorrectionRequested", employeeId));
+        Assert.Equal(2, await CountManifestsAsync(employeeId));
 
-        Assert.Equal(linesBefore, await ReadCurrentEffectiveLinesAsync(employeeId));
-        Assert.Equal(0, await CountOutboxAsync("RetroactiveCorrectionRequested", employeeId));
-        Assert.Equal(1, await CountManifestsAsync(employeeId));
+        using var payload = System.Text.Json.JsonDocument.Parse(await ReadCorrectionEventPayloadAsync(employeeId));
+        var linked = payload.RootElement.GetProperty("manifestId").GetGuid();
+        Assert.NotEqual(first.ManifestId, linked);
+
+        // S145 B2: two EMPLOYED segments, and the cause is the profile change.
+        var manifest = await LoadManifestAsync(linked);
+        Assert.Equal(2, manifest.Segments.Count);
+        Assert.All(manifest.Segments, s => Assert.False(s.TryGetProperty("employmentStatus", out _)));
+        Assert.Contains("EmployeeProfileChange", manifest.BoundaryCauseSummary);
+        var pieces = await ReadFrozenPiecesAsync(linked);
+        Assert.Equal((Mar16, Mar31, InitialAgreementCode), pieces[^1]);
+        Assert.Equal((Mar01, Mar16.AddDays(-1), InitialAgreementCode), pieces[^2]);
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // 7c. The planless /calculate-and-export path refuses too
+    // 7c. The planless /calculate-and-export path pays the split month too
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// (7c) The planless <c>CalculateWithOutcomeAsync</c> (what <c>/api/payroll/calculate-and-export</c>
-    /// calls) on the agreement-code case, live set: it THROWS the split refusal naming
-    /// <see cref="BoundaryCause.AgreementCodeChange"/>, and no manifest is persisted for the
-    /// employee — the export never starts on a month that cannot be paid correctly.
+    /// <b>S145 B2: was <c>CalculateWithOutcome_Planless_MidMonthAgreementCodeChange_LiveSet_Refuses_NoManifest</c>.</b>
+    /// (7c) The planless <c>CalculateWithOutcomeAsync</c> (what <c>/api/payroll/calculate-and-export</c> calls)
+    /// on the Monday agreement-code case, live set: the outcome SUCCEEDS; its manifest records
+    /// <c>AgreementCodeChange</c> and two EMPLOYED segments; and the export lines map per part, as 7a
+    /// (1–15 March under HK's code, 16–31 March under AC's distinct test-only code).
     ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified): mutation M-14 — the
-    /// hydration in <c>BuildPlanForLegacyCallersAsync</c> is skipped (both the shim and this
-    /// planless overload build their plan through it). The month calculates as one segment,
-    /// <c>Assert.ThrowsAsync&lt;PlannerInvariantViolation&gt;</c> trips (and a manifest would be
-    /// written). The PCS is built WITH <c>userAgreementCodeRepo</c>.
+    /// <para>
+    /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-2 (every EMPLOYED segment hydrated
+    /// with the first one's key): the 16–31 March lines map under HK's code, tripping the AC-code assertion. MB-7
+    /// (the evaluated-set filter disabled): the call throws <see cref="PlannerInvariantViolation"/> before any
+    /// assertion. Mutation M-14 (hydration skipped): one segment, so the two-segment assertion trips.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task CalculateWithOutcome_Planless_MidMonthAgreementCodeChange_LiveSet_Refuses_NoManifest()
+    public async Task CalculateWithOutcome_Planless_MondayAgreementCodeChange_LiveSet_CalculatesWithPerSegmentCodes() // S145 B2: was CalculateWithOutcome_Planless_MidMonthAgreementCodeChange_LiveSet_Refuses_NoManifest
     {
         const string employeeId = "EMP-S144-LIVE-AGR-PLANLESS";
         await SeedEmployeeAsync(employeeId);
+        await SeedSuccessorWageTypeMappingAsync(); // S145 B2: the distinct AC code
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31);
 
-        var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
-            RunShimAsync(BuildPcs(HoursOf(entries)), employeeId));
+        var outcome = await RunShimAsync(BuildPcs(HoursOf(entries)), employeeId);
 
-        Assert.True(ex.IsSplitRefusal);
-        Assert.Equal(2, ex.EmployedSegmentCount);
-        Assert.Equal(new[] { BoundaryCause.AgreementCodeChange }, ex.InteriorBoundaryCauses);
-        Assert.Equal(0, await CountManifestsAsync(employeeId));
+        // S145 B2: the month calculates (it used to throw the split refusal) and persists its one manifest.
+        Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
+        Assert.Equal(1, await CountManifestsAsync(employeeId));
+        var manifest = await LoadManifestAsync(outcome.ManifestId);
+        Assert.Contains("AgreementCodeChange", manifest.BoundaryCauseSummary);
+        Assert.Equal(2, manifest.Segments.Count);
+
+        // S145 B2: the lines map per part, under that part's own agreement's code.
+        var lines = outcome.Result.ExportLines.ToList();
+        Assert.Equal(entries.Count, lines.Count);
+        var hkLines = lines.Where(l => l.PeriodStart == Mar01).ToList();
+        var acLines = lines.Where(l => l.PeriodStart == Mar16).ToList();
+        Assert.Equal(entries.Count(e => e.Date < Mar16), hkLines.Count);
+        Assert.Equal(entries.Count(e => e.Date >= Mar16), acLines.Count);
+        Assert.All(hkLines, l => Assert.Equal(HkNormalHoursWageType, l.WageType));
+        Assert.All(acLines, l => Assert.Equal(AcNormalHoursWageType, l.WageType));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -231,10 +311,9 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
     /// shared date would record the higher-ranked cause and hide the one under test.
     ///
     /// This pins the BOUNDARY independent of the refusal: the planner learns about the agreement
-    /// change whether or not the rule set later refuses to act on it. It becomes QUAL-150's
-    /// reachable case the day QUAL-149 (the norm/overtime rules' split refusal) lands and the live
-    /// set stops refusing — then a calculated month with an agreement change is real, and this
-    /// manifest is what says why it has two segments.
+    /// change whether or not the rule set later refuses to act on it. Since S145 Stage B the live
+    /// path calculates such a month (<c>Recalculate_MondayAgreementCodeChange_LiveSet_RecalculatesWithPerSegmentCodes</c>,
+    /// in this class), and this manifest is what says why it has two segments.
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): mutation M-14 — the
     /// hydration is skipped. The month is then ONE segment and its manifest's
@@ -247,10 +326,11 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
     {
         const string employeeId = "EMP-S144-STRADDLE-AGR";
         await SeedEmployeeAsync(employeeId);
-        // The seeded wage-type mappings cover HK only. This AC row is seeded for when QUAL-150
-        // lands (per-segment agreement in the mapping) and is UNUSED today: mapping reads the
-        // agreement key hydrated ONCE from the caller's profile (PeriodCalculationService.cs
-        // :1049-1053, :1696-1698) — which is QUAL-150 itself — not the second segment's code.
+        // The full schema also seeds an AC NORMAL_HOURS row under HK's code; this upserts it to the
+        // successor mapping (a distinct, test-only NORMAL_HOURS code, S145 B2): since S145 A4 / Stage B each EMPLOYED
+        // segment maps under its own dated agreement key (QUAL-150), so the second part uses it.
+        // This fact asserts the manifest only; the per-part codes are asserted by the recalculate
+        // and planless facts above.
         await SeedSuccessorWageTypeMappingAsync();
         await SupersedeAgreementCodeAsync(employeeId, SuccessorAgreementCode, Mar16);
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, Mar01, Mar31);
@@ -346,16 +426,23 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         await tx.CommitAsync();
     }
 
+    /// <summary>S145 B2: the successor (AC) mapping for NORMAL_HOURS with a DISTINCT, test-only wage-type
+    /// code (<see cref="AcNormalHoursWageType"/>) — the HK code is SLS_0110 — so the key of each part of a
+    /// split month is observable. Upserts the live row (the full schema already seeds an AC row).</summary>
     private async Task SeedSuccessorWageTypeMappingAsync()
     {
         await using var conn = _harness.Factory.Create();
         await conn.OpenAsync();
+        // S145 B2: a distinct test-only AC code, upserted, with an explicit effective_from (was
+        // SLS_0110 and ON CONFLICT DO NOTHING, a no-op over the full schema's AC row).
         await using var cmd = new NpgsqlCommand(
             """
-            INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description)
-            VALUES ('NORMAL_HOURS', 'SLS_0110', @ok, @code, '', NULL)
-            ON CONFLICT (time_type, ok_version, agreement_code, position) WHERE effective_to IS NULL DO NOTHING
+            INSERT INTO wage_type_mappings (time_type, wage_type, ok_version, agreement_code, position, description, effective_from)
+            VALUES ('NORMAL_HOURS', @wt, @ok, @code, '', NULL, DATE '2020-01-01')
+            ON CONFLICT (time_type, ok_version, agreement_code, position) WHERE effective_to IS NULL
+            DO UPDATE SET wage_type = EXCLUDED.wage_type
             """, conn);
+        cmd.Parameters.AddWithValue("wt", AcNormalHoursWageType);
         cmd.Parameters.AddWithValue("ok", OkVersion);
         cmd.Parameters.AddWithValue("code", SuccessorAgreementCode);
         await cmd.ExecuteNonQueryAsync();
@@ -432,6 +519,43 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("t", eventType);
         cmd.Parameters.AddWithValue("e", employeeId);
         return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    /// <summary>S145 B2: the <c>RetroactiveCorrectionRequested</c> event payload (the latest one for the employee).</summary>
+    private async Task<string> ReadCorrectionEventPayloadAsync(string employeeId)
+    {
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT event_payload::text FROM outbox_events
+            WHERE event_type = 'RetroactiveCorrectionRequested' AND stream_id LIKE @s
+            ORDER BY outbox_id DESC LIMIT 1
+            """, conn);
+        cmd.Parameters.AddWithValue("s", $"retro-correction-{employeeId}-%");
+        var payload = await cmd.ExecuteScalarAsync() as string;
+        Assert.NotNull(payload);
+        return payload!;
+    }
+
+    /// <summary>S145 B2: the manifest's frozen pieces (<c>plan_inputs_jsonb.pieces</c>), in stored order:
+    /// the context pieces first, then each EMPLOYED segment's piece.</summary>
+    private async Task<IReadOnlyList<(DateOnly From, DateOnly To, string AgreementCode)>> ReadFrozenPiecesAsync(Guid manifestId)
+    {
+        await using var conn = _harness.Factory.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT plan_inputs_jsonb::text FROM segment_manifests WHERE manifest_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", manifestId);
+        var json = await cmd.ExecuteScalarAsync() as string;
+        Assert.NotNull(json);
+        using var doc = System.Text.Json.JsonDocument.Parse(json!);
+        return doc.RootElement.GetProperty("pieces").EnumerateArray()
+            .Select(p => (
+                DateOnly.Parse(p.GetProperty("from").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+                DateOnly.Parse(p.GetProperty("to").GetString()!, System.Globalization.CultureInfo.InvariantCulture),
+                p.GetProperty("agreementCode").GetString()!))
+            .ToList();
     }
 
     private sealed record PersistedManifest(IReadOnlyList<System.Text.Json.JsonElement> Segments, IReadOnlyList<string> BoundaryCauseSummary);

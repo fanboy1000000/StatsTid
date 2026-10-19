@@ -5,30 +5,41 @@ namespace StatsTid.Integrations.Payroll.Services;
 
 /// <summary>
 /// S144 / TASK-14403 — the HTTP problem body the payroll host returns (as a 422) when a month cannot be
-/// calculated automatically. Since S145 / TASK-14512 it has two variants, both with
+/// calculated or exported automatically. Since S145 it has three variants, all with
 /// <c>kind = payroll-recalc-blocked</c>:
 /// <list type="bullet">
 /// <item><b>The planner's split refusal</b> (S144, unchanged): a whole-period rule would have to be
-/// evaluated in two or more pieces (the ADR-016 D4 split refusal) — e.g. a mid-month agreement-code
-/// change. It names the rule (<c>ruleId</c>) and the EMPLOYED segment count, and carries no
-/// <c>reason</c>.</item>
-/// <item><b>The week check's refusal</b> (S145, Q5 (c)): an agreement change inside a Monday–Sunday week
-/// the month settles, on a day other than its Monday (<see cref="PeriodNotCalculableException"/>). It
-/// carries <c>reason = agreement-change-mid-week</c> and no <c>ruleId</c> or segment count: it is not a
-/// rule's refusal.</item>
+/// evaluated in two or more pieces (the ADR-016 D4 split refusal). It names the rule (<c>ruleId</c>) and
+/// the EMPLOYED segment count, and carries no <c>reason</c>. Since S145 Stage B payroll hands the planner
+/// only the classifications of the rules it evaluates, none of which refuses a split, so this variant
+/// answers only for a rule set that still holds a Reject or AlignedWindow rule (a test fixture set,
+/// today).</item>
+/// <item><b>The week check's refusal</b> (S145 / TASK-14512, Q5 (c), every payroll route): an agreement
+/// change inside a Monday–Sunday week the month settles, on a day other than its Monday
+/// (<see cref="PeriodNotCalculableException.AgreementChangeMidWeek"/>). It carries
+/// <c>reason = agreement-change-mid-week</c> and no <c>ruleId</c> or segment count: it is not a rule's
+/// refusal.</item>
+/// <item><b>The single-profile route's refusal</b> (S145 Stage B / TASK-14522, Q6 (a), ruling R-76; the raw
+/// <c>/api/payroll/export</c> and <c>/api/payroll/export-period</c> routes only): the month has two or
+/// more EMPLOYED parts, and the route maps every line under one profile
+/// (<see cref="PeriodNotCalculableException.SplitMonthSingleProfileRoute"/>). It carries
+/// <c>reason = split-month-single-profile-route</c>, the EMPLOYED segment count and the interior boundary
+/// causes, and no <c>ruleId</c>: it is not a rule's refusal either.</item>
 /// </list>
-/// Consumers tell the variants apart by <c>reason</c>, never by which other members are present.
+/// Consumers tell the variants apart by <c>reason</c> (absent from the planner's variant), never by which
+/// other members are present.
 ///
 /// <para>
 /// <b>Why it exists (plain language).</b> A month can contain a change that splits it into
 /// segments — since S144 a mid-month change of the employee's agreement code, since S137 a
-/// mid-month profile change. Some rules (overtime, norm) can only be evaluated over the whole
-/// period, so the planner refuses rather than pay the month wrong. Before S144 that refusal
-/// escaped the endpoints as a bare 500: the operator learned nothing and could not tell it from a
-/// crash. Now <c>/api/payroll/recalculate</c> and <c>/api/payroll/calculate-and-export</c> turn it
-/// into a 422 saying, in effect, "this month would be evaluated in 2 segments; causes:
-/// AgreementCodeChange — handle it manually". The week check's refusal reaches every payroll route
-/// the same way, because a week cannot be judged under two agreements.
+/// mid-month profile change. Before S144 a refused month escaped the endpoints as a bare 500: the
+/// operator learned nothing and could not tell it from a crash. Since S144 the payroll routes turn the
+/// refusal into a 422 saying, in effect, "this month cannot be handled here, and this is why". Since
+/// S145 Stage B the calculating routes (<c>/api/payroll/recalculate</c> and
+/// <c>/api/payroll/calculate-and-export</c>) pay a split month part by part, so two refusals remain in
+/// production: an agreement change inside a week (a week cannot be judged under two agreements; the
+/// month is handled manually, on every payroll route), and a split month sent to a raw export route
+/// (which must go through a calculating route instead).
 /// </para>
 ///
 /// <para>
@@ -43,20 +54,24 @@ namespace StatsTid.Integrations.Payroll.Services;
 ///
 /// <para>
 /// <b>Bugs stay bugs.</b> Only a genuine split refusal (<see cref="PlannerInvariantViolation.IsSplitRefusal"/>)
-/// or a known week-check reason maps to a problem. Every other planner violation (a gap, an overlap, a
-/// missing snapshot) is a defect in the system, not a month that needs manual handling;
-/// <see cref="TryCreate(PlannerInvariantViolation)"/> returns <c>null</c> for it and the handlers let it
-/// propagate as a 500.
+/// or a known reason carrying the members its variant needs maps to a problem. Every other planner
+/// violation (a gap, an overlap, a missing snapshot, a merger contract breach) is a defect in the system,
+/// not a month that needs manual handling; both <c>TryCreate</c> overloads return <c>null</c> for it and
+/// the handlers let it propagate as a 500.
 /// </para>
 ///
 /// <para>
-/// Wire shapes (web-default JSON, camelCase). The planner variant, byte for byte as in S144 (the
-/// absent members are omitted, not written as null):
+/// Wire shapes (web-default JSON, camelCase; absent members are omitted, not written as null). The
+/// planner variant, byte for byte as in S144:
 /// <c>{ "success": false, "error": "&lt;fixed sentence&gt;", "kind": "payroll-recalc-blocked",
 /// "employedSegmentCount": 2, "interiorBoundaryCauses": ["AgreementCodeChange"], "ruleId": "OVERTIME_CALC" }</c>.
 /// The week variant:
 /// <c>{ "success": false, "error": "&lt;fixed sentence&gt;", "kind": "payroll-recalc-blocked",
 /// "reason": "agreement-change-mid-week", "interiorBoundaryCauses": ["AgreementCodeChange"] }</c>.
+/// The single-profile route variant:
+/// <c>{ "success": false, "error": "&lt;fixed sentence&gt;", "kind": "payroll-recalc-blocked",
+/// "reason": "split-month-single-profile-route", "employedSegmentCount": 2,
+/// "interiorBoundaryCauses": ["EmployeeProfileChange"] }</c>.
 /// </para>
 /// </summary>
 public sealed class PayrollPlanRefusalProblem
@@ -82,6 +97,15 @@ public sealed class PayrollPlanRefusalProblem
         "of a week this period settles, and a week cannot be judged under two agreements. The period " +
         "must be handled manually.";
 
+    /// <summary>
+    /// The single-profile route variant's fixed, plain-language sentence (S145 Stage B, Q6 (a), ruling R-76,
+    /// verbatim). Like <see cref="ErrorSentence"/> it contains no date, no id and no digit.
+    /// </summary>
+    public const string SplitMonthSingleProfileRouteSentence =
+        "This period cannot be exported through this route: a change inside the period splits it into " +
+        "parts with different profiles, and this route maps every line under a single profile. Use the " +
+        "calculating routes (recalculate, or calculate-and-export) to pay the period.";
+
     private PayrollPlanRefusalProblem(
         string error,
         string? reason,
@@ -106,13 +130,18 @@ public sealed class PayrollPlanRefusalProblem
     public string Kind => KindValue;
 
     /// <summary>
-    /// The week variant's cause (<see cref="PeriodNotCalculableException.AgreementChangeMidWeek"/>).
-    /// Omitted from the planner variant, whose S144 body it must not change.
+    /// The cause of a <see cref="PeriodNotCalculableException"/> variant
+    /// (<see cref="PeriodNotCalculableException.AgreementChangeMidWeek"/> or
+    /// <see cref="PeriodNotCalculableException.SplitMonthSingleProfileRoute"/>). Omitted from the planner
+    /// variant, whose S144 body it must not change.
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Reason { get; }
 
-    /// <summary>How many EMPLOYED segments the period would have been evaluated in (planner variant only).</summary>
+    /// <summary>
+    /// How many EMPLOYED segments the period has (the planner variant and the single-profile route variant;
+    /// omitted from the week variant).
+    /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? EmployedSegmentCount { get; }
 
@@ -143,23 +172,46 @@ public sealed class PayrollPlanRefusalProblem
     }
 
     /// <summary>
-    /// S145 / TASK-14512 — maps a week-check refusal to the second 422 variant, or <c>null</c> for a
-    /// reason this mapping does not know (a bug — let it propagate as a 500, like a non-split planner
-    /// violation). Reads only <see cref="PeriodNotCalculableException.Reason"/>: no date, no employee id.
+    /// Maps a <see cref="PeriodNotCalculableException"/> to its 422 variant, or <c>null</c> when it cannot
+    /// be mapped (a bug — let it propagate as a 500, like a non-split planner violation):
+    /// <list type="bullet">
+    /// <item><see cref="PeriodNotCalculableException.AgreementChangeMidWeek"/> → the week variant (S145 /
+    /// TASK-14512), unchanged: the reason and the fixed cause <c>AgreementCodeChange</c>, no segment
+    /// count;</item>
+    /// <item><see cref="PeriodNotCalculableException.SplitMonthSingleProfileRoute"/> → the single-profile
+    /// route variant (S145 Stage B / TASK-14522, R-76): the reason, the EMPLOYED segment count and the
+    /// interior boundary cause names in date order. Without a segment count it maps to <c>null</c>: the raw
+    /// routes' guard always sets one, so a missing count is a bug;</item>
+    /// <item>any other reason → <c>null</c>.</item>
+    /// </list>
+    /// Reads only <see cref="PeriodNotCalculableException.Reason"/> and the structured members — never
+    /// <see cref="Exception.Message"/> — so no date and no employee id can reach the body.
     /// </summary>
     public static PayrollPlanRefusalProblem? TryCreate(PeriodNotCalculableException ex)
     {
         ArgumentNullException.ThrowIfNull(ex);
 
-        return ex.Reason switch
+        if (string.Equals(ex.Reason, PeriodNotCalculableException.AgreementChangeMidWeek, StringComparison.Ordinal))
         {
-            PeriodNotCalculableException.AgreementChangeMidWeek => new PayrollPlanRefusalProblem(
+            return new PayrollPlanRefusalProblem(
                 MidWeekAgreementChangeSentence,
                 ex.Reason,
                 employedSegmentCount: null,
                 new[] { BoundaryCause.AgreementCodeChange.ToString() },
-                ruleId: null),
-            _ => null,
-        };
+                ruleId: null);
+        }
+
+        if (string.Equals(ex.Reason, PeriodNotCalculableException.SplitMonthSingleProfileRoute, StringComparison.Ordinal)
+            && ex.EmployedSegmentCount is { } segmentCount)
+        {
+            return new PayrollPlanRefusalProblem(
+                SplitMonthSingleProfileRouteSentence,
+                ex.Reason,
+                segmentCount,
+                ex.InteriorBoundaryCauses.Select(cause => cause.ToString()).ToArray(),
+                ruleId: null);
+        }
+
+        return null;
     }
 }

@@ -20,7 +20,8 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// <para>
 /// <b>The story, in plain language.</b> An organisation can switch on a "local agreement profile" (its
 /// own norm hours and the like) partway through a month. That date splits the month into two pieces, and
-/// under the live rule set a split month is refused. A profile belongs to ONE (organisation, agreement,
+/// under a rule set with an AlignedWindow rule a split month is refused at the planner (production's own set
+/// no longer does since S145 Stage B; see the note on facts 3 and 4). A profile belongs to ONE (organisation, agreement,
 /// OK version). So the question "did a profile switch on this month?" only makes sense for the agreement
 /// and OK version the employee actually had on each day, and that is what the employee's dated records say.
 /// Before this task the question was asked with whatever the request body said, so a stale body for a past
@@ -157,7 +158,8 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     /// (S145 R-20, fact 3 — the straddle) The employee's agreement changes AC to HK on 16 April, and the
     /// organisation switches on its HK / OK26 profile on 20 April. The body says AC / OK26 (the month's
     /// first interval). Two intervals have two keys: (ORG, AC, OK26) for 1-15 April and (ORG, HK, OK26) for
-    /// 16-30 April; the second finds the 20 April activation. Under the LIVE rule set the planner refuses
+    /// 16-30 April; the second finds the 20 April activation. Under an AlignedWindow fixture set
+    /// (<c>TestFixtures.RuleSet</c>, S145 B2) the planner refuses
     /// the split month, and its structured refusal (<see cref="PlannerInvariantViolation.InteriorBoundaryCauses"/>,
     /// also spelled in the message at <c>PeriodPlanner.cs</c> "interior boundary causes") lists, in date
     /// order, <see cref="BoundaryCause.AgreementCodeChange"/> (16th) then
@@ -166,9 +168,16 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     /// written, so no manifest.
     ///
     /// The 16th is a Thursday, so the month would also fail the mid-week agreement check; the planner's
-    /// refusal is raised first (the refusal order planner 422, then week check 422, pinned by
-    /// PayrollHostWeeklyTests H9/H10, N1), so this
-    /// fact rests on that order.
+    /// refusal is raised first (the refusal order planner 422, then week check 422, N1; the week check's side
+    /// of that order is pinned in PayrollHostWeeklyTests, IB2 and H10), so this fact rests on that order.
+    ///
+    /// <b>S145 B2 — what this fact no longer proves.</b> It no longer proves production wiring. Since Stage B
+    /// the production rule set never refuses a split month at the planner: payroll hands the planner only the
+    /// six rules it evaluates, and none of production's six is AlignedWindow. So this fact pins the
+    /// local-profile key through a fixture set that still refuses: <c>TestFixtures.RuleSet</c> classifies
+    /// <c>OVERTIME_CALC</c> as AlignedWindow and payroll's filter keeps it, so the planner still refuses first,
+    /// with the same causes and counts. The production path for such a month is the week check (IB1 in
+    /// PayrollHostRecalcBlockedTests, IB2 in PayrollHostWeeklyTests).
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "a single
     /// lookup over the whole period" (keyed on the period start's record, or on the body, once). It asks
@@ -189,7 +198,7 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
 
         var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
             RunShimAsync(
-                BuildPcs(HoursOf(entries), new RuleRegistry().GetAll()),
+                BuildPcs(HoursOf(entries), TestFixtures.RuleSet), // S145 B2: an AlignedWindow fixture set, not the live registry (R-71)
                 Body(employeeId, agreementCode: "AC", okVersion: "OK26")));
 
         Assert.True(ex.IsSplitRefusal);
@@ -213,14 +222,21 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
     /// one, and <c>LocalProfileActivation</c> outranks <c>AgreementCodeChange</c>; so if the activation were
     /// found, the 16th would be labelled as a profile switch and the agreement change would vanish from the
     /// trail. The HK interval is therefore read AFTER the 16th (its first day exclusive): the activation is
-    /// not passed, and the live rule set's refusal lists exactly <see cref="BoundaryCause.AgreementCodeChange"/>
+    /// not passed, and the AlignedWindow fixture set's refusal (S145 B2) lists exactly <see cref="BoundaryCause.AgreementCodeChange"/>
     /// and no <see cref="BoundaryCause.LocalProfileActivation"/>. Observation surface: the thrown
     /// <see cref="PlannerInvariantViolation.InteriorBoundaryCauses"/> and message.
     ///
     /// The 16th is a Thursday, so the month would also fail the mid-week agreement check; the planner's
-    /// refusal is raised first (the refusal order planner 422, then week check 422, pinned by
-    /// PayrollHostWeeklyTests H9/H10, N1), so this
-    /// fact rests on that order.
+    /// refusal is raised first (the refusal order planner 422, then week check 422, N1; the week check's side
+    /// of that order is pinned in PayrollHostWeeklyTests, IB2 and H10), so this fact rests on that order.
+    ///
+    /// <b>S145 B2 — what this fact no longer proves.</b> It no longer proves production wiring. Since Stage B
+    /// the production rule set never refuses a split month at the planner: payroll hands the planner only the
+    /// six rules it evaluates, and none of production's six is AlignedWindow. So this fact pins the
+    /// local-profile key through a fixture set that still refuses: <c>TestFixtures.RuleSet</c> classifies
+    /// <c>OVERTIME_CALC</c> as AlignedWindow and payroll's filter keeps it, so the planner still refuses first,
+    /// with the same causes and counts. The production path for such a month is the week check (IB1 in
+    /// PayrollHostRecalcBlockedTests, IB2 in PayrollHostWeeklyTests).
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): the production mutation "bound each
     /// run from the day before its first day" (the run's exclusive lower bound becomes
@@ -240,7 +256,7 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
 
         var ex = await Assert.ThrowsAsync<PlannerInvariantViolation>(() =>
             RunShimAsync(
-                BuildPcs(HoursOf(entries), new RuleRegistry().GetAll()),
+                BuildPcs(HoursOf(entries), TestFixtures.RuleSet), // S145 B2: an AlignedWindow fixture set, not the live registry (R-71)
                 Body(employeeId, agreementCode: "AC", okVersion: "OK26")));
 
         Assert.True(ex.IsSplitRefusal);

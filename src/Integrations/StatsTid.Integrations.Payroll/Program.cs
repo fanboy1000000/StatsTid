@@ -142,8 +142,11 @@ builder.Services.AddSingleton<JwtTokenService>();
 // TESTS ONLY — the constructor fallback when no provider is registered. It is never a stand-in
 // for an unreachable Rule Engine: since S144 (TASK-14412, ruling B1) this provider throws
 // RuleClassificationsUnavailableException when it cannot fetch the set, and every route that
-// plans answers that with a 503 (RulesUnavailable below) — never a silent empty set, which the
-// planner would read as "no rule forbids a split".
+// plans answers that with a 503 (RulesUnavailable below) — never a silent empty set: payroll plans
+// and merges by the strategies its rules declare, so an unknown set read as an empty one would plan
+// and merge as though no rule declared anything. (Before S145 B2 the reason was that the planner
+// would read it as "no rule forbids a split"; payroll now hands the planner only the rules it
+// evaluates, none of which refuses one — R-91.)
 builder.Services.AddHttpClient<IRuleClassificationProvider, HttpRuleClassificationProvider>(client =>
 {
     var ruleEngineUrl = builder.Configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
@@ -197,12 +200,15 @@ app.MapPost("/api/payroll/export", async (
 {
     // S144 TASK-14410 (owner ruling 2026-09-29, QUAL-183): this route now PLANS every calendar
     // month its lines fall in, through the SAME builder the calculating endpoints use, BEFORE
-    // anything is mapped or written. A month the planner refuses (e.g. a mid-month agreement-code
-    // change: the caller's lines would pay the days after the change under the old agreement) gets
-    // the same redacted 422 as /calculate-and-export and /recalculate; nothing is mapped, written,
-    // locked or recorded. Any other planner violation is a bug and propagates as a 500. The route
-    // still bypasses APPROVAL by design (admin retroactive / internal calls) — planning is a
-    // correctness check, not an approval gate.
+    // anything is mapped or written. A month the calculating endpoints refuse gets the same redacted
+    // 422 as /calculate-and-export and /recalculate; nothing is mapped, written, locked or recorded.
+    // Since S145 Stage B (Q6 (a)) this route also refuses a month with two or more EMPLOYED parts (e.g.
+    // a mid-month change in hours, position or agreement), which the calculating endpoints now pay part
+    // by part: below, every line is mapped under request.Profile alone, so the second part's lines would
+    // carry the first part's wage-type codes. That 422 has its own reason
+    // (split-month-single-profile-route) and points to the calculating routes. Any other planner
+    // violation is a bug and propagates as a 500. The route still bypasses APPROVAL by design (admin
+    // retroactive / internal calls) — planning is a correctness check, not an approval gate.
     if (await RefuseUnplannableMonthsAsync(calculator, request.Profile, new[] { request.CalculationResult }, ct) is { } refusal)
         return refusal;
 
@@ -247,9 +253,12 @@ app.MapPost("/api/payroll/export-period", async (
     // S144 TASK-14410 (owner ruling 2026-09-29, QUAL-183): this route now PLANS every calendar
     // month touched by ANY of request.CalculationResults, through the SAME builder the calculating
     // endpoints use, BEFORE the first result is mapped. All-or-nothing, like the export itself: one
-    // refused month (e.g. a mid-month agreement-code change) refuses the whole call with the same
-    // redacted 422 as /calculate-and-export and /recalculate, and no month is mapped, written,
-    // locked or recorded. Any other planner violation is a bug and propagates as a 500. The route
+    // refused month refuses the whole call with the same redacted 422 as /calculate-and-export and
+    // /recalculate, and no month is mapped, written, locked or recorded. Since S145 Stage B (Q6 (a))
+    // a month with two or more EMPLOYED parts (e.g. a mid-month change in hours, position or
+    // agreement) is refused here too, by its own reason (split-month-single-profile-route): the
+    // calculating endpoints now pay it part by part, but this route maps every line under
+    // request.Profile alone. Any other planner violation is a bug and propagates as a 500. The route
     // still bypasses APPROVAL by design (admin retroactive / internal calls) — planning is a
     // correctness check, not an approval gate.
     if (await RefuseUnplannableMonthsAsync(calculator, request.Profile, request.CalculationResults, ct) is { } refusal)
@@ -369,7 +378,8 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
     {
         // S144 TASK-14403: the planner REFUSED the month (a whole-period rule would be evaluated in
-        // 2+ segments — e.g. a mid-month agreement-code change). The plan is built before anything
+        // 2+ segments). Since S145 B2 payroll's own rule set never refuses a split month here, so
+        // this answers only a rule set that holds such a rule (a test fixture). The plan is built before anything
         // is calculated or written, so no manifest and no export record exist. 422 with the
         // redacted problem (counts + causes, never dates or the employee id); any OTHER planner
         // violation is a bug and falls through as a 500.
@@ -570,7 +580,8 @@ app.MapPost("/api/payroll/recalculate", async (
     catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
     {
         // S144 TASK-14403: the planner REFUSED the month (a whole-period rule would be evaluated in
-        // 2+ segments — e.g. an agreement-code change recorded mid-month after the export). The
+        // 2+ segments). Since S145 B2 payroll's own rule set never refuses a split month here, so
+        // this answers only a rule set that holds such a rule (a test fixture). The
         // correction service plans BEFORE it opens its transaction, so nothing was written: the
         // export baseline, the correction event and the idempotency marker are all untouched. 422
         // with the redacted problem (counts + causes, never dates or the employee id); any OTHER
@@ -657,6 +668,15 @@ app.Run();
 // (EnsurePeriodCalculableAsync): a month with an agreement change inside a week it settles — on a 1st
 // that is not a Monday, or in the previous month's last days — gets the same second 422 variant. It
 // still reads no approval: the months-in-order 409 belongs to the calculating routes alone.
+//
+// S145 Stage B / TASK-14522 (Q6 (a), rulings R-74, R-76): since the calculating routes pay a month
+// with two or more EMPLOYED parts, EnsurePeriodCalculableAsync also refuses such a month for these
+// routes, which map every line under one profile: the third 422 variant (reason
+// "split-month-single-profile-route", the EMPLOYED segment count and the boundary causes, no ruleId,
+// date or employee id), mapped by the same PeriodNotCalculableException catch below. The order is
+// planner 422 → week-check 422 → single-profile 422, so an interior Tuesday-to-Sunday agreement change
+// (both a mid-week change and a split month) answers the week check here exactly as on the
+// calculating routes.
 static async Task<IResult?> RefuseUnplannableMonthsAsync(
     PeriodCalculationService calculator,
     EmploymentProfile profile,
@@ -683,8 +703,10 @@ static async Task<IResult?> RefuseUnplannableMonthsAsync(
         }
         catch (PeriodNotCalculableException ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
         {
-            // Same mapping as the calculating handlers: the week check's 422 variant (reason
-            // "agreement-change-mid-week", no ruleId, no date, no employee id).
+            // The same mapper as the calculating handlers: the week check's 422 variant (reason
+            // "agreement-change-mid-week") and, on these raw routes only, the single-profile variant
+            // (reason "split-month-single-profile-route", S145 B2, Q6 (a)); no ruleId, no date, no
+            // employee id.
             return Results.Json(problem, statusCode: 422);
         }
         catch (RuleClassificationsUnavailableException)
