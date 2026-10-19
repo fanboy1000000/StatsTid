@@ -2124,13 +2124,44 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
   - Cycles 2–4's internal lens, the adjudications and the sign-off ran on Opus by the owner's direction, because Fable was on its usage limit. Codex was the external lens in every cycle.
   - Still open: R-104's close-guard question (asked at C-1, only if Fable is still on its limit), and the O-7 routing row at C-9.
 
+
+## Wave B.1 (dispatched 2026-10-19; the build-safe order, R-78: at most one building agent at a time)
+
+**TASK-14524, authored** (`test-qa`; branch `s145/task-14524`, `5ee23e4`; not merged, by design: it merges at B.3).
+
+*Plain language:* these are the tests that define "done" for Stage B, written from the specification before the code exists.
+
+- **Compiles today, observed RED:** `BackdateWorklistResidualDerivationTests` (Unit) fails 17 of its 19 cases. The two that pass are Monday context days that are null today and stay null.
+  - The failures are the worklist's current derivation: QUAL-149/QUAL-150 instead of the residual QUAL-209, or null.
+  - The QUAL-210 drift pair fails as the brief expects.
+  - The matrix's hand-derived expected blocks hold on all 11 rows, which confirms the reading of Q5 (c).
+- **Compiles today, Docker** (CI-verified, not locally green; the Regression build has 0 errors):
+  - `SplitMonthPayrollTests`: WS1, WS2, QA1, QP1, FX1, FX2, FX3, RP-B1;
+  - `SplitMonthHostTests`: SP1, IB3, RB3, RB4;
+  - `WorklistResidualBlockTests`: WR1 (3 cases), WR2, WR3.
+- **Written blind** (they name members Stage B creates): `SinglePlanEvaluationMergerTests`, `RuleRegistryStageBClassificationTests`, `SplitMonthPcsTests` (MB-3, MB-8, MB-10c, and MB-12's two-case Theory), and the appends to `PayrollPlanRefusalProblemTests` and `HttpRuleClassificationProviderTests`. They are proven RED by Unit mutation at B.3.
+- **The spec figures were re-derived:** the Q2 week 2.67/4.53 and 7.20; WS1 flex +7.20; FX3 6.00 and 8.00; FX1; FX2 (170 + 20 = 190, under the DEPARTMENT_HEAD cap of 200 but over AC's 150).
+- **Deviations reported:**
+  - a second, type-check-only Regression build;
+  - the Unit PCS fixture cannot map lines, so MB-8's merged-row fact uses line-free answers, and Docker covers the lines;
+  - the Q-A Theory observes the in-memory store directly;
+  - the leaver fact builds PCS with a capturing logger;
+  - the `PeriodNotCalculableException` constructor shape is assumed, and reconciled at B.3;
+  - RP-B1's live-state change is an in-place update;
+  - stream ids are literals, because `ManifestStreamId` is internal;
+  - test-only wage-type rows are seeded inside the facts.
+
+  No brief contradiction.
+
+**TASK-14520, dispatched** (`rule-engine`, worktree `s145-task-14520`, at `c1b7255`). Its paired pass TASK-14520-T follows on the same branch. The review is 5α, 5a Opus (owner direction) and 5a Codex (legal rule logic).
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-16, **Stage A closed** (Gate A-CLOSE CA-7). Local master is this docs-only log commit, on top of `K_A` (`923f7fb`) and the CA-4..CA-6 record commits. Not pushed to master, by design. `origin/master` is `cdd8253` and must not be pushed while any evidence run is in flight (R-52) |
 | **Evidence** | `K_A` = `923f7fb` · V-A run `38747749039` (all seven jobs green) · EA-1..EA-5 all matched (EA-3 through EA-3′); runs and heads in § "Stage A gate — `K_A`" → Results and § "CA-5"; confirmed by the Fable seat (R-52) · PR #37 closed unmerged, `s145-evidence-a` deleted on both sides · K ⟨close⟩ · EB ⟨Stage B⟩ |
-| **Phase** | Stage B: B.0 closed 2026-10-19; the briefs are signed (R-113) after four Step-0b cycles. B.1 next. Reviews and rulings run on Opus while Fable is on its usage limit (owner direction 2026-10-19); Codex is the external lens. Stage A closed (CA-1..CA-7); QUAL-207 merged (`499771c`). CA-1's full report and mutation patches are kept, untracked, in `.claude/plans/s145/ca1/` (the CA-3 builder works from them, amended by TASK-14518's "Amended at the freeze" section). (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
+| **Phase** | Stage B, wave B.1 (2026-10-19): TASK-14524 authored (`5ee23e4`, merges at B.3); TASK-14520 in flight. B.0 closed and the briefs signed (R-113). Reviews and rulings run on Opus while Fable is on its usage limit (owner direction 2026-10-19); Codex is the external lens. Stage A closed (CA-1..CA-7); QUAL-207 merged (`499771c`). CA-1's full report and mutation patches are kept, untracked, in `.claude/plans/s145/ca1/` (the CA-3 builder works from them, amended by TASK-14518's "Amended at the freeze" section). (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
 | **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Merged in A.5:** 14513+T (`07337ea`), 14515 (`eb78b8e`), 14519+T (`8367862`); 14515 re-spawn 2 done: 3 of 3 mutations tripped, its throwaway checkout removed. **Gate A-CLOSE (closed 2026-10-16):** TASK-14518 CA-1 and CA-3 done; the freeze R-33..R-46; the R-33 split merged (`07f7c78`); `K_A` `923f7fb`; the evidence branch and PR #37 closed and deleted (CA-6); the CA-5 rulings R-47..R-52. **After CA-7:** QUAL-207 merged (`499771c`); its worktree `s145-qual-207` to clear at teardown. **To clear at teardown:** `s145-task-14518-rs` (merged); the A.5 worktrees `s145-task-14513`, `s145-task-14515`, `s145-task-14519` (all merged); the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1` |
 | **Pending gates** | **B.0** (`planner` revises the Stage B briefs TASK-14520..14524 against `K_A`; the Fable seat reviews; a scoped Step-0b cycle if any criterion or file list changes beyond line numbers; the Fable seat signs the B briefs) → waves B.1, B.2, B.3 → the close sequence C-1..C-9 (incl. TASK-14528, the Stage B evidence on `s145-evidence-b`, with R-52's base check). This machine is memory-constrained (8 GB): one build-heavy agent at a time, `-m:2`, foreground; `dotnet build-server shutdown` after builds |
 | **Open rulings** | None for the owner. The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
