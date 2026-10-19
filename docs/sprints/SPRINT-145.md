@@ -2037,7 +2037,16 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
     - R-81's table against the tests;
     - the comment-only additions;
     - R-87 and R-89.
-- **The planner's revision 2** (absorbing R-80..R-92) was dispatched on 2026-10-19.
+- **The planner's revision 2: done** (report in `.claude/plans/s145/b0/B0-revision2-report.md`; the rev 1 → rev 2 diff in `b0/rev1-to-rev2.diff`). All 13 rulings were applied, with the verbatim texts copied by script, and the standing-constraints block is byte-identical everywhere. **Two items need a ruling:**
+  - **The hash length.** A patch's `index` lines carry abbreviated hashes, and Git lengthens them from 7 to 8 characters at 16,384 packed objects. The repository is at 16,076, and packing its 523 loose objects would cross that. So R-83's byte-for-byte `cmp` could fail on correct patches. The proposal is `--full-index` on every save and compare.
+  - **A forward pointer.** R-82(a)'s comment, written at B.2, points to `SplitMonthPayrollTests`, which only exists from B.3. The proposal is to point to 14522-T's own B.2 tests.
+
+  Also noted: three spots outside the checklist; the plan and brief wording on expected greens differ; and R-83's trigger looks only at `src tests frontend docker tools`.
+- **Scoped Step-0b, cycle 3 (R-92), dispatched 2026-10-19:**
+  - Codex (the external lens);
+  - the internal lens on Opus (owner-directed; read-only, with a content baseline taken).
+
+  The adjudication on Opus follows.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
