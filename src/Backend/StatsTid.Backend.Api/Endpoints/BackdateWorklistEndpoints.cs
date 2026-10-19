@@ -20,9 +20,11 @@ namespace StatsTid.Backend.Api.Endpoints;
 /// correction path and which years to reverse-then-re-settle (ADR-033 D4/D5), together with the
 /// honest derived state: whether the export hash / settlement sequence has ALREADY moved since
 /// each trigger (<c>recalculatedSince</c> / <c>reversedSince</c>), and which known limitation
-/// blocks the re-plan today (<c>recalcBlockedBy</c> = QUAL-149 for a profile / category split
-/// inside the month, QUAL-150 for an agreement-code change inside the month — owner ruling OQ-3
-/// (a): OUT this sprint, made VISIBLE here).
+/// blocks the re-plan today (<c>recalcBlockedBy</c>). Since S145 Stage B there is one: QUAL-209,
+/// an agreement-code change dated on a non-Monday inside a Monday–Sunday week the month settles
+/// (Q5 (c): a week cannot be judged under two agreements, so that month stays manual). Profile,
+/// category and Monday agreement changes no longer block — payroll pays such a month part by part.
+/// (S138–S144 showed QUAL-149 / QUAL-150 for any such change strictly inside the month.)
 /// </para>
 ///
 /// <list type="bullet">
@@ -246,7 +248,8 @@ public static class BackdateWorklistEndpoints
                 }
                 catch (BackdateWorklistRecalcBlockedException ex)
                 {
-                    // S144: the row's month cannot be re-planned today (QUAL-149 / QUAL-150), so
+                    // S144: the row's month cannot be re-planned today (since S145 Stage B: QUAL-209,
+                    // an agreement change inside a week the month settles), so
                     // "recalculated" would record something that could not have happened. The
                     // repository decided this on the LOCKED row, after the version guard (a stale
                     // If-Match is still 412 above), and wrote nothing.

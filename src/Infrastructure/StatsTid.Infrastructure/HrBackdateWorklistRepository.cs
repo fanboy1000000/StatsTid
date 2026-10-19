@@ -73,9 +73,9 @@ public static class WorklistTriggerKinds
     /// S145 / R5(c) — month M was reopened while M+1 was already exported, and M+1's opening week
     /// holds days of M. Under week-by-week settlement (Q3 = F1) M+1's export paid that week, using
     /// M's figures as they stood; the reopen lets those figures change, so M+1 may now be stale.
-    /// NON-BLOCKING: nothing about M+1's own data stops its re-plan (the QUAL-149 / QUAL-150
-    /// refusals concern a profile or agreement split INSIDE the flagged month, which a reopen is
-    /// not), so <see cref="BackdateWorklistDerivation.RecalcBlockedByForTrigger"/> derives no block.
+    /// NON-BLOCKING: nothing about M+1's own data stops its re-plan (the one remaining block,
+    /// QUAL-209, concerns an agreement change inside a week M+1 settles, and a reopen changes no
+    /// agreement row), so <see cref="BackdateWorklistDerivation.RecalcBlockedByForTrigger"/> derives no block.
     /// </summary>
     public const string PriorMonthReopened = "PRIOR_MONTH_REOPENED";
 
@@ -96,7 +96,8 @@ public static class WorklistKinds
 /// <summary>
 /// The operator's resolution verbs (the <c>resolution</c> CHECK). S144: <see cref="HandledManually"/>
 /// records "HR fixed this month outside the system" — the honest verb for a row whose payroll
-/// re-plan is BLOCKED (QUAL-149 / QUAL-150), where <see cref="Recalculated"/> is refused.
+/// re-plan is BLOCKED (since S145 Stage B: QUAL-209, an agreement change inside a settled week),
+/// where <see cref="Recalculated"/> is refused.
 /// </summary>
 public static class WorklistResolutions
 {
@@ -201,7 +202,7 @@ public sealed class BackdateWorklistAlreadyResolvedException : Exception
 /// <summary>
 /// S144 — thrown by <see cref="HrBackdateWorklistRepository.ResolveAsync"/> when HR asks to record
 /// <see cref="WorklistResolutions.Recalculated"/> on a row whose payroll re-plan is BLOCKED on the
-/// locked snapshot (<see cref="BlockedBy"/> = the register ids, e.g. <c>["QUAL-149"]</c>). Nothing
+/// locked snapshot (<see cref="BlockedBy"/> = the register ids, e.g. <c>["QUAL-209"]</c>). Nothing
 /// has been written when it is thrown. The endpoint maps it to 409 <c>worklist-recalc-blocked</c>;
 /// the honest verb for such a row is <see cref="WorklistResolutions.HandledManually"/>.
 /// </summary>
@@ -245,17 +246,20 @@ public static class WorklistTriggerJson
 ///
 /// <list type="bullet">
 ///   <item><b>recalcBlockedBy</b> — which known limitation stops the payroll correction re-plan
-///     TODAY for an EXPORTED_MONTH row: <c>QUAL-149</c> when a PROFILE / EMPLOYMENT_CATEGORY
-///     trigger's <c>effectiveFrom</c> lies STRICTLY INSIDE the month (a re-plan would produce
-///     ≥ 2 EMPLOYED segments, which the live rule set refuses); <c>QUAL-150</c> when an
-///     AGREEMENT_CODE trigger's <c>effectiveFrom</c> lies strictly inside the month (the
-///     wage-type key is plan-wide, so no correct recalc exists). "Strictly inside" = after the
-///     1st and on or before the last day: a change ON the 1st coincides with the period start
-///     (one segment), a change on the last day still splits the month. Both are OUT this sprint
-///     (owner ruling OQ-3 (a)) and made VISIBLE here. SETTLED_YEAR rows are never blocked this
-///     way — their fix is ADR-033's reverse-then-re-settle, not a re-plan. A
-///     PRIOR_MONTH_REOPENED trigger (S145 R5(c)) never blocks either: it splits nothing inside
-///     the flagged month.</item>
+///     TODAY for an EXPORTED_MONTH row. Since S145 Stage B there is ONE: <c>QUAL-209</c>, when an
+///     AGREEMENT_CODE trigger's <c>effectiveFrom</c> is a non-Monday inside a Monday–Sunday week
+///     the month settles (context days before the 1st included). A week cannot be judged under
+///     two agreements (Q5 (c)), so payroll refuses that month and HR resolves it by hand. The
+///     test is payroll's own shared week rule (<see cref="WeeklyContext.MidWeekAgreementChange"/>
+///     over <see cref="WeeklyContext.SettledWeeks"/>), so the worklist and payroll agree for an
+///     employee employed throughout the month's settled weeks; for hires and leavers they can
+///     differ (QUAL-210). A Monday change starts a clean week and never blocks. PROFILE and
+///     EMPLOYMENT_CATEGORY triggers no longer block: payroll pays such a month part by part.
+///     (S138–S144 derived <c>QUAL-149</c> / <c>QUAL-150</c> for any such change strictly inside
+///     the month; rows resolved then keep those ids in their stamp.) SETTLED_YEAR rows are never
+///     blocked this way — their fix is ADR-033's reverse-then-re-settle, not a re-plan. A
+///     PRIOR_MONTH_REOPENED trigger (S145 R5(c)) never blocks either: it changes no agreement
+///     row.</item>
 ///   <item><b>recalculatedSince</b> (EXPORTED_MONTH) — per trigger: the export record's CURRENT
 ///     <c>content_hash</c> differs from the baseline THAT trigger captured (corrections advance
 ///     the hash in place via <c>PayrollExportRecordRepository.UpdateCurrentEffectiveLinesAsync</c>,
@@ -270,13 +274,19 @@ public static class WorklistTriggerJson
 /// </summary>
 public static class BackdateWorklistDerivation
 {
-    /// <summary>The re-plan-refusal register id for a profile / category split inside an exported month.</summary>
-    public const string RecalcBlockedProfileSplit = "QUAL-149";
+    /// <summary>
+    /// S145 Stage B — the one register id the derivation still yields: an AGREEMENT_CODE_CHANGE dated
+    /// on a non-Monday inside a Monday–Sunday week the flagged month settles. Such a week would be
+    /// judged under two agreements, which no source rule covers (Q5 (c)), so payroll refuses the
+    /// month and HR resolves the row by hand.
+    /// </summary>
+    public const string RecalcBlockedAgreementMidWeek = "QUAL-209";
 
-    /// <summary>The register id for a plan-wide wage-type key change inside an exported month.</summary>
-    public const string RecalcBlockedAgreementKey = "QUAL-150";
-
-    /// <summary>True when <paramref name="date"/> is after the 1st and on or before the last day of (year, month).</summary>
+    /// <summary>
+    /// True when <paramref name="date"/> is after the 1st and on or before the last day of (year, month).
+    /// Since S145 Stage B the block derivation no longer uses it (the week rule replaced it); it is
+    /// kept as a plain month fencepost.
+    /// </summary>
     public static bool IsStrictlyInsideMonth(DateOnly date, int year, int month)
     {
         var first = new DateOnly(year, month, 1);
@@ -284,24 +294,49 @@ public static class BackdateWorklistDerivation
         return date > first && date <= last;
     }
 
-    /// <summary>The blocking register id for ONE trigger of an EXPORTED_MONTH row, or null when that trigger does not block the re-plan.</summary>
-    public static string? RecalcBlockedByForTrigger(string triggerKind, DateOnly effectiveFrom, int year, int month)
-    {
-        if (!IsStrictlyInsideMonth(effectiveFrom, year, month))
-            return null;
-
-        return triggerKind switch
+    /// <summary>
+    /// The blocking register id for ONE trigger of an EXPORTED_MONTH row keyed (year, month), or
+    /// null when that trigger does not block the re-plan. Only an AGREEMENT_CODE_CHANGE can block:
+    /// it yields <see cref="RecalcBlockedAgreementMidWeek"/> exactly when payroll's shared week rule
+    /// (<see cref="WeeklyContext.MidWeekAgreementChange"/> over the month's
+    /// <see cref="WeeklyContext.SettledWeeks"/>) calls its date a mid-week change.
+    /// </summary>
+    public static string? RecalcBlockedByForTrigger(string triggerKind, DateOnly effectiveFrom, int year, int month) =>
+        triggerKind switch
         {
-            WorklistTriggerKinds.ProfileChange => RecalcBlockedProfileSplit,
-            WorklistTriggerKinds.EmploymentCategoryChange => RecalcBlockedProfileSplit,
-            WorklistTriggerKinds.AgreementCodeChange => RecalcBlockedAgreementKey,
-            // S145 R5(c): a reopen of the previous month splits nothing inside this month, so it
-            // never blocks the re-plan. Stated explicitly rather than left to the default arm.
-            // (Its effectiveFrom lies in the previous month anyway, so the strictly-inside test
-            // above already answers null for it.)
+            WorklistTriggerKinds.AgreementCodeChange =>
+                IsAgreementChangeInsideSettledWeek(effectiveFrom, year, month) ? RecalcBlockedAgreementMidWeek : null,
+            // S145 Stage B (refinement :702): payroll pays a profile or category split part by part,
+            // so neither blocks the re-plan any more (S138–S144 derived QUAL-149 for them).
+            WorklistTriggerKinds.ProfileChange => null,
+            WorklistTriggerKinds.EmploymentCategoryChange => null,
+            // S145 R5(c): a reopen of the previous month changes no agreement row, so it never
+            // blocks the re-plan. Stated explicitly rather than left to the default arm.
             WorklistTriggerKinds.PriorMonthReopened => null,
             _ => null,
         };
+
+    /// <summary>
+    /// The SAME question payroll asks before it calculates a month (Q5 (c)), for one change date:
+    /// is <paramref name="changeDate"/> a non-Monday inside one of the Monday–Sunday weeks the
+    /// month (year, month) settles? Those weeks include the context days before the 1st, so this
+    /// catches an interior weekday, a weekday 1st, and the previous month's last days on the next
+    /// month's row (R5(a)) — and lets a change in the month's last days pass when its week is
+    /// settled by the next month.
+    ///
+    /// <para>
+    /// <b>No settlement cutoff and no hire filter (QUAL-210, ruled at B.0, R-55).</b> Payroll also
+    /// passes the leaver's last day as the cutoff and drops hire-dated rows (R43); the worklist has
+    /// neither input. So it can under-block a leaver whose last partial week holds the change, and
+    /// over-block a hire-dated agreement row on a non-Monday. Both cases are registered and pinned.
+    /// </para>
+    /// </summary>
+    private static bool IsAgreementChangeInsideSettledWeek(DateOnly changeDate, int year, int month)
+    {
+        var first = new DateOnly(year, month, 1);
+        var last = first.AddMonths(1).AddDays(-1);
+        return WeeklyContext.MidWeekAgreementChange(
+            WeeklyContext.SettledWeeks(first, last, cutoff: null), new[] { changeDate });
     }
 
     /// <summary>The SET (distinct, stable order) of blocking register ids over all triggers of the row; empty for SETTLED_YEAR rows.</summary>

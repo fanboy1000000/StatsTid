@@ -11,8 +11,9 @@ namespace StatsTid.Backend.Api.Contracts;
 /// on EXPORTED_MONTH rows (the export's CURRENT content hash differs from
 /// <paramref name="BaselineContentHash"/>); <paramref name="ReversedSince"/> only on SETTLED_YEAR
 /// rows (a later settlement sequence exists, or the baseline row is now REVERSED);
-/// <paramref name="RecalcBlockedBy"/> is the register id (<c>QUAL-149</c> / <c>QUAL-150</c>) when
-/// THIS trigger blocks the payroll re-plan today, else null.
+/// <paramref name="RecalcBlockedBy"/> is the register id when THIS trigger blocks the payroll
+/// re-plan today, else null. Since S145 Stage B the only id is <c>QUAL-209</c>: an
+/// AGREEMENT_CODE_CHANGE dated on a non-Monday inside a Monday–Sunday week the month settles.
 /// </summary>
 public sealed record BackdateWorklistTriggerDto(
     string Kind,
@@ -39,7 +40,8 @@ public sealed record BackdateWorklistTriggerDto(
 /// <c>HANDLED_MANUALLY</c> once resolved (null while open). <paramref name="ResolutionBlockedBy"/>
 /// (S144) is the block set RECORDED at resolution — the register ids that were in force on the row
 /// when HR resolved it (<c>[]</c> when nothing blocked) — and is null while the row is open; unlike
-/// <paramref name="RecalcBlockedBy"/> it is a stamped fact, not re-derived.
+/// <paramref name="RecalcBlockedBy"/> it is a stamped fact, not re-derived, so a row resolved before
+/// S145 Stage B keeps the ids then in force (<c>QUAL-149</c> / <c>QUAL-150</c>).
 /// <paramref name="Version"/> also rides the ETag the resolve endpoint expects as If-Match.
 /// </summary>
 public sealed record BackdateWorklistRow(
