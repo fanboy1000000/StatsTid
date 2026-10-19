@@ -181,7 +181,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
     /// (MERARBEJDE, OK24, AC). March is entirely OK24.
     ///
     /// Red conditions (Docker-gated, CI-verified): MB-2 (every EMPLOYED segment hydrated with the FIRST
-    /// EMPLOYED segment's wage-type key, <c>PeriodCalculationService.cs:1675-1677</c>) maps the AC part's
+    /// EMPLOYED segment's wage-type key, <c>PeriodCalculationService</c>, the dated wage-type key hydration in <c>SegmentProfileAsync</c>) maps the AC part's
     /// MERARBEJDE under HK, where no MERARBEJDE row exists, so the line is dropped and the exact export-lines
     /// assertion trips. MB-7 (the filter disabled) makes the shim throw (the planner refuses the split).
     /// </summary>

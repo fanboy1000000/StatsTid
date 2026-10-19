@@ -124,7 +124,7 @@ public sealed class BackdateWorklistResidualDerivationTests
 
     /// <summary>
     /// QUAL-210 - HIRE. A hire's first agreement row is not a change; payroll drops hire-dated rows
-    /// (R43, <c>PeriodCalculationService.cs:3385-3397</c>) so it pays the month. The worklist cannot
+    /// (R43, <c>PeriodCalculationService.EnsureNoMidWeekAgreementChange</c>) so it pays the month. The worklist cannot
     /// tell a hire row from a change and derives the residual (over-blocks). The first assertion
     /// repeats <c>AgreementChange_MidWeekInsideMonth_DerivesResidual</c> on purpose: this fact names
     /// the drift for the register and adds no coverage. It flips when the derivation gets the

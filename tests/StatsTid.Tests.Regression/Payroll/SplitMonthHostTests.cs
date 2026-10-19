@@ -190,7 +190,7 @@ public sealed class SplitMonthHostTests : IAsyncLifetime
     /// <c>current_effective_lines</c> is byte-for-byte unchanged and no correction event or audit row is written.
     ///
     /// Red conditions (Docker-gated, CI-verified): MB-4 (the week check ignores interior dates,
-    /// <c>PeriodCalculationService.cs:3386-3391</c>) lets the Wednesday change through: the month is recalculated
+    /// <c>PeriodCalculationService.EnsureNoMidWeekAgreementChange</c>) lets the Wednesday change through: the month is recalculated
     /// and the route answers 200, tripping the status assertion. MB-7 (the filter disabled) restores the planner's
     /// refusal: the body then carries a <c>ruleId</c> and no <c>reason</c>, tripping <c>AssertWeekCheckRefusal</c>.
     /// </summary>
