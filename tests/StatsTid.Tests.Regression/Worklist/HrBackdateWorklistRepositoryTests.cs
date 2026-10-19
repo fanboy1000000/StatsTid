@@ -275,8 +275,8 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         Assert.True(BackdateWorklistDerivation.RecalculatedSinceForTrigger(row, row.Triggers[0]));
         Assert.False(BackdateWorklistDerivation.RecalculatedSinceForTrigger(row, row.Triggers[1]));
         Assert.False(BackdateWorklistDerivation.RecalculatedSince(row));
-        // Both dates are strictly inside May → both re-plan blockers are visible (owner ruling OQ-3 (a)).
-        Assert.Equal(new[] { "QUAL-149", "QUAL-150" }, BackdateWorklistDerivation.RecalcBlockedBy(row));
+        // S145 B3: only the AGREEMENT trigger (Wed 20 May, mid-week in a week May settles) blocks, with the residual id; the PROFILE trigger no longer blocks (was ["QUAL-149", "QUAL-150"], owner ruling OQ-3 (a)).
+        Assert.Equal(new[] { "QUAL-209" }, BackdateWorklistDerivation.RecalcBlockedBy(row));
         Assert.Null(BackdateWorklistDerivation.ReversedSince(row));
 
         // Events: the first Created (appended=false, rowVersion 1) + the appended one (true, 2).
@@ -714,18 +714,24 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// S144 / TASK-14401 — the resolve version guard, and (S144) the FENCEPOST pin for the
-    /// recalculation-blocked refusal.
+    /// S144 / TASK-14401 — the resolve version guard, and the pin that the recalculation-blocked
+    /// refusal does not fire on an unblocked row (S144's FENCEPOST pin; since S145 Stage B the row
+    /// is unblocked by its trigger's kind, not its date).
     ///
-    /// <para><b>Plain language.</b> The trigger is effective on the FIRST day of August, so the
-    /// correction does NOT reach into an already-exported month (QUAL-149 only blocks a trigger
-    /// strictly inside the month: <c>date &gt; first &amp;&amp; date &lt;= last</c>). A RECALCULATED
+    /// <para><b>Plain language.</b> S145 B3 (docstring reworded; the seed is unchanged): the seeded
+    /// trigger is a PROFILE_CHANGE effective on 1 August. Since Stage B a profile change never
+    /// blocks a month, because payroll pays such a month part by part, so this row is unblocked
+    /// whatever the date of the trigger. (Before Stage B the date mattered: QUAL-149 blocked only a
+    /// trigger strictly inside the month, and the 1st was the fencepost.) A RECALCULATED
     /// resolution on this row must therefore succeed and record an EMPTY block set — this is the pin
-    /// that the new refusal does not fire on an unblocked row.</para>
+    /// that the refusal does not fire on an unblocked row.</para>
     ///
-    /// <para><b>Red conditions.</b> (1) Use <c>&gt;=</c> instead of <c>&gt;</c> in
-    /// <c>IsStrictlyInsideMonth</c> (the fencepost) → the row counts as blocked, the fresh
-    /// RECALCULATED call throws the blocked exception and the fact fails at the resolve. (2) Stamp a
+    /// <para><b>Red conditions.</b> (1) S145 B3 (R-117): no derivation mutation of this sprint trips
+    /// it. MB-6p restores Stage A's profile arm (QUAL-149 only strictly inside the month), and the 1st
+    /// is not strictly inside; MB-6 and MB-6r touch only AGREEMENT triggers; and the old <c>&gt;=</c>
+    /// in <c>IsStrictlyInsideMonth</c> no longer applies, because the derivation does not call that
+    /// method. A derivation that blocked a PROFILE trigger on any date would trip it: the fresh
+    /// RECALCULATED call would throw the blocked exception. (2) Stamp a
     /// non-empty or NULL set for an unblocked row → the event's <c>blockedBy</c> is not an empty array
     /// / <c>resolution_blocked_by = '{}'</c> counts 0. (3) Run the already-resolved check AFTER the
     /// version guard → the stale-version-1 repeat throws <see cref="OptimisticConcurrencyException"/>
@@ -769,7 +775,7 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         Assert.Equal(1L, resolved.GetProperty("versionBefore").GetInt64());
         Assert.Equal(2L, resolved.GetProperty("versionAfter").GetInt64());
         Assert.Equal(1, resolved.GetProperty("triggerCount").GetInt32());
-        // S144: nothing blocked (trigger on the 1st) → the event carries an EMPTY array and the row
+        // S144: nothing blocked (S145 B3: a PROFILE trigger never blocks) → the event carries an EMPTY array and the row
         // is stamped with the EMPTY set (not NULL — NULL means "still open").
         var blockedBy = resolved.GetProperty("blockedBy");
         Assert.Equal(JsonValueKind.Array, blockedBy.ValueKind);
@@ -793,8 +799,10 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
 
     // ── S144 / TASK-14405 — the block is binding for RECALCULATED where the row is LOCKED ───
     //
-    // Plain language: a worklist row whose month contains a mid-month profile change is "blocked"
-    // (QUAL-149: the live rule set refuses to re-plan such a month). Until S144 the endpoint only
+    // Plain language: a worklist row whose month contains a mid-week agreement change is "blocked"
+    // (S145 B3: QUAL-209 - a Monday-Sunday week cannot be judged under two agreements, so payroll
+    // refuses to re-plan such a month; before Stage B a mid-month PROFILE change blocked it, as
+    // QUAL-149). Until S144 the endpoint only
     // showed that as a flag, and the verb RECALCULATED could still be recorded — an HR "I
     // recalculated it" assertion for a month that could not have been. Now the repository
     // (which holds the row lock) refuses RECALCULATED on a blocked row, and the new verb
@@ -802,21 +810,22 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     //
     // Three SEPARATE facts (one mutation each, attributable in the evidence runs): a fact stops
     // at its first failed assertion, so folding them together would let one mutation mask another.
-    // The blocked row is seeded via a PROFILE_CHANGE trigger on 2026-08-15 (strictly inside August,
-    // so QUAL-149 applies; the 1st would not — that is the derivation fencepost, pinned in unit).
+    // S145 B3: the blocked row is seeded via an AGREEMENT_CODE_CHANGE trigger on Wed 2026-08-19 (a
+    // non-Monday inside a week August settles, so the residual QUAL-209 applies; the week-rule
+    // matrix is pinned in unit). It was a PROFILE_CHANGE on Sat 2026-08-15, which no longer blocks.
 
     private async Task<Guid> SeedBlockedAugustRowAsync(string employeeId)
     {
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, "STY_WL_A");
         await SeedExportAsync(employeeId, 2026, 8, "h1");
         return Assert.Single(await RunExportedAsync(employeeId,
-            Trigger(WorklistTriggerKinds.ProfileChange, new DateOnly(2026, 8, 15)),
-            new DateOnly(2026, 8, 15), new DateOnly(2026, 9, 1)));
+            Trigger(WorklistTriggerKinds.AgreementCodeChange, new DateOnly(2026, 8, 19)), // S145 B3: was PROFILE_CHANGE on 2026-08-15
+            new DateOnly(2026, 8, 19), new DateOnly(2026, 9, 1)));
     }
 
     /// <summary>
     /// (1a) RECALCULATED on a blocked row, matching version → <see cref="BackdateWorklistRecalcBlockedException"/>
-    /// carrying the worklist id and <c>BlockedBy = ["QUAL-149"]</c>; the fact observes NOTHING
+    /// carrying the worklist id and <c>BlockedBy = ["QUAL-209"]</c> (S145 B3: the residual; was QUAL-149); the fact observes NOTHING
     /// COMMITTED: the row is still open at version 1, no <c>BackdateWorklistRowResolved</c> event,
     /// no audit row. Stated plainly, this does NOT prove the refusal precedes any write: the
     /// helper's transaction is disposed (rolled back) when the exception propagates, so a write
@@ -828,6 +837,8 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     /// <c>throw new BackdateWorklistRecalcBlockedException(…)</c> branch. The row then resolves
     /// normally and <c>Assert.ThrowsAsync&lt;BackdateWorklistRecalcBlockedException&gt;</c> trips
     /// (no exception thrown). Observed in evidence run 1 (E1) at close.
+    /// S145 B3, also: MB-6r (TASK-14521's Unit mutation: the residual arm returns null) leaves the
+    /// seeded Wed 19 Aug agreement trigger unblocked, so the same assertion trips.
     /// </summary>
     [Fact]
     public async Task Resolve_Recalculated_OnBlockedRow_ThrowsRecalcBlocked_WritesNothing()
@@ -839,7 +850,7 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
             () => RunResolveAsync(id, expectedVersion: 1, WorklistResolutions.Recalculated, "Re-planned"));
 
         Assert.Equal(id, ex.WorklistId);
-        Assert.Equal(new[] { "QUAL-149" }, ex.BlockedBy);
+        Assert.Equal(new[] { "QUAL-209" }, ex.BlockedBy); // S145 B3: the residual (was QUAL-149)
 
         var row = await _repo.GetByIdWithVersionAsync(id);
         Assert.Null(row!.ResolvedAt);
@@ -862,6 +873,8 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     /// <see cref="BackdateWorklistRecalcBlockedException"/> and
     /// <c>Assert.ThrowsAsync&lt;OptimisticConcurrencyException&gt;</c> trips. Observed in evidence
     /// run 2 (E2, M-3 alone — M-1 and M-3 cancel each other in one build) at close.
+    /// S145 B3: MB-6r does not trip this fact on its own (a stale token is refused before any block
+    /// is derived), so it stays attributable to M-3 only.
     /// </summary>
     [Fact]
     public async Task Resolve_Recalculated_OnBlockedRow_StaleVersion_ThrowsConcurrencyBeforeBlock()
@@ -881,13 +894,15 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     /// <summary>
     /// (1c) HANDLED_MANUALLY on the same blocked row SUCCEEDS (that is the point of the verb) and
     /// records the block set that was in force — on the ROW (<c>ResolutionBlockedBy</c>) and in the
-    /// EVENT (<c>blockedBy</c>, the audit record) — both exactly <c>["QUAL-149"]</c>.
+    /// EVENT (<c>blockedBy</c>, the audit record) — both exactly <c>["QUAL-209"]</c> (S145 B3: the residual; was QUAL-149).
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified): mutation M-2 — in
     /// <c>ResolveAsync</c> stamp <c>Array.Empty&lt;string&gt;()</c> (<c>{}</c>) on the write and the
     /// event instead of the derived <c>blockedBy</c>. <c>ResolutionBlockedBy</c> then reads <c>[]</c>
-    /// and <c>Assert.Equal(new[] { "QUAL-149" }, row.ResolutionBlockedBy)</c> trips. Observed in
+    /// and <c>Assert.Equal(new[] { "QUAL-209" }, row.ResolutionBlockedBy)</c> trips. Observed in
     /// evidence run 1 (E1) at close; it also trips TASK-14401's endpoint stamp facts.
+    /// S145 B3, also: MB-6r (the residual arm returns null) stamps an empty set for the seeded Wed
+    /// 19 Aug agreement trigger, so the same assertion trips.
     /// </summary>
     [Fact]
     public async Task Resolve_HandledManually_OnBlockedRow_StampsBlockSetOnRowAndEvent()
@@ -903,11 +918,11 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
         Assert.NotNull(row!.ResolvedAt);
         Assert.Equal("HANDLED_MANUALLY", row.Resolution);
         Assert.NotNull(row.ResolutionBlockedBy);
-        Assert.Equal(new[] { "QUAL-149" }, row.ResolutionBlockedBy);
+        Assert.Equal(new[] { "QUAL-209" }, row.ResolutionBlockedBy); // S145 B3: the residual (was QUAL-149)
 
         var resolved = Assert.Single(await OutboxEventsAsync(emp, "BackdateWorklistRowResolved"));
         Assert.Equal("HANDLED_MANUALLY", resolved.GetProperty("resolution").GetString());
-        Assert.Equal(new[] { "QUAL-149" },
+        Assert.Equal(new[] { "QUAL-209" }, // S145 B3: the residual (was QUAL-149)
             resolved.GetProperty("blockedBy").EnumerateArray().Select(e => e.GetString()).ToArray());
     }
 

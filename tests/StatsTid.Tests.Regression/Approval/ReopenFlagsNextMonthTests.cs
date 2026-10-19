@@ -26,8 +26,9 @@ namespace StatsTid.Tests.Regression.Approval;
 /// <c>EXPORTED_MONTH</c> row for October on the HR follow-up list (ADR-040 D8; HRP-001), in the same
 /// transaction as the reopen, so the list is never behind the state. The row carries a NEW trigger
 /// kind, working name <c>PRIOR_MONTH_REOPENED</c>, that is deliberately NON-blocking: nothing about
-/// October's own data prevents re-planning it (the payroll re-plan refusal is about a profile or
-/// agreement split INSIDE the month, which a reopen is not), so <c>recalcBlockedBy</c> stays empty.
+/// October's own data prevents re-planning it (since S145 Stage B the re-plan refusal is about an
+/// agreement change inside a week the month settles, which a reopen is not), so
+/// <c>recalcBlockedBy</c> stays empty.
 /// The row's event is the <c>PeriodReopened</c> event itself, which is the causal link back to
 /// what HR must look at.</para>
 ///

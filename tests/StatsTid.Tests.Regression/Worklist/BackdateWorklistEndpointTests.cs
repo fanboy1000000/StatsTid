@@ -52,8 +52,9 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         _ = _factory.CreateClient(); // boots the host (seeders run)
 
         // Subject: an employee in EmployeeOrg with ONE exported month (March 2026) and ONE open
-        // EXPORTED_MONTH worklist row raised by a PROFILE_CHANGE effective 15 Mar (strictly inside
-        // the month → QUAL-149 visible). Also seed the foreign org so a foreign-HR scope is real.
+        // EXPORTED_MONTH worklist row raised by an AGREEMENT_CODE_CHANGE effective Wed 18 Mar
+        // (S145 B3: was a PROFILE_CHANGE on 15 Mar, which no longer blocks; Wed 18 Mar is a
+        // non-Monday inside a week March settles → the residual QUAL-209 visible). Also seed the foreign org so a foreign-HR scope is real.
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, Employee, EmployeeOrg);
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, "wl_ep_foreign_emp", ForeignOrg);
         await ExecAsync(
@@ -69,8 +70,8 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         await conn.OpenAsync();
         await using var tx = await conn.BeginTransactionAsync();
         var ids = await repo.WriteForExportedMonthsAsync(conn, tx, Employee,
-            new WorklistTrigger(WorklistTriggerKinds.ProfileChange, Guid.NewGuid(), new DateOnly(2026, 3, 15), "hr_seed"),
-            new DateOnly(2026, 3, 15), new DateOnly(2026, 4, 1), CancellationToken.None);
+            new WorklistTrigger(WorklistTriggerKinds.AgreementCodeChange, Guid.NewGuid(), new DateOnly(2026, 3, 18), "hr_seed"), // S145 B3: was PROFILE_CHANGE on 2026-03-15
+            new DateOnly(2026, 3, 18), new DateOnly(2026, 4, 1), CancellationToken.None); // S145 B3: interval start 2026-03-18 (was 03-15)
         await tx.CommitAsync();
         _openRowId = Assert.Single(ids);
     }
@@ -113,14 +114,16 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Null, row.GetProperty("resolutionBlockedBy").ValueKind);
 
         var trigger =Assert.Single(row.GetProperty("triggers").EnumerateArray());
-        Assert.Equal("PROFILE_CHANGE", trigger.GetProperty("kind").GetString());
-        Assert.Equal("2026-03-15", trigger.GetProperty("effectiveFrom").GetString()); // HR-only surface — may be carried
+        Assert.Equal("AGREEMENT_CODE_CHANGE", trigger.GetProperty("kind").GetString()); // S145 B3: was PROFILE_CHANGE
+        Assert.Equal("2026-03-18", trigger.GetProperty("effectiveFrom").GetString()); // HR-only surface — may be carried; S145 B3: was 2026-03-15
         Assert.Equal("h-mar", trigger.GetProperty("baselineContentHash").GetString());
         Assert.False(trigger.GetProperty("recalculatedSince").GetBoolean());
         Assert.Equal(JsonValueKind.Null, trigger.GetProperty("reversedSince").ValueKind);
-        Assert.Equal("QUAL-149", trigger.GetProperty("recalcBlockedBy").GetString());
+        // S145 B3: MB-6r (TASK-14521's Unit mutation: the residual arm returns null) → the trigger's
+        // recalcBlockedBy is null and the row's set is empty, tripping both QUAL-209 assertions.
+        Assert.Equal("QUAL-209", trigger.GetProperty("recalcBlockedBy").GetString()); // S145 B3: the residual (was QUAL-149)
 
-        Assert.Equal(new[] { "QUAL-149" }, row.GetProperty("recalcBlockedBy").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.Equal(new[] { "QUAL-209" }, row.GetProperty("recalcBlockedBy").EnumerateArray().Select(e => e.GetString()).ToArray()); // S145 B3: the residual (was QUAL-149)
         Assert.False(row.GetProperty("recalculatedSince").GetBoolean());
         Assert.Equal(JsonValueKind.Null, row.GetProperty("reversedSince").ValueKind);
     }
@@ -211,18 +214,20 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0", Employee));
 
         // S144 / TASK-14401 (3a): DISMISSED is stamped too — with the block set that held at the
-        // moment of resolution (the setup row IS blocked by QUAL-149), not merely a non-NULL value.
+        // moment of resolution (the setup row IS blocked by QUAL-209, S145 B3), not merely a non-NULL value.
         // Red conditions: stamp '{}' (or NULL, which the widened CHECK would also refuse) instead of
         // the derived set → the row count is 0; drop blockedBy from the event → the payload count is
         // 0; drop it from the audit mapper's details → the details count is 0; drop
         // ResolutionBlockedBy from ToDto / the repository read → the open=false GetProperty below
-        // throws or the array differs.
+        // throws or the array differs. S145 B3: MB-6r (the residual arm returns null) → the derived
+        // set is empty and all three counts are 0.
+        // S145 B3: the residual QUAL-209 (was QUAL-149) in the three stamp assertions below.
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution_blocked_by = '{QUAL-149}'", _openRowId));
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution_blocked_by = '{QUAL-209}'", _openRowId));
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved' AND event_payload -> 'blockedBy' = '[\"QUAL-149\"]'::jsonb", $"employee-{Employee}"));
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved' AND event_payload -> 'blockedBy' = '[\"QUAL-209\"]'::jsonb", $"employee-{Employee}"));
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0 AND details -> 'blockedBy' = '[\"QUAL-149\"]'::jsonb", Employee));
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0 AND details -> 'blockedBy' = '[\"QUAL-209\"]'::jsonb", Employee));
 
         // (4) open=true (default) no longer lists it; open=false does, with the resolution fields.
         using (var openDoc = JsonDocument.Parse(await client.GetStringAsync($"/api/hr/backdate-worklist?employeeId={Employee}")))
@@ -233,7 +238,7 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
             Assert.Equal("DISMISSED", row.GetProperty("resolution").GetString());
             Assert.Equal(ScopedHrActor, row.GetProperty("resolvedBy").GetString());
             Assert.Equal(2L, row.GetProperty("version").GetInt64());
-            Assert.Equal(new[] { "QUAL-149" }, row.GetProperty("resolutionBlockedBy").EnumerateArray().Select(e => e.GetString()).ToArray());
+            Assert.Equal(new[] { "QUAL-209" }, row.GetProperty("resolutionBlockedBy").EnumerateArray().Select(e => e.GetString()).ToArray()); // S145 B3: the residual (was QUAL-149)
         }
 
         // (5) Resolving again with the FRESH token → 409 (already resolved, not a silent re-write).
@@ -288,7 +293,9 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     /// unconditional (refuse every actor, or ignore the actor's role) → the Global-Admin leg 403s
     /// and fails. (4) Move the gate BEFORE the org-scope validation → the foreign-HR leg's 403
     /// reason changes from the scope reason to the rule reason and fails, which is the pin that the
-    /// refusal is not an existence/kind oracle for a row the caller may not see.</para>
+    /// refusal is not an existence/kind oracle for a row the caller may not see. (5) S145 B3: MB-6r
+    /// (the residual arm returns null) → the setup row is unblocked, so the Global-Admin leg returns
+    /// 200 instead of 409 and fails.</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_AsRecalculated_Hr403_LocalAdmin403_GlobalAdmin409Blocked_ForeignHrStillScope403()
@@ -338,8 +345,8 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
             "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0", Employee));
 
         // (4) S144 — the SAME request, differing ONLY in the actor's role, now reaches the NEXT
-        // gate for a Global Admin: the setup row is BLOCKED (trigger 15 Mar, strictly inside the
-        // month → QUAL-149), so RECALCULATED is refused with 409 worklist-recalc-blocked and NOTHING
+        // gate for a Global Admin: the setup row is BLOCKED (S145 B3: trigger Wed 18 Mar, mid-week in a week March settles
+        // → QUAL-209), so RECALCULATED is refused with 409 worklist-recalc-blocked and NOTHING
         // is written. This leg keeps its purpose: a 409-blocked is reachable ONLY past the role
         // gate (a 403 actor never gets a block verdict), so it still proves the 403s above were
         // the rule biting and not a malformed request; the gate does not over-block the one role
@@ -350,7 +357,7 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         using (var blockedDoc = JsonDocument.Parse(await admin.Content.ReadAsStringAsync()))
         {
             Assert.Equal("worklist-recalc-blocked", blockedDoc.RootElement.GetProperty("kind").GetString());
-            Assert.Equal(new[] { "QUAL-149" }, blockedDoc.RootElement.GetProperty("blockedBy").EnumerateArray().Select(e => e.GetString()).ToArray());
+            Assert.Equal(new[] { "QUAL-209" }, blockedDoc.RootElement.GetProperty("blockedBy").EnumerateArray().Select(e => e.GetString()).ToArray()); // S145 B3: the residual (was QUAL-149)
             Assert.False(string.IsNullOrWhiteSpace(blockedDoc.RootElement.GetProperty("error").GetString()));
         }
         Assert.Equal(1, await CountAsync(
@@ -363,14 +370,15 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
 
     /// <summary>
     /// S144 / TASK-14401 leg (5), a SEPARATE fact (a test stops at its first failed assertion, so a
-    /// leg after the deliberately-red 409 leg would never run in evidence run 1). The trigger is
-    /// effective on the FIRST of April 2026, so the correction does not reach into the exported month
-    /// (QUAL-149 needs a date strictly inside it) → the row is UNBLOCKED → a Global Admin RECALCULATED
+    /// leg after the deliberately-red 409 leg would never run in evidence run 1). The trigger is a
+    /// PROFILE_CHANGE effective on the FIRST of April 2026 (S145 B3, reworded: a profile change never
+    /// blocks since Stage B; before it, the 1st was the fencepost of QUAL-149's strictly-inside-the-
+    /// month test) → the row is UNBLOCKED → a Global Admin RECALCULATED
     /// succeeds, and the resolution is stamped with the EMPTY set (not NULL: NULL means open).
     ///
     /// <para><b>Red conditions.</b> (1) Refuse RECALCULATED for a Global Admin unconditionally, or
-    /// treat a 1st-of-month trigger as blocked (<c>&gt;=</c> in <c>IsStrictlyInsideMonth</c>) → 409,
-    /// not 200. (2) Stamp NULL (the widened CHECK refuses it, so 500) or a non-empty set → the
+    /// treat a PROFILE trigger on the 1st as blocked → 409, not 200 (S145 R-117: MB-6p restores
+    /// Stage A's profile arm, which never blocked the 1st, so MB-6p does not trip this fact). (2) Stamp NULL (the widened CHECK refuses it, so 500) or a non-empty set → the
     /// <c>resolution_blocked_by = '{}'</c> count is 0. (3) Omit <c>blockedBy</c> from the event, or
     /// emit <c>null</c> instead of <c>[]</c> → the event assertion's <c>ValueKind</c>/emptiness fails.</para>
     /// </summary>
@@ -421,7 +429,8 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     /// <para><b>Red conditions.</b> Move the block check before the version guard (in the handler or
     /// the repository) → the response is 409 <c>worklist-recalc-blocked</c>, not 412, and the status
     /// assertion fails. Drop the block check's precedence differently — e.g. return 409 for a stale
-    /// token on any blocked row — same failure.</para>
+    /// token on any blocked row — same failure. (S145 B3: MB-6r, the residual arm returning null,
+    /// does not trip it: the stale token answers 412 whether or not the row is blocked.)</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_Blocked_AsRecalculated_StaleIfMatch_Is412_Not409()
@@ -445,19 +454,20 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     /// S144 / TASK-14401 — the new verb <c>HANDLED_MANUALLY</c> on an EXPORTED_MONTH row is gated
     /// exactly like RECALCULATED (it asserts an act only a Global Admin performs: the payroll
     /// correction was handled outside the tool): HR 403, LocalAdmin 403, Global Admin 200. The 200
-    /// stamps the block set that held at resolution (the setup row is blocked by QUAL-149) on the
+    /// stamps the block set that held at resolution (the setup row is blocked by QUAL-209, S145 B3) on the
     /// row, the event, the audit row and the wire.
     ///
     /// <para><b>Red conditions.</b> (1) Leave HANDLED_MANUALLY out of the verb whitelist → the
     /// Global-Admin leg is 422, not 200. (2) Gate it as HR-open (no OQ-7 (a) extension to the new
     /// verb) → the HR leg returns 200 (and the row-untouched counts fail). (3) Gate it as a role
-    /// FLOOR → the LocalAdmin leg is 200. (4) Also block it on QUAL-149 like RECALCULATED → the
+    /// FLOOR → the LocalAdmin leg is 200. (4) Also block it on QUAL-209 like RECALCULATED → the
     /// Global-Admin leg is 409 (the whole point of the verb is that it is the way out of a block).
-    /// (5) Stamp <c>{}</c> instead of the derived set → the <c>'{QUAL-149}'</c> and event
+    /// (5) Stamp <c>{}</c> instead of the derived set → the <c>'{QUAL-209}'</c> and event
     /// assertions trip. (6) Drop blockedBy from the audit mapper → the <c>details</c> assertion
     /// trips. (7) Drop ResolutionBlockedBy from <c>ToDto</c> → the read-back <c>GetProperty</c> throws.
     /// (8) Reword the 403 so it omits <c>GlobalAdmin</c>/<c>RECALCULATED</c> or names the employee →
-    /// the reason assertions trip.</para>
+    /// the reason assertions trip. (9) S145 B3: MB-6r (the residual arm returns null) → the stamp is
+    /// <c>{}</c>, not <c>{QUAL-209}</c>, and the row, event and audit assertions trip.</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_AsHandledManually_Hr403_LocalAdmin403_GlobalAdmin200_StampsBlockSet()
@@ -491,29 +501,30 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, admin.StatusCode);
         Assert.Equal("\"2\"", admin.Headers.ETag!.Tag);
 
+        // S145 B3: the residual QUAL-209 (was QUAL-149) in the row, event and audit assertions below.
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'HANDLED_MANUALLY' AND resolved_by = 'wl_ep_admin' AND version = 2 AND resolution_blocked_by = '{QUAL-149}'", _openRowId));
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'HANDLED_MANUALLY' AND resolved_by = 'wl_ep_admin' AND version = 2 AND resolution_blocked_by = '{QUAL-209}'", _openRowId));
 
         // The event: the resolution and the block set; and the row's stamp equals the event's.
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved' AND event_payload ->> 'resolution' = 'HANDLED_MANUALLY' AND event_payload -> 'blockedBy' = '[\"QUAL-149\"]'::jsonb", $"employee-{Employee}"));
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved' AND event_payload ->> 'resolution' = 'HANDLED_MANUALLY' AND event_payload -> 'blockedBy' = '[\"QUAL-209\"]'::jsonb", $"employee-{Employee}"));
 
         // The audit row: resolution, reason and blockedBy in details.
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0 AND details ->> 'resolution' = 'HANDLED_MANUALLY' AND details ->> 'reason' = 'Paid out by hand in the payroll system, March 2026' AND details -> 'blockedBy' = '[\"QUAL-149\"]'::jsonb", Employee));
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type = 'BackdateWorklistRowResolved' AND target_resource_id = @p0 AND details ->> 'resolution' = 'HANDLED_MANUALLY' AND details ->> 'reason' = 'Paid out by hand in the payroll system, March 2026' AND details -> 'blockedBy' = '[\"QUAL-209\"]'::jsonb", Employee));
 
         // The wire: a resolved row's resolutionBlockedBy is the array.
         using var allDoc = JsonDocument.Parse(await Client(GlobalAdminToken()).GetStringAsync($"/api/hr/backdate-worklist?employeeId={Employee}&open=false"));
         var row = Assert.Single(allDoc.RootElement.EnumerateArray());
         Assert.Equal("HANDLED_MANUALLY", row.GetProperty("resolution").GetString());
-        Assert.Equal(new[] { "QUAL-149" }, row.GetProperty("resolutionBlockedBy").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.Equal(new[] { "QUAL-209" }, row.GetProperty("resolutionBlockedBy").EnumerateArray().Select(e => e.GetString()).ToArray()); // S145 B3: the residual (was QUAL-149)
     }
 
     /// <summary>
     /// S144 / TASK-14401 — the OQ-7 (a) gate is about the EXPORTED_MONTH remedy; a SETTLED_YEAR row
     /// stays HR-open for every verb, including the new one. An in-scope HR actor records
     /// HANDLED_MANUALLY on a SETTLED_YEAR row → 200, stamped with the EMPTY set (a settled-year row
-    /// is never blocked; the QUAL-149 block is an EXPORTED_MONTH-only concept).
+    /// is never blocked; the QUAL-209 block is an EXPORTED_MONTH-only concept).
     ///
     /// <para><b>Red conditions.</b> (1) Apply the Global-Admin gate to HANDLED_MANUALLY regardless
     /// of <c>row.Kind</c> → the HR call is 403, not 200. (2) Stamp NULL → the widened CHECK refuses
@@ -574,8 +585,9 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
     ///
     /// <para><b>S144 red conditions.</b> Let HANDLED_MANUALLY on an EXPORTED_MONTH row through for a
     /// non-GlobalAdmin → leg (a2) returns 200 instead of 403. Stamp <c>{}</c> instead of the derived
-    /// set on the DISMISSED → the <c>'{QUAL-149}'</c> row assertion and the event <c>blockedBy</c>
-    /// assertion in leg (b) trip.</para>
+    /// set on the DISMISSED → the <c>'{QUAL-209}'</c> row assertion and the event <c>blockedBy</c>
+    /// assertion in leg (b) trip. S145 B3: MB-6r (the residual arm returns null) → the stamp is
+    /// <c>{}</c> and the same two assertions trip.</para>
     /// </summary>
     [Fact]
     public async Task Resolve_ExportedMonth_AsRecalculated_MixedRoleHrWithGlobalAdminScope_Is403_ButMayStillDismiss()
@@ -628,11 +640,12 @@ public sealed class BackdateWorklistEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, dismiss.StatusCode);
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution = 'DISMISSED' AND resolved_by = 'wl_ep_hr_globalscope' AND version = 2", _openRowId));
-        // S144: the DISMISSED is stamped with the derived block set (the row is blocked by QUAL-149).
+        // S144: the DISMISSED is stamped with the derived block set.
+        // S145 B3: the residual QUAL-209 (was QUAL-149) in the two stamp assertions below.
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution_blocked_by = '{QUAL-149}'", _openRowId));
+            "SELECT COUNT(*) FROM hr_backdate_worklist WHERE worklist_id = @p0 AND resolution_blocked_by = '{QUAL-209}'", _openRowId));
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved' AND event_payload -> 'blockedBy' = '[\"QUAL-149\"]'::jsonb", $"employee-{Employee}"));
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @p0 AND event_type = 'BackdateWorklistRowResolved' AND event_payload -> 'blockedBy' = '[\"QUAL-209\"]'::jsonb", $"employee-{Employee}"));
     }
 
     /// <summary>
