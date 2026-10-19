@@ -1998,6 +1998,20 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
 - **Fable reviewer: NOT RUN.** The agent stopped at the start of cycle 2 on the account's **Fable usage limit** (HTTP 429, request `req_011Cg61RPugkyVaKphCJFhC9`). The review floor is Fable, under the 2026-09-29 routing ruling, and dual-lens review is mandatory. So cycle 2's internal lens, the adjudicator's rulings and the sign-off all wait until Fable is available again. **Halted, 2026-10-16.** A resume on 2026-10-18 hit the same limit at once (`req_011Cg9nDgz1xs9wuwhUw1imc`).
 - **Owner direction, 2026-10-19: "Run the review with opus."** The cycle-2 internal lens was therefore run on Opus, as owner-directed, following WORKFLOW § "Model Routing" (the sanctioned route): a `general-purpose` agent with `model: opus`, told it is read-only, stating its model as `opus-lens-model:` (not `reviewed-by-model:`). A content baseline was taken outside the workspace before it started (`git diff --binary HEAD` empty at `b351494`; 120 untracked files checksummed). The model-routing guard allowed the spawn. This round's internal lens is therefore not a Fable floor review. The adjudicator's rulings and the sign-off are separate Fable steps; the owner's direction names only the review.
 - **Owner answer, 2026-10-19.** Asked "After the Opus review returns, should the adjudication and the sign-off of the Stage B briefs also run on Opus, or wait for Fable?", the owner chose **"Opus, same as review"**. The other options offered were "Wait for Fable" and "Opus only this round" (later reviews back on Fable). The Orchestrator's working reading, stated to the owner for correction: while Fable is unavailable, S145's reviews and rulings run on Opus through the sanctioned `general-purpose` route; once Fable is available again, they return to Fable. Each such step is recorded here.
+- **Cycle 2, the internal lens on Opus** (`opus-lens-model: claude-opus-5-5`; the full text is in `.claude/plans/s145/b0/opus-step0b-c2-review.md`): **NOT READY, no BLOCKER.**
+  - **Read-only, verified.** The tracked files and the 120 untracked files are byte-identical to the baseline.
+  - **What it confirmed:**
+    - all six cycle-1 internal warnings and the thirteen notes are CLOSED;
+    - contract 7 is right, and its Fact 12 holds: no existing stub engine turns red;
+    - replaying a split month is safe, and RP-B1 can be built as specified;
+    - FX3 is re-derived: 6.00 credit and 8.00 flex balance.
+  - **Open:**
+    - WARNING 1: F-1 is confirmed, so EB-1 = 14;
+    - WARNING 2: the Step 7a whitelist must become a per-pass table of the labels each pass was authorized to use;
+    - WARNING 3, which Codex missed: C-4's red-CI path breaks C-5's "`git diff K <close>` is empty" check and the no-push rule; and any edit to a file a frozen patch touches invalidates the byte-for-byte check, not only an edit to a mutated method;
+    - NOTEs 1–9.
+  - **Where it differs from Codex:** the class doc of `EmploymentTruncationAlignmentTests` goes to TASK-14522-T, as a comment-only edit at B.2; and the pasted standing-constraints block can stay.
+- **The adjudication of cycle 2 on Opus** (owner-directed; rulings R-80 onward) was dispatched on 2026-10-19, with a content baseline taken.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
