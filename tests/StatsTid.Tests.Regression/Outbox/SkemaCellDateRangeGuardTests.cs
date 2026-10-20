@@ -176,7 +176,7 @@ public sealed class SkemaCellDateRangeGuardTests : IClassFixture<SkemaCellDateRa
 
     /// <summary>
     /// <b>B1-c (control).</b> An October save whose entry and absence are BOTH inside October is accepted
-    /// (200) and writes both rows, on the FIRST (2025-10-01) and LAST (2025-10-31) day of October, so the inclusive bounds are pinned (S145 R-133 N-a): the guard refuses only out-of-range dates, never a whole month's save,
+    /// (200) and writes both rows, on the FIRST (2025-10-01) and LAST (2025-10-31) day of October (S145 R-133 N-a). It pins the Entries LOWER bound and the Absences UPPER bound; the two loops share one check form, and the other two off-by-one mutations would refuse a valid edge date (fail closed), noted at cycle 2 and not pinned here: the guard refuses only out-of-range dates, never a whole month's save,
     /// even while a different month (September) is APPROVED.
     ///
     /// <para><b>Red conditions.</b> Passes today and must keep passing. It trips if the new check is built

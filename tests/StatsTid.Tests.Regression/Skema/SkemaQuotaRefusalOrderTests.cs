@@ -43,7 +43,7 @@ namespace StatsTid.Tests.Regression.Skema;
 /// (a profile change landing mid-request, the race the in-lock re-check exists for). The fact reproduces that
 /// race deterministically: the host's <see cref="IEmploymentProfileResolver"/> is wrapped, and answers "no
 /// profile" for the særlige-feriedage day ONLY to the endpoint's own phase-1 read: the host wires the two calculators
-/// (which serve the guards before the pre-check) to the REAL resolver, and only the endpoint gets the wrapper
+/// (which serve the guards before the pre-check) to the REAL resolver, so on the save path only the endpoint gets the wrapper
 /// (explicit DI, see <see cref="Harness"/>). The wrapper counts the nulls it served, and the fact asserts exactly one, so the premise cannot
 /// be silently vacuous.</para>
 ///
@@ -274,9 +274,10 @@ public sealed class SkemaQuotaRefusalOrderTests : IClassFixture<SkemaQuotaRefusa
     // ── The profile-resolver seam: the deterministic "profile changed mid-request" ──
 
     /// <summary>Wraps the host's real <see cref="IEmploymentProfileResolver"/>. While armed, a read for the
-    /// armed employee and day answers <c>null</c>. Only the endpoint receives this wrapper (the two calculators are built on
-    /// the real resolver, see <see cref="Harness"/>), so the only read it can intercept is the quota pre-check's own
-    /// phase-1 anchor read.
+    /// armed employee and day answers <c>null</c>. On the save path only the endpoint receives this wrapper (the two
+    /// calculators are built on the real resolver, see <see cref="Harness"/>), so the only save-path read it can intercept is
+    /// the quota pre-check's own phase-1 anchor read. Host-wide, other holders (the settlement poller, other endpoints) never
+    /// read the armed day; a stray hit would make the null count 2 and fail the fact.
     /// Everything else, and every read while disarmed, is the real answer.</summary>
     public sealed class ProfileResolverSeam : IEmploymentProfileResolver
     {
@@ -338,7 +339,7 @@ public sealed class SkemaQuotaRefusalOrderTests : IClassFixture<SkemaQuotaRefusa
                     services.AddSingleton<IHttpClientFactory>(new RuleEngineStubFactory());
                     services.AddSingleton<TimeProvider>(new FixedTimeProvider(F));
                     // Explicit wiring (R-133): the real resolver is registered as ITSELF; the two calculators
-                    // are built on it directly (the endpoint resolves both from DI as singletons); and only
+                    // are built on it directly (the save endpoint injects ConsumptionCalculator, which carries DailyNormCalculator); and only
                     // IEmploymentProfileResolver is the armed wrapper, which the endpoint's own phase-1 read
                     // is the sole consumer of in the save path.
                     services.AddSingleton<EmploymentProfileResolver>(sp =>
