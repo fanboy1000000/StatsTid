@@ -210,6 +210,12 @@ foreach ($artifact in @($codex, $reviewer)) {
     # reviewer artifact only (the Codex artifact is the external lens; no Claude model).
     if ($artifact -eq $reviewer) {
         $reviewFloor = 'claude-fable-5-1'
+        # S145 ONLY (owner ruling 2026-10-20; docs/sprints/SPRINT-145.md § "Wave B.3", R-104 option 2):
+        # Fable was on its usage limit from 2026-10-19, and the owner directed S145's reviews to run on
+        # Opus. This close accepts the Opus id for S145 alone; every other sprint keeps the floor, and
+        # this exception is itself reviewed in S145's Step 7a. Delete it after the S145 close.
+        $acceptedReviewModels = @($reviewFloor)
+        if ($sprintNum -eq '145') { $acceptedReviewModels += 'claude-opus-5-5' }
         if ($content -notmatch '(?im)^\s*reviewed-by-model\s*:\s*(\S+)') {
             [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
             [Console]::Error.WriteLine('')
@@ -224,7 +230,7 @@ foreach ($artifact in @($codex, $reviewer)) {
         # A self-report may carry a context-window suffix (`claude-fable-5-1[1m]`); it is not part of the id.
         # Only that shape (digits + m) is stripped; `[]`, `[garbage]` or anything else still fails the compare.
         $reviewedBy = $matches[1] -replace '\[[0-9]+m\]$', ''
-        if ($reviewedBy -ne $reviewFloor) {
+        if ($acceptedReviewModels -notcontains $reviewedBy) {
             [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
             [Console]::Error.WriteLine('')
             [Console]::Error.WriteLine("Step 7a internal review ran on '$reviewedBy'; the review floor is '$reviewFloor'.")
@@ -241,7 +247,8 @@ foreach ($artifact in @($codex, $reviewer)) {
             $tdir = Split-Path $tlog -Parent
             if (-not (Test-Path $tdir)) { New-Item -ItemType Directory -Path $tdir -Force | Out-Null }
             $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-            Add-Content -Path $tlog -Value "$ts | close | S$sprintNum | $reviewedBy | PASS | step-7a reviewer artifact on the floor model" -Encoding utf8
+            $tnote = if ($reviewedBy -eq $reviewFloor) { 'step-7a reviewer artifact on the floor model' } else { "step-7a reviewer artifact on the S$sprintNum owner exception, not the floor model" }
+            Add-Content -Path $tlog -Value "$ts | close | S$sprintNum | $reviewedBy | PASS | $tnote" -Encoding utf8
         } catch { }
     }
 

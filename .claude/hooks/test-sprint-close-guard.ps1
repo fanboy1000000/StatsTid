@@ -59,6 +59,12 @@ New-Item -ItemType Directory -Force -Path $tmpSprints | Out-Null
 $env:STATSTID_CI_HEALTH_MOCK = 'success'
 $env:STATSTID_SPRINTS_DIR = $tmpSprints
 $env:STATSTID_UNTRACKED_MOCK = 'clean'
+# S145 — the worktree-teardown gate (S143) brought its own S99 seam, but this harness never set it, so
+# every test expecting exit 0 passed only on a repository with no worktrees standing and failed on one
+# mid-sprint (found when T23-T24 were added: T5, T7, T9, T11, T12, T14 and T16-T20 all blocked on the
+# real worktree list). Neutral default, for the same reason as the seams above: those tests are not
+# about this gate. (The gate itself still has no test of its own in this harness.)
+$env:STATSTID_WORKTREE_MOCK = 'clean'
 
 # S141 — the task-ledger seam gets a neutral default for T1-T14, for the same
 # reason the two seams above do: those tests are not about this gate.
@@ -317,15 +323,55 @@ if (-not $ok) { $results += $r.Stderr }
 Remove-Item $mockLog -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 
+# T23-T24 — the S145-only review-model exception (owner ruling 2026-10-20, R-104 option 2). T21 above
+# already pins that the reserved S99 still refuses Opus; these two pin the exception's other edges.
+# Every seam in the hook is honoured for S99 only, so an S145 run meets the REAL later gates (CI health,
+# worktrees, the task ledger), which may refuse for their own reasons. Both tests therefore assert on
+# the model check's own message only. They write SPRINT-145 artifacts into the real reviews dir: any
+# real ones are saved first and restored afterwards, byte for byte.
+$mock145     = 'git commit -m "S145 TASK-9999: sprint close -- test"'
+$codex145    = Join-Path $reviewsDir "SPRINT-145-step7a-codex.md"
+$reviewer145 = Join-Path $reviewsDir "SPRINT-145-step7a-reviewer.md"
+$waiver145   = Join-Path $reviewsDir "SPRINT-145-step7a-WAIVED.md"
+$saved145 = @{}
+foreach ($f in @($codex145, $reviewer145)) { if (Test-Path $f) { $saved145[$f] = [System.IO.File]::ReadAllBytes($f) } }
+try {
+    if (Test-Path $waiver145) {
+        $results += "T23-T24 SKIPPED: a real S145 step-7a waiver exists, and it bypasses the model check"
+    } else {
+        Set-Content -Path $codex145 -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+
+        # T23: S145 accepts the Opus id at the model check (the exception itself).
+        Set-Content -Path $reviewer145 -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+        $r = Invoke-Hook $mock145
+        $ok = -not ($r.Stderr -match 'Step 7a internal review ran on')
+        $results += "T23 (S145 accepts Opus at the model check): exit=$($r.Exit) (later gates may refuse) $(if($ok){'PASS'}else{'FAIL'})"
+        if (-not $ok) { $results += $r.Stderr }
+
+        # T24: the exception is Opus only; S145 still refuses a cheaper model.
+        Set-Content -Path $reviewer145 -Value "reviewed-by-model: claude-sonnet-5-5`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+        $r = Invoke-Hook $mock145
+        $ok = ($r.Exit -eq 2 -and $r.Stderr -match "Step 7a internal review ran on 'claude-sonnet-5-5'")
+        $results += "T24 (S145 still refuses a cheaper model): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
+        if (-not $ok) { $results += $r.Stderr }
+    }
+} finally {
+    foreach ($f in @($codex145, $reviewer145)) {
+        if ($saved145.ContainsKey($f)) { [System.IO.File]::WriteAllBytes($f, $saved145[$f]) }
+        else { Remove-Item $f -ErrorAction SilentlyContinue }
+    }
+}
+
 # Cleanup
 Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver,$ledgerWaiver -ErrorAction SilentlyContinue
 Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_CI_HEALTH_MOCK -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTS_DIR -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_UNTRACKED_MOCK -ErrorAction SilentlyContinue
+Remove-Item Env:\STATSTID_WORKTREE_MOCK -ErrorAction SilentlyContinue
 
 Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 Write-Output ""
-Write-Output "ALL 22 TESTS PASSED"
+Write-Output "ALL 24 TESTS PASSED"
