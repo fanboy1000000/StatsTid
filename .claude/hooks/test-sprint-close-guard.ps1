@@ -16,7 +16,10 @@ $headShort = $headSha.Substring(0,7)
 $staleSha = "deadbee"
 
 function Invoke-Hook {
-    param([string]$mockCommand)
+    # The hook resolves .claude/reviews, docs/sprints, the telemetry log and HEAD from its working
+    # directory. S145 Step 7a cycle 5 (R-137): that directory is now explicit, so T23-T24 can run the hook
+    # in a throwaway repository instead of the real one. Every other test runs it at the repo root.
+    param([string]$mockCommand, [string]$workDir = $repoRoot)
     $payload = @{
         tool_name = "Bash"
         tool_input = @{ command = $mockCommand }
@@ -30,6 +33,7 @@ function Invoke-Hook {
 
     $proc = Start-Process -FilePath "powershell.exe" `
         -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$hookPath `
+        -WorkingDirectory $workDir `
         -RedirectStandardInput $tmpIn `
         -RedirectStandardOutput $tmpOut `
         -RedirectStandardError $tmpErr `
@@ -66,8 +70,9 @@ $env:STATSTID_UNTRACKED_MOCK = 'clean'
 # about this gate. (The gate itself still has no test of its own in this harness.)
 $env:STATSTID_WORKTREE_MOCK = 'clean'
 # S145 Step 7a (Opus N-2; a switch since cycle 2, Codex B2-1) — telemetry is SUPPRESSED, never written:
-# every test whose run passes the model check (the S99 ones, and T23 for S145) would otherwise write a
-# PASS line that in the live log looks like a real close. The hook echoes the suppressed line to stderr
+# every S99 test whose run passes the model check would otherwise write a PASS line that in the live log
+# looks like a real close (T23 runs in a sandbox since cycle 5, so its line would land in the sandbox's
+# own log, but it needs the echo all the same). The hook echoes the suppressed line to stderr
 # instead, which T23 and T25 use as positive evidence. A switch writes nothing, so it can create no file
 # (the cycle-1 path seam could create a waiver a later gate reads; T25 pins that the old variable is
 # dead). The switch stays when T23/T24 are deleted after the S145 close: the S99 tests still need it.
@@ -332,85 +337,58 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 
 # T23-T24 — the S145-only review-model exception (owner ruling 2026-10-20, R-104 option 2). T21 above
 # already pins that the reserved S99 still refuses Opus; these two pin the exception's other edges.
+#
+# They run the hook in a THROWAWAY REPOSITORY under %TEMP%, never in the real one (S145 Step 7a cycle 5,
+# R-137). Cycles 1-5 found one leftover-file hazard after another while these tests overwrote the real
+# SPRINT-145 artifacts and restored them afterwards: a temporary waiver (cycle 2), fakes that passed the
+# gate if a run was killed (cycles 3 and 4), recovery copies a re-run destroyed (cycle 4), a byte compare
+# that ignored letter case (cycle 5). The hook resolves .claude/reviews, docs/sprints, the telemetry log
+# and HEAD from its working directory, so a sandbox with its own git commit and its own reviews folder
+# gives the same test with nothing real to overwrite. A real close runs in the real repository, so
+# nothing left in a sandbox can ever reach one.
+#
 # Every GATE seam in the hook is honoured for S99 only (the telemetry switch, which gates nothing, is the
-# one any-sprint seam; S145 Step 7a cycle 4, Opus N4-3), so an S145 run would meet the REAL later gates
-# (CI health, worktrees, the task ledger), which may refuse for their own reasons. Both tests therefore
-# assert on the model check's own outcome, and T23's run stops at the reviewer's staleness check before any
-# of those gates. They write SPRINT-145 artifacts into the real reviews dir: any real ones are saved first
-# and restored afterwards, byte for byte.
-# S145 Step 7a (Codex W1 / Opus N-2; reworked at cycle 2, Codex B2-1 / Opus N-D): T23 also needs POSITIVE
-# evidence that the run got PAST the model check, not merely the absence of its refusal. The hook's
-# telemetry block runs only after the model check passes, and with STATSTID_TELEMETRY_SUPPRESS=1 it echoes
-# the line it would have written to stderr instead of writing anything. T23 requires that echo. (The
-# cycle-1 form placed a temporary ci-health waiver, which a killed run would have left behind.)
-# S145 Step 7a cycle 3 (Opus W3-1): the fake REVIEWER artifact T23/T24 write carries a STALE
-# reviewed-against-commit, so a pair left behind by a killed run fails the close gate's staleness check
-# instead of passing it. Only the reviewer one: the hook checks the artifacts in order Codex then reviewer,
-# so a stale Codex fake would refuse before the reviewer's model line is ever read. Within the reviewer's
-# own pass the model check and the echo come BEFORE its staleness check, so both tests still test what they
-# test. The real artifacts are also copied to %TEMP% before any overwrite, so a killed run can be recovered
-# by hand, not only from memory.
-$mock145     = 'git commit -m "S145 TASK-9999: sprint close -- test"'
-$codex145    = Join-Path $reviewsDir "SPRINT-145-step7a-codex.md"
-$reviewer145 = Join-Path $reviewsDir "SPRINT-145-step7a-reviewer.md"
-$waiver145   = Join-Path $reviewsDir "SPRINT-145-step7a-WAIVED.md"
-$saved145 = @{}
-$backup145 = @{}
-# S145 Step 7a cycle 4 (Codex WARNING): the recovery copies have fixed names, so a run after a killed one
-# would read the left-behind FAKES as the originals and overwrite the genuine copies with them. A copy left
-# behind therefore means an interrupted run: T23-T24 do not touch the artifacts at all, and the banner fails
-# until a human restores the real artifacts from the copies and deletes the copies.
-$leftBackups = @(Get-ChildItem -Path $env:TEMP -Filter 'statstid-guard-test-backup-SPRINT-145-*' -ErrorAction SilentlyContinue)
-if ($leftBackups.Count -gt 0) {
-    $results += "T23-T24 SKIPPED: recovery copies from an interrupted harness run exist ($(($leftBackups | ForEach-Object { $_.FullName }) -join ', ')); the S145 artifacts in .claude/reviews may be fakes. Restore them from the copies by hand, delete the copies, then re-run"
-} elseif (Test-Path $waiver145) {
-    $results += "T23-T24 SKIPPED: a real S145 step-7a waiver exists, and it bypasses the model check"
-} else {
-    foreach ($f in @($codex145, $reviewer145)) {
-        if (Test-Path $f) {
-            $saved145[$f] = [System.IO.File]::ReadAllBytes($f)
-            $bk = Join-Path $env:TEMP ("statstid-guard-test-backup-" + (Split-Path $f -Leaf))
-            [System.IO.File]::WriteAllBytes($bk, $saved145[$f])
-            $backup145[$f] = $bk
-        }
-    }
-    try {
-        # S145 Step 7a cycle 4 (Codex BLOCKER): the stale reviewer fake is written FIRST. Written second, a run
-        # killed between the two writes would leave the HEAD-valid Codex fake beside a real reviewer artifact,
-        # and at close time the real one names HEAD and an accepted model, so the pair would pass. In this
-        # order every state a kill can leave refuses: the stale reviewer alone, the pair, T24's cheaper-model
-        # reviewer, and (restoring Codex first, below) a real Codex beside either fake reviewer.
+# one any-sprint seam), so the S145 runs meet the hook's real checks. T23 stops at the reviewer's staleness
+# check and T24 at its model check, both before the gates that read the repository (CI health, untracked
+# files, worktrees, the task ledger).
+$mock145 = 'git commit -m "S145 TASK-9999: sprint close -- test"'
+# A sandbox left by a killed run is harmless (no real close reads it); clear any before making a new one.
+Get-ChildItem -Path $env:TEMP -Directory -Filter 'statstid-guard-test-sandbox-*' -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+$sandbox = Join-Path $env:TEMP ("statstid-guard-test-sandbox-" + [guid]::NewGuid().ToString('N'))
+try {
+    $sbReviews = Join-Path $sandbox '.claude\reviews'
+    New-Item -ItemType Directory -Force -Path $sbReviews | Out-Null
+    git -C $sandbox init -q
+    git -C $sandbox -c user.name=guard-harness -c user.email=guard-harness@invalid -c commit.gpgsign=false commit -q --allow-empty -m "guard harness sandbox"
+    $sbHead = git -C $sandbox rev-parse HEAD
+    if ($LASTEXITCODE -ne 0 -or -not $sbHead) {
+        $results += "T23-T24 FAIL: could not create the sandbox repository at $sandbox"
+    } else {
+        $sbHeadShort = $sbHead.Trim().Substring(0,7)
+        $sbCodex    = Join-Path $sbReviews 'SPRINT-145-step7a-codex.md'
+        $sbReviewer = Join-Path $sbReviews 'SPRINT-145-step7a-reviewer.md'
+        Set-Content -Path $sbCodex -Value "verdict: APPROVED`nreviewed-against-commit: $sbHeadShort" -Encoding UTF8
 
-        # T23: S145 accepts the Opus id at the model check (the exception itself); the suppressed-telemetry
-        # echo, reached only after the check passes, is the positive evidence.
-        Set-Content -Path $reviewer145 -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $staleSha" -Encoding UTF8
-        Set-Content -Path $codex145 -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
-        $r = Invoke-Hook $mock145
-        # The run must then refuse at the reviewer's staleness check: that is what makes a left-behind fake
-        # pair harmless (W3-1), so it is asserted, not assumed.
+        # T23: S145 accepts the Opus id at the model check (the exception itself). The suppressed-telemetry
+        # echo, reached only after the check passes, is the positive evidence. The reviewer fake names a
+        # stale commit, so the run then refuses at the reviewer's staleness check, before any gate that
+        # reads the repository: asserting that refusal pins where the run stopped.
+        Set-Content -Path $sbReviewer -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $staleSha" -Encoding UTF8
+        $r = Invoke-Hook $mock145 $sandbox
         $ok = (-not ($r.Stderr -match 'Step 7a internal review ran on')) -and ($r.Stderr -match 'telemetry suppressed \(test seam\): \S+ \| close \| S145 \| claude-opus-5-5 \| PASS') -and ($r.Exit -eq 2) -and ($r.Stderr -match 'Artifact is STALE')
-        $results += "T23 (S145 accepts Opus at the model check, positive echo; the stale fake refuses later): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
+        $results += "T23 (S145 accepts Opus at the model check, positive echo; stops at the reviewer's staleness check): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
         if (-not $ok) { $results += $r.Stderr }
 
         # T24: the exception is Opus only; S145 still refuses a cheaper model.
-        Set-Content -Path $reviewer145 -Value "reviewed-by-model: claude-sonnet-5-5`nverdict: APPROVED`nreviewed-against-commit: $staleSha" -Encoding UTF8
-        $r = Invoke-Hook $mock145
+        Set-Content -Path $sbReviewer -Value "reviewed-by-model: claude-sonnet-5-5`nverdict: APPROVED`nreviewed-against-commit: $staleSha" -Encoding UTF8
+        $r = Invoke-Hook $mock145 $sandbox
         $ok = ($r.Exit -eq 2 -and $r.Stderr -match "Step 7a internal review ran on 'claude-sonnet-5-5'")
         $results += "T24 (S145 still refuses a cheaper model): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
         if (-not $ok) { $results += $r.Stderr }
-    } finally {
-        # Codex first, then the reviewer: until the reviewer is restored, the fake one refuses.
-        foreach ($f in @($codex145, $reviewer145)) {
-            if ($saved145.ContainsKey($f)) { [System.IO.File]::WriteAllBytes($f, $saved145[$f]) }
-            else { Remove-Item $f -ErrorAction SilentlyContinue }
-        }
-        # A recovery copy is deleted only once its artifact is verifiably back.
-        foreach ($f in @($backup145.Keys)) {
-            $back = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($f))
-            if ($back -eq [Convert]::ToBase64String($saved145[$f])) { Remove-Item $backup145[$f] -ErrorAction SilentlyContinue }
-            else { $results += "T23-T24 FAIL: $f was not restored byte for byte; its recovery copy is kept at $($backup145[$f])" }
-        }
     }
+} finally {
+    Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # T25 (S145 Step 7a cycle 2, Codex B2-1; strengthened at cycle 3, Codex W / Opus N3-1): the telemetry seam

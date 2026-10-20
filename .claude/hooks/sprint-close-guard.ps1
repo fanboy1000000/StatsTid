@@ -144,7 +144,7 @@ if ($missing.Count -gt 0) {
     [Console]::Error.WriteLine('diff before the close commit lands.')
     [Console]::Error.WriteLine('')
     [Console]::Error.WriteLine('Remediation:')
-    [Console]::Error.WriteLine('  1. Run dual-lens Step 7a review against the sprint diff (cycle-cap 2 per lens).')
+    [Console]::Error.WriteLine('  1. Run dual-lens Step 7a review against the sprint diff (cycle cap 5 per lens; docs/WORKFLOW.md Step 7a).')
     [Console]::Error.WriteLine('  2. Save artifacts to the paths above. Each must include a "verdict:" line.')
     [Console]::Error.WriteLine('  3. Absorb any BLOCKERs in follow-up commits.')
     [Console]::Error.WriteLine('  4. Re-attempt the sprint-close commit.')
