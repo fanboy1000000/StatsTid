@@ -300,4 +300,37 @@ public sealed class HttpRuleClassificationProviderTests
             return _responder(request);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // S145 Stage B / TASK-14524 (MB-9's pin): the fifth merge kind on the wire
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// TASK-14520 contract 6. The Rule Engine serves the classification set with web defaults, so
+    /// <c>TimelineAware</c> (SplitBehavior 4) and <c>SinglePlanEvaluation</c> (MergeStrategyKind 4) cross
+    /// the wire as INTEGERS (appended after the existing values so the old integers stay stable). The
+    /// payroll provider's converter must map the kind to <see cref="MergeStrategy.SinglePlanEvaluation"/>;
+    /// without that arm the converter throws, the fetch swallows it and returns null, and EVERY payroll
+    /// route answers 503 in the composed stack while every host fact (which injects an in-memory
+    /// provider) stays green. Also pinned in its string form, as the sibling fact does for Custom.
+    /// Red conditions: MB-9 (Unit; the converter arm removed) makes the fetch throw
+    /// RuleClassificationsUnavailableException instead of returning the set.
+    /// </summary>
+    [Theory]
+    [InlineData("4")]
+    [InlineData("\"SinglePlanEvaluation\"")]
+    public void GetClassifications_ParsesSinglePlanEvaluationKind_IntegerAndString(string kindJson)
+    {
+        var json = "[{\"ruleId\":\"OVERTIME_CALC\",\"span\":1,\"splitBehavior\":4,\"family\":0," +
+                   "\"mergeStrategy\":{\"kind\":" + kindJson + "},\"snapshotContract\":null}]";
+
+        var provider = BuildProviderWith(json);
+        var result = provider.GetClassifications();
+
+        var c = Assert.Single(result);
+        Assert.Equal("OVERTIME_CALC", c.RuleId);
+        Assert.Equal(SplitBehavior.TimelineAware, c.SplitBehavior);
+        Assert.Equal(MergeStrategyKind.SinglePlanEvaluation, c.MergeStrategy.Kind);
+        Assert.Same(MergeStrategy.SinglePlanEvaluation, c.MergeStrategy);
+    }
 }

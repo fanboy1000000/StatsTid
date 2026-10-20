@@ -223,4 +223,91 @@ public sealed class PayrollPlanRefusalProblemTests
             reason: "agreement-change-mid-week",
             message: "Period for employee '" + EmployeeId + "' has an agreement change on " +
                      ChangeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + " inside a settled week.");
+
+    // ═════════════════════════════════════════════════════════════════════
+    // S145 Stage B / TASK-14524 (TASK-14522 contract 3, R-76) — the third 422 variant:
+    // the raw export routes refuse a month with two or more EMPLOYED segments (Q6 (a))
+    // ═════════════════════════════════════════════════════════════════════
+
+    private const string SingleProfileReason = "split-month-single-profile-route";
+
+    /// <summary>The fixed sentence of the Q6 (a) body, verbatim from TASK-14522 contract 3.</summary>
+    private const string SingleProfileSentence =
+        "This period cannot be exported through this route: a change inside the period splits it into parts with " +
+        "different profiles, and this route maps every line under a single profile. Use the calculating routes " +
+        "(recalculate, or calculate-and-export) to pay the period.";
+
+    /// <summary>
+    /// A Q6 (a) refusal as the raw-route guard throws it: reason <c>split-month-single-profile-route</c>,
+    /// the EMPLOYED segment count and the interior boundary causes in date order. The diagnostic message
+    /// names the employee and a date so the redaction pin has something to redact. (Constructor shape:
+    /// optional named arguments after <c>message</c>, per R-76's "two optional members"; reconciled at B.3.)
+    /// </summary>
+    private static PeriodNotCalculableException SingleProfileRefusal() =>
+        new(
+            reason: SingleProfileReason,
+            message: "Period for employee '" + EmployeeId + "' has 2 EMPLOYED segments from " +
+                     ChangeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".",
+            employedSegmentCount: 2,
+            interiorBoundaryCauses: new[] { BoundaryCause.EmployeeProfileChange, BoundaryCause.AgreementCodeChange });
+
+    /// <summary>
+    /// The third 422 variant: same <c>payroll-recalc-blocked</c> kind, <c>reason</c>
+    /// <c>split-month-single-profile-route</c>, the segment count, the cause names in date order, the fixed
+    /// sentence, and NO <c>ruleId</c> (it is not a rule's refusal).
+    ///
+    /// Red conditions (names members TASK-14522 creates, so RED by MUTATION at the B.3 gate): MB-11 (the
+    /// body drops <c>reason</c>, or leaks a date) trips the <c>reason</c> assertion; a mapping that returns
+    /// null for the new reason (master's behaviour for an unknown reason) trips <c>Assert.NotNull</c>.
+    /// </summary>
+    [Fact]
+    public void SingleProfileRouteVariant_HasReasonCountsAndCauses_NoRuleId()
+    {
+        var problem = PayrollPlanRefusalProblem.TryCreate(SingleProfileRefusal());
+
+        Assert.NotNull(problem);
+        using var doc = JsonDocument.Parse(ToWireJson(problem!));
+        var root = doc.RootElement;
+        Assert.Equal("payroll-recalc-blocked", root.GetProperty("kind").GetString());
+        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.Equal(SingleProfileReason, root.GetProperty("reason").GetString());
+        Assert.Equal(2, root.GetProperty("employedSegmentCount").GetInt32());
+        Assert.Equal(new[] { "EmployeeProfileChange", "AgreementCodeChange" },
+            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.Equal(SingleProfileSentence, root.GetProperty("error").GetString());
+        Assert.True(
+            !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
+            "the single-profile-route variant carries no ruleId (it is not a rule's refusal)");
+    }
+
+    /// <summary>
+    /// The Q6 (a) body, SERIALIZED, contains no calendar date, not the date and employee id the exception's own
+    /// message names, and no digit in its sentence. The preconditions assert the message really carries the
+    /// date and the employee id, so the redaction assertions CAN fail.
+    ///
+    /// Red conditions (RED by MUTATION at the B.3 gate): MB-11 (the body takes <c>error = ex.Message</c>, or
+    /// otherwise leaks a date) puts the date and <c>EMP-REDACT-88213</c> into the JSON and trips the
+    /// date-pattern and employee-id assertions.
+    /// </summary>
+    [Fact]
+    public void SingleProfileRouteVariant_SerializedJson_HasNoDateNoEmployeeId()
+    {
+        var ex = SingleProfileRefusal();
+        var isoChange = ChangeDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        Assert.Contains(EmployeeId, ex.Message);
+        Assert.Contains(isoChange, ex.Message);
+
+        var problem = PayrollPlanRefusalProblem.TryCreate(ex);
+        Assert.NotNull(problem);
+        var json = ToWireJson(problem!);
+
+        Assert.DoesNotMatch(@"\d{4}-\d{2}-\d{2}", json);
+        Assert.DoesNotContain(isoChange, json);
+        Assert.DoesNotContain(ChangeDate.ToString(), json);
+        Assert.DoesNotContain(EmployeeId, json);
+        Assert.DoesNotContain("88213", json);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.DoesNotMatch(@"\d", doc.RootElement.GetProperty("error").GetString()!);
+    }
 }
