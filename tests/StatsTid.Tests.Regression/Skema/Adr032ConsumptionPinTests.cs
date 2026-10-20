@@ -307,13 +307,16 @@ public sealed class Adr032ConsumptionPinTests : IAsyncLifetime
     /// <summary>
     /// ADR-032 D2 + TASK-1801 precedent: <c>AbsenceRegistered.OkVersion</c> is stamped from the
     /// ABSENCE ENTRY DATE (<c>OkVersionResolver.ResolveVersion(date)</c>), NOT the live
-    /// <c>user.OkVersion</c>. A two-row batch straddling the 2026-04-01 OK24→OK26 cutover
-    /// (one day in March 2026 = OK24, one in April 2026 = OK26) records DIFFERENT per-row OK
-    /// versions on the events. The user row's <c>ok_version</c> is OK24 throughout, so a live-stamp
-    /// would record OK24 for both — the discriminator.
+    /// <c>user.OkVersion</c>. Two saves either side of the 2026-04-01 OK24→OK26 cutover
+    /// (2026-03-31 posted under 2026/3 = OK24, 2026-04-01 posted under 2026/4 = OK26) record
+    /// DIFFERENT per-row OK versions on the events. The user row's <c>ok_version</c> is OK24
+    /// throughout, so a live-stamp would record OK24 for both — the discriminator.
+    /// S145 R-132: was one batch straddling the boundary
+    /// (<c>OkStamping_BatchStraddlesOk24Ok26Boundary_PerRowEntryDateResolved</c>); a Skema save is
+    /// now one month and the OK boundary is a month start, so the two days are two in-month saves.
     /// </summary>
     [Fact]
-    public async Task OkStamping_BatchStraddlesOk24Ok26Boundary_PerRowEntryDateResolved()
+    public async Task OkStamping_AcrossOk24Ok26Boundary_PerRowEntryDateResolved() // S145 R-132: was OkStamping_BatchStraddlesOk24Ok26Boundary_PerRowEntryDateResolved
     {
         var httpClient = CreateRuleStubbedClient();
         var employeeId = await SeedFullTimeEmployeeAsync(); // user.ok_version = OK24
@@ -321,11 +324,10 @@ public sealed class Adr032ConsumptionPinTests : IAsyncLifetime
 
         var marDay = new DateOnly(2026, 3, 31); // Tuesday, OK24 (boundary is 2026-04-01)
         var aprDay = new DateOnly(2026, 4, 1);  // Wednesday, OK26
-        var rsp = await PostAbsencesAsync(client, employeeId, 2026, 4, new[]
-        {
-            (marDay, "VACATION", 7.4m),
-            (aprDay, "VACATION", 7.4m),
-        });
+        // S145 R-132: two in-month saves (March's, then April's), each 200.
+        var marRsp = await PostAbsencesAsync(client, employeeId, 2026, 3, new[] { (marDay, "VACATION", 7.4m) });
+        Assert.Equal(HttpStatusCode.OK, marRsp.StatusCode);
+        var rsp = await PostAbsencesAsync(client, employeeId, 2026, 4, new[] { (aprDay, "VACATION", 7.4m) });
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
 
         Assert.Equal("OK24", await ReadEventOkVersionAsync(employeeId, marDay));

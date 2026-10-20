@@ -125,18 +125,21 @@ public sealed class SkemaMonthlyAccrualGuardTests : IAsyncLifetime
     public async Task Vacation_BeyondDynamicCap_Rejected422_NothingPersisted()
     {
         var client = CreateEmployeeClient(CreateRuleStubbedClient());
-        // 26 distinct VACATION days (each 7.4h) > the full annual 25 forskud cap. Spread one per
-        // date starting in Nov 2025 (absences are not month-range-gated; the per-type batch
-        // anchors on the MIN = Nov 2025 ⇒ ferieår 2025).
+        // 26 distinct VACATION days (each 7.4h) > the full annual 25 forskud cap, one per date
+        // starting in Nov 2025 (ferieår 2025). S145 R-132: a Skema save is ONE month (Entries and
+        // Absences dates outside it are refused 400), so the booking is one save per month, in date
+        // order: 20 days in Nov (200, within the cap), then 6 days in Dec (20 + 6 = 26 > 25 ⇒ 422).
         var dates = DistinctDays(new DateOnly(2025, 11, 3), 26);
         var absences = dates.Select(d => (d, "VACATION", 7.4m)).ToArray();
 
-        var rsp = await PostAbsencesAsync(client, 2025, 11, absences);
+        var rsp = await PostAbsencesPerMonthAsync(client, absences); // S145 R-132
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("Entitlement quota exceeded", body.GetProperty("error").GetString());
-        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, dates[0]));
+        // S145 R-132: nothing from the REFUSED save (the December one) is written; November's 200 stays.
+        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, dates[20]));
+        Assert.Equal(1, await CountAbsenceRowsAsync(Emp001, dates[0]));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -238,13 +241,17 @@ public sealed class SkemaMonthlyAccrualGuardTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// A multi-date VACATION batch spanning the ferieår boundary (one day in Aug 2026 = ferieår
-    /// 2025; one in Sep 2026 = ferieår 2026) anchors the per-type batch on the MIN date
-    /// (firstAbsenceDate = Aug 2026 ⇒ entitlement_year 2025). The whole batch (3 days) lands in
-    /// the 2025 balance row, proving the anchor is the batch MIN, not each absence's own year.
+    /// S145 R-132: the cross-month batch this fact once anchored is now refused. (Was
+    /// <c>Vacation_BoundarySpanningBatch_AnchorsOnFirstAbsenceDate</c>: a VACATION batch with one day
+    /// in Aug 2026 = ferieår 2025 and two in Sep 2026 = ferieår 2026, anchored on the MIN date.)
+    /// A Skema save is one month, and the ferieår boundary falls on a month start, so an in-month
+    /// batch can never span it and "the batch anchors on its first date" cannot happen any more.
+    /// The same request (2026/9 carrying 2026-08-28) now answers 400
+    /// <c>skema_cell_date_out_of_range</c> and writes nothing: no absence row on any of the three
+    /// dates.
     /// </summary>
     [Fact]
-    public async Task Vacation_BoundarySpanningBatch_AnchorsOnFirstAbsenceDate()
+    public async Task Vacation_CrossFerieaarBatch_Refused400_NothingWritten() // S145 R-132: was Vacation_BoundarySpanningBatch_AnchorsOnFirstAbsenceDate
     {
         var client = CreateEmployeeClient(CreateRuleStubbedClient());
         var augDate = new DateOnly(2026, 8, 28); // ferieår 2025
@@ -258,14 +265,13 @@ public sealed class SkemaMonthlyAccrualGuardTests : IAsyncLifetime
             (sep2, "VACATION", 1 * 7.4m),
         });
 
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
-        Assert.Equal(1, await CountAbsenceRowsAsync(Emp001, augDate));
-        Assert.Equal(1, await CountAbsenceRowsAsync(Emp001, sepDate));
-
-        // All 3 days aggregated under the firstAbsenceDate-anchored year (2025), not split.
-        var (_, used2025, _) = await ReadBalanceAsync(Emp001, "VACATION", 2025);
-        Assert.Equal(3m, used2025);
-        Assert.Null(await TryReadBalanceAsync(Emp001, "VACATION", 2026)); // no 2026 row created
+        // S145 R-132: the cross-month request is refused before anything is written.
+        Assert.Equal(HttpStatusCode.BadRequest, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("skema_cell_date_out_of_range", body.GetProperty("error").GetString());
+        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, augDate));
+        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, sepDate));
+        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, sep2));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -357,6 +363,23 @@ public sealed class SkemaMonthlyAccrualGuardTests : IAsyncLifetime
             d = d.AddDays(1);
         }
         return days;
+    }
+
+    /// <summary>S145 R-132: one save per calendar month, in date order (a save is one month). Every save but
+    /// the last must answer 200 (a failing setup can never pass as the outcome under test); the LAST
+    /// response is returned.</summary>
+    private static async Task<HttpResponseMessage> PostAbsencesPerMonthAsync(
+        HttpClient client, (DateOnly Date, string Type, decimal Hours)[] absences)
+    {
+        HttpResponseMessage? last = null;
+        foreach (var month in absences.GroupBy(a => (a.Date.Year, a.Date.Month)).OrderBy(g => g.Key))
+        {
+            if (last is not null)
+                Assert.True(last.StatusCode == HttpStatusCode.OK,
+                    $"S145 R-132: an earlier monthly save must answer 200; got {(int)last.StatusCode}: {await last.Content.ReadAsStringAsync()}");
+            last = await PostAbsencesAsync(client, month.Key.Year, month.Key.Month, month.ToArray());
+        }
+        return last!;
     }
 
     private static async Task<HttpResponseMessage> PostAbsencesAsync(

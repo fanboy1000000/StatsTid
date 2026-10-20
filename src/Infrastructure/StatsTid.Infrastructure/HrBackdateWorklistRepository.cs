@@ -288,6 +288,11 @@ public static class BackdateWorklistDerivation
     /// True when <paramref name="date"/> is after the 1st and on or before the last day of (year, month).
     /// Since S145 Stage B the block derivation no longer uses it (the week rule replaced it); it is
     /// kept as a plain month fencepost.
+    /// <para><b>Kept deliberately; do not delete as dead code.</b> It has no production caller since
+    /// TASK-14521, but it is the substitute of the Unit mutation MB-6 (TASK-14528; run by TASK-14524
+    /// re-spawn 2): MB-6 swaps <see cref="RecalcBlockedByForTrigger"/>'s agreement arm back to this
+    /// Stage A predicate. The facts that rest on MB-6 are verified by that swap, so deleting this
+    /// method would leave the mutation with nothing to substitute.</para>
     /// </summary>
     public static bool IsStrictlyInsideMonth(DateOnly date, int year, int month)
     {

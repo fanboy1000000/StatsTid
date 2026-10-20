@@ -100,7 +100,7 @@ public sealed class DatedQuotaAnchorTests : IAsyncLifetime
     ///   <item><description>PRE-fix (Step-2 read at live OK26 ⇒ quota 30): cap 30, 27 ≤ 30 ⇒
     ///     <b>200 OK</b> (observed RED: the over-OK24-quota booking was wrongly ALLOWED).</description></item>
     ///   <item><description>POST-fix (Step-2 read at year-start OK24 ⇒ quota 25): cap 25, 27 &gt; 25 ⇒
-    ///     <b>422</b>, nothing persists.</description></item>
+    ///     <b>422</b>, nothing from the refused monthly save persists.</description></item>
     /// </list>
     /// Also pins validation == display: <c>/summary</c> + <c>/year-overview</c> report the OK24 25,
     /// not the live OK26 30, for the same ferieår.
@@ -118,13 +118,15 @@ public sealed class DatedQuotaAnchorTests : IAsyncLifetime
         var absences = dates.Select(d => (d, "VACATION", 7.4m)).ToArray();
 
         var client = CreateEmployeeClient();
-        var rsp = await PostAbsencesAsync(client, 2026, 5, absences);
+        // S145 R-132: a save is one month, so one save per month in date order: 20 days in May (200,
+        // within the OK24 cap of 25), then 7 days in June (20 + 7 = 27 > 25 ⇒ 422). Same ferieår 2025.
+        var rsp = await PostAbsencesPerMonthAsync(client, absences);
 
         // POST-fix: rejected against the year-start OK24 quota (25). 27 > 25.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("Entitlement quota exceeded", body.GetProperty("error").GetString());
-        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, dates[0])); // nothing persisted
+        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, dates[20])); // S145 R-132: nothing from the refused (June) save persisted
 
         // validation == display: /summary's totalQuota for the same month is the SAME year-start
         // (OK24) quota 25 the validation now uses — NOT the live OK26 30. /summary and the validation
@@ -149,7 +151,7 @@ public sealed class DatedQuotaAnchorTests : IAsyncLifetime
     ///   <item><description>PRE-fix (Step-2 read at the month-start agreement AC ⇒ quota 25): cap 25,
     ///     22 ≤ 25 ⇒ <b>200 OK</b> (observed RED: wrongly ALLOWED against AC's higher quota).</description></item>
     ///   <item><description>POST-fix (Step-2 read at the year-start agreement HK ⇒ quota 20): cap 20,
-    ///     22 &gt; 20 ⇒ <b>422</b>, nothing persists.</description></item>
+    ///     22 &gt; 20 ⇒ <b>422</b>, nothing from the refused monthly save persists.</description></item>
     /// </list>
     /// </summary>
     [Fact]
@@ -166,13 +168,15 @@ public sealed class DatedQuotaAnchorTests : IAsyncLifetime
         var absences = dates.Select(d => (d, "VACATION", 7.4m)).ToArray();
 
         var client = CreateEmployeeClient();
-        var rsp = await PostAbsencesAsync(client, 2026, 2, absences);
+        // S145 R-132: one save per month: 19 days in Feb (200, within the HK cap of 20), then 3 days in
+        // March (19 + 3 = 22 > 20 ⇒ 422). Same ferieår 2025, same year-start agreement.
+        var rsp = await PostAbsencesPerMonthAsync(client, absences);
 
         // POST-fix: rejected against the year-start AGREEMENT (HK) quota 20. 22 > 20.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("Entitlement quota exceeded", body.GetProperty("error").GetString());
-        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, dates[0]));
+        Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, dates[19])); // S145 R-132: nothing from the refused (March) save persisted
 
         // validation == display: /summary reports the year-start HK quota 20, not the month-start AC 25.
         var summary = await GetSummaryAsync(2026, 2);
@@ -391,6 +395,22 @@ public sealed class DatedQuotaAnchorTests : IAsyncLifetime
             d = d.AddDays(1);
         }
         return days;
+    }
+
+    /// <summary>S145 R-132: one save per calendar month, in date order (a save is one month). Every save but
+    /// the last must answer 200; the LAST response is returned.</summary>
+    private static async Task<HttpResponseMessage> PostAbsencesPerMonthAsync(
+        HttpClient client, (DateOnly Date, string Type, decimal Hours)[] absences)
+    {
+        HttpResponseMessage? last = null;
+        foreach (var month in absences.GroupBy(a => (a.Date.Year, a.Date.Month)).OrderBy(g => g.Key))
+        {
+            if (last is not null)
+                Assert.True(last.StatusCode == HttpStatusCode.OK,
+                    $"S145 R-132: an earlier monthly save must answer 200; got {(int)last.StatusCode}: {await last.Content.ReadAsStringAsync()}");
+            last = await PostAbsencesAsync(client, month.Key.Year, month.Key.Month, month.ToArray());
+        }
+        return last!;
     }
 
     private static async Task<HttpResponseMessage> PostAbsencesAsync(

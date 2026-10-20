@@ -229,6 +229,8 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
         var replay = await pcs.ReplayAsync(plan.ManifestId);
         Assert.True(replay.Success);
         // S145 R14: the result no longer carries a ManifestId; every rule result carries the original.
+        // S145 R-131 (Step 7a N-1): Assert.All passes on an empty list, so the replay must have produced results.
+        Assert.NotEmpty(replay.RuleResults);
         Assert.All(replay.RuleResults, r => Assert.Equal(plan.ManifestId, r.ManifestId));
     }
 

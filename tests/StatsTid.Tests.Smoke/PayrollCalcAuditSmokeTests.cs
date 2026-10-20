@@ -63,7 +63,8 @@ public sealed class PayrollCalcAuditSmokeTests
     public async Task PayrollCalculateAndExport_WritesExactlyOneManifestLinkedAuditRow_ComposedStack()
     {
         // A single-OK-version month: every day is < 2026-04-01 ⇒ OK24, so the legacy planless plan is
-        // one segment (no interior OK boundary → the AlignedWindow overtime rule does not reject).
+        // one segment (no interior OK boundary → nothing to split; overtime is TimelineAware since S145 B1, so it
+        // would not reject a split month either, and this fixture simply keeps the plan at one segment).
         var periodStart = new DateOnly(2026, 3, 1);
         var periodEnd = new DateOnly(2026, 3, 31);
 
