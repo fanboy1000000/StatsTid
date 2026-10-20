@@ -242,17 +242,25 @@ foreach ($artifact in @($codex, $reviewer)) {
         }
         # Telemetry (thin monitoring, owner ruling 2026-09-07): record which model the close's
         # internal review ran on, next to the spawn lines the routing guard writes. Best-effort.
-        try {
-            # Test seam (S145 Step 7a N-2): the harness points telemetry at a temp file. Honoured for
-            # any sprint, unlike the gate seams, because telemetry is not a gate: redirecting it
-            # blinds no check, and T23's real-path S145 run must not write a close-looking line here.
-            $tlog = if ($env:STATSTID_TELEMETRY_LOG_MOCK) { $env:STATSTID_TELEMETRY_LOG_MOCK } else { Join-Path (Get-Location) '.claude/telemetry/model-routing.log' }
-            $tdir = Split-Path $tlog -Parent
-            if (-not (Test-Path $tdir)) { New-Item -ItemType Directory -Path $tdir -Force | Out-Null }
-            $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-            $tnote = if ($reviewedBy -eq $reviewFloor) { 'step-7a reviewer artifact on the floor model' } else { "step-7a reviewer artifact on the S$sprintNum owner exception, not the floor model" }
-            Add-Content -Path $tlog -Value "$ts | close | S$sprintNum | $reviewedBy | PASS | $tnote" -Encoding utf8
-        } catch { }
+        $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $tnote = if ($reviewedBy -eq $reviewFloor) { 'step-7a reviewer artifact on the floor model' } else { "step-7a reviewer artifact on the S$sprintNum owner exception, not the floor model" }
+        $tline = "$ts | close | S$sprintNum | $reviewedBy | PASS | $tnote"
+        # Test seam (S145 Step 7a; made a SWITCH at cycle 2, Codex B2-1): STATSTID_TELEMETRY_SUPPRESS=1 turns
+        # the write OFF and echoes the line to stderr instead. It is a switch, never a path: the cycle-1
+        # path seam let the hook create ANY file, including a waiver that a later gate reads (pointing it
+        # at SPRINT-<N>-ci-health-WAIVED.md skipped the CI-health gate). Writing nothing, it can blind no
+        # gate, so it is honoured for any sprint. The echo is the harness's positive evidence (T23) that a
+        # run got PAST the model check, since this line is reached only after the check passes.
+        if ($env:STATSTID_TELEMETRY_SUPPRESS -eq '1') {
+            [Console]::Error.WriteLine("sprint-close-guard: telemetry suppressed (test seam): $tline")
+        } else {
+            try {
+                $tlog = Join-Path (Get-Location) '.claude/telemetry/model-routing.log'
+                $tdir = Split-Path $tlog -Parent
+                if (-not (Test-Path $tdir)) { New-Item -ItemType Directory -Path $tdir -Force | Out-Null }
+                Add-Content -Path $tlog -Value $tline -Encoding utf8
+            } catch { }
+        }
     }
 
     # Staleness check: artifact must declare which commit was reviewed.

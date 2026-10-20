@@ -65,12 +65,12 @@ $env:STATSTID_UNTRACKED_MOCK = 'clean'
 # real worktree list). Neutral default, for the same reason as the seams above: those tests are not
 # about this gate. (The gate itself still has no test of its own in this harness.)
 $env:STATSTID_WORKTREE_MOCK = 'clean'
-# S145 Step 7a (Opus N-2) — telemetry goes to a temp file, never the live log: T23 passes the real
-# model check for S145 (every gate seam is S99-only), and the hook then writes a PASS line, which in
-# the live log looked like a real close. The hook honours this seam for any sprint because telemetry
-# is not a gate: redirecting it blinds no check.
-$tmpTelemetry = Join-Path $env:TEMP "statstid-guard-test-telemetry.log"
-$env:STATSTID_TELEMETRY_LOG_MOCK = $tmpTelemetry
+# S145 Step 7a (Opus N-2; a switch since cycle 2, Codex B2-1) — telemetry is SUPPRESSED, never written:
+# T23 passes the real model check for S145 (every gate seam is S99-only), and the hook would then write a
+# PASS line that in the live log looked like a real close. The hook echoes the suppressed line to stderr
+# instead, which T23 uses as positive evidence. A switch writes nothing, so it can create no file (the
+# cycle-1 path seam could create a waiver a later gate reads; T25 pins that the old variable is dead).
+$env:STATSTID_TELEMETRY_SUPPRESS = '1'
 
 # S141 — the task-ledger seam gets a neutral default for T1-T14, for the same
 # reason the two seams above do: those tests are not about this gate.
@@ -335,31 +335,29 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # worktrees, the task ledger), which may refuse for their own reasons. Both tests therefore assert on
 # the model check's own message only. They write SPRINT-145 artifacts into the real reviews dir: any
 # real ones are saved first and restored afterwards, byte for byte.
-# S145 Step 7a (Codex W1 / Opus N-2): T23 also needs POSITIVE evidence that the run got PAST the model
-# check, not merely the absence of its refusal (an earlier failure would satisfy that too). The CI-health
-# gate is the next gate after the artifact checks, and its waiver prints a fixed line before anything
-# else can refuse; so T23 places a temporary S145 ci-health waiver (saved and restored like the
-# artifacts) and requires that line in stderr.
+# S145 Step 7a (Codex W1 / Opus N-2; reworked at cycle 2, Codex B2-1 / Opus N-D): T23 also needs POSITIVE
+# evidence that the run got PAST the model check, not merely the absence of its refusal. The hook's
+# telemetry block runs only after the model check passes, and with STATSTID_TELEMETRY_SUPPRESS=1 it echoes
+# the line it would have written to stderr instead of writing anything. T23 requires that echo. (The
+# cycle-1 form placed a temporary ci-health waiver, which a killed run would have left behind.)
 $mock145     = 'git commit -m "S145 TASK-9999: sprint close -- test"'
 $codex145    = Join-Path $reviewsDir "SPRINT-145-step7a-codex.md"
 $reviewer145 = Join-Path $reviewsDir "SPRINT-145-step7a-reviewer.md"
 $waiver145   = Join-Path $reviewsDir "SPRINT-145-step7a-WAIVED.md"
-$ciWaiver145 = Join-Path $reviewsDir "SPRINT-145-ci-health-WAIVED.md"
 $saved145 = @{}
-foreach ($f in @($codex145, $reviewer145, $ciWaiver145)) { if (Test-Path $f) { $saved145[$f] = [System.IO.File]::ReadAllBytes($f) } }
+foreach ($f in @($codex145, $reviewer145)) { if (Test-Path $f) { $saved145[$f] = [System.IO.File]::ReadAllBytes($f) } }
 try {
     if (Test-Path $waiver145) {
         $results += "T23-T24 SKIPPED: a real S145 step-7a waiver exists, and it bypasses the model check"
     } else {
         Set-Content -Path $codex145 -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
-        Set-Content -Path $ciWaiver145 -Value "temporary: test-sprint-close-guard.ps1 T23 (restored or removed when the test ends)" -Encoding UTF8
 
-        # T23: S145 accepts the Opus id at the model check (the exception itself), and the run reaches
-        # the CI-health gate after it (the waiver line), so the pass is positive, not just an absence.
+        # T23: S145 accepts the Opus id at the model check (the exception itself); the suppressed-telemetry
+        # echo, reached only after the check passes, is the positive evidence.
         Set-Content -Path $reviewer145 -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
         $r = Invoke-Hook $mock145
-        $ok = (-not ($r.Stderr -match 'Step 7a internal review ran on')) -and ($r.Stderr -match 'S145 has a CI-health waiver')
-        $results += "T23 (S145 accepts Opus at the model check, reaches the CI-health gate): exit=$($r.Exit) (later gates may refuse) $(if($ok){'PASS'}else{'FAIL'})"
+        $ok = (-not ($r.Stderr -match 'Step 7a internal review ran on')) -and ($r.Stderr -match 'telemetry suppressed \(test seam\): \S+ \| close \| S145 \| claude-opus-5-5 \| PASS')
+        $results += "T23 (S145 accepts Opus at the model check, positive echo): exit=$($r.Exit) (later gates may refuse) $(if($ok){'PASS'}else{'FAIL'})"
         if (-not $ok) { $results += $r.Stderr }
 
         # T24: the exception is Opus only; S145 still refuses a cheaper model.
@@ -370,10 +368,34 @@ try {
         if (-not $ok) { $results += $r.Stderr }
     }
 } finally {
-    foreach ($f in @($codex145, $reviewer145, $ciWaiver145)) {
+    foreach ($f in @($codex145, $reviewer145)) {
         if ($saved145.ContainsKey($f)) { [System.IO.File]::WriteAllBytes($f, $saved145[$f]) }
         else { Remove-Item $f -ErrorAction SilentlyContinue }
     }
+}
+
+# T25 (S145 Step 7a cycle 2, Codex B2-1): the telemetry seam cannot create or activate a waiver. The cycle-1
+# seam took a PATH (STATSTID_TELEMETRY_LOG_MOCK) and Add-Content created any file there, so pointing it at
+# SPRINT-<N>-ci-health-WAIVED.md made the next gate skip CI health. The seam is now a switch. This pins
+# (a) that the hook no longer reads the old variable at all, and (b) at run time, with the old variable set
+# to the S99 ci-health waiver path, that no waiver appears and the CI-health gate is NOT skipped.
+$hookSource = Get-Content -Path $hookPath -Raw
+$noPathSeam = -not ($hookSource -match 'STATSTID_TELEMETRY_LOG_MOCK')
+Remove-Item $ciHealthWaiver -ErrorAction SilentlyContinue
+$validS99 = "reviewed-by-model: claude-fable-5-1`nverdict: APPROVED`nreviewed-against-commit: $headShort"
+Set-Content -Path $codex -Value $validS99 -Encoding UTF8
+Set-Content -Path $reviewer -Value $validS99 -Encoding UTF8
+$env:STATSTID_TELEMETRY_LOG_MOCK = $ciHealthWaiver
+try {
+    $r = Invoke-Hook $mock
+    $noWaiver = -not (Test-Path $ciHealthWaiver)
+    $notSkipped = -not ($r.Stderr -match 'has a CI-health waiver')
+    $ok = $noPathSeam -and $noWaiver -and $notSkipped
+    $results += "T25 (telemetry seam cannot create a waiver): no-path-seam=$noPathSeam no-waiver=$noWaiver ci-gate-ran=$notSkipped $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+} finally {
+    Remove-Item Env:\STATSTID_TELEMETRY_LOG_MOCK -ErrorAction SilentlyContinue
+    Remove-Item $ciHealthWaiver -ErrorAction SilentlyContinue
 }
 
 # Cleanup
@@ -383,15 +405,15 @@ Remove-Item Env:\STATSTID_CI_HEALTH_MOCK -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTS_DIR -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_UNTRACKED_MOCK -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_WORKTREE_MOCK -ErrorAction SilentlyContinue
-Remove-Item Env:\STATSTID_TELEMETRY_LOG_MOCK -ErrorAction SilentlyContinue
-Remove-Item $tmpTelemetry -ErrorAction SilentlyContinue
+Remove-Item Env:\STATSTID_TELEMETRY_SUPPRESS -ErrorAction SilentlyContinue
 
 Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
-# S145 Step 7a (Codex W1): a skipped test is not a passed one; say so instead of "ALL 24".
-$skipped = @($results | Where-Object { $_ -match 'SKIPPED' })
+# S145 Step 7a (Codex W1; Opus N-D at cycle 2): a skipped test is not a passed one, and "ALL" means the
+# full count of PASS lines, not merely the absence of FAIL.
+$skipped = @($results | Where-Object { $_ -cmatch 'SKIPPED' })   # case-SENSITIVE: a label like "not-skipped" is not a skip
 $passed  = @($results | Where-Object { $_ -match '^T\d+ .* PASS$' })
 Write-Output ""
-if ($skipped.Count -gt 0) { Write-Output "$($passed.Count) TESTS PASSED, $($skipped.Count) SKIPPED LINE(S); NOT ALL 24 RAN" }
-else { Write-Output "ALL 24 TESTS PASSED ($($passed.Count) PASS lines)" }
+if ($skipped.Count -gt 0 -or $passed.Count -ne 25) { Write-Output "$($passed.Count) OF 25 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 25 RAN"; exit 1 }
+else { Write-Output "ALL 25 TESTS PASSED ($($passed.Count) PASS lines)" }

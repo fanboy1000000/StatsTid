@@ -2655,6 +2655,41 @@ B-1's fix is `69b80585` (`backend-infrastructure`):
 
 Cycle 2 re-reviews the fix-up, scoped to its diff.
 
+**Merged and K2.** The fix batch merged at `8fda8415`; its 5a ran two cycles on both lenses, and its ledger row is above. **K2 = `64456c7b`** carries the fix, the doc fixes (W-2, N-5, N-8 as SEC-051/052, N-9, SEC-049/050, QUAL-214), the harness fix and the C-2 record of K1.
+
+**C-2 on K2 (2026-10-20): the freeze stands, and `B` becomes K2 = `64456c7b2c1036eaffe1107a522bac2967e8fe58`** (R-98; no seat ruling needed).
+- **What changed.** The code-set diff `B..K2` is 16 files, and `PeriodCalculationService.cs`, the one file every patch edits, is not among them.
+- **The census.** "C-1 again" re-checked every Docker row under R-96:
+  - the six new Docker facts are guards outside every mutation's reach;
+  - the seven re-shaped facts are Skema and balance facts with no PCS reach;
+  - every payroll host fact on a list uses a GlobalAdmin GLOBAL token, which W-1's LocalAdmin floor still admits;
+  - BC-4 stays green under every run (under MB-13 its replay still has segment 1's rows);
+  - the two renames appear only in inventory files, not on any red or expected-green list.
+- **The re-cuts.** All four re-cuts on K2, in `.claude/plans/s145/cb1/mut/64456c7b2c10/`, are byte-identical; the dry runs are green and the round trips exit 0.
+
+**C-3 cycle 2 (Step 7a scoped to the fix, `a9beb01f..64456c7b`).**
+- **The Opus lens: CLOSE.** Every cycle-1 finding of both lenses is resolved or recorded as deferred; notes N-A..N-F.
+- **Codex: REQUEST-CHANGES, on one new BLOCKER in the Orchestrator's own harness fix (B2-1).** Its fix table otherwise agrees with the Opus lens.
+  - **The problem.** The telemetry seam `STATSTID_TELEMETRY_LOG_MOCK` took a *path*, and `Add-Content` created any file there. Pointed at `SPRINT-<N>-ci-health-WAIVED.md`, it would have created the waiver, and the CI-health gate, which runs just after, would have been skipped.
+  - **Why the Opus lens missed it.** It reasoned that no gate *reads* the telemetry log, and missed that the path seam could *create* a file that a gate reads. The Orchestrator verified the control flow, so the blocker stands.
+
+*Plain language:* while fixing a small problem in the close guard's own tests (they wrote fake "close passed" lines into a log), the Orchestrator added a test switch that took a file path. Codex saw that the path could name a waiver file, and that writing it would switch off one of the close checks. The switch now only turns the logging off; it can no longer write any file.
+
+**R-134 (Orchestrator): the seam becomes a switch.**
+- **The guard.** `STATSTID_TELEMETRY_SUPPRESS=1` writes nothing and echoes the would-be line to stderr. The old path variable is gone from the guard.
+- **The harness.**
+  - **T23** now takes that echo as its positive evidence. The echo is reached only after the model check passes, so the temporary ci-health waiver is gone, and with it Opus N-D's leftover-waiver risk.
+  - **The new T25** pins the negative case: the hook no longer reads the old variable, and with the old variable pointed at the S99 waiver path, no waiver appears and the CI-health gate runs.
+  - **The banner** requires all 25 PASS lines and no skipped test, case-sensitively, because T25's own label contains "skipped".
+- **Result:** 25 of 25 pass; the real S145 Step 7a artifacts were restored byte-identical; no S99 or S145 waiver was left; the live telemetry log did not grow.
+- **The cycle-2 notes, applied:**
+  - **N-A:** the SEC-048/049/051/052 and QUAL-214 cites at K2;
+  - **N-B:** QUAL-214 names the more common silent-loss path and says "since S56";
+  - **N-C:** ADR-017's sentence points to ADR-016 D10's exception;
+  - **N-E and N-F:** the handoff below.
+
+**Next.** K3 carries R-134 and these records. The code set is unchanged from `B` (= K2) to K3, so C-2's check is empty and the frozen patches stand. C-3 cycle 3 then reviews `64456c7b..K3`, both lenses.
+
 **The fix batch** runs on `s145/step7a-fix` (worktree `s145-step7a-fix`, at K):
 1. `test-qa` writes the RED-first pins.
 2. `backend-infrastructure` makes B-1's fix.
@@ -2666,10 +2701,10 @@ Cycle 2 re-reviews the fix-up, scoped to its diff.
 
 | | |
 |---|---|
-| **As of** | 2026-10-20, **C-2: K committed** (this commit carries the O-4 records and is K). Stage B is fully merged (`8a54484d`, the last code merge); C-1 is frozen at `B` = `2a981597` (R-127). Not pushed to master, by design: `origin/master` is `cdd8253` until C-4's close push. Stage A closed on 2026-10-16 at `K_A` (`923f7fb`) |
+| **As of** | 2026-10-20, **C-3 cycle 3 pending**. Local master is K3 (this commit), on top of K2 `64456c7b` (C-2 on K2: the freeze stood, `B` = K2) and the fix merge `8fda8415`. Not pushed to master, by design: `origin/master` is `cdd8253` until C-4's close push. Stage A closed on 2026-10-16 at `K_A` (`923f7fb`) |
 | **Evidence** | `K_A` = `923f7fb` · V-A run `38747749039` (all seven jobs green) · EA-1..EA-5 all matched (EA-3 through EA-3′); runs and heads in § "Stage A gate — `K_A`" → Results and § "CA-5"; confirmed by the Fable seat (R-52) · PR #37 closed unmerged, `s145-evidence-a` deleted on both sides · K ⟨close⟩ · EB ⟨Stage B⟩ |
-| **Phase** | The close sequence (2026-10-20). C-3 cycle 1 found B-1; the fix batch (R-128..R-133) is merged (`8fda8415`) after its own 5a (two cycles, both lenses). The new K (K2) carries the fix, the harness fix (24/24), the Step 7a doc fixes (W-2, N-5, N-8, N-9, SEC-049..052, QUAL-214) and the C-2 record of K1. Next: C-2 on K2 ("C-1 again": census for the new Docker facts, the two renames, BC-4; re-cuts), then C-3 cycle 2 scoped to `a9beb01f..K2` |
+| **Phase** | The close sequence, C-3 (2026-10-20). Cycle 1 (on K1) found B-1, fixed by the batch merged at `8fda8415` (R-128..R-133). Cycle 2 (on K2): the Opus lens CLOSE; Codex REQUEST-CHANGES on B2-1, the harness telemetry seam that could create a waiver, fixed by R-134 (a switch; T23 positive; T25; 25/25). K3 carries R-134 and the cycle-2 notes (N-A..N-F). The code set is unchanged K2..K3, so the frozen patches stand |
 | **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Merged in A.5:** 14513+T (`07337ea`), 14515 (`eb78b8e`), 14519+T (`8367862`); 14515 re-spawn 2 done: 3 of 3 mutations tripped, its throwaway checkout removed. **Gate A-CLOSE (closed 2026-10-16):** TASK-14518 CA-1 and CA-3 done; the freeze R-33..R-46; the R-33 split merged (`07f7c78`); `K_A` `923f7fb`; the evidence branch and PR #37 closed and deleted (CA-6); the CA-5 rulings R-47..R-52. **After CA-7:** QUAL-207 merged (`499771c`); its worktree `s145-qual-207` to clear at teardown. **To clear at teardown:** `s145-task-14518-rs` (merged); the A.5 worktrees `s145-task-14513`, `s145-task-14515`, `s145-task-14519` (all merged); the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1`. **B.1:** `s145-task-14520` (merged `53a7812`) and `s145-task-14521` (merged `fe928dde`) are to clear at teardown. Still open: `s145-task-14524` (merges at B.3). **B.2:** `s145-task-14522` (merged `f6fac97b`) is to clear at teardown. **B.3:** `s145-task-14523` (merged `8efdfffd`; its `frontend/node_modules` is a junction to the main checkout, so remove the junction before the worktree at teardown) and `s145-task-14524` (merged `8a54484d`; re-spawn 2 works in throwaway checkouts outside the repository) |
-| **Pending gates** | **C-2** patch validity ("C-1 again") → **C-3** Step 7a on K (Codex + the internal lens on Opus, R-104 option 2; base `cbaa5e0`) → **C-4** the close commit and its green push → **C-5..C-8** the Stage B evidence on `s145-evidence-b` → **C-9**. This machine is memory-constrained (8 GB): one build-heavy agent at a time, `-m:2`, foreground; `dotnet build-server shutdown` after builds |
+| **Pending gates** | **C-3 cycle 3** (both lenses on `64456c7b..K3`) → **C-4** (the close commit, push, watch) → **C-5..C-8** the Stage B evidence on `s145-evidence-b` → **C-9**. This machine is memory-constrained (8 GB): one build-heavy agent at a time, `-m:2`, foreground; `dotnet build-server shutdown` after builds |
 | **Open rulings** | None for the owner. R-104 was answered on 2026-10-20 (option 2). The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | (1) C-2 on K2: TASK-14528 "C-1 again" (the code-set diff `B..K2` now holds `SkemaEndpoints.cs`, the payroll `Program.cs`, `HrBackdateWorklistRepository.cs` and tests; PCS is untouched, so the re-cuts should be byte-identical; R-96 (ii) re-checks every Docker row). (2) C-3 cycle 2: both lenses on `a9beb01f..K2`; update both Step 7a artifacts to K2. (3) C-4: re-check worktrees (only the fix worktree to remove), the close commit (its command alone carries the guard's words, R-97), push, watch. (4) **After the close: delete the S145-only Opus exception from `.claude/hooks/sprint-close-guard.ps1` (and T23/T24) — owner ruling R-104; Opus N-3** |
+| **Next action** | (1) C-3 cycle 3: both lenses on `64456c7b..K3`; update both Step 7a artifacts to K3. (2) C-4: confirm only the main worktree stands, no untracked file under src/tests/tools/frontend, no S145 waiver left in `.claude/reviews` (Opus N-D); the close commit (its command alone carries the guard's words, R-97); push; watch. (3) C-5: build the keys file per R-122 (Opus N-10). (4) **After the close: delete the S145-only Opus exception from `.claude/hooks/sprint-close-guard.ps1` (and T23/T24) — owner ruling R-104; Opus N-3.** (5) **S146 pickups:** the unused `BuildPlanForLegacyCallersAsync` (Codex N2, deferred to keep the frozen patches valid); QUAL-214 (the Skema month-navigation race and the Danish date-range messages); SEC-051/052 (input bounds) |
