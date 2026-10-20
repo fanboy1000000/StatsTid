@@ -2422,7 +2422,53 @@ The alternatives were:
 
   Then the seat freezes the lists, the patches and `B`. By owner direction the seat runs on Opus: the `adjudicator` cannot run below Fable, so it goes through the sanctioned general-purpose route.
 
-**TASK-14528 C-1, dispatched** (`test-qa`). Each named Unit mutation is applied alone, in a throwaway checkout outside the repository, to show that its pin turns red; the Stage A mutations whose method TASK-14522 changed are re-run too.
+**TASK-14528 C-1, dispatched** (`test-qa`).
+
+## C-1 — the Stage B evidence, resolved and saved (2026-10-20)
+
+*Plain language:* most of Stage B's new tests need a database, which this machine cannot run. So after the close commit is pushed green, CI runs four throwaway commits, each breaking the code in known ways, and must turn red exactly the tests listed below. C-1 settled those lists on the merged code and rehearsed each run locally.
+- **The rehearsal:** every run built cleanly, and Unit, DemoSeed and the non-Docker Regression tests stayed green, as they must: CI stops at the first red step.
+- **The patches:** each run's breakages are saved as a patch file. The end-of-sprint review reads those files, and CI applies them byte for byte.
+- **The full report** is kept, untracked, at `.claude/plans/s145/cb1/C1-report.md`.
+
+**`B`** = `2a981597dedb45add37c60e817f40cba5eee4b96` (local master at C-1; master moved only by docs after it).
+
+**The four patches**, each a diff of `PeriodCalculationService.cs` only, saved with `--full-index --default-prefix`. Each round-trips byte-identical (`cmp` exit 0). The Orchestrator recomputed the SHA-256 independently, and it matches:
+
+| Run | Mutations | Patch (`.claude/plans/s145/cb1/mut/`) | Bytes | SHA-256 |
+|---|---|---|---|---|
+| EB-1 | MB-2, MB-4, MB-5, MB-13 | `EB-1.diff` | 2846 | `632b8749ce5d52094eba2271d94e4b0a38169d907b16f3d483e2a342027a3f92` |
+| EB-2 | MB-7 | `EB-2.diff` | 964 | `4830beb362b26ceae34c3c4d5e8c6e158f172c6818f14d7fe76e4088d6a337cd` |
+| EA-R1 | MD-25, MD-30 | `EA-R1.diff` | 1692 | `ba047098fad92e3dd9ca5a6174b08556e452e437f74c07878398e65864f3174e` |
+| EA-R2 | MD-24 (as frozen in R-35) | `EA-R2.diff` | 2782 | `d25cb78f15743b3a58e0984417cc6d2bbd9a883ed3e617e7cc2445b79d2304a7` |
+
+**The dry runs** (one throwaway checkout at `B`): each run 0 errors / 145 warnings · CA2100 115 · Unit 1512 · DemoSeed 170 · Regression non-Docker 128.
+
+**The red lists** (keys; each key's FullyQualifiedName is in `cb1/lists/<run>.red.fqn` and `cb1/keys-all.tsv`):
+- **EB-1 (14):** QB1, QB2, QA1, QP1 (MB-2) · IB1, IB2, IB3, RB4 (MB-4) · RB1, RB2, RB3 (MB-5) · RP-B1, SR1, SR2 (MB-13).
+- **EB-2 (22):** LB1, QB1, QB2, QB3, XB1, XB2, RB1, RB2, RB3, RB4, IB1, IB2, IB3, SP1, WS1, WS2, QA1, QP1, FX1, FX2, FX3, RP-B1.
+- **EA-R1 (10):** AR3, AR4, AR7, AR8, RB4 (MD-25) · WP12, QB1, QB2, QA1, QP1 (MD-30).
+- **EA-R2 (4):** IB2, H10, X3, X4.
+
+**The expected-green lists** are EB-1 61, EB-2 65, EA-R1 66 and EA-R2 80 facts, in `cb1/lists/<run>.green.fqn`. 155 of 159 keys resolve; the four that do not are 14522-T's renames, and the lists use the new names (H9 → IB2, AR10 → IB1, X1 → XB1, X2 → XB2).
+
+**The census and the check lines.**
+- The census was by diff since `923f7fb` and by predicate: each mutation's edited condition, its cases, and the facts per case.
+- The R-69 facts and F-1 are confirmed on the merged code.
+- All five check lines PASS on all four runs. There is no unlisted red, no mutation that misses its assertion, and no Unit or DemoSeed red.
+
+**The R39 set.**
+- MD-25 and MD-30 changed method, and MD-24 is in by ruling. Their lists were re-derived on the merged code.
+- The MUs whose method changed (MU-43, MU-44, MU-46, MU-26, MU-27) were all re-run by TASK-14524 re-spawn 2.
+- The Unit mutation table above is attached.
+
+**Findings, none a red** (put to the seat):
+- **F-C1:** one worklist Docker fact rests on MB-6r and MB-6p, but its docstring does not name them (R-72's first condition).
+- **F-C2:** SR2 and Stage A's guard FS-G1 are one FullyQualifiedName, which C-5's compare keys must map.
+- **F-C3:** `TASK-14524.md:63` still has the pre-R-120 wording of MB-12.
+- **Brief corrections:** the stale line cites; XB1/XB2 belong to MB-2 case (d), not (c); 7D is missing from MB-2's case lists.
+
+**The seat (Opus, by owner direction) is reviewing the freeze.**
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
