@@ -44,8 +44,10 @@
 // have performed that reversal themselves; the row still shows the reversal
 // route as inert TEXT ONLY (no form — OQ-4), and the instruction CARD stays
 // Global-Admin-only and network-call-free regardless of kind. When the row's
-// `recalcBlockedBy` is non-empty (a trigger strictly inside the exported
-// month — QUAL-149/150 — recalculating would yield wrong wage-type codes) the
+// `recalcBlockedBy` is non-empty (since S145 Stage B exactly one case remains,
+// register id QUAL-209: an agreement change inside a Monday–Sunday week the
+// exported month settles, so the week cannot be settled under two agreements;
+// recalculating would then yield wrong wage-type codes) the
 // card/hint is REPLACED by a blocked notice and only Dismiss remains, for
 // EVERY role and EVERY kind — recalculating produces a wrong result
 // regardless of who is asking, so this check is never bypassed by the
@@ -102,6 +104,21 @@ function triggerKindLabel(kind: string): string {
     case 'PRIOR_MONTH_REOPENED': return 'Forrige måned genåbnet'
     default: return kind
   }
+}
+
+// The plain-Danish reason beside a blocking register id (S145 B3, R-77). Only
+// QUAL-209 can appear on an open row since Stage B; an unknown id renders as
+// the id alone. The id stays visible for cross-reference to the register.
+function blockReasonLabel(id: string): string | null {
+  switch (id) {
+    case 'QUAL-209': return 'overenskomstskift midt i en uge — ugen kan ikke afregnes efter to overenskomster'
+    default: return null
+  }
+}
+
+function blockReasonText(id: string): string {
+  const label = blockReasonLabel(id)
+  return label ? `${id}: ${label}` : id
 }
 
 function resolutionLabel(resolution: string | null): string {
@@ -252,7 +269,7 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
           ...prev,
           [row.worklistId]: {
             kind: 'warning',
-            message: `Genberegning er blokeret${blockedIds.length ? ` (${blockedIds.join(', ')})` : ''} og kan ikke markeres som løst. Brug "Håndteret manuelt", hvis sagen er rettet på anden vis.`,
+            message: `Genberegning er blokeret${blockedIds.length ? ` (${blockedIds.map(blockReasonText).join(', ')})` : ''} og kan ikke markeres som løst. Brug "Håndteret manuelt", hvis sagen er rettet på anden vis.`,
           },
         }))
         await load()
@@ -389,7 +406,7 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
                       {blocked && (
                         <div data-testid={`worklist-blocked-${row.worklistId}`}>
                           <Alert variant="warning">
-                            Genberegning blokeret — {row.recalcBlockedBy.join(', ')}
+                            Genberegning blokeret — {row.recalcBlockedBy.map(blockReasonText).join(', ')}
                           </Alert>
                         </div>
                       )}

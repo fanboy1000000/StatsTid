@@ -20,7 +20,7 @@
 //    row (its remedy, the payroll recalculate, is GlobalAdminOnly) — and a
 //    blocked row suppresses it regardless of kind or role.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import WorklistList from '../WorklistList'
 
@@ -192,13 +192,14 @@ describe('WorklistList — a blocked row never shows the run-instruction', () =>
     const user = userEvent.setup()
     auth.role = 'GlobalAdmin'
     mockFetch.mockImplementationOnce(async () =>
-      jsonResponse([exportedMonthRow({ worklistId: 'wl-2', recalcBlockedBy: ['QUAL-149'] })]),
+      // S145 B3: Stage B re-seed — the only id the backend sends on an open row is QUAL-209.
+      jsonResponse([exportedMonthRow({ worklistId: 'wl-2', recalcBlockedBy: ['QUAL-209'] })]),
     )
 
     render(<WorklistList onResolved={vi.fn()} />)
 
     await waitFor(() => expect(screen.getByTestId('worklist-blocked-wl-2')).toBeDefined())
-    expect(screen.getByText(/Genberegning blokeret — QUAL-149/)).toBeDefined()
+    expect(screen.getByText(/Genberegning blokeret — QUAL-209/)).toBeDefined()
     expect(screen.queryByTestId('worklist-recalc-card-wl-2')).toBeNull()
     expect(screen.queryByTestId('worklist-recalc-hint-wl-2')).toBeNull()
 
@@ -239,7 +240,7 @@ describe('WorklistList — OQ-7 (a): the Recalculate gate tracks the remedy, not
   })
 
   // S144 / TASK-14406: this test used to seed a BLOCKED SETTLED_YEAR row (`recalcBlockedBy:
-  // ['QUAL-150']`). The backend can never produce that — `BackdateWorklistDerivation.RecalcBlockedBy`
+  // ['QUAL-150']`; since S145 B3 fixtures use the one remaining id, QUAL-209). The backend can never produce that — `BackdateWorklistDerivation.RecalcBlockedBy`
   // is empty for every kind but EXPORTED_MONTH — so it pinned an impossible premise. The fixture
   // below is one the backend CAN produce: a blocked EXPORTED_MONTH row seen by a non-Global-Admin HR
   // actor (no Recalculated, no Håndteret manuelt — both remedies are GlobalAdmin-only there).
@@ -247,7 +248,7 @@ describe('WorklistList — OQ-7 (a): the Recalculate gate tracks the remedy, not
     const user = userEvent.setup()
     auth.role = 'LocalHR'
     mockFetch.mockImplementationOnce(async () =>
-      jsonResponse([exportedMonthRow({ worklistId: 'wl-4', recalcBlockedBy: ['QUAL-150'] })]),
+      jsonResponse([exportedMonthRow({ worklistId: 'wl-4', recalcBlockedBy: ['QUAL-209'] })]), // S145 B3: Stage B re-seed
     )
 
     render(<WorklistList onResolved={vi.fn()} />)
@@ -257,6 +258,27 @@ describe('WorklistList — OQ-7 (a): the Recalculate gate tracks the remedy, not
     expect(screen.queryByTestId('worklist-mark-recalculated-wl-4')).toBeNull()
     expect(screen.queryByTestId('worklist-handled-manually-wl-4')).toBeNull()
     expect(screen.getByTestId('worklist-dismiss-wl-4')).toBeDefined()
+  })
+})
+
+describe('WorklistList — the blocked notice explains the one remaining reason (S145 B3, R-77)', () => {
+  it('QUAL-209 shows the id AND the Danish explanation; an unknown id shows the id only; an unblocked row shows no notice', async () => {
+    auth.role = 'GlobalAdmin'
+    mockFetch.mockImplementationOnce(async () =>
+      jsonResponse([
+        exportedMonthRow({ worklistId: 'wl-a', recalcBlockedBy: ['QUAL-209'] }),
+        exportedMonthRow({ worklistId: 'wl-b', recalcBlockedBy: ['QUAL-999'] }),
+        exportedMonthRow({ worklistId: 'wl-c' }),
+      ]),
+    )
+    render(<WorklistList onResolved={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('worklist-blocked-wl-a')).toBeDefined())
+
+    expect(screen.getByTestId('worklist-blocked-wl-a').textContent).toBe(
+      'Genberegning blokeret — QUAL-209: overenskomstskift midt i en uge — ugen kan ikke afregnes efter to overenskomster',
+    )
+    expect(screen.getByTestId('worklist-blocked-wl-b').textContent).toBe('Genberegning blokeret — QUAL-999')
+    expect(screen.queryByTestId('worklist-blocked-wl-c')).toBeNull()
   })
 })
 
@@ -272,7 +294,7 @@ describe('WorklistList — "Håndteret manuelt" button visibility (role x kind x
   it.each(cases)('$role on $kind (blocked=$blocked) -> visible=$visible', async ({ role, kind, blocked, visible }) => {
     const user = userEvent.setup()
     auth.role = role
-    const over = { worklistId: 'wl-x', ...(blocked ? { recalcBlockedBy: ['QUAL-149'] } : {}) }
+    const over = { worklistId: 'wl-x', ...(blocked ? { recalcBlockedBy: ['QUAL-209'] } : {}) } // S145 B3: Stage B re-seed
     const row = kind === 'EXPORTED_MONTH' ? exportedMonthRow(over) : settledYearRow(over)
     mockFetch.mockImplementationOnce(async () => jsonResponse([row]))
 
@@ -359,11 +381,31 @@ describe('WorklistList — 409 / 403 messages, fed the real server JSON through 
     const text = await submitFailing(409, {
       error: 'Recalculation is blocked for this row',
       kind: 'worklist-recalc-blocked',
-      blockedBy: ['QUAL-149', 'QUAL-150'],
+      blockedBy: ['QUAL-209'], // S145 B3: Stage B re-seed
     })
-    expect(text).toContain('QUAL-149, QUAL-150')
+    expect(text).toContain('QUAL-209')
     expect(text).toContain('Håndteret manuelt')
     expect(text).not.toContain('allerede løst')
+  })
+
+  // S145 B3 (owner amendment to R-77's scope, 2026-10-20): the 409 message explains the id too.
+  it('409 worklist-recalc-blocked: QUAL-209 is explained in Danish; an unknown id is shown alone', async () => {
+    const known = await submitFailing(409, {
+      error: 'Recalculation is blocked for this row',
+      kind: 'worklist-recalc-blocked',
+      blockedBy: ['QUAL-209'],
+    })
+    expect(known).toContain(
+      '(QUAL-209: overenskomstskift midt i en uge — ugen kan ikke afregnes efter to overenskomster)',
+    )
+    cleanup()
+    mockFetch.mockReset()
+    const unknown = await submitFailing(409, {
+      error: 'Recalculation is blocked for this row',
+      kind: 'worklist-recalc-blocked',
+      blockedBy: ['QUAL-999'],
+    })
+    expect(unknown).toContain('Genberegning er blokeret (QUAL-999) og kan ikke markeres som løst.')
   })
 
   it('409 already-resolved ({ error } only): the already-resolved message', async () => {
