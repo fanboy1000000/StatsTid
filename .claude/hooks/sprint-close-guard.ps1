@@ -14,6 +14,7 @@
 #   .claude/reviews/SPRINT-{N}-ci-pending-WAIVED.md -> bypasses the consecutive-CI-pending gate only
 #   .claude/reviews/SPRINT-{N}-untracked-WAIVED.md -> bypasses the untracked-source gate only
 #   .claude/reviews/SPRINT-{N}-worktree-WAIVED.md  -> bypasses the worktree-teardown gate only
+#   .claude/reviews/SPRINT-{N}-ledger-WAIVED.md    -> bypasses the task-ledger gate only
 #
 # Why this exists: post-S35 governance change (commit a094630) requires
 # Codex + Reviewer dual-lens at every sprint-end. Advisory memory + WORKFLOW.md

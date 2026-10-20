@@ -66,10 +66,11 @@ $env:STATSTID_UNTRACKED_MOCK = 'clean'
 # about this gate. (The gate itself still has no test of its own in this harness.)
 $env:STATSTID_WORKTREE_MOCK = 'clean'
 # S145 Step 7a (Opus N-2; a switch since cycle 2, Codex B2-1) — telemetry is SUPPRESSED, never written:
-# T23 passes the real model check for S145 (every gate seam is S99-only), and the hook would then write a
-# PASS line that in the live log looked like a real close. The hook echoes the suppressed line to stderr
-# instead, which T23 uses as positive evidence. A switch writes nothing, so it can create no file (the
-# cycle-1 path seam could create a waiver a later gate reads; T25 pins that the old variable is dead).
+# every test whose run passes the model check (the S99 ones, and T23 for S145) would otherwise write a
+# PASS line that in the live log looks like a real close. The hook echoes the suppressed line to stderr
+# instead, which T23 and T25 use as positive evidence. A switch writes nothing, so it can create no file
+# (the cycle-1 path seam could create a waiver a later gate reads; T25 pins that the old variable is
+# dead). The switch stays when T23/T24 are deleted after the S145 close: the S99 tests still need it.
 $env:STATSTID_TELEMETRY_SUPPRESS = '1'
 
 # S141 — the task-ledger seam gets a neutral default for T1-T14, for the same
@@ -331,10 +332,12 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 
 # T23-T24 — the S145-only review-model exception (owner ruling 2026-10-20, R-104 option 2). T21 above
 # already pins that the reserved S99 still refuses Opus; these two pin the exception's other edges.
-# Every seam in the hook is honoured for S99 only, so an S145 run meets the REAL later gates (CI health,
-# worktrees, the task ledger), which may refuse for their own reasons. Both tests therefore assert on
-# the model check's own message only. They write SPRINT-145 artifacts into the real reviews dir: any
-# real ones are saved first and restored afterwards, byte for byte.
+# Every GATE seam in the hook is honoured for S99 only (the telemetry switch, which gates nothing, is the
+# one any-sprint seam; S145 Step 7a cycle 4, Opus N4-3), so an S145 run would meet the REAL later gates
+# (CI health, worktrees, the task ledger), which may refuse for their own reasons. Both tests therefore
+# assert on the model check's own outcome, and T23's run stops at the reviewer's staleness check before any
+# of those gates. They write SPRINT-145 artifacts into the real reviews dir: any real ones are saved first
+# and restored afterwards, byte for byte.
 # S145 Step 7a (Codex W1 / Opus N-2; reworked at cycle 2, Codex B2-1 / Opus N-D): T23 also needs POSITIVE
 # evidence that the run got PAST the model check, not merely the absence of its refusal. The hook's
 # telemetry block runs only after the model check passes, and with STATSTID_TELEMETRY_SUPPRESS=1 it echoes
@@ -353,23 +356,35 @@ $reviewer145 = Join-Path $reviewsDir "SPRINT-145-step7a-reviewer.md"
 $waiver145   = Join-Path $reviewsDir "SPRINT-145-step7a-WAIVED.md"
 $saved145 = @{}
 $backup145 = @{}
-foreach ($f in @($codex145, $reviewer145)) {
-    if (Test-Path $f) {
-        $saved145[$f] = [System.IO.File]::ReadAllBytes($f)
-        $bk = Join-Path $env:TEMP ("statstid-guard-test-backup-" + (Split-Path $f -Leaf))
-        [System.IO.File]::WriteAllBytes($bk, $saved145[$f])
-        $backup145[$f] = $bk
+# S145 Step 7a cycle 4 (Codex WARNING): the recovery copies have fixed names, so a run after a killed one
+# would read the left-behind FAKES as the originals and overwrite the genuine copies with them. A copy left
+# behind therefore means an interrupted run: T23-T24 do not touch the artifacts at all, and the banner fails
+# until a human restores the real artifacts from the copies and deletes the copies.
+$leftBackups = @(Get-ChildItem -Path $env:TEMP -Filter 'statstid-guard-test-backup-SPRINT-145-*' -ErrorAction SilentlyContinue)
+if ($leftBackups.Count -gt 0) {
+    $results += "T23-T24 SKIPPED: recovery copies from an interrupted harness run exist ($(($leftBackups | ForEach-Object { $_.FullName }) -join ', ')); the S145 artifacts in .claude/reviews may be fakes. Restore them from the copies by hand, delete the copies, then re-run"
+} elseif (Test-Path $waiver145) {
+    $results += "T23-T24 SKIPPED: a real S145 step-7a waiver exists, and it bypasses the model check"
+} else {
+    foreach ($f in @($codex145, $reviewer145)) {
+        if (Test-Path $f) {
+            $saved145[$f] = [System.IO.File]::ReadAllBytes($f)
+            $bk = Join-Path $env:TEMP ("statstid-guard-test-backup-" + (Split-Path $f -Leaf))
+            [System.IO.File]::WriteAllBytes($bk, $saved145[$f])
+            $backup145[$f] = $bk
+        }
     }
-}
-try {
-    if (Test-Path $waiver145) {
-        $results += "T23-T24 SKIPPED: a real S145 step-7a waiver exists, and it bypasses the model check"
-    } else {
-        Set-Content -Path $codex145 -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+    try {
+        # S145 Step 7a cycle 4 (Codex BLOCKER): the stale reviewer fake is written FIRST. Written second, a run
+        # killed between the two writes would leave the HEAD-valid Codex fake beside a real reviewer artifact,
+        # and at close time the real one names HEAD and an accepted model, so the pair would pass. In this
+        # order every state a kill can leave refuses: the stale reviewer alone, the pair, T24's cheaper-model
+        # reviewer, and (restoring Codex first, below) a real Codex beside either fake reviewer.
 
         # T23: S145 accepts the Opus id at the model check (the exception itself); the suppressed-telemetry
         # echo, reached only after the check passes, is the positive evidence.
         Set-Content -Path $reviewer145 -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $staleSha" -Encoding UTF8
+        Set-Content -Path $codex145 -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
         $r = Invoke-Hook $mock145
         # The run must then refuse at the reviewer's staleness check: that is what makes a left-behind fake
         # pair harmless (W3-1), so it is asserted, not assumed.
@@ -383,13 +398,19 @@ try {
         $ok = ($r.Exit -eq 2 -and $r.Stderr -match "Step 7a internal review ran on 'claude-sonnet-5-5'")
         $results += "T24 (S145 still refuses a cheaper model): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
         if (-not $ok) { $results += $r.Stderr }
+    } finally {
+        # Codex first, then the reviewer: until the reviewer is restored, the fake one refuses.
+        foreach ($f in @($codex145, $reviewer145)) {
+            if ($saved145.ContainsKey($f)) { [System.IO.File]::WriteAllBytes($f, $saved145[$f]) }
+            else { Remove-Item $f -ErrorAction SilentlyContinue }
+        }
+        # A recovery copy is deleted only once its artifact is verifiably back.
+        foreach ($f in @($backup145.Keys)) {
+            $back = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($f))
+            if ($back -eq [Convert]::ToBase64String($saved145[$f])) { Remove-Item $backup145[$f] -ErrorAction SilentlyContinue }
+            else { $results += "T23-T24 FAIL: $f was not restored byte for byte; its recovery copy is kept at $($backup145[$f])" }
+        }
     }
-} finally {
-    foreach ($f in @($codex145, $reviewer145)) {
-        if ($saved145.ContainsKey($f)) { [System.IO.File]::WriteAllBytes($f, $saved145[$f]) }
-        else { Remove-Item $f -ErrorAction SilentlyContinue }
-    }
-    foreach ($bk in $backup145.Values) { Remove-Item $bk -ErrorAction SilentlyContinue }
 }
 
 # T25 (S145 Step 7a cycle 2, Codex B2-1; strengthened at cycle 3, Codex W / Opus N3-1): the telemetry seam
