@@ -298,7 +298,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   reversal) deferred from S140 under owner ruling OQ-4. The **"current ≠ live" precondition still gates future-dating** and is the
   reason the increment was not simply bundled into S140 — it is a read-model change with roughly 200 read sites in its blast
   radius and deserves its own refinement and plan review. Remaining scope (unchanged design inputs: the HR follow-up register's Increment-4 checklist, S139: the landing tiles, the worklist UI with its role-mismatch decision, the termination screen, the admin-create hire date, the "efter frist" tile fix computed from the owner-ratified +2/+5 deadlines, routing the overtime page) · named follow-ups: **org/unit membership history** (ADR-040 D4 tail —
-  until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail; **S145 design input:** per-spell settlement cutoffs are needed, since today's single cutoff takes the latest-ending window, and `PeriodCalculationService.SegmentIndexForLine`'s out-of-segment fallback must become a refusal; otherwise a week settled on a NOT_EMPLOYED gap day exports an overtime line dated in the gap under the preceding segment. Fable 5a of TASK-14511, WARNING 2) · **OQ-4** (IMMEDIATE-
+  until then "which org in March?" stays unanswerable) · **re-hire spells** (D1 tail; **S145 design input:** per-spell settlement cutoffs are needed, since today's single cutoff takes the latest-ending window, and ~~`PeriodCalculationService.SegmentIndexForLine`'s out-of-segment fallback must become a refusal; otherwise a week settled on a NOT_EMPLOYED gap day exports an overtime line dated in the gap under the preceding segment~~ ✅ **DONE (S145 Stage B, TASK-14522, R-56)** — a line dated in no EMPLOYED segment now fails the calculation (500, nothing written) instead of being mapped under the preceding segment's codes; the per-spell cutoffs stay owed, since without them such a month is refused rather than paid. Fable 5a of TASK-14511, WARNING 2) · **OQ-4** (IMMEDIATE-
   grant pro-rating at mid-year hire → Phase B expert list). **S137-owed items by increment:** Increment 3 — **all three DELIVERED in
   S138**: the retroactive-correction window pin (the Docker pin that exports a windowless month, records a
   mid-month end date, corrects, and asserts the claw-back deltas cover only post-end days with the manifest
@@ -341,7 +341,8 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   **→ S145 (owner ruling 2026-10-01: "both stages, gated").** The S145 refinement found that every month is
   wrong, not only split ones (**QUAL-186**: payroll judges a month against one week's norm), so S145 first makes
   payroll work week by week (Stage A, with QUAL-150) and only then opens split months (Stage B, QUAL-149). This
-  entry is retired at S145's close.
+  entry was retired at S145 (the ✅ entry above); QUAL-149 reads BUILT, not FIXED, until the Stage B evidence runs
+  (C-6/C-7) report.
 - **Overtime and norm design questions the S145 refinement surfaced (domain questions, not defects; none is S145
   scope).** (1) **Part-time overtime band:** should a part-timer's hours between their own norm and the full-time
   37 h be plain merarbejde rather than 50% overtime? Today the thresholds scale with the fraction

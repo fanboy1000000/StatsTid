@@ -65,6 +65,12 @@ $env:STATSTID_UNTRACKED_MOCK = 'clean'
 # real worktree list). Neutral default, for the same reason as the seams above: those tests are not
 # about this gate. (The gate itself still has no test of its own in this harness.)
 $env:STATSTID_WORKTREE_MOCK = 'clean'
+# S145 Step 7a (Opus N-2) — telemetry goes to a temp file, never the live log: T23 passes the real
+# model check for S145 (every gate seam is S99-only), and the hook then writes a PASS line, which in
+# the live log looked like a real close. The hook honours this seam for any sprint because telemetry
+# is not a gate: redirecting it blinds no check.
+$tmpTelemetry = Join-Path $env:TEMP "statstid-guard-test-telemetry.log"
+$env:STATSTID_TELEMETRY_LOG_MOCK = $tmpTelemetry
 
 # S141 — the task-ledger seam gets a neutral default for T1-T14, for the same
 # reason the two seams above do: those tests are not about this gate.
@@ -329,23 +335,31 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # worktrees, the task ledger), which may refuse for their own reasons. Both tests therefore assert on
 # the model check's own message only. They write SPRINT-145 artifacts into the real reviews dir: any
 # real ones are saved first and restored afterwards, byte for byte.
+# S145 Step 7a (Codex W1 / Opus N-2): T23 also needs POSITIVE evidence that the run got PAST the model
+# check, not merely the absence of its refusal (an earlier failure would satisfy that too). The CI-health
+# gate is the next gate after the artifact checks, and its waiver prints a fixed line before anything
+# else can refuse; so T23 places a temporary S145 ci-health waiver (saved and restored like the
+# artifacts) and requires that line in stderr.
 $mock145     = 'git commit -m "S145 TASK-9999: sprint close -- test"'
 $codex145    = Join-Path $reviewsDir "SPRINT-145-step7a-codex.md"
 $reviewer145 = Join-Path $reviewsDir "SPRINT-145-step7a-reviewer.md"
 $waiver145   = Join-Path $reviewsDir "SPRINT-145-step7a-WAIVED.md"
+$ciWaiver145 = Join-Path $reviewsDir "SPRINT-145-ci-health-WAIVED.md"
 $saved145 = @{}
-foreach ($f in @($codex145, $reviewer145)) { if (Test-Path $f) { $saved145[$f] = [System.IO.File]::ReadAllBytes($f) } }
+foreach ($f in @($codex145, $reviewer145, $ciWaiver145)) { if (Test-Path $f) { $saved145[$f] = [System.IO.File]::ReadAllBytes($f) } }
 try {
     if (Test-Path $waiver145) {
         $results += "T23-T24 SKIPPED: a real S145 step-7a waiver exists, and it bypasses the model check"
     } else {
         Set-Content -Path $codex145 -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+        Set-Content -Path $ciWaiver145 -Value "temporary: test-sprint-close-guard.ps1 T23 (restored or removed when the test ends)" -Encoding UTF8
 
-        # T23: S145 accepts the Opus id at the model check (the exception itself).
+        # T23: S145 accepts the Opus id at the model check (the exception itself), and the run reaches
+        # the CI-health gate after it (the waiver line), so the pass is positive, not just an absence.
         Set-Content -Path $reviewer145 -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
         $r = Invoke-Hook $mock145
-        $ok = -not ($r.Stderr -match 'Step 7a internal review ran on')
-        $results += "T23 (S145 accepts Opus at the model check): exit=$($r.Exit) (later gates may refuse) $(if($ok){'PASS'}else{'FAIL'})"
+        $ok = (-not ($r.Stderr -match 'Step 7a internal review ran on')) -and ($r.Stderr -match 'S145 has a CI-health waiver')
+        $results += "T23 (S145 accepts Opus at the model check, reaches the CI-health gate): exit=$($r.Exit) (later gates may refuse) $(if($ok){'PASS'}else{'FAIL'})"
         if (-not $ok) { $results += $r.Stderr }
 
         # T24: the exception is Opus only; S145 still refuses a cheaper model.
@@ -356,7 +370,7 @@ try {
         if (-not $ok) { $results += $r.Stderr }
     }
 } finally {
-    foreach ($f in @($codex145, $reviewer145)) {
+    foreach ($f in @($codex145, $reviewer145, $ciWaiver145)) {
         if ($saved145.ContainsKey($f)) { [System.IO.File]::WriteAllBytes($f, $saved145[$f]) }
         else { Remove-Item $f -ErrorAction SilentlyContinue }
     }
@@ -369,9 +383,15 @@ Remove-Item Env:\STATSTID_CI_HEALTH_MOCK -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTS_DIR -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_UNTRACKED_MOCK -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_WORKTREE_MOCK -ErrorAction SilentlyContinue
+Remove-Item Env:\STATSTID_TELEMETRY_LOG_MOCK -ErrorAction SilentlyContinue
+Remove-Item $tmpTelemetry -ErrorAction SilentlyContinue
 
 Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
+# S145 Step 7a (Codex W1): a skipped test is not a passed one; say so instead of "ALL 24".
+$skipped = @($results | Where-Object { $_ -match 'SKIPPED' })
+$passed  = @($results | Where-Object { $_ -match '^T\d+ .* PASS$' })
 Write-Output ""
-Write-Output "ALL 24 TESTS PASSED"
+if ($skipped.Count -gt 0) { Write-Output "$($passed.Count) TESTS PASSED, $($skipped.Count) SKIPPED LINE(S); NOT ALL 24 RAN" }
+else { Write-Output "ALL 24 TESTS PASSED ($($passed.Count) PASS lines)" }

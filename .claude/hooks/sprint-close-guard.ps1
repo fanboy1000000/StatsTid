@@ -243,7 +243,10 @@ foreach ($artifact in @($codex, $reviewer)) {
         # Telemetry (thin monitoring, owner ruling 2026-09-07): record which model the close's
         # internal review ran on, next to the spawn lines the routing guard writes. Best-effort.
         try {
-            $tlog = Join-Path (Get-Location) '.claude/telemetry/model-routing.log'
+            # Test seam (S145 Step 7a N-2): the harness points telemetry at a temp file. Honoured for
+            # any sprint, unlike the gate seams, because telemetry is not a gate: redirecting it
+            # blinds no check, and T23's real-path S145 run must not write a close-looking line here.
+            $tlog = if ($env:STATSTID_TELEMETRY_LOG_MOCK) { $env:STATSTID_TELEMETRY_LOG_MOCK } else { Join-Path (Get-Location) '.claude/telemetry/model-routing.log' }
             $tdir = Split-Path $tlog -Parent
             if (-not (Test-Path $tdir)) { New-Item -ItemType Directory -Path $tdir -Force | Out-Null }
             $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')

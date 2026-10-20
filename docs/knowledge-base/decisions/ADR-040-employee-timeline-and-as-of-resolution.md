@@ -136,6 +136,12 @@ The payroll host's planner (and the compliance path) obtain the window via
 crossing the PAT-005 HTTP boundary — never carries employment dates**, preserving the `User.cs`
 redaction rule. No employee-facing DTO, JWT, export, or (per D3) error body carries them either.
 
+*Precision (S145 Step 7a, N-9):* since S145 two employment-derived facts do cross from payroll to the Rule Engine,
+server to server, in the timeline call: the settlement cutoff (a leaver's last employed day) and the edges of the
+pieces (a piece starts at a hire and ends at a leaving date) (`EvaluateTimelineRequest.cs:10-16, :24-25`). Both are
+frozen in the manifest (`segment_manifests.plan_inputs_jsonb`; ADR-016 D10). The wire `EmploymentProfile` still
+carries none.
+
 ### D8 — Temporal editing (reopens ADR-023 D8): future-dating and backdating become legal, with truth preserved
 Profile and agreement-code changes accept **future-dated and backdated** `effective_from`
 (HROrAbove; the ADR-020 3-case routing extended with an insert-between-rows case). Two policies:
@@ -277,8 +283,10 @@ of two tests, not the entitlement-window test alone; see the 2026-09-03 sub-amen
 implemented.)
 
 **Replay vs re-plan (stated, S138; rewritten S145 for the replay contract, ADR-016 D10 amendment 2026-10-15).**
-Manifest replay is historical-manifest replay, and since S145 it consults no dated history at all, current or
-otherwise. It re-runs the calculation on the inputs the manifest froze (the employment pieces, meaning the part-time
+Manifest replay is historical-manifest replay, and since S145 it consults no dated employee history at all, current or
+otherwise. Its one dated read is configuration: the wage-type mapping, looked up with each segment's frozen key at the
+segment's start exactly as the forward run did; mapping edits must be dated today, so a past period maps as it did
+(ADR-016 D10; corrected S145 Step 7a, W-2). It re-runs the calculation on the inputs the manifest froze (the employment pieces, meaning the part-time
 fraction, agreement and position for each stretch of employed days, the opening week's context days included; the
 settlement cutoff; the opening flex balance) and re-reads the hours rows by the event ids it recorded, superseded
 rows included. Any backdate, interior to a frozen segment or at its start, is therefore invisible to replay by

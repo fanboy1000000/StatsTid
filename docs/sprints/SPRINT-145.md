@@ -519,6 +519,7 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 | TASK-14523 | DONE | merged `8efdfffd` (B.3) |
 | TASK-14524 | DONE | authored at B.1, merged `8a54484d` (B.3); re-spawn 2's Unit mutation run done |
 | TASK-14528 | DONE | C-1 done and frozen (R-127). Its C-5 build of the evidence runs follows the close's green push, by the plan's design (R-53); the results are recorded at C-9 |
+| TASK-1902 | DONE | not an S145 task: a prior sprint's task (the payroll host's resource-scope guard), named in § "C-3" only as the origin of the check W-1 floored. Listed so the close guard's ledger gate, which reads every TASK id in this log, sees an outcome |
 
 | Task | Branch | Build | 5α | 5a Reviewer (Fable) | 5a Codex | Merged |
 |---|---|---|---|---|---|---|
@@ -547,6 +548,7 @@ A row is written when a task merges. **A row with an empty 5α or 5a cell is not
 | TASK-14522 split months payable; raw routes refuse them by their own reason (`payroll-integration`) + 14522-T flipped refusal pins (`test-qa`; B.2) | `s145/task-14522` (`39d60f86`; 14522-T `61edc9dc`; Orchestrator `8992a4ce`, comments + two dead helpers removed) | O-1 on merged master `f6fac97b`: full rebuild 0 errors / 145 warnings · CA2100 115 · Unit 1478 · DemoSeed 170 · Regression non-Docker 128 · OpenAPI no drift | PASS (14 files, all authorized; SharedKernel comments only; 14522-T touches no `src/**`) | **On Opus** (owner direction): APPROVED-WITH-WARNINGS (`61edc9dc`; W-1, W-2 stale prose; N-1..N-9). Applied in `8992a4ce`, not re-reviewed | APPROVE-WITH-WARNINGS (`61edc9dc`; WARNING IB1's MB-4 narrative → R-119; NOTE failed merge rows under Success, recorded) | `f6fac97b`. Rulings R-118 (the XB1/XB2 hours seed) and R-119 (TASK-14528 MB-4 (d)). QUAL-149 to be marked BUILT after the EB runs |
 | TASK-14524 the Stage B pins (`test-qa`; authored B.1, merged B.3) | `s145/task-14524` (authored `5ee23e4` → rebased `6f6ce59b`; Orchestrator `ce269f3` → `ca7a9c5c`; re-spawn 1 `767d4631`; fix-up `25f224ef`; Orchestrator `d28a97b8`, comments) | O-1 on merged master `8a54484d`: full rebuild 0 errors / 145 warnings · CA2100 115 · Unit **1512** (+34) · DemoSeed 170 · Regression non-Docker 128. Docker facts CI-verified at the close | PASS (9 files: 7 new, 2 end-appends; no `src/**`; all 36 names match TASK-14528's keys) | **On Opus** (owner direction): REQUEST-CHANGES (`767d4631`; B-1 QA1/QP1 setup) → cycle 2 APPROVED (`25f224ef`); the NOTEs applied in `d28a97b8` | **Added beyond the plan** (the internal lens is below the usual review model): REQUEST-CHANGES (`767d4631`, the same B-1) → cycle 2 APPROVE (`25f224ef`) | `8a54484d`. R-120 (B-1's fix; docstring corrections; TASK-14528 MB-12 amended; N-6 accepted). Re-spawn 2's Unit mutation table follows |
 | TASK-14523 the blocked notice explains QUAL-209 (`ux`; B.3) | `s145/task-14523` (`d93aee6a`; owner follow-up `820434ab`) | Frontend only: tsc 0 · vitest **1005** (+2) on merged master `8efdfffd`. The .NET side is unchanged since `f6fac97b` | PASS (two files, both authorized) | **SKIP** per the plan's 5a table (pure UI text; `docs/AGENTS.md:353`); the copy was shown to the owner at return (R-85), and the owner ruled to also explain the 409 message | not required | `8efdfffd` |
+| Step 7a fix batch, C-3 (R-128..R-133): B-1 the Skema month bound (`backend-infrastructure`); W-1 the LocalAdmin scope floor (Orchestrator); the RED-first pins, the item-10 pin and the R-132 re-shapes (`test-qa`) | `s145/step7a-fix` (`c9f87124` pins; `69b80585` B-1; `a57bb057` re-shape; `06caca3e` W-1; `d4d10d38` fix-up R-133; Orchestrator `f7ac0854`, comments) | O-1 on merged master `8fda8415`: full rebuild 0 errors / 145 warnings · CA2100 115 · Unit 1512 · DemoSeed 170 · Regression non-Docker 128. The new and re-shaped facts are Docker, CI-verified at the close | PASS (each commit in its author's scope; tests only from `test-qa`; one call from the Orchestrator) | **On Opus** (owner direction): APPROVED (`06caca3e`); cycle 2 APPROVED-WITH-WARNINGS (`d4d10d38`; notes, comments applied in `f7ac0854`) | APPROVE-WITH-WARNINGS (`06caca3e`; the seam → R-133); cycle 2 APPROVE (`d4d10d38`) | `8fda8415`. SEC-049..052 and QUAL-214 registered; the C-3 cycle 2 (Step 7a scoped to the fix) follows on the new K |
 | TASK-14521 the worklist's mark follows payroll's week rule (`backend-infrastructure`) + 14521-T re-seeded pins (`test-qa`; B.1) | `s145/task-14521` (`1f084e1`; 14521-T `f563dbf`; Orchestrator `4563abc`, comments) | O-1 on merged master `fe928dde`: full rebuild 0 errors / 145 warnings · CA2100 115 · Unit **1478** · DemoSeed 170 · Regression non-Docker 128. **O-2:** no drift in `openapi.json` or `api-types.ts` | **FAIL on labels only** (three changed stamp values unlabelled, five labelled only in prose; all authorized by brief item 3). Labelled in `4563abc`, comments only | **On Opus** (owner direction): APPROVED-WITH-WARNINGS (`f563dbf`; W-1 labels, W-2 red conditions, W-3 → R-117, W-4 → QUAL-212, W-5 stale prose; N-1..N-6). Applied in `4563abc`, not re-reviewed | APPROVE-WITH-WARNINGS (`f563dbf`; W1 the interim state: no change, see § "Wave B.1"; W2 applied in `4563abc`) | `fe928dde`. Rulings R-114..R-117; QUAL-212 registered. The PROFILE and CATEGORY blocks are gone and the residual is QUAL-209. Carried to TASK-14523: `WorklistList.tsx:47-48` |
 
 **O-1 for the six merges `5c35ffb`…`94dea75`.** All six were merged on 2026-10-02 within one minute, with no O-1 between them. O-1 was run once afterwards, on 2026-10-14, at `9b75848`. That commit is the six merges plus O-9, which changes comments and one console line, so it is code-identical to `94dea75` for every test. Result: build 0 errors / 145 warnings (full `--no-incremental` Release rebuild) · CA2100 115 distinct sites · Unit 1309 · DemoSeed 170 · Regression `Category!=Docker` 128, all passing and all equal to the S144 baseline. The counts do not move because every new A.1a pin is a Docker fact, and Docker does not run on this machine; CI runs them. So nothing here verifies the Docker side of the known-red list below.
@@ -2561,7 +2563,104 @@ The alternatives were:
 
 The Orchestrator re-computed all twelve SHA-256 values; they match. The brief edits (R-121's two table cells, R-122..R-124) are applied in `.claude/plans/s145/TASK-14528.md` and `TASK-14524.md` (untracked), with a "C-1" revision row in each.
 
-**Next: C-2.** K is made. "C-1 again" re-cuts the patches on K, because R-121 changed a test file (R-96: steps 2–3 for every Docker row). If the re-cuts are byte-identical, `B` becomes K with no seat ruling (R-98). Then C-3, the Step 7a review on K: Codex, and the internal lens on Opus under the owner's R-104 ruling.
+**C-2 outcome (2026-10-20): the freeze stands, and `B` becomes K = `a9beb01fcfa7aaac0c8bf569fe7982ad5afa68fa`** (R-98; no seat ruling needed).
+- **What changed.** The code-set diff `B..K` was exactly three files: R-21's marker doc, R-126's IB1 tag and R-121's docstring. All three are doc comments, with no executable line changed and no test name moved.
+- **"C-1 again" (TASK-14528).** It re-classified IB1 (still red under MB-4 and MB-7) and the AppendOnOpenRow fact (Unit-resting, on MB-6r and MB-6p; no PCS reach). No census entry, list, expected-green set or check line changed. The Regression test-name inventory is identical (2148).
+- **The re-cuts on K.** Each frozen patch applied cleanly on K. All four dry runs were green: 0 / 145 · Unit 1512 · DemoSeed 170 · Regression non-Docker 128. Each re-cut, in `.claude/plans/s145/cb1/mut/a9beb01fcfa7/`, is **byte-identical** to its frozen patch (`cmp` exit 0; same SHA-256), and each round trip exits 0. The frozen files are untouched.
+- *(Recorded in the working tree after K, as C-2 says; it rides in the close commit.)*
+
+*(The paragraph below is the plan as written at C-1, kept for the record.)* **Next: C-2.** K is made. "C-1 again" re-cuts the patches on K, because R-121 changed a test file (R-96: steps 2–3 for every Docker row). If the re-cuts are byte-identical, `B` becomes K with no seat ruling (R-98). Then C-3, the Step 7a review on K: Codex, and the internal lens on Opus under the owner's R-104 ruling.
+
+## C-3 — Step 7a, the whole-sprint review (2026-10-20)
+
+**Before dispatch:** each frozen patch's SHA-256 was checked against the latest freeze; all four match. Base `cbaa5e0`; K = `a9beb01f`.
+
+**Cycle 1 (on K = `a9beb01f`).** The artifacts are `.claude/reviews/SPRINT-145-step7a-{codex,reviewer}.md`. The content baseline was unchanged after the internal lens; it disclosed one stray write outside the repository, deleted at once.
+
+- **Codex: APPROVE-WITH-WARNINGS.** Checklist items 1–9 PASS; item 10 is a WARNING (a pin is owed). It independently re-verified the four frozen patches (hashes, in-memory application to K, scope). Its findings:
+  - **W1:** T23 could pass without reaching the model check.
+  - **W2:** item 10's refusal-order pin is owed.
+  - **N1:** the relocated replay assertion is vacuous on an empty list.
+  - **N2:** an unused PCS wrapper, `BuildPlanForLegacyCallersAsync`.
+- **The internal lens (Opus, by the owner's R-104 ruling): DO-NOT-CLOSE.** Items 1–8 PASS; item 9 PASS WITH WARNING; on item 10, "no pin owed".
+  - **B-1 (BLOCKER):** a Skema save for an open month can carry `Entries`/`Absences` cells dated in a locked month, and since TASK-14507 it replaces them. Only WorkTime was month-bounded (S56), and the supersede SQL has no period condition.
+  - **W-1:** `/calculate-and-export` uses the unfloored scope check, against the S76 invariant. It predates S145.
+  - **W-2:** three ADRs overstate what replay reads; it does read the dated wage-type mapping.
+  - **N-1..N-10.**
+
+*Plain language:* both reviewers found the sprint's payroll logic sound end to end, and both independently confirmed the frozen evidence patches. The internal reviewer found one real hole, which the Orchestrator verified in the code: a Skema save for an open month could change a cell in a month that is already approved and locked. Before S145 such a cell was added as a duplicate; since S145 it replaces the locked value, and payroll now reads those values itself. Codex did not see it. The fix is small and mirrors the rule WorkTime has had since S56.
+
+**The Orchestrator's rulings on cycle 1** (by owner direction, rulings run on Opus while Fable is unavailable; each fix is reviewed again at cycle 2 by both lenses):
+- **R-128 (B-1): fix now. Not a known-accepted hole, because it breaks the approval lock, an invariant.**
+  - **The fix:** before the transaction, refuse any `Entries` or `Absences` date outside the requested month, with 400 `skema_cell_date_out_of_range`, exactly as WorkTime's S56 check does.
+  - **The pin:** a RED-first Docker fact, `SkemaCellDateRangeGuardTests`.
+  - **The register:** a SEC row, FIXED.
+  - **No legitimate flow is lost:** the grid posts only in-month dates, and DemoSeed saves per month.
+- **R-129 (W-1): fix now, as a one-line role floor (`StatsTidRoles.LocalAdmin`), with a mixed-role 403 Docker fact and a SEC row, FIXED.** It rides R-128's new K. It predates S145 (TASK-1902), but since R14 the route reads and returns the target's recorded hours itself.
+- **R-130 (item 10, where the lenses differ): add the pin.** Codex holds it owed. The internal lens holds a wrong order harmless, since both answers are 422s that write nothing. The pin is cheap in this batch and settles the question.
+- **R-131 (the rest):**
+  - **Ride the fix batch:** N-1, `Assert.NotEmpty` before the `Assert.All` (BC-4 is an EB-1 expected green, so C-1 again re-classifies it); N-6, a stale test comment; N-7, `IsStrictlyInsideMonth`'s doc says it is kept as MB-6's substitute.
+  - **Docs:** W-2, N-5, N-8 (two SEC rows, REGISTERED) and N-9 are drafted for the Orchestrator to apply.
+  - **The harness:** Codex W1 = Opus N-2. T23 now requires positive evidence: a temporary S145 CI-health waiver whose line proves the run passed the model check. A skipped test is reported as such, not counted in "ALL 24". The hook gains a telemetry seam, `STATSTID_TELEMETRY_LOG_MOCK`, honoured for any sprint because telemetry is not a gate. The three stray `close | S145` telemetry lines are annotated in the local log.
+    - **Result:** 24 of 24 pass. The real S145 artifacts were restored byte-identical, and the live log did not grow.
+  - **N-3:** deleting the S145 guard exception is added to the handoff's next actions.
+  - **Accepted, no change:** N-4 (a pre-S145 CI-health gap).
+  - **Noted for C-5:** N-10 (build the keys file per R-122).
+  - **Deferred to S146: Codex N2, the unused `BuildPlanForLegacyCallersAsync`.** Removing it changes `PeriodCalculationService.cs`, the file every frozen patch edits, so the patches' context and line numbers would shift and need a re-freeze, for dead code. It is recorded here for S146's first tidy, below the register's Medium floor.
+
+**The fix batch so far.** The `test-qa` pins are `c9f87124`:
+- `SkemaCellDateRangeGuardTests`: three facts, the entry case, the absence case and an in-month control;
+- `PayrollCalculateScopeFloorTests`: two facts, the 403 and the control;
+- `SkemaQuotaRefusalOrderTests`, the item-10 pin. It uses a test-only resolver wrapper that serves exactly one null to the endpoint's Phase-1 read, and asserts that it did, so a wrong guess fails visibly. The cycle-2 lenses are asked to judge that seam.
+- N-1 and N-6 (N-6's file is in the Smoke project).
+
+B-1's fix is `69b80585` (`backend-infrastructure`):
+- the month bound for `Entries` and `Absences`, beside the S56 WorkTime check;
+- the comments it made false;
+- N-7's doc comment.
+
+**R-132 (Orchestrator): the month bound stays, even though seven existing Docker facts posted cross-month absence batches.**
+- **The consequence.** `backend-infrastructure` found seven facts in four files that post cross-month batches: quota-exhaustion bookings of 25–27 days, plus two facts whose subject was the cross-month batch itself (`Vacation_BoundarySpanningBatch_AnchorsOnFirstAbsenceDate`, `OkStamping_BatchStraddlesOk24Ok26Boundary_…`). Under the fix they get the 400.
+- **Why the bound still stands.** The only product caller of the save, `useSkema.saveMonth`, builds every save from one month's grid. DemoSeed saves per month, and no other endpoint writes Skema cells. So no product capability is lost; only test scaffolding used cross-month batches. The alternative, checking the lock of every month a save touches, would keep those batches but rewrite the in-lock authoritative check in a security-critical path at the close. That was rejected.
+- **The re-shape (`test-qa`).** The quota facts become one save per month, in date order, with the same asserted outcome and name. The two boundary facts are re-shaped as in-month saves where their behaviour is still reachable, or converted to pin the refusal and renamed, with the reason recorded.
+
+**Registered for S146 (from `backend-infrastructure`'s report): QUAL-214, a Skema month-navigation race.** Navigating months does not flush the pending save queues.
+- **Cells:** since the fix, an old-month cell sent after the 1-second debounce fires is refused (400). The edit is dropped with an error banner, where before it was written under the wrong month's lock.
+- **Work time:** a pre-S56 risk. `workTimeDirtyRef` is never cleared on load, so a refused old date re-queues and blocks later work-time saves until the page reloads.
+- **The fix:** flush or drop the queues on month navigation, in the frontend.
+
+**Recorded, no change:** the supersede SQL in both projection repositories still has no period condition. It is safe only because of this endpoint check, a defence-in-depth point recorded in B-1's SEC row.
+
+**The re-shape** is `a57bb057` (`test-qa`, R-132):
+- **The five quota facts** keep their names and outcomes, now as one save per month through a helper that requires every earlier save to be 200. Their "nothing written" check moves to the first date of the refused save.
+- **Two boundary facts are renamed:**
+  - `OkStamping_BatchStraddlesOk24Ok26Boundary_PerRowEntryDateResolved` → `OkStamping_AcrossOk24Ok26Boundary_PerRowEntryDateResolved`: two in-month saves, the same stamp assertions;
+  - `Vacation_BoundarySpanningBatch_AnchorsOnFirstAbsenceDate` → `Vacation_CrossFerieaarBatch_Refused400_NothingWritten`: it now pins the refusal.
+
+**W-1's fix** is `06caca3e` (Orchestrator, one call): `ValidateEmployeeAccessAsync(…, StatsTidRoles.LocalAdmin, ct)`. The branch's full rebuild: 0 / 145 · CA2100 115 · Unit 1512 · DemoSeed 170 · Regression non-Docker 128.
+
+**The fix batch, 5α and 5a cycle 1** (`a9beb01f..06caca3e`):
+- **5α PASS** (Orchestrator, then confirmed by the Opus lens).
+- **The Opus lens: APPROVED.** It traced B-1's 200 before the fix and its 400 after, recounted the re-shape splits, and grepped all 61 files that call the save to confirm none posts a cross-month batch.
+- **Codex: APPROVE-WITH-WARNINGS.** Both confirmed that B-1 and W-1 are complete, that the pins discriminate, and that the re-shapes keep their purpose. The baseline was unchanged.
+- **The item-10 seam, where the lenses differ.** Codex flags its stack inspection as fragile and recommends explicit DI. Opus traced it as deterministic under .NET 8 Release (async `MoveNext` frames are never inlined) and would keep it, noting DI as the stronger form.
+
+**R-133 (Orchestrator): take the complete fix now, as a test-only fix-up.**
+- The seam moves to explicit DI: the real resolver, the calculators built with it, and only `IEmploymentProfileResolver` armed.
+- N-a: the in-month control's dates move to the 1st and the 31st, pinning the inclusive bounds, and the 400 message is checked for the offending date.
+- Codex's NOTE: three docstrings now say "nothing from the refused monthly save persists".
+- N-c: the stale header of `CalculateAndExportScopeTests.cs`.
+- **To QUAL-214:** N-e (the new 400 message is English, as S56's is, and the UI shows it raw).
+- **Noted for C-2's "C-1 again":** N-d (the two renames are on the Regression inventory lists).
+
+Cycle 2 re-reviews the fix-up, scoped to its diff.
+
+**The fix batch** runs on `s145/step7a-fix` (worktree `s145-step7a-fix`, at K):
+1. `test-qa` writes the RED-first pins.
+2. `backend-infrastructure` makes B-1's fix.
+3. The Orchestrator makes W-1's one-line fix.
+4. 5α, then 5a on both lenses.
+5. The merge, then a new K, then C-2 ("C-1 again", with the census for the new Docker facts), then a C-3 cycle 2 scoped to the fix.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
@@ -2569,8 +2668,8 @@ The Orchestrator re-computed all twelve SHA-256 values; they match. The brief ed
 |---|---|
 | **As of** | 2026-10-20, **C-2: K committed** (this commit carries the O-4 records and is K). Stage B is fully merged (`8a54484d`, the last code merge); C-1 is frozen at `B` = `2a981597` (R-127). Not pushed to master, by design: `origin/master` is `cdd8253` until C-4's close push. Stage A closed on 2026-10-16 at `K_A` (`923f7fb`) |
 | **Evidence** | `K_A` = `923f7fb` · V-A run `38747749039` (all seven jobs green) · EA-1..EA-5 all matched (EA-3 through EA-3′); runs and heads in § "Stage A gate — `K_A`" → Results and § "CA-5"; confirmed by the Fable seat (R-52) · PR #37 closed unmerged, `s145-evidence-a` deleted on both sides · K ⟨close⟩ · EB ⟨Stage B⟩ |
-| **Phase** | The close sequence, C-2 (2026-10-20). K carries the O-4 records (ADR-016 D2/D3/D4/D10, ADR-017, ADR-020 pointer, ADR-028 D6, ADR-002, ADR-034, ADR-040, the quality and HR registers, ROADMAP, danish-agreements, QUALITY.md) and two code-set changes after `B`: R-121/R-126's test doc comments (`e68077da`) and R-21's marker doc in `WeeklyTimelineCore.cs`. So the patch-validity check is not empty and "C-1 again" runs (TASK-14528 re-spawn: steps 2–3 for every Docker row, R-96, then the dry runs and re-cuts on K, R-98) |
+| **Phase** | The close sequence (2026-10-20). C-3 cycle 1 found B-1; the fix batch (R-128..R-133) is merged (`8fda8415`) after its own 5a (two cycles, both lenses). The new K (K2) carries the fix, the harness fix (24/24), the Step 7a doc fixes (W-2, N-5, N-8, N-9, SEC-049..052, QUAL-214) and the C-2 record of K1. Next: C-2 on K2 ("C-1 again": census for the new Docker facts, the two renames, BC-4; re-cuts), then C-3 cycle 2 scoped to `a9beb01f..K2` |
 | **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Merged in A.5:** 14513+T (`07337ea`), 14515 (`eb78b8e`), 14519+T (`8367862`); 14515 re-spawn 2 done: 3 of 3 mutations tripped, its throwaway checkout removed. **Gate A-CLOSE (closed 2026-10-16):** TASK-14518 CA-1 and CA-3 done; the freeze R-33..R-46; the R-33 split merged (`07f7c78`); `K_A` `923f7fb`; the evidence branch and PR #37 closed and deleted (CA-6); the CA-5 rulings R-47..R-52. **After CA-7:** QUAL-207 merged (`499771c`); its worktree `s145-qual-207` to clear at teardown. **To clear at teardown:** `s145-task-14518-rs` (merged); the A.5 worktrees `s145-task-14513`, `s145-task-14515`, `s145-task-14519` (all merged); the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1`. **B.1:** `s145-task-14520` (merged `53a7812`) and `s145-task-14521` (merged `fe928dde`) are to clear at teardown. Still open: `s145-task-14524` (merges at B.3). **B.2:** `s145-task-14522` (merged `f6fac97b`) is to clear at teardown. **B.3:** `s145-task-14523` (merged `8efdfffd`; its `frontend/node_modules` is a junction to the main checkout, so remove the junction before the worktree at teardown) and `s145-task-14524` (merged `8a54484d`; re-spawn 2 works in throwaway checkouts outside the repository) |
 | **Pending gates** | **C-2** patch validity ("C-1 again") → **C-3** Step 7a on K (Codex + the internal lens on Opus, R-104 option 2; base `cbaa5e0`) → **C-4** the close commit and its green push → **C-5..C-8** the Stage B evidence on `s145-evidence-b` → **C-9**. This machine is memory-constrained (8 GB): one build-heavy agent at a time, `-m:2`, foreground; `dotnet build-server shutdown` after builds |
 | **Open rulings** | None for the owner. R-104 was answered on 2026-10-20 (option 2). The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | (1) TASK-14528 "C-1 again" on K: if every re-cut is byte-identical and no list or check line changes, `B` becomes K with no seat ruling (R-98); that record rides in the close commit. (2) C-3: check each patch's SHA-256 against the freeze, then the Step 7a lenses on K. (3) C-4: remove every worktree first (the guard's gate), then the close commit, whose command alone carries the words the guard looks for (R-97) |
+| **Next action** | (1) C-2 on K2: TASK-14528 "C-1 again" (the code-set diff `B..K2` now holds `SkemaEndpoints.cs`, the payroll `Program.cs`, `HrBackdateWorklistRepository.cs` and tests; PCS is untouched, so the re-cuts should be byte-identical; R-96 (ii) re-checks every Docker row). (2) C-3 cycle 2: both lenses on `a9beb01f..K2`; update both Step 7a artifacts to K2. (3) C-4: re-check worktrees (only the fix worktree to remove), the close commit (its command alone carries the guard's words, R-97), push, watch. (4) **After the close: delete the S145-only Opus exception from `.claude/hooks/sprint-close-guard.ps1` (and T23/T24) — owner ruling R-104; Opus N-3** |
