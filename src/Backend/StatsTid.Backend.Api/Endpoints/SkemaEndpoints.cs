@@ -786,12 +786,45 @@ public static class SkemaEndpoints
                     });
             }
 
+            // ── Entry/absence date-range validation (S145 / Step 7a B-1, R-128) ──
+            // The sibling of the S56 work-time check below, for the same reason: the approval-lock
+            // check above is scoped to the REQUESTED month, so a date outside [monthStart, monthEnd]
+            // would be written without that lock governing it. Since S145 (TASK-14507) a save
+            // REPLACES the cell it posts, and the mark-superseded statements
+            // (TimeEntryProjectionRepository / AbsenceProjectionRepository.MarkSupersededSkemaCellSql)
+            // key on employee, date, task or absence type, and source, with NO period condition. So
+            // an October save carrying a September cell would retire and rewrite a cell of an
+            // already APPROVED or exported September, whose recorded hours payroll reads (R14).
+            // Refused here, before the rule-engine call, the advisory lock and the transaction, so
+            // nothing is written and no event is emitted. With the work-time check below, all three
+            // arrays (Entries, Absences, WorkTime) are now month-bounded. The date in the message is
+            // the request's own registration date, never an employment date (ADR-040 D7).
+            foreach (var entry in request.Entries ?? Array.Empty<SkemaEntry>())
+            {
+                if (entry.Date < monthStart || entry.Date > monthEnd)
+                    return Results.BadRequest(new
+                    {
+                        error = "skema_cell_date_out_of_range",
+                        message = $"Skema date {entry.Date:yyyy-MM-dd} is outside the requested period {request.Year}-{request.Month:D2}."
+                    });
+            }
+            foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
+            {
+                if (absence.Date < monthStart || absence.Date > monthEnd)
+                    return Results.BadRequest(new
+                    {
+                        error = "skema_cell_date_out_of_range",
+                        message = $"Skema date {absence.Date:yyyy-MM-dd} is outside the requested period {request.Year}-{request.Month:D2}."
+                    });
+            }
+
             // ── Work-time date-range validation (S56 / Step 7a BLOCKER fix) ──
             // The approval-lock check above is scoped to the REQUESTED month. Reject any
             // work-time day outside [monthStart, monthEnd] up front (before the tx) so that
             // lock governs every written date. Without this, a save targeting an unlocked
             // month could smuggle in a date belonging to an already-approved/locked month and
-            // overwrite its work_time_projection row, bypassing the period lock.
+            // overwrite its work_time_projection row, bypassing the period lock. (Since S145
+            // Step 7a the Entries and Absences arrays are held to the same month, just above.)
             if (request.WorkTime is not null)
             {
                 foreach (var day in request.WorkTime)
@@ -1749,10 +1782,12 @@ public static class SkemaEndpoints
 
                     // ── S136 / TASK-13603 — THE EMPLOYMENT-WINDOW GATE (ADR-040 D1–D3), IN-LOCK ────
                     // Every date this save would write — across ALL THREE arrays: Entries, Absences,
-                    // AND WorkTime — must lie inside the subject's employment window. This is the
-                    // FIRST date gate Entries and Absences have ever had (only WorkTime was even
-                    // month-bounded, the S56 pre-tx check above); refusal is date-free via the shared
-                    // EmploymentWindowGate (ONE predicate + ONE 422 construction site with
+                    // AND WorkTime — must lie inside the subject's employment window. When S136 added
+                    // it, this was the FIRST date gate Entries and Absences had (only WorkTime was
+                    // month-bounded then, by the S56 pre-tx check above). Since S145 Step 7a (B-1,
+                    // R-128) all three arrays are month-bounded by the pre-tx checks above, so every
+                    // date reaching this gate lies in the requested month. Refusal is date-free via
+                    // the shared EmploymentWindowGate (ONE predicate + ONE 422 construction site with
                     // POST /api/time-entries — see that class for the do-not-add-date-fields rule).
                     //
                     // Placement is the LOCK REGIME (S136 refinement, Codex-B1): the employment-date
@@ -1782,8 +1817,8 @@ public static class SkemaEndpoints
                     // valid for the current single-spell storage, and ADR-040 D1's whole point is
                     // that consumers must not bake that assumption in — when the spells increment
                     // ships (re-hire), gaps between spells make it wrong. The resolver call is a
-                    // single-row indexed read on this tx's connection; a save carries at most ~90
-                    // distinct dates.
+                    // single-row indexed read on this tx's connection; a save carries at most 31
+                    // distinct dates (all three arrays are month-bounded, see above).
                     var registrationDates = new SortedSet<DateOnly>();
                     foreach (var entry in request.Entries ?? Array.Empty<SkemaEntry>())
                         registrationDates.Add(entry.Date);
