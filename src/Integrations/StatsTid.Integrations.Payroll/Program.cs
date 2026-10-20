@@ -312,9 +312,13 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // checks (employee_id, period) — a LocalAdmin from org A could trigger payroll
     // for any employee in org B whose period happens to be APPROVED. This check
     // closes that vector before the approval lookup or any downstream call.
+    // S145 Step 7a W-1 (R-129): role-FLOORED at LocalAdmin, the route's policy floor
+    // (SECURITY.md, "The mixed-role scope-floor invariant (S76 / B1)"): a scope only admits
+    // the target if it also clears LocalAdmin, so a LocalHR scope over the target's org
+    // no longer admits an actor who is LocalAdmin elsewhere.
     var actor = httpContext.GetActorContext();
     var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
-        actor, request.Profile.EmployeeId, ct);
+        actor, request.Profile.EmployeeId, StatsTid.SharedKernel.Security.StatsTidRoles.LocalAdmin, ct);
     if (!allowed)
     {
         return Results.Json(new
