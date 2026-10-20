@@ -64,6 +64,27 @@ PROSA mirrors HK on all 5 cells per SR-PROSA-OK24-001 "mirrors HK" bundle.
 | OvertimeThreshold50 | 37.0 | SR-HK-OK24-006 (load-bearing for HK; inert for AC per SR-AC-OK24-022) |
 | OvertimeThreshold100 | 40.0 | SR-HK-OK24-007 (load-bearing for HK; inert for AC per SR-AC-OK24-023) |
 
+## Weekly Settlement Rules (owner ruling, 2026-10-01)
+
+> Added 2026-10-20 (S145). Source: **owner ruling, 2026-10-01** (S145 Q2 and Q3). The agreement sources are silent on both questions (`SYSTEM_TARGET.md:43`; `agreement-source-register.md:506`, "1-week norm period, no multi-week averaging"), so these are the system's rulings, not cirkulære text. A domain expert may still confirm whether a state-sector convention exists; if one does, it is a later ruling change. Implemented once, in `SharedKernel/Calendar` (`DayNorm`, `WeeklyContext`), shared by the Rule Engine, payroll and the Skema screen (ADR-002, S145 amendment).
+
+Norm, overtime and merarbejde are judged **week by week, Monday to Sunday**, never a whole month against one week's norm (QUAL-186).
+
+### Per working day: a week with a mid-week hours change (Q2 = A)
+
+- Each weekday's norm, and each overtime threshold, is `weekly × that day's part-time fraction ÷ 5`; Saturday and Sunday carry 0. A week's figure is the **sum of its days**, so the payslip equals what the employee sees on the Skema screen, day by day.
+- **Precision rule.** A per-day amount is `Math.Round(weekly × fraction / 5, 2)`, half-to-even (the .NET default), from one shared helper; week and month figures are sums of per-day amounts; line hours have 2 decimals. The stored fraction for 30 h is 0.811 (NUMERIC(4,3)), so a 30-hour weekday's norm is **6.00** (37 × 0.811 ÷ 5 = 6.0014) and its 100% threshold **6.49** (40 × 0.811 ÷ 5 = 6.488).
+- *Worked example:* the week of 14–20 September 2026, 8 h worked every weekday, hours cut from 37 to 30 from Wednesday 16th. Norm = 2 × 7.40 + 3 × 6.00 = 32.80; 100% threshold = 2 × 8.00 + 3 × 6.49 = 35.47. HK is paid `OVERTIME_50` **2.67** and `OVERTIME_100` **4.53**; AC is paid **7.20** merarbejde. Treating each part as a full week would pay nothing.
+- *Options not chosen:* per calendar day (puts norm on weekends); Monday's fraction governs (pays up to a week under the old contract); the week-end fraction governs (the same flaw reversed); hours changes only on Mondays (HR would record a date other than the contract's).
+
+### Settle when the week closes: a week crossing a month boundary (Q3 = F1)
+
+- A Monday–Sunday week is **settled by the month containing its Sunday** (for a leaver, by the month of the last employed day), and **all of the week's excess is dated that day**. A month pays only what is dated inside it.
+- *What this means in practice:* (i) after a mid-week position change, the week's overtime maps under the codes of the part that holds the Sunday; (ii) the week 30 March – 5 April 2026 crosses the 1 April OK24 → OK26 boundary: it is dated 5 April and keyed OK26 (identical values today); (iii) overtime from a month's last days is paid with the next month; (iv) months must be approved in calendar order, because a month whose first week reaches into the previous month waits for that month's approval; (v) recalculating a month does not correct the next month's settled week, so the correction names the next month instead (Q7 (b)).
+- *Options not chosen:* F2, provisional settlement hour by hour with each hour dated on its own day, was more precise, but under Q2 it settles hours on assumptions about next month's fractions and would need a reconciliation design for amounts already paid. Clipping the week to the month was rejected because it breaks the weekly rule.
+
+*Related, a lean rather than an owner ruling:* a week cannot be judged under two agreements (HK pays tiered overtime, AC merarbejde 1:1), so a month with an agreement change inside a settled week, on a day other than its Monday, is refused and handled manually (Q5 (c); QUAL-209).
+
 ## Compensation Model
 
 > Added 2026-05-18 (S35 / TASK-3504). The `DefaultCompensationModel` + `EmployeeCompensationChoice` fields were introduced in S17 (Overtime Governance & Compensation Model) but were never back-filled into this reference doc. Source of truth: the overenskomst cirkulærer cited per agreement below. Encoded values live in `init.sql` agreement_configs seed rows + `CentralAgreementConfigs.cs`.

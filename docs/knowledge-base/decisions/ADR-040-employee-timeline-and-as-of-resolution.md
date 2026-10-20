@@ -201,7 +201,7 @@ latent 500 path the moment real windows exist, without touching the profile reso
   routes leavers here.
 - **D5 × ADR-016 D4 — employment edges are TRUNCATIONS, not splits (owner ruling 2026-09-02, S137
   TASK-13707):** D5's typed segments collided with ADR-016 D4's refusal of interior boundaries for
-  `AlignedWindow`/`Reject` rules — in the live rule set (four AlignedWindow rules) every mid-month hire or
+  `AlignedWindow`/`Reject` rules — in the live rule set (at the time four AlignedWindow rules: overtime, the weekly norm, and the daily and weekly rest rules) every mid-month hire or
   leave would have REFUSED the month instead of paying it. Ruled: the D4 refusal keys on how many EMPLOYED
   segments a whole-window rule would be EVALUATED in, not on boundary count. A whole-window rule is unsafe to
   SPLIT because two half-evaluations cannot be merged; an employment edge does not split evaluation (the
@@ -211,6 +211,15 @@ latent 500 path the moment real windows exist, without touching the profile reso
   registered as QUAL-149 (the S64 F4-1(b) gap with its true scope) — the "mid-month fraction change pays per
   span" AC of Increment 2 is proven under the straddle-safe test rule set and pinned as REFUSED under the
   live set until norm/overtime are reclassified with a pro-rating merger.
+  **Updated S145 Stage B (2026-10-19, R-63; ADR-016 D2–D4, S145 amendments):** the live registry now has **three**
+  AlignedWindow rules (`NORM_CHECK_WEEKLY`, first in registration order and so the rule a refused split names, R-73;
+  and the daily and weekly rest rules), and payroll evaluates none of them. Overtime, the 37-hour norm and flex
+  became `TimelineAware` (evaluated once across the whole month, each day under its own contract) rather than
+  Mergeable with a pro-rating merger, and payroll hands the planner only the six rules it evaluates. So a mid-month
+  fraction, position, category or Monday agreement change while employed is now paid part by part under the live
+  set (QUAL-149 BUILT, evidence ⟨EB runs at C-6/C-7⟩); the one manual case left is an agreement change inside a
+  settled week (QUAL-209). The truncation ruling above is unchanged and still governs any caller whose rule set
+  holds an AlignedWindow or Reject rule.
 - **D7 precision note (S137 Reviewer NOTE, 2026-09-02):** the planner's D4 refusal messages carry the
   period, the EMPLOYED-segment count and the interior boundary CAUSE names (e.g. `EmploymentStarted`) — never
   a segment date. On a ≥ 2-EMPLOYED refusal that message can reveal that an employment edge EXISTS inside the
@@ -267,10 +276,17 @@ not on `payroll_export_records`. (NARROWED 2026-09-03 — "reaches a SETTLED fer
 of two tests, not the entitlement-window test alone; see the 2026-09-03 sub-amendment below for the rule as
 implemented.)
 
-**Replay vs re-plan (stated, S138).** Manifest replay stays historical-manifest replay: frozen segments, each
-resolved at its frozen start from CURRENT dated history. A backdate INTERIOR to a frozen segment is therefore
-invisible to replay by construction; the corrected truth reaches payroll only through the correction RE-PLAN
-(`POST /api/payroll/recalculate`), which is exactly what the worklist row points at.
+**Replay vs re-plan (stated, S138; rewritten S145 for the replay contract, ADR-016 D10 amendment 2026-10-15).**
+Manifest replay is historical-manifest replay, and since S145 it consults no dated history at all, current or
+otherwise. It re-runs the calculation on the inputs the manifest froze (the employment pieces, meaning the part-time
+fraction, agreement and position for each stretch of employed days, the opening week's context days included; the
+settlement cutoff; the opening flex balance) and re-reads the hours rows by the event ids it recorded, superseded
+rows included. Any backdate, interior to a frozen segment or at its start, is therefore invisible to replay by
+construction, and a replay whose recorded rows, configs or arithmetic no longer match refuses by name rather than
+recomputing. The corrected truth reaches payroll only through the correction RE-PLAN
+(`POST /api/payroll/recalculate`), which is exactly what the worklist row points at. *(Until S145 each frozen
+segment was resolved at its frozen start from CURRENT dated history, so a backdate AT a segment's start did reach
+a replay; the replay marquee pins that tested this now pin the freeze.)*
 
 ## Amendment 2026-09-03 — the settled-year selection rule is a CONJUNCTION (S138 implementation, owner ruling)
 

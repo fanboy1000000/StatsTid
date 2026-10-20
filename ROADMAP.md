@@ -317,7 +317,18 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   may exist: those readers become as-of-today readers, and the caches get an explicit strategy (dated reads vs
   derived-at-write with a refresh on the effective date — a scheduler question D8 had waved away). S138 ships
   backdating only; Increment 4 = picker + this precondition. [S138 refinement · ADR-040 Amendment 2026-09-02]
-- **AlignedWindow rules at a GENUINE split in the live rule set (QUAL-149; the S64 F4-1(b) gap — re-registered,
+- **✅ SHIPPED IN S145 — a month with a mid-month change is paid part by part (QUAL-149, with QUAL-150 and QUAL-186).**
+  Payroll first learned to work week by week (Stage A): every ordinary month had been judged against one week's norm
+  (QUAL-186), and each part's wage-type key now comes from the dated record (QUAL-150). Stage B then made a month with
+  a mid-month change in part-time hours, position, category, or a Monday agreement change payable on the calculating
+  routes, each part under its own codes. Overtime, the 37-hour norm and flex became timeline-aware (evaluated once
+  across the whole month, each day under its own contract), and payroll hands the planner only the rules it runs
+  (ADR-016 D2–D4, S145 amendments); none of the fix options below was taken. One case stays manual, an agreement
+  change inside a settled week (QUAL-209), and the raw export routes refuse split months by their own reason.
+  Residuals: QUAL-209..213, and the design questions in the next entry. QUAL-149 BUILT ⟨EB runs at C-6/C-7⟩.
+  Detail in `docs/sprints/SPRINT-145.md`.
+  The entry below is kept as the statement of the problem that was solved.
+  **AlignedWindow rules at a GENUINE split in the live rule set (QUAL-149; the S64 F4-1(b) gap — re-registered,
   it had fallen out of this file).** A mid-month part-time/position change while employed, or two spells in one
   month, is REFUSED by the planner (ADR-016 D4) in the Payroll host's live wiring → raw 500 at
   `calculate-and-export`. S137's owner ruling cleared hire/leave edges as truncations only. Fix needs a

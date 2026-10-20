@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | **in progress. Stage A CLOSED on 2026-10-16 (Gate A-CLOSE, CA-1..CA-7).** Every Stage A task is merged and reviewed. `K_A` (`923f7fb`) is green in CI (V-A), and all five deliberate-breakage lists matched in CI (EA-1..EA-5, confirmed by the Fable seat). The three Unit mutation runs caught 27 of 27, 14 of 14 and 3 of 3. QUAL-186 and QUAL-150 are BUILT. **Next: B.0**, the Stage B briefs revised against `K_A`. Planning: refinement READY (rev 3.4, Step 4, five cycles), plan READY (`.claude/plans/PLAN-s145.md` draft 5 plus 30 task briefs in `.claude/plans/s145/`; Step 0b, five cycles, both lenses READY at cycle 5) |
-| **Test Verified** | **In CI at `K_A`** (V-A, run `38747749039`, 2026-10-15): all seven jobs green. Unit 1477 · DemoSeed 170 · Regression **2127** (Docker included) · smoke · e2e · frontend · docs · gitleaks · lizard. Locally (O-1 at `07f7c78`): build 0 errors / 145 warnings · CA2100 115 · Unit 1477 (baseline 1309; +168) · DemoSeed 170 · Regression non-Docker 128 · tsc 0 · vitest 1002. `origin/master` is still `cdd8253`: this project pushes master only at sprint close, and CI saw Stage A on the throwaway evidence branch (`s145-evidence-a`, PR #37, now closed and deleted) |
+| **Status** | **In the close sequence (C-2), 2026-10-20.** Stage A closed on 2026-10-16 (Gate A-CLOSE, CA-1..CA-7); QUAL-186 and QUAL-150 are BUILT. Stage B is fully merged: B.1 (`53a7812`, `fe928dde`), B.2 (`f6fac97b`), B.3 (`8efdfffd`, `8a54484d`); its Unit mutation run caught 12 of 12 and 5 of 5. C-1 is frozen (R-127). Pending: the Step 7a outcome ⟨C-3⟩; the close's CI run ⟨C-4⟩; the Stage B evidence runs EB-1, EB-2, EA-R1, EA-R2 ⟨C-6/C-7⟩; QUAL-149 is marked BUILT when they match. Planning: refinement READY (rev 3.4, Step 4, five cycles); plan READY (`.claude/plans/PLAN-s145.md` plus the task briefs in `.claude/plans/s145/`; Step 0b, five cycles; the Stage B briefs signed at B.0, R-113). Model routing: reviews, rulings and sign-off ran on Opus from 2026-10-19 by the owner's direction (Fable on its usage limit); the close review runs on Opus under the owner's R-104 ruling |
+| **Test Verified** | **At the close:** ⟨the close's CI run, C-4⟩. **Locally**, O-1 at `8a54484d`, the last code merge: build 0 errors / 145 warnings · CA2100 115 · Unit **1512** · DemoSeed 170 · Regression non-Docker 128 · tsc 0 · vitest **1005**. **Stage A, in CI at `K_A`** (V-A, run `38747749039`, 2026-10-15): all seven jobs green. Unit 1477 · DemoSeed 170 · Regression **2127** (Docker included) · smoke · e2e · frontend · docs · gitleaks · lizard. Locally (O-1 at `07f7c78`): build 0 errors / 145 warnings · CA2100 115 · Unit 1477 (baseline 1309; +168) · DemoSeed 170 · Regression non-Docker 128 · tsc 0 · vitest 1002. `origin/master` is still `cdd8253`: this project pushes master only at sprint close, and CI saw Stage A on the throwaway evidence branch (`s145-evidence-a`, PR #37, now closed and deleted) |
 | **Theme** | Payroll stops judging a whole month against one week's norm, which today makes every ordinary month's overtime, merarbejde and flex wrong (QUAL-186). Then a month with a mid-month change to hours, position or agreement becomes payable, with each part under its own wage-type codes (QUAL-149/150). Along the way, a Skema correction stops being counted twice (QUAL-192..194) |
 | **Predecessor** | S144: close `cbaa5e0` (CI red: nine test-setup failures) · governance `6b0d982` (review cap 3 → 5; the close guard's CI-health query fix) · post-close fix `8a87d16` (CI green `36610948637`) · docs-only `018ef2a` (QUAL-186), `6849b84` (QUAL-187..191), `de6c228` (the S144 C-9 record), `62fcdc3` (QUAL-192..194) |
 | **Base commit (Step 7a)** | **`cbaa5e0`**, the S144 close commit, not HEAD. So `6b0d982` (which touches `.claude/hooks/sprint-close-guard.ps1`, never reviewed on its own), `8a87d16` and the docs commits all fall inside S145's Step-7a diff (`docs/WORKFLOW.md` step 7a) |
@@ -22,6 +22,27 @@
 - **Stage B** opens split months, each part paid under its own codes. If Stage B cannot pass review within the cap, Stage A ships alone.
 
 **What else surfaced.** Re-saving a Skema cell stores a second row, and every server total counts both. The send gate then refuses the month, and the employee cannot repair it. A re-saved ferie day consumes quota twice. Registered as QUAL-192..194, this is fixed first in Stage A, because payroll is about to read those same rows.
+
+## What changed for the people who use it (O-4, the operational changes)
+
+1. **Ordinary months are paid correctly** (QUAL-186). Payroll now settles overtime, merarbejde and flex week by week instead of treating a whole month as one week.
+   - A week that crosses a month boundary is paid by the month holding its Sunday, dated that Sunday (Q3 F1).
+   - A week with a mid-week hours change is counted per working day, as the employee's screen shows it (Q2).
+   - A full-time HK employee who works exactly 37 hours every week of September 2026 is no longer exported with about 126 hours of overtime and a flex payout.
+2. **Months with a mid-month change are paid** (QUAL-149/150). A change in part-time hours, position, category, or a Monday agreement change is paid part by part, each part under its own dated wage-type codes. Before S145 the month was refused and handled by hand.
+3. **One case stays manual: an agreement change in the middle of a week.** A week cannot be settled under two agreements (Q5), so every payroll route refuses such a month with `reason: agreement-change-mid-week`. The HR worklist marks it `QUAL-209` with a Danish explanation ("overenskomstskift midt i en uge — ugen kan ikke afregnes efter to overenskomster"), and a Global Admin resolves it as "Håndteret manuelt" (handled manually).
+4. **The raw export routes refuse split months** (Q6 (a)). `/export` and `/export-period` file every line under one profile, so they answer a two-part month with `reason: split-month-single-profile-route` and point to the calculating routes.
+5. **Months are approved in order.**
+   - A month whose first week reaches back into the previous month is calculated only once that previous month is APPROVED; otherwise the answer is 409 `payroll-prior-month-not-approved` (R5(b)).
+   - Reopening a month flags the next month on the HR worklist (R5(c)).
+   - Recalculating a month whose last week the next month already paid says so (Q7 (b)).
+6. **A Skema save replaces the cell** (QUAL-192..194). Re-saving a cell no longer stores a second row, so totals, the send check and vacation quota count it once. Zero or negative hours are refused at entry.
+   - Payroll reads the recorded hours itself, rather than taking them from the request.
+   - Each calculation records a replayable proof (its manifest), from which a replay reproduces the result byte for byte.
+
+**A criterion note (O-4).** The plan expected refinement criterion `:618` (an absence day after a mid-month fraction change credits 6.00) to be met at Unit level only. Its branch needs a zero-hour absence, which R24 makes unreachable from the screen (contradiction 12). B.0 restored FX3 (R-62), which seeds that absence directly and pins the 6.00 credit in a Docker fact, CI-verified at the close's runs. It is also met at Unit level.
+
+**No task was cut.** Every planned task is DONE (§ "Task ledger" → "Dispositions"), so there is no known unpinned change.
 
 ## Refinement — Step 4, five cycles (both lenses each cycle)
 
@@ -466,6 +487,38 @@ Every BLOCKER and WARNING is mapped below, then the notes.
 ## Task ledger (merge checklist record, `PLAN-s145.md` § "The merge checklist")
 
 A row is written when a task merges. **A row with an empty 5α or 5a cell is not merged.**
+
+### Dispositions (one line per task; the close guard's ledger gate reads these)
+
+*Plain language:* the table further down records how each task was merged and reviewed. This short list states each task's outcome in the one word the close check looks for, so no planned task can be silently forgotten (the S141 failure). Every S145 task was built; none was cut.
+
+| Task | Disposition | Where |
+|---|---|---|
+| TASK-14500 | DONE | merged `1b6160c` (A.1) |
+| TASK-14501 | DONE | merged `5c35ffb` (A.1) |
+| TASK-14502 | DONE | merged `25eb8eb` (A.1) |
+| TASK-14503 | DONE | split into 14503a (merged `32b668a`) and 14503b (merged `510619e`) at Step 0b (R49) |
+| TASK-14504 | DONE | merged `630bf89` (A.1) |
+| TASK-14505 | DONE | with 14505-T, merged `ce51a38` (A.1) |
+| TASK-14506 | DONE | merged `379567e` (A.1), with the R49 file |
+| TASK-14507 | DONE | merged `94dea75` (A.1) |
+| TASK-14508 | DONE | with 14508-T, merged `f0a863b` (A.2) |
+| TASK-14509 | DONE | with 14509-T, merged `755cb14` (A.2) |
+| TASK-14510 | DONE | merged `d928cf5` (A.2) |
+| TASK-14511 | DONE | with 14511-T, merged `2d14003` (A.3) |
+| TASK-14512 | DONE | with 14512-T, merged `250fcdf` (A.4) |
+| TASK-14513 | DONE | with 14513-T, merged `07337ea` (A.5) |
+| TASK-14514 | DONE | merged `49c00e5` (A.4) |
+| TASK-14515 | DONE | merged `eb78b8e` (A.5) |
+| TASK-14516 | DONE | merged `46cecd8` (A.2) |
+| TASK-14518 | DONE | CA-1 and CA-3 at Gate A-CLOSE; the R-33 split merged `07f7c78` |
+| TASK-14519 | DONE | with 14519-T, merged `8367862` (A.5) |
+| TASK-14520 | DONE | with 14520-T, merged `53a7812` (B.1) |
+| TASK-14521 | DONE | with 14521-T, merged `fe928dde` (B.1) |
+| TASK-14522 | DONE | with 14522-T, merged `f6fac97b` (B.2) |
+| TASK-14523 | DONE | merged `8efdfffd` (B.3) |
+| TASK-14524 | DONE | authored at B.1, merged `8a54484d` (B.3); re-spawn 2's Unit mutation run done |
+| TASK-14528 | DONE | C-1 done and frozen (R-127). Its C-5 build of the evidence runs follows the close's green push, by the plan's design (R-53); the results are recorded at C-9 |
 
 | Task | Branch | Build | 5α | 5a Reviewer (Fable) | 5a Codex | Merged |
 |---|---|---|---|---|---|---|
@@ -2160,7 +2213,7 @@ The tool is `.claude/plans/s145/ca3/compare.sh`. The Fable seat confirms all fiv
 
 **TASK-14520 + 14520-T, merged** (`53a7812`; the ledger row has the review record).
 
-*Plain language:* overtime, the 37-hour norm check and flex now carry a new label, "timeline-aware". It means "evaluated once across the whole month, with each day's own contract; never split into parts". The merge step for such a rule passes its one answer through unchanged. Two answers would mean the design broke, and the merge step then fails loudly as a bug (a 500), never as a split refusal. Nothing pays differently yet. Split months are still refused until B.2; the refusal now names the weekly norm check (`NORM_CHECK_WEEKLY`) instead of overtime.
+*Plain language:* overtime, the 37-hour norm check and flex now carry a new label, "timeline-aware". It means "evaluated once across the whole month, with each day's own contract; never split into parts". The merge step for such a rule passes its one answer through unchanged. Two answers would mean the design broke. The merger then throws a bug error, never a split refusal. *(Corrected at the close, from the O-4 drafting: payroll catches that error and records a failed rule row while the calculation still reports `Success`, rather than answering a 500. It is unreachable with the live rules; whether such a failure should refuse the whole calculation is recorded as an open question in ADR-016 D10.)* Nothing pays differently yet. Split months are still refused until B.2; the refusal now names the weekly norm check (`NORM_CHECK_WEEKLY`) instead of overtime.
 
 - **Review.** 5α PASS. Codex APPROVE. The internal lens ran on Opus by the owner's direction and returned APPROVED-WITH-WARNINGS. Every finding was a comment that the change had made false: W-1 (two comments still said flex merges by a custom rule), N1 and N2 (comments elsewhere naming overtime as a split-sensitive rule, or "four" such rules), and N6 (a re-wrap). They were applied at merge, comments only, in `5715f7e` (build 0 / 145).
 - **5a NOTE-3:** the two-answers failure must not look like a split refusal. Pinned on TASK-14524's branch (`ce269f3`), as two asserts in `SinglePlanEvaluation_TwoResults_Throws_NamesRuleAndCount_NoDate`: `IsSplitRefusal` is false and `SplitRefusalRuleId` is null.
@@ -2468,16 +2521,56 @@ The alternatives were:
 - **F-C3:** `TASK-14524.md:63` still has the pre-R-120 wording of MB-12.
 - **Brief corrections:** the stale line cites; XB1/XB2 belong to MB-2 case (d), not (c); 7D is missing from MB-2's case lists.
 
-**The seat (Opus, by owner direction) is reviewing the freeze.**
+**The seat's rulings R-121..R-127 and the freeze** (2026-10-20). The seat ran on Opus by the owner's direction (`opus-seat-model: claude-opus-5-5`), read-only; the content baseline was unchanged afterwards.
+
+*Plain language:* the seat checked each saved patch against the code. Each does exactly the breakages the plan assigns to its run, on the right lines, and nothing else; the seat applied each one in memory and matched the patch's own file hash. It re-checked the riskiest predictions itself (IB1, RB4, SR1/SR2, XB1/XB2, 7D) and found the report right. Then it froze everything, with no change to any list or patch. Its findings were paperwork; one of them, R-121, adds a step before the close.
+
+- **Patch verification:** each hunk matches the brief's wording on the as-built site.
+  - EA-R1's and EA-R2's replacement lines are byte-identical to Stage A's `ca3/EA-1.diff` and `ca3/EA-4.diff`.
+  - MB-5 appears as `< int.MaxValue` because the as-built check is an early return; it is the same mutation.
+  - All eight list files resolve. Red and green lists do not overlap.
+- **R-121 (F-C1). Add the missing docstring now, before K.** `HrBackdateWorklistRepositoryTests.WriteForExportedMonths_AppendOnOpenRow_…` rests on MB-6r (which gives `[]`) and MB-6p (which gives `["QUAL-149","QUAL-209"]`), and R-72 requires its docstring to say so.
+  - The seat chose this over a tidy after the close: that would leave a rule broken at the close and a commit that no review covers.
+  - The cost: a test file changes, so "C-1 again" runs at C-2. Because `PeriodCalculationService.cs` is untouched, the re-cut patches are expected to be byte-identical.
+  - Applied in `e68077da` (comment only). TASK-14528's MB-6r and MB-6p rows name the fact.
+- **R-122 (F-C2, plus a second case the seat found).** C-5's keys file has one key per test name:
+  - the shared FrozenInputsSlotTests name maps to `SR2` only (Stage A's `FS-G1` is the same test);
+  - `BoundaryCauseEncodingTests.ForwardCalcWrite_And_Rebuild_…` maps to `BC-4` only;
+  - there are no rows for renamed-away names;
+  - a `uniq -d` check must print nothing before the first comparison, because `compare.sh` keeps the last row for a repeated name.
+- **R-123 (F-C3).** `TASK-14524.md`'s MB-12 wording follows R-120.
+- **R-124 (the brief corrections).** TASK-14528 is amended, not superseded, because "C-1 again" starts from its table:
+  - the sites at `B`;
+  - MB-2 case (c) gains A3-3 and loses XB1/XB2;
+  - case (d) names XB1, XB2, 7D and FX2 as reached but green;
+  - the R39 MD-30 line names them as EA-R1 greens.
+- **R-125.** The four renames are confirmed in the lists; no edit.
+- **R-126 (the seat's own finding).** IB1's stale "(guard)" tag now says it is a RED pin. Applied with R-121, in `e68077da`. Recorded only: C-1's census listed `Resolve_ForeignHr_…` as reached by MB-6r, but it is a plain expected green.
+- **R-127, the freeze.** **FROZEN:** `B` = `2a981597dedb45add37c60e817f40cba5eee4b96`; the four patches by the SHA-256 in the table above; and the lists by these SHA-256 (untracked files in `.claude/plans/s145/cb1/lists/`):
+
+| List | Facts | SHA-256 |
+|---|---|---|
+| `EB-1.red.fqn` | 14 | `55df9f349f26c5c03c96049929a047c817bfa37af7ff402aca36da04f6a17d17` |
+| `EB-2.red.fqn` | 22 | `9c43f99d10c4a782c29a49d05b35635b1078f0da2543a130bab3eb8af3106943` |
+| `EA-R1.red.fqn` | 10 | `1fe9c65ae368ea8484c11215f022c947b6be8d674639baf8d9856ce7db82baa5` |
+| `EA-R2.red.fqn` | 4 | `a0c451123f7486d89f104af3f03c31583778b6ab7cba0cff34cb864302ae7c41` |
+| `EB-1.green.fqn` | 61 | `7603dbcd04c60211bceb9d07a9f61c497a1891cebeef2f3cf9f24a3e06427938` |
+| `EB-2.green.fqn` | 65 | `6e29a84316e15c6763d25113e49582f95089b1fc0c540a6d83c342421559b679` |
+| `EA-R1.green.fqn` | 66 | `bd0826d03f72e04cddabc25c549f6142bb2b382faa9c407da304200f9798d2cd` |
+| `EA-R2.green.fqn` | 80 | `df0358e49f42041822ecabd0de0653398c94ff11fc2dfd1e20930d3c44fe49fa` |
+
+The Orchestrator re-computed all twelve SHA-256 values; they match. The brief edits (R-121's two table cells, R-122..R-124) are applied in `.claude/plans/s145/TASK-14528.md` and `TASK-14524.md` (untracked), with a "C-1" revision row in each.
+
+**Next: C-2.** K is made. "C-1 again" re-cuts the patches on K, because R-121 changed a test file (R-96: steps 2–3 for every Docker row). If the re-cuts are byte-identical, `B` becomes K with no seat ruling (R-98). Then C-3, the Step 7a review on K: Codex, and the internal lens on Opus under the owner's R-104 ruling.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-19, **B.2 gate closed; wave B.3 dispatched**. Local master is this docs-only log commit, on top of `f6fac97b` (the TASK-14522 merge). Stage A closed on 2026-10-16 at `K_A` (`923f7fb`). Not pushed to master, by design. `origin/master` is `cdd8253` and must not be pushed while any evidence run is in flight (R-52) |
+| **As of** | 2026-10-20, **C-2: K committed** (this commit carries the O-4 records and is K). Stage B is fully merged (`8a54484d`, the last code merge); C-1 is frozen at `B` = `2a981597` (R-127). Not pushed to master, by design: `origin/master` is `cdd8253` until C-4's close push. Stage A closed on 2026-10-16 at `K_A` (`923f7fb`) |
 | **Evidence** | `K_A` = `923f7fb` · V-A run `38747749039` (all seven jobs green) · EA-1..EA-5 all matched (EA-3 through EA-3′); runs and heads in § "Stage A gate — `K_A`" → Results and § "CA-5"; confirmed by the Fable seat (R-52) · PR #37 closed unmerged, `s145-evidence-a` deleted on both sides · K ⟨close⟩ · EB ⟨Stage B⟩ |
-| **Phase** | Stage B, wave B.3 (2026-10-19). The B.1 and B.2 gates are closed: TASK-14520+T (`53a7812`), TASK-14521+T (`fe928dde`) and TASK-14522+T (`f6fac97b`) are merged, so split months are payable on master. O-1 is green at `f6fac97b`. TASK-14524 is authored (`5ee23e4`, `ce269f3`) and merges at B.3. **Every Stage B task is merged:** TASK-14523 (`8efdfffd`) and TASK-14524 (`8a54484d`; 5a cycle 2 clean on both lenses). O-1 is green at `8a54484d`: Unit 1512 · DemoSeed 170 · Regression non-Docker 128 · vitest 1005. TASK-14524 re-spawn 2 (the Unit mutation run) is in flight. B.0 closed and the briefs signed (R-113). Reviews and rulings run on Opus while Fable is on its usage limit (owner direction 2026-10-19); Codex is the external lens. Stage A closed (CA-1..CA-7); QUAL-207 merged (`499771c`). CA-1's full report and mutation patches are kept, untracked, in `.claude/plans/s145/ca1/` (the CA-3 builder works from them, amended by TASK-14518's "Amended at the freeze" section). (On 2026-10-14 the log was first caught up after a twelve-day pause: the 2026-10-02 session had ended right after the 14507 merge and TASK-14506's rebase. The six ledger rows for 14501–14504 and 14507 were written then from the merge commits, the branches and a fresh O-1.) The briefs go to the agents by absolute path (`.claude/plans/s145/TASK-*.md`, untracked, so absent from worktrees), read in full as the contract. `docs/CONVENTIONS.md` and the plan's standing constraints are pasted verbatim into every prompt |
+| **Phase** | The close sequence, C-2 (2026-10-20). K carries the O-4 records (ADR-016 D2/D3/D4/D10, ADR-017, ADR-020 pointer, ADR-028 D6, ADR-002, ADR-034, ADR-040, the quality and HR registers, ROADMAP, danish-agreements, QUALITY.md) and two code-set changes after `B`: R-121/R-126's test doc comments (`e68077da`) and R-21's marker doc in `WeeklyTimelineCore.cs`. So the patch-validity check is not empty and "C-1 again" runs (TASK-14528 re-spawn: steps 2–3 for every Docker row, R-96, then the dry runs and re-cuts on K, R-98) |
 | **Dispatched tasks / worktrees** | **Merged:** 14500 (`1b6160c`), 14505+T (`ce51a38`), 14501 (`5c35ffb`), 14502 (`25eb8eb`), 14503a (`32b668a`, `6e4592c` only), 14503b (`510619e`), 14504 (`630bf89`), 14507 (`94dea75`), 14506 (`379567e`). O-9 done (`9b75848`), O-2 done (no drift). 14506 re-spawn 2 done: 27 of 27 mutations tripped their pins, and its throwaway checkout is removed. **Merged in A.2:** 14510 (`d928cf5`), 14516 (`46cecd8`), 14509+T (`755cb14`), 14508+T (`f0a863b`). **Merged in A.3:** 14511+T (`2d14003`). O-10 merged (`a59825b`). **Merged in A.4:** 14512+T (`250fcdf`), 14514 (`49c00e5`); 14514 re-spawn 2 done: 14 of 14 mutations tripped, its throwaway checkout removed. **Merged in A.5:** 14513+T (`07337ea`), 14515 (`eb78b8e`), 14519+T (`8367862`); 14515 re-spawn 2 done: 3 of 3 mutations tripped, its throwaway checkout removed. **Gate A-CLOSE (closed 2026-10-16):** TASK-14518 CA-1 and CA-3 done; the freeze R-33..R-46; the R-33 split merged (`07f7c78`); `K_A` `923f7fb`; the evidence branch and PR #37 closed and deleted (CA-6); the CA-5 rulings R-47..R-52. **After CA-7:** QUAL-207 merged (`499771c`); its worktree `s145-qual-207` to clear at teardown. **To clear at teardown:** `s145-task-14518-rs` (merged); the A.5 worktrees `s145-task-14513`, `s145-task-14515`, `s145-task-14519` (all merged); the merged worktrees `agent-ac1278752784ecede`, `agent-ad9053a02a651ddfb`, `agent-a1e2cddcd1ccda107`, `agent-a219bb4679ce74dae`, `s145-task-14503b`, `s145-task-14504`, `s145-task-14507`; `agent-a0fe62b0b3b73d252` (14503a; its `c3543f1` file is now merged byte-identical), `agent-a97b8efd3e8cd8e90` (14506, merged), and the A.2 worktrees `s145-task-14508`, `s145-task-14509`, `s145-task-14510`, `s145-task-14516` (all merged); the A.3/A.4 worktrees `s145-task-14511`, `s145-task-14512`, `s145-task-14514` and O-10's `s145-o10` (all merged); and the two unregistered directories `agent-a9efbf24c4db49318` and `agent-aa8d09f81f61764a1`. **B.1:** `s145-task-14520` (merged `53a7812`) and `s145-task-14521` (merged `fe928dde`) are to clear at teardown. Still open: `s145-task-14524` (merges at B.3). **B.2:** `s145-task-14522` (merged `f6fac97b`) is to clear at teardown. **B.3:** `s145-task-14523` (merged `8efdfffd`; its `frontend/node_modules` is a junction to the main checkout, so remove the junction before the worktree at teardown) and `s145-task-14524` (merged `8a54484d`; re-spawn 2 works in throwaway checkouts outside the repository) |
-| **Pending gates** | **C-1** (TASK-14528 in flight) → the close sequence C-1..C-9 (incl. TASK-14528, the Stage B evidence on `s145-evidence-b`, with R-52's base check). This machine is memory-constrained (8 GB): one build-heavy agent at a time, `-m:2`, foreground; `dotnet build-server shutdown` after builds |
+| **Pending gates** | **C-2** patch validity ("C-1 again") → **C-3** Step 7a on K (Codex + the internal lens on Opus, R-104 option 2; base `cbaa5e0`) → **C-4** the close commit and its green push → **C-5..C-8** the Stage B evidence on `s145-evidence-b` → **C-9**. This machine is memory-constrained (8 GB): one build-heavy agent at a time, `-m:2`, foreground; `dotnet build-server shutdown` after builds |
 | **Open rulings** | None for the owner. R-104 was answered on 2026-10-20 (option 2). The reopen hook's `EffectiveFrom` ruling was confirmed at the batched Fable 5a |
-| **Next action** | (1) When TASK-14528 C-1 returns: publish the resolved lists, the expected greens, the check lines, `B`, the four patch paths and their SHA-256 here; the seat (Opus, owner direction) freezes them. (2) C-2: K. R-104 is ruled (option 2): the close guard accepts Opus for S145 only; that change is in K and is reviewed at Step 7a. Delete the exception after the close. R-104 goes to the owner at C-1 if Fable is still on its limit. Build-safe order throughout (R-78; at most one building agent at a time). Reviews and rulings stay on Opus while Fable is on its limit (owner direction 2026-10-19); Codex for the high-risk 5a (14520 rule logic, 14521 corrections) |
+| **Next action** | (1) TASK-14528 "C-1 again" on K: if every re-cut is byte-identical and no list or check line changes, `B` becomes K with no seat ruling (R-98); that record rides in the close commit. (2) C-3: check each patch's SHA-256 against the freeze, then the Step 7a lenses on K. (3) C-4: remove every worktree first (the guard's gate), then the close commit, whose command alone carries the words the guard looks for (R-97) |

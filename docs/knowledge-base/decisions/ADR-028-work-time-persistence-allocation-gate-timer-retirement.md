@@ -94,6 +94,24 @@ must still replay historical timer events. Historical timer-origin `TimeEntryReg
 (`ActivityType="timer"`) are left untouched and continue to behave as ordinary time entries; verified
 that no payroll/wage-type or rule-engine logic branches on `ActivityType="timer"` (P6).
 
+### D6 — A Skema save replaces its cell; `POST /api/time-entries` stays additive; replaced rows are kept (S145)
+
+*Added at the S145 close: TASK-14507, merged `94dea75` (2026-10-14); the adjudicator's Skema ruling in refinement rev 3.3, owner informed 2026-10-01; fixes QUAL-192, QUAL-193 and QUAL-194.*
+
+**In plain terms.** A Skema cell is one number: one employee, one day, one project, or one absence type. Before S145, saving a cell again stored a second row beside the first. Both grids showed the latest value, but every total the server computed added both rows. So the send-for-approval check refused a month the employee could not repair, a re-saved ferie day used up vacation quota twice, and a save retried after a lost network response stored the same day twice. The product had always meant "replace": the cell holds an absolute number, both grids show the last value written, the inability to clear a cell is recorded as a known limitation (SPRINT-72 R17), and the sibling work-time record is latest-wins by design (D1). D6 makes the stored data mean the same.
+
+**The decision.**
+- **Skema cells are latest-wins per cell.** A re-save still appends a new `TimeEntryRegistered` / `AbsenceRegistered` event, so events stay append-only; the event now carries `Source = SKEMA`. The new row becomes the cell's current value, and the cell's earlier Skema row is marked `superseded_by_outbox_id` = the new row's `outbox_id`: mark first, then insert, inside the save's existing per-employee lock (`TimeEntryProjectionRepository.cs:19-26, :47-55`). A cell is `(employee_id, date, task_id)` for time entries and `(employee_id, date, absence_type)` for absences. A partial unique index on each table admits one current Skema row per cell (`ux_time_entries_proj_current_skema_cell`, `NULLS NOT DISTINCT`, and `ux_absences_proj_current_skema_cell`; `init.sql`, the S145 segment). The index is a backstop; the mark is the mechanism.
+- **`POST /api/time-entries` rows stay additive.** Each such registration is a separate piece of work: `source = TIME_POST`, never marked and never marking another row, even when it carries a task id. An event with no `Source`, which is every event written before S145, reads as `TIME_POST`.
+- **Superseded rows are retained.** A replaced row is never deleted or overwritten, so the audit trail, and a payroll replay that re-reads rows by event id, still see exactly what a calculation used (ADR-016 D10, S145 amendment). Every total counts current rows only: both repositories' default reads, the raw-SQL readers (team overview, allocation breakdown, the vacation settlement, the employment-window strand check) and the vacation quota filter `superseded_by_outbox_id IS NULL`. `GetByEventIdsAsync` is the one read that does not.
+- **The quota change is signed.** Re-saving an absence books the new feriedage minus the stored feriedage of the rows it replaces. An unchanged re-save leaves `used` unchanged; a reduction lowers it and is never refused, even above the cap after a revaluation; an increase goes through the guarded quota check, and the pre-check mirrors the same delta.
+- **A cell cannot be cleared.** The save refuses hours ≤ 0, and an entry with an empty project code, with a 400 before anything is written (`SkemaEndpoints.cs:739-787`), so every current row carries hours > 0. SPRINT-72 R17 stays open. The storage leaves room for a later retraction (mark the current row superseded, insert nothing), which is a ROADMAP backlog item (ruling R24).
+- **The rebuild agrees with the live path.** `ProjectionBackfillService` replays the events with the same mark, in `outbox_id` order, so a from-events rebuild reproduces the live current set.
+
+**What it changes in D4.** D4's "Σ time entries" assumed one row per allocation. It now holds as written: the gate sums current rows only, so a re-saved cell counts once and the gate agrees with the grid.
+
+**What was given up.** A payroll-only "latest per cell" read was rejected: payroll would then pay hours the approval gate never approved, and payroll would carry the Skema's cell rules behind a read-only contract. Keeping replaced rows costs storage; deleting or overwriting them would break replay. Evidence: the Docker pins S1–S13, Q1–Q7, B1–B3, PAR, TRM and SHO, green in CI at `K_A` (run `38747749039`), and their mutations observed red in the Stage A evidence runs (`SPRINT-145.md` § "Task ledger", TASK-14507, and § "CA-5").
+
 ## Consequences
 
 - The disappearing-hours bug is fixed; work time survives reload, month-switch, and approval.
