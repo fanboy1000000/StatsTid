@@ -256,8 +256,10 @@ public sealed class SplitMonthPcsTests
     /// </para>
     ///
     /// Red conditions: MB-12 (Unit mutation; the throw replaced by today's fallback) lets the line be filed
-    /// under a neighbouring segment, so the call does not throw the invariant exception and
-    /// <c>Assert.ThrowsAsync&lt;InvalidOperationException&gt;</c> trips.
+    /// under a neighbouring segment and on to mapping, where this fixture's null mapping service throws a
+    /// <c>NullReferenceException</c>; the call then does not throw the invariant exception and
+    /// <c>Assert.ThrowsAsync&lt;InvalidOperationException&gt;</c> trips on the exact type ("Exception type was not
+    /// an exact match"); it is not a call that passes without throwing.
     /// </summary>
     [Theory]
     [InlineData(1)]

@@ -26,7 +26,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// <see cref="ProjectionHoursReader"/> over seeded projection rows and the REAL
 /// <see cref="ApprovalPeriodPriorPeriodReader"/> with every previous month seeded APPROVED (R26). Every fact
 /// plans through the PLANLESS SHIM with the FULL live registry set (C-B6), so the evaluated-set filter
-/// (TASK-14522 contract 1, MB-7) is on the path of each. Ten facts: WS1, WS2, QA1, QP1, FX1, FX2, FX3, RP-B1.
+/// (TASK-14522 contract 1, MB-7) is on the path of each. Eight facts: WS1, WS2, QA1, QP1, FX1, FX2, FX3, RP-B1.
 ///
 /// <para>
 /// <b>The story, in plain language.</b> Until Stage B a month in which an employee's hours, position or
@@ -177,11 +177,12 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
     /// 16-20 Mar, every other weekday (the context days 23-27 Feb included) at the norm 7.40. The week 9-15
     /// Mar is HK's: 40.00 against norm 37.00 and 100% threshold 40.00 pays OVERTIME_50 3.00 dated Sunday 15
     /// Mar, exported under SLS_0210. The week 16-22 Mar is AC's: 40.00 - 37.00 = MERARBEJDE 3.00 dated
-    /// Sunday 22 Mar, exported under SLS_0310. The AC mapping row the shared fixture lacks is seeded here
-    /// (MERARBEJDE, OK24, AC). March is entirely OK24.
+    /// Sunday 22 Mar, exported under SLS_0310. The AC base row (MERARBEJDE, OK24, AC, SLS_0310) comes from
+    /// init.sql, which this class applies in full; the helper only verifies it (S145 B3 R-120).
+    /// March is entirely OK24.
     ///
     /// Red conditions (Docker-gated, CI-verified): MB-2 (every EMPLOYED segment hydrated with the FIRST
-    /// EMPLOYED segment's wage-type key, <c>PeriodCalculationService</c>, the dated wage-type key hydration in <c>SegmentProfileAsync</c>) maps the AC part's
+    /// EMPLOYED segment's wage-type key, the <c>WtmNaturalKey</c> hydrator in <c>PeriodCalculationService.BuildPlanWithHistoriesAsync</c>, <c>DatedWtmKey</c>) maps the AC part's
     /// MERARBEJDE under HK, where no MERARBEJDE row exists, so the line is dropped and the exact export-lines
     /// assertion trips. MB-7 (the filter disabled) makes the shim throw (the planner refuses the split).
     /// </summary>
@@ -295,7 +296,8 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
     ///
     /// Red conditions (Docker-gated, CI-verified): MB-7 (the filter disabled) makes the shim throw. MB-3 (Unit;
     /// the timeline covers only the first part) leaves the DEPARTMENT_HEAD days out of the timeline: the
-    /// balance is 170.00 (no hours judged), not 190.00.
+    /// last covered day is 13 Sep, an AC day with cap 150, so the balance is 150.00 with a 20.00 FLEX_PAYOUT,
+    /// not 190.00 with no payout; both assertions trip.
     /// </summary>
     [Fact]
     public async Task Flex_AcToDepartmentHeadMidMonth_Cap200Applies()
@@ -416,8 +418,9 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         Assert.Equal(1, periodEventsBefore);
 
         // Change the live state so that a re-read would differ.
-        await ExecuteAsync(
-            $"UPDATE employee_profiles SET part_time_fraction = 0.500 WHERE employee_id = '{emp}' AND effective_from = DATE '2026-09-16'");
+        // S145 B3 (R-120): prove the "live state changed" premise - exactly one row was updated.
+        Assert.Equal(1, await ExecuteAsync(
+            $"UPDATE employee_profiles SET part_time_fraction = 0.500 WHERE employee_id = '{emp}' AND effective_from = DATE '2026-09-16'"));
         await SupersedeTimeEntryAsync(emp, Sep16, 9.00m);
 
         var replay = await pcs.ReplayAsync(forward.ManifestId, authorizationHeader: bearer);
@@ -689,7 +692,21 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("ok", okVersion);
         cmd.Parameters.AddWithValue("ac", agreementCode);
         cmd.Parameters.AddWithValue("pos", position);
-        Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+        await cmd.ExecuteNonQueryAsync();
+
+        // S145 B3 (R-120): idempotent. init.sql (applied in full by this class) may already seed the open row
+        // (idx_wtm_natural_key_open), so the insert can legitimately add 0 rows. Assert instead that the OPEN row
+        // for the key carries exactly the expected wage type, whoever seeded it.
+        await using var read = new NpgsqlCommand(
+            """
+            SELECT wage_type FROM wage_type_mappings
+            WHERE time_type = @t AND ok_version = @ok AND agreement_code = @ac AND position = @pos AND effective_to IS NULL
+            """, conn);
+        read.Parameters.AddWithValue("t", timeType);
+        read.Parameters.AddWithValue("ok", okVersion);
+        read.Parameters.AddWithValue("ac", agreementCode);
+        read.Parameters.AddWithValue("pos", position);
+        Assert.Equal(wageType, (string?)await read.ExecuteScalarAsync());
     }
 
     /// <summary>An APPROVED monthly approval period (R26: the previous month, seeded at repository level).</summary>
@@ -804,7 +821,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         await tx.CommitAsync();
     }
 
-    private async Task ExecuteAsync(string sql)
+    private async Task<int> ExecuteAsync(string sql)
     {
         await using var conn = _db.Create();
         await conn.OpenAsync();
@@ -813,7 +830,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
 #pragma warning disable CA2100
         await using var cmd = new NpgsqlCommand(sql, conn);
 #pragma warning restore CA2100
-        await cmd.ExecuteNonQueryAsync();
+        return await cmd.ExecuteNonQueryAsync();
     }
 
     // =====================================================================
