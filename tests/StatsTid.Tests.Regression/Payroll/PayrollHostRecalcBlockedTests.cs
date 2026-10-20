@@ -1299,7 +1299,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// AR10 / <b>IB1</b> <b>(guard)</b>. <b>S145 B2: was
+    /// AR10 / <b>IB1</b> (S145 R-126: a guard at Stage A, as AR10; now a RED pin, see Red conditions). <b>S145 B2: was
     /// <c>CalculateAndExport_AgreementChangeWed18Mar_StillPlanner422_WithRuleId</c>.</b> HK → AC effective
     /// WEDNESDAY 18 March 2026 (inside March, and in the middle of a week too), February and March APPROVED →
     /// <b>422</b>, the WEEK CHECK's variant (<c>reason = agreement-change-mid-week</c>, no <c>ruleId</c>, no

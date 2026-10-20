@@ -232,6 +232,15 @@ public sealed class HrBackdateWorklistRepositoryTests : IAsyncLifetime
     // Append-on-open + per-trigger baseline capture + derived flags (exported month)
     // ════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Append-on-open: a second trigger on an exported month with an open row joins that row (same id, version 2),
+    /// each trigger keeping the baseline hash it saw when appended; the derived flags read the live state.
+    /// <para><b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). S145 B3 (R-72, R-121): the
+    /// <c>RecalcBlockedBy(row)</c> assertion rests on two Unit mutations of <c>RecalcBlockedByForTrigger</c>.
+    /// MB-6r (the residual arm returns null) leaves the Wed 20 May agreement trigger unblocked: <c>[]</c>. MB-6p
+    /// (PROFILE returns QUAL-149 strictly inside the month, R-117) blocks the Sun 10 May profile trigger:
+    /// <c>["QUAL-149", "QUAL-209"]</c>. MB-6 does not trip it (20 May is strictly inside May).</para>
+    /// </summary>
     [Fact]
     public async Task WriteForExportedMonths_AppendOnOpenRow_CapturesBaselineAtAppendTime_BumpsVersion_EmitsAppended()
     {
