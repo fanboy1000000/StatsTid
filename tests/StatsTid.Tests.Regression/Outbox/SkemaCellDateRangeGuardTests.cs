@@ -48,6 +48,8 @@ public sealed class SkemaCellDateRangeGuardTests : IClassFixture<SkemaCellDateRa
     private static readonly DateOnly SeptemberCellDay = new(2025, 9, 10);   // Wednesday
     private static readonly DateOnly SeptemberAbsenceDay = new(2025, 9, 11); // Thursday
     private static readonly DateOnly OctoberDay = new(2025, 10, 8);          // Wednesday
+    private static readonly DateOnly OctoberFirst = new(2025, 10, 1);  // Wednesday (inclusive lower bound)
+    private static readonly DateOnly OctoberLast = new(2025, 10, 31);   // Friday (inclusive upper bound)
     private static readonly DateOnly SeptemberStart = new(2025, 9, 1);
     private static readonly DateOnly SeptemberEnd = new(2025, 9, 30);
 
@@ -100,7 +102,8 @@ public sealed class SkemaCellDateRangeGuardTests : IClassFixture<SkemaCellDateRa
             $"an October save carrying a September entry must answer 400; got {(int)rsp.StatusCode}: {raw}");
         var body = JsonDocument.Parse(raw).RootElement;
         Assert.Equal("skema_cell_date_out_of_range", body.GetProperty("error").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("message").GetString()));
+        // S145 R-133 (N-a): the message names the offending date, as the WorkTime sibling pins.
+        Assert.Contains("2025-09-10", body.GetProperty("message").GetString());
 
         // September's recorded cell is unchanged: one row, 7.4 h, current (not superseded).
         var september = await EntryRowsOnAsync(emp, SeptemberCellDay);
@@ -158,7 +161,8 @@ public sealed class SkemaCellDateRangeGuardTests : IClassFixture<SkemaCellDateRa
             $"an October save carrying a September absence must answer 400; got {(int)rsp.StatusCode}: {raw}");
         var body = JsonDocument.Parse(raw).RootElement;
         Assert.Equal("skema_cell_date_out_of_range", body.GetProperty("error").GetString());
-        Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("message").GetString()));
+        // S145 R-133 (N-a): the message names the offending date.
+        Assert.Contains("2025-09-11", body.GetProperty("message").GetString());
 
         var september = await AbsenceRowsOnAsync(emp, SeptemberAbsenceDay);
         var row = Assert.Single(september);
@@ -172,7 +176,7 @@ public sealed class SkemaCellDateRangeGuardTests : IClassFixture<SkemaCellDateRa
 
     /// <summary>
     /// <b>B1-c (control).</b> An October save whose entry and absence are BOTH inside October is accepted
-    /// (200) and writes both rows: the guard refuses only out-of-range dates, never a whole month's save,
+    /// (200) and writes both rows, on the FIRST (2025-10-01) and LAST (2025-10-31) day of October, so the inclusive bounds are pinned (S145 R-133 N-a): the guard refuses only out-of-range dates, never a whole month's save,
     /// even while a different month (September) is APPROVED.
     ///
     /// <para><b>Red conditions.</b> Passes today and must keep passing. It trips if the new check is built
@@ -189,16 +193,16 @@ public sealed class SkemaCellDateRangeGuardTests : IClassFixture<SkemaCellDateRa
         {
             year = 2025,
             month = 10,
-            entries = new[] { new { date = Iso(OctoberDay), projectCode = Project, hours = 4.0m } },
-            absences = new[] { new { date = Iso(OctoberDay.AddDays(1)), absenceType = "SICK_DAY", hours = 3.7m } },
+            entries = new[] { new { date = Iso(OctoberFirst), projectCode = Project, hours = 4.0m } }, // S145 R-133 (N-a): first day of the month
+            absences = new[] { new { date = Iso(OctoberLast), absenceType = "SICK_DAY", hours = 3.7m } },
         });
 
         var raw = await rsp.Content.ReadAsStringAsync();
         Assert.True(rsp.StatusCode == HttpStatusCode.OK,
             $"an in-month October save must answer 200; got {(int)rsp.StatusCode}: {raw}");
-        var entry = Assert.Single(await EntryRowsOnAsync(emp, OctoberDay));
+        var entry = Assert.Single(await EntryRowsOnAsync(emp, OctoberFirst));
         Assert.Equal(4.0m, entry.Hours);
-        var absence = Assert.Single(await AbsenceRowsOnAsync(emp, OctoberDay.AddDays(1)));
+        var absence = Assert.Single(await AbsenceRowsOnAsync(emp, OctoberLast));
         Assert.Equal(3.7m, absence.Hours);
     }
 

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -43,9 +42,9 @@ namespace StatsTid.Tests.Regression.Skema;
 /// branch is reachable only when the profile read at the phase-1 anchor disagrees with the reads before it
 /// (a profile change landing mid-request, the race the in-lock re-check exists for). The fact reproduces that
 /// race deterministically: the host's <see cref="IEmploymentProfileResolver"/> is wrapped, and answers "no
-/// profile" for the særlige-feriedage day ONLY to a caller that is not one of the two calculators (the
-/// calculators serve the guards before the pre-check; the endpoint's own phase-1 read is the only direct
-/// caller). The wrapper counts the nulls it served, and the fact asserts exactly one, so the premise cannot
+/// profile" for the særlige-feriedage day ONLY to the endpoint's own phase-1 read: the host wires the two calculators
+/// (which serve the guards before the pre-check) to the REAL resolver, and only the endpoint gets the wrapper
+/// (explicit DI, see <see cref="Harness"/>). The wrapper counts the nulls it served, and the fact asserts exactly one, so the premise cannot
 /// be silently vacuous.</para>
 ///
 /// <para><b>Fixture rules.</b> As <see cref="SkemaQuotaResaveTests"/>: VACATION exhausted by REAL saves (24
@@ -275,9 +274,9 @@ public sealed class SkemaQuotaRefusalOrderTests : IClassFixture<SkemaQuotaRefusa
     // ── The profile-resolver seam: the deterministic "profile changed mid-request" ──
 
     /// <summary>Wraps the host's real <see cref="IEmploymentProfileResolver"/>. While armed, a read for the
-    /// armed employee and day answers <c>null</c> to any caller that is NOT one of the two calculators
-    /// (<c>ConsumptionCalculator</c>, <c>DailyNormCalculator</c>), which serve the guards BEFORE the quota
-    /// pre-check; the endpoint's own phase-1 anchor read is the only direct caller in the save path.
+    /// armed employee and day answers <c>null</c>. Only the endpoint receives this wrapper (the two calculators are built on
+    /// the real resolver, see <see cref="Harness"/>), so the only read it can intercept is the quota pre-check's own
+    /// phase-1 anchor read.
     /// Everything else, and every read while disarmed, is the real answer.</summary>
     public sealed class ProfileResolverSeam : IEmploymentProfileResolver
     {
@@ -302,10 +301,8 @@ public sealed class SkemaQuotaRefusalOrderTests : IClassFixture<SkemaQuotaRefusa
         public Task<EmploymentProfile?> GetByEmployeeIdAtAsync(
             string employeeId, DateOnly asOfDate, CancellationToken ct = default)
         {
-            // Inspect the caller synchronously, before the first await (an async stack is not the caller's).
             if (string.Equals(_employeeId, employeeId, StringComparison.Ordinal)
-                && asOfDate == _day
-                && !CalledFromACalculator())
+                && asOfDate == _day)
             {
                 Interlocked.Increment(ref _nullsServed);
                 return Task.FromResult<EmploymentProfile?>(null);
@@ -313,17 +310,6 @@ public sealed class SkemaQuotaRefusalOrderTests : IClassFixture<SkemaQuotaRefusa
             return _inner.GetByEmployeeIdAtAsync(employeeId, asOfDate, ct);
         }
 
-        private static bool CalledFromACalculator()
-        {
-            foreach (var frame in new StackTrace(false).GetFrames())
-            {
-                var name = frame.GetMethod()?.DeclaringType?.FullName ?? string.Empty;
-                if (name.Contains("ConsumptionCalculator", StringComparison.Ordinal)
-                    || name.Contains("DailyNormCalculator", StringComparison.Ordinal))
-                    return true;
-            }
-            return false;
-        }
     }
 
     // ── The shared container + host ──
@@ -351,8 +337,22 @@ public sealed class SkemaQuotaRefusalOrderTests : IClassFixture<SkemaQuotaRefusa
                 {
                     services.AddSingleton<IHttpClientFactory>(new RuleEngineStubFactory());
                     services.AddSingleton<TimeProvider>(new FixedTimeProvider(F));
+                    // Explicit wiring (R-133): the real resolver is registered as ITSELF; the two calculators
+                    // are built on it directly (the endpoint resolves both from DI as singletons); and only
+                    // IEmploymentProfileResolver is the armed wrapper, which the endpoint's own phase-1 read
+                    // is the sole consumer of in the save path.
+                    services.AddSingleton<EmploymentProfileResolver>(sp =>
+                        ActivatorUtilities.CreateInstance<EmploymentProfileResolver>(sp));
+                    services.AddSingleton<StatsTid.Backend.Api.Services.DailyNormCalculator>(sp =>
+                        new StatsTid.Backend.Api.Services.DailyNormCalculator(
+                            sp.GetRequiredService<EmploymentProfileResolver>(),
+                            sp.GetRequiredService<ConfigResolutionService>()));
+                    services.AddSingleton<StatsTid.Backend.Api.Services.ConsumptionCalculator>(sp =>
+                        new StatsTid.Backend.Api.Services.ConsumptionCalculator(
+                            sp.GetRequiredService<StatsTid.Backend.Api.Services.DailyNormCalculator>(),
+                            sp.GetRequiredService<EmploymentProfileResolver>()));
                     services.AddSingleton<IEmploymentProfileResolver>(sp =>
-                        new ProfileResolverSeam(ActivatorUtilities.CreateInstance<EmploymentProfileResolver>(sp)));
+                        new ProfileResolverSeam(sp.GetRequiredService<EmploymentProfileResolver>()));
                 }));
             _ = Host.CreateClient(); // boot the startup seeders now; every case seeds after this
         }

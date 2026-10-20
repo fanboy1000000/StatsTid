@@ -34,8 +34,8 @@ namespace StatsTid.Tests.Regression;
 /// these branches against a real Postgres container (Testcontainers), so this
 /// file lives here and follows the same fixture pattern as
 /// <see cref="WageTypeMappingRegressionTests"/>. Pinning the validator covers
-/// every endpoint that calls <c>ValidateEmployeeAccessAsync</c>, including
-/// <c>/calculate-and-export</c>.
+/// the unfloored <c>ValidateEmployeeAccessAsync</c>. Since S145 W-1 <c>/calculate-and-export</c> calls the
+/// LocalAdmin-FLOORED overload instead, which <c>PayrollCalculateScopeFloorTests</c> pins at the route.
 ///
 /// Requires a running Docker daemon. Without Docker the fixture surfaces the
 /// failure clearly rather than silently skipping.

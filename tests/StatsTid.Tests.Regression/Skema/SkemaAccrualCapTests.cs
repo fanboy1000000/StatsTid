@@ -176,7 +176,7 @@ public sealed class SkemaAccrualCapTests : IAsyncLifetime
     /// exceeds the FLAT forskud cap (the whole annual 25, 0 carryover), proving the cap — though
     /// fraction-independent — is still BOUNDED (no infinite borrowing). The rejection is the
     /// quota-exceeded shape (NOT the profile-missing 422 — the part-time profile IS present at the
-    /// anchor). Nothing persists. Together with the 25-day allow, this brackets the flat cap on BOTH
+    /// anchor). Nothing from the refused monthly save persists. Together with the 25-day allow, this brackets the flat cap on BOTH
     /// sides.
     /// </summary>
     [Fact]

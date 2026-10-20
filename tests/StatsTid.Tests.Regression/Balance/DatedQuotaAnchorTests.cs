@@ -100,7 +100,7 @@ public sealed class DatedQuotaAnchorTests : IAsyncLifetime
     ///   <item><description>PRE-fix (Step-2 read at live OK26 ⇒ quota 30): cap 30, 27 ≤ 30 ⇒
     ///     <b>200 OK</b> (observed RED: the over-OK24-quota booking was wrongly ALLOWED).</description></item>
     ///   <item><description>POST-fix (Step-2 read at year-start OK24 ⇒ quota 25): cap 25, 27 &gt; 25 ⇒
-    ///     <b>422</b>, nothing persists.</description></item>
+    ///     <b>422</b>, nothing from the refused monthly save persists.</description></item>
     /// </list>
     /// Also pins validation == display: <c>/summary</c> + <c>/year-overview</c> report the OK24 25,
     /// not the live OK26 30, for the same ferieår.
@@ -151,7 +151,7 @@ public sealed class DatedQuotaAnchorTests : IAsyncLifetime
     ///   <item><description>PRE-fix (Step-2 read at the month-start agreement AC ⇒ quota 25): cap 25,
     ///     22 ≤ 25 ⇒ <b>200 OK</b> (observed RED: wrongly ALLOWED against AC's higher quota).</description></item>
     ///   <item><description>POST-fix (Step-2 read at the year-start agreement HK ⇒ quota 20): cap 20,
-    ///     22 &gt; 20 ⇒ <b>422</b>, nothing persists.</description></item>
+    ///     22 &gt; 20 ⇒ <b>422</b>, nothing from the refused monthly save persists.</description></item>
     /// </list>
     /// </summary>
     [Fact]
