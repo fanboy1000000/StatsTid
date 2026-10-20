@@ -11,7 +11,9 @@ $hookPath   = Join-Path $PSScriptRoot 'sprint-close-guard.ps1'
 $reviewsDir = Join-Path $repoRoot '.claude\reviews'
 New-Item -ItemType Directory -Force -Path $reviewsDir | Out-Null
 
-$headSha = (git rev-parse HEAD).Trim()
+# S145 Step 7a cycle 6 (Opus N6-2): HEAD of THIS repository, wherever the harness is launched from; the hook
+# runs at $repoRoot too (Invoke-Hook's default working directory).
+$headSha = (git -C $repoRoot rev-parse HEAD).Trim()
 $headShort = $headSha.Substring(0,7)
 $staleSha = "deadbee"
 
@@ -347,25 +349,55 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # gives the same test with nothing real to overwrite. A real close runs in the real repository, so
 # nothing left in a sandbox can ever reach one.
 #
+# Isolation (S145 Step 7a cycle 6, owner ruling R-138; Codex W1/W2 and NOTE, Opus N6-1/N6-3):
+#   - the git variables that route a command to ANOTHER repository (GIT_DIR, GIT_WORK_TREE, ...) are
+#     cleared for the sandbox steps and the hook runs they start, and restored afterwards;
+#   - the sandbox is made from an empty template and committed with hooks pointed at an empty folder,
+#     so no hook installed on this machine runs;
+#   - each git step's exit code is checked, and the sandbox must answer `rev-parse --git-dir` with `.git`
+#     (its own repository) before anything is committed;
+#   - only sandboxes over an hour old are cleared (a run takes about two minutes), so a concurrent run's
+#     live sandbox is left alone; a sandbox that cannot be removed is reported, not ignored.
+#
 # Every GATE seam in the hook is honoured for S99 only (the telemetry switch, which gates nothing, is the
 # one any-sprint seam), so the S145 runs meet the hook's real checks. T23 stops at the reviewer's staleness
-# check and T24 at its model check, both before the gates that read the repository (CI health, untracked
-# files, worktrees, the task ledger).
+# check and T24 at its model check, both before the gates that read the repository (CI health, consecutive
+# CI-pending, untracked files, worktrees, the task ledger).
 $mock145 = 'git commit -m "S145 TASK-9999: sprint close -- test"'
-# A sandbox left by a killed run is harmless (no real close reads it); clear any before making a new one.
-Get-ChildItem -Path $env:TEMP -Directory -Filter 'statstid-guard-test-sandbox-*' -ErrorAction SilentlyContinue |
-    ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+$gitRouting = @('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE')
+$savedGitEnv = @{}
+foreach ($v in $gitRouting) { $savedGitEnv[$v] = [Environment]::GetEnvironmentVariable($v, 'Process') }
+foreach ($old in @(Get-ChildItem -Path $env:TEMP -Directory -Filter 'statstid-guard-test-sandbox-*' -ErrorAction SilentlyContinue)) {
+    if ($old.LastWriteTime -lt (Get-Date).AddHours(-1)) {
+        Remove-Item $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $old.FullName) { $results += "sandbox cleanup: could not remove the abandoned sandbox $($old.FullName) (harmless: no real close reads it; remove it by hand)" }
+    }
+}
 $sandbox = Join-Path $env:TEMP ("statstid-guard-test-sandbox-" + [guid]::NewGuid().ToString('N'))
 try {
+    foreach ($v in $gitRouting) { [Environment]::SetEnvironmentVariable($v, $null, 'Process') }
     $sbReviews = Join-Path $sandbox '.claude\reviews'
-    New-Item -ItemType Directory -Force -Path $sbReviews | Out-Null
-    git -C $sandbox init -q
-    git -C $sandbox -c user.name=guard-harness -c user.email=guard-harness@invalid -c commit.gpgsign=false commit -q --allow-empty -m "guard harness sandbox"
-    $sbHead = git -C $sandbox rev-parse HEAD
-    if ($LASTEXITCODE -ne 0 -or -not $sbHead) {
-        $results += "T23-T24 FAIL: could not create the sandbox repository at $sandbox"
+    $sbEmpty   = Join-Path $sandbox '.empty'   # an empty git template and hooks folder
+    New-Item -ItemType Directory -Force -Path $sbReviews, $sbEmpty | Out-Null
+    $sbStep = ''
+    git -C $sandbox init -q "--template=$sbEmpty"
+    if ($LASTEXITCODE -ne 0) { $sbStep = 'git init' }
+    else {
+        $sbGitDir = git -C $sandbox rev-parse --git-dir
+        if ($LASTEXITCODE -ne 0 -or "$sbGitDir".Trim() -ne '.git') { $sbStep = "isolation check: rev-parse --git-dir answered '$sbGitDir', not '.git'" }
+        else {
+            git -C $sandbox -c "core.hooksPath=$sbEmpty" -c user.name=guard-harness -c user.email=guard-harness@invalid -c commit.gpgsign=false commit -q --allow-empty --no-verify -m "guard harness sandbox"
+            if ($LASTEXITCODE -ne 0) { $sbStep = 'git commit' }
+            else {
+                $sbHead = git -C $sandbox rev-parse HEAD
+                if ($LASTEXITCODE -ne 0 -or -not $sbHead) { $sbStep = 'git rev-parse HEAD' }
+            }
+        }
+    }
+    if ($sbStep) {
+        $results += "T23-T24 FAIL: the sandbox repository at $sandbox could not be set up ($sbStep)"
     } else {
-        $sbHeadShort = $sbHead.Trim().Substring(0,7)
+        $sbHeadShort = "$sbHead".Trim().Substring(0,7)
         $sbCodex    = Join-Path $sbReviews 'SPRINT-145-step7a-codex.md'
         $sbReviewer = Join-Path $sbReviews 'SPRINT-145-step7a-reviewer.md'
         Set-Content -Path $sbCodex -Value "verdict: APPROVED`nreviewed-against-commit: $sbHeadShort" -Encoding UTF8
@@ -389,6 +421,8 @@ try {
     }
 } finally {
     Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $sandbox) { $results += "sandbox cleanup: could not remove $sandbox (harmless: no real close reads it; a later run clears it once it is an hour old)" }
+    foreach ($v in $gitRouting) { [Environment]::SetEnvironmentVariable($v, $savedGitEnv[$v], 'Process') }
 }
 
 # T25 (S145 Step 7a cycle 2, Codex B2-1; strengthened at cycle 3, Codex W / Opus N3-1): the telemetry seam
