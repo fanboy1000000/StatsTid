@@ -178,7 +178,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
     /// Mar is HK's: 40.00 against norm 37.00 and 100% threshold 40.00 pays OVERTIME_50 3.00 dated Sunday 15
     /// Mar, exported under SLS_0210. The week 16-22 Mar is AC's: 40.00 - 37.00 = MERARBEJDE 3.00 dated
     /// Sunday 22 Mar, exported under SLS_0310. The AC base row (MERARBEJDE, OK24, AC, SLS_0310) comes from
-    /// init.sql, which this class applies in full; the helper only verifies it (S145 B3 R-120).
+    /// init.sql, which this class applies in full; the helper only verifies it (S145 R-120).
     /// March is entirely OK24.
     ///
     /// Red conditions (Docker-gated, CI-verified): MB-2 (every EMPLOYED segment hydrated with the FIRST
@@ -418,7 +418,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         Assert.Equal(1, periodEventsBefore);
 
         // Change the live state so that a re-read would differ.
-        // S145 B3 (R-120): prove the "live state changed" premise - exactly one row was updated.
+        // S145 R-120: prove the "live state changed" premise - exactly one row was updated.
         Assert.Equal(1, await ExecuteAsync(
             $"UPDATE employee_profiles SET part_time_fraction = 0.500 WHERE employee_id = '{emp}' AND effective_from = DATE '2026-09-16'"));
         await SupersedeTimeEntryAsync(emp, Sep16, 9.00m);
@@ -676,7 +676,8 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         await tx.CommitAsync();
     }
 
-    /// <summary>A wage-type mapping row for an (agreement, OK version, position); position '' is the generic row.</summary>
+    /// <summary>Ensures the open wage-type mapping row for an (agreement, OK version, position) exists and carries the
+    /// expected wage type: inserted only if absent (init.sql seeds the base rows); position '' is the generic row.</summary>
     private async Task SeedMappingAsync(string timeType, string wageType, string okVersion, string agreementCode, string position)
     {
         await using var conn = _db.Create();
@@ -694,7 +695,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("pos", position);
         await cmd.ExecuteNonQueryAsync();
 
-        // S145 B3 (R-120): idempotent. init.sql (applied in full by this class) may already seed the open row
+        // S145 R-120: idempotent. init.sql (applied in full by this class) may already seed the open row
         // (idx_wtm_natural_key_open), so the insert can legitimately add 0 rows. Assert instead that the OPEN row
         // for the key carries exactly the expected wage type, whoever seeded it.
         await using var read = new NpgsqlCommand(
