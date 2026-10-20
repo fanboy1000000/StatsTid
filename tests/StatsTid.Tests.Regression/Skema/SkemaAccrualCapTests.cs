@@ -163,7 +163,8 @@ public sealed class SkemaAccrualCapTests : IAsyncLifetime
         var dates = DistinctDays(new DateOnly(2024, 11, 4), 25);
         var absences = dates.Select(d => (d, "VACATION", 7.4m)).ToArray();
 
-        var rsp = await PostAbsencesAsync(client, employeeId, 2024, 11, absences);
+        // S145 R-132: one save per month, in date order: 20 days in Nov, 5 in Dec; both 200 (20, then 25 = cap).
+        var rsp = await PostAbsencesPerMonthAsync(client, employeeId, absences);
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);          // flat cap 25 ≥ 25 (boundary allow)
         Assert.Equal(1, await CountAbsenceRowsAsync(employeeId, dates[0]));
@@ -187,12 +188,13 @@ public sealed class SkemaAccrualCapTests : IAsyncLifetime
         var dates = DistinctDays(new DateOnly(2024, 11, 4), 26); // 26 > 25 flat cap
         var absences = dates.Select(d => (d, "VACATION", 7.4m)).ToArray();
 
-        var rsp = await PostAbsencesAsync(client, employeeId, 2024, 11, absences);
+        // S145 R-132: one save per month: 20 days in Nov (200), then 6 in Dec (20 + 6 = 26 > 25 ⇒ 422).
+        var rsp = await PostAbsencesPerMonthAsync(client, employeeId, absences);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("Entitlement quota exceeded", body.GetProperty("error").GetString());
-        Assert.Equal(0, await CountAbsenceRowsAsync(employeeId, dates[0]));
+        Assert.Equal(0, await CountAbsenceRowsAsync(employeeId, dates[20])); // S145 R-132: nothing from the refused (Dec) save persisted
     }
 
     // ── Scenario seeding ──
@@ -264,6 +266,22 @@ public sealed class SkemaAccrualCapTests : IAsyncLifetime
             d = d.AddDays(1);
         }
         return days;
+    }
+
+    /// <summary>S145 R-132: one save per calendar month, in date order (a save is one month). Every save but
+    /// the last must answer 200; the LAST response is returned.</summary>
+    private static async Task<HttpResponseMessage> PostAbsencesPerMonthAsync(
+        HttpClient client, string employeeId, (DateOnly Date, string Type, decimal Hours)[] absences)
+    {
+        HttpResponseMessage? last = null;
+        foreach (var month in absences.GroupBy(a => (a.Date.Year, a.Date.Month)).OrderBy(g => g.Key))
+        {
+            if (last is not null)
+                Assert.True(last.StatusCode == HttpStatusCode.OK,
+                    $"S145 R-132: an earlier monthly save must answer 200; got {(int)last.StatusCode}: {await last.Content.ReadAsStringAsync()}");
+            last = await PostAbsencesAsync(client, employeeId, month.Key.Year, month.Key.Month, month.ToArray());
+        }
+        return last!;
     }
 
     private static async Task<HttpResponseMessage> PostAbsencesAsync(
