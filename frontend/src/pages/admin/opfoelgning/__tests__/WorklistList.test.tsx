@@ -20,7 +20,7 @@
 //    row (its remedy, the payroll recalculate, is GlobalAdminOnly) — and a
 //    blocked row suppresses it regardless of kind or role.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import WorklistList from '../WorklistList'
 
@@ -386,6 +386,26 @@ describe('WorklistList — 409 / 403 messages, fed the real server JSON through 
     expect(text).toContain('QUAL-209')
     expect(text).toContain('Håndteret manuelt')
     expect(text).not.toContain('allerede løst')
+  })
+
+  // S145 B3 (owner amendment to R-77's scope, 2026-10-20): the 409 message explains the id too.
+  it('409 worklist-recalc-blocked: QUAL-209 is explained in Danish; an unknown id is shown alone', async () => {
+    const known = await submitFailing(409, {
+      error: 'Recalculation is blocked for this row',
+      kind: 'worklist-recalc-blocked',
+      blockedBy: ['QUAL-209'],
+    })
+    expect(known).toContain(
+      '(QUAL-209: overenskomstskift midt i en uge — ugen kan ikke afregnes efter to overenskomster)',
+    )
+    cleanup()
+    mockFetch.mockReset()
+    const unknown = await submitFailing(409, {
+      error: 'Recalculation is blocked for this row',
+      kind: 'worklist-recalc-blocked',
+      blockedBy: ['QUAL-999'],
+    })
+    expect(unknown).toContain('Genberegning er blokeret (QUAL-999) og kan ikke markeres som løst.')
   })
 
   it('409 already-resolved ({ error } only): the already-resolved message', async () => {

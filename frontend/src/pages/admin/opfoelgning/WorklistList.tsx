@@ -269,7 +269,7 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
           ...prev,
           [row.worklistId]: {
             kind: 'warning',
-            message: `Genberegning er blokeret${blockedIds.length ? ` (${blockedIds.join(', ')})` : ''} og kan ikke markeres som løst. Brug "Håndteret manuelt", hvis sagen er rettet på anden vis.`,
+            message: `Genberegning er blokeret${blockedIds.length ? ` (${blockedIds.map(blockReasonText).join(', ')})` : ''} og kan ikke markeres som løst. Brug "Håndteret manuelt", hvis sagen er rettet på anden vis.`,
           },
         }))
         await load()
