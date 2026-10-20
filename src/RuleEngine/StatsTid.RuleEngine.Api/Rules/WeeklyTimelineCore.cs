@@ -126,7 +126,10 @@ public static class WeeklyTimelineCore
     /// <summary>
     /// The evaluation-model marker recorded with every payroll calculation (replay contract,
     /// refinement A7): a replay whose marker differs from the stored one is refused by name.
-    /// Bump it whenever the core's arithmetic changes.
+    /// It names the arithmetic of EVERY rule endpoint payroll calls (S145 R-21; ADR-016 D10):
+    /// this week-by-week core and the per-segment lane's supplement, on-call and absence rules,
+    /// although only the timeline call returns it. Bump it whenever any of those rules' arithmetic
+    /// changes, or a rule starts reading another field of an hours row.
     /// </summary>
     public const string EvaluationModel = "weekly-timeline-v1";
 
