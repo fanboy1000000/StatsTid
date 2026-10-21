@@ -211,12 +211,6 @@ foreach ($artifact in @($codex, $reviewer)) {
     # reviewer artifact only (the Codex artifact is the external lens; no Claude model).
     if ($artifact -eq $reviewer) {
         $reviewFloor = 'claude-fable-5-1'
-        # S145 ONLY (owner ruling 2026-10-20; docs/sprints/SPRINT-145.md § "Wave B.3", R-104 option 2):
-        # Fable was on its usage limit from 2026-10-19, and the owner directed S145's reviews to run on
-        # Opus. This close accepts the Opus id for S145 alone; every other sprint keeps the floor, and
-        # this exception is itself reviewed in S145's Step 7a. Delete it after the S145 close.
-        $acceptedReviewModels = @($reviewFloor)
-        if ($sprintNum -eq '145') { $acceptedReviewModels += 'claude-opus-5-5' }
         if ($content -notmatch '(?im)^\s*reviewed-by-model\s*:\s*(\S+)') {
             [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
             [Console]::Error.WriteLine('')
@@ -231,7 +225,7 @@ foreach ($artifact in @($codex, $reviewer)) {
         # A self-report may carry a context-window suffix (`claude-fable-5-1[1m]`); it is not part of the id.
         # Only that shape (digits + m) is stripped; `[]`, `[garbage]` or anything else still fails the compare.
         $reviewedBy = $matches[1] -replace '\[[0-9]+m\]$', ''
-        if ($acceptedReviewModels -notcontains $reviewedBy) {
+        if ($reviewedBy -ne $reviewFloor) {
             [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
             [Console]::Error.WriteLine('')
             [Console]::Error.WriteLine("Step 7a internal review ran on '$reviewedBy'; the review floor is '$reviewFloor'.")
@@ -244,8 +238,7 @@ foreach ($artifact in @($codex, $reviewer)) {
         # Telemetry (thin monitoring, owner ruling 2026-09-07): record which model the close's
         # internal review ran on, next to the spawn lines the routing guard writes. Best-effort.
         $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-        $tnote = if ($reviewedBy -eq $reviewFloor) { 'step-7a reviewer artifact on the floor model' } else { "step-7a reviewer artifact on the S$sprintNum owner exception, not the floor model" }
-        $tline = "$ts | close | S$sprintNum | $reviewedBy | PASS | $tnote"
+        $tline = "$ts | close | S$sprintNum | $reviewedBy | PASS | step-7a reviewer artifact on the floor model"
         # Test seam (S145 Step 7a; made a SWITCH at cycle 2, Codex B2-1): STATSTID_TELEMETRY_SUPPRESS=1 turns
         # the write OFF and echoes the line to stderr instead. It is a switch, never a path: the cycle-1
         # path seam let the hook create ANY file, including a waiver that a later gate reads (pointing it

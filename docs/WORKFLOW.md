@@ -356,9 +356,9 @@ one of its 19 agents inherited that model because no routing existed.
    for a review.
 4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-1` in the Step-7a
    reviewer artifact (a trailing context-window suffix such as `[1m]` is ignored in the comparison). A sprint
-   cannot close on a review that ran cheap, whatever happened upstream. (One owner-ruled exception: S145's
-   close also accepts `claude-opus-5-5`, because Fable was on its usage limit; R-104 in
-   `docs/sprints/SPRINT-145.md`. It applies to S145 alone and is deleted after that close.)
+   cannot close on a review that ran cheap, whatever happened upstream. (S145 alone closed on an Opus review,
+   by a one-sprint owner exception in the hook while Fable was on its usage limit, R-104 in
+   `docs/sprints/SPRINT-145.md`; the exception was deleted after that close.)
 
 **A route the four layers did not cover (found 2026-09-25 by reading the 2026-09-24 transcript; its signature
 is now detected).** On 2026-09-24 the owner asked for a head-to-head — *"Could you do it so you spawn one

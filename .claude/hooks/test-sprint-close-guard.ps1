@@ -303,6 +303,8 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # strip must not over-accept: a suffixed WRONG model still blocks.
 # T20 is the discriminating test (fails without the strip). T21 is a negative CONTROL, not a test of the
 # strip: an unstripped `claude-opus-5-5[1m]` fails the compare just the same. T22 pins the tightened shape.
+# T21 is also the harness's only pin that the review floor admits no other model (S145 Step 7a cycle 8,
+# NOTE 3): an exception that let Opus through for some sprint would turn it red. Keep it.
 # The ledger gate runs after the model check, so give it a fully accounted log.
 # ---------------------------------------------------------------------------
 $env:STATSTID_SPRINTLOG_MOCK = $mockLog
@@ -336,12 +338,13 @@ if (-not $ok) { $results += $r.Stderr }
 Remove-Item $mockLog -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 
-# T23-T24 (removed). They pinned the S145-only review-model exception (owner ruling R-104) and were deleted
-# BEFORE the S145 close by owner ruling R-139 (2026-10-21; docs/sprints/SPRINT-145.md § "C-3 — Step 7a",
-# cycle 7). Their proof was complete (every run passed, a mutation check showed they fail without the
-# exception, seven review cycles), and from cycle 5 on every review finding concerned the scaffolding they
-# needed, a throwaway git repository, not the exception itself. The exception stays in the hook for the
-# S145 close and is deleted after it. T25 keeps its number so the records that cite it stay valid.
+# T23-T24 (removed). They pinned the S145-only review-model exception (owner ruling R-104), which let the
+# S145 close accept an Opus review while Fable was on its usage limit. The tests were deleted before that
+# close by owner ruling R-139 (2026-10-21; docs/sprints/SPRINT-145.md § "C-3 — Step 7a", cycle 7): every
+# run had passed, a mutation check showed T23 fails without the exception, seven review cycles had examined
+# them, and from cycle 5 on no review finding concerned the exception itself. The exception was deleted
+# from the hook after the S145 close; T21 now pins, for every sprint, that the floor admits no other model.
+# T25 keeps its number so the records that cite it stay valid.
 
 # T25 (S145 Step 7a cycle 2, Codex B2-1; strengthened at cycle 3, Codex W / Opus N3-1): the telemetry seam
 # cannot create or activate a waiver. The cycle-1 seam took a PATH (STATSTID_TELEMETRY_LOG_MOCK) and
