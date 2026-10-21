@@ -1311,6 +1311,31 @@ public sealed class PeriodCalculationService
         // BuildPlanForLegacyCallers became async in S21 TASK-2108 (ADR-017 D9c) so the
         // shim can hydrate LocalProfileActivations from the local_agreement_profiles
         // table. S145 TASK-14511: the plan comes back WITH the histories its planning read.
+        // EA MD-24 (mutation only): the prior-month check, before planning, on windows read here only when needed.
+        {
+            var eaMonthStart = new DateOnly(periodStart.Year, periodStart.Month, 1);
+            string? eaStatus = _priorPeriodApprovalReader is null ? null : await _priorPeriodApprovalReader.GetApprovalStatusAsync(profile.EmployeeId, eaMonthStart.AddMonths(-1), eaMonthStart.AddDays(-1), ct);
+            var eaMonday = WeeklyContext.WeekStart(periodStart);
+            if (eaMonday != periodStart && !string.Equals(eaStatus, ApprovedStatus, StringComparison.Ordinal))
+            {
+                var eaWins = _employmentWindowResolver is null ? null : await _employmentWindowResolver.GetWindowsAsync(profile.EmployeeId, periodStart, periodEnd, ct);
+                var eaContextStart = eaMonday;
+                var eaApplies = IsEmployedOn(eaWins, periodStart);
+                if (eaApplies && eaWins is not null)
+                {
+                    EmploymentWindow? eaCovering = null;
+                    foreach (var w in eaWins) { if (w.Overlaps(periodStart, periodStart)) { eaCovering = w; break; } }
+                    if (eaCovering?.ClipTo(eaMonday, periodStart.AddDays(-1))?.Start is { } eaFrom) eaContextStart = eaFrom; else eaApplies = false;
+                }
+                if (eaApplies && eaContextStart < eaMonthStart)
+                {
+                    if (_priorPeriodApprovalReader is null)
+                        throw new InvalidOperationException("EA MD-24: the months-in-order check ran without an IPriorPeriodApprovalReader registration.");
+                    throw new PriorMonthNotApprovedException(eaMonthStart.AddMonths(-1), eaMonthStart.AddDays(-1), "EA MD-24 admission before planning");
+                }
+            }
+        }
+
         var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
 
         AssertPlanMatchesProfile(plan, profile);
@@ -1467,7 +1492,7 @@ public sealed class PeriodCalculationService
     {
         ArgumentNullException.ThrowIfNull(profile);
         var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
-        // EA MD-25: week check skipped on the raw route
+        EnsureNoMidWeekAgreementChange(plan, histories);
 
         // Q6 (a) (S145 Stage B, R-76): a single-profile route cannot export a month with two or more
         // EMPLOYED parts. The causes are the planner's own report of the plan's interior boundaries: each
@@ -1732,7 +1757,7 @@ public sealed class PeriodCalculationService
         var enrollment = new PlannerEnrollment();
         enrollment.RegisterSnapshotContract(
             "WtmNaturalKey",
-            (callerProfile, segmentStart) => new WtmNaturalKey(OkVersion: callerProfile.OkVersion, AgreementCode: callerProfile.AgreementCode, Position: callerProfile.Position ?? "")); // EA MD-30
+            (callerProfile, segmentStart) => DatedWtmKey(callerProfile, segmentStart, segmentStartProfiles));
 
         // EmployeeId is now string end-to-end (ADR-016 D10 amendment 2026-05-01) — pass
         // profile.EmployeeId directly with no synthetic Guid derivation.
