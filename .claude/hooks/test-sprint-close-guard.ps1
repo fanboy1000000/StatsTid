@@ -305,7 +305,8 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # strip: an unstripped `claude-opus-5-5[1m]` fails the compare just the same. T22 pins the tightened shape.
 # T21 is also the harness's only RUN-TIME pin that the floor refuses another model, on the reserved S99
 # (S145 Step 7a cycle 8, NOTE 3): an exception that let Opus through unconditionally would turn it red. An
-# exception scoped to another sprint number would not (S145's did not); T26 pins that statically. Keep both.
+# exception scoped to another sprint number would not (S145's did not); T26 is a static regression pin for
+# that inside the model-check block (see its own comment for what it cannot see). Keep both.
 # The ledger gate runs after the model check, so give it a fully accounted log.
 # ---------------------------------------------------------------------------
 $env:STATSTID_SPRINTLOG_MOCK = $mockLog
@@ -344,8 +345,9 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # close by owner ruling R-139 (2026-10-21; docs/sprints/SPRINT-145.md § "C-3 — Step 7a", cycle 7): every
 # run had passed, a mutation check showed T23 fails without the exception, seven review cycles had examined
 # them, and at the time of R-139, from cycle 5 on, no review finding concerned the exception itself. The
-# exception was deleted from the hook after the S145 close. What pins the floor now: T21 at run time on S99,
-# and T26 statically for every sprint. T25 keeps its number so the records that cite it stay valid.
+# exception was deleted from the hook after the S145 close. What guards the floor now: T21 at run time on
+# S99; T26, a static regression pin on the model-check block; and the Step 7a review of any change to the
+# hook, for what neither test can see. T25 keeps its number so the records that cite it stay valid.
 
 # T25 (S145 Step 7a cycle 2, Codex B2-1; strengthened at cycle 3, Codex W / Opus N3-1): the telemetry seam
 # cannot create or activate a waiver. The cycle-1 seam took a PATH (STATSTID_TELEMETRY_LOG_MOCK) and
@@ -375,25 +377,41 @@ try {
     Remove-Item $ciHealthWaiver -ErrorAction SilentlyContinue
 }
 
-# T26 (S145 post-close review: Fable BLOCKER 1 / Codex WARNING) — the review floor applies to EVERY sprint.
-# T21 runs only the reserved S99, so an exception scoped to another sprint number leaves it green: S145's
-# did, through K7 and K8, and only T23 (now deleted) ever discriminated on it. This static pin reads the
-# hook's model-check block, from its "# Model-routing check" comment to its "# Staleness check" comment, and
-# requires no comparison on the sprint number, no list of accepted models, one floor literal and one floor
-# compare. (The hook compares $sprintNum with '99' in its five gate seams, all outside this block.)
+# T26 (S145 post-close review; cycle 1 Fable BLOCKER 1 / Codex WARNING, tightened at cycle 2, Fable W1-W2 /
+# Codex BLOCKER and WARNING) — a REGRESSION PIN, not a proof, that the model-check block has no per-sprint or
+# model-list exception. T21 runs only the reserved S99, so an exception scoped to another sprint number
+# leaves it green: S145's did, through K7 and K8, and only T23 (now deleted) ever discriminated on it.
+#
+# What it reads: the hook's model-check block, from its "# Model-routing check" comment line to its
+# "# Staleness check" comment line; each marker must occur exactly once, as a comment line, in that order.
+# What it requires inside the block (an allow-list, not a list of forbidden shapes):
+#   - the sprint number appears only in the two message strings ("BLOCKING sprint S$sprintNum close commit."
+#     and the telemetry line's "| close | S$sprintNum |"), so the block cannot branch on it in any syntax;
+#   - no list of accepted models (`acceptedReviewModels`, a ` -contains ` / ` -in ` operator);
+#   - exactly one assignment to $reviewFloor, to a model-id literal, and exactly one to $reviewedBy;
+#   - exactly one `if ($reviewedBy -ne $reviewFloor)`.
+# What it cannot see (a recorded limitation, S145 post-close cycle 2): code BEFORE the block in the same loop
+# (for example rewriting $content) or a helper defined elsewhere in the hook. A change there is caught by the
+# Step 7a review of that change to the hook, and an unconditional exception by T21 at run time. It can also
+# false-fail on a harmless edit inside the block (a reworded message, a quoted operator in a comment); each
+# failure names its reason, so update the pin deliberately when that happens.
 function Test-FloorBlock([string]$text) {
-    $s = $text.IndexOf('# Model-routing check')
-    $e = $text.IndexOf('# Staleness check')
-    if ($s -lt 0 -or $e -le $s) { return 'markers-missing' }
-    $block = $text.Substring($s, $e - $s)
-    if ($block -match '\$sprintNum\s*-[A-Za-z]+|-[A-Za-z]*(contains|in)\s+\$sprintNum|switch\s*\(\s*\$sprintNum') { return 'sprint-branch' }
-    if ($block -match 'acceptedReviewModels|-(not)?contains\b|-(not)?in\b') { return 'model-list' }
+    $sm = [regex]::Matches($text, '(?m)^[ \t]*# Model-routing check')
+    $em = [regex]::Matches($text, '(?m)^[ \t]*# Staleness check')
+    if ($sm.Count -ne 1 -or $em.Count -ne 1) { return 'markers-not-unique' }
+    if ($em[0].Index -le $sm[0].Index) { return 'markers-out-of-order' }
+    $block = $text.Substring($sm[0].Index, $em[0].Index - $sm[0].Index)
+    $stripped = $block -replace 'BLOCKING sprint S\$sprintNum close commit\.', '' -replace '\| close \| S\$sprintNum \|', ''
+    if ($stripped -match '\$sprintNum') { return 'sprint-used' }
+    if ($block -match 'acceptedReviewModels|\s-(not)?(contains|in)\s') { return 'model-list' }
+    if (([regex]::Matches($block, '\$reviewFloor\s*=')).Count -ne 1) { return 'floor-assign' }
     if (([regex]::Matches($block, "\`$reviewFloor = 'claude-[a-z0-9.-]+'")).Count -ne 1) { return 'floor-literal' }
+    if (([regex]::Matches($block, '\$reviewedBy\s*=')).Count -ne 1) { return 'reviewedBy-assign' }
     if (([regex]::Matches($block, 'if \(\$reviewedBy -ne \$reviewFloor\)')).Count -ne 1) { return 'floor-compare' }
     return 'ok'
 }
 $floorCheck = Test-FloorBlock $hookSource
-$results += "T26 (the review floor applies to every sprint, static): $floorCheck $(if($floorCheck -eq 'ok'){'PASS'}else{'FAIL'})"
+$results += "T26 (the model-check block has no per-sprint or model-list exception, static pin): $floorCheck $(if($floorCheck -eq 'ok'){'PASS'}else{'FAIL'})"
 
 # Cleanup
 Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver,$ledgerWaiver -ErrorAction SilentlyContinue

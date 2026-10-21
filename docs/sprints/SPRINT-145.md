@@ -2979,9 +2979,36 @@ As owner ruling R-104 required, the close guard's one-sprint exception (accept `
   - the exception's own commit `e2ce7dfc` and K8 `d129468f` give `sprint-branch`;
   - a made-up `-in @('146')` exception gives `sprint-branch`, a second floor literal gives `floor-literal`, and the compare removed gives `floor-compare`.
 
-  So T26 fails on every one of these; S145's exception would have been caught.
+  So T26 fails on both historical exception versions and all three synthetic mutants; S145's exception would have been caught. *(Wording corrected at cycle 2, Codex NOTE: this first said "fails on every one of these", which included the two `ok` versions.)*
 - **The commit message of `6c29efc2`** repeats the wrong T21 sentence. It is left as written, since commits are not rewritten; this record corrects it.
-- **Next:** cycle 2 verifies this fix, both lenses, scoped to its commit.
+
+**Post-close review, cycle 2 (on `30be8017`).** The Fable lens returned **APPROVED-WITH-WARNINGS** and Codex **REQUEST-CHANGES**, with the same substance: T26 is real for the exception that existed, but its wording promised a proof.
+- **The overclaim.** "Applies to EVERY sprint", "no comparison on the sprint number" and "This makes it true" claim more than T26 shows. T26 was a list of three forbidden code shapes.
+  - Fable wrote seven sprint-scoped exceptions in ordinary PowerShell, six inside the block, and T26 returned `ok` for all seven: a reversed `-eq`, a double-quoted floor, a lookup table keyed by sprint, `.Equals`, an interpolated `"S$sprintNum"`, and a helper call.
+  - Codex wrote more: a truthy lookup table, an array on the left of `-eq`, `[regex]::IsMatch`, and an unconditional regex rewrite of `$reviewedBy`.
+- **Fable's W2 / Codex's BLOCKER: a bounded limitation.** No pin scoped to the block can see code before it in the same loop (for example, rewriting `$content`) or a helper defined elsewhere. Reading the whole hook for `$sprintNum` would be unbounded, because it has about forty legitimate uses. So this is recorded as a limitation, not answered with a further test.
+- **Codex's WARNING:** the block markers were not checked for uniqueness. A duplicate end marker could hide later code.
+- **The NOTEs:** T26 can false-fail on harmless edits, loudly and with a reason (both lenses); and this record's "fails on every one of these" wording (corrected above).
+
+*Plain language:* both reviewers showed that a test which forbids certain ways of writing an exception can be dodged by writing it another way. So the test now works the other way round: it lists the few places the sprint number is allowed to appear, and fails on any other use. It also says plainly what it cannot check.
+
+**The fix (cycle-2 absorption).**
+- **T26 is now an allow-list, and calls itself a regression pin, not a proof.**
+  - Each marker must occur exactly once, as a comment line, in order.
+  - Inside the block, the sprint number may appear only in its two message strings ("BLOCKING sprint S$sprintNum close commit." and the telemetry line's "| close | S$sprintNum |"). Any other use, in any syntax, fails as `sprint-used`.
+  - There may be no list of accepted models (`acceptedReviewModels`, or a ` -contains ` / ` -in ` operator).
+  - There must be exactly one assignment to `$reviewFloor`, to a model-id literal, and exactly one to `$reviewedBy`, plus exactly one floor compare.
+- **What T26 cannot see is written in its comment:** code before the block in the same loop, and helpers elsewhere in the hook. A change there is caught by the Step 7a review of that change, and an unconditional exception by T21 at run time. The comment also says that T26 can false-fail on a harmless edit inside the block, naming its reason.
+- **T21's comment and the T23-T24 note** say the floor is now guarded by three things: T21 at run time on S99, T26 as a static regression pin on the block, and the review of any change to the hook.
+- **Result:** 24 of 24 pass.
+- **The mutation probe**, run with T26's exact function extracted from the harness:
+  - the current file and `c488b2d3` give `ok`;
+  - `e2ce7dfc` and `d129468f` give `sprint-used`;
+  - every exception the two lenses wrote inside the block fails: F1-F6 and C1, C2, C4 give `sprint-used`, C3 (the unconditional rewrite) gives `reviewedBy-assign`, and a decoy duplicate end marker gives `markers-not-unique`;
+  - the earlier `-in @('146')` mutant gives `sprint-used`, and the removed compare gives `floor-compare`;
+  - the exception placed **outside** the block gives `ok`, the recorded limitation.
+- **The commit message of `30be8017`** ("so the floor holds for every sprint") is corrected by this record, as `6c29efc2`'s was.
+- **Next:** cycle 3 verifies this fix, both lenses, scoped to its commit.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
