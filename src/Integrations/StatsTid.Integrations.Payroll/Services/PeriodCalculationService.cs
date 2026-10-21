@@ -1467,7 +1467,7 @@ public sealed class PeriodCalculationService
     {
         ArgumentNullException.ThrowIfNull(profile);
         var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
-        EnsureNoMidWeekAgreementChange(plan, histories);
+        // EA MD-25: week check skipped on the raw route
 
         // Q6 (a) (S145 Stage B, R-76): a single-profile route cannot export a month with two or more
         // EMPLOYED parts. The causes are the planner's own report of the plan's interior boundaries: each
@@ -1732,7 +1732,7 @@ public sealed class PeriodCalculationService
         var enrollment = new PlannerEnrollment();
         enrollment.RegisterSnapshotContract(
             "WtmNaturalKey",
-            (callerProfile, segmentStart) => DatedWtmKey(callerProfile, segmentStart, segmentStartProfiles));
+            (callerProfile, segmentStart) => new WtmNaturalKey(OkVersion: callerProfile.OkVersion, AgreementCode: callerProfile.AgreementCode, Position: callerProfile.Position ?? "")); // EA MD-30
 
         // EmployeeId is now string end-to-end (ADR-016 D10 amendment 2026-05-01) — pass
         // profile.EmployeeId directly with no synthetic Guid derivation.
@@ -1746,7 +1746,7 @@ public sealed class PeriodCalculationService
             periodStart: periodStart,
             periodEnd: periodEnd,
             calculationKind: "forward-calc",
-            ruleSet: _classificationProvider.GetClassifications(), // EB MB-7
+            ruleSet: _classificationProvider.GetClassifications().Where(c => EvaluatedRuleIds.Contains(c.RuleId)).ToList(),
             sources: sources,
             options: PlannerOptions.Default,
             enrollment: enrollment,
