@@ -380,24 +380,29 @@ try {
 }
 
 # T26 (S145 post-close review; added at cycle 1 for Fable BLOCKER 1 / Codex WARNING, reworked at cycles 2 and
-# 3 for both lenses' findings) — a static REGRESSION PIN on the hook's model-check block: it fails if the block
-# shows any of a few text patterns that a per-sprint or model-list exception would most plausibly use. It is
-# not a proof. T21 runs only the reserved S99 with its one Opus fixture, so an exception scoped to another
-# sprint number leaves T21 green: S145's did, through K7 and K8, and only T23 (now deleted) ever caught it.
+# 3 for both lenses' findings, tightened at cycle 4) — a static REGRESSION PIN on the hook's model-check
+# block: it fails if the block shows any of a few text patterns that a per-sprint or model-list exception
+# would most plausibly use. It is not a proof. T21 runs only the reserved S99 with its one Opus fixture, so an
+# exception scoped to another sprint number leaves T21 green: S145's did, through K7 and K8, and only T23 (now
+# deleted) ever discriminated on it (T23 went red when the exception was removed).
 #
 # The block: from the "# Model-routing check" comment line to the "# Staleness check" comment line; each must
 # occur exactly once as a line starting with that comment, in that order. Inside it, the pin checks TEXT:
 #   - the token `sprintNum` appears only in two whole lines, the BLOCKING message (twice) and the `$tline`
 #     telemetry line (once), each matched as the entire line;
-#   - no variable indirection: `${`, a scope prefix such as `$script:` (`$env:` is allowed: the block reads
-#     the telemetry switch), or Get-/Set-/New-/Remove-/Clear-Variable;
-#   - no `acceptedReviewModels` and no -contains / -in operator in any case form (`-cin`, `-inotcontains`, ...);
+#   - no variable indirection: `${`, a scope prefix such as `$script:`, `$env:` other than the one telemetry
+#     switch the block reads (`$env:STATSTID_TELEMETRY_SUPPRESS`), Get-/Set-/New-/Remove-/Clear-Variable, the
+#     aliases `gv` / `sv`, or `PSVariable`;
+#   - no `acceptedReviewModels` and no -contains / -in operator in any case form (`-cin`, `-inotcontains`, ...),
+#     with or without a space after it (`-in@(...)`);
 #   - exactly one `$reviewFloor =` (to a model-id literal), one `$reviewedBy =`, and one
 #     `if ($reviewedBy -ne $reviewFloor)`.
-# What it does NOT see, so an exception written these ways passes it (recorded at post-close cycles 2-3):
-#   - inside the block: variables that already embed the sprint number ($artifact, $reviewer, $codex, $waiver,
-#     and $tline once built); the BODY of the floor compare (a conditional `exit 2`); list tests by other means
-#     (-match, -like, .IndexOf, a regex or a wildcard); and any other syntax or indirection not listed above;
+# What it does NOT see, so an exception written these ways passes it (recorded at post-close cycles 2-4):
+#   - inside the block: variables that already embed the sprint number (for example $command, $artifact,
+#     $reviewer, $codex, $waiver, and $tline once built); the BODY of the floor compare (a conditional
+#     `exit 2`); list tests by other means (-match, -like, .IndexOf, a regex or a wildcard); an exception keyed
+#     on something other than the sprint number or the model id (the artifact's text, the date, a file); and
+#     any other syntax or indirection not listed above;
 #   - outside the block: code before it in the same loop (for example rewriting $content) and helpers defined
 #     elsewhere in the hook.
 # So any change to the hook requires the Step 7a review of that change; that review, not this pin, is where
@@ -414,8 +419,8 @@ function Test-FloorBlock([string]$text) {
     if (([regex]::Matches($block, $msgLine)).Count -ne 2 -or ([regex]::Matches($block, $telLine)).Count -ne 1) { return 'sprint-lines' }
     $stripped = [regex]::Replace([regex]::Replace($block, $msgLine, ''), $telLine, '')
     if ($stripped -match 'sprintNum') { return 'sprint-used' }
-    if ($block -match '\$\{|\$(script|global|local|private|variable|using):|(Get|Set|New|Remove|Clear)-Variable') { return 'indirect-access' }
-    if ($block -match 'acceptedReviewModels|\s-[ci]?(not)?(contains|in)\s') { return 'model-list' }
+    if ($block -match '\$\{|\$(script|global|local|private|variable|using):|\$env:(?!STATSTID_TELEMETRY_SUPPRESS\b)|(Get|Set|New|Remove|Clear)-Variable|\bgv\b|\bsv\b|PSVariable') { return 'indirect-access' }
+    if ($block -match 'acceptedReviewModels|\s-[ci]?(not)?(contains|in)\b') { return 'model-list' }
     if (([regex]::Matches($block, '\$reviewFloor\s*=')).Count -ne 1) { return 'floor-assign' }
     if (([regex]::Matches($block, "\`$reviewFloor = 'claude-[a-z0-9.-]+'")).Count -ne 1) { return 'floor-literal' }
     if (([regex]::Matches($block, '\$reviewedBy\s*=')).Count -ne 1) { return 'reviewedBy-assign' }
