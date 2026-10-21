@@ -1476,7 +1476,7 @@ public sealed class PeriodCalculationService
         // date order — the list the planner's refusal reports. Causes and a count only, never a date
         // (ADR-040 D7).
         var employedSegmentCount = plan.Segments.Count(s => s.EmploymentStatus == EmploymentWindowStatus.EMPLOYED);
-        if (employedSegmentCount < int.MaxValue) // EB MB-5
+        if (employedSegmentCount < 2)
             return;
 
         var interiorBoundaryCauses = new List<BoundaryCause>(plan.Segments.Count);
@@ -1732,7 +1732,7 @@ public sealed class PeriodCalculationService
         var enrollment = new PlannerEnrollment();
         enrollment.RegisterSnapshotContract(
             "WtmNaturalKey",
-            (callerProfile, segmentStart) => DatedWtmKey(callerProfile, segmentStartProfiles is { Count: > 0 } ebP ? ebP.Keys.Min() : segmentStart, segmentStartProfiles)); // EB MB-2
+            (callerProfile, segmentStart) => DatedWtmKey(callerProfile, segmentStart, segmentStartProfiles));
 
         // EmployeeId is now string end-to-end (ADR-016 D10 amendment 2026-05-01) — pass
         // profile.EmployeeId directly with no synthetic Guid derivation.
@@ -1746,7 +1746,7 @@ public sealed class PeriodCalculationService
             periodStart: periodStart,
             periodEnd: periodEnd,
             calculationKind: "forward-calc",
-            ruleSet: _classificationProvider.GetClassifications().Where(c => EvaluatedRuleIds.Contains(c.RuleId)).ToList(),
+            ruleSet: _classificationProvider.GetClassifications(), // EB MB-7
             sources: sources,
             options: PlannerOptions.Default,
             enrollment: enrollment,
@@ -2293,9 +2293,7 @@ public sealed class PeriodCalculationService
             segmentProfiles[s] = ProfileFromPiece(plan.EmployeeId, piece, segment.StartDate);
         }
 
-        var ebFirstStart = plan.Segments.Where(s => s.EmploymentStatus != EmploymentWindowStatus.NOT_EMPLOYED).Select(s => (DateOnly?)s.StartDate).FirstOrDefault(); // EB MB-13
-        IReadOnlyList<FrozenPiece> ebPieces = ebFirstStart is { } ebF ? frozen.Pieces.Where(p => p.From <= ebF).ToList() : frozen.Pieces;
-        return new EvaluationInputs(ebPieces, segmentProfiles, frozen.SettlementCutoff);
+        return new EvaluationInputs(frozen.Pieces, segmentProfiles, frozen.SettlementCutoff);
     }
 
     /// <summary>
@@ -3531,7 +3529,7 @@ public sealed class PeriodCalculationService
         var changes = new List<DateOnly>(dates.Count);
         foreach (var date in dates)
         {
-            if (date > DateOnly.MinValue && IsEmployedOn(histories.EmploymentWindows, date.AddDays(-1)) && date <= plan.PeriodStart) // EB MB-4
+            if (date > DateOnly.MinValue && IsEmployedOn(histories.EmploymentWindows, date.AddDays(-1)))
                 changes.Add(date);
         }
         if (changes.Count == 0)
