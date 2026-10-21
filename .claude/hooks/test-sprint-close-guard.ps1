@@ -19,8 +19,9 @@ $staleSha = "deadbee"
 
 function Invoke-Hook {
     # The hook resolves .claude/reviews, docs/sprints, the telemetry log and HEAD from its working
-    # directory. S145 Step 7a cycle 5 (R-137): that directory is now explicit, so T23-T24 can run the hook
-    # in a throwaway repository instead of the real one. Every other test runs it at the repo root.
+    # directory. S145 Step 7a (R-137): that directory is explicit, the repo root, so the hook meets the same
+    # repository as $headSha wherever the harness is launched from. (R-137 added the parameter for T23-T24's
+    # throwaway repository; R-139 deleted those tests and kept the explicit default.)
     param([string]$mockCommand, [string]$workDir = $repoRoot)
     $payload = @{
         tool_name = "Bash"
@@ -73,11 +74,9 @@ $env:STATSTID_UNTRACKED_MOCK = 'clean'
 $env:STATSTID_WORKTREE_MOCK = 'clean'
 # S145 Step 7a (Opus N-2; a switch since cycle 2, Codex B2-1) — telemetry is SUPPRESSED, never written:
 # every S99 test whose run passes the model check would otherwise write a PASS line that in the live log
-# looks like a real close (T23 runs in a sandbox since cycle 5, so its line would land in the sandbox's
-# own log, but it needs the echo all the same). The hook echoes the suppressed line to stderr
-# instead, which T23 and T25 use as positive evidence. A switch writes nothing, so it can create no file
-# (the cycle-1 path seam could create a waiver a later gate reads; T25 pins that the old variable is
-# dead). The switch stays when T23/T24 are deleted after the S145 close: the S99 tests still need it.
+# looks like a real close. The hook echoes the suppressed line to stderr instead, which T25 uses as positive
+# evidence. A switch writes nothing, so it can create no file (the cycle-1 path seam could create a waiver
+# a later gate reads; T25 pins that the old variable is dead).
 $env:STATSTID_TELEMETRY_SUPPRESS = '1'
 
 # S141 — the task-ledger seam gets a neutral default for T1-T14, for the same
@@ -337,93 +336,12 @@ if (-not $ok) { $results += $r.Stderr }
 Remove-Item $mockLog -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 
-# T23-T24 — the S145-only review-model exception (owner ruling 2026-10-20, R-104 option 2). T21 above
-# already pins that the reserved S99 still refuses Opus; these two pin the exception's other edges.
-#
-# They run the hook in a THROWAWAY REPOSITORY under %TEMP%, never in the real one (S145 Step 7a cycle 5,
-# R-137). Cycles 1-5 found one leftover-file hazard after another while these tests overwrote the real
-# SPRINT-145 artifacts and restored them afterwards: a temporary waiver (cycle 2), fakes that passed the
-# gate if a run was killed (cycles 3 and 4), recovery copies a re-run destroyed (cycle 4), a byte compare
-# that ignored letter case (cycle 5). The hook resolves .claude/reviews, docs/sprints, the telemetry log
-# and HEAD from its working directory, so a sandbox with its own git commit and its own reviews folder
-# gives the same test with nothing real to overwrite. A real close runs in the real repository, so
-# nothing left in a sandbox can ever reach one.
-#
-# Isolation (S145 Step 7a cycle 6, owner ruling R-138; Codex W1/W2 and NOTE, Opus N6-1/N6-3):
-#   - the git variables that route a command to ANOTHER repository (GIT_DIR, GIT_WORK_TREE, ...) are
-#     cleared for the sandbox steps and the hook runs they start, and restored afterwards;
-#   - the sandbox is made from an empty template and committed with hooks pointed at an empty folder,
-#     so no hook installed on this machine runs;
-#   - each git step's exit code is checked, and the sandbox must answer `rev-parse --git-dir` with `.git`
-#     (its own repository) before anything is committed;
-#   - only sandboxes over an hour old are cleared (a run takes about two minutes), so a concurrent run's
-#     live sandbox is left alone; a sandbox that cannot be removed is reported, not ignored.
-#
-# Every GATE seam in the hook is honoured for S99 only (the telemetry switch, which gates nothing, is the
-# one any-sprint seam), so the S145 runs meet the hook's real checks. T23 stops at the reviewer's staleness
-# check and T24 at its model check, both before the gates that read the repository (CI health, consecutive
-# CI-pending, untracked files, worktrees, the task ledger).
-$mock145 = 'git commit -m "S145 TASK-9999: sprint close -- test"'
-$gitRouting = @('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_NAMESPACE')
-$savedGitEnv = @{}
-foreach ($v in $gitRouting) { $savedGitEnv[$v] = [Environment]::GetEnvironmentVariable($v, 'Process') }
-foreach ($old in @(Get-ChildItem -Path $env:TEMP -Directory -Filter 'statstid-guard-test-sandbox-*' -ErrorAction SilentlyContinue)) {
-    if ($old.LastWriteTime -lt (Get-Date).AddHours(-1)) {
-        Remove-Item $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $old.FullName) { $results += "sandbox cleanup: could not remove the abandoned sandbox $($old.FullName) (harmless: no real close reads it; remove it by hand)" }
-    }
-}
-$sandbox = Join-Path $env:TEMP ("statstid-guard-test-sandbox-" + [guid]::NewGuid().ToString('N'))
-try {
-    foreach ($v in $gitRouting) { [Environment]::SetEnvironmentVariable($v, $null, 'Process') }
-    $sbReviews = Join-Path $sandbox '.claude\reviews'
-    $sbEmpty   = Join-Path $sandbox '.empty'   # an empty git template and hooks folder
-    New-Item -ItemType Directory -Force -Path $sbReviews, $sbEmpty | Out-Null
-    $sbStep = ''
-    git -C $sandbox init -q "--template=$sbEmpty"
-    if ($LASTEXITCODE -ne 0) { $sbStep = 'git init' }
-    else {
-        $sbGitDir = git -C $sandbox rev-parse --git-dir
-        if ($LASTEXITCODE -ne 0 -or "$sbGitDir".Trim() -ne '.git') { $sbStep = "isolation check: rev-parse --git-dir answered '$sbGitDir', not '.git'" }
-        else {
-            git -C $sandbox -c "core.hooksPath=$sbEmpty" -c user.name=guard-harness -c user.email=guard-harness@invalid -c commit.gpgsign=false commit -q --allow-empty --no-verify -m "guard harness sandbox"
-            if ($LASTEXITCODE -ne 0) { $sbStep = 'git commit' }
-            else {
-                $sbHead = git -C $sandbox rev-parse HEAD
-                if ($LASTEXITCODE -ne 0 -or -not $sbHead) { $sbStep = 'git rev-parse HEAD' }
-            }
-        }
-    }
-    if ($sbStep) {
-        $results += "T23-T24 FAIL: the sandbox repository at $sandbox could not be set up ($sbStep)"
-    } else {
-        $sbHeadShort = "$sbHead".Trim().Substring(0,7)
-        $sbCodex    = Join-Path $sbReviews 'SPRINT-145-step7a-codex.md'
-        $sbReviewer = Join-Path $sbReviews 'SPRINT-145-step7a-reviewer.md'
-        Set-Content -Path $sbCodex -Value "verdict: APPROVED`nreviewed-against-commit: $sbHeadShort" -Encoding UTF8
-
-        # T23: S145 accepts the Opus id at the model check (the exception itself). The suppressed-telemetry
-        # echo, reached only after the check passes, is the positive evidence. The reviewer fake names a
-        # stale commit, so the run then refuses at the reviewer's staleness check, before any gate that
-        # reads the repository: asserting that refusal pins where the run stopped.
-        Set-Content -Path $sbReviewer -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $staleSha" -Encoding UTF8
-        $r = Invoke-Hook $mock145 $sandbox
-        $ok = (-not ($r.Stderr -match 'Step 7a internal review ran on')) -and ($r.Stderr -match 'telemetry suppressed \(test seam\): \S+ \| close \| S145 \| claude-opus-5-5 \| PASS') -and ($r.Exit -eq 2) -and ($r.Stderr -match 'Artifact is STALE')
-        $results += "T23 (S145 accepts Opus at the model check, positive echo; stops at the reviewer's staleness check): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
-        if (-not $ok) { $results += $r.Stderr }
-
-        # T24: the exception is Opus only; S145 still refuses a cheaper model.
-        Set-Content -Path $sbReviewer -Value "reviewed-by-model: claude-sonnet-5-5`nverdict: APPROVED`nreviewed-against-commit: $staleSha" -Encoding UTF8
-        $r = Invoke-Hook $mock145 $sandbox
-        $ok = ($r.Exit -eq 2 -and $r.Stderr -match "Step 7a internal review ran on 'claude-sonnet-5-5'")
-        $results += "T24 (S145 still refuses a cheaper model): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
-        if (-not $ok) { $results += $r.Stderr }
-    }
-} finally {
-    Remove-Item $sandbox -Recurse -Force -ErrorAction SilentlyContinue
-    if (Test-Path $sandbox) { $results += "sandbox cleanup: could not remove $sandbox (harmless: no real close reads it; a later run clears it once it is an hour old)" }
-    foreach ($v in $gitRouting) { [Environment]::SetEnvironmentVariable($v, $savedGitEnv[$v], 'Process') }
-}
+# T23-T24 (removed). They pinned the S145-only review-model exception (owner ruling R-104) and were deleted
+# BEFORE the S145 close by owner ruling R-139 (2026-10-21; docs/sprints/SPRINT-145.md § "C-3 — Step 7a",
+# cycle 7). Their proof was complete (every run passed, a mutation check showed they fail without the
+# exception, seven review cycles), and from cycle 5 on every review finding concerned the scaffolding they
+# needed, a throwaway git repository, not the exception itself. The exception stays in the hook for the
+# S145 close and is deleted after it. T25 keeps its number so the records that cite it stay valid.
 
 # T25 (S145 Step 7a cycle 2, Codex B2-1; strengthened at cycle 3, Codex W / Opus N3-1): the telemetry seam
 # cannot create or activate a waiver. The cycle-1 seam took a PATH (STATSTID_TELEMETRY_LOG_MOCK) and
@@ -467,10 +385,10 @@ Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 # S145 Step 7a (Codex W1; Opus N-D at cycle 2): a skipped test is not a passed one, and "ALL" means the
-# full count of PASS lines, not merely the absence of FAIL. When T23/T24 are deleted after the S145 close,
-# this count becomes 23 (Opus N3-5).
+# full count of PASS lines, not merely the absence of FAIL. 23 since T23-T24 were deleted (R-139): T1-T22
+# and T25.
 $skipped = @($results | Where-Object { $_ -cmatch 'SKIPPED' })   # case-sensitive: only the explicit "SKIPPED" marker counts
 $passed  = @($results | Where-Object { $_ -match '^T\d+ .* PASS$' })
 Write-Output ""
-if ($skipped.Count -gt 0 -or $passed.Count -ne 25) { Write-Output "$($passed.Count) OF 25 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 25 RAN"; exit 1 }
-else { Write-Output "ALL 25 TESTS PASSED ($($passed.Count) PASS lines)" }
+if ($skipped.Count -gt 0 -or $passed.Count -ne 23) { Write-Output "$($passed.Count) OF 23 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 23 RAN"; exit 1 }
+else { Write-Output "ALL 23 TESTS PASSED ($($passed.Count) PASS lines)" }

@@ -250,7 +250,7 @@ foreach ($artifact in @($codex, $reviewer)) {
         # the write OFF and echoes the line to stderr instead. It is a switch, never a path: the cycle-1
         # path seam let the hook create ANY file, including a waiver that a later gate reads (pointing it
         # at SPRINT-<N>-ci-health-WAIVED.md skipped the CI-health gate). Writing nothing, it can blind no
-        # gate, so it is honoured for any sprint. The echo is the harness's positive evidence (T23) that a
+        # gate, so it is honoured for any sprint. The echo is the harness's positive evidence (T25) that a
         # run got PAST the model check, since this line is reached only after the check passes.
         if ($env:STATSTID_TELEMETRY_SUPPRESS -eq '1') {
             [Console]::Error.WriteLine("sprint-close-guard: telemetry suppressed (test seam): $tline")
