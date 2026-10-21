@@ -325,7 +325,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   across the whole month, each day under its own contract), and payroll hands the planner only the rules it runs
   (ADR-016 D2–D4, S145 amendments); none of the fix options below was taken. One case stays manual, an agreement
   change inside a settled week (QUAL-209), and the raw export routes refuse split months by their own reason.
-  Residuals: QUAL-209..213, and the design questions in the next entry. QUAL-149 BUILT ⟨EB runs at C-6/C-7⟩.
+  Residuals: QUAL-209..213, and the design questions in the next entry. QUAL-149 BUILT (all four Stage B evidence runs matched in CI, S145 C-6/C-7).
   Detail in `docs/sprints/SPRINT-145.md`.
   The entry below is kept as the statement of the problem that was solved.
   **AlignedWindow rules at a GENUINE split in the live rule set (QUAL-149; the S64 F4-1(b) gap — re-registered,

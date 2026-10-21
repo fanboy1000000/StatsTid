@@ -223,7 +223,7 @@ latent 500 path the moment real windows exist, without touching the profile reso
   became `TimelineAware` (evaluated once across the whole month, each day under its own contract) rather than
   Mergeable with a pro-rating merger, and payroll hands the planner only the six rules it evaluates. So a mid-month
   fraction, position, category or Monday agreement change while employed is now paid part by part under the live
-  set (QUAL-149 BUILT, evidence ⟨EB runs at C-6/C-7⟩); the one manual case left is an agreement change inside a
+  set (QUAL-149 BUILT, evidence: all four Stage B runs matched in CI, S145 C-6/C-7); the one manual case left is an agreement change inside a
   settled week (QUAL-209). The truncation ruling above is unchanged and still governs any caller whose rule set
   holds an AlignedWindow or Reject rule.
 - **D7 precision note (S137 Reviewer NOTE, 2026-09-02):** the planner's D4 refusal messages carry the
