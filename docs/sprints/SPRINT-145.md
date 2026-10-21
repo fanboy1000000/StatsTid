@@ -2995,10 +2995,10 @@ As owner ruling R-104 required, the close guard's one-sprint exception (accept `
 **The fix (cycle-2 absorption).**
 - **T26 is now an allow-list, and calls itself a regression pin, not a proof.**
   - Each marker must occur exactly once, as a comment line, in order.
-  - Inside the block, the sprint number may appear only in its two message strings ("BLOCKING sprint S$sprintNum close commit." and the telemetry line's "| close | S$sprintNum |"). Any other use, in any syntax, fails as `sprint-used`.
+  - Inside the block, the sprint number may appear only in its two message strings ("BLOCKING sprint S$sprintNum close commit." and the telemetry line's "| close | S$sprintNum |"). Any other use, in any syntax, fails as `sprint-used`. *(Wrong, corrected at cycle 3: the check matched the token `$sprintNum`, not the sprint number. Brace syntax, scope prefixes, `Get-Variable`, the artifact-path variables and a copied message fragment all passed it.)*
   - There may be no list of accepted models (`acceptedReviewModels`, or a ` -contains ` / ` -in ` operator).
   - There must be exactly one assignment to `$reviewFloor`, to a model-id literal, and exactly one to `$reviewedBy`, plus exactly one floor compare.
-- **What T26 cannot see is written in its comment:** code before the block in the same loop, and helpers elsewhere in the hook. A change there is caught by the Step 7a review of that change, and an unconditional exception by T21 at run time. The comment also says that T26 can false-fail on a harmless edit inside the block, naming its reason.
+- **What T26 cannot see is written in its comment:** code before the block in the same loop, and helpers elsewhere in the hook. A change there is caught by the Step 7a review of that change, and an unconditional exception by T21 at run time. *(Incomplete, corrected at cycle 3: exceptions written wholly inside the block could also escape. "Is caught by" also overstated a review process, and T21 catches only its own fixture.)* The comment also says that T26 can false-fail on a harmless edit inside the block, naming its reason.
 - **T21's comment and the T23-T24 note** say the floor is now guarded by three things: T21 at run time on S99, T26 as a static regression pin on the block, and the review of any change to the hook.
 - **Result:** 24 of 24 pass.
 - **The mutation probe**, run with T26's exact function extracted from the harness:
@@ -3008,7 +3008,40 @@ As owner ruling R-104 required, the close guard's one-sprint exception (accept `
   - the earlier `-in @('146')` mutant gives `sprint-used`, and the removed compare gives `floor-compare`;
   - the exception placed **outside** the block gives `ok`, the recorded limitation.
 - **The commit message of `30be8017`** ("so the floor holds for every sprint") is corrected by this record, as `6c29efc2`'s was.
-- **Next:** cycle 3 verifies this fix, both lenses, scoped to its commit.
+
+**Post-close review, cycle 3 (on `ff607881`).** Fable returned **BLOCKED**, and Codex **REQUEST-CHANGES**, on the same claim. "The block cannot branch on the sprint number in any syntax" is false: the check matches the token `$sprintNum`, not the sprint number.
+- **The bypasses.**
+  - Fable wrote in-block exceptions that pass T26 with `ok`: brace syntax `${sprintNum}`, `$script:sprintNum`, `Get-Variable sprintNum`, and the artifact path, which carries the number (`$artifact -like '*SPRINT-146-*'`). It ran two of them end to end through the real guard in a sandbox: an Opus artifact closed S146 while S99 was still refused. T21 and T26 both stayed green, the S145 blind spot again.
+  - **Fable's warnings:** case-modified list operators (`-cin`, `-icontains`) passed; the body of the floor compare was unpinned (a conditional `exit 2`); and "an allow-list" was only half true.
+  - **Codex's examples:** the allowed message fragment copied into an `if`; a `.IndexOf` list; and `${reviewedBy} = $reviewFloor`.
+- **Both offered the same bounded resolution.** Say only what is checked, record the in-block bypasses, and leave the rest to review: "requires review", not "is caught by review". T21 covers only its own S99 Opus fixture. Fable also proposed three cheap tightenings.
+- **Recorded, neutrally.** The Fable lens wrote its probe scripts (`mut-*.ps1`, `e2e.ps1`, `run.ps1`) to the Orchestrator's scratchpad, outside the repository. That goes beyond its read-only brief. The repository was unchanged (HEAD, status and worktrees as before), and the probe files were reused below.
+
+*Plain language:* the test was still being described as stronger than it is. It checks the text of the guard for certain patterns, and an exception written in a different style can still slip past. The test now catches more styles. Above all, its comment now says exactly which patterns it checks, lists the known ways around it, and says that any change to the guard must be reviewed. The review is the real safeguard.
+
+**The fix (cycle-3 absorption).**
+- **The wording claims only the literal checks.**
+  - The T26 comment lists the text patterns the pin looks for, and the classes it does not see.
+  - **Not seen, inside the block:** variables that already embed the sprint number (`$artifact`, `$reviewer`, `$codex`, `$waiver`, `$tline`); the body of the floor compare; list tests by other means (`-match`, `-like`, `.IndexOf`, a regex or a wildcard); and any other syntax or indirection not listed.
+  - **Not seen, outside the block:** code before it in the same loop, and helpers elsewhere.
+  - The comment ends: "any change to the hook requires the Step 7a review of that change; that review, not this pin, is where such a change is meant to be caught."
+  - T21's comment names its one fixture. The T23-T24 note lists the three guards in those terms.
+- **The tightenings** (Fable's three, plus one for Codex's fragment):
+  - The allowed messages are stripped only as their **entire lines**, with fixed counts (two BLOCKING lines and one `$tline` line, or `sprint-lines`). Then the bare word `sprintNum` anywhere else fails as `sprint-used`.
+  - Variable indirection fails as `indirect-access`: `${`, a scope prefix, or `Get-/Set-/New-/Remove-/Clear-Variable`. `$env:` is allowed, because the block reads the telemetry switch.
+  - List operators in any case form fail as `model-list`.
+- **The PASS label** says "shows none of the pinned exception patterns".
+- **Result:** 24 of 24 pass.
+- **The probe** (`t26-probe3.ps1` and `t26-probe4.ps1`, T26's exact function):
+  - The current file gives `ok`.
+  - **S145's exception re-inserted into today's guard** (both parts of `e2ce7dfc`) gives `sprint-used`, as does a sprint branch alone.
+  - **Caught:**
+    - Fable's 25 mutant files: everything the comment says is checked fails (`sprint-used`, `indirect-access`, `model-list`, `reviewedBy-assign`, `markers-not-unique`, `floor-assign`, `floor-compare`);
+    - Codex's fragment-in-an-`if` fails as `sprint-used`, and `${reviewedBy}` as `indirect-access`.
+  - **Pass, as the comment lists:** E4 (the artifact path), E9 (the conditional `exit` inside the compare), Codex's `.IndexOf` list, and L3 (outside the block).
+  - **A changed result:** the pre-exception `c488b2d3` and the two exception versions now give `sprint-lines`. The pin matches today's exact lines, and their telemetry line differs (the S145 switch, R-134, changed it). So the historical exception is tested by re-inserting it into today's file, as above.
+- **The commit message of `ff607881`** ("the sprint number may appear only in its two message strings") is corrected by this record (Fable NOTE 2).
+- **Next:** cycle 4 verifies this fix, both lenses, scoped to its commit. The cap for this scope is five cycles.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
