@@ -303,8 +303,9 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # strip must not over-accept: a suffixed WRONG model still blocks.
 # T20 is the discriminating test (fails without the strip). T21 is a negative CONTROL, not a test of the
 # strip: an unstripped `claude-opus-5-5[1m]` fails the compare just the same. T22 pins the tightened shape.
-# T21 is also the harness's only pin that the review floor admits no other model (S145 Step 7a cycle 8,
-# NOTE 3): an exception that let Opus through for some sprint would turn it red. Keep it.
+# T21 is also the harness's only RUN-TIME pin that the floor refuses another model, on the reserved S99
+# (S145 Step 7a cycle 8, NOTE 3): an exception that let Opus through unconditionally would turn it red. An
+# exception scoped to another sprint number would not (S145's did not); T26 pins that statically. Keep both.
 # The ledger gate runs after the model check, so give it a fully accounted log.
 # ---------------------------------------------------------------------------
 $env:STATSTID_SPRINTLOG_MOCK = $mockLog
@@ -342,9 +343,9 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # S145 close accept an Opus review while Fable was on its usage limit. The tests were deleted before that
 # close by owner ruling R-139 (2026-10-21; docs/sprints/SPRINT-145.md § "C-3 — Step 7a", cycle 7): every
 # run had passed, a mutation check showed T23 fails without the exception, seven review cycles had examined
-# them, and from cycle 5 on no review finding concerned the exception itself. The exception was deleted
-# from the hook after the S145 close; T21 now pins, for every sprint, that the floor admits no other model.
-# T25 keeps its number so the records that cite it stay valid.
+# them, and at the time of R-139, from cycle 5 on, no review finding concerned the exception itself. The
+# exception was deleted from the hook after the S145 close. What pins the floor now: T21 at run time on S99,
+# and T26 statically for every sprint. T25 keeps its number so the records that cite it stay valid.
 
 # T25 (S145 Step 7a cycle 2, Codex B2-1; strengthened at cycle 3, Codex W / Opus N3-1): the telemetry seam
 # cannot create or activate a waiver. The cycle-1 seam took a PATH (STATSTID_TELEMETRY_LOG_MOCK) and
@@ -374,6 +375,26 @@ try {
     Remove-Item $ciHealthWaiver -ErrorAction SilentlyContinue
 }
 
+# T26 (S145 post-close review: Fable BLOCKER 1 / Codex WARNING) — the review floor applies to EVERY sprint.
+# T21 runs only the reserved S99, so an exception scoped to another sprint number leaves it green: S145's
+# did, through K7 and K8, and only T23 (now deleted) ever discriminated on it. This static pin reads the
+# hook's model-check block, from its "# Model-routing check" comment to its "# Staleness check" comment, and
+# requires no comparison on the sprint number, no list of accepted models, one floor literal and one floor
+# compare. (The hook compares $sprintNum with '99' in its five gate seams, all outside this block.)
+function Test-FloorBlock([string]$text) {
+    $s = $text.IndexOf('# Model-routing check')
+    $e = $text.IndexOf('# Staleness check')
+    if ($s -lt 0 -or $e -le $s) { return 'markers-missing' }
+    $block = $text.Substring($s, $e - $s)
+    if ($block -match '\$sprintNum\s*-[A-Za-z]+|-[A-Za-z]*(contains|in)\s+\$sprintNum|switch\s*\(\s*\$sprintNum') { return 'sprint-branch' }
+    if ($block -match 'acceptedReviewModels|-(not)?contains\b|-(not)?in\b') { return 'model-list' }
+    if (([regex]::Matches($block, "\`$reviewFloor = 'claude-[a-z0-9.-]+'")).Count -ne 1) { return 'floor-literal' }
+    if (([regex]::Matches($block, 'if \(\$reviewedBy -ne \$reviewFloor\)')).Count -ne 1) { return 'floor-compare' }
+    return 'ok'
+}
+$floorCheck = Test-FloorBlock $hookSource
+$results += "T26 (the review floor applies to every sprint, static): $floorCheck $(if($floorCheck -eq 'ok'){'PASS'}else{'FAIL'})"
+
 # Cleanup
 Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver,$ledgerWaiver -ErrorAction SilentlyContinue
 Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
@@ -388,10 +409,10 @@ Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 # S145 Step 7a (Codex W1; Opus N-D at cycle 2): a skipped test is not a passed one, and "ALL" means the
-# full count of PASS lines, not merely the absence of FAIL. 23 since T23-T24 were deleted (R-139): T1-T22
-# and T25.
+# full count of PASS lines, not merely the absence of FAIL. 24: T1-T22, T25 and T26 (T23-T24 were deleted,
+# R-139).
 $skipped = @($results | Where-Object { $_ -cmatch 'SKIPPED' })   # case-sensitive: only the explicit "SKIPPED" marker counts
 $passed  = @($results | Where-Object { $_ -match '^T\d+ .* PASS$' })
 Write-Output ""
-if ($skipped.Count -gt 0 -or $passed.Count -ne 23) { Write-Output "$($passed.Count) OF 23 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 23 RAN"; exit 1 }
-else { Write-Output "ALL 23 TESTS PASSED ($($passed.Count) PASS lines)" }
+if ($skipped.Count -gt 0 -or $passed.Count -ne 24) { Write-Output "$($passed.Count) OF 24 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 24 RAN"; exit 1 }
+else { Write-Output "ALL 24 TESTS PASSED ($($passed.Count) PASS lines)" }

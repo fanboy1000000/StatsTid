@@ -2946,11 +2946,42 @@ As owner ruling R-104 required, the close guard's one-sprint exception (accept `
   - Against the guard before the exception (`c488b2d3`), the model check is now byte-identical.
   - The only remaining differences are the three changes S145's Step 7a reviewed: the ledger-waiver header line, the cycle-cap message, and the telemetry switch.
 - **`.claude/hooks/test-sprint-close-guard.ps1`.**
-  - The T23-T24 note says the exception is gone and that the mutation check showed T23 fails without it (cycle 8 NOTE 2). It also says T21 now pins, for every sprint, that the floor admits no other model.
-  - T21's comment says the same and asks to keep it (cycle 8 NOTE 3).
+  - The T23-T24 note says the exception is gone and that the mutation check showed T23 fails without it (cycle 8 NOTE 2). It also said that T21 now pins, for every sprint, that the floor admits no other model. *(Wrong, corrected by the review below: T21 runs S99 only.)*
+  - T21's comment said the same and asked to keep it (cycle 8 NOTE 3).
   - 23 of 23 pass; the S145 artifacts and the live telemetry log are unchanged.
 - **`docs/WORKFLOW.md`** § Model Routing, layer 4 records in one past-tense sentence that S145 alone closed on an Opus review, and that the exception was deleted after the close.
-- **Review:** a post-Step-7a review cycle on both lenses (WORKFLOW Step 7a, "post-Step-7a coverage"), scoped to this commit. Recorded below once it returns.
+- **Review:** a post-Step-7a review cycle on both lenses (WORKFLOW Step 7a, "post-Step-7a coverage"), scoped to the commit `6c29efc2`. The cycle counter starts again for this scope.
+
+**Post-close review, cycle 1 (on `6c29efc2`).** The internal lens ran on **Fable** again (`reviewed-by-model: claude-fable-5-1`), the first Fable review since 2026-10-19.
+- **Both lenses confirm the code.** The exception is gone from every executable line. The model-check block is byte-identical to `c488b2d3`. Fable also probed the real hook against throwaway artifacts outside the repository: Opus is refused for S145 and for S146 with the floor message, and Fable for S145 passes the compare.
+- **Fable: BLOCKED, on one claim; Codex: APPROVE-WITH-WARNINGS, the same point as its WARNING.** "T21 pins, for every sprint, that the floor admits no other model" is false.
+  - T21 runs one close, on the reserved S99. An exception scoped to any other sprint number leaves it green.
+  - S145's own history proves it: with the exception in the hook, the harness passed 25/25 (K7) and 23/23 (K8) with T21 green. Only T23 ever discriminated on the exception.
+  - The sentence would tell the next editor that a re-introduced exception is caught by the existing tests, which is exactly the gap T23 filled.
+  - Cycle 8's own NOTE 3 was worded correctly ("spreading beyond S145"); the post-close rewording widened it.
+- **Fable's NOTE 1:** "from cycle 5 on no finding concerned the exception" holds only at the time of R-139, since cycle 8's NOTE 1 concerned the exception's comparison line.
+
+*Plain language:* the cleanup itself was right. But a comment claimed the remaining test protects every sprint from an exception like S145's, when it only checks one test sprint. The S145 exception had sat in the code while that very test kept passing. So instead of just rewording the comment, a new test now checks the guard's code directly.
+
+**The fix (Orchestrator; the owner's standing preference for the complete fix, which Fable's report names).** Fable offered two fixes: reword the claim, or make it true. This makes it true.
+- **The new T26** is a static pin in the style of T25's static half. It reads the guard's model-check block, from its `# Model-routing check` comment to its `# Staleness check` comment. It requires:
+  - no comparison on the sprint number;
+  - no list of accepted models (`acceptedReviewModels`, `-contains`, `-in`);
+  - exactly one floor literal;
+  - exactly one `if ($reviewedBy -ne $reviewFloor)`.
+
+  The guard compares `$sprintNum` with `'99'` in five gate seams, all outside that block.
+- **The comments.** T21's comment and the T23-T24 note now say what each test pins: T21 at run time on S99, and T26 statically for every sprint. The note adds Fable's "at the time of R-139".
+- **The banner** requires 24 PASS lines.
+- **Result:** 24 of 24 pass.
+- **The mutation probe.** T26's exact function, extracted from the harness, was run against real guard versions and three made-up versions:
+  - the current file and the pre-exception `c488b2d3` give `ok`;
+  - the exception's own commit `e2ce7dfc` and K8 `d129468f` give `sprint-branch`;
+  - a made-up `-in @('146')` exception gives `sprint-branch`, a second floor literal gives `floor-literal`, and the compare removed gives `floor-compare`.
+
+  So T26 fails on every one of these; S145's exception would have been caught.
+- **The commit message of `6c29efc2`** repeats the wrong T21 sentence. It is left as written, since commits are not rewritten; this record corrects it.
+- **Next:** cycle 2 verifies this fix, both lenses, scoped to its commit.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
