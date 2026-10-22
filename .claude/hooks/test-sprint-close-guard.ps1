@@ -388,11 +388,13 @@ try {
 # It reads the block (from the "# Model-routing check" comment to the "# Staleness check" comment, each exactly
 # once, in that order) through PowerShell's tokenizer (PSParser) and looks at these token types only; comments
 # are ignored. Because it reads tokens, a variable's spelling (`$sprintNum`, `${sprintNum}`, `$script:sprintNum`)
-# and an operator's spacing or typographic dash do not matter for the checks below. It fails on:
+# does not matter for the checks below, nor do a list operator's spacing or typographic dash. (The floor compare
+# must be the plain ASCII `-ne`: any other spelling of it fails as floor-compare.) It fails on:
 #   - Variable tokens: `sprintNum` in any spelling or case; a scope prefix (script, global, local, private,
 #     using, variable); an environment variable other than the one telemetry switch, which must itself appear
 #     exactly once; the name `acceptedReviewModels`;
-#   - Command tokens: the *-Variable cmdlets and their aliases (gv, sv, nv, rv, clv);
+#   - Command tokens: the *-Variable cmdlets and their Windows PowerShell aliases (gv, sv, set, nv, rv, clv),
+#     with or without a module prefix (`Microsoft.PowerShell.Utility\Get-Variable`);
 #   - Member tokens: PSVariable, Get/SetEnvironmentVariable and GetEnvironmentVariables;
 #   - Operator tokens: -contains or -in, in any case or negated form;
 #   - String tokens, searched ignoring case: one mentioning `sprintNum` other than the two message strings (the
@@ -410,13 +412,15 @@ try {
 #     $reviewer, $codex, $waiver, and $tline once built); the BODY of the floor compare (a conditional `exit 2`);
 #     a pattern test on the model that does not spell a model id (`-like 'claude*'`, `-match 'opus'`) or one
 #     assembled from pieces ('claude' + '-opus-5-5'); an exception keyed on something else (the artifact's text,
-#     the date, a file); and any other construct the checks above do not name;
+#     the date, a file); a multiple assignment (`$reviewedBy, $x = ...`); code assembled from strings and run
+#     with Invoke-Expression (`iex`), the generic way around any token check; and any other construct the
+#     checks above do not name;
 #   - outside the block: code before it in the same loop (for example rewriting $content) and helpers defined
 #     elsewhere in the hook.
 # So any change to the hook requires its own Step 7a review; that review, not this pin, is where such a change
 # is meant to be caught. The pin can false-fail on a harmless edit inside the block (a reworded message fails as
-# sprint-used; a second string naming a model as model-literal); each failure names its reason, so update the
-# pin deliberately.
+# sprint-used if it still mentions the sprint variable, otherwise as sprint-lines; a second string naming a
+# model as model-literal); each failure names its reason, so update the pin deliberately.
 function Test-FloorBlock([string]$text) {
     $errs = $null
     $all = [System.Management.Automation.PSParser]::Tokenize($text, [ref]$errs)
@@ -467,7 +471,7 @@ function Test-FloorBlock([string]$text) {
                 if ($op -match '^-[ci]?(not)?(contains|in)$') { return 'model-list' }
             }
             'Command' {
-                if ($c -match '^(Get|Set|New|Remove|Clear)-Variable$|^(gv|sv|nv|rv|clv)$') { return 'indirect-access' }
+                if ($c -match '(^|\\)((Get|Set|New|Remove|Clear)-Variable|gv|sv|set|nv|rv|clv)$') { return 'indirect-access' }
             }
             'Member' {
                 if ($c -in @('PSVariable', 'GetEnvironmentVariable', 'SetEnvironmentVariable', 'GetEnvironmentVariables')) { return 'indirect-access' }
