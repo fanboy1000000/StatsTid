@@ -379,56 +379,101 @@ try {
     Remove-Item $ciHealthWaiver -ErrorAction SilentlyContinue
 }
 
-# T26 (S145 post-close review; added at cycle 1 for Fable BLOCKER 1 / Codex WARNING, reworked at cycles 2 and
-# 3 for both lenses' findings, tightened at cycle 4) — a static REGRESSION PIN on the hook's model-check
-# block: it fails if the block shows any of a few text patterns that a per-sprint or model-list exception
-# would most plausibly use. It is not a proof. T21 runs only the reserved S99 with its one Opus fixture, so an
-# exception scoped to another sprint number leaves T21 green: S145's did, through K7 and K8, and only T23 (now
-# deleted) ever discriminated on it (T23 went red when the exception was removed).
+# T26 (S145 post-close review: added at cycle 1, reworked at cycles 2-4, rebuilt on PowerShell's tokenizer by
+# owner ruling R-141 after cycle 5) - a static REGRESSION PIN on the hook's model-check block. It is not a proof.
+# T21 runs only the reserved S99 with its one Opus fixture, so an exception scoped to another sprint number
+# leaves T21 green: S145's did, through K7 and K8, and only T23 (now deleted) ever discriminated on it.
 #
-# The block: from the "# Model-routing check" comment line to the "# Staleness check" comment line; each must
-# occur exactly once as a line starting with that comment, in that order. Inside it, the pin checks TEXT:
-#   - the token `sprintNum` appears only in two whole lines, the BLOCKING message (twice) and the `$tline`
-#     telemetry line (once), each matched as the entire line;
-#   - no variable indirection: `${`, a scope prefix such as `$script:`, `$env:` other than the one telemetry
-#     switch the block reads (`$env:STATSTID_TELEMETRY_SUPPRESS`), Get-/Set-/New-/Remove-/Clear-Variable, the
-#     aliases `gv` / `sv`, or `PSVariable`;
-#   - no `acceptedReviewModels` and no -contains / -in operator in any case form (`-cin`, `-inotcontains`, ...),
-#     with or without a space after it (`-in@(...)`);
-#   - exactly one `$reviewFloor =` (to a model-id literal), one `$reviewedBy =`, and one
-#     `if ($reviewedBy -ne $reviewFloor)`.
-# What it does NOT see, so an exception written these ways passes it (recorded at post-close cycles 2-4):
-#   - inside the block: variables that already embed the sprint number (for example $command, $artifact,
-#     $reviewer, $codex, $waiver, and $tline once built); the BODY of the floor compare (a conditional
-#     `exit 2`); list tests by other means (-match, -like, .IndexOf, a regex or a wildcard); an exception keyed
-#     on something other than the sprint number or the model id (the artifact's text, the date, a file); and
-#     any other syntax or indirection not listed above;
+# It reads the block (from the "# Model-routing check" comment to the "# Staleness check" comment, each exactly
+# once, in that order) through PowerShell's own tokenizer, so spelling does not matter: `$sprintNum`,
+# `${sprintNum}` and `$script:sprintNum` are the same variable token, an operator is the same token with or
+# without spaces or with a typographic dash, and comments are ignored. Inside the block it fails on:
+#   - any use of the variable `sprintNum`, in any spelling, and any string mentioning it other than the two
+#     message strings: the BLOCKING message (exactly twice) and the telemetry line (exactly once);
+#   - variable indirection: a scope prefix (script, global, local, private, using, variable); an environment
+#     variable other than the one telemetry switch, which must itself appear exactly once; the *-Variable
+#     cmdlets and their aliases (gv, sv, nv, rv, clv); the members PSVariable and Get/SetEnvironmentVariable(s);
+#   - a list operator (-contains or -in, in any case or negated form) or the name `acceptedReviewModels`;
+#   - any string naming a model (`claude-...`) other than the floor literal, which must be the value of the one
+#     `$reviewFloor =` assignment;
+#   - a count other than one of `$reviewFloor =`, `$reviewedBy =`, and `if ($reviewedBy -ne $reviewFloor)`.
+# What it does NOT see, so an exception written these ways passes it:
+#   - inside the block: variables that embed the sprint number (for example $command, $artifact, $reviewer,
+#     $codex, $waiver, and $tline once built); the BODY of the floor compare (a conditional `exit 2`); an
+#     exception keyed on something other than the sprint number or the model id (the artifact's text, the
+#     date, a file); a model id assembled from pieces ('claude' + '-opus-5-5'); and any other construct the
+#     checks above do not name;
 #   - outside the block: code before it in the same loop (for example rewriting $content) and helpers defined
 #     elsewhere in the hook.
-# So any change to the hook requires the Step 7a review of that change; that review, not this pin, is where
-# such a change is meant to be caught. The pin can also false-fail on a harmless edit inside the block (a
-# reworded message, an operator quoted in a comment); each failure names its reason, so update it deliberately.
+# So any change to the hook requires its own Step 7a review; that review, not this pin, is where such a change
+# is meant to be caught. The pin can false-fail on a harmless edit inside the block (a reworded message, a
+# second string naming a model); each failure names its reason, so update the pin deliberately.
 function Test-FloorBlock([string]$text) {
-    $sm = [regex]::Matches($text, '(?m)^[ \t]*# Model-routing check')
-    $em = [regex]::Matches($text, '(?m)^[ \t]*# Staleness check')
+    $errs = $null
+    $all = [System.Management.Automation.PSParser]::Tokenize($text, [ref]$errs)
+    $sm = @($all | Where-Object { $_.Type -eq 'Comment' -and $_.Content.StartsWith('# Model-routing check') })
+    $em = @($all | Where-Object { $_.Type -eq 'Comment' -and $_.Content.StartsWith('# Staleness check') })
     if ($sm.Count -ne 1 -or $em.Count -ne 1) { return 'markers-not-unique' }
-    if ($em[0].Index -le $sm[0].Index) { return 'markers-out-of-order' }
-    $block = $text.Substring($sm[0].Index, $em[0].Index - $sm[0].Index)
-    $msgLine = '(?m)^[ \t]*\[Console\]::Error\.WriteLine\("sprint-close-guard: BLOCKING sprint S\$sprintNum close commit\."\)[ \t]*\r?$'
-    $telLine = '(?m)^[ \t]*\$tline = "\$ts \| close \| S\$sprintNum \| \$reviewedBy \| PASS \| step-7a reviewer artifact on the floor model"[ \t]*\r?$'
-    if (([regex]::Matches($block, $msgLine)).Count -ne 2 -or ([regex]::Matches($block, $telLine)).Count -ne 1) { return 'sprint-lines' }
-    $stripped = [regex]::Replace([regex]::Replace($block, $msgLine, ''), $telLine, '')
-    if ($stripped -match 'sprintNum') { return 'sprint-used' }
-    if ($block -match '\$\{|\$(script|global|local|private|variable|using):|\$env:(?!STATSTID_TELEMETRY_SUPPRESS\b)|(Get|Set|New|Remove|Clear)-Variable|\bgv\b|\bsv\b|PSVariable') { return 'indirect-access' }
-    if ($block -match 'acceptedReviewModels|\s-[ci]?(not)?(contains|in)\b') { return 'model-list' }
-    if (([regex]::Matches($block, '\$reviewFloor\s*=')).Count -ne 1) { return 'floor-assign' }
-    if (([regex]::Matches($block, "\`$reviewFloor = 'claude-[a-z0-9.-]+'")).Count -ne 1) { return 'floor-literal' }
-    if (([regex]::Matches($block, '\$reviewedBy\s*=')).Count -ne 1) { return 'reviewedBy-assign' }
-    if (([regex]::Matches($block, 'if \(\$reviewedBy -ne \$reviewFloor\)')).Count -ne 1) { return 'floor-compare' }
+    if ($em[0].Start -le $sm[0].Start) { return 'markers-out-of-order' }
+    $t = @($all | Where-Object { $_.Start -gt $sm[0].Start -and $_.Start -lt $em[0].Start -and
+                                $_.Type -notin @('Comment', 'NewLine', 'LineContinuation') })
+    $msgA = 'sprint-close-guard: BLOCKING sprint S$sprintNum close commit.'
+    $msgB = '$ts | close | S$sprintNum | $reviewedBy | PASS | step-7a reviewer artifact on the floor model'
+    $nA = 0; $nB = 0; $nSwitch = 0; $nFloorAssign = 0; $nByAssign = 0; $nCompare = 0; $nClaude = 0
+    $assignOps = @('=', '+=', '-=', '*=', '/=', '%=')
+    for ($i = 0; $i -lt $t.Count; $i++) {
+        $k = $t[$i]; $c = [string]$k.Content
+        switch ($k.Type) {
+            'Variable' {
+                $scope = ''; $name = $c
+                if ($c -match '^(?<s>[A-Za-z]+):(?<n>.*)$') { $scope = $Matches.s.ToLower(); $name = $Matches.n }
+                if ($scope -in @('script', 'global', 'local', 'private', 'using', 'variable')) { return 'indirect-access' }
+                if ($scope -eq 'env') {
+                    if ($name -ne 'STATSTID_TELEMETRY_SUPPRESS') { return 'indirect-access' }
+                    $nSwitch++
+                }
+                if ($name -eq 'sprintNum') { return 'sprint-used' }
+                if ($name -eq 'acceptedReviewModels') { return 'model-list' }
+                $next = if ($i + 1 -lt $t.Count) { $t[$i + 1] } else { $null }
+                $isAssign = $next -and $next.Type -eq 'Operator' -and ($assignOps -contains [string]$next.Content)
+                if ($isAssign -and $name -eq 'reviewFloor') {
+                    $nFloorAssign++
+                    $val = if ($i + 2 -lt $t.Count) { $t[$i + 2] } else { $null }
+                    if (-not $val -or $val.Type -ne 'String' -or ([string]$val.Content) -notmatch '^claude-[a-z0-9.-]+$') { return 'floor-literal' }
+                }
+                if ($isAssign -and $name -eq 'reviewedBy') { $nByAssign++ }
+                if ($name -eq 'reviewedBy' -and $next -and $next.Type -eq 'Operator' -and [string]$next.Content -eq '-ne' -and
+                    $i + 2 -lt $t.Count -and $t[$i + 2].Type -eq 'Variable' -and [string]$t[$i + 2].Content -eq 'reviewFloor' -and
+                    $i -ge 2 -and $t[$i - 2].Type -eq 'Keyword' -and [string]$t[$i - 2].Content -eq 'if' -and $t[$i - 1].Type -eq 'GroupStart') { $nCompare++ }
+            }
+            'String' {
+                if ($c.Contains('sprintNum')) {
+                    if ($c -ceq $msgA) { $nA++ } elseif ($c -ceq $msgB) { $nB++ } else { return 'sprint-used' }
+                }
+                if ($c.Contains('claude-')) { $nClaude++ }
+            }
+            'Operator' {
+                $op = ($c -replace ('[' + [char]0x2013 + [char]0x2014 + [char]0x2015 + ']'), '-').ToLower()
+                if ($op -match '^-[ci]?(not)?(contains|in)$') { return 'model-list' }
+            }
+            'Command' {
+                if ($c -match '^(Get|Set|New|Remove|Clear)-Variable$|^(gv|sv|nv|rv|clv)$') { return 'indirect-access' }
+            }
+            'Member' {
+                if ($c -in @('PSVariable', 'GetEnvironmentVariable', 'SetEnvironmentVariable', 'GetEnvironmentVariables')) { return 'indirect-access' }
+            }
+        }
+    }
+    if ($nA -ne 2 -or $nB -ne 1) { return 'sprint-lines' }
+    if ($nSwitch -ne 1) { return 'env-switch' }
+    if ($nFloorAssign -ne 1) { return 'floor-assign' }
+    if ($nClaude -ne 1) { return 'model-literal' }
+    if ($nByAssign -ne 1) { return 'reviewedBy-assign' }
+    if ($nCompare -ne 1) { return 'floor-compare' }
     return 'ok'
 }
 $floorCheck = Test-FloorBlock $hookSource
-$results += "T26 (the model-check block shows none of the pinned exception patterns, static pin): $floorCheck $(if($floorCheck -eq 'ok'){'PASS'}else{'FAIL'})"
+$results += "T26 (the model-check block shows none of the pinned exception patterns, token-based static pin): $floorCheck $(if($floorCheck -eq 'ok'){'PASS'}else{'FAIL'})"
 
 # Cleanup
 Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver,$ledgerWaiver -ErrorAction SilentlyContinue
