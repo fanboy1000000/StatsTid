@@ -306,8 +306,8 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # T21 is also the harness's only RUN-TIME check that the floor refuses another model, for its one fixture:
 # Opus (with a context suffix) on the reserved S99 (S145 Step 7a cycle 8, NOTE 3). An exception that let
 # that fixture through would turn it red; one scoped to another sprint number, or admitting another model,
-# would not (S145's did not). T26 adds a static pin on a few text patterns (see its comment for what it does
-# not see), and any change to the hook requires its own Step 7a review. Keep both tests.
+# would not (S145's did not). T26 adds a static, token-based pin on the model-check block (see its comment for
+# what it does not see), and any change to the hook requires its own Step 7a review. Keep both tests.
 # The ledger gate runs after the model check, so give it a fully accounted log.
 # ---------------------------------------------------------------------------
 $env:STATSTID_SPRINTLOG_MOCK = $mockLog
@@ -347,7 +347,7 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 # run had passed, a mutation check showed T23 fails without the exception, seven review cycles had examined
 # them, and at the time of R-139, from cycle 5 on, no review finding concerned the exception itself. The
 # exception was deleted from the hook after the S145 close. What guards the floor now: T21 (its S99 Opus
-# fixture, at run time), T26 (a few text patterns in the model-check block, statically), and the Step 7a
+# fixture, at run time), T26 (a static, token-based pin on the model-check block), and the Step 7a
 # review that any change to the hook requires, for everything else. T25 keeps its number so the records that
 # cite it stay valid.
 
@@ -380,34 +380,43 @@ try {
 }
 
 # T26 (S145 post-close review: added at cycle 1, reworked at cycles 2-4, rebuilt on PowerShell's tokenizer by
-# owner ruling R-141 after cycle 5) - a static REGRESSION PIN on the hook's model-check block. It is not a proof.
-# T21 runs only the reserved S99 with its one Opus fixture, so an exception scoped to another sprint number
-# leaves T21 green: S145's did, through K7 and K8, and only T23 (now deleted) ever discriminated on it.
+# owner ruling R-141 after cycle 5, its claims matched to its checks by R-142 after cycle 6) - a static
+# REGRESSION PIN on the hook's model-check block. It is not a proof. T21 runs only the reserved S99 with its one
+# Opus fixture, so an exception scoped to another sprint number leaves T21 green: S145's did, through K7 and K8,
+# and only T23 (now deleted) ever discriminated on it.
 #
 # It reads the block (from the "# Model-routing check" comment to the "# Staleness check" comment, each exactly
-# once, in that order) through PowerShell's own tokenizer, so spelling does not matter: `$sprintNum`,
-# `${sprintNum}` and `$script:sprintNum` are the same variable token, an operator is the same token with or
-# without spaces or with a typographic dash, and comments are ignored. Inside the block it fails on:
-#   - any use of the variable `sprintNum`, in any spelling, and any string mentioning it other than the two
-#     message strings: the BLOCKING message (exactly twice) and the telemetry line (exactly once);
-#   - variable indirection: a scope prefix (script, global, local, private, using, variable); an environment
-#     variable other than the one telemetry switch, which must itself appear exactly once; the *-Variable
-#     cmdlets and their aliases (gv, sv, nv, rv, clv); the members PSVariable and Get/SetEnvironmentVariable(s);
-#   - a list operator (-contains or -in, in any case or negated form) or the name `acceptedReviewModels`;
-#   - any string naming a model (`claude-...`) other than the floor literal, which must be the value of the one
-#     `$reviewFloor =` assignment;
-#   - a count other than one of `$reviewFloor =`, `$reviewedBy =`, and `if ($reviewedBy -ne $reviewFloor)`.
+# once, in that order) through PowerShell's tokenizer (PSParser) and looks at these token types only; comments
+# are ignored. Because it reads tokens, a variable's spelling (`$sprintNum`, `${sprintNum}`, `$script:sprintNum`)
+# and an operator's spacing or typographic dash do not matter for the checks below. It fails on:
+#   - Variable tokens: `sprintNum` in any spelling or case; a scope prefix (script, global, local, private,
+#     using, variable); an environment variable other than the one telemetry switch, which must itself appear
+#     exactly once; the name `acceptedReviewModels`;
+#   - Command tokens: the *-Variable cmdlets and their aliases (gv, sv, nv, rv, clv);
+#   - Member tokens: PSVariable, Get/SetEnvironmentVariable and GetEnvironmentVariables;
+#   - Operator tokens: -contains or -in, in any case or negated form;
+#   - String tokens, searched ignoring case: one mentioning `sprintNum` other than the two message strings (the
+#     BLOCKING message exactly twice, the telemetry line exactly once), and any naming a model (`claude-`)
+#     other than the floor literal, which must be the value of the one `$reviewFloor =` assignment;
+#   - counts other than one `$reviewFloor =`, one `$reviewedBy =` (each a Variable token followed by an
+#     assignment operator), and one complete `if ($reviewedBy -ne $reviewFloor)` (its six tokens, through the
+#     closing bracket).
 # What it does NOT see, so an exception written these ways passes it:
-#   - inside the block: variables that embed the sprint number (for example $command, $artifact, $reviewer,
-#     $codex, $waiver, and $tline once built); the BODY of the floor compare (a conditional `exit 2`); an
-#     exception keyed on something other than the sprint number or the model id (the artifact's text, the
-#     date, a file); a model id assembled from pieces ('claude' + '-opus-5-5'); and any other construct the
-#     checks above do not name;
+#   - inside the block, the same names in another token position: inside a double-quoted string's `$( )` (the
+#     tokenizer returns the whole string as one String token, searched only for the two names above), as a
+#     command argument (`Get-Item env:X`, `variable:sprintNum`), or given as a string (`& 'gv'`,
+#     `.('PSVariable')`), or a member not listed (`ExpandEnvironmentVariables`);
+#   - inside the block, also: variables that embed the sprint number (for example $command, $artifact,
+#     $reviewer, $codex, $waiver, and $tline once built); the BODY of the floor compare (a conditional `exit 2`);
+#     a pattern test on the model that does not spell a model id (`-like 'claude*'`, `-match 'opus'`) or one
+#     assembled from pieces ('claude' + '-opus-5-5'); an exception keyed on something else (the artifact's text,
+#     the date, a file); and any other construct the checks above do not name;
 #   - outside the block: code before it in the same loop (for example rewriting $content) and helpers defined
 #     elsewhere in the hook.
 # So any change to the hook requires its own Step 7a review; that review, not this pin, is where such a change
-# is meant to be caught. The pin can false-fail on a harmless edit inside the block (a reworded message, a
-# second string naming a model); each failure names its reason, so update the pin deliberately.
+# is meant to be caught. The pin can false-fail on a harmless edit inside the block (a reworded message fails as
+# sprint-used; a second string naming a model as model-literal); each failure names its reason, so update the
+# pin deliberately.
 function Test-FloorBlock([string]$text) {
     $errs = $null
     $all = [System.Management.Automation.PSParser]::Tokenize($text, [ref]$errs)
@@ -444,13 +453,14 @@ function Test-FloorBlock([string]$text) {
                 if ($isAssign -and $name -eq 'reviewedBy') { $nByAssign++ }
                 if ($name -eq 'reviewedBy' -and $next -and $next.Type -eq 'Operator' -and [string]$next.Content -eq '-ne' -and
                     $i + 2 -lt $t.Count -and $t[$i + 2].Type -eq 'Variable' -and [string]$t[$i + 2].Content -eq 'reviewFloor' -and
-                    $i -ge 2 -and $t[$i - 2].Type -eq 'Keyword' -and [string]$t[$i - 2].Content -eq 'if' -and $t[$i - 1].Type -eq 'GroupStart') { $nCompare++ }
+                    $i -ge 2 -and $t[$i - 2].Type -eq 'Keyword' -and [string]$t[$i - 2].Content -eq 'if' -and $t[$i - 1].Type -eq 'GroupStart' -and
+                    $i + 3 -lt $t.Count -and $t[$i + 3].Type -eq 'GroupEnd') { $nCompare++ }
             }
             'String' {
-                if ($c.Contains('sprintNum')) {
+                if ($c.IndexOf('sprintNum', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
                     if ($c -ceq $msgA) { $nA++ } elseif ($c -ceq $msgB) { $nB++ } else { return 'sprint-used' }
                 }
-                if ($c.Contains('claude-')) { $nClaude++ }
+                if ($c.IndexOf('claude-', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $nClaude++ }
             }
             'Operator' {
                 $op = ($c -replace ('[' + [char]0x2013 + [char]0x2014 + [char]0x2015 + ']'), '-').ToLower()
