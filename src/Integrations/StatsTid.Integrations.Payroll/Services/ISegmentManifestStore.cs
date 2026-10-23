@@ -31,7 +31,9 @@ public interface ISegmentManifestStore
     /// <c>segment_manifests</c> projection row of <paramref name="manifest"/>, and the legacy
     /// <see cref="PeriodCalculationCompleted"/> summary event (enqueued on
     /// <c>period-calc-{employeeId}-{periodStart:yyyy-MM-dd}</c>). It returns only when all three are
-    /// committed; any failure throws and leaves none of them (R-18 by construction: both events or neither).
+    /// committed; a failure throws. When the commit itself is not confirmed, the three records may or may not
+    /// exist, and the caller refuses either way. They are never split (R-18 by construction: both events or
+    /// neither).
     /// </summary>
     /// <param name="manifestEvent">The manifest event; its <c>ManifestId</c> must equal
     /// <paramref name="manifest"/>'s.</param>
