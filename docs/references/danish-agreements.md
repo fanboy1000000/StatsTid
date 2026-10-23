@@ -47,6 +47,8 @@
 
 ### Supplement Time Windows (HK/PROSA only)
 
+> **S146 D4 note (2026-10-23): contradicted by a verified primary source; still in force in code.** The state has one unsocial-hours supplement, +25 % for weekdays 17:00-06:00, weekends, public holidays, Grundlovsdag after 12:00 and 24 Dec after 14:00 (state working-time agreement § 13); ordered weekend or holiday work gets +50 % compensation on top and is left out of the monthly hours count (§ 14). No 1.50 night rate, no Saturday/Sunday difference and no 2.0 Sunday or holiday rate exist for general HK or PROSA. Grundlovsdag is not a public holiday, yet it is paid at 2.0 today. See `docs/references/agreement-cells-reverification-research.md` (C1, C2); register QUAL-227. The rebuild is the S147 model program.
+
 | Supplement | Start | End | Rate | SR rows |
 |------------|-------|-----|------|---------|
 | Evening | 17:00 | 23:00 | 1.25 | SR-HK-OK24-009 (windows compound) + SR-HK-OK24-010 (rate) |
