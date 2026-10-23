@@ -123,6 +123,39 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
   QUAL-189 is widened to point at QUAL-216/217 as its root cause. Drift corrected: QUAL-205's false "surfaces a degraded state to the HTTP caller", and the QUAL-188 and QUAL-189 line numbers. ADR-013 gains a footnote that its items 1–2 do not hold today; the amendment itself lands in D7.
 - **D3: DONE.** The `disputed?` definition is amended first (R-19: a party dispute **or** a contradiction by a verified primary source). Nine rows are set `disputed? = true` with a dated note: SR-AC-OK24-020, SR-HK-OK24-001, SR-AC-OK24-005/007/021, SR-HK-OK24-006/007, SR-HK-OK24-020 and SR-PROSA-OK24-001. `confidence_level` is untouched; D4 overwrites both fields. `danish-agreements.md` gains dated notes on Overtime Thresholds, Weekly Settlement Rules (recording OQ-2) and Compensation Model. This settles the Step-0a DRIFT.
 
+## Wave 1 — tasks (merge checklist)
+
+| Task | Branch @ sha | Build | 5α | 5a Fable | 5a Codex | Merged |
+|---|---|---|---|---|---|---|
+| TASK-14600 (`payroll-integration`) | `worktree-agent-a1d308c8b658cfbee` @ `370d10cb` | 0 errors / 145 warnings; Unit 1512, DemoSeed 170, Regression non-Docker 128 | PASS | APPROVED-WITH-WARNINGS | APPROVE | `92ecaa13` |
+| TASK-14601 + 14601-T (`data-model`, `test-qa`) | `worktree-agent-a84e58f3b84c8b514` @ `7af3625f`, `dece4112`, fix-up `c67881f9` | 0 / 145; 1512 / 170 / 128 | PASS | APPROVED-WITH-WARNINGS → fix-up APPROVED | APPROVE-WITH-WARNINGS → fix-up APPROVE | `cda60da5` |
+| TASK-14602 + 14602-T (`backend-infrastructure`, `test-qa`) | `worktree-agent-a1d9823947d197303` @ `3505b620`, `2429016b` | 0 / 144; 1512 / 170 / 128 | PASS | APPROVED | — (display only) | `b104c4d7` |
+| TASK-14603 (`test-qa`) | `worktree-agent-aead3545374bb4a42` @ `41e7992f`, follow-up `900df51f` | 0 errors; 1512 / — / 130 | PASS (both commits) | APPROVED, follow-up APPROVED | — (tests only) | `a173ace3` |
+| TASK-14609 (`test-qa`) | dispatched 2026-10-23 | | | | | |
+
+**O-1 on master `bc4ad0d7`** (after 14600, 14601, 14602 and 14603 merged): build 0 errors / **145** warnings (at the ceiling) · CA2100 **115** · Unit **1512** · DemoSeed **170** · Regression non-Docker **130** (+2, 14603's `JsonAssertTests`). **O-2:** no drift in `openapi.json` or `api-types.ts` (QUAL-198 changed values only). **O-3:** `db-schema.md` hand-synced at `bc4ad0d7`, transcribed in the generator's format and cross-checked against the merged `init.sql`; CI's `check_docs.py --check` arbitrates at CI-W1.
+
+**Findings and decisions at the wave-1 merges:**
+- **TASK-14600, declared deviation accepted:** the wrapper's 71-line doc block documented planning itself (boundary sources, ADR-040 D1's off-by-one rule, null-resolver byte-identity, D9c). Only the wrapper-specific parts were deleted; the rest was merged into `BuildPlanWithHistoriesAsync`'s summary. Both lenses agreed this is the better reading of the contract.
+  - Fable **W2**, the lost "tests reach this method by name" sentence, and **W1**, the planless `CalculateAsync` shim whose banner and `[Obsolete]` text still name a production caller it lost in S134, are **carried into TASK-14604** as text-only edits. 14604 is the next task to touch the same file, under full dual-lens review.
+  - The shims themselves are test-only; that is recorded for a later tidy, below the register's Medium floor.
+- **TASK-14601, the frozen inputs (the owner's audit question, answered):** the frozen-inputs column `plan_inputs_jsonb` is written from the event serialization (`EventSerializer`, `WhenWritingNull`) and omits the null `OpeningFlexProvenance` member, so bytes are unchanged for every current writer, since none sets it yet. No hash or fingerprint covers that JSON. *(The implementing agent's report said the opposite; the Fable reviewer and Codex both showed it was wrong, and this sentence replaces it.)*
+- **TASK-14601-T fix-up:** both lenses found test gaps. Fable W2: the sixth partial shape `(false, true, true)`, without which a CHECK that lost its `opening_balance IS NOT NULL` term would pass. Codex: the snapshots-dropped fact started from a schema where the table was already absent. The fix-up adds the shape and `Segment_OnPreS146Database_DropsSnapshotsAndKeepsRowsAllNull`, which restores the pre-S146 shape and runs the segment. Both lenses verified that removing the DROP TABLE, an ADD COLUMN or the ADD CONSTRAINT now fails a fact.
+  - Record-only notes: the `outbox_messages` line-cite at `PayrollExportRecordsTestSchema.cs:66` is stale; "upgrade half" in a fact label could read as a supported upgrade path (pre-S146 databases are reseeded).
+- **TASK-14601-T renamed the guard theory** to `HarnessDdl_Copies_MatchInitSqlSchema`; QUAL-195 updated at `bc4ad0d7`.
+- **TASK-14602:** five declared deviations accepted:
+  1. a comment correction;
+  2. `DayNorm.IsWeekday` in both loops;
+  3. an `ILoggerFactory` parameter;
+  4. a cancellation filter on the catch;
+  5. a local log-category const.
+
+  The reviewer's notes are routed:
+  - **(1) to the register:** a part-timer's hours above their own norm now show as "overtime" on the screens, where the agreements call them merarbejde (added to QUAL-217's row);
+  - **(3) to the register:** the two screens read the fraction differently when an agreement-code row is missing (QUAL-226);
+  - **(2) the screens' different weekly-norm anchors, and (4) the month-end fraction versus the engine's per-day sum:** to the S147 program's input list (QUAL-226).
+- **TASK-14603, scope widened by Orchestrator decision** on the reviewer's recommendation: three more refusal-body helpers with the same crash risk, `AssertRulesUnavailable`, `AssertEntriesNotAccepted` and `AssertPriorMonthNotApproved` (follow-up `900df51f`), so the whole class is closed rather than left for 14605-T's census. The N-fact's RED uses the literal mutation in `JsonAssert.cs`: `if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var member))` becomes `if (true)`, and `return member;` becomes `return root.GetProperty(name);`. Result: `Failed: 1, Passed: 1`, actual `KeyNotFoundException` against expected `XunitException`. The reviewer re-ran it outside the repository after the dead `IsNotType` line was removed.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
