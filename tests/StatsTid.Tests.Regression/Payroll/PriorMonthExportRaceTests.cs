@@ -350,8 +350,8 @@ public sealed class PriorMonthExportRaceTests : IAsyncLifetime
 /// <para>
 /// <b>What is kept.</b> As with the existing B2 recheck of this month's approval, the calculation's own
 /// artifacts are written BEFORE the export and stay: the segment manifest (<c>segment_manifests</c> row)
-/// and the legacy <c>PeriodCalculationCompleted</c> event (stream <c>period-calc-{employee}-2026-10-01</c>
-/// in <c>events</c>). Both are observable from the test, by SQL. Not asserted separately: the manifest
+/// and the legacy <c>PeriodCalculationCompleted</c> event (stream <c>period-calc-{employee}-2026-10-01</c>,
+/// on <c>outbox_events</c> since S146 R-22: this host runs no publisher). Both are observable from the test, by SQL. Not asserted separately: the manifest
 /// event's own stream (<c>segment-manifest-{manifestId}</c>), which is the same fact as the manifest row.
 /// </para>
 ///
@@ -520,8 +520,10 @@ public sealed class PriorMonthExportRaceHostTests : IAsyncLifetime
         // The calculation's artifacts are KEPT (written before the export, as with the B2 recheck).
         Assert.Equal(1, await CountAsync(
             "SELECT COUNT(*) FROM segment_manifests WHERE employee_id = @e", ("e", EmployeeId)));
+        // S146 R-22: the legacy PeriodCalculationCompleted now rides the Payroll outbox in the manifest's own
+        // transaction (this host runs no publisher, so it is on outbox_events, not yet on events).
         Assert.Equal(1, await CountAsync(
-            "SELECT COUNT(*) FROM events WHERE stream_id = @s",
+            "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @s AND event_type = 'PeriodCalculationCompleted'",
             ("s", $"period-calc-{EmployeeId}-2026-10-01")));
 
         // The reopen itself stands.

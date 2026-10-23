@@ -58,9 +58,14 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
         await ExecuteAsync(
             "UPDATE segment_manifests SET plan_inputs_jsonb = '[]'::jsonb WHERE manifest_id = @id", manifestId);
 
-        // The "despite": the event stream still carries complete frozen inputs.
+        // The "despite": the event still carries complete frozen inputs. S146 R-22: the manifest event rides the
+        // outbox, so it is read from outbox_events; the drain puts the same event on `events` too, which is what
+        // the replay's event fallback would read, so the refusal below is not vacuous (a replay that substituted
+        // the event would find it).
+        await PayrollOutboxDrain.DrainAsync(_harness.Factory);
         var created = await ReadManifestEventAsync(manifestId);
         Assert.NotNull(created.PlanInputs);
+        Assert.Single((await _harness.EventStore.ReadStreamAsync($"segment-manifest-{manifestId}")).OfType<SegmentManifestCreated>());
 
         var refused = await Assert.ThrowsAsync<ReplayRefusedException>(() => pcs.ReplayAsync(manifestId));
         Assert.Equal("replay-manifest-without-frozen-inputs", refused.Reason);
@@ -195,9 +200,19 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
         Assert.Equal(1, rows);
     }
 
+    /// <summary>S146 R-22: the manifest event as the calculation enqueued it, decoded from its `outbox_events` row
+    /// through <see cref="StatsTid.Infrastructure.EventSerializer"/> (a calculation no longer appends to `events`).</summary>
     private async Task<SegmentManifestCreated> ReadManifestEventAsync(Guid manifestId)
     {
-        var events = await _harness.EventStore.ReadStreamAsync($"segment-manifest-{manifestId}");
-        return Assert.Single(events.OfType<SegmentManifestCreated>());
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT event_type, event_payload::text FROM outbox_events WHERE stream_id = @s", conn);
+        cmd.Parameters.AddWithValue("s", $"segment-manifest-{manifestId}");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), "non-vacuity: the manifest event is on the outbox");
+        var decoded = StatsTid.Infrastructure.EventSerializer.Deserialize(reader.GetString(0), reader.GetString(1));
+        Assert.False(await reader.ReadAsync(), "exactly one manifest event on the outbox");
+        return Assert.IsType<SegmentManifestCreated>(decoded);
     }
 }

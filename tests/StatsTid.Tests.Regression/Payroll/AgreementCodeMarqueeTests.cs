@@ -213,8 +213,7 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
         return new PeriodCalculationService(
             httpFactory,
             mappingService,
-            _harness.EventStore,
-            _harness.Factory,
+            new PostgresSegmentManifestStore(_harness.Factory, _harness.EventStore, _harness.EventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryRuleClassificationProvider(TestFixtures.RuleSet),

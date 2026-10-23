@@ -15,7 +15,7 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// SAME options object production uses. Until this accessor existed, three tests each held a
 /// hand-copied replica with a "KEEP IN SYNC" comment — a promise, not a check: had someone
 /// added a <c>DefaultIgnoreCondition</c> to the real options, the replicas would have kept
-/// passing while production bytes changed. Binding to the real private field by reflection
+/// passing while production bytes changed. Binding to the real (non-public, since S146 internal) field by reflection
 /// closes that gap; renaming or re-shaping the field fails every consumer loudly (the throw
 /// below) instead of silently diverging.
 /// </para>
@@ -42,7 +42,7 @@ internal static class PcsJsonOptions
 
         return field?.GetValue(null) as JsonSerializerOptions
             ?? throw new InvalidOperationException(
-                $"PeriodCalculationService.{FieldName} (private static JsonSerializerOptions) was not " +
+                $"PeriodCalculationService.{FieldName} (internal static JsonSerializerOptions) was not " +
                 "found by reflection — the field was renamed, made non-static, or changed type. Update " +
                 "PcsJsonOptions.FieldName; do NOT reintroduce a hand-copied replica of the options.");
     }

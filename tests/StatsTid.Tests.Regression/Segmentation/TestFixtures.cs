@@ -38,14 +38,14 @@ internal static class TestFixtures
     // its rebuilt-from-events twin; binding to the real instance means any drift in PCS's options
     // (e.g. a DefaultIgnoreCondition someone adds) is EXERCISED here instead of hidden by a stale
     // copy. Reflection is required because the Web-SDK Payroll assembly cannot expose internals to
-    // this project without a Program-type clash against Backend.Api. Renaming the private field
+    // this project without a Program-type clash against Backend.Api. Renaming the (now internal) field
     // fails loudly at fixture load (the throw below) rather than silently diverging.
     public static readonly JsonSerializerOptions ManifestReadOptions =
         (JsonSerializerOptions?)typeof(PeriodCalculationService)
             .GetField("JsonOptions", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
             ?.GetValue(null)
         ?? throw new InvalidOperationException(
-            "PeriodCalculationService.JsonOptions (private static) was not found by reflection — " +
+            "PeriodCalculationService.JsonOptions (internal static) was not found by reflection — " +
             "the field was renamed or made non-static. Update TestFixtures.ManifestReadOptions; " +
             "do NOT reintroduce a hand-copied replica.");
 
@@ -271,8 +271,7 @@ internal static class TestFixtures
         return new PeriodCalculationService(
             httpFactory,
             mappingService,
-            eventStore,
-            factory,
+            new PostgresSegmentManifestStore(factory, eventStore, eventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryRuleClassificationProvider(RuleSet),
