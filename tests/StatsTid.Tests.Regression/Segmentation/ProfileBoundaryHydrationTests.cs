@@ -6,6 +6,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -172,7 +173,9 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
             classificationProvider: null,
             localAgreementProfileRepo: profileRepo,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
     }
 
     private static async Task<PlannedCalculation> InvokeBuildPlanAsync(

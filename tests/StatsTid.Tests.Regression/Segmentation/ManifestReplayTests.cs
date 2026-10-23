@@ -60,8 +60,7 @@ public sealed class ManifestReplayTests : IAsyncLifetime
             profile: profile);
 
         var forward = await pcs.CalculateAsync(
-            plan, profile,
-            previousFlexBalance: 0m);
+            plan, profile);
         Assert.True(forward.Success);
 
         // Replay against the same manifest id with the same inputs.

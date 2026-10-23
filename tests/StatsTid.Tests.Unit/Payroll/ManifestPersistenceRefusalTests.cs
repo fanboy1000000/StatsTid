@@ -49,7 +49,7 @@ public sealed class ManifestPersistenceRefusalTests
         var engine = new RecordingRuleEngine(responder);
         var pcs = BuildPcs(engine, store, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId), previousFlexBalance: 0m, emitAuditEvents: emitAuditEvents);
+            plan, Profile(EmployeeId), emitAuditEvents: emitAuditEvents);
         return (outcome, store);
     }
 

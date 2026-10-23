@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Calendar;
@@ -18,7 +19,7 @@ namespace StatsTid.Integrations.Payroll.Services;
 ///
 /// <para>
 /// Sprint 20 (ADR-016 D1, D8): the sole logic entry point is
-/// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, bool, CancellationToken)"/>.
+/// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, string?, Guid?, bool, CancellationToken)"/>.
 /// Every calculation routes through <see cref="PeriodPlanner"/> first — the back-compat
 /// overload <c>CalculateAsync(profile, periodStart, periodEnd, …)</c> below is a thin shim that hydrates
 /// <see cref="BoundarySources"/> from <see cref="OkVersionResolver"/> and immediately
@@ -122,6 +123,18 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <see cref="StampAuditContext(HttpContext, PeriodCalculationOutcome)"/> to thread the manifest id into
 /// <c>HttpContext.Items</c> for <see cref="AuditLoggingMiddleware"/>.
 /// </para>
+///
+/// <para>
+/// <strong>The flex ledger (S146 / TASK-14605, QUAL-188; rulings R-14, R-28, R-36, R-37)</strong>: no entry point
+/// takes an opening flex balance any more. Admission derives it from the recorded ledger through the ONE function
+/// <see cref="FlexLedgerOpening.Derive"/> (records through <see cref="IFlexLedgerReader"/>, employment windows over
+/// <c>[the previous month's first day, this month's last day]</c>), after the existing checks and before any rule
+/// call, for a month holding an EMPLOYED day; a refusal is <see cref="FlexLedgerRefusalException"/> (409). The
+/// derived opening feeds the timeline call and <see cref="PlanInputs"/>; the result carries the opening, the
+/// engine's clamped closing (<c>Flex.NewBalance</c>) and the provenance. The writing transactions re-run the same
+/// function on in-transaction reads under the per-employee ledger lock
+/// (<see cref="RecheckFlexOpeningUnderLockAsync"/>). Replay keeps the frozen opening and provenance.
+/// </para>
 /// </summary>
 public sealed class PeriodCalculationService
 {
@@ -180,6 +193,18 @@ public sealed class PeriodCalculationService
     // throws InvalidOperationException naming the registration (EnsurePriorMonthApprovedAsync). Replay
     // never consults it (R42).
     private readonly IPriorPeriodApprovalReader? _priorPeriodApprovalReader;
+    // S146 TASK-14605 (QUAL-188; R-14, reviewer c3 W2): the flex ledger's one read — the employee's export records
+    // with their balances. Optional in the constructor (plan-only instances, and calculations of a month with no
+    // EMPLOYED day, need none), but NEVER SILENT: a calculation that reaches the opening derivation without it
+    // throws InvalidOperationException naming the registration (RequireFlexLedgerReader). Defaulting to 0 would be
+    // QUAL-188 again. Replay never consults it (R42): it keeps the frozen opening.
+    private readonly IFlexLedgerReader? _flexLedgerReader;
+    // S146 TASK-14605 (R-36): the in-transaction employment-window read the under-lock recheck uses over
+    // [P.start, M.end]. Optional: without a self-managed window resolver the windows are null on BOTH reads
+    // (implicit employment, R-37); with one, the recheck needs this surface — taken from here, else from the
+    // self-managed resolver when it implements it too (the one concrete EmploymentWindowResolver implements both),
+    // else the recheck throws naming the registration (never a silent windowless re-run).
+    private readonly IEmploymentWindowResolverInTx? _employmentWindowResolverInTx;
     private readonly ILogger<PeriodCalculationService> _logger;
     private readonly string _ruleEngineUrl;
 
@@ -287,7 +312,9 @@ public sealed class PeriodCalculationService
         EmployeeProfileRepository? employeeProfileRepo = null,
         UserAgreementCodeRepository? userAgreementCodeRepo = null,
         IRecordedHoursReader? hoursReader = null,
-        IPriorPeriodApprovalReader? priorPeriodApprovalReader = null)
+        IPriorPeriodApprovalReader? priorPeriodApprovalReader = null,
+        IFlexLedgerReader? flexLedgerReader = null,
+        IEmploymentWindowResolverInTx? employmentWindowResolverInTx = null)
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
@@ -369,8 +396,35 @@ public sealed class PeriodCalculationService
         // (June 2026 starts on a Monday; a starter hired on the 1st), legitimately need no reader. The
         // never-silent throw runs at call time, exactly when the answer is needed.
         _priorPeriodApprovalReader = priorPeriodApprovalReader;
+        // S146 TASK-14605 (R-14): NOT enforced here either, for the same reason — a plan-only instance, and a
+        // calculation of a month with no EMPLOYED day (no flex is settled), legitimately need no reader. The
+        // never-silent throw runs at call time (RequireFlexLedgerReader), exactly when an opening is derived.
+        _flexLedgerReader = flexLedgerReader;
+        _employmentWindowResolverInTx = employmentWindowResolverInTx;
         _ruleEngineUrl = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080";
     }
+
+    /// <summary>
+    /// S146 / TASK-14605 (QUAL-188; R-14 "optional but never silent") — the never-silent check for the flex ledger
+    /// reader, called by the opening derivation (admission and the under-lock recheck) before it reads anything.
+    ///
+    /// <para>
+    /// <b>Why it throws (plain language).</b> A month's opening flex balance comes only from the recorded ledger. A
+    /// service built without a reader cannot know it; opening the month at 0 instead is exactly the defect S146
+    /// removes (QUAL-188: a balance nobody recorded), so it refuses, by name.
+    /// </para>
+    /// </summary>
+    private IFlexLedgerReader RequireFlexLedgerReader() =>
+        _flexLedgerReader ?? throw new InvalidOperationException(
+            "PeriodCalculationService was asked to derive the opening flex balance of a month holding an EMPLOYED " +
+            "day, on a service constructed WITHOUT an IFlexLedgerReader. The opening comes only from the recorded " +
+            "ledger (S146 R-14); opening the month at 0 instead would pay flex from a balance nobody recorded " +
+            "(QUAL-188), so it is refused before anything is evaluated or written. Fix the wiring: the Payroll host " +
+            "must register IFlexLedgerReader -> PostgresFlexLedgerReader in " +
+            "src/Integrations/StatsTid.Integrations.Payroll/Program.cs (beside PayrollExportRecordRepository). Test " +
+            "fixtures that calculate an employed month must pass an IFlexLedgerReader as the flexLedgerReader " +
+            "constructor argument (a fake answering \"no ledger records\", declared with a comment, when the fixture " +
+            "is not about the chain: the month then opens at LEDGER_START 0).");
 
     /// <summary>
     /// S145 / TASK-14508 (ruling R25) — the never-silent check for the hours source. Called FIRST by
@@ -419,11 +473,13 @@ public sealed class PeriodCalculationService
         /// value.</summary>
         Complete,
 
-        /// <summary>The manifest's one transaction did NOT commit, so none of its three writes exists (formerly
-        /// <c>BothFailed</c>; R-22). The rule outputs are valid, but nothing could prove them later: both calculating
-        /// routes refuse the calculation before any payroll write (503 <c>payroll-manifest-not-persisted</c>, through
-        /// <see cref="PeriodCalculationOutcome.ThrowIfNotProvable"/>). The ManifestId carried alongside resolves in
-        /// no store (barring a commit that failed in flight after the database committed).</summary>
+        /// <summary>The commit of the manifest's one transaction was not confirmed (formerly <c>BothFailed</c>; R-22):
+        /// it failed, or its acknowledgement was lost. Usually none of its three writes exists, but a lost
+        /// acknowledgement can leave all three committed, so the state claims only that the proof cannot be relied on.
+        /// The rule outputs are valid, but nothing could prove them later: both calculating routes refuse the
+        /// calculation before any payroll write (503 <c>payroll-manifest-not-persisted</c>, through
+        /// <see cref="PeriodCalculationOutcome.ThrowIfNotProvable"/>), which is safe either way: nothing is exported
+        /// or corrected from it. The ManifestId carried alongside usually resolves in no store.</summary>
         NotPersisted,
 
         /// <summary>No manifest emission was attempted. Set on the refused calculation
@@ -442,7 +498,7 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// Wrapper surfacing the calculation result alongside its <see cref="AuditState"/>.
     /// Returned by <see cref="CalculateWithOutcomeAsync"/>; the legacy
-    /// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, string?, Guid?, CancellationToken)"/>
     /// returns just <see cref="PeriodCalculationResult"/> for backward compatibility but
     /// loses the <see cref="AuditState"/> signal.
     ///
@@ -513,11 +569,21 @@ public sealed class PeriodCalculationService
         public PlanInputs? PlanInputs { get; init; }
 
         /// <summary>
+        /// S146 / TASK-14605 (QUAL-188; R-14) — the opening admission derived from the recorded ledger
+        /// (<see cref="FlexLedgerOpening.Derive"/>): the balance, its provenance (<c>LEDGER_START</c>, <c>CHAINED</c>,
+        /// <c>REHIRE</c> or <c>UNTRACKED</c>) and the ledger start S the derivation saw. <c>null</c> when the month holds
+        /// no EMPLOYED day (no flex is settled, so the function is not called and no record is written) and on every
+        /// replay (R42). The writing transaction re-runs the derivation under the ledger lock and requires this same
+        /// (opening, provenance) pair (<see cref="RecheckFlexOpeningUnderLockAsync"/>).
+        /// </summary>
+        public FlexOpening? FlexOpening { get; init; }
+
+        /// <summary>
         /// S146 / TASK-14604 (QUAL-205; rulings R-22, R-27) — THE refusal predicate both calculating routes call
         /// before any payroll write: throws <see cref="ManifestNotPersistedException"/> when this outcome cannot be
         /// proven later, and returns otherwise.
         /// <list type="bullet">
-        /// <item><see cref="AuditState.NotPersisted"/>: the manifest's one transaction did not commit;</item>
+        /// <item><see cref="AuditState.NotPersisted"/>: the commit of the manifest's one transaction was not confirmed;</item>
         /// <item><see cref="AuditState.NoManifest"/> with <c>Result.Success == true</c>: a successful forward
         /// calculation that wrote no manifest at all.</item>
         /// </list>
@@ -539,9 +605,9 @@ public sealed class PeriodCalculationService
             {
                 throw new ManifestNotPersistedException(
                     ManifestId,
-                    $"The manifest {ManifestId} of this calculation was not persisted (audit state NotPersisted): its " +
-                    "one transaction (manifest event, projection row, legacy event) did not commit, so the result is not " +
-                    "provable and is refused before any payroll write.");
+                    $"The manifest {ManifestId} of this calculation was not persisted (audit state NotPersisted): the " +
+                    "commit of its one transaction (manifest event, projection row, legacy event) was not confirmed, so " +
+                    "the result is not provable and is refused before any payroll write.");
             }
 
             if (AuditState == AuditState.NoManifest && Result.Success)
@@ -569,7 +635,7 @@ public sealed class PeriodCalculationService
     /// <para>
     /// Returns just <see cref="PeriodCalculationResult"/>; callers that need the
     /// <see cref="AuditState"/> signal should use
-    /// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, bool, CancellationToken)"/>.
+    /// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, string?, Guid?, bool, CancellationToken)"/>.
     /// </para>
     ///
     /// <para>
@@ -577,25 +643,28 @@ public sealed class PeriodCalculationService
     /// employee's current recorded rows itself; a service built without an
     /// <see cref="IRecordedHoursReader"/> throws there before anything is read.
     /// </para>
+    ///
+    /// <para>
+    /// S146 / TASK-14605 (R-14): takes no opening flex balance either; admission derives it from the ledger.
+    /// </para>
     /// </summary>
     public async Task<PeriodCalculationResult> CalculateAsync(
         PlannedCalculation plan,
         EmploymentProfile profile,
-        decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
         CancellationToken ct = default)
     {
         var outcome = await CalculateWithOutcomeAsync(
             plan, profile,
-            previousFlexBalance, authorizationHeader, correlationId,
+            authorizationHeader, correlationId,
             ct: ct);
         return outcome.Result;
     }
 
     /// <summary>
     /// Sole logic entry point — same semantics as
-    /// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateAsync(PlannedCalculation, EmploymentProfile, string?, Guid?, CancellationToken)"/>
     /// but additionally returns an explicit <see cref="AuditState"/> describing the
     /// completeness of the manifest-persistence chain.
     ///
@@ -633,11 +702,16 @@ public sealed class PeriodCalculationService
     /// lane). The per-plan results are joined to the EMPLOYED segment's result list, so the merge and
     /// the wage-type mapping see exactly one result per rule per EMPLOYED segment, as before.
     /// </para>
+    ///
+    /// <para>
+    /// <strong>The opening flex balance (S146 / TASK-14605, R-14).</strong> No caller hands it in any more:
+    /// admission derives it from the recorded ledger (<see cref="FlexLedgerOpening.Derive"/>) and may refuse with
+    /// <see cref="FlexLedgerRefusalException"/>; the outcome carries it as <see cref="PeriodCalculationOutcome.FlexOpening"/>.
+    /// </para>
     /// </summary>
     public async Task<PeriodCalculationOutcome> CalculateWithOutcomeAsync(
         PlannedCalculation plan,
         EmploymentProfile profile,
-        decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
         bool emitAuditEvents = true,
@@ -664,7 +738,7 @@ public sealed class PeriodCalculationService
 
         // ── Evaluation.
         return await EvaluateAdmittedAsync(
-            admitted, profile, previousFlexBalance, authorizationHeader, correlationId, emitAuditEvents, ct);
+            admitted, profile, authorizationHeader, correlationId, emitAuditEvents, ct);
     }
 
     // -------------------------------------------------------------------
@@ -673,14 +747,16 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// What admission hands to evaluation: the plan; the histories its checks and the timeline pieces are
-    /// built from; the hours rows exactly as read; and the previous month's pay period admission required to
-    /// be APPROVED (<c>null</c> when the check did not apply).
+    /// built from; the hours rows exactly as read; the previous month's pay period admission required to
+    /// be APPROVED (<c>null</c> when the check did not apply); and the opening flex balance derived from the
+    /// ledger (S146 / TASK-14605; <c>null</c> when the month holds no EMPLOYED day).
     /// </summary>
     private sealed record AdmittedCalculation(
         PlannedCalculation Plan,
         PlanHistories Histories,
         RecordedHours Hours,
-        (DateOnly PeriodStart, DateOnly PeriodEnd)? PriorMonthApproved);
+        (DateOnly PeriodStart, DateOnly PeriodEnd)? PriorMonthApproved,
+        FlexOpening? FlexOpening);
 
     /// <summary>
     /// The admission step that follows planning, in exactly the refusal order N1 requires:
@@ -691,6 +767,11 @@ public sealed class PeriodCalculationService
     /// opening week holds its EMPLOYED days → <see cref="PriorMonthNotApprovedException"/>, the 409 (or
     /// <see cref="InvalidOperationException"/> when no <see cref="IPriorPeriodApprovalReader"/> is
     /// registered);</item>
+    /// <item>the <b>opening flex balance</b> (S146 / TASK-14605, R-14): derived from the recorded ledger by
+    /// <see cref="FlexLedgerOpening.Derive"/> for a month holding an EMPLOYED day →
+    /// <see cref="FlexLedgerRefusalException"/>, a 409 (<c>payroll-export-out-of-order</c> or
+    /// <c>payroll-prior-month-not-recorded</c>), or <see cref="InvalidOperationException"/> when no
+    /// <see cref="IFlexLedgerReader"/> is registered;</item>
     /// <item>the <b>hours read</b> (<see cref="IRecordedHoursReader.ReadCurrentAsync"/>).</item>
     /// </list>
     /// The planner's own refusal, the first 422, has already happened: it is raised while the plan is built,
@@ -713,6 +794,12 @@ public sealed class PeriodCalculationService
 
         var priorMonth = await EnsurePriorMonthApprovedAsync(plan, histories, ct);
 
+        // S146 TASK-14605 (QUAL-188; R-14, R-28) — the opening flex balance, after the existing checks and before
+        // the hours read and any rule call. Nobody hands a calculation its opening any more: it is derived from the
+        // recorded ledger by the one function, on self-managed reads (no lock is held while the engine is called);
+        // the writing transaction re-runs it under the ledger lock. A refusal (409) writes nothing.
+        var flexOpening = await DeriveFlexOpeningAtAdmissionAsync(plan, ct);
+
         // ---------------------------------------------------------------
         // S145 TASK-14508 (R14) — payroll reads its own hours. Nobody hands a calculation its
         // hours any more: it reads the employee's CURRENT recorded rows (one current row per Skema
@@ -731,19 +818,19 @@ public sealed class PeriodCalculationService
         var recordedHours = await hoursReader.ReadCurrentAsync(
             plan.EmployeeId, HoursReadStart(plan.PeriodStart), plan.PeriodEnd, ct);
 
-        return new AdmittedCalculation(plan, histories, recordedHours, priorMonth);
+        return new AdmittedCalculation(plan, histories, recordedHours, priorMonth, flexOpening);
     }
 
     /// <summary>
     /// Evaluation of an admitted calculation: derives the evaluation inputs from the histories admission
-    /// read (<see cref="DeriveEvaluationInputsAsync"/>), runs <see cref="EvaluateAsync"/>, and records on the
-    /// outcome the previous month admission required to be APPROVED, which <c>/calculate-and-export</c>
-    /// hands to the export for its row-locked recheck (TASK-14512 Do 7).
+    /// read (<see cref="DeriveEvaluationInputsAsync"/>), runs <see cref="EvaluateAsync"/> on the opening
+    /// admission derived, and records on the outcome the previous month admission required to be APPROVED,
+    /// which <c>/calculate-and-export</c> hands to the export for its row-locked recheck (TASK-14512 Do 7),
+    /// and the derived opening (S146 / TASK-14605), which both writing routes re-check under the ledger lock.
     /// </summary>
     private async Task<PeriodCalculationOutcome> EvaluateAdmittedAsync(
         AdmittedCalculation admitted,
         EmploymentProfile profile,
-        decimal previousFlexBalance,
         string? authorizationHeader,
         Guid? correlationId,
         bool emitAuditEvents,
@@ -751,13 +838,186 @@ public sealed class PeriodCalculationService
     {
         var inputs = await DeriveEvaluationInputsAsync(admitted.Plan, admitted.Histories, profile, ct);
 
+        // S146 TASK-14605: a month with no EMPLOYED day makes no timeline call, so its opening is never used; it
+        // freezes 0 with no provenance, and its result carries no balance.
+        var opening = admitted.FlexOpening;
+
         // S145 R-12: evaluation takes the employee id only. The caller's profile fed the derivation above
         // (the fallback where no dated record is resolved); the result reports what the pieces ran under.
         var outcome = await EvaluateAsync(
             admitted.Plan, inputs, admitted.Hours, profile.EmployeeId,
-            previousFlexBalance, authorizationHeader, correlationId, emitAuditEvents, ct);
+            opening?.Balance ?? 0m, opening?.Provenance,
+            authorizationHeader, correlationId, emitAuditEvents, ct);
 
-        return outcome with { PriorMonthApprovalRequired = admitted.PriorMonthApproved };
+        return outcome with
+        {
+            PriorMonthApprovalRequired = admitted.PriorMonthApproved,
+            FlexOpening = opening,
+        };
+    }
+
+    // -------------------------------------------------------------------
+    // The flex ledger — S146 TASK-14605 (QUAL-188; R-14, R-28, R-36, R-37)
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// The writing route a recheck runs for: it selects the <c>payroll-ledger-changed</c> sentence (R-14).
+    /// </summary>
+    public enum FlexLedgerRoute
+    {
+        /// <summary><c>/calculate-and-export</c>, through <see cref="PayrollExportService.ExportAsync"/>.</summary>
+        Export,
+
+        /// <summary><c>/recalculate</c>, through <see cref="RetroactiveCorrectionService"/>.</summary>
+        Correction,
+    }
+
+    /// <summary>
+    /// Admission's half of R-14 (C2 "PCS owns the derivation"): the opening of the plan's month M, on SELF-MANAGED
+    /// reads — the employee's export records (<see cref="IFlexLedgerReader.ReadRecordsAsync(string, CancellationToken)"/>)
+    /// and the employment windows over <c>[P.start, M.end]</c>
+    /// (<see cref="IEmploymentWindowResolver.GetWindowsAsync"/>; R-28: the derivation's own read, never the plan's
+    /// <c>[periodStart, periodEnd]</c> histories, which can miss a spell that ended inside P). Returns <c>null</c>
+    /// without reading anything when the plan holds no EMPLOYED segment (the function's precondition: no flex is
+    /// settled and no record is written). Without a window resolver the windows are <c>null</c> and every day is
+    /// EMPLOYED (R-37), so the chain needs only P's ledger record. A refusal throws
+    /// <see cref="FlexLedgerRefusalException"/>; a missing reader throws <see cref="InvalidOperationException"/>
+    /// (<see cref="RequireFlexLedgerReader"/>). M is the calendar month of the period start, the month the export
+    /// record is keyed by.
+    /// </summary>
+    private async Task<FlexOpening?> DeriveFlexOpeningAtAdmissionAsync(PlannedCalculation plan, CancellationToken ct)
+    {
+        // The same predicate as the timeline call's (EvaluateAsync's employedIndices): a segment that is not
+        // NOT_EMPLOYED is evaluated, so the month settles flex exactly when this holds.
+        if (!plan.Segments.Any(s => s.EmploymentStatus != EmploymentWindowStatus.NOT_EMPLOYED))
+            return null;
+
+        var reader = RequireFlexLedgerReader();
+        var month = FlexLedgerOpening.MonthStart(plan.PeriodStart);
+        var records = await reader.ReadRecordsAsync(plan.EmployeeId, ct);
+
+        IReadOnlyList<EmploymentWindow>? windows = null;
+        if (_employmentWindowResolver is not null)
+        {
+            var (from, to) = FlexLedgerOpening.WindowsReadRange(month);
+            windows = await _employmentWindowResolver.GetWindowsAsync(plan.EmployeeId, from, to, ct);
+        }
+
+        return FlexLedgerOpening.Derive(month, records, windows).OpeningOrThrow(plan.EmployeeId);
+    }
+
+    /// <summary>
+    /// S146 / TASK-14605 (R-14 "the under-lock recheck"; R-36) — the writing transaction's half: the SAME function
+    /// re-run inside the caller's <paramref name="conn"/> + <paramref name="tx"/>, which must already hold the
+    /// employee's ledger lock (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>, the first
+    /// statement of every writer). Records through the reader's in-transaction surface; windows through
+    /// <see cref="IEmploymentWindowResolverInTx.GetWindowsAsync(NpgsqlConnection, NpgsqlTransaction, string, DateOnly, DateOnly, CancellationToken)"/>
+    /// over the same <c>[P.start, M.end]</c> (null on both reads when no window resolver is wired, R-37).
+    ///
+    /// <para>
+    /// The write proceeds only when the function returns no refusal and the same (opening, provenance) pair as
+    /// <paramref name="used"/>, the pair the calculation ran on; otherwise this throws
+    /// <see cref="FlexLedgerRefusalException"/> <c>payroll-ledger-changed</c> and the caller's transaction rolls back.
+    /// A correction compares against ITS OWN calculation's pair, never M's recorded values: the point of a
+    /// correction is that M's recorded opening may be stale. With provenance in the compare, two concurrent first
+    /// exports of consecutive months that both computed <c>LEDGER_START 0</c> cannot both be written: the later
+    /// month re-derives <c>CHAINED</c> here and refuses, and its retry chains.
+    /// </para>
+    /// </summary>
+    public async Task RecheckFlexOpeningUnderLockAsync(
+        NpgsqlConnection conn,
+        NpgsqlTransaction tx,
+        string employeeId,
+        DateOnly month,
+        FlexOpening used,
+        FlexLedgerRoute route,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(conn);
+        ArgumentNullException.ThrowIfNull(tx);
+        ArgumentNullException.ThrowIfNull(used);
+
+        var reader = RequireFlexLedgerReader();
+        var monthStart = FlexLedgerOpening.MonthStart(month);
+        var records = await reader.ReadRecordsAsync(conn, tx, employeeId, ct);
+
+        IReadOnlyList<EmploymentWindow>? windows = null;
+        if (_employmentWindowResolver is not null)
+        {
+            var inTx = _employmentWindowResolverInTx
+                ?? _employmentWindowResolver as IEmploymentWindowResolverInTx
+                ?? throw new InvalidOperationException(
+                    "PeriodCalculationService was asked to re-check a month's opening flex balance under the ledger " +
+                    "lock with an IEmploymentWindowResolver but WITHOUT an IEmploymentWindowResolverInTx. Admission read " +
+                    "the employment windows, so the recheck must read them too, inside the writing transaction; re-running " +
+                    "without them would treat every day as employed and could accept an opening admission refused, so it " +
+                    "is refused instead. Fix the wiring: the Payroll host must register IEmploymentWindowResolverInTx from " +
+                    "the EmploymentWindowResolver singleton in src/Integrations/StatsTid.Integrations.Payroll/Program.cs " +
+                    "(beside IEmploymentWindowResolver), and pass it as the employmentWindowResolverInTx constructor " +
+                    "argument (or use a window resolver that implements both surfaces).");
+            var (from, to) = FlexLedgerOpening.WindowsReadRange(monthStart);
+            windows = await inTx.GetWindowsAsync(conn, tx, employeeId, from, to, ct);
+        }
+
+        var decision = FlexLedgerOpening.Derive(monthStart, records, windows);
+        if (decision.Opening is { } rederived && rederived.SamePairAs(used))
+            return;
+
+        var sentence = route == FlexLedgerRoute.Correction
+            ? FlexLedgerOpening.LedgerChangedCorrectionSentence
+            : FlexLedgerOpening.LedgerChangedExportSentence;
+        var now = decision.Opening is { } o
+            ? $"{o.Provenance} {o.Balance.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+            : $"a refusal ({decision.Refusal!.Kind})";
+        throw new FlexLedgerRefusalException(
+            FlexLedgerRefusalException.LedgerChanged, monthStart, sentence,
+            $"Employee '{employeeId}', {monthStart.ToString(FlexLedgerRefusalException.MonthFormat, System.Globalization.CultureInfo.InvariantCulture)}: " +
+            $"the calculation ran on {used.Provenance} {used.Balance.ToString(System.Globalization.CultureInfo.InvariantCulture)}, " +
+            $"but under the ledger lock the ledger now gives {now} ({route} route). Nothing was written.");
+    }
+
+    /// <summary>
+    /// S146 / TASK-14605 (R-3, R-14, R-16) — what <c>/calculate-and-export</c> hands
+    /// <see cref="PayrollExportService.ExportAsync"/> about the month's flex balance
+    /// (<see cref="PayrollExportContext.FlexLedger"/>): the record's identity (the employee and the calendar month
+    /// of the period start), the derived opening and provenance, the engine's clamped closing, and the under-lock
+    /// recheck bound to this service and the derived pair. <c>null</c> when the month holds no EMPLOYED day (no flex
+    /// is settled and no record is written, ADR-034 D3). Under <c>UNTRACKED</c> both balances are <c>null</c>.
+    /// </summary>
+    public FlexLedgerWrite? FlexLedgerWriteFor(PeriodCalculationOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        if (outcome.FlexOpening is not { } opening)
+            return null;
+
+        var result = outcome.Result;
+
+        // S146 R-47 — the writer's invariant: a ledger write is for one whole calendar month (the record's key; its closing
+        // is the month's, which the next month opens from). /calculate-and-export refuses a partial period with 400
+        // payroll-period-not-a-month before the calculation; reaching this with one is a programmer error.
+        if (!FlexLedgerOpening.IsWholeCalendarMonth(result.PeriodStart, result.PeriodEnd))
+        {
+            throw new InvalidOperationException(
+                $"PeriodCalculationService.FlexLedgerWriteFor: the period " +
+                $"[{result.PeriodStart.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}.." +
+                $"{result.PeriodEnd.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}] " +
+                $"for employee '{result.EmployeeId}' is not one whole calendar month, so its closing is not the month's and " +
+                "must not be recorded as it (R-47). Nothing was written.");
+        }
+
+        var employeeId = result.EmployeeId;
+        var month = FlexLedgerOpening.MonthStart(result.PeriodStart);
+        return new FlexLedgerWrite
+        {
+            EmployeeId = employeeId,
+            Year = month.Year,
+            Month = month.Month,
+            Provenance = opening.Provenance,
+            OpeningBalance = result.OpeningFlexBalance,
+            ClosingBalance = result.ClosingFlexBalance,
+            RecheckUnderLock = (conn, tx, ct) => RecheckFlexOpeningUnderLockAsync(
+                conn, tx, employeeId, month, opening, FlexLedgerRoute.Export, ct),
+        };
     }
 
     // -------------------------------------------------------------------
@@ -874,13 +1134,25 @@ public sealed class PeriodCalculationService
     /// a replay alike, so a request body that disagrees with the employee's dated record can never relabel the
     /// month (the same principle as R-10 for the position).
     /// </para>
+    ///
+    /// <para>
+    /// <b>The flex balances (S146 / TASK-14605, R-14).</b> <paramref name="openingFlexBalance"/> and
+    /// <paramref name="openingFlexProvenance"/> are what admission derived (a forward calculation) or what the
+    /// manifest froze (a replay). The opening goes to the timeline call and into <see cref="PlanInputs"/> with its
+    /// provenance. The result reports the opening, the engine's clamped closing (<c>Flex.NewBalance</c>) and the
+    /// provenance. Under <c>UNTRACKED</c> every <c>FLEX_PAYOUT</c> export line is dropped (a payout from a balance
+    /// that is not tracked would be money from nowhere), the balance members are null and the provenance says
+    /// <c>UNTRACKED</c>; a replay of such a manifest drops them the same way (R-33 item 2). A <c>null</c>
+    /// provenance (no EMPLOYED day, or a manifest frozen before S146) reports no balance at all.
+    /// </para>
     /// </summary>
     private async Task<PeriodCalculationOutcome> EvaluateAsync(
         PlannedCalculation plan,
         EvaluationInputs inputs,
         RecordedHours recordedHours,
         string employeeId,
-        decimal previousFlexBalance,
+        decimal openingFlexBalance,
+        string? openingFlexProvenance,
         string? authorizationHeader,
         Guid? correlationId,
         bool emitAuditEvents,
@@ -968,8 +1240,8 @@ public sealed class PeriodCalculationService
         //    - a week is settled by the month holding its Sunday and dated that Sunday (Q3 = F1), so
         //      a closing week that ends in the next month is paid THERE, not here; a leaver's last
         //      week is settled on their last employed day — the settlement cutoff (R41);
-        //    - the opening flex balance goes in as given: flex is settled once for the month, so the
-        //      per-segment flex carry is retired.
+        //    - the opening flex balance goes in as derived (S146 TASK-14605: from the recorded ledger, never from
+        //      a caller): flex is settled once for the month, so the per-segment flex carry is retired.
         //    No call is made for a plan with no EMPLOYED segment: there is nothing to settle (a week
         //    whose employed days all lie in the previous month was settled by that month).
         // ---------------------------------------------------------------
@@ -998,7 +1270,7 @@ public sealed class PeriodCalculationService
             callsAttempted++;
             timeline = await CallTimelineAsync(
                 client, plan.EmployeeId, plan.PeriodStart, plan.PeriodEnd, settlementCutoff,
-                pieces, timelineEntries, timelineAbsences, previousFlexBalance, ct);
+                pieces, timelineEntries, timelineAbsences, openingFlexBalance, ct);
             if (timeline is null)
                 callsFailed++;
         }
@@ -1140,11 +1412,36 @@ public sealed class PeriodCalculationService
             perSegmentRuleResults, ruleSet, employeeId, plan.ManifestId,
             timelineRows: timeline?.Results.ToDictionary(r => r.RuleId, StringComparer.Ordinal));
 
+        // S146 TASK-14605 (R-14 case 3b): a raw month before the ledger start runs UNTRACKED — its flex is not
+        // tracked, so no payout may come from it: every FLEX_PAYOUT export line is dropped (the rule report keeps
+        // what the engine computed). A replay of an UNTRACKED manifest drops them the same way (R-33 item 2).
+        var untracked = string.Equals(openingFlexProvenance, FlexLedgerOpening.Untracked, StringComparison.Ordinal);
+        if (untracked)
+        {
+            allExportLines.RemoveAll(l =>
+                string.Equals(l.SourceTimeType, FlexLedgerOpening.FlexPayoutTimeType, StringComparison.Ordinal));
+        }
+
+        // S146 TASK-14605 (C1): the month's balances. The closing is the engine's clamped NewBalance (the balance
+        // after any payout above the cap); a tracked provenance always comes with a timeline answer, because the
+        // opening is derived only for a month that holds an EMPLOYED day and a failed call refused above.
+        decimal? resultOpening = null;
+        decimal? resultClosing = null;
+        if (openingFlexProvenance is not null && !untracked)
+        {
+            resultOpening = openingFlexBalance;
+            resultClosing = timeline?.Flex.NewBalance ?? throw new InvalidOperationException(
+                $"PeriodCalculationService evaluation invariant violated: the opening flex balance of employee " +
+                $"{employeeId} was derived ({openingFlexProvenance}) but the plan made no timeline call, so there is no " +
+                $"closing balance to record. ManifestId={plan.ManifestId}.");
+        }
+
         // ---------------------------------------------------------------
         // 5. Freeze what this evaluation ran on (S145 TASK-14513, refinement A7): the data as stored
         //    values, the code as the engine's fingerprints and marker. A replay re-runs exactly this.
+        //    S146 TASK-14605 (R-33 item 2): with the opening's provenance, so a replay reproduces it.
         // ---------------------------------------------------------------
-        var planInputs = FreezePlanInputs(inputs, recordedHours, previousFlexBalance, timeline);
+        var planInputs = FreezePlanInputs(inputs, recordedHours, openingFlexBalance, openingFlexProvenance, timeline);
 
         // ---------------------------------------------------------------
         // 6. Persist the proof (ADR-016 D10): the SegmentManifestCreated event, carrying the frozen
@@ -1198,7 +1495,12 @@ public sealed class PeriodCalculationService
             OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
             RuleResults = allRuleResults,
             ExportLines = allExportLines,
-            Success = true
+            Success = true,
+            // S146 TASK-14605 (C1): the opening used, the engine's clamped closing and where the opening came from.
+            // Under UNTRACKED the balances are null and the provenance says so; with no EMPLOYED day all three are null.
+            OpeningFlexBalance = resultOpening,
+            ClosingFlexBalance = resultClosing,
+            FlexProvenance = openingFlexProvenance,
         };
 
         return new PeriodCalculationOutcome(okResult, auditState, plan.ManifestId)
@@ -1220,7 +1522,10 @@ public sealed class PeriodCalculationService
     /// <item><see cref="PlanInputs.SettlementCutoff"/> — the cutoff as sent (R41: the window's inclusive
     /// <c>End</c> when it is on or before the period end, else <c>null</c>; derived once, by
     /// <see cref="SettlementCutoffFrom"/>, and not recoverable from the plan);</item>
-    /// <item><see cref="PlanInputs.OpeningFlexBalance"/> — the opening balance the timeline call received;</item>
+    /// <item><see cref="PlanInputs.OpeningFlexBalance"/> — the opening balance the timeline call received (0 when
+    /// the plan made no call), and <see cref="PlanInputs.OpeningFlexProvenance"/> — where it came from (S146 /
+    /// TASK-14605; <c>null</c> when no opening was derived). The provenance is optional and outside
+    /// <see cref="IsComplete"/> (R-33 item 2);</item>
     /// <item><see cref="PlanInputs.EntryEventIds"/> / <see cref="PlanInputs.AbsenceEventIds"/> — the event ids of
     /// every row the hours read returned (all of them, as read: the evaluation's own date filters are code and
     /// re-run identically at replay), sorted ordinally on their <c>D</c> string form;</item>
@@ -1239,6 +1544,7 @@ public sealed class PeriodCalculationService
         EvaluationInputs inputs,
         RecordedHours recordedHours,
         decimal openingFlexBalance,
+        string? openingFlexProvenance,
         TimelineEvaluationResponse? timeline)
     {
         var maxEntryOutboxId = recordedHours.Entries.Count > 0 ? recordedHours.Entries.Max(r => r.OutboxId) : 0L;
@@ -1254,7 +1560,10 @@ public sealed class PeriodCalculationService
             EntriesDigest: HoursDigest.ComputeEntriesDigest(recordedHours.Entries),
             AbsencesDigest: HoursDigest.ComputeAbsencesDigest(recordedHours.Absences),
             ConfigFingerprints: timeline?.ConfigFingerprints.ToArray() ?? Array.Empty<string>(),
-            EvaluationModel: timeline?.EvaluationModel ?? NoEngineCallEvaluationModel);
+            EvaluationModel: timeline?.EvaluationModel ?? NoEngineCallEvaluationModel)
+        {
+            OpeningFlexProvenance = openingFlexProvenance,
+        };
     }
 
     /// <summary>
@@ -1334,7 +1643,6 @@ public sealed class PeriodCalculationService
         EmploymentProfile profile,
         DateOnly periodStart,
         DateOnly periodEnd,
-        decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
         CancellationToken ct = default)
@@ -1346,7 +1654,7 @@ public sealed class PeriodCalculationService
 
         var outcome = await CalculatePlanlessAsync(
             profile, periodStart, periodEnd,
-            previousFlexBalance, authorizationHeader, correlationId, hoursReader, ct);
+            authorizationHeader, correlationId, hoursReader, ct);
         return outcome.Result;
     }
 
@@ -1364,7 +1672,6 @@ public sealed class PeriodCalculationService
         EmploymentProfile profile,
         DateOnly periodStart,
         DateOnly periodEnd,
-        decimal previousFlexBalance,
         string? authorizationHeader,
         Guid? correlationId,
         IRecordedHoursReader hoursReader,
@@ -1380,7 +1687,7 @@ public sealed class PeriodCalculationService
         var admitted = await AdmitAsync(plan, histories, hoursReader, ct);
 
         return await EvaluateAdmittedAsync(
-            admitted, profile, previousFlexBalance, authorizationHeader, correlationId,
+            admitted, profile, authorizationHeader, correlationId,
             emitAuditEvents: true, ct);
     }
 
@@ -1392,7 +1699,7 @@ public sealed class PeriodCalculationService
     /// Planless back-compat shim that returns the full <see cref="PeriodCalculationOutcome"/>
     /// (result + <see cref="AuditState"/> + <see cref="PeriodCalculationOutcome.ManifestId"/>),
     /// the outcome-returning sibling of the legacy planless
-    /// <see cref="CalculateAsync(EmploymentProfile, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateAsync(EmploymentProfile, DateOnly, DateOnly, string?, Guid?, CancellationToken)"/>
     /// shim above.
     ///
     /// <para>
@@ -1400,7 +1707,7 @@ public sealed class PeriodCalculationService
     /// This method runs the SAME body (<see cref="CalculatePlanlessAsync"/>: the same planning through
     /// <see cref="BuildPlanWithHistoriesAsync"/>, the same admission and the same evaluation, which the
     /// plan-first
-    /// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, decimal, string?, Guid?, bool, CancellationToken)"/>
+    /// <see cref="CalculateWithOutcomeAsync(PlannedCalculation, EmploymentProfile, string?, Guid?, bool, CancellationToken)"/>
     /// also runs) as the planless <c>CalculateAsync</c> — which is literally
     /// <c>CalculatePlanlessAsync(…).Result</c>. So <c>this(…).Result</c> is bit-identical
     /// to <c>CalculateAsync(profile, …)</c> for the same inputs; the ONLY difference across two
@@ -1444,7 +1751,6 @@ public sealed class PeriodCalculationService
         EmploymentProfile profile,
         DateOnly periodStart,
         DateOnly periodEnd,
-        decimal previousFlexBalance,
         string? authorizationHeader = null,
         Guid? correlationId = null,
         CancellationToken ct = default)
@@ -1456,10 +1762,10 @@ public sealed class PeriodCalculationService
 
         // Mirrors the planless CalculateAsync shim EXACTLY (the same CalculatePlanlessAsync body), then
         // returns the PeriodCalculationOutcome INSTEAD of its .Result — this shared body is what makes
-        // the export output bit-identical.
+        // the export output bit-identical. S146 TASK-14605 (R-14): no opening is passed; admission derives it.
         return await CalculatePlanlessAsync(
             profile, periodStart, periodEnd,
-            previousFlexBalance, authorizationHeader, correlationId, hoursReader, ct);
+            authorizationHeader, correlationId, hoursReader, ct);
     }
 
     // -------------------------------------------------------------------
@@ -1511,7 +1817,7 @@ public sealed class PeriodCalculationService
     /// <para>
     /// <b>Same builder and same week check, by design.</b> This goes through the SAME private
     /// <see cref="BuildPlanWithHistoriesAsync"/> as
-    /// <see cref="CalculateWithOutcomeAsync(EmploymentProfile, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
+    /// <see cref="CalculateWithOutcomeAsync(EmploymentProfile, DateOnly, DateOnly, string?, Guid?, CancellationToken)"/>
     /// — same boundary sources, same rule classifications (<see cref="EvaluatedRuleIds"/>), same
     /// <see cref="PeriodPlanner.Plan"/> — and the SAME <see cref="EnsureNoMidWeekAgreementChange"/> the
     /// calculating routes' admission runs. There is no second copy of the boundary or week logic to drift,
@@ -2277,9 +2583,11 @@ public sealed class PeriodCalculationService
         //    but does NOT mint a new SegmentManifestCreated or PeriodCalculationCompleted event (ADR-016 D10
         //    immutability; Codex sprint-end review). The result's agreement comes from the frozen pieces by the
         //    same derivation a forward calculation uses (R-12), so a replay needs no caller profile (R14).
+        //    S146 TASK-14605 (R-33 item 2): the frozen provenance goes with it, so the replay's result carries it
+        //    and an UNTRACKED replay drops FLEX_PAYOUT as the forward run did. The ledger is never read (R42).
         var outcome = await EvaluateAsync(
             plan, inputs, recordedHours, plan.EmployeeId,
-            frozen.OpeningFlexBalance, authorizationHeader, correlationId,
+            frozen.OpeningFlexBalance, frozen.OpeningFlexProvenance, authorizationHeader, correlationId,
             emitAuditEvents: false, ct);
 
         // A failed engine call refused the result (R-6): there is no engine answer to compare.
@@ -2791,9 +3099,9 @@ public sealed class PeriodCalculationService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogError(ex,
-                "The manifest {ManifestId} of employee {EmployeeId} was NOT persisted: its one transaction (the " +
-                "SegmentManifestCreated outbox row, the segment_manifests row and the PeriodCalculationCompleted " +
-                "outbox row) did not commit, so none of them exists. The calculation is not provable and the " +
+                "The manifest {ManifestId} of employee {EmployeeId} was NOT persisted: the commit of its one " +
+                "transaction (the SegmentManifestCreated outbox row, the segment_manifests row and the " +
+                "PeriodCalculationCompleted outbox row) was not confirmed. The calculation is not provable and the " +
                 "calculating routes refuse it before any payroll write (503 payroll-manifest-not-persisted).",
                 manifest.ManifestId, plan.EmployeeId);
             return AuditState.NotPersisted;
@@ -3944,7 +4252,7 @@ public sealed class PeriodCalculationService
         IReadOnlyList<FrozenPiece> pieces,
         IReadOnlyList<TimeEntry> entries,
         IReadOnlyList<AbsenceEntry> absences,
-        decimal previousFlexBalance,
+        decimal openingFlexBalance,
         CancellationToken ct)
     {
         try
@@ -3952,6 +4260,8 @@ public sealed class PeriodCalculationService
             // The body of EvaluateTimelineRequest (Rule Engine contract, TASK-14505). Each piece
             // serializes as { from, to, partTimeFraction, agreementCode, position }; the OK version is
             // not sent — the engine derives it from the dates and splits a piece at 1 April itself.
+            // S146 TASK-14605: the engine's wire field keeps its name, previousFlexBalance; its value is the
+            // opening derived from the ledger (or frozen on the manifest, for a replay).
             var payload = new
             {
                 employeeId,
@@ -3961,7 +4271,7 @@ public sealed class PeriodCalculationService
                 pieces,
                 entries,
                 absences,
-                previousFlexBalance,
+                previousFlexBalance = openingFlexBalance,
             };
 
             var response = await client.PostAsJsonAsync(

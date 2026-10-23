@@ -253,7 +253,8 @@ internal static class TestFixtures
         DbConnectionFactory factory,
         PostgresEventStore eventStore,
         Func<HttpRequestMessage, HttpResponseMessage>? handler = null,
-        IRecordedHoursReader? hoursReader = null)
+        IRecordedHoursReader? hoursReader = null,
+        IFlexLedgerReader? flexLedgerReader = null)
     {
         var stubHandler = new StubHandler(handler ?? DefaultRuleEngineHandler);
         var httpFactory = new SingleClientFactory(stubHandler);
@@ -281,7 +282,11 @@ internal static class TestFixtures
             // passes a reader holding the hours it used to hand to the call as arguments.
             hoursReader: hoursReader ?? new InMemoryRecordedHoursReader(),
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S146 R-14: the opening is derived from the recorded ledger, never handed in. Default = an EMPTY
+            // in-memory ledger (not about the chain: LEDGER_START 0, the opening the former caller-supplied 0m
+            // said); a fact over the database that records months passes the Postgres reader.
+            flexLedgerReader: flexLedgerReader ?? new InMemoryFlexLedgerReader());
     }
 
     /// <summary>

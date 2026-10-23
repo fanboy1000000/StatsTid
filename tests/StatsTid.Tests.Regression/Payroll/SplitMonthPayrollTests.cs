@@ -278,7 +278,9 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
             : d >= Sep14 && d <= Sep18 ? 5.80m
             : DayNorm);
 
-        var september = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Sep01, Sep30, previousFlex: 95m);
+        // S146 R-14: August (employed) closed at 95, so September opens at 95 CHAINED (case 4a).
+        await FlexLedgerSeed.SeedAsync(_container.GetConnectionString(), emp, Aug01, closing: 95m);
+        var september = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Sep01, Sep30);
 
         var timeline = september.Recorder.Timeline.Single();
         Assert.Multiple(
@@ -310,7 +312,9 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         await SeedWeekdaysAsync(emp, "AC", Aug31, Sep30, d =>
             d >= Sep21 && d <= Sep25 ? 11.40m : DayNorm);
 
-        var september = await CalculateAsync(emp, ProfileOf(emp, "AC", 1.0m), Sep01, Sep30, previousFlex: 170m);
+        // S146 R-14: August (employed) closed at 170, so September opens at 170 CHAINED (case 4a).
+        await FlexLedgerSeed.SeedAsync(_container.GetConnectionString(), emp, Aug01, closing: 170m);
+        var september = await CalculateAsync(emp, ProfileOf(emp, "AC", 1.0m), Sep01, Sep30);
 
         Assert.Multiple(
             () => Assert.Equal(190.00m, september.Recorder.Timeline.Single().FlexNewBalance()),
@@ -404,8 +408,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         var bearer = "Bearer " + MintGlobalAdminToken();
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         var forward = await pcs.CalculateWithOutcomeAsync(
-            ProfileOf(emp, "HK", 1.0m), Sep01, Sep30, previousFlexBalance: 0m,
-            authorizationHeader: bearer);
+            ProfileOf(emp, "HK", 1.0m), Sep01, Sep30, authorizationHeader: bearer);
 #pragma warning restore CS0618
         Assert.True(forward.Result.Success, forward.Result.ErrorMessage);
 
@@ -475,14 +478,13 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         string employeeId,
         EmploymentProfile profile,
         DateOnly periodStart,
-        DateOnly periodEnd,
-        decimal previousFlex = 0m)
+        DateOnly periodEnd)
     {
         var recorder = new RecordingHandler(_engine.Server.CreateHandler());
         var pcs = BuildPcs(recorder);
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: previousFlex,
+            profile, periodStart, periodEnd,
             authorizationHeader: "Bearer " + MintGlobalAdminToken());
 #pragma warning restore CS0618
         Assert.True(outcome.Result.Success, $"{employeeId} {periodStart:yyyy-MM}: {outcome.Result.ErrorMessage}");
@@ -514,7 +516,10 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
             userAgreementCodeRepo: agreementCodes,
             hoursReader: new ProjectionHoursReader(_db,
                 new TimeEntryProjectionRepository(_db), new AbsenceProjectionRepository(_db)),
-            priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)));
+            priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)),
+            // S146 R-14: the production reader over payroll_export_records (the full schema is applied); a fact that
+            // needs a non-zero opening seeds a ledger record with FlexLedgerSeed, the rest read an empty ledger.
+            flexLedgerReader: new PostgresFlexLedgerReader(_db));
     }
 
     // =====================================================================

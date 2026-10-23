@@ -155,7 +155,6 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
             Profile(employeeId),
             periodStart: Apr01,
             periodEnd: Apr30,
-            previousFlexBalance: 0m,
             reason: "S138 window pin — end date recorded after export",
             actorId: "hr-s138");
 
@@ -334,7 +333,9 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
             // S145 R14: the in-memory hours reader (payroll reads its own hours).
             hoursReader: hoursReader,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: a correction/ledger fact over the database: the production reader over payroll_export_records.
+            flexLedgerReader: new PostgresFlexLedgerReader(_harness.Factory));
     }
 
     /// <summary>The S90 correction-service shape over the supplied (window-hydrated) PCS.</summary>
@@ -353,7 +354,7 @@ public sealed class RetroactiveCorrectionWindowTests : IAsyncLifetime
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export and /recalculate).
         return await pcs.CalculateWithOutcomeAsync(
-            Profile(employeeId), Apr01, Apr30, previousFlexBalance: 0m);
+            Profile(employeeId), Apr01, Apr30);
 #pragma warning restore CS0618
     }
 

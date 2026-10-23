@@ -173,7 +173,7 @@ public sealed class EmploymentEdgesTimelineTests : IAsyncLifetime
         var pcs = BuildPcs(engine);
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         return await pcs.CalculateWithOutcomeAsync(
-            Profile(employeeId), periodStart, periodEnd, previousFlexBalance: 0m);
+            Profile(employeeId), periodStart, periodEnd);
 #pragma warning restore CS0618
     }
 
@@ -200,7 +200,9 @@ public sealed class EmploymentEdgesTimelineTests : IAsyncLifetime
             employmentWindowResolver: new EmploymentWindowResolver(_harness.Factory),
             employeeProfileRepo: new EmployeeProfileRepository(_harness.Factory),
             hoursReader: new EmptyHours(),
-            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
     }
 
     private static EmploymentProfile Profile(string employeeId) => new()

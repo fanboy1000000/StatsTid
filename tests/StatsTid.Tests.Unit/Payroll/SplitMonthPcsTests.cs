@@ -139,7 +139,7 @@ public sealed class SplitMonthPcsTests
         var engine = Engine(() => Timeline(normHours: 147.40m, actualHours: 150.00m, deviation: 2.60m));
         var pcs = BuildPcs(engine, ruleSet: StageBTripleSet, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         foreach (var ruleId in new[] { "OVERTIME_CALC", "NORM_CHECK_37H", "FLEX_BALANCE" })
@@ -181,7 +181,7 @@ public sealed class SplitMonthPcsTests
         var engine = Engine(() => Timeline());
         var pcs = BuildPcs(engine, ruleSet: StageBTripleSet, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
 
-        await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         var timeline = Assert.Single(engine.TimelineCalls);
         Assert.Contains(timeline.Pieces!, p => p.To == new DateOnly(2026, 3, 15));
@@ -224,9 +224,11 @@ public sealed class SplitMonthPcsTests
             logger,
             classificationProvider: new FixedProvider(live),
             hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31),
-            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         Assert.DoesNotContain(logger.Messages, m => m.Contains("No RuleClassification registered", StringComparison.Ordinal));
@@ -289,7 +291,7 @@ public sealed class SplitMonthPcsTests
         var pcs = BuildPcs(engine, manifestStore: store, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m));
+            () => pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId)));
 
         Assert.Contains("OVERTIME_CALC", ex.Message);
         Assert.DoesNotMatch(@"\d{4}-\d{2}-\d{2}", ex.Message);

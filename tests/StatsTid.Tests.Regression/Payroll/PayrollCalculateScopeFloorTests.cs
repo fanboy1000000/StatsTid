@@ -146,7 +146,7 @@ public sealed class PayrollCalculateScopeFloorTests : IAsyncLifetime
                 },
                 periodStart = Mar01,
                 periodEnd = Mar31,
-                previousFlexBalance = 0m,
+                // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
             }),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);

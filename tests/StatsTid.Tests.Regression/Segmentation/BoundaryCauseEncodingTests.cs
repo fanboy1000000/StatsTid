@@ -192,7 +192,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        await pcs.CalculateAsync(plan, profile, 0m);
+        await pcs.CalculateAsync(plan, profile);
 
         var expectedCauses = plan.Segments.Select(s => s.BoundaryCause.ToString()).ToList();
 

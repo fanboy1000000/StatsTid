@@ -63,7 +63,7 @@ public sealed class ManifestOutboxDrainTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        var forward = await pcs.CalculateAsync(plan, profile, previousFlexBalance: 0m);
+        var forward = await pcs.CalculateAsync(plan, profile);
         Assert.True(forward.Success, forward.ErrorMessage);
 
         var manifestStream = $"segment-manifest-{plan.ManifestId}";

@@ -159,7 +159,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // PeriodPlanner.Plan() bypasses this registration and fails replay.
 #pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.
         var baseline = await pcs.CalculateAsync(
-            profileSeed, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
+            profileSeed, PeriodStart, PeriodEnd);
 #pragma warning restore CS0618
         Assert.True(baseline.Success);
         Assert.NotEmpty(baseline.RuleResults);
@@ -231,7 +231,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // (S29 TASK-2909 precedent; required by PCS.MapSegmentToExportLinesAsync L1236).
 #pragma warning disable CS0618
         var baseline = await pcs.CalculateAsync(
-            profileSeed, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
+            profileSeed, PeriodStart, PeriodEnd);
 #pragma warning restore CS0618
         Assert.True(baseline.Success);
         // QUAL-015 falsifiability guard (see variant 1): the resolved fraction reaches the
@@ -296,8 +296,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
         // Legacy shim — registers WtmNaturalKey hydrator (S29 precedent).
 #pragma warning disable CS0618
         var result = await pcs.CalculateAsync(
-            callerProfile, PeriodStart, PeriodEnd,
-            previousFlexBalance: 0m);
+            callerProfile, PeriodStart, PeriodEnd);
 #pragma warning restore CS0618
         Assert.True(result.Success);
         // Resolver-driven dated profile carries Position="RESEARCHER"; we
@@ -405,7 +404,9 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
             hoursReader: new InMemoryRecordedHoursReader(
                 TestFixtures.WeekdayEntriesForPeriod(EmployeeId, PeriodStart, PeriodEnd)),
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
     }
 
     // ─── QUAL-015: resolver-sensitive rule-engine stub ───────────────────────

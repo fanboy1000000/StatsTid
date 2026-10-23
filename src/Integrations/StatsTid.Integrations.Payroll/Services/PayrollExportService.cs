@@ -91,6 +91,32 @@ public sealed class PayrollExportService
     /// There is NO background payroll dispatcher (B1), so this stays the delivery path; the
     /// lock does NOT depend on it.
     /// </para>
+    ///
+    /// <para>
+    /// <b>S146 / TASK-14605 — the flex ledger (QUAL-188; R-3, R-14, R-15, R-16).</b>
+    /// <list type="bullet">
+    /// <item><description><b>The ledger lock, first.</b> The FIRST statement of the transaction takes the
+    /// per-employee ledger lock for every employee of the call, in one statement ordered by key
+    /// (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>), before the previous month's
+    /// <c>FOR SHARE</c>, the current approval's <c>FOR UPDATE</c> and the record insert. All three routes that call
+    /// this method take it, the raw ones included.</description></item>
+    /// <item><description><b>The recheck</b> (calculating route only, <see cref="PayrollExportContext.FlexLedger"/>
+    /// set). Right after the lock, the derivation runs again on in-transaction reads
+    /// (<see cref="FlexLedgerWrite.RecheckUnderLock"/>); a different (opening, provenance) or a refusal aborts the
+    /// whole transaction with <see cref="FlexLedgerRefusalException"/> <c>payroll-ledger-changed</c>.</description></item>
+    /// <item><description><b>The balances</b> are written with the record (opening, closing, provenance); null on
+    /// the raw routes and under <c>UNTRACKED</c>.</description></item>
+    /// <item><description><b>A zero-line month</b> (R-3): the calculating route passes the record's identity in
+    /// <see cref="FlexLedgerWrite"/>, so a month with an EMPLOYED day but no lines still writes its record (lines
+    /// empty, balances set, corrections-only from then on). The empty line set hashes like any other line set through
+    /// <see cref="PayrollExportManifest.ComputeContentHash"/> (the canonical JSON <c>[]</c>), defined once there. Nothing
+    /// is delivered for it (no lines).</description></item>
+    /// <item><description><b>The same-hash no-op</b> (R-16) additionally compares the derived (opening,
+    /// provenance) and the computed closing with the recorded triple; any difference is the existing
+    /// <see cref="PayrollExportConflictException"/> ("the balance changed; use a correction"). <c>UNTRACKED</c>
+    /// against an all-null recorded triple is equal, ignoring the computed closing.</description></item>
+    /// </list>
+    /// </para>
     /// </summary>
     public async Task<ExportResult> ExportAsync(
         IReadOnlyList<PayrollExportLine> lines,
@@ -118,7 +144,27 @@ public sealed class PayrollExportService
 
         var groups = lines
             .GroupBy(l => new ExportGroupKey(l.EmployeeId, l.PeriodStart.Year, l.PeriodStart.Month))
+            .Select(g => (Key: g.Key, Lines: (IEnumerable<PayrollExportLine>)g))
             .ToList();
+
+        // S146 TASK-14605 (R-3): the calculating route's record identity. Every line it sends belongs to that one
+        // (employee, year, month); a month with an EMPLOYED day but no lines still gets its record (an empty group).
+        var flex = context.FlexLedger;
+        ExportGroupKey? flexKey = null;
+        if (flex is not null)
+        {
+            var key = new ExportGroupKey(flex.EmployeeId, flex.Year, flex.Month);
+            if (groups.Exists(g => g.Key != key))
+            {
+                throw new InvalidOperationException(
+                    $"PayrollExportService.ExportAsync: the calculating route's flex-ledger write is for employee " +
+                    $"'{flex.EmployeeId}' {flex.Year}-{flex.Month:D2}, but its lines also fall in another (employee, " +
+                    "year, month). A calculation is one employee and one month; nothing was written.");
+            }
+            if (groups.Count == 0)
+                groups.Add((key, Array.Empty<PayrollExportLine>()));
+            flexKey = key;
+        }
 
         var exportedAt = DateTimeOffset.UtcNow;
 
@@ -133,6 +179,25 @@ public sealed class PayrollExportService
         {
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(ct);
+
+            // S146 TASK-14605 (R-15; C3) — the ledger lock is the FIRST statement: every employee of the call, one
+            // statement, ordered by key. It precedes every row lock below (the previous month's FOR SHARE, the
+            // current approval's FOR UPDATE, the record insert's UNIQUE key), so payroll transactions lock in one
+            // order: advisory, then approval rows, then records. The raw routes take it too: they are writers of
+            // payroll_export_records, and a raw export racing a calculating export of the same employee must wait.
+            await PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync(
+                conn, tx, groups.Select(g => g.Key.EmployeeId).Distinct(StringComparer.Ordinal).ToArray(), ct);
+
+            // S146 TASK-14605 (R-14) — the under-lock recheck. The opening the calculation used was derived before
+            // the calculation, outside any lock; another writer may have recorded or corrected the previous month
+            // since. The SAME function runs again here on in-transaction reads (records and employment windows),
+            // after the lock, so it sees everything committed before the lock was granted. A different (opening,
+            // provenance) pair, or a refusal, throws FlexLedgerRefusalException payroll-ledger-changed and the
+            // whole transaction rolls back: no record, no event, no audit row.
+            if (flex is not null)
+            {
+                await flex.RecheckUnderLock(conn, tx, ct);
+            }
 
             // S145 TASK-14512 Do 7 — the PREVIOUS month first. When the calculation's admission required the
             // previous month to be APPROVED (calculate-and-export threads it), re-check that approval here,
@@ -152,7 +217,7 @@ public sealed class PayrollExportService
             foreach (var group in groups)
             {
                 var key = group.Key;
-                var groupLines = PayrollExportManifest.OrderLines(group);
+                var groupLines = PayrollExportManifest.OrderLines(group.Lines);
 
                 // B2 — re-assert APPROVED under FOR UPDATE when this export maps to an approval
                 // period (calculate-and-export threads the periodId). The raw /export +
@@ -165,11 +230,20 @@ public sealed class PayrollExportService
                 var contentHash = PayrollExportManifest.ComputeContentHash(groupLines);
                 var manifestJson = PayrollExportManifest.Serialize(groupLines);
 
+                // S146 TASK-14605 (C1): the balances this record stores — the calculating route's, for its own month,
+                // unless flex is not tracked (UNTRACKED is never stored); none on the raw routes.
+                var balances = flex is not null && key == flexKey && !flex.IsUntracked
+                    ? new RecordedBalances(
+                        flex.OpeningBalance ?? throw MissingBalance(flex, "opening"),
+                        flex.ClosingBalance ?? throw MissingBalance(flex, "closing"),
+                        flex.Provenance)
+                    : null;
+
                 // INSERT with idempotency. ON CONFLICT (employee_id, year, month) DO NOTHING +
                 // RETURNING distinguishes the first write (a row comes back) from a conflict
                 // (no row → read the existing row and compare hashes).
                 var existingExportId = await TryInsertRecordAsync(
-                    conn, tx, key, context, exportedAt, contentHash, manifestJson, ct);
+                    conn, tx, key, context, exportedAt, contentHash, manifestJson, balances, ct);
 
                 if (existingExportId is { } existing)
                 {
@@ -187,6 +261,10 @@ public sealed class PayrollExportService
                         ActorId = context.ActorId,
                         ActorRole = context.ActorRole,
                         CorrelationId = context.CorrelationId,
+                        // S146 TASK-14605 (C1): what the record stores — null on the raw routes.
+                        OpeningFlexBalance = balances?.Opening,
+                        ClosingFlexBalance = balances?.Closing,
+                        FlexProvenance = balances?.Provenance,
                     };
                     var streamId = $"employee-{key.EmployeeId}";
                     var outboxId = await _outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
@@ -209,15 +287,29 @@ public sealed class PayrollExportService
                 {
                     // Conflict: a record already exists for this (employee, year, month). Read it
                     // and compare the content hash for idempotency.
-                    var (existingId, existingHash) = await ReadExistingRecordAsync(conn, tx, key, ct);
-                    if (!string.Equals(existingHash, contentHash, StringComparison.Ordinal))
+                    var existingRecord = await ReadExistingRecordAsync(conn, tx, key, ct);
+                    if (!string.Equals(existingRecord.ContentHash, contentHash, StringComparison.Ordinal))
                     {
                         throw new PayrollExportConflictException(
                             $"Employee '{key.EmployeeId}' already has a payroll export for {key.Year}-{key.Month:D2} " +
                             $"with different content; use a correction (/api/payroll/recalculate) to amend an exported month.");
                     }
+
+                    // S146 TASK-14605 (R-16; contract 8): on the calculating route the same lines are not enough — the
+                    // derived (opening, provenance) and the computed closing must equal the recorded triple, or the
+                    // month's balance changed and only a correction may change it. UNTRACKED (a raw month before the
+                    // ledger start) is equal to an all-null recorded triple whatever the computed closing; the raw
+                    // routes keep the content-hash compare alone.
+                    if (flex is not null && key == flexKey && !RecordedTripleMatches(flex, existingRecord))
+                    {
+                        throw new PayrollExportConflictException(
+                            $"Employee '{key.EmployeeId}' already has a payroll export for {key.Year}-{key.Month:D2} " +
+                            "with the same lines but a different flex balance: the balance changed; use a correction " +
+                            "(/api/payroll/recalculate) to amend an exported month.");
+                    }
+
                     // Same hash → idempotent no-op: return the existing export id, emit NOTHING.
-                    perGroup.Add(new GroupExportOutcome(existingId, IsNew: false));
+                    perGroup.Add(new GroupExportOutcome(existingRecord.ExportId, IsNew: false));
                 }
             }
 
@@ -234,6 +326,13 @@ public sealed class PayrollExportService
         // ── POST-COMMIT delivery (best-effort, UNCHANGED): the lock does NOT depend on this. ──
         // An idempotent no-op (no new record) must not re-deliver to payroll either.
         if (!anyNew)
+        {
+            return new ExportResult { ExportId = primaryExportId, Success = true, MessageId = Guid.Empty };
+        }
+
+        // S146 TASK-14605 (R-3): a newly recorded zero-line month (the calculating route's employed month with no
+        // lines) hands payroll nothing; its record exists for the ledger and the lock. No envelope, no POST.
+        if (newlyExportedLines.Count == 0)
         {
             return new ExportResult { ExportId = primaryExportId, Success = true, MessageId = Guid.Empty };
         }
@@ -367,21 +466,29 @@ public sealed class PayrollExportService
     /// </summary>
     private static async Task<Guid?> TryInsertRecordAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, ExportGroupKey key, PayrollExportContext context,
-        DateTimeOffset exportedAt, string contentHash, string manifestJson, CancellationToken ct)
+        DateTimeOffset exportedAt, string contentHash, string manifestJson, RecordedBalances? balances,
+        CancellationToken ct)
     {
         var exportId = Guid.NewGuid();
+        // S146 TASK-14605 (C1): the three balance columns, all set (a calculating route's tracked month) or all null
+        // (the raw routes, and UNTRACKED); the CHECK payroll_export_records_balances_paired refuses anything between.
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO payroll_export_records (
                 export_id, period_id, employee_id, year, month, exported_at,
-                original_lines, current_effective_lines, content_hash, source
+                original_lines, current_effective_lines, content_hash, source,
+                opening_balance, closing_balance, balance_provenance
             ) VALUES (
                 @exportId, @periodId, @employeeId, @year, @month, @exportedAt,
-                @originalLines::jsonb, @currentLines::jsonb, @contentHash, @source
+                @originalLines::jsonb, @currentLines::jsonb, @contentHash, @source,
+                @openingBalance, @closingBalance, @balanceProvenance
             )
             ON CONFLICT (employee_id, year, month) DO NOTHING
             RETURNING export_id
             """, conn, tx);
+        cmd.Parameters.Add(new NpgsqlParameter("openingBalance", NpgsqlDbType.Numeric) { Value = (object?)balances?.Opening ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter("closingBalance", NpgsqlDbType.Numeric) { Value = (object?)balances?.Closing ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter("balanceProvenance", NpgsqlDbType.Text) { Value = (object?)balances?.Provenance ?? DBNull.Value });
         cmd.Parameters.AddWithValue("exportId", exportId);
         cmd.Parameters.AddWithValue("periodId", (object?)context.PeriodId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("employeeId", key.EmployeeId);
@@ -397,12 +504,12 @@ public sealed class PayrollExportService
         return result is null or DBNull ? null : (Guid)result;
     }
 
-    private static async Task<(Guid ExportId, string ContentHash)> ReadExistingRecordAsync(
+    private static async Task<ExistingRecord> ReadExistingRecordAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, ExportGroupKey key, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT export_id, content_hash
+            SELECT export_id, content_hash, opening_balance, closing_balance, balance_provenance
             FROM payroll_export_records
             WHERE employee_id = @employeeId AND year = @year AND month = @month
             """, conn, tx);
@@ -416,10 +523,45 @@ public sealed class PayrollExportService
             throw new PayrollExportConflictException(
                 $"Payroll export record for employee '{key.EmployeeId}' {key.Year}-{key.Month:D2} vanished mid-transaction.");
         }
-        return (reader.GetGuid(0), reader.GetString(1));
+        return new ExistingRecord(
+            reader.GetGuid(0),
+            reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetDecimal(2),
+            reader.IsDBNull(3) ? null : reader.GetDecimal(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4));
     }
 
+    /// <summary>
+    /// S146 / TASK-14605 (R-16; contract 8) — the same-hash re-run's balance compare. A tracked month matches only
+    /// when the recorded opening, provenance and closing all equal the derived opening, its provenance and the
+    /// computed closing. <c>UNTRACKED</c> matches an all-null recorded triple and ignores the computed closing (a
+    /// raw month before the ledger start keeps no balance, so there is nothing to compare it with).
+    /// </summary>
+    private static bool RecordedTripleMatches(FlexLedgerWrite flex, ExistingRecord recorded)
+    {
+        if (flex.IsUntracked)
+        {
+            return recorded.OpeningBalance is null
+                && recorded.ClosingBalance is null
+                && recorded.Provenance is null;
+        }
+
+        return recorded.OpeningBalance == flex.OpeningBalance
+            && recorded.ClosingBalance == flex.ClosingBalance
+            && string.Equals(recorded.Provenance, flex.Provenance, StringComparison.Ordinal);
+    }
+
+    private static InvalidOperationException MissingBalance(FlexLedgerWrite flex, string which) =>
+        new($"PayrollExportService.ExportAsync: the calculating route's flex-ledger write for employee " +
+            $"'{flex.EmployeeId}' {flex.Year}-{flex.Month:D2} is {flex.Provenance} but carries no {which} balance; " +
+            "a tracked month always has both. Nothing was written.");
+
     private readonly record struct ExportGroupKey(string EmployeeId, int Year, int Month);
+
+    private sealed record RecordedBalances(decimal Opening, decimal Closing, string Provenance);
+
+    private sealed record ExistingRecord(
+        Guid ExportId, string ContentHash, decimal? OpeningBalance, decimal? ClosingBalance, string? Provenance);
 
     private readonly record struct GroupExportOutcome(Guid ExportId, bool IsNew);
 
@@ -536,6 +678,15 @@ public sealed class PayrollExportContext
     /// </summary>
     public (DateOnly PeriodStart, DateOnly PeriodEnd)? PriorMonthToRecheck { get; init; }
 
+    /// <summary>
+    /// S146 / TASK-14605 (QUAL-188; R-3, R-14, R-16) — the calculating route's flex-ledger write: the record's
+    /// identity, the derived opening and provenance, the computed closing, and the under-lock recheck. Set ONLY by
+    /// <c>/calculate-and-export</c>, from <see cref="PeriodCalculationService.FlexLedgerWriteFor"/>, for a month
+    /// holding an EMPLOYED day; <c>null</c> on the raw routes, which write null balances and are otherwise
+    /// unchanged.
+    /// </summary>
+    public FlexLedgerWrite? FlexLedger { get; init; }
+
     /// <summary>The originating endpoint: CALCULATE_AND_EXPORT / EXPORT / EXPORT_PERIOD.</summary>
     public required string Source { get; init; }
 
@@ -549,6 +700,59 @@ public sealed class PayrollExportContext
     public string? ResolvedTargetOrgId { get; init; }
 
     public Guid? CorrelationId { get; init; }
+}
+
+/// <summary>
+/// S146 / TASK-14605 (QUAL-188; rulings R-3, R-14, R-16) — what the calculating route hands
+/// <see cref="PayrollExportService.ExportAsync"/> about the month's flex balance.
+///
+/// <para>
+/// <b>Plain language.</b> The calculation derived the month's opening balance from the recorded ledger before it
+/// ran, and the engine returned the closing. The export stores both on the month's record, but only after checking,
+/// under the per-employee ledger lock, that the ledger still gives the same opening: if another export or a
+/// correction recorded the previous month in between, the stored balance would be built on a stale opening, so the
+/// export refuses (<c>payroll-ledger-changed</c>) and the caller retries.
+/// </para>
+///
+/// <para>
+/// <b>Members.</b> The record's identity (<see cref="EmployeeId"/>, <see cref="Year"/>, <see cref="Month"/>), so a
+/// month with an EMPLOYED day but no lines still writes its record (R-3); the derived
+/// <see cref="OpeningBalance"/> and <see cref="Provenance"/> and the computed <see cref="ClosingBalance"/> (both
+/// balances null under <c>UNTRACKED</c>, which is never stored); and <see cref="RecheckUnderLock"/>, the
+/// derivation's in-transaction re-run, owned by <see cref="PeriodCalculationService"/>
+/// (<see cref="PeriodCalculationService.RecheckFlexOpeningUnderLockAsync"/>), which the export calls right after the
+/// ledger lock. Built by <see cref="PeriodCalculationService.FlexLedgerWriteFor"/>.
+/// </para>
+/// </summary>
+public sealed class FlexLedgerWrite
+{
+    /// <summary>The employee of the record.</summary>
+    public required string EmployeeId { get; init; }
+
+    /// <summary>The record's year (the calendar month of the period start).</summary>
+    public required int Year { get; init; }
+
+    /// <summary>The record's month (1..12).</summary>
+    public required int Month { get; init; }
+
+    /// <summary><c>LEDGER_START</c>, <c>CHAINED</c>, <c>REHIRE</c> or <c>UNTRACKED</c>.</summary>
+    public required string Provenance { get; init; }
+
+    /// <summary>The derived opening balance; <c>null</c> under <c>UNTRACKED</c>.</summary>
+    public decimal? OpeningBalance { get; init; }
+
+    /// <summary>The engine's clamped closing balance (<c>Flex.NewBalance</c>); <c>null</c> under <c>UNTRACKED</c>.</summary>
+    public decimal? ClosingBalance { get; init; }
+
+    /// <summary>
+    /// The derivation's re-run on in-transaction reads, called inside the export transaction right after the
+    /// ledger lock; throws <see cref="FlexLedgerRefusalException"/> <c>payroll-ledger-changed</c> when the ledger
+    /// no longer gives the (opening, provenance) the calculation used.
+    /// </summary>
+    public required Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> RecheckUnderLock { get; init; }
+
+    /// <summary>True under <c>UNTRACKED</c>: no balance is stored.</summary>
+    public bool IsUntracked => string.Equals(Provenance, FlexLedgerOpening.Untracked, StringComparison.Ordinal);
 }
 
 /// <summary>

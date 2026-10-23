@@ -120,6 +120,33 @@ public sealed class EmploymentWindowResolver : IEmploymentWindowResolver, IEmplo
         return await ExecuteAsync(cmd, employeeId, date, ct);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// S146 / TASK-14605 (R-36): the self-managed <see cref="GetWindowsAsync(string, DateOnly, DateOnly, CancellationToken)"/>
+    /// body on the caller's <c>(conn, tx)</c> — the same inverted-range check, the same single row-reading
+    /// path (<see cref="ReadWindowRowAsync"/>, so the fail-loud missing-user contract cannot drift) and the
+    /// same <see cref="EmploymentWindow.Overlaps"/> filter.
+    /// </remarks>
+    public async Task<IReadOnlyList<EmploymentWindow>> GetWindowsAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        if (to < from)
+        {
+            throw new ArgumentException(
+                $"Employment-window range query is inverted: to ({to:yyyy-MM-dd}) is before " +
+                $"from ({from:yyyy-MM-dd}). EmployeeId='{employeeId}'.",
+                nameof(to));
+        }
+
+        await using var cmd = new NpgsqlCommand(Sql, conn, tx);
+        var (start, end) = await ReadWindowRowAsync(cmd, employeeId, ct);
+        var window = new EmploymentWindow(start, end);
+        return window.Overlaps(from, to)
+            ? new[] { window }
+            : Array.Empty<EmploymentWindow>();
+    }
+
     private static async Task<EmploymentWindowStatus> ExecuteAsync(
         NpgsqlCommand cmd, string employeeId, DateOnly date, CancellationToken ct)
     {

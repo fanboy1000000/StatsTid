@@ -177,7 +177,7 @@ public sealed class PcsNeverSilentTests
         PeriodCalculationService pcs, DateOnly periodStart, DateOnly periodEnd)
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
-        return await pcs.CalculateWithOutcomeAsync(Profile(Emp), periodStart, periodEnd, previousFlexBalance: 0m);
+        return await pcs.CalculateWithOutcomeAsync(Profile(Emp), periodStart, periodEnd);
 #pragma warning restore CS0618
     }
 
@@ -200,7 +200,9 @@ public sealed class PcsNeverSilentTests
             employmentWindowResolver: windows,
             employeeProfileRepo: null,
             hoursReader: hours,
-            priorPeriodApprovalReader: approval);
+            priorPeriodApprovalReader: approval,
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
 
     private static TimeEntryProjectionRow Row(DateOnly date, decimal hours, long outboxId) => new()
     {

@@ -15,7 +15,8 @@ namespace StatsTid.Integrations.Payroll.Services;
 ///
 /// <para>
 /// <b>When.</b> The outcome's audit state is <see cref="PeriodCalculationService.AuditState.NotPersisted"/> (the
-/// one transaction that writes the manifest, its projection row and the legacy summary event did not commit), or
+/// commit of the one transaction that writes the manifest, its projection row and the legacy summary event was not
+/// confirmed; a lost commit acknowledgement can leave all three records committed, and payroll still refuses), or
 /// it is <see cref="PeriodCalculationService.AuditState.NoManifest"/> on a SUCCESSFUL result (a forward
 /// calculation that emitted no manifest at all). A refused calculation (<c>Success == false</c>) carries
 /// <c>NoManifest</c> by design and is not this exception's business; a replay carries <c>NoManifest</c> on

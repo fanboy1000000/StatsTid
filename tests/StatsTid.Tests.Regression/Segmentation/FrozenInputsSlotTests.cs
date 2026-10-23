@@ -53,7 +53,7 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
     public async Task Replay_PlanInputsSlotWrongShape_RefusesWithoutFrozenInputs_DespiteIntactEvent()
     {
         // S145 R-17:
-        var (pcs, manifestId, _) = await ForwardCalcAsync("EMP-FIS-SHAPE", previousFlexBalance: 0m);
+        var (pcs, manifestId, _) = await ForwardCalcAsync("EMP-FIS-SHAPE");
 
         await ExecuteAsync(
             "UPDATE segment_manifests SET plan_inputs_jsonb = '[]'::jsonb WHERE manifest_id = @id", manifestId);
@@ -87,7 +87,7 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
     public async Task Replay_SegmentsSlotMalformed_FailsAsDamagedRow_NotEventFallback()
     {
         // S145 R-17:
-        var (pcs, manifestId, _) = await ForwardCalcAsync("EMP-FIS-SEGMENTS", previousFlexBalance: 0m);
+        var (pcs, manifestId, _) = await ForwardCalcAsync("EMP-FIS-SEGMENTS");
 
         await ExecuteAsync(
             "UPDATE segment_manifests SET segments_jsonb = '{}'::jsonb WHERE manifest_id = @id", manifestId);
@@ -97,8 +97,15 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
 
     /// <summary>
     /// <b>R-18.</b> The stored frozen inputs lost <c>openingFlexBalance</c> (a required member). The replay must
-    /// refuse by name; it must not read the missing number as 0 and replay a different calculation. The forward
-    /// calculation used an opening balance of 12.5, so 0 would be a wrong, silent substitute.
+    /// refuse by name; it must not read the missing number as 0 and replay a different calculation.
+    ///
+    /// <para>
+    /// <b>S146 R-14 (docstring only).</b> The forward calculation no longer takes an opening from its caller (this
+    /// fact used to pass 12.5): payroll derives it from the ledger. The helper seeds the previous month with a
+    /// recorded closing of 12.5, so the month opens CHAINED at 12.5 (R-14 case 4a) and the frozen opening is again
+    /// a distinct non-zero value: a replay that read the missing key as 0 would be a wrong, silent substitute.
+    /// The fact's assertion is the refusal by name (R-37, reviewer c2 N3).
+    /// </para>
     ///
     /// <para>
     /// <b>Red conditions.</b> Today <c>PlanInputs.OpeningFlexBalance</c> is a plain <c>decimal</c> with no
@@ -111,7 +118,7 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
     public async Task Replay_PlanInputsSlotMissingOpeningBalance_RefusesWithoutFrozenInputs()
     {
         // S145 R-18:
-        var (pcs, manifestId, _) = await ForwardCalcAsync("EMP-FIS-OPENING", previousFlexBalance: 12.5m);
+        var (pcs, manifestId, _) = await ForwardCalcAsync("EMP-FIS-OPENING");
 
         await ExecuteAsync(
             "UPDATE segment_manifests SET plan_inputs_jsonb = plan_inputs_jsonb - 'openingFlexBalance' WHERE manifest_id = @id",
@@ -138,7 +145,7 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
     public async Task Replay_ProjectionRowAbsent_LoadsFrozenInputsFromEvent_Succeeds()
     {
         // S145 R-22:
-        var (pcs, manifestId, forward) = await ForwardCalcAsync("EMP-FIS-ABSENT", previousFlexBalance: 0m);
+        var (pcs, manifestId, forward) = await ForwardCalcAsync("EMP-FIS-ABSENT");
 
         // S146 R-24: the replay falls back to the events copy once the projection row is gone; drain
         // Payroll's outbox partition first so that copy exists (a no-op until the manifest rides the outbox).
@@ -158,7 +165,7 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private async Task<(PeriodCalculationService Pcs, Guid ManifestId, PeriodCalculationResult Forward)> ForwardCalcAsync(
-        string employeeId, decimal previousFlexBalance)
+        string employeeId)
     {
         await TestFixtures.SeedWageTypeMappingsAsync(_harness.Factory);
 
@@ -168,7 +175,9 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, start, end);
         var pcs = TestFixtures.BuildPcs(
             _harness.Factory, _harness.EventStore,
-            hoursReader: new InMemoryRecordedHoursReader(entries));
+            hoursReader: new InMemoryRecordedHoursReader(entries),
+            // S146 R-14: an employed February (implicit, no resolver) closed at 12.5, so March opens CHAINED at 12.5.
+            flexLedgerReader: InMemoryFlexLedgerReader.ClosedAt(start, 12.5m));
 
         var plan = PeriodPlanner.Plan(
             employeeId: employeeId,
@@ -181,7 +190,7 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        var forward = await pcs.CalculateAsync(plan, profile, previousFlexBalance);
+        var forward = await pcs.CalculateAsync(plan, profile);
         Assert.True(forward.Success, forward.ErrorMessage);
         return (pcs, plan.ManifestId, forward);
     }

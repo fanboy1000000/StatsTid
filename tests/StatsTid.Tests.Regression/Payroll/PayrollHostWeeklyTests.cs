@@ -651,7 +651,18 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     /// H14 <b>(guard)</b>. May 2026 ends on a Sunday (31 May), so its closing week closes inside May
     /// and June settles none of it. Recalculating exported May — with June ALSO exported, so that only
     /// the Sunday condition keeps June out — names nothing: no June date in the response or the audit
-    /// row. April is APPROVED (May's first week, 27 April – 3 May, reaches April, R26's host-fact
+    /// row.
+    ///
+    /// <para>
+    /// <b>S146 R-48.</b> May is seeded as the LEDGER START (opening 0, closing 0, <c>LEDGER_START</c>), not as a
+    /// raw record. A first correction of a raw-recorded month runs on an empty ledger, derives LEDGER_START 0 and
+    /// records a closing, so its closing "changes" from nothing to a number and the correction names June whatever
+    /// the day of the week is (C4/R-10, R-48). Seeding the closing the recalculation reproduces (0, the clamped
+    /// <c>NewBalance</c> this host's rule-engine stub always returns, <c>TestFixtures.cs:432</c>, taken as the
+    /// result's closing at <c>PeriodCalculationService.cs:1433</c>) puts the correction on R-14 case 1 with an
+    /// unchanged closing, so ONLY the Sunday condition is in play, as before. The closing-changed case is pinned by
+    /// TASK-14606's <c>Recalculate_ClosingChanged_SundayEndingMay2026_NamesJune</c>.
+    /// </para> April is APPROVED (May's first week, 27 April – 3 May, reaches April, R26's host-fact
     /// rule), so the months-in-order check does not interfere. Like H13, the fact first proves the
     /// recalculation really ran.
     ///
@@ -668,6 +679,10 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         await SeedEmployeeAsync(employeeId);
         await SeedApprovalAsync(employeeId, Apr01, Apr30, "APPROVED");
         await PersistExportRecordAsync(employeeId, 2026, 5);
+        // S146 R-48: May becomes the ledger start with the closing the recalculation reproduces (0: see above), so
+        // the C4/R-48 closing-change trigger does not fire. June stays a raw record (it is exported, not corrected).
+        await FlexLedgerFill.FillBalancesAsync(
+            _container.GetConnectionString(), employeeId, May01, opening: 0m, closing: 0m);
         await PersistExportRecordAsync(employeeId, 2026, 6);
 
         var (status, json) = await PostAsync(Host, "/api/payroll/recalculate",
@@ -893,7 +908,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
     };
 
     private static object RecalculateBody(
@@ -905,7 +920,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         reason = "S145 host pin — correction of an exported month",
         idempotencyToken,
     };

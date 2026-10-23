@@ -60,7 +60,7 @@ public sealed class ManifestProjectionRebuildTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        await pcs.CalculateAsync(plan, profile, 0m);
+        await pcs.CalculateAsync(plan, profile);
 
         // Snapshot the row pre-truncate so we can compare exactly after rebuild.
         var pre = await ReadSingleRowAsync(plan.ManifestId);

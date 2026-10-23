@@ -82,7 +82,9 @@ public sealed class RetroactiveCorrectionRequested : DomainEventBase
 
     /// <summary>
     /// Where the opening balance came from: <c>LEDGER_START</c>, <c>CHAINED</c> or
-    /// <c>REHIRE</c> (S146). Optional and NOT required: null on pre-S146 events.
+    /// <c>REHIRE</c> (S146), or <c>UNTRACKED</c> (flex not tracked: a raw-recorded month before
+    /// the ledger start, R-14 case 3b; the balances are then null). Optional and NOT required:
+    /// null on pre-S146 events.
     /// </summary>
     public string? FlexProvenance { get; init; }
 }

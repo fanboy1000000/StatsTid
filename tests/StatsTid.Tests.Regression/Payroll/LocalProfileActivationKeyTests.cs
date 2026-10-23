@@ -554,7 +554,9 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
             userAgreementCodeRepo: userAgreementCodeRepo,
             hoursReader: hoursReader,
             // This suite is not about the prior-month check; M-1 is treated as APPROVED.
-            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
     }
 
     private static InMemoryRecordedHoursReader HoursOf(IEnumerable<TimeEntry> entries) => new(entries);
@@ -563,7 +565,7 @@ public sealed class LocalProfileActivationKeyTests : IAsyncLifetime
         PeriodCalculationService pcs, EmploymentProfile body)
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export and /recalculate).
-        return await pcs.CalculateWithOutcomeAsync(body, Apr01, Apr30, previousFlexBalance: 0m);
+        return await pcs.CalculateWithOutcomeAsync(body, Apr01, Apr30);
 #pragma warning restore CS0618
     }
 

@@ -62,7 +62,7 @@ public sealed class MixedVersionExportTests : IAsyncLifetime
 
         Assert.Equal(2, plan.Segments.Count);
 
-        var result = await pcs.CalculateAsync(plan, profile, 0m);
+        var result = await pcs.CalculateAsync(plan, profile);
         Assert.True(result.Success);
         Assert.NotEmpty(result.ExportLines);
 

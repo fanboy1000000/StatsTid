@@ -155,7 +155,7 @@ public sealed class MonthEndCrossingTests
         var pcs = BuildPcsOver(engine, reader);
         var profile = Profile(Emp) with { OkVersion = "OK26" };
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            Plan(Emp, start, end, windows: null), profile, previousFlexBalance: 0m);
+            Plan(Emp, start, end, windows: null), profile);
         return new MonthRun(outcome, reader, engine);
     }
 
@@ -240,7 +240,9 @@ public sealed class MonthEndCrossingTests
                 employeeProfileRepo: null,
                 hoursReader: reader,
                 // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-                priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
+                priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+                // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+                flexLedgerReader: new InMemoryFlexLedgerReader());
 
     private static TimeEntryProjectionRow NightShiftRow(DateOnly date) => new()
     {
