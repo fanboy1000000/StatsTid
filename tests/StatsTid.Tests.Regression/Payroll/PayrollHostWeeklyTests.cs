@@ -697,9 +697,9 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(EntriesNotAcceptedKind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        Assert.Equal(EntriesNotAcceptedKind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(JsonAssert.RequiredMember(root, "error").GetString()));
 
         // A fixed sentence: it echoes neither the refused entry's date nor the employee.
         Assert.DoesNotMatch(IsoDatePattern, json);
@@ -711,16 +711,16 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(PriorMonthNotApprovedKind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        Assert.Equal(PriorMonthNotApprovedKind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(JsonAssert.RequiredMember(root, "error").GetString()));
 
         // The earlier month's PAY period — and nothing else date-shaped (no employment date, no
         // echo of the month being calculated).
         Assert.Equal(priorStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            root.GetProperty("periodStart").GetString());
+            JsonAssert.RequiredMember(root, "periodStart").GetString());
         Assert.Equal(priorEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            root.GetProperty("periodEnd").GetString());
+            JsonAssert.RequiredMember(root, "periodEnd").GetString());
         var datesInBody = Regex.Matches(json, IsoDatePattern).Select(m => m.Value).OrderBy(v => v, StringComparer.Ordinal).ToArray();
         Assert.Equal(
             new[] { priorStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), priorEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) },

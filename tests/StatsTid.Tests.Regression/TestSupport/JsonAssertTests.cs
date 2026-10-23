@@ -19,7 +19,6 @@ public class JsonAssertTests
 
         var ex = Assert.ThrowsAny<XunitException>(() => JsonAssert.RequiredMember(doc.RootElement, "reason"));
 
-        Assert.IsNotType<KeyNotFoundException>(ex);
         Assert.Contains("'reason'", ex.Message);
         Assert.Contains("kind", ex.Message);
         Assert.Contains("success", ex.Message);

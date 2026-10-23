@@ -587,11 +587,11 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal("payroll-rules-unavailable", root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.Equal("payroll-rules-unavailable", JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
         // N-c4-1 (S144 Step 7a cycle 4, ruled R38): the sentence itself, word for word — no longer
         // verified by inspection only. An upstream status or body leaking into it would trip this.
-        Assert.Equal(RulesUnavailableSentence, root.GetProperty("error").GetString());
+        Assert.Equal(RulesUnavailableSentence, JsonAssert.RequiredMember(root, "error").GetString());
         // The body is FIXED (Program.cs:618): exactly these three properties, so an added
         // upstream-detail field cannot slip past the pin (Step 7a cycle 3, C2).
         Assert.Equal(
