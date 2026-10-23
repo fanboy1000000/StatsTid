@@ -11,7 +11,7 @@ namespace StatsTid.Tests.Regression.Segmentation;
 
 /// <summary>
 /// D11 fixture #14 — exercises
-/// <c>PeriodCalculationService.BuildPlanForLegacyCallersAsync</c>'s S21 hydration
+/// <c>PeriodCalculationService.BuildPlanWithHistoriesAsync</c>'s S21 hydration
 /// of <see cref="BoundarySources.LocalProfileActivations"/> from the
 /// <c>local_agreement_profiles</c> table (ADR-017 D9c, TASK-2108).
 ///
@@ -157,7 +157,7 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
             .Build();
         var profileRepo = new LocalAgreementProfileRepository(_harness.Factory);
 
-        // Stubbed HTTP factory — never actually called by BuildPlanForLegacyCallersAsync,
+        // Stubbed HTTP factory — never actually called by BuildPlanWithHistoriesAsync,
         // but PeriodCalculationService's constructor requires non-null. Re-using the
         // segmentation TestFixtures default handler keeps shape identical.
         var stubHandler = new TestFixtures.StubHandler(TestFixtures.DefaultRuleEngineHandler);
@@ -182,13 +182,21 @@ public sealed class ProfileBoundaryHydrationTests : IAsyncLifetime
         DateOnly periodStart,
         DateOnly periodEnd)
     {
+        // S146 TASK-14600: the plan-only wrapper is gone, so this reaches its former body,
+        // BuildPlanWithHistoriesAsync, and takes .Plan. That returns
+        // Task<(PlannedCalculation Plan, PlanHistories Histories)> and PlanHistories is private,
+        // so the task is awaited untyped and the plan is the tuple's first element. Regression
+        // pin (R): the facts' assertions are unchanged; only the seam they reach moved.
         var method = typeof(PeriodCalculationService).GetMethod(
-            "BuildPlanForLegacyCallersAsync",
+            "BuildPlanWithHistoriesAsync",
             BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
-        var task = (Task<PlannedCalculation>)method!.Invoke(
+        var task = (Task)method!.Invoke(
             pcs, new object[] { profile, periodStart, periodEnd, CancellationToken.None })!;
-        return await task;
+        await task;
+        var planAndHistories = (System.Runtime.CompilerServices.ITuple)method.ReturnType
+            .GetProperty(nameof(Task<object>.Result))!.GetValue(task)!;
+        return (PlannedCalculation)planAndHistories[0]!;
     }
 
     private sealed class SingleClientHttpFactory : IHttpClientFactory

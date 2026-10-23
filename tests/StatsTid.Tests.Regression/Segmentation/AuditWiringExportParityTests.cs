@@ -20,7 +20,7 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// planless <c>CalculateAsync(profile, …)</c> shim and return its <c>PeriodCalculationResult</c>. It
 /// now calls the new planless <c>CalculateWithOutcomeAsync(profile, …)</c> and returns
 /// <c>outcome.Result</c>. Both overloads build the plan through the SAME
-/// <c>BuildPlanForLegacyCallersAsync</c> and run the SAME sole logic entry point
+/// <c>BuildPlanWithHistoriesAsync</c> and run the SAME sole logic entry point
 /// (<c>CalculateWithOutcomeAsync(plan, …)</c>) — indeed the legacy <c>CalculateAsync</c> IS literally
 /// <c>CalculateWithOutcomeAsync(plan, …).Result</c>. So the export produced by the two paths is
 /// identical except for the per-call, freshly-minted manifest id — which was already

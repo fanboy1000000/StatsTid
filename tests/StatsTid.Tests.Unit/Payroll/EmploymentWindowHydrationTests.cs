@@ -9,7 +9,7 @@ namespace StatsTid.Tests.Unit.Payroll;
 
 /// <summary>
 /// S137 / TASK-13702 — the payroll host's planner HYDRATION of the employment window
-/// (ADR-040 D5/D7): <c>PeriodCalculationService.BuildPlanForLegacyCallersAsync</c> reads the
+/// (ADR-040 D5/D7): <c>PeriodCalculationService.BuildPlanWithHistoriesAsync</c> reads the
 /// window via <c>IEmploymentWindowResolver.GetWindowsAsync</c> and turns it into boundary
 /// dates + segment typing. Locally runnable (no DB).
 ///
@@ -229,12 +229,20 @@ public sealed class EmploymentWindowHydrationTests
     {
         var pcs = BuildPcs(new RecordingRuleEngine(), windowResolver: windowResolver);
 
+        // S146 TASK-14600: the plan-only wrapper is gone, so this reaches its former body,
+        // BuildPlanWithHistoriesAsync, and takes .Plan. That returns
+        // Task<(PlannedCalculation Plan, PlanHistories Histories)> and PlanHistories is private,
+        // so the task is awaited untyped and the plan is the tuple's first element. Regression
+        // pin (R): the facts' assertions are unchanged; only the seam they reach moved.
         var method = typeof(PeriodCalculationService).GetMethod(
-            "BuildPlanForLegacyCallersAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+            "BuildPlanWithHistoriesAsync", BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(method);
 
-        var task = (Task<PlannedCalculation>)method!.Invoke(
+        var task = (Task)method!.Invoke(
             pcs, new object[] { Profile(EmployeeId), periodStart, periodEnd, CancellationToken.None })!;
-        return await task;
+        await task;
+        var planAndHistories = (System.Runtime.CompilerServices.ITuple)method.ReturnType
+            .GetProperty(nameof(Task<object>.Result))!.GetValue(task)!;
+        return (PlannedCalculation)planAndHistories[0]!;
     }
 }
