@@ -453,8 +453,13 @@ public sealed class EmploymentWindowSegmentSkipTests
         // D10: exactly one profile lookup, at the hire date — none at 03-01 (pre-hire).
         Assert.Equal(new[] { hire }, profileResolver.AsOfDates);
 
-        // D7: the window was read server-side for exactly the calculation period.
-        Assert.Equal((EmployeeId, Mar01, Mar31), Assert.Single(windowResolver.Calls));
+        // D7: the window was read server-side for the calculation period.
+        // S146 R-28: and once more for [P.start, M.end] = (1 Feb, 31 Mar): the flex-ledger derivation reading the
+        // previous month (R-36 contract 2). Exactly these two reads, in either order.
+        Assert.Equal(2, windowResolver.Calls.Count);
+        Assert.Equal(
+            new HashSet<(string, DateOnly, DateOnly)> { (EmployeeId, Mar01, Mar31), (EmployeeId, new DateOnly(2026, 2, 1), Mar31) },
+            windowResolver.Calls.ToHashSet());
 
         // Rule engine only saw the employed span; the manifest carries the typed prefix.
         // S145 F1: per-segment calls start at the hire date; the timeline's pieces do too.

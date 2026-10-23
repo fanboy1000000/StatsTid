@@ -101,9 +101,10 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
     ///
     /// <para>
     /// <b>S146 R-14 (docstring only).</b> The forward calculation no longer takes an opening from its caller (this
-    /// fact used to pass 12.5): payroll derives it from the ledger, which is empty here, so it is LEDGER_START 0.
-    /// The fact asserts nothing about the number: its assertion is the refusal by name, which is what trips when
-    /// the required marker goes (R-37, reviewer c2 N3). It is not re-seeded.
+    /// fact used to pass 12.5): payroll derives it from the ledger. The helper seeds the previous month with a
+    /// recorded closing of 12.5, so the month opens CHAINED at 12.5 (R-14 case 4a) and the frozen opening is again
+    /// a distinct non-zero value: a replay that read the missing key as 0 would be a wrong, silent substitute.
+    /// The fact's assertion is the refusal by name (R-37, reviewer c2 N3).
     /// </para>
     ///
     /// <para>
@@ -174,7 +175,9 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
         var entries = TestFixtures.WeekdayEntriesForPeriod(employeeId, start, end);
         var pcs = TestFixtures.BuildPcs(
             _harness.Factory, _harness.EventStore,
-            hoursReader: new InMemoryRecordedHoursReader(entries));
+            hoursReader: new InMemoryRecordedHoursReader(entries),
+            // S146 R-14: an employed February (implicit, no resolver) closed at 12.5, so March opens CHAINED at 12.5.
+            flexLedgerReader: InMemoryFlexLedgerReader.ClosedAt(start, 12.5m));
 
         var plan = PeriodPlanner.Plan(
             employeeId: employeeId,
