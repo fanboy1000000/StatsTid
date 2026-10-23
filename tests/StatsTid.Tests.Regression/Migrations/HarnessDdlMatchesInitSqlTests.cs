@@ -13,7 +13,8 @@ namespace StatsTid.Tests.Regression.Migrations;
 /// tables so a test can start with a small database instead of the whole schema. The copies this guard
 /// covers: <c>ProjectionSchemaTestFixture</c> (the two hours tables), <c>TxContractTests</c> (the same two
 /// tables, again), <c>TestFixtures.DockerHarness.SchemaDdl</c> (<c>segment_manifests</c> from S145, and
-/// <c>outbox_events</c> from S146 / TASK-14609, once the manifest moves onto the outbox) and
+/// <c>outbox_events</c> from S146 / TASK-14609: the copy and its guard row are in force now, ahead of
+/// TASK-14604 moving the manifest onto the outbox) and
 /// <c>PayrollExportRecordsTestSchema</c> (<c>payroll_export_records</c>, S146 / TASK-14601-T). A copy
 /// that lags behind production breaks every test that writes a column the copy lacks, and it breaks
 /// them in setup, with an error that points at the test and not at the stale copy. S144's close went

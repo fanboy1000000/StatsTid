@@ -29,11 +29,12 @@ public sealed class PayrollOutboxDrainTests : IAsyncLifetime
     /// the id that travels is the one the event was enqueued with.</para>
     ///
     /// <para><b>Red conditions.</b> Names a type this sprint creates, so RED is a mutation, not a revert:
-    /// make <c>DrainAsync</c> return before <c>publisher.StartAsync</c> (keep the signature). Nothing then
-    /// publishes the row; the helper's poll sees one unpublished row and throws <see cref="TimeoutException"/>
-    /// after its limit, so the fact fails (and with a polling short-circuit that skips the wait, the
-    /// <c>events</c> assertion below trips on a missing row). A helper that drained the wrong partition
-    /// (service id other than <c>"payroll"</c>) fails the same way. Not run locally.</para>
+    /// two mutations, each keeping the signature. (1) <c>DrainAsync</c> returns at once, before
+    /// <c>publisher.StartAsync</c>: it never polls, so the fact fails at the <c>events</c> count assertion
+    /// (0 rows, expected 1). (2) <c>DrainAsync</c> skips <c>publisher.StartAsync</c> but keeps the poll:
+    /// nothing publishes the row, the poll keeps seeing one unpublished row and throws
+    /// <see cref="TimeoutException"/> after its limit. A helper that drained the wrong partition (a service
+    /// id other than <c>"payroll"</c>) fails like (2). Not run locally.</para>
     /// </summary>
     [Fact]
     public async Task PayrollOutboxDrain_EnqueuedPayrollRow_DrainedToEvents_SameEventId()

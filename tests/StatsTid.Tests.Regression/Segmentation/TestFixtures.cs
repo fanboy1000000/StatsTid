@@ -505,7 +505,9 @@ internal static class TestFixtures
     ///
     /// <para>
     /// <c>init.sql</c>-<i>compatible</i> shape covering <c>segment_manifests</c> +
-    /// <c>events</c> + <c>event_streams</c> + <c>wage_type_mappings</c>. It is NOT a byte copy
+    /// <c>events</c> + <c>event_streams</c> + <c>wage_type_mappings</c> + <c>outbox_events</c>
+    /// (the last since S146 R-24: the manifest moves onto the outbox in TASK-14604, and the
+    /// harness store is enqueue-capable). It is NOT a byte copy
     /// (S145 / TASK-14501 corrected an earlier "byte-for-byte" claim that was false). The named
     /// differences:
     /// <list type="bullet">
@@ -522,7 +524,8 @@ internal static class TestFixtures
     ///   matches production's final table: <c>init.sql</c> adds it in an S25 block (ADR-019, ledger key `s25-d2-2-version`), so it differs
     ///   from the base <c>CREATE</c> only.) Nothing checks this table against
     ///   <c>init.sql</c>.</description></item>
-    ///   <item><description><c>segment_manifests</c> — and the two hours projection tables copied in
+    ///   <item><description><c>segment_manifests</c> and <c>outbox_events</c> (the latter via the guard
+    ///   row <c>TestFixtures.DockerHarness.SchemaDdl.Outbox</c>) — and the two hours projection tables copied in
     ///   <c>Outbox.ProjectionSchemaTestFixture</c> and <c>Infrastructure.TxContractTests</c> — are
     ///   checked column-by-column, index-by-index against a database built from <c>init.sql</c>
     ///   alone by <c>Migrations.HarnessDdlMatchesInitSqlTests</c>, so drift there fails CI with a
