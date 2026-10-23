@@ -135,14 +135,30 @@ public sealed class RetroactiveCorrectionService
     /// <see cref="PeriodCalculationService.PeriodCalculationOutcome.ThrowIfNotProvable"/> throws
     /// <see cref="ManifestNotPersistedException"/> before the correction transaction opens: nothing is written.
     /// </para>
+    /// <para>
+    /// <strong>S146 / TASK-14605 (QUAL-188; R-14, R-15, R-10) — the flex ledger.</strong> No opening balance is
+    /// passed: the recalculation's admission derives it from the recorded ledger (and may refuse with
+    /// <see cref="FlexLedgerRefusalException"/> before the transaction opens). The correction transaction takes the
+    /// per-employee ledger lock as its FIRST statement, before the record's <c>FOR UPDATE</c>, then re-runs the
+    /// derivation on in-transaction reads and requires the (opening, provenance) its OWN calculation used
+    /// (<c>payroll-ledger-changed</c> otherwise). It records the month's corrected balances beside
+    /// <c>current_effective_lines</c>; the event and the result carry the opening used and the closing before and
+    /// after; and the next month is named when the closing changed (C4), Sunday or not. Under <c>UNTRACKED</c> (a raw
+    /// month before the ledger start) <c>FLEX_PAYOUT</c> is excluded from both sides of the diff and the flex delta is
+    /// null, so no flex correction line is emitted and a payout already made is never clawed back; the balances stay
+    /// null. A month that lost every EMPLOYED day (a windows edit) derives no opening (the function's precondition):
+    /// its line diff is corrected, its recorded balances stay unchanged, and its event says so (no opening used,
+    /// no provenance, the same closing before and after; reviewer c3 N7, decided: leave unchanged, not refuse).
+    /// </para>
     /// </summary>
     /// <exception cref="ManifestNotPersistedException">The recalculation's manifest was not persisted (or a
     /// successful result carries none); nothing was written.</exception>
+    /// <exception cref="FlexLedgerRefusalException">The month's opening could not be derived (admission), or the
+    /// ledger changed while the correction was computed (the under-lock recheck); nothing was written.</exception>
     public async Task<RetroactiveCorrectionResult> RecalculateAsync(
         EmploymentProfile profile,
         DateOnly periodStart,
         DateOnly periodEnd,
-        decimal previousFlexBalance,
         string reason,
         string actorId,
         string? authorizationHeader = null,
@@ -243,10 +259,14 @@ public sealed class RetroactiveCorrectionService
         // /calculate-and-export made in S134, QUAL-003). The outcome carries the calculation's frozen
         // inputs (PlanInputs), which is where the correction event's agreement and position come from.
         // ---------------------------------------------------------------
+        //
+        // S146 TASK-14605 (R-14): no opening balance is passed. Admission derives it from the recorded ledger,
+        // after the existing checks and before any rule call; a refusal (FlexLedgerRefusalException, 409) leaves
+        // nothing behind, like every other admission refusal above.
 #pragma warning disable CS0618 // RetroactiveCorrectionService intentionally calls the [Obsolete] shim overload during the TASK-2009 / TASK-2010 migration; remove once the service constructs PlannedCalculation explicitly.
         var outcome = await _calculationService.CalculateWithOutcomeAsync(
             profile, periodStart, periodEnd,
-            previousFlexBalance, authorizationHeader, correlationId, ct);
+            authorizationHeader, correlationId, ct);
 #pragma warning restore CS0618
 
         // S146 TASK-14604 (QUAL-205; rulings R-22, R-27): the recalculation's proof — its manifest, written in one
@@ -274,10 +294,17 @@ public sealed class RetroactiveCorrectionService
             };
         }
 
+        // S146 TASK-14605 (R-14): the opening admission derived. null when the month holds no EMPLOYED day (the
+        // function's precondition, reviewer c3 N7): no flex is settled and the record's balances stay unchanged.
+        var flexOpening = outcome.FlexOpening;
+        var untracked = flexOpening?.IsUntracked == true;
+
         // Flex delta is extracted from the merged rule results. Flex is evaluated once
         // across the whole plan (S145 B1: TimelineAware → SinglePlanEvaluation), so
         // newResult.RuleResults already carries the period's net delta.
-        decimal? flexDelta = ExtractFlexDelta(newResult.RuleResults);
+        // S146 TASK-14605 (R-14 case 3b; reviewer c3 W4): under UNTRACKED the flex is not tracked, so there is no
+        // flex delta and no flex correction line (FLEX_PAYOUT is also excluded from both sides of the diff below).
+        decimal? flexDelta = untracked ? null : ExtractFlexDelta(newResult.RuleResults);
 
         var resolvedOrgId = profile.OrgId
             ?? throw new InvalidOperationException(
@@ -315,35 +342,80 @@ public sealed class RetroactiveCorrectionService
         // while leaving the baseline un-advanced → the exact B3 double-count this sprint prevents).
         IReadOnlyList<CorrectionExportLine> correctionLines;
         (DateOnly Start, DateOnly End)? nextPeriod;
+        decimal? closingBefore;
+        decimal? closingAfter;
         await using (var conn = _connectionFactory.Create())
         {
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(ct);
 
+            // S146 TASK-14605 (R-15; C3) — the per-employee ledger lock is the FIRST statement, before the record's
+            // FOR UPDATE below, as in every writer of payroll_export_records: a correction of M and an export of M+1
+            // (which reads M's closing) serialize here, whichever comes first.
+            await PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync(conn, tx, new[] { profile.EmployeeId }, ct);
+
+            // S146 TASK-14605 (R-14) — the under-lock recheck: the same function on in-transaction reads must give
+            // the (opening, provenance) THIS correction's calculation used — not M's recorded values, which are
+            // what a correction may be correcting. A month with no EMPLOYED day derived nothing and has nothing to
+            // re-check. Throws FlexLedgerRefusalException payroll-ledger-changed (the transaction rolls back).
+            if (flexOpening is not null)
+            {
+                await _calculationService.RecheckFlexOpeningUnderLockAsync(
+                    conn, tx, profile.EmployeeId, new DateOnly(corrYear, corrMonth, 1), flexOpening,
+                    PeriodCalculationService.FlexLedgerRoute.Correction, ct);
+            }
+
             // BLOCKER 3 — the authoritative baseline, read + locked inside the tx. A null here means
             // the record vanished between the pre-check probe and this lock (concurrent deletion) →
             // fail loud (corrections-only-post-lock; nothing is committed).
-            var lockedBaseline = await PayrollExportRecordRepository.TryReadCurrentEffectiveLinesForUpdateAsync(
+            // S146 TASK-14605 (C4, reviewer c3 N4): the same locked read now also returns the month's recorded
+            // balances, so the closing BEFORE this correction is read inside this transaction.
+            var lockedRecord = await PayrollExportRecordRepository.TryReadRecordForUpdateAsync(
                 conn, tx, profile.EmployeeId, corrYear, corrMonth, ct);
-            if (lockedBaseline is null)
+            if (lockedRecord is null)
             {
                 throw new PayrollExportNotFoundException(
                     $"Payroll-eksportrækken for medarbejder '{profile.EmployeeId}' ({corrYear}-{corrMonth:D2}) " +
                     $"forsvandt under korrektionen; korrektionen blev rullet tilbage.");
+            }
+            var lockedBaseline = lockedRecord.Lines;
+
+            // S146 TASK-14605 (R-14 case 3b; reviewer c3 W4) — under UNTRACKED, FLEX_PAYOUT leaves BOTH sides of the
+            // diff: the recalculation already dropped it (PCS), and the baseline's is set aside here, so a payout
+            // that was really paid produces no correction line and is never clawed back. The set-aside payout lines
+            // stay in the new effective baseline: nothing reversed them, so they are still what payroll holds
+            // (current_effective_lines = the original plus every correction line, wage type by wage type).
+            var diffBaseline = lockedBaseline;
+            var diffNew = newResult.ExportLines;
+            var newEffectiveLines = newResult.ExportLines;
+            if (untracked)
+            {
+                diffBaseline = lockedBaseline.Where(l => !IsFlexPayout(l)).ToList();
+                diffNew = newResult.ExportLines.Where(l => !IsFlexPayout(l)).ToList();
+                newEffectiveLines = diffNew.Concat(lockedBaseline.Where(IsFlexPayout)).ToList();
             }
 
             // Diff new export lines against the LOCKED baseline. ProduceCorrectionLines already honours
             // each line's per-line OkVersion (S14), which is exactly what the planner-driven path emits
             // — so OK-version-aware diffing works whether the planner produced 1 or N segments.
             correctionLines = ProduceCorrectionLines(
-                profile, lockedBaseline, newResult.ExportLines, periodStart, periodEnd,
+                profile, diffBaseline, diffNew, periodStart, periodEnd,
                 flexDelta, okTransitionDate, canonicalPreviousOkVersion);
+
+            // S146 TASK-14605 (C1) — the month's closing before and after this correction. Tracked: the engine's
+            // closing. UNTRACKED: none (never stored). No EMPLOYED day: unchanged (nothing was settled).
+            closingBefore = lockedRecord.ClosingBalance;
+            closingAfter = flexOpening is null
+                ? closingBefore
+                : untracked ? null : newResult.ClosingFlexBalance;
 
             // S145 TASK-14512 — Q7 (b), ruling R37: does this correction leave the NEXT month stale?
             // A plain read inside this tx (READ COMMITTED: it sees every export committed before it runs);
             // it takes no lock and writes nothing to the next month — the response, the event and the
-            // audit row only name it.
-            nextPeriod = await NextPeriodToRecalculateAsync(conn, tx, profile.EmployeeId, corrYear, corrMonth, ct);
+            // audit row only name it. S146 TASK-14605 (C4, R-10): also when this correction changed M's closing,
+            // which M+1 opened at.
+            nextPeriod = await NextPeriodToRecalculateAsync(
+                conn, tx, profile.EmployeeId, corrYear, corrMonth, closingChanged: closingBefore != closingAfter, ct);
 
             // Emit RetroactiveCorrectionRequested (MANDATORY — see BLOCKER 2 above).
             // The audit trail records what actually ran, never what the request body said:
@@ -374,6 +446,14 @@ public sealed class RetroactiveCorrectionService
                 // too (null otherwise). The audit mapper carries both into the audit row's details.
                 NextPeriodToRecalculateStart = nextPeriod?.Start,
                 NextPeriodToRecalculateEnd = nextPeriod?.End,
+                // S146 TASK-14605 (C1; makes ADR-013 item 2 true): the opening this recalculation used, the month's
+                // closing before and after, and the opening's provenance. UNTRACKED: no opening, no closing after,
+                // provenance UNTRACKED (flex not tracked). No EMPLOYED day: no opening, no provenance, and the same
+                // closing before and after (the balances were left unchanged, reviewer c3 N7).
+                OpeningFlexBalanceUsed = flexOpening is null || untracked ? null : flexOpening.Balance,
+                ClosingFlexBalanceBefore = closingBefore,
+                ClosingFlexBalanceAfter = closingAfter,
+                FlexProvenance = flexOpening?.Provenance,
             };
 
             var streamId = $"retro-correction-{profile.EmployeeId}-{periodStart:yyyy-MM-dd}";
@@ -392,8 +472,20 @@ public sealed class RetroactiveCorrectionService
             // correction's result (no double-count). original_lines is left immutable. The corrected
             // lines are newResult.ExportLines (what a future correction must diff against). A 0-row
             // update means the record vanished mid-tx — fail loud rather than silently desync.
-            var rowsUpdated = await PayrollExportRecordRepository.UpdateCurrentEffectiveLinesAsync(
-                conn, tx, profile.EmployeeId, corrYear, corrMonth, newResult.ExportLines, ct);
+            // S146 TASK-14605 (C1): a tracked month's balances are written in the same statement (a raw month after
+            // the ledger start fills its nulls here, R-14 4a); under UNTRACKED and for a month with no EMPLOYED day
+            // the balances are left as they are (null, resp. unchanged) and only the lines move.
+            var rowsUpdated = flexOpening is not null && !untracked
+                ? await PayrollExportRecordRepository.UpdateCorrectedRecordAsync(
+                    conn, tx, profile.EmployeeId, corrYear, corrMonth, newEffectiveLines,
+                    flexOpening.Balance,
+                    closingAfter ?? throw new InvalidOperationException(
+                        $"RetroactiveCorrectionService invariant violated: the recalculation for employee " +
+                        $"{profile.EmployeeId} derived a {flexOpening.Provenance} opening but carries no closing " +
+                        $"balance. ManifestId={outcome.ManifestId}."),
+                    flexOpening.Provenance, ct)
+                : await PayrollExportRecordRepository.UpdateCurrentEffectiveLinesAsync(
+                    conn, tx, profile.EmployeeId, corrYear, corrMonth, newEffectiveLines, ct);
             if (rowsUpdated == 0)
             {
                 throw new PayrollExportNotFoundException(
@@ -465,8 +557,29 @@ public sealed class RetroactiveCorrectionService
             Success = true,
             NextPeriodToRecalculateStart = nextPeriod?.Start,
             NextPeriodToRecalculateEnd = nextPeriod?.End,
+            // S146 TASK-14605: the same flex members as the event, plus a plain statement when flex was not
+            // tracked (R-14 case 3b) or not settled (no EMPLOYED day, reviewer c3 N7).
+            OpeningFlexBalanceUsed = flexOpening is null || untracked ? null : flexOpening.Balance,
+            ClosingFlexBalanceBefore = closingBefore,
+            ClosingFlexBalanceAfter = closingAfter,
+            FlexProvenance = flexOpening?.Provenance,
+            FlexNote = flexOpening is null
+                ? NoEmployedDayFlexNote
+                : untracked ? FlexLedgerOpening.UntrackedNote(flexOpening.LedgerStart) : null,
         };
     }
+
+    /// <summary>
+    /// S146 / TASK-14605 (reviewer c3 N7) — the statement a correction of a month with no EMPLOYED day carries: the
+    /// opening derivation's precondition does not hold, so no flex is settled and the record's balances are left
+    /// as they were.
+    /// </summary>
+    public const string NoEmployedDayFlexNote =
+        "flex not settled: the month holds no employed day; the recorded balances are unchanged";
+
+    /// <summary>True for an export line that pays out flex above the cap (<c>FLEX_PAYOUT</c>).</summary>
+    private static bool IsFlexPayout(PayrollExportLine line) =>
+        string.Equals(line.SourceTimeType, FlexLedgerOpening.FlexPayoutTimeType, StringComparison.Ordinal);
 
     /// <summary>
     /// S145 / TASK-14512 — Q7 (b), owner ruling; R37. The pay period of the month AFTER the corrected one,
@@ -488,16 +601,27 @@ public sealed class RetroactiveCorrectionService
     /// week was settled inside M, naming M+1 over-names: it is advisory and harmless, because nothing is
     /// written to M+1 — the response, the event and the audit row only point at it.
     /// </para>
+    ///
+    /// <para>
+    /// <b>S146 / TASK-14605 (C4, R-10) — the closing test, in addition.</b> M+1 opened at M's recorded closing
+    /// balance (R-14 case 4a). When this correction changed that closing (<paramref name="closingChanged"/>,
+    /// any difference including a first value where there was none), M+1's opening is stale too, so M+1 is
+    /// named whenever it is exported, even when M ends on a Sunday (May 2026 ends on Sunday 31 May). The Sunday
+    /// test is the F1 trigger the overtime/flex model program removes; the closing test is the one that stays.
+    /// ADR-013 holds: nothing recalculates M+1 automatically.
+    /// </para>
     /// </summary>
     private static async Task<(DateOnly Start, DateOnly End)?> NextPeriodToRecalculateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        string employeeId, int year, int month, CancellationToken ct)
+        string employeeId, int year, int month, bool closingChanged, CancellationToken ct)
     {
         var monthStart = new DateOnly(year, month, 1);
         var monthEnd = monthStart.AddMonths(1).AddDays(-1);
 
-        // The closing week ends inside M (M's last day is a Sunday): M settled it, M+1 paid none of it.
-        if (WeeklyContext.WeekEnd(monthEnd) == monthEnd)
+        // The F1 trigger (owner ruling Q3 = F1; the model program removes it): the closing week ends inside M (M's
+        // last day is a Sunday), so M settled it and M+1 paid none of it. Unless M's closing balance changed (C4):
+        // then M+1's opening is stale whatever weekday M ends on.
+        if (WeeklyContext.WeekEnd(monthEnd) == monthEnd && !closingChanged)
             return null;
 
         var nextStart = monthStart.AddMonths(1);
@@ -636,6 +760,36 @@ public sealed class RetroactiveCorrectionResult
     /// <see cref="NextPeriodToRecalculateStart"/>. Serialized as <c>nextPeriodToRecalculateEnd</c>.
     /// </summary>
     public DateOnly? NextPeriodToRecalculateEnd { get; init; }
+
+    /// <summary>
+    /// S146 / TASK-14605 — the opening flex balance the recalculation used (derived from the ledger). <c>null</c>
+    /// when flex is not tracked (<c>UNTRACKED</c>) or the month holds no EMPLOYED day. Serialized as
+    /// <c>openingFlexBalanceUsed</c>.
+    /// </summary>
+    public decimal? OpeningFlexBalanceUsed { get; init; }
+
+    /// <summary>S146 / TASK-14605 — the month's recorded closing balance before this correction (<c>null</c> on a raw record).</summary>
+    public decimal? ClosingFlexBalanceBefore { get; init; }
+
+    /// <summary>
+    /// S146 / TASK-14605 — the month's closing balance after this correction (the engine's clamped closing);
+    /// <c>null</c> under <c>UNTRACKED</c>; equal to <see cref="ClosingFlexBalanceBefore"/> for a month with no
+    /// EMPLOYED day (left unchanged).
+    /// </summary>
+    public decimal? ClosingFlexBalanceAfter { get; init; }
+
+    /// <summary>
+    /// S146 / TASK-14605 — where the opening came from: <c>LEDGER_START</c>, <c>CHAINED</c>, <c>REHIRE</c> or
+    /// <c>UNTRACKED</c>; <c>null</c> for a month with no EMPLOYED day.
+    /// </summary>
+    public string? FlexProvenance { get; init; }
+
+    /// <summary>
+    /// S146 / TASK-14605 — a plain statement when the month's flex was not tracked
+    /// ("flex not tracked: the month precedes the ledger start S", R-14 case 3b) or not settled (no EMPLOYED day);
+    /// <c>null</c> otherwise.
+    /// </summary>
+    public string? FlexNote { get; init; }
 }
 
 /// <summary>

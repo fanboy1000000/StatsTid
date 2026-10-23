@@ -70,11 +70,16 @@ builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResol
 // segment typing. Read server-side inside THIS host (D7): the EmploymentProfile wire DTO never
 // carries employment dates. Registered next to IEmploymentProfileResolver because the two are
 // consulted in D10 order (employed? FIRST, then which profile?) at the same planning seam.
-// Only the SELF-MANAGED SharedKernel surface is registered here — deliberately NOT the
-// Infrastructure IEmploymentWindowResolverInTx sibling: planning is a pure read outside any
-// advisory lock, and this host has no write transaction for a window read to ride.
+// S146 TASK-14605 (R-36): the Infrastructure in-transaction surface IEmploymentWindowResolverInTx is
+// registered too, from the SAME singleton (the Backend host's pattern), so the two reads cannot disagree on
+// semantics. Planning still reads outside any lock (self-managed); but this host now has writing transactions
+// that need a window read inside them: the flex ledger's under-lock recheck re-derives a month's opening
+// balance after the per-employee ledger lock, reading the windows over [the previous month's first day, this
+// month's last day] on the caller's (conn, tx), so it sees what a concurrent write committed. The earlier
+// "no write transaction for a window read to ride" rationale ended with that recheck.
 builder.Services.AddSingleton<EmploymentWindowResolver>();
 builder.Services.AddSingleton<IEmploymentWindowResolver>(sp => sp.GetRequiredService<EmploymentWindowResolver>());
+builder.Services.AddSingleton<IEmploymentWindowResolverInTx>(sp => sp.GetRequiredService<EmploymentWindowResolver>());
 // S137 TASK-13702 (ADR-040 D5): the employee_profiles history read (GetEffectiveFromDatesAsync)
 // that feeds the now-ACTIVE EmployeeProfileChange boundary — a mid-period part-time-fraction
 // or position change splits the calculation so each span resolves its own dated profile.
@@ -87,6 +92,11 @@ builder.Services.AddSingleton<PayrollExportService>();
 // current_effective_lines as the /recalculate diff baseline (B3) and rewrites it in the
 // correction tx so a 2nd correction diffs against the 1st correction's result.
 builder.Services.AddSingleton<PayrollExportRecordRepository>();
+// S146 TASK-14605 (QUAL-188; R-14): the flex ledger's one read — the employee's export records with their
+// balance columns — which PeriodCalculationService's opening derivation consumes (self-managed at admission,
+// in-transaction for the under-lock recheck). Optional in PCS's constructor but never silent: without this
+// registration every calculation of a month holding an EMPLOYED day throws, naming this line.
+builder.Services.AddSingleton<IFlexLedgerReader, PostgresFlexLedgerReader>();
 // S145 TASK-14508 (rulings R14, R25, R58): payroll reads the employee's recorded hours itself —
 // the calculating routes no longer take them from the request. This registers IRecordedHoursReader
 // (PeriodCalculationService's optional-but-never-silent hours source: without it every calculation
@@ -347,6 +357,13 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     if (RefuseBodyHours(request.Entries, request.Absences) is { } bodyHoursRefusal)
         return bodyHoursRefusal;
 
+    // S146 TASK-14605 (QUAL-188; R-14, AC-C2): an opening flex balance in the body is refused, loudly, beside the
+    // hours refusal and for the same reason — the calculation derives the opening from the recorded ledger, so a
+    // caller-supplied one would be silently ignored. Same placement (ruling N1): after the org-scope 403, before
+    // the approval read and every read the calculation makes; nothing is calculated, written or exported.
+    if (RefuseBodyOpeningBalance(request.PreviousFlexBalance) is { } openingRefusal)
+        return openingRefusal;
+
     // Approval guard: period must be APPROVED before payroll export
     var approval = await approvalRepo.GetByEmployeeAndPeriodAsync(
         request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd, ct);
@@ -380,11 +397,11 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     PeriodCalculationService.PeriodCalculationOutcome outcome;
     try
     {
+        // S146 TASK-14605 (R-14): no opening flex balance is passed — admission derives it from the ledger.
         outcome = await calculator.CalculateWithOutcomeAsync(
             request.Profile,
             request.PeriodStart,
             request.PeriodEnd,
-            request.PreviousFlexBalance,
             authHeader,
             correlationId,
             ct);
@@ -424,6 +441,14 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         // before any rule call, so nothing was calculated or written. 409 naming the previous month.
         return PriorMonthNotApproved(ex);
     }
+    catch (FlexLedgerRefusalException ex)
+    {
+        // S146 TASK-14605 (QUAL-188; R-14): the month's opening flex balance cannot be derived from the recorded
+        // ledger — an unrecorded month before the ledger start (payroll-export-out-of-order, naming the start) or
+        // an employed previous month with no ledger record (payroll-prior-month-not-recorded, naming it). Raised by
+        // admission after the prior-month check and before any rule call, so nothing was calculated or written.
+        return FlexLedgerRefused(ex);
+    }
     catch (RuleClassificationsUnavailableException)
     {
         // S144 TASK-14412 (ruling B1): the rule set could not be fetched, so the month could not be
@@ -433,9 +458,9 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     }
     catch (ManifestNotPersistedException)
     {
-        // S146 TASK-14604 (QUAL-205): the calculation's manifest was not persisted (its one transaction did
-        // not commit — nothing of it exists), so the result is not provable and is not exported. Nothing was
-        // exported or written. Fixed 503; the cause is in the calculation service's Error log.
+        // S146 TASK-14604 (QUAL-205): the calculation's manifest was not persisted (the commit of its one
+        // transaction was not confirmed), so the result is not provable and is not exported. Nothing was
+        // exported. Fixed 503; the cause is in the calculation service's Error log.
         return ManifestNotPersisted();
     }
 
@@ -454,8 +479,21 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     if (!result.Success)
         return Results.UnprocessableEntity(result);
 
-    // If calculation produced export lines, send to payroll
-    if (result.ExportLines.Count > 0)
+    // S146 TASK-14605 (QUAL-188; R-3, R-14): the month's flex-ledger write — its record identity, the derived
+    // opening and provenance, the engine's closing, and the under-lock recheck. Null exactly when the month holds
+    // no EMPLOYED day: then no flex is settled, the calculation produced no line, and no record is written (ADR-034
+    // D3). Otherwise the record is written even when there are no lines (an employed zero-line month: lines empty,
+    // balances set, corrections-only from then on) — the export used to be skipped for an empty line list.
+    var flexWrite = calculator.FlexLedgerWriteFor(outcome);
+    if (flexWrite is null && result.ExportLines.Count > 0)
+    {
+        throw new InvalidOperationException(
+            "calculate-and-export invariant violated: the calculation produced export lines for a month whose opening " +
+            "flex balance was never derived (no EMPLOYED day). Nothing was exported.");
+    }
+
+    // Send to payroll whenever the month holds an EMPLOYED day (S146: zero lines included).
+    if (flexWrite is not null)
     {
         // S90 / TASK-9002 (B2 + OQ-1): thread the approval period id so ExportAsync re-asserts
         // status='APPROVED' under FOR UPDATE before writing the lock record — closing the
@@ -471,6 +509,7 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         {
             PeriodId = approval.PeriodId,
             PriorMonthToRecheck = outcome.PriorMonthApprovalRequired,
+            FlexLedger = flexWrite,
             Source = "CALCULATE_AND_EXPORT",
             ActorId = actorId,
             ActorRole = actor.ActorRole,
@@ -481,6 +520,15 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         try
         {
             exportResult = await export.ExportAsync(result.ExportLines, context, ct);
+        }
+        catch (FlexLedgerRefusalException ex)
+        {
+            // S146 TASK-14605 (R-14 "the under-lock recheck"): inside the export transaction, after the ledger lock,
+            // the derivation re-ran on in-transaction reads and no longer gave the opening the calculation used
+            // (another export or a correction recorded the previous month meanwhile). The transaction rolled back:
+            // no export record, no PayrollExportGenerated, no audit row. The calculation's own manifest stays, as
+            // with the other export-time rechecks. 409 payroll-ledger-changed: retry.
+            return FlexLedgerRefused(ex);
         }
         catch (PriorMonthNotApprovedException ex)
         {
@@ -524,6 +572,11 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         }
     }
 
+    // S146 TASK-14605 (R-14 case 3b): a raw-recorded month before the ledger start ran UNTRACKED — its balances
+    // stay null and no FLEX_PAYOUT was paid. The response says so in plain words beside the result.
+    if (outcome.FlexOpening is { IsUntracked: true } untrackedOpening)
+        return OkWithFlexNote(httpContext, result, FlexLedgerOpening.UntrackedNote(untrackedOpening.LedgerStart));
+
     return Results.Ok(result);
 // LocalAdmin is acceptable here because the resource-scope guard above (TASK-1902)
 // validates the caller's scope against the target employee's org. The previous
@@ -548,6 +601,12 @@ app.MapPost("/api/payroll/recalculate", async (
     // anything is calculated or written — no baseline change, correction event, audit row or marker.
     if (RefuseBodyHours(request.Entries, request.Absences) is { } bodyHoursRefusal)
         return bodyHoursRefusal;
+
+    // S146 TASK-14605 (QUAL-188; R-14, AC-C2): an opening flex balance in the body is refused, beside the hours
+    // refusal and before any read (the idempotency lookup included): the recalculation derives the opening from
+    // the recorded ledger. Nothing is calculated or written.
+    if (RefuseBodyOpeningBalance(request.PreviousFlexBalance) is { } openingRefusal)
+        return openingRefusal;
 
     var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
     Guid? correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var corrValues)
@@ -579,12 +638,11 @@ app.MapPost("/api/payroll/recalculate", async (
         // (current_effective_lines), NOT from the request body — corrections require a prior
         // export. A never-exported month throws PayrollExportNotFoundException → a clean 422 below.
         // S145 TASK-14508 (R14): no hours are passed — the recalculation reads the employee's current
-        // recorded rows itself.
+        // recorded rows itself. S146 TASK-14605 (R-14): no opening flex balance either — it is derived.
         result = await correctionService.RecalculateAsync(
             request.Profile,
             request.PeriodStart,
             request.PeriodEnd,
-            request.PreviousFlexBalance,
             request.Reason,
             actorId,
             authHeader,
@@ -633,6 +691,17 @@ app.MapPost("/api/payroll/recalculate", async (
         // month exported through the raw routes it typically has no approval row at all). Raised before
         // the correction transaction opens, so nothing was written. 409 naming the previous month.
         return PriorMonthNotApproved(ex);
+    }
+    catch (FlexLedgerRefusalException ex)
+    {
+        // S146 TASK-14605 (QUAL-188; R-14): either admission could not derive the month's opening flex balance
+        // (payroll-prior-month-not-recorded: the employed previous month has no ledger record — "export it first",
+        // or "correct it first" for a raw one), raised before the correction transaction opens; or the under-lock
+        // recheck inside the correction transaction found the ledger changed while the correction was computed
+        // (payroll-ledger-changed), and the transaction rolled back. Either way nothing was written: no baseline
+        // or balance change, no correction event, no audit row, no idempotency marker (a retry with the same token
+        // is not short-circuited). 409 naming the month.
+        return FlexLedgerRefused(ex);
     }
     catch (RuleClassificationsUnavailableException)
     {
@@ -822,6 +891,52 @@ static IResult? RefuseBodyHours(List<TimeEntry>? entries, List<AbsenceEntry>? ab
         }, statusCode: 400)
         : null;
 
+// S146 TASK-14605 (QUAL-188; R-14, AC-C2) — the ONE refusal for "this request carries an opening flex balance".
+// The calculating routes derive a month's opening from the recorded ledger (the previous month's recorded closing,
+// or 0 at the ledger start or after a gap in employment); a caller-supplied opening is no longer an input. Any
+// non-null value, 0 included, answers 400 rather than being silently ignored — silently ignoring it would hide a
+// caller that still believes it controls the balance. An absent or null field is accepted. The body is FIXED: it
+// echoes neither the refused value nor the employee id. Shared by /calculate-and-export and /recalculate; returns
+// null when the request carries no opening.
+static IResult? RefuseBodyOpeningBalance(decimal? previousFlexBalance) =>
+    previousFlexBalance is not null
+        ? Results.Json(new
+        {
+            success = false,
+            error = "An opening flex balance is not accepted in the request. Payroll derives each month's opening flex balance from the recorded ledger (the previous month's recorded closing balance); send the request without previousFlexBalance. Nothing was calculated, written or exported.",
+            kind = "payroll-opening-balance-not-accepted"
+        }, statusCode: 400)
+        : null;
+
+// S146 TASK-14605 (QUAL-188; R-14) — the ONE response for a flex-ledger refusal. 409 because the month itself is
+// fine but the ledger is in a state the operator can fix (export or correct the named month first) or that a retry
+// resolves (the ledger changed while this request was computed). The body carries the named month as yyyy-MM — a
+// pay month, never an employment date — plus the members every sibling body has (success, error, kind). The
+// sentence is fixed per kind: no employee id and no date. Shared by /calculate-and-export (admission and the
+// export's under-lock recheck) and /recalculate (admission and the correction's under-lock recheck).
+static IResult FlexLedgerRefused(FlexLedgerRefusalException ex) =>
+    Results.Json(new
+    {
+        success = false,
+        error = ex.ErrorSentence,
+        kind = ex.Kind,
+        month = ex.MonthText
+    }, statusCode: 409);
+
+// S146 TASK-14605 (R-14 case 3b) — the success body of /calculate-and-export with the "flex not tracked" statement
+// beside the result: the result exactly as Results.Ok(result) would serialize it (the host's own JSON options), plus
+// one member, flexNote. Built from the serialized result rather than a hand-listed copy of its members, so a member
+// added to PeriodCalculationResult later can never be left out of this body.
+static IResult OkWithFlexNote(HttpContext httpContext, PeriodCalculationResult result, string flexNote)
+{
+    var jsonOptions = httpContext.RequestServices
+        .GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions>>()
+        .Value.SerializerOptions;
+    var body = System.Text.Json.JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
+    body["flexNote"] = flexNote;
+    return Results.Ok(body);
+}
+
 // S90 / TASK-9002 — builds the PayrollExportContext for the raw /export + /export-period
 // endpoints (the calculate-and-export path builds its own context inline because it already
 // has the resolved actor + correlation id + the approval period). The raw endpoints pass a
@@ -876,7 +991,13 @@ public sealed class CalculateAndExportRequest
 
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
-    public decimal PreviousFlexBalance { get; init; }
+
+    /// <summary>
+    /// NOT AN INPUT (S146 / TASK-14605, R-14). The month's opening flex balance is derived from the recorded
+    /// ledger. Nullable so that an absent or null field still binds; ANY value (0 included) is refused with 400
+    /// <c>payroll-opening-balance-not-accepted</c> before anything is read, calculated or written.
+    /// </summary>
+    public decimal? PreviousFlexBalance { get; init; }
 }
 
 public sealed class RecalculateRequest
@@ -895,7 +1016,13 @@ public sealed class RecalculateRequest
 
     public required DateOnly PeriodStart { get; init; }
     public required DateOnly PeriodEnd { get; init; }
-    public decimal PreviousFlexBalance { get; init; }
+
+    /// <summary>
+    /// NOT AN INPUT (S146 / TASK-14605, R-14) — as <see cref="CalculateAndExportRequest.PreviousFlexBalance"/>: the
+    /// recalculation derives the opening from the recorded ledger; any value is refused with 400
+    /// <c>payroll-opening-balance-not-accepted</c> before anything is read or written.
+    /// </summary>
+    public decimal? PreviousFlexBalance { get; init; }
 
     /// <summary>
     /// DEPRECATED (S90 / TASK-9004 / B3). The correction diff baseline is now read from
