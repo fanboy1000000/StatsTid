@@ -91,14 +91,46 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 
 Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1–D7, O-1..O-7, CI-W1, CI-W2, C-1..C-5.
 
+## Wave 1 — Orchestrator items (T7, D1–D3)
+
+- **T7 (E1), the hook comment: DONE at `68e4ca01`.** T26's comment now matches its check:
+  - the floor compare is "`-ne` in any letter case; a typographic dash, `-cne`, `-ine` or any other form fails";
+  - the "does not see" list names the right-hand side of the one `$reviewedBy =`;
+  - R-143 joins the provenance line.
+
+  *Probe before the claim:* `Test-FloorBlock` on the live hook gives `ok` for `-ne`, `-NE` and `-Ne`, and `floor-compare` for `-cne`, `-ine`, an en dash, an em dash and `-gt`. The harness shows **24/24**.
+
+  *Its own Step 7a cycle (post-Step-7a coverage for hook files):* Codex **APPROVE** (three confirming NOTEs) and the Fable reviewer **APPROVED**, no BLOCKER and no WARNING, with three record-only NOTEs:
+  1. `-in`/`-contains` in the compare position fail as `model-list`, not `floor-compare` (same outcome);
+  2. the right-hand side's tokens still pass the general checks, so the comment under-claims (the safe direction);
+  3. two lines overrun the wrap width.
+
+  The owner's standing preference applies: no further cycle on wording. Artifacts: `.claude/reviews/S146-T7-step7a-{codex,reviewer}.md`.
+- **D1: DONE.** `docs/references/overtime-flex-model-research.md` holds the verified dossier. The verification governs as Part 1, with the first pass verbatim as Part 2. A CLAUDE.md dossier row is added.
+- **D2: DONE.** QUAL-215..QUAL-225 are registered, root cause first:
+  - QUAL-215 — the source register's load-bearing citations are unreliable;
+  - QUAL-216 — the monthly norm period;
+  - QUAL-217 — automatic overtime;
+  - QUAL-218 — the 37/40 h tiers;
+  - QUAL-219 — payout versus forfeiture;
+  - QUAL-220 — AC merarbejde;
+  - QUAL-221 — the compensation model;
+  - QUAL-222 — holidays;
+  - QUAL-223 — the watch row;
+  - QUAL-224 — the flex screens;
+  - QUAL-225 — the explicit opening balance.
+
+  QUAL-189 is widened to point at QUAL-216/217 as its root cause. Drift corrected: QUAL-205's false "surfaces a degraded state to the HTTP caller", and the QUAL-188 and QUAL-189 line numbers. ADR-013 gains a footnote that its items 1–2 do not hold today; the amendment itself lands in D7.
+- **D3: DONE.** The `disputed?` definition is amended first (R-19: a party dispute **or** a contradiction by a verified primary source). Nine rows are set `disputed? = true` with a dated note: SR-AC-OK24-020, SR-HK-OK24-001, SR-AC-OK24-005/007/021, SR-HK-OK24-006/007, SR-HK-OK24-020 and SR-PROSA-OK24-001. `confidence_level` is untouched; D4 overwrites both fields. `danish-agreements.md` gains dated notes on Overtime Thresholds, Weekly Settlement Rules (recording OQ-2) and Compensation Model. This settles the Step-0a DRIFT.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-23, master `0f02b484` + the S146 open commit |
-| **Phase** | Step 0b READY on both lenses; S146 opened; wave 1 next |
-| **Tasks** | none dispatched |
-| **Track D** | not started |
+| **Phase** | wave 1 running; T7 DONE (`68e4ca01`, Step 7a APPROVED on both lenses); D1–D3 DONE |
+| **Tasks** | 14600 (`payroll-integration`), 14601 (`data-model`), 14602 (`backend-infrastructure`) and 14603 (`test-qa`) dispatched 2026-10-23 in worktrees, awaiting reports. Next on return: 14601-T and 14602-T on their branches; 14609 after 14601-T merges |
+| **Track D** | D1, D2, D3 DONE; D4 not started; D5–D7 later |
 | **Pending gates** | wave-1 dispatch |
 | **CI** | G-0 `39755579330` · CI-W1 — · CI-W2 — · C-2 — · close — |
 | **Open rulings** | none |

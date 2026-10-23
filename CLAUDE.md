@@ -63,6 +63,7 @@ This file is the hub. It defines the invariants + trade-offs and points to deepe
 | [docs/references/agreement-source-register.md](docs/references/agreement-source-register.md) | DRAFT S36 agreement source-cell register (Phase A) |
 | [docs/references/ferie-transfer-timing-research.md](docs/references/ferie-transfer-timing-research.md) | S65 deep-research verdict: ferie transfer timing (§21 stk.2, 31 Dec) + særlige-feriedage timeline |
 | [docs/references/vacation-consumption-mechanism-research.md](docs/references/vacation-consumption-mechanism-research.md) | S66 deep-research verdict: §6 stk.2 is week-mirroring, no 5÷N multiplier (ADR-032 premise correction) |
+| [docs/references/overtime-flex-model-research.md](docs/references/overtime-flex-model-research.md) | S146 verified research: monthly norm for HK/PROSA, overtime only when ordered (+50%), surplus to flex, AC merarbejde a claim; the weekly-norm source citations were wrong (premise correction for S145's weekly rulings) |
 | [docs/references/agreement-ruleset-audit.md](docs/references/agreement-ruleset-audit.md) | DRAFT S36 ruleset coverage audit |
 | [docs/references/role-dimension-audit.md](docs/references/role-dimension-audit.md) | DRAFT S36 role-within-agreement gap audit |
 | [docs/references/phase-b-handoff-package.md](docs/references/phase-b-handoff-package.md) | Phase B expert-engagement handoff package |

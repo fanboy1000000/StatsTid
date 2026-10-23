@@ -59,12 +59,16 @@ PROSA mirrors HK on all 5 cells per SR-PROSA-OK24-001 "mirrors HK" bundle.
 
 ### Overtime Thresholds (HK/PROSA only)
 
+> **S146 note (2026-10-23): contradicted by a verified primary source; still in force in code.** Neither threshold was ever sourced (both rows read "pending (Phase B)"). The state working-time agreement pays HK and PROSA (pay groups 1-2) overtime at a **flat +50%** for hours above the period's norm, only for ordered or necessary work, with part-timers' hours up to full time at 1:1 (§ 8). The period is a calendar month, not a week (§ 4 stk. 2). No 100% tier exists for general HK or PROSA. See `docs/references/overtime-flex-model-research.md` (V2, V4); register QUAL-215, QUAL-218. The rebuild is the S147 model program (owner OQ-3 = (b)).
+
 | Threshold | Hours | SR rows |
 |-----------|-------|---------|
 | OvertimeThreshold50 | 37.0 | SR-HK-OK24-006 (load-bearing for HK; inert for AC per SR-AC-OK24-022) |
 | OvertimeThreshold100 | 40.0 | SR-HK-OK24-007 (load-bearing for HK; inert for AC per SR-AC-OK24-023) |
 
 ## Weekly Settlement Rules (owner ruling, 2026-10-01)
+
+> **S146 note (2026-10-23): the premise below is contradicted; the rulings stay in force in code, provisionally.** The note below says the agreement sources are silent on the norm period. They are not: the state working-time agreement § 4 stk. 2 sets **one calendar month** for HK and PROSA ("Arbejdstiden beregnes for en periode på 1 måned"), and PAV 19.2.4.1 says how hours fall across days and weeks "does not matter". The register row cited for the silence (SR-AC-OK24-020) points at a section on form of employment. **Owner ruling S146 OQ-2 = (a):** Q2 = A, Q3 = F1 and Q7 (b) are superseded in principle by the verified sources, stay in force in code until the model program replaces them, and get no new work (QUAL-209/210/212/213 frozen). The per-day `DayNorm` sum is expected to survive in a new form (a month's norm is the per-day sum minus weekday holidays). See `docs/references/overtime-flex-model-research.md` (V1, V12); register QUAL-215, QUAL-216, QUAL-222.
 
 > Added 2026-10-20 (S145). Source: **owner ruling, 2026-10-01** (S145 Q2 and Q3). The agreement sources are silent on both questions (`SYSTEM_TARGET.md:43`; `agreement-source-register.md:506`, "1-week norm period, no multi-week averaging"), so these are the system's rulings, not cirkulære text. A domain expert may still confirm whether a state-sector convention exists; if one does, it is a later ruling change. Implemented once, in `SharedKernel/Calendar` (`DayNorm`, `WeeklyContext`), shared by the Rule Engine, payroll and the Skema screen (ADR-002, S145 amendment).
 
@@ -86,6 +90,8 @@ Norm, overtime and merarbejde are judged **week by week, Monday to Sunday**, nev
 *Related, a lean rather than an owner ruling:* a week cannot be judged under two agreements (HK pays tiered overtime, AC merarbejde 1:1), so a month with an agreement change inside a settled week, on a day other than its Monday, is refused and handled manually (Q5 (c); QUAL-209).
 
 ## Compensation Model
+
+> **S146 note (2026-10-23): two cells contradicted by a verified primary source.** (1) For HK, time off vs pay is **the employer's** choice (PAV 19.2.7.1), so `EmployeeCompensationChoice = true` is contradicted; the deadline is 3 months from the end of the **norm period** (§ 10). (2) PROSA is described below as "afspadsering or payment 1:1"; § 8 gives +50%. Payroll also ignores `DefaultCompensationModel` today. See `docs/references/overtime-flex-model-research.md` (V10); register QUAL-221. The AC row's citation (043-19 § 4) is "Basisløn" (base pay), not the compensation rule (AC § 14 stk. 5-6); QUAL-215.
 
 > Added 2026-05-18 (S35 / TASK-3504). The `DefaultCompensationModel` + `EmployeeCompensationChoice` fields were introduced in S17 (Overtime Governance & Compensation Model) but were never back-filled into this reference doc. Source of truth: the overenskomst cirkulærer cited per agreement below. Encoded values live in `init.sql` agreement_configs seed rows + `CentralAgreementConfigs.cs`.
 

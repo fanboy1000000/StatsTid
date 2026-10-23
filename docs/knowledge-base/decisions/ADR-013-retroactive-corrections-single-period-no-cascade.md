@@ -24,6 +24,8 @@ When a correction produces a flex balance delta:
 3. The system does **not** automatically re-run subsequent periods
 4. An administrator can manually trigger corrections for downstream periods if needed
 
+> **Footnote (S146 refinement, 2026-10-23): items 1 and 2 do not hold in the code today.** The correction event `RetroactiveCorrectionRequested` carries no flex member at all, and the line-level `FlexDelta` holds the **payout hours** (`FLEX_PAYOUT`), not the change in the balance (`RetroactiveCorrectionService.cs:504-514`). S146 TASK-14605 makes item 2 true: the event gains the opening it used and the closing balance before and after (optional members), and the month's export record carries the corrected balances. Item 3 is unchanged; S146 widens the "name the next month" hint so a correction that changes the closing balance names the month after it (Q7 (b) widening, R-10). The full amendment lands with TASK-14605 (S146 D7).
+
 ## Rationale
 
 1. **Bounded blast radius**: Automatic cascade could touch dozens of periods per correction, each generating payroll deltas. A single data fix could cascade across months of payroll history.
