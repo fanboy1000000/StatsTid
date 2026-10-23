@@ -82,8 +82,8 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14609 | DONE (merged `0a291582`, fix-up `ac56c72e`) | wave 1, after 14601-T · `test-qa` · harness outbox readiness (R-24) |
 | TASK-14604 | DONE (merged `384484cb`) | wave 2a · `payroll-integration` · QUAL-205 through the outbox; `ISegmentManifestStore`; the refusal predicate |
 | TASK-14604-T | DONE (merged `384484cb`) | wave 2a, paired · `test-qa` · in-memory store; 23-file census; AC-A1..A3 |
-| TASK-14605 | RETURNED (`1992e4d5`, fix-up `f6d3f780`) | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4 |
-| TASK-14605-T | IN PROGRESS (same worktree) | wave 2b, paired · `test-qa` · the site migration under the census rule |
+| TASK-14605 | DONE (merged `8f366802`) | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4; 5a fix-ups R-47/R-48/R-50/R-51 |
+| TASK-14605-T | DONE (merged `8f366802`) | wave 2b, paired · `test-qa` · the site migration under the census rule; H14 re-seed |
 | TASK-14606 | PLANNED | wave 2c · `test-qa` · the QUAL-188 pins |
 | TASK-14607 | PLANNED | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
 | TASK-14607-T | PLANNED | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
@@ -246,15 +246,39 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 
 **Fix-up dispatched** (R-47, R-48, R-50, R-51; `src/**` only).
 
+**The re-review and the merge.**
+
+| Task | Branch @ sha | Build | 5α | 5a Fable | 5a Codex | Merged |
+|---|---|---|---|---|---|---|
+| TASK-14605 + 14605-T (`payroll-integration`, `test-qa`) | `worktree-agent-a7d25c1f742b46097` @ `1992e4d5`, `f6d3f780`, `3add5847`, `57b011cf`, `50321d2c`, `69e54d88`, `f476763b` | 0 / 145; Unit 1518, DemoSeed 170, Regression non-Docker 130 | PASS (`f6d3f780`); PASS (the union to `50321d2c`) | c1 APPROVED-WITH-WARNINGS → c2 APPROVED-WITH-WARNINGS → scoped APPROVED (`f476763b`) | c1 REQUEST-CHANGES → c2 REQUEST-CHANGES → c3 APPROVE (`f476763b`) | `8f366802` |
+
+- **Codex cycle 2** confirmed that R-47 and R-48 close its first-cycle findings, and found two new ones.
+  - **BLOCKER (a miss in the static chain census):** H14 (`PayrollHostWeeklyTests` `Recalculate_ExportedMay2026_MonthEndsSunday_NamesNothing`) corrected a raw May. Under R-14 case 2 that month becomes the ledger start, its closing goes from null to 0, and so June is named. The fact's unchanged "names nothing" assertion would have failed at CI-W2.
+    - The fix (`f476763b`, test-qa) seeds May as `LEDGER_START` 0→0, so the correction recomputes the same closing: the stub engine's `newBalance = 0m`, quoted at `TestFixtures.cs:432`. Only the Sunday test then keeps June out, which is the fact's stated purpose.
+    - The census was re-run under four rules (a raw-month correction names an exported M+1; the new response and audit members; the 400 for a partial period; the zero-line record). It found no other changed assertion, and both lenses spot-checked that result.
+    - The "closing changed → June named" case is TASK-14606's AC-C5 pin.
+  - **WARNING:** `IsWholeCalendarMonth` threw for December 9999. It is now a field compare (`69e54d88`, by the Orchestrator under the Small Tasks Exception), which is also textually the Backend's predicate.
+- **Fable cycle 2** confirmed the fix-up and the migration, with one new WARNING (W-1): a real-engine pin's only non-vacuity guard ("one export record") is now also satisfied by the zero-line record.
+  - W-1, its docstring note N1, and the test-support tidy-ups in N4 are **routed to TASK-14606** (brief Do 6c), which owns the zero-line pins.
+  - N2 (two "whole calendar month" predicates in two bounded contexts, now textually identical) is a later SharedKernel sweep item.
+- **O-1 on master after the merge:** 0 errors / 145 warnings, CA2100 115, Unit **1518**, DemoSeed 170, Regression non-Docker 130. The Docker facts are CI-pending until CI-W2.
+- **D7 part 2 (with the merge):**
+  - ADR-034 D3 is amended: the flex triple on the calculating routes, the zero-line record (R-3), the whole-month rule (R-47) and the triple no-op (R-16).
+  - ADR-034 D4 gains a note: the ledger advisory lock comes first, then the approval rows, then the record. QUAL-201 closes by construction.
+  - ADR-013 is amended: item 2 now holds, and the next-month hint is widened (R-10, R-48).
+  - The audit catalog gains the new keys on both rows and R-49's two reading rules.
+  - QUAL-188 is BUILT and QUAL-201 is CLOSED BY CONSTRUCTION, with R-5's text.
+  - QUAL-205's status said "Docker facts CI-verified at CI-W2", which anticipated a checkpoint that has not run. It is corrected to CI-pending.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-23, master `5087ab88` (wave 1 and wave 2a merged, D7 part 1), local only; origin/master `0f02b484` |
-| **Phase** | wave 2b in progress. Wave 2a gate: O-1 green on `384484cb` (0 / 145, Unit 1518, DemoSeed 170, Regression non-Docker 130) |
-| **Tasks** | Wave 1 and wave 2a DONE (see the ledger). TASK-14605 (`1992e4d5`, `f6d3f780`) and TASK-14605-T (`3add5847`, `57b011cf`) are on `worktree-agent-a7d25c1f742b46097`. Step 5a on the production code is done (Codex REQUEST-CHANGES → rulings R-47..R-53). **The 5a fix-up is dispatched** to the same agent |
-| **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 part 1 DONE (`5087ab88`). D7 part 2 after 14605 merges (ADR-034 D3, ADR-013, QUAL-188 BUILT, QUAL-201 closed with R-5's text, the catalog rows); part 3 after 14607 (ADR-018:478) |
-| **Pending gates** | On the fix-up's return: 5α (the test diff and the fix-up) and both lenses re-review the combined branch (Codex must move off REQUEST-CHANGES); then merge, O-1 and D7 part 2; then wave 2c (14606) and CI-W2 |
+| **As of** | 2026-10-24, master `8f366802` + the D7 part 2 record (waves 1, 2a and 2b merged), local only; origin/master `0f02b484` |
+| **Phase** | wave 2c next. Wave 2b gate: O-1 green on `8f366802` (0 / 145, CA2100 115, Unit 1518, DemoSeed 170, Regression non-Docker 130) |
+| **Tasks** | Waves 1, 2a and 2b DONE (see the ledger). TASK-14606 (the QUAL-188 pins) is next: its brief carries Do 6b (R-47/R-48/R-49 pins) and Do 6c (Fable W-1, N1, N4), and its pack is at `s146-ctx/TASK-14606.md` |
+| **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 parts 1 and 2 DONE (`5087ab88`; part 2 with the 14605 merge record). Part 3 comes after 14607 (ADR-018:478) |
+| **Pending gates** | TASK-14606: build · 5α · 5a Fable · 5a Codex; merge; O-1; then **CI-W2**, the first CI run of the wave-2 Docker facts (QUAL-205, QUAL-188) |
 | **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · CI-W2 — · C-2 — · close — |
 | **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
-| **Next action** | On the fix-up's return: verify the build, then run 5α and the dual-lens re-review on the combined branch. On merge: O-1, D7 part 2 (the R-52 list), then dispatch TASK-14606 (pack `s146-ctx/TASK-14606.md` is built; the brief has Do 6b) |
+| **Next action** | Dispatch TASK-14606 (`test-qa`, worktree from master at the D7 part 2 commit). Paste TASK-14605's names as built, including the fix-up's `IsWholeCalendarMonth`, `RefusePeriodNotAMonth` and `nextMonthOpeningStale`, and 14605-T's helpers (`InMemoryFlexLedgerReader`, `FlexLedgerSeed`, `FlexLedgerFill`) |
