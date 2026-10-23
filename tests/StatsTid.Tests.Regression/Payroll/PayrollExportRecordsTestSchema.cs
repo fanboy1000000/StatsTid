@@ -9,8 +9,8 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// row) and <c>approval_periods</c> (for the B2 <c>FOR UPDATE</c> APPROVED re-check).
 ///
 /// <para>
-/// Mirrors <c>docker/postgres/init.sql</c> for the columns (payroll_export_records ~4140-4159,
-/// approval_periods ~783-804). <c>approval_periods.org_id</c> FKs <c>organizations</c>, supplied
+/// Mirrors <c>docker/postgres/init.sql</c> for the columns; the harness-drift guard
+/// (<c>HarnessDdlMatchesInitSqlTests</c>) compares <c>payroll_export_records</c>. <c>approval_periods.org_id</c> FKs <c>organizations</c>, supplied
 /// by <see cref="PhaseE.AuditProjectionTestSchema"/> (applied alongside in the test fixture).
 /// Schema drift between this DDL and production must be mirrored here.
 /// </para>

@@ -140,8 +140,9 @@ public sealed class PayrollExportBalancesSchemaTests : IAsyncLifetime
 
     /// <summary>
     /// <b>Kind F, CI-pending.</b> Any partial shape is refused by the named CHECK: opening only,
-    /// closing only, provenance only, opening and closing without provenance, opening and provenance
-    /// without closing. SqlState <c>23514</c>, constraint <c>payroll_export_records_balances_paired</c>.
+    /// closing only, provenance only, and the three two-of-three shapes (opening and closing without provenance,
+    /// opening and provenance without closing, closing and provenance without opening).
+    /// SqlState <c>23514</c>, constraint <c>payroll_export_records_balances_paired</c>.
     ///
     /// <para><b>Red conditions.</b> TODAY (pre-S146 schema) every row fails with <c>42703
     /// undefined_column</c>, NOT with a missing CHECK: the columns do not exist, so
@@ -157,6 +158,7 @@ public sealed class PayrollExportBalancesSchemaTests : IAsyncLifetime
     [InlineData(false, false, true)]
     [InlineData(true, true, false)]
     [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
     public async Task Balances_Partial_Rejected23514(bool hasOpening, bool hasClosing, bool hasProvenance)
     {
         await AssertRejected23514Async(
@@ -224,6 +226,94 @@ public sealed class PayrollExportBalancesSchemaTests : IAsyncLifetime
         await using var count = new NpgsqlCommand(
             "SELECT count(*) FROM pg_constraint WHERE conname = 'payroll_export_records_balances_paired'", check);
         Assert.Equal(1L, (long)(await count.ExecuteScalarAsync())!);
+    }
+
+    // The pre-S146 shape of the parts the segment touches: the old snapshots table (as the base schema
+    // created it at 5dfce75d, with its two indexes) and a payroll_export_records without balances.
+    private const string PutBackToPreS146ShapeSql =
+        """
+        ALTER TABLE payroll_export_records DROP CONSTRAINT payroll_export_records_balances_paired;
+        ALTER TABLE payroll_export_records DROP COLUMN opening_balance;
+        ALTER TABLE payroll_export_records DROP COLUMN closing_balance;
+        ALTER TABLE payroll_export_records DROP COLUMN balance_provenance;
+
+        CREATE TABLE flex_balance_snapshots (
+            snapshot_id     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            employee_id     TEXT        NOT NULL,
+            period_start    DATE        NOT NULL,
+            period_end      DATE        NOT NULL,
+            balance_hours   DECIMAL     NOT NULL,
+            delta           DECIMAL     NOT NULL,
+            ok_version      TEXT        NOT NULL,
+            agreement_code  TEXT        NOT NULL,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX idx_flex_snapshots_employee ON flex_balance_snapshots(employee_id);
+        CREATE INDEX idx_flex_snapshots_period ON flex_balance_snapshots(period_start, period_end);
+
+        INSERT INTO payroll_export_records
+            (export_id, employee_id, year, month, original_lines, current_effective_lines, content_hash)
+        VALUES
+            (gen_random_uuid(), 'emp_s146_pre', 2026, 3, '[]'::jsonb, '[]'::jsonb, 'pre-s146-hash');
+        """;
+
+    /// <summary>
+    /// <b>Kind F, CI-pending (AC-C8, upgrade half).</b> On a database in the pre-S146 shape (the snapshots
+    /// table exists; <c>payroll_export_records</c> has no balance columns and no CHECK; one record is
+    /// already stored), running the S146 segment drops the snapshots table, adds the three columns,
+    /// leaves the existing record intact with all three balances NULL (which the CHECK accepts), and
+    /// leaves exactly one <c>payroll_export_records_balances_paired</c> constraint.
+    ///
+    /// <para><b>Plain language.</b> The other segment fact starts from a database that is already in
+    /// the new shape, so it would stay green even if the segment forgot to drop the old table. This one
+    /// starts from the old shape, so the segment has real work to do.</para>
+    ///
+    /// <para><b>Red conditions.</b> Remove <c>DROP TABLE IF EXISTS flex_balance_snapshots</c> from the
+    /// segment: the "snapshots table is gone" assertion fails (the table is still there). Remove one
+    /// of the three <c>ADD COLUMN</c> statements: the segment's own CHECK statement throws
+    /// <c>42703 undefined_column</c> when it references the missing column, so the run fails before
+    /// any assertion (and the column-count assertion would fail otherwise). Remove the CHECK statement:
+    /// the constraint-count assertion reads 0 instead of 1. Add a NOT NULL default to the columns: the
+    /// all-NULL assertion on the surviving record fails. (The base CREATE of the table in the test
+    /// database is the post-S146 one; the pre-S146 shape is put back by the test itself.)</para>
+    /// </summary>
+    [Fact]
+    public async Task Segment_OnPreS146Database_DropsSnapshotsAndKeepsRowsAllNull()
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+
+#pragma warning disable CA2100 // constant DDL of this test
+        await using (var prep = new NpgsqlCommand(PutBackToPreS146ShapeSql, conn))
+            await prep.ExecuteNonQueryAsync();
+#pragma warning restore CA2100
+
+        // Preconditions: the old shape is really in place, so the assertions below prove the segment did the work.
+        Assert.NotNull(await ToRegclassAsync("flex_balance_snapshots"));
+        Assert.Equal(0L, await ScalarLongAsync(conn,
+            "SELECT count(*) FROM information_schema.columns WHERE table_name = 'payroll_export_records' AND column_name IN ('opening_balance','closing_balance','balance_provenance')"));
+
+        var segment = CanonicalInitSql.ExtractInclusiveRange(SegmentBegin, SegmentEnd);
+#pragma warning disable CA2100 // the DDL is the shipped segment of init.sql, read from the repository file
+        await using (var run = new NpgsqlCommand(segment, conn))
+            await run.ExecuteNonQueryAsync();
+#pragma warning restore CA2100
+
+        Assert.Null(await ToRegclassAsync("flex_balance_snapshots"));
+        Assert.Equal(3L, await ScalarLongAsync(conn,
+            "SELECT count(*) FROM information_schema.columns WHERE table_name = 'payroll_export_records' AND column_name IN ('opening_balance','closing_balance','balance_provenance')"));
+        Assert.Equal(1L, await ScalarLongAsync(conn,
+            "SELECT count(*) FROM pg_constraint WHERE conname = 'payroll_export_records_balances_paired'"));
+        Assert.Equal(1L, await ScalarLongAsync(conn,
+            "SELECT count(*) FROM payroll_export_records WHERE employee_id = 'emp_s146_pre' AND content_hash = 'pre-s146-hash' AND opening_balance IS NULL AND closing_balance IS NULL AND balance_provenance IS NULL"));
+    }
+
+    private static async Task<long> ScalarLongAsync(NpgsqlConnection conn, string sql)
+    {
+#pragma warning disable CA2100 // constant SQL literals at the call sites above
+        await using var cmd = new NpgsqlCommand(sql, conn);
+#pragma warning restore CA2100
+        return (long)(await cmd.ExecuteScalarAsync())!;
     }
 
     private async Task<string?> ToRegclassAsync(string table)
