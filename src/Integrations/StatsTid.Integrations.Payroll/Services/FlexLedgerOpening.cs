@@ -255,10 +255,15 @@ public static class FlexLedgerOpening
     /// <summary>
     /// R-47: true when [<paramref name="start"/>, <paramref name="end"/>] is exactly one calendar month, the only period a
     /// ledger write may be made for: the record is keyed by the calendar month and its closing is the MONTH's closing,
-    /// which the next month opens from. A partial period has no place in the chain.
+    /// which the next month opens from. A partial period has no place in the chain. Compared field by field, with no
+    /// date arithmetic, so a malformed request at the end of the calendar (December 9999) is refused, never thrown on
+    /// (S146 5a cycle 2, Codex W).
     /// </summary>
     public static bool IsWholeCalendarMonth(DateOnly start, DateOnly end) =>
-        start.Day == 1 && end == start.AddMonths(1).AddDays(-1);
+        start.Day == 1
+        && end.Year == start.Year
+        && end.Month == start.Month
+        && end.Day == DateTime.DaysInMonth(start.Year, start.Month);
 
     private static string Format(DateOnly month) =>
         month.ToString(FlexLedgerRefusalException.MonthFormat, CultureInfo.InvariantCulture);
