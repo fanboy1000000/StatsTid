@@ -73,14 +73,14 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 
 | Task | Disposition | Note |
 |---|---|---|
-| TASK-14600 | PLANNED | wave 1 · `payroll-integration` · E2: delete `BuildPlanForLegacyCallersAsync` |
-| TASK-14601 | PLANNED | wave 1 · `data-model` · the schema (balances, provenance, CHECK, `flex_balance_snapshots` dropped) and the optional shapes; `init.sql` Orchestrator-approved in the plan |
-| TASK-14601-T | PLANNED | wave 1, paired · `test-qa` · the harness copy, the R51 guard row, the schema facts |
-| TASK-14602 | PLANNED | wave 1 · `backend-infrastructure` · QUAL-198; the injectable profile read (R-31) |
-| TASK-14602-T | PLANNED | wave 1, paired · `test-qa` · part-time pins; the fault-isolation pin (N) |
-| TASK-14603 | PLANNED | wave 1 · `test-qa` · E3: `JsonAssert.RequiredMember` in the five helpers |
-| TASK-14609 | PLANNED | wave 1, after 14601-T · `test-qa` · harness outbox readiness (R-24) |
-| TASK-14604 | PLANNED | wave 2a · `payroll-integration` · QUAL-205 through the outbox; `ISegmentManifestStore`; the refusal predicate |
+| TASK-14600 | DONE (merged `92ecaa13`) | wave 1 · `payroll-integration` · E2: delete `BuildPlanForLegacyCallersAsync` |
+| TASK-14601 | DONE (merged `cda60da5`) | wave 1 · `data-model` · the schema (balances, provenance, CHECK, `flex_balance_snapshots` dropped) and the optional shapes; `init.sql` Orchestrator-approved in the plan |
+| TASK-14601-T | DONE (merged `cda60da5`, fix-up `c67881f9`) | wave 1, paired · `test-qa` · the harness copy, the R51 guard row, the schema facts |
+| TASK-14602 | DONE (merged `b104c4d7`) | wave 1 · `backend-infrastructure` · QUAL-198; the injectable profile read (R-31) |
+| TASK-14602-T | DONE (merged `b104c4d7`) | wave 1, paired · `test-qa` · part-time pins; the fault-isolation pin (N) |
+| TASK-14603 | DONE (merged `a173ace3`, follow-up `900df51f`) | wave 1 · `test-qa` · E3: `JsonAssert.RequiredMember` in the five helpers |
+| TASK-14609 | DONE (merged `0a291582`, fix-up `ac56c72e`) | wave 1, after 14601-T · `test-qa` · harness outbox readiness (R-24) |
+| TASK-14604 | IN PROGRESS (dispatched 2026-10-23) | wave 2a · `payroll-integration` · QUAL-205 through the outbox; `ISegmentManifestStore`; the refusal predicate |
 | TASK-14604-T | PLANNED | wave 2a, paired · `test-qa` · in-memory store; 23-file census; AC-A1..A3 |
 | TASK-14605 | PLANNED | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4 |
 | TASK-14605-T | PLANNED | wave 2b, paired · `test-qa` · the site migration under the census rule |
@@ -131,7 +131,7 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 | TASK-14601 + 14601-T (`data-model`, `test-qa`) | `worktree-agent-a84e58f3b84c8b514` @ `7af3625f`, `dece4112`, fix-up `c67881f9` | 0 / 145; 1512 / 170 / 128 | PASS | APPROVED-WITH-WARNINGS → fix-up APPROVED | APPROVE-WITH-WARNINGS → fix-up APPROVE | `cda60da5` |
 | TASK-14602 + 14602-T (`backend-infrastructure`, `test-qa`) | `worktree-agent-a1d9823947d197303` @ `3505b620`, `2429016b` | 0 / 144; 1512 / 170 / 128 | PASS | APPROVED | — (display only) | `b104c4d7` |
 | TASK-14603 (`test-qa`) | `worktree-agent-aead3545374bb4a42` @ `41e7992f`, follow-up `900df51f` | 0 errors; 1512 / — / 130 | PASS (both commits) | APPROVED, follow-up APPROVED | — (tests only) | `a173ace3` |
-| TASK-14609 (`test-qa`) | dispatched 2026-10-23 | | | | | |
+| TASK-14609 (`test-qa`) | `worktree-agent-aa258d3371368d250` @ `bb9e733a`, fix-up `ac56c72e` | 0 / 144; 1512 / 170 / 130 | PASS | APPROVED-WITH-WARNINGS → fix-up APPROVED | — (tests only) | `0a291582` |
 
 **O-1 on master `bc4ad0d7`** (after 14600, 14601, 14602 and 14603 merged): build 0 errors / **145** warnings (at the ceiling) · CA2100 **115** · Unit **1512** · DemoSeed **170** · Regression non-Docker **130** (+2, 14603's `JsonAssertTests`). **O-2:** no drift in `openapi.json` or `api-types.ts` (QUAL-198 changed values only). **O-3:** `db-schema.md` hand-synced at `bc4ad0d7`, transcribed in the generator's format and cross-checked against the merged `init.sql`; CI's `check_docs.py --check` arbitrates at CI-W1.
 
@@ -160,11 +160,11 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 
 | | |
 |---|---|
-| **As of** | 2026-10-23, master `0f02b484` + the S146 open commit |
-| **Phase** | wave 1 running; T7 DONE (`68e4ca01`, Step 7a APPROVED on both lenses); D1–D3 DONE |
-| **Tasks** | 14600 (`payroll-integration`), 14601 (`data-model`), 14602 (`backend-infrastructure`) and 14603 (`test-qa`) dispatched 2026-10-23 in worktrees, awaiting reports. Next on return: 14601-T and 14602-T on their branches; 14609 after 14601-T merges |
-| **Track D** | D1, D2, D3 DONE; D4 not started; D5–D7 later |
-| **Pending gates** | wave-1 dispatch |
-| **CI** | G-0 `39755579330` · CI-W1 — · CI-W2 — · C-2 — · close — |
-| **Open rulings** | none |
-| **Next action** | Dispatch wave 1: 14600, 14601, 14602 and 14603 in worktrees; 14601-T and 14602-T on return; 14609 after 14601-T merges. Start D1–D3 and T7 |
+| **As of** | 2026-10-23, master `0a291582` (wave 1 merged), local only; origin/master `0f02b484` |
+| **Phase** | wave-1 gate: O-1 green on `0a291582` (0 errors / 145 warnings, CA2100 115, Unit 1512, DemoSeed 170, Regression non-Docker 130); **CI-W1 running** (draft PR #39, branch `s146-ci-w1`, run `39992507686`); wave 2a dispatched in parallel (no merge before CI-W1 is green) |
+| **Tasks** | Wave 1 DONE (see the ledger). TASK-14604 (`payroll-integration`) is in progress in a worktree; its gate is the production build only, since its constructor change breaks ~22 test files until TASK-14604-T migrates them. It also carries TASK-14600's two text warnings (W1, W2) |
+| **Track D** | D1–D4 DONE (`d188d2d1`, `e5aba3a4`); D5 (ADR-043 PROPOSED) being drafted by the planner into `.claude/plans/s146/ADR-043-draft.md`; D6 after D5; D7 after 14604/14605/14607 |
+| **Pending gates** | CI-W1 (all seven jobs; then the PR is closed unmerged and the branch deleted); then 14604's merge checklist |
+| **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` (running) · CI-W2 — · C-2 — · close — |
+| **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
+| **Next action** | On CI-W1 green: record the run id, flip wave 1's Docker facts to CI-verified, close PR #39 and delete `s146-ci-w1`. On 14604's return: dispatch 14604-T (refresh its `FrozenInputsSlotTests.cs:194-198` pointer to `:198-202`), then the 14604 merge checklist |
