@@ -413,8 +413,10 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         var forwardPieces = recorder.Timeline.First().Pieces();
         var manifestStream = $"segment-manifest-{forward.ManifestId}";
         var periodStream = $"period-calc-{emp}-2026-09-01";
-        var manifestEventsBefore = (await _store.ReadStreamAsync(manifestStream)).Count;
-        var periodEventsBefore = (await _store.ReadStreamAsync(periodStream)).Count;
+        // S146 R-22: both events ride the Payroll outbox in the manifest's transaction and this host has no
+        // publisher, so they are read from outbox_events (not yet on events).
+        var manifestEventsBefore = await CountOutboxRowsAsync(manifestStream);
+        var periodEventsBefore = await CountOutboxRowsAsync(periodStream);
         Assert.Equal(1, manifestEventsBefore); // non-vacuity: the forward step wrote its manifest and period events
         Assert.Equal(1, periodEventsBefore);
 
@@ -443,8 +445,9 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
             () => Assert.Single(replay.RuleResults, r => r.RuleId == "FLEX_BALANCE" && r.Success));
 
         // No new audit event: the replay appends nothing to the manifest or period streams.
-        Assert.Equal(manifestEventsBefore, (await _store.ReadStreamAsync(manifestStream)).Count);
-        Assert.Equal(periodEventsBefore, (await _store.ReadStreamAsync(periodStream)).Count);
+        // S146 R-22: counted on outbox_events, where a replay that wrote an event would show.
+        Assert.Equal(manifestEventsBefore, await CountOutboxRowsAsync(manifestStream));
+        Assert.Equal(periodEventsBefore, await CountOutboxRowsAsync(periodStream));
     }
 
     // =====================================================================
@@ -500,8 +503,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         return new PeriodCalculationService(
             new SingleClientFactory(engineHandler),
             mappingService,
-            _store,
-            _db,
+            new PostgresSegmentManifestStore(_db, _store, _store),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new LiveClassifications(),
@@ -606,6 +608,16 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         Position = position,
         OrgId = OrgId,
     };
+
+    /// <summary>S146 R-22: the number of Payroll outbox rows (published or not) on <paramref name="streamId"/>.</summary>
+    private async Task<int> CountOutboxRowsAsync(string streamId)
+    {
+        await using var conn = _db.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("SELECT COUNT(*) FROM outbox_events WHERE stream_id = @s", conn);
+        cmd.Parameters.AddWithValue("s", streamId);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
 
     /// <summary>users + employee_profiles + user_agreement_codes with the history-covering '0001-01-01' rows (the
     /// dated record equals the request profile at the period start) + the organization.</summary>

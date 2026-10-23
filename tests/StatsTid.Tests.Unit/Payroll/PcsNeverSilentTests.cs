@@ -74,7 +74,7 @@ public sealed class PcsNeverSilentTests
     public async Task NoApprovalReader_OctoberWithEmployedSeptemberDays_Throws_NamesRegistration()
     {
         var engine = new StubEngine();
-        var pcs = BuildPcs(engine, new InMemoryEventStore(), hours: new InMemoryHours(), approval: null);
+        var pcs = BuildPcs(engine, new InMemorySegmentManifestStore(), hours: new InMemoryHours(), approval: null);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => CalculateAsync(pcs, Oct01, Oct31));
 
@@ -96,7 +96,7 @@ public sealed class PcsNeverSilentTests
     public async Task NoApprovalReader_June2026_Succeeds()
     {
         var engine = new StubEngine();
-        var pcs = BuildPcs(engine, new InMemoryEventStore(), hours: new InMemoryHours(), approval: null);
+        var pcs = BuildPcs(engine, new InMemorySegmentManifestStore(), hours: new InMemoryHours(), approval: null);
 
         var outcome = await CalculateAsync(pcs, Jun01, Jun30);
 
@@ -120,7 +120,7 @@ public sealed class PcsNeverSilentTests
         var engine = new StubEngine();
         var approval = new CountingApproval();
         var windows = new FakeWindowResolver(new EmploymentWindow(null, null));
-        var pcs = BuildPcs(engine, new InMemoryEventStore(), hours: null, approval: approval, windows: windows);
+        var pcs = BuildPcs(engine, new InMemorySegmentManifestStore(), hours: null, approval: approval, windows: windows);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => CalculateAsync(pcs, Jun01, Jun30));
 
@@ -136,18 +136,19 @@ public sealed class PcsNeverSilentTests
 
     /// <summary>
     /// R42. A fresh calculation of October runs on a PCS with an APPROVED fake and an in-memory hours reader; its
-    /// manifest lands in the in-memory event store (the projection write is swallowed by design, so the audit state
-    /// is event-only). A SECOND PCS over the same event store and the same hours, but with a NULL approval reader,
+    /// manifest is persisted into the in-memory manifest store (the audit state is Complete, S146 R-22). A SECOND PCS
+    /// over the same manifest store and the same hours, but with a NULL approval reader,
     /// then replays that manifest by id and SUCCEEDS: replay enters evaluation only (TASK-14512 Do 2) and never
     /// consults the approval reader, because "is September approved today" cannot change whether October's result is
     /// reproducible. Replay really evaluated (the engine received the timeline call), so the success is not
-    /// vacuous. (<c>LoadManifestAsync</c> falls back to the event store when the projection read fails,
-    /// <c>PeriodCalculationService.cs:1539-1552</c>, which is what lets a unit fixture replay.)
+    /// vacuous. (The replay loads the manifest through <c>ISegmentManifestStore.TryLoadAsync</c>, which the in-memory
+    /// store answers without a database, which is what lets a unit fixture replay. S146 TASK-14604-T: this cite
+    /// replaces the pre-S146 pointer into <c>PeriodCalculationService.LoadManifestAsync</c>.)
     /// </summary>
     [Fact]
     public async Task NoApprovalReader_Replay_Succeeds()
     {
-        var store = new InMemoryEventStore();
+        var store = new InMemorySegmentManifestStore();
         var hours = new InMemoryHours(
             Row(new DateOnly(2026, 9, 28), 9.0m, 1), Row(new DateOnly(2026, 9, 29), 9.0m, 2),
             Row(new DateOnly(2026, 9, 30), 9.0m, 3), Row(Oct01, 7.4m, 4), Row(new DateOnly(2026, 10, 2), 7.4m, 5));
@@ -182,7 +183,7 @@ public sealed class PcsNeverSilentTests
 
     private static PeriodCalculationService BuildPcs(
         StubEngine engine,
-        IEventStore store,
+        ISegmentManifestStore store,
         IRecordedHoursReader? hours,
         IPriorPeriodApprovalReader? approval,
         IEmploymentWindowResolver? windows = null) =>
@@ -191,8 +192,6 @@ public sealed class PcsNeverSilentTests
             // Never dereferenced: the stub engine returns no line items, so no mapping lookup happens.
             mappingService: null!,
             store,
-            // The projection insert is inside PCS's swallowing try/catch by design (AuditState.EventOnly).
-            connectionFactory: null!,
             Configuration(),
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new Classifications(RuleSet),

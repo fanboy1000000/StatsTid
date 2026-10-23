@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Http;
-using Npgsql;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Calendar;
@@ -111,24 +110,27 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
-/// <strong>Audit completeness contract</strong>: a successful calculation always returns
-/// a populated <see cref="PeriodCalculationResult"/>, but the audit chain may be partially
-/// degraded when one of the two manifest-persistence steps (event-store append, projection
-/// insert) fails. Callers that need to know whether the audit chain is complete should use
-/// <see cref="CalculateWithOutcomeAsync"/> (or the Replay equivalent) which returns a
-/// <see cref="PeriodCalculationOutcome"/> carrying an explicit <see cref="AuditState"/>.
-/// Endpoints that surface manifest-id to clients should also call
-/// <see cref="StampAuditContext(HttpContext, PeriodCalculationOutcome)"/> to thread the
-/// manifest id (and the audit state when degraded) into <c>HttpContext.Items</c> for
-/// <see cref="AuditLoggingMiddleware"/>.
+/// <strong>Audit completeness contract (S146 / TASK-14604, QUAL-205; rulings R-21, R-22, R-27)</strong>: a
+/// successful calculation's proof (its manifest event, its <c>segment_manifests</c> row and the legacy
+/// <see cref="PeriodCalculationCompleted"/>) is written in ONE transaction through the ADR-018 outbox, by
+/// <see cref="ISegmentManifestStore.PersistAsync"/>: all of it or none of it. The
+/// <see cref="PeriodCalculationOutcome"/> returned by <see cref="CalculateWithOutcomeAsync"/> carries the
+/// <see cref="AuditState"/> of that write (<see cref="AuditState.Complete"/> or
+/// <see cref="AuditState.NotPersisted"/>). A calculation that is not provable is never used: both calculating
+/// routes call <see cref="PeriodCalculationOutcome.ThrowIfNotProvable"/> before any payroll write and answer
+/// 503 <c>payroll-manifest-not-persisted</c>. The calculate-and-export endpoint then calls
+/// <see cref="StampAuditContext(HttpContext, PeriodCalculationOutcome)"/> to thread the manifest id into
+/// <c>HttpContext.Items</c> for <see cref="AuditLoggingMiddleware"/>.
 /// </para>
 /// </summary>
 public sealed class PeriodCalculationService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly PayrollMappingService _mappingService;
-    private readonly IEventStore _eventStore;
-    private readonly DbConnectionFactory _connectionFactory;
+    // S146 TASK-14604 (QUAL-205; R-21, R-22): the ONE place a calculation's proof is written and read back. It
+    // replaced the IEventStore + DbConnectionFactory pair, whose only uses were the manifest's direct append,
+    // its projection insert and read, and the legacy event's direct append.
+    private readonly ISegmentManifestStore _manifestStore;
     private readonly IRuleClassificationProvider _classificationProvider;
     // S21 TASK-2108 (ADR-017 D9c): optional repository for hydrating
     // BoundarySources.LocalProfileActivations on the back-compat shim path. Optional
@@ -183,11 +185,23 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// Stream id pattern for the <see cref="SegmentManifestCreated"/> event. Keying by
-    /// manifest id makes the event-replay fallback in <see cref="ReplayAsync(Guid, string?, Guid?, CancellationToken)"/>
-    /// a single <see cref="IEventStore.ReadStreamAsync"/> call rather than a full event-store scan.
+    /// manifest id makes the event-replay fallback of the manifest load
+    /// (<see cref="ISegmentManifestStore.TryLoadAsync"/>, called by
+    /// <see cref="ReplayAsync(Guid, string?, Guid?, CancellationToken)"/>) a single
+    /// <see cref="IEventStore.ReadStreamAsync"/> call rather than a full event-store scan. Since S146 /
+    /// TASK-14604 the event is enqueued on this stream through the outbox, in the manifest's own transaction.
     /// </summary>
     internal static string ManifestStreamId(Guid manifestId) =>
         $"segment-manifest-{manifestId}";
+
+    /// <summary>
+    /// Stream id of the legacy <see cref="PeriodCalculationCompleted"/> event:
+    /// <c>period-calc-{employeeId}-{periodStart:yyyy-MM-dd}</c>, unchanged since before S20. Since S146 /
+    /// TASK-14604 it is enqueued through the outbox in the manifest's own transaction
+    /// (<see cref="ISegmentManifestStore.PersistAsync"/>).
+    /// </summary>
+    internal static string PeriodCalculationCompletedStreamId(string employeeId, DateOnly periodStart) =>
+        $"period-calc-{employeeId}-{periodStart:yyyy-MM-dd}";
 
     /// <summary>
     /// S145 / TASK-14513 (TASK-14511 Step 5a, Fable NOTE 2) — the evaluation-model marker frozen into
@@ -209,15 +223,10 @@ public sealed class PeriodCalculationService
     /// </summary>
     public const string NoEngineCallEvaluationModel = "no-engine-call";
 
-    /// <summary>
-    /// HttpContext.Items key carrying the <see cref="AuditState"/> alongside the manifest id
-    /// when the persistence chain was partially degraded. Consumed by audit/log middleware
-    /// or downstream handlers that want to surface degraded-audit warnings to clients.
-    /// </summary>
-    public const string AuditStateItemKey = "audit:audit_state";
-
     // S132 TASK-132-2b (QUAL-002): the single JsonSerializerOptions used to WRITE segments into
-    // the segment_manifests projection (segments_jsonb) AND to READ them back in LoadManifestAsync.
+    // the segment_manifests projection (segments_jsonb) AND to READ them back (since S146 / TASK-14604 both
+    // in PostgresSegmentManifestStore, which is why this field is internal rather than private; the test
+    // suites still bind to it by reflection under its name, BindingFlags.NonPublic | Static).
     //
     // Why the JsonStringEnumConverter matters (auditability / correctness — ADR-016 D10, ADR-018):
     // the PlannedSegment.BoundaryCause enum previously serialized NUMERICALLY here (no converter),
@@ -226,8 +235,9 @@ public sealed class PeriodCalculationService
     // projection row rebuilt from it (SegmentManifestProjectionRebuilder copies data->'segments'
     // verbatim) — encodes it as a STRING, e.g. "boundaryCause": "OkTransition". Two writers, two
     // encodings: a reader wired to one silently misread the other. Concretely, after a projection
-    // rebuild (a first-class, always-supported operation) LoadManifestAsync's converter-less reader
-    // could not parse the string form at all.
+    // rebuild (a first-class, always-supported operation) the manifest load's converter-less reader
+    // (then PCS's LoadManifestAsync; since S146 PostgresSegmentManifestStore.TryLoadAsync) could not
+    // parse the string form at all.
     //
     // The enforced contract this restores is DESERIALIZED EQUIVALENCE, not byte-identity: a
     // live-written and a rebuilt manifest deserialize to the SAME PlannedSegment set. Adding the
@@ -257,7 +267,7 @@ public sealed class PeriodCalculationService
     // for EMPLOYED (WhenWritingDefault), so a windowless employee's segments_jsonb is byte-identical
     // to pre-S137 output under THESE options. Adding a DefaultIgnoreCondition here would now also
     // break that pin, not only the wire format.
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
@@ -267,8 +277,7 @@ public sealed class PeriodCalculationService
     public PeriodCalculationService(
         IHttpClientFactory httpClientFactory,
         PayrollMappingService mappingService,
-        IEventStore eventStore,
-        DbConnectionFactory connectionFactory,
+        ISegmentManifestStore manifestStore,
         IConfiguration configuration,
         ILogger<PeriodCalculationService> logger,
         IRuleClassificationProvider? classificationProvider = null,
@@ -282,8 +291,10 @@ public sealed class PeriodCalculationService
     {
         _httpClientFactory = httpClientFactory;
         _mappingService = mappingService;
-        _eventStore = eventStore;
-        _connectionFactory = connectionFactory;
+        // S146 TASK-14604: not null-checked, like the mapping service above. A calculation on a service built
+        // without a store fails its manifest write (logged at Error) and is refused as NotPersisted, never paid;
+        // a replay on one fails loudly at the load.
+        _manifestStore = manifestStore;
         _logger = logger;
         // The provider is the cross-domain seam to the Rule Engine's RuleRegistry. When
         // unwired (cross-domain dep — see file XML doc), we fall back to an empty provider
@@ -390,30 +401,30 @@ public sealed class PeriodCalculationService
     // -------------------------------------------------------------------
 
     /// <summary>
-    /// Audit-chain completeness for a single calculation run. Values describe the outcome
-    /// of the two-step manifest persistence (event-store append + projection insert).
+    /// Whether a single calculation run's proof (its manifest) was persisted. Since S146 / TASK-14604 (QUAL-205;
+    /// rulings R-21, R-22) the manifest event, its <c>segment_manifests</c> projection row and the legacy
+    /// <see cref="PeriodCalculationCompleted"/> are written in ONE transaction through the ADR-018 outbox
+    /// (<see cref="ISegmentManifestStore.PersistAsync"/>), so there are three states, not the earlier five: a
+    /// partial write (an event without its projection row, or the reverse) can no longer happen.
+    /// <para>
+    /// <b>What "provable" means after the commit (R-22).</b> The outbox rows and the projection row are durable
+    /// together; the publisher then delivers each event to <c>events</c> at least once and in per-stream order
+    /// (ADR-018 D4/D5), the same guarantee every other Payroll event has.
+    /// </para>
     /// </summary>
     public enum AuditState
     {
-        /// <summary>Both event-store append and projection insert succeeded. Default value.</summary>
+        /// <summary>The manifest's one transaction committed: its outbox row, its projection row and the legacy
+        /// event's outbox row are durable. The only state a calculation may be exported or corrected from. Default
+        /// value.</summary>
         Complete,
 
-        /// <summary>Event-store append succeeded, projection insert failed. Replay is fully
-        /// supported; audit-query consumers should rebuild the projection (TASK-2011 ops
-        /// script).</summary>
-        EventOnly,
-
-        /// <summary>Projection insert succeeded, event-store append failed. Audit-query is
-        /// supported but the manifest is not replayable from events alone — the projection
-        /// row is the only source of truth. Investigate the event-store failure.</summary>
-        ProjectionOnly,
-
-        /// <summary>Both writes failed. The calculation result is still returned to the
-        /// caller (the rule outputs are valid), but the audit chain is empty for this
-        /// manifest id; ManifestId on result rows points to a record that does not exist
-        /// in either store. Operators must investigate; treating the response as
-        /// audit-of-record is unsafe.</summary>
-        BothFailed,
+        /// <summary>The manifest's one transaction did NOT commit, so none of its three writes exists (formerly
+        /// <c>BothFailed</c>; R-22). The rule outputs are valid, but nothing could prove them later: both calculating
+        /// routes refuse the calculation before any payroll write (503 <c>payroll-manifest-not-persisted</c>, through
+        /// <see cref="PeriodCalculationOutcome.ThrowIfNotProvable"/>). The ManifestId carried alongside resolves in
+        /// no store (barring a commit that failed in flight after the database committed).</summary>
+        NotPersisted,
 
         /// <summary>No manifest emission was attempted. Set on the refused calculation
         /// (any rule-engine call failed — typically Rule Engine outage, auth misconfiguration
@@ -422,8 +433,9 @@ public sealed class PeriodCalculationService
         /// manifest event — ADR-016 D10 immutability). The ManifestId carried alongside
         /// this state references the in-memory plan; in the failure case it does not
         /// resolve in either store; in the replay case it resolves to the original
-        /// forward-calc's persisted manifest. Callers that surface ManifestId to clients
-        /// must check this state explicitly before using it as an audit-query key.</summary>
+        /// forward-calc's persisted manifest. On a SUCCESSFUL forward calculation this state
+        /// means no proof was written, so <see cref="PeriodCalculationOutcome.ThrowIfNotProvable"/>
+        /// refuses it exactly as <see cref="NotPersisted"/>; replay never calls that predicate.</summary>
         NoManifest,
     }
 
@@ -499,6 +511,48 @@ public sealed class PeriodCalculationService
         /// manifest's record.
         /// </summary>
         public PlanInputs? PlanInputs { get; init; }
+
+        /// <summary>
+        /// S146 / TASK-14604 (QUAL-205; rulings R-22, R-27) — THE refusal predicate both calculating routes call
+        /// before any payroll write: throws <see cref="ManifestNotPersistedException"/> when this outcome cannot be
+        /// proven later, and returns otherwise.
+        /// <list type="bullet">
+        /// <item><see cref="AuditState.NotPersisted"/>: the manifest's one transaction did not commit;</item>
+        /// <item><see cref="AuditState.NoManifest"/> with <c>Result.Success == true</c>: a successful forward
+        /// calculation that wrote no manifest at all.</item>
+        /// </list>
+        /// A refused calculation (<c>Success == false</c>, <see cref="AuditState.NoManifest"/>) passes: it carries no
+        /// figure, and the routes answer it with their own 422. <see cref="AuditState.Complete"/> passes.
+        ///
+        /// <para>
+        /// <b>Who calls it.</b> <c>/api/payroll/calculate-and-export</c>, right after the calculation and before
+        /// <see cref="StampAuditContext"/> and the export; <see cref="RetroactiveCorrectionService"/>, right after
+        /// the recalculation and before its correction transaction opens. Replay NEVER calls it:
+        /// <see cref="AuditState.NoManifest"/> with success is a replay's normal state (it mints no manifest,
+        /// ADR-016 D10). One predicate, so the two routes cannot drift apart on what "provable" means.
+        /// </para>
+        /// </summary>
+        /// <exception cref="ManifestNotPersistedException">The outcome is not provable; see above.</exception>
+        public void ThrowIfNotProvable()
+        {
+            if (AuditState == AuditState.NotPersisted)
+            {
+                throw new ManifestNotPersistedException(
+                    ManifestId,
+                    $"The manifest {ManifestId} of this calculation was not persisted (audit state NotPersisted): its " +
+                    "one transaction (manifest event, projection row, legacy event) did not commit, so the result is not " +
+                    "provable and is refused before any payroll write.");
+            }
+
+            if (AuditState == AuditState.NoManifest && Result.Success)
+            {
+                throw new ManifestNotPersistedException(
+                    ManifestId,
+                    $"The calculation for manifest {ManifestId} succeeded without writing a manifest (audit state " +
+                    "NoManifest on a successful result: a forward calculation run with emitAuditEvents:false), so the " +
+                    "result is not provable and is refused before any payroll write.");
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -1093,23 +1147,27 @@ public sealed class PeriodCalculationService
         var planInputs = FreezePlanInputs(inputs, recordedHours, previousFlexBalance, timeline);
 
         // ---------------------------------------------------------------
-        // 6. Emit SegmentManifestCreated event (ADR-016 D10). Single audit-of-record per
-        //    successful calculation, carrying the frozen PlanInputs. The two-step persistence
-        //    (event-store append + projection insert) tracks an explicit AuditState so callers
-        //    can react to partial failures rather than silently treating success-with-degraded-
-        //    audit as success-with-complete-audit.
+        // 6. Persist the proof (ADR-016 D10): the SegmentManifestCreated event, carrying the frozen
+        //    PlanInputs, its segment_manifests projection row and the legacy PeriodCalculationCompleted,
+        //    in ONE transaction through the ADR-018 outbox (S146 TASK-14604, QUAL-205; R-21, R-22). All
+        //    three commit or none does: AuditState.Complete or AuditState.NotPersisted. A NotPersisted
+        //    outcome still carries the (valid) result, and both calculating routes refuse it through
+        //    PeriodCalculationOutcome.ThrowIfNotProvable before any payroll write.
         // ---------------------------------------------------------------
         AuditState auditState;
         if (emitAuditEvents)
         {
             var manifest = BuildManifest(plan, planInputs);
-            auditState = await EmitManifestAsync(plan, manifest, correlationId, ct);
 
-            // Legacy event for backward compatibility with the pre-S20 audit chain. Kept
-            // alongside SegmentManifestCreated so existing audit queries against
-            // PeriodCalculationCompleted continue to work; the new event is the source of
-            // truth for segmentation, the legacy one for high-level period-result counts.
-            await EmitLegacyPeriodCompletedAsync(plan, employeeId, evaluatedAgreementCode, allRuleResults.Count, allExportLines.Count, allExportLines.Sum(l => l.Hours), correlationId, ct);
+            // The legacy event, kept for backward compatibility with the pre-S20 audit chain: existing audit
+            // queries against PeriodCalculationCompleted keep working. The manifest is the source of truth for
+            // segmentation, the legacy event for high-level period-result counts. Since S146 it is written in
+            // the manifest's own transaction, so it exists exactly when the manifest does (R-18).
+            var legacyEvent = BuildLegacyPeriodCompleted(
+                plan, employeeId, evaluatedAgreementCode, allRuleResults.Count, allExportLines.Count,
+                allExportLines.Sum(l => l.Hours), correlationId);
+
+            auditState = await EmitManifestAsync(plan, manifest, legacyEvent, correlationId, ct);
         }
         else
         {
@@ -1242,17 +1300,20 @@ public sealed class PeriodCalculationService
     }
 
     // -------------------------------------------------------------------
-    // Back-compat shim — D8 always-on planner. Pre-S20 callers (Program.cs
-    // /calculate-and-export endpoint, RetroactiveCorrectionService) call this overload;
-    // it hydrates BoundarySources, runs the planner, and re-enters the new entry point.
-    // No "skip planner" code path exists.
+    // Back-compat shim — D8 always-on planner. It hydrates BoundarySources, runs the planner,
+    // and re-enters the new entry point. No "skip planner" code path exists.
+    //
+    // NO PRODUCTION CALLER (corrected S146 TASK-14604): both former callers moved to the
+    // outcome-returning sibling CalculateWithOutcomeAsync(profile, …) below — the
+    // /calculate-and-export endpoint in S134 (QUAL-003) and RetroactiveCorrectionService in S145
+    // (ruling R-11) — because only the outcome carries the manifest id and the audit state the
+    // routes need. This overload is kept for its test callers only (for example the parity pins
+    // that prove the sibling's result bit-identical to this one's), and returns that same body's
+    // .Result.
     //
     // [Obsolete] is intentional: it marks the migration runway from caller-supplied
-    // (profile, period, …) to caller-constructed PlannedCalculation. TASK-2009 and
-    // TASK-2010 migrated their own surfaces (RetroactiveCorrectionService internals;
-    // /export and /export-period). The /calculate-and-export endpoint at Program.cs
-    // is the last surviving customer; its retirement was explicitly out-of-scope per
-    // S20 Step 0b W2 (full retirement of PeriodCalculationService is deferred).
+    // (profile, period, …) to caller-constructed PlannedCalculation. Full retirement of the
+    // planless path was explicitly out-of-scope per S20 Step 0b W2.
     //
     // S145 TASK-14508 (R14, R25): the shim takes no hours. The never-silent hours-reader check
     // runs FIRST, before planning's reads (the rule-classification fetch, the employment-window
@@ -1265,8 +1326,9 @@ public sealed class PeriodCalculationService
         "Use CalculateAsync(PlannedCalculation, …) or CalculateWithOutcomeAsync(PlannedCalculation, …). " +
         "Boundary sources are limited to OK-transitions, LocalProfileActivations (S21), employment-window, " +
         "employee-profile-change dates (S137) and agreement-code dates (S144) in this path; full segmentation requires explicit " +
-        "PlannedCalculation construction. The single surviving caller is the /calculate-and-export " +
-        "endpoint; full retirement is deferred per S20 Step 0b W2.",
+        "PlannedCalculation construction. It has no production caller (the /calculate-and-export endpoint and " +
+        "RetroactiveCorrectionService call the outcome-returning CalculateWithOutcomeAsync(profile, …)); it is kept " +
+        "for test callers only. Full retirement is deferred per S20 Step 0b W2.",
         error: false)]
     public async Task<PeriodCalculationResult> CalculateAsync(
         EmploymentProfile profile,
@@ -1593,6 +1655,12 @@ public sealed class PeriodCalculationService
     /// OK-version) interval of the period (<see cref="ReadLocalProfileActivationsAsync"/>), through the
     /// same per-date cache, so the request body's organisation, agreement code and OK version no longer
     /// reach this boundary source, and the key adds no resolver read.
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>Its name is load-bearing.</strong> Two planning-shape suites,
+    /// <c>EmploymentWindowHydrationTests</c> (Unit) and <c>ProfileBoundaryHydrationTests</c> (Regression),
+    /// invoke this private method by name through reflection, so renaming it breaks them.
     /// </para>
     /// </summary>
     private async Task<(PlannedCalculation Plan, PlanHistories Histories)> BuildPlanWithHistoriesAsync(
@@ -2177,7 +2245,9 @@ public sealed class PeriodCalculationService
         // S145 TASK-14508 (R25): never silent, before any read (the manifest load is a read).
         var hoursReader = RequireHoursReader(nameof(ReplayAsync));
 
-        var manifest = await LoadManifestAsync(manifestId, ct)
+        // S146 TASK-14604 (R-21 (c)): the load goes through the manifest store — the projection first, the event
+        // store as fallback, the found-row rule (R-17) unchanged — so a fixture replays without a database.
+        var manifest = await _manifestStore.TryLoadAsync(manifestId, ct)
             ?? throw new InvalidOperationException(
                 $"Manifest {manifestId} not found in segment_manifests projection or event store. " +
                 "Cannot replay.");
@@ -2226,8 +2296,8 @@ public sealed class PeriodCalculationService
     /// <summary>
     /// True when every member of a loaded <see cref="PlanInputs"/> holds a usable value. This is the semantic
     /// half of the completeness check: a MISSING member already fails the decode (<c>[JsonRequired]</c>, S145
-    /// ruling R-18: on the projection row it is refused by name in <see cref="DecodeProjectionRow"/>; on the
-    /// event the stream read fails, see <see cref="LoadManifestAsync"/>), but a member written as an explicit
+    /// ruling R-18: on the projection row it is refused by name by <see cref="PostgresSegmentManifestStore.TryLoadAsync"/>;
+    /// on the event the stream read fails, see the same method), but a member written as an explicit
     /// JSON <c>null</c> list or an empty digest still decodes; it is refused by the same name
     /// (<see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>) rather than crashing later. An empty
     /// list is complete (no rows read; no fingerprint for a plan that made no engine call).
@@ -2410,9 +2480,18 @@ public sealed class PeriodCalculationService
     /// the manifest id, the employee id and a fixed description only: no hours and no dates (an EMPLOYED
     /// segment's first day can be a hire date, ADR-040 D7).
     /// </summary>
-    private ReplayRefusedException Refuse(string reason, Guid manifestId, string employeeId, string detail)
+    private ReplayRefusedException Refuse(string reason, Guid manifestId, string employeeId, string detail) =>
+        LogAndBuildReplayRefusal(_logger, reason, manifestId, employeeId, detail);
+
+    /// <summary>
+    /// The one shape of a replay refusal's log line and message, shared since S146 / TASK-14604 with
+    /// <see cref="PostgresSegmentManifestStore"/>, whose manifest load refuses a found projection row with
+    /// undecodable frozen inputs (R-17) exactly as this service did when the load lived here.
+    /// </summary>
+    internal static ReplayRefusedException LogAndBuildReplayRefusal(
+        ILogger logger, string reason, Guid manifestId, string employeeId, string detail)
     {
-        _logger.LogWarning(
+        logger.LogWarning(
             "Replay of manifest {ManifestId} (employee {EmployeeId}) REFUSED: {Reason}: {Detail}. Nothing is " +
             "recomputed from live data and nothing is written.",
             manifestId, employeeId, reason, detail);
@@ -2425,23 +2504,26 @@ public sealed class PeriodCalculationService
     // -------------------------------------------------------------------
 
     /// <summary>
-    /// Stamps the <see cref="PeriodCalculationOutcome.ManifestId"/> (and degraded
-    /// <see cref="AuditState"/> when applicable) onto <see cref="HttpContext.Items"/> so
-    /// <see cref="AuditLoggingMiddleware"/> picks it up for the <c>audit_log.details</c>
-    /// JSONB column. Endpoints that compute a calculation outcome should call this once
-    /// after a successful evaluation, before returning the response.
+    /// Stamps the <see cref="PeriodCalculationOutcome.ManifestId"/> of a PERSISTED manifest onto
+    /// <see cref="HttpContext.Items"/> so <see cref="AuditLoggingMiddleware"/> picks it up for the
+    /// <c>audit_log.details</c> JSONB column (the ADR-016 D10 <c>segment_manifests⋈audit_log</c> linkage).
+    /// Endpoints that compute a calculation outcome call this once, after
+    /// <see cref="PeriodCalculationOutcome.ThrowIfNotProvable"/> passed, before returning the response.
     ///
     /// <para>
-    /// Idempotent: calling with <see cref="PeriodCalculationOutcome.ManifestId"/> equal to
-    /// <see cref="Guid.Empty"/> is a no-op (no manifest was produced). Re-stamping the same
-    /// id overwrites the previous value — this is fine because there is at most one
-    /// manifest per HTTP request.
+    /// <b>On success only (S146 / TASK-14604, QUAL-205).</b> The id is stamped only when the outcome's
+    /// <see cref="AuditState"/> is <see cref="AuditState.Complete"/>, i.e. the manifest's one transaction
+    /// committed and the id resolves in <c>segment_manifests</c>. Every other outcome is a no-op: a refused
+    /// calculation (<see cref="AuditState.NoManifest"/>, S145 ruling R-6) carries its plan's id, which resolves in
+    /// no store, and must not be written into the audit row as if it did; a not-provable outcome never reaches
+    /// this call (the route refuses first). So is a <see cref="Guid.Empty"/> id. The degraded-audit-state key
+    /// this method stamped before S146 is gone: nobody read it (the middleware reads only the manifest id), and a
+    /// degraded state is now refused instead of reported.
     /// </para>
     ///
     /// <para>
-    /// The key for the manifest id is
-    /// <see cref="AuditLoggingMiddleware.ManifestIdItemKey"/>; the audit-state key (when
-    /// degraded) is <see cref="AuditStateItemKey"/>.
+    /// Re-stamping the same id overwrites the previous value, which is fine because there is at most one
+    /// manifest per HTTP request. The key is <see cref="AuditLoggingMiddleware.ManifestIdItemKey"/>.
     /// </para>
     /// </summary>
     public static void StampAuditContext(HttpContext context, PeriodCalculationOutcome outcome)
@@ -2449,18 +2531,10 @@ public sealed class PeriodCalculationService
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(outcome);
 
-        if (outcome.ManifestId == Guid.Empty)
-            return; // no manifest produced; nothing to surface to the audit chain
+        if (outcome.AuditState != AuditState.Complete || outcome.ManifestId == Guid.Empty)
+            return; // no persisted manifest; nothing to surface to the audit chain
 
         context.Items[AuditLoggingMiddleware.ManifestIdItemKey] = outcome.ManifestId;
-
-        // Only stamp the audit-state when it's degraded — the default Complete value is the
-        // assumption made by every existing audit query. Surfacing it explicitly only when
-        // it deviates keeps the on-disk JSON identical for the happy path.
-        if (outcome.AuditState != AuditState.Complete)
-        {
-            context.Items[AuditStateItemKey] = outcome.AuditState.ToString();
-        }
     }
 
     // -------------------------------------------------------------------
@@ -2670,20 +2744,28 @@ public sealed class PeriodCalculationService
     }
 
     /// <summary>
-    /// Two-step persistence (event-store append + projection insert) returning an explicit
-    /// <see cref="AuditState"/> describing which step(s) succeeded. Failures are logged at
-    /// Warning level (not Information) and include the manifest id so ops monitoring can
-    /// alert on degraded audit chains.
+    /// S146 / TASK-14604 (QUAL-205; rulings R-21, R-22) — persists a successful calculation's proof through
+    /// <see cref="ISegmentManifestStore.PersistAsync"/>: the <see cref="SegmentManifestCreated"/> event, its
+    /// <c>segment_manifests</c> projection row and <paramref name="legacyEvent"/>, in ONE transaction through the
+    /// ADR-018 outbox. Returns <see cref="AuditState.Complete"/> when that transaction committed, and
+    /// <see cref="AuditState.NotPersisted"/> when it did not (logged at Error with the manifest id, so operations
+    /// can alert on it). There is no partial state any more: the event, the row and the legacy event commit
+    /// together or not at all.
+    ///
+    /// <para>
+    /// <b>Why it returns a state instead of throwing (plain language).</b> The rule outputs are valid either way;
+    /// what is missing on <see cref="AuditState.NotPersisted"/> is the proof. The outcome carries both, and the
+    /// calculating routes decide through ONE predicate, <see cref="PeriodCalculationOutcome.ThrowIfNotProvable"/>,
+    /// which refuses before any payroll write. Cancellation propagates as cancellation.
+    /// </para>
     /// </summary>
     private async Task<AuditState> EmitManifestAsync(
         PlannedCalculation plan,
         SegmentManifest manifest,
+        PeriodCalculationCompleted legacyEvent,
         Guid? correlationId,
         CancellationToken ct)
     {
-        bool eventOk = false;
-        bool projectionOk = false;
-
         // The SegmentManifestCreated domain event (audit-of-record per ADR-016 D10). Since S145 / TASK-14513
         // it carries the frozen PlanInputs: the event is their record of truth, because the projection is
         // rebuildable from events.
@@ -2701,307 +2783,48 @@ public sealed class PeriodCalculationService
             CorrelationId = correlationId,
         };
 
-        // 1. Append the event.
         try
         {
-            await _eventStore.AppendAsync(ManifestStreamId(manifest.ManifestId), manifestEvent, ct);
-            eventOk = true;
+            await _manifestStore.PersistAsync(manifestEvent, manifest, legacyEvent, ct);
+            return AuditState.Complete;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex,
-                "Failed to append SegmentManifestCreated event for manifest {ManifestId} employee {EmployeeId}; " +
-                "audit chain partially degraded — see AuditState on the calculation outcome.",
+            _logger.LogError(ex,
+                "The manifest {ManifestId} of employee {EmployeeId} was NOT persisted: its one transaction (the " +
+                "SegmentManifestCreated outbox row, the segment_manifests row and the PeriodCalculationCompleted " +
+                "outbox row) did not commit, so none of them exists. The calculation is not provable and the " +
+                "calculating routes refuse it before any payroll write (503 payroll-manifest-not-persisted).",
                 manifest.ManifestId, plan.EmployeeId);
+            return AuditState.NotPersisted;
         }
-
-        // 2. Insert into the segment_manifests projection table. The projection is
-        //    rebuildable from events (TASK-2011 ops script), so a transient failure here
-        //    is recoverable as long as step 1 succeeded.
-        try
-        {
-            await using var conn = _connectionFactory.Create();
-            await conn.OpenAsync(ct);
-
-            var segmentsJson = JsonSerializer.Serialize(manifest.Segments, JsonOptions);
-            var planInputsJson = PlanInputsJsonOf(manifestEvent);
-
-            await using var cmd = new NpgsqlCommand(
-                """
-                INSERT INTO segment_manifests
-                    (manifest_id, period_start, period_end, employee_id, calculation_kind,
-                     boundary_cause_summary, created_at, segments_jsonb, plan_inputs_jsonb)
-                VALUES
-                    (@manifestId, @periodStart, @periodEnd, @employeeId, @calculationKind,
-                     @boundaryCauseSummary, @createdAt, @segmentsJson::jsonb, @planInputsJson::jsonb)
-                ON CONFLICT (manifest_id) DO NOTHING
-                """, conn);
-            cmd.Parameters.AddWithValue("manifestId", manifest.ManifestId);
-            cmd.Parameters.AddWithValue("periodStart", manifest.PeriodStart);
-            cmd.Parameters.AddWithValue("periodEnd", manifest.PeriodEnd);
-            cmd.Parameters.AddWithValue("employeeId", manifest.EmployeeId);
-            cmd.Parameters.AddWithValue("calculationKind", manifest.CalculationKind);
-            cmd.Parameters.AddWithValue("boundaryCauseSummary", manifest.BoundaryCauseSummary.ToArray());
-            cmd.Parameters.AddWithValue("createdAt", manifest.CreatedAt);
-            cmd.Parameters.AddWithValue("segmentsJson", NpgsqlTypes.NpgsqlDbType.Text, segmentsJson);
-            cmd.Parameters.AddWithValue("planInputsJson", NpgsqlTypes.NpgsqlDbType.Text, (object?)planInputsJson ?? DBNull.Value);
-
-            await cmd.ExecuteNonQueryAsync(ct);
-            projectionOk = true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to insert manifest {ManifestId} into segment_manifests projection; " +
-                "rebuild script (TASK-2011) can recover from the SegmentManifestCreated event " +
-                "(if step 1 succeeded). Audit chain partially degraded.",
-                manifest.ManifestId);
-        }
-
-        return (eventOk, projectionOk) switch
-        {
-            (true, true) => AuditState.Complete,
-            (true, false) => AuditState.EventOnly,
-            (false, true) => AuditState.ProjectionOnly,
-            _ => AuditState.BothFailed,
-        };
-    }
-
-    /// <summary>
-    /// S145 / TASK-14513 — the <c>plan_inputs_jsonb</c> value: exactly the <c>planInputs</c> object as
-    /// <see cref="EventSerializer"/> writes it on <paramref name="manifestEvent"/> (camelCase, null members
-    /// omitted), or <c>null</c> when the event carries none.
-    ///
-    /// <para>
-    /// <b>Why it is taken from the serialized event (TASK-14509's shape contract).</b> The projection rebuild and
-    /// its SQL twin copy <c>data-&gt;'planInputs'</c> verbatim into this column, so a live-written row and a
-    /// rebuilt one must hold the same JSON; reading it out of the event's own serialization makes that true by
-    /// construction instead of keeping a second copy of the serializer's options in step. (The segments column
-    /// keeps its own options: its documented null-snapshot residual, QUAL-146, is not this column's.)
-    /// </para>
-    /// </summary>
-    private static string? PlanInputsJsonOf(SegmentManifestCreated manifestEvent)
-    {
-        if (manifestEvent.PlanInputs is null)
-            return null;
-
-        using var serialized = JsonDocument.Parse(EventSerializer.Serialize(manifestEvent));
-        return serialized.RootElement.TryGetProperty("planInputs", out var planInputs)
-            && planInputs.ValueKind == JsonValueKind.Object
-                ? planInputs.GetRawText()
-                : throw new InvalidOperationException(
-                    "SegmentManifestCreated serialized without its planInputs object although the event carries " +
-                    "PlanInputs; the projection row would lose the frozen inputs. " +
-                    $"ManifestId={manifestEvent.ManifestId}.");
-    }
-
-    /// <summary>
-    /// The raw values of one <c>segment_manifests</c> row, read before anything is decoded (S145 ruling R-17):
-    /// the scalars as typed by the reader, and the two JSON columns as text (<c>plan_inputs_jsonb</c> is
-    /// <c>null</c> when the column is NULL).
-    /// </summary>
-    private sealed record ManifestProjectionRow(
-        Guid ManifestId,
-        DateOnly PeriodStart,
-        DateOnly PeriodEnd,
-        string EmployeeId,
-        string CalculationKind,
-        List<string> BoundaryCauseSummary,
-        DateTimeOffset CreatedAt,
-        string SegmentsJson,
-        string? PlanInputsJson);
-
-    private async Task<SegmentManifest?> LoadManifestAsync(Guid manifestId, CancellationToken ct)
-    {
-        // 1. Try the projection table first — single-row indexed lookup. Since S145 / TASK-14513 the row's
-        //    plan_inputs_jsonb is read too. Three outcomes (S145 rulings R-14 vii, R-17):
-        //    - no row, or the projection unreachable (a connection failure, a missing table, a SQL error)
-        //      → the event (step 2 below);
-        //    - a found row with a NULL slot → refused by the replay (R-14 vii): a manifest without frozen inputs;
-        //    - a found row with an undecodable slot → refused here (R-17), by the same name.
-        //    A found row never falls back to the event for the slot: the row is what the projection says was
-        //    calculated, and a rebuild (not a replay) is what restores a damaged row. That is why the catch-all
-        //    below wraps ONLY the SQL read into raw values; the decoding happens after it, where no catch can
-        //    turn a damaged row into a silent event substitution.
-        //    A SegmentManifestCreated whose own planInputs cannot be decoded fails the stream read and surfaces
-        //    as "not found / cannot replay": a store-level fault in an append-only record.
-        ManifestProjectionRow? row = null;
-        try
-        {
-            await using var conn = _connectionFactory.Create();
-            await conn.OpenAsync(ct);
-
-            await using var cmd = new NpgsqlCommand(
-                """
-                SELECT manifest_id, period_start, period_end, employee_id, calculation_kind,
-                       boundary_cause_summary, created_at, segments_jsonb, plan_inputs_jsonb
-                FROM segment_manifests
-                WHERE manifest_id = @manifestId
-                """, conn);
-            cmd.Parameters.AddWithValue("manifestId", manifestId);
-
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            if (await reader.ReadAsync(ct))
-            {
-                row = new ManifestProjectionRow(
-                    ManifestId: reader.GetGuid(0),
-                    PeriodStart: DateOnly.FromDateTime(reader.GetDateTime(1)),
-                    PeriodEnd: DateOnly.FromDateTime(reader.GetDateTime(2)),
-                    EmployeeId: reader.GetString(3),
-                    CalculationKind: reader.GetString(4),
-                    BoundaryCauseSummary: ((string[])reader.GetValue(5)).ToList(),
-                    CreatedAt: reader.GetFieldValue<DateTimeOffset>(6),
-                    SegmentsJson: reader.GetString(7),
-                    PlanInputsJson: reader.IsDBNull(8) ? null : reader.GetString(8));
-            }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // A fault in the read means the projection could not be consulted; no decoding has happened yet,
-            // so nothing here can be a damaged row. A row already read stays read: a fault after it (closing
-            // the connection) does not hand a found row to the event (R-17). A cancelled replay propagates
-            // as cancellation, not as "manifest not found".
-            _logger.LogWarning(ex,
-                "Projection lookup for manifest {ManifestId} failed; falling back to event-replay.",
-                manifestId);
-        }
-
-        if (row is not null)
-            return DecodeProjectionRow(row);
-
-        // 2. Event-replay fallback — read SegmentManifestCreated events on the manifest's
-        //    stream and rehydrate the manifest. This path covers the projection-truncated /
-        //    projection-not-yet-rebuilt case and is the same path TASK-2011's rebuild
-        //    script will use.
-        try
-        {
-            var events = await _eventStore.ReadStreamAsync(ManifestStreamId(manifestId), ct);
-            var created = events.OfType<SegmentManifestCreated>().FirstOrDefault();
-            if (created is not null)
-            {
-                return new SegmentManifest(
-                    ManifestId: created.ManifestId,
-                    PeriodStart: created.PeriodStart,
-                    PeriodEnd: created.PeriodEnd,
-                    EmployeeId: created.EmployeeId,
-                    CalculationKind: created.CalculationKind,
-                    BoundaryCauseSummary: created.BoundaryCauseSummary,
-                    CreatedAt: created.CreatedAt,
-                    Segments: created.Segments,
-                    PlanInputs: created.PlanInputs);
-            }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex,
-                "Event-replay fallback for manifest {ManifestId} failed.", manifestId);
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// S145 ruling R-17 — decodes a FOUND <c>segment_manifests</c> row. Runs outside the projection read's
-    /// catch-all, so a damaged row fails loudly and is never replaced by the event:
-    /// <list type="bullet">
-    /// <item><c>segments_jsonb</c> not decodable → <see cref="InvalidOperationException"/> naming the manifest and
-    /// the column. The segments are the plan, not frozen inputs, so this is a damaged row, not a named replay
-    /// refusal;</item>
-    /// <item><c>plan_inputs_jsonb</c> present but not decodable as <see cref="PlanInputs"/> (the wrong shape, for
-    /// example <c>[]</c>, or a missing required member, R-18) → logged at Warning with the exception, then refused
-    /// <see cref="ReplayRefusedException.ManifestWithoutFrozenInputs"/>;</item>
-    /// <item><c>plan_inputs_jsonb</c> NULL (or the JSON literal <c>null</c>) → a manifest without frozen inputs,
-    /// which <see cref="ReplayAsync"/> refuses by the same name (R-14 vii).</item>
-    /// </list>
-    /// </summary>
-    private SegmentManifest DecodeProjectionRow(ManifestProjectionRow row)
-    {
-        List<PlannedSegment> segments;
-        try
-        {
-            segments = JsonSerializer.Deserialize<List<PlannedSegment>>(row.SegmentsJson, JsonOptions)
-                ?? new List<PlannedSegment>();
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException(
-                $"Damaged projection row: segment_manifests.segments_jsonb of manifest {row.ManifestId} could not be " +
-                "decoded as the planned segments; rebuild the projection. The replay does not fall back to the " +
-                "event for a found row.",
-                ex);
-        }
-
-        PlanInputs? planInputs = null;
-        if (row.PlanInputsJson is not null)
-        {
-            try
-            {
-                planInputs = JsonSerializer.Deserialize<PlanInputs>(row.PlanInputsJson, JsonOptions);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(ex,
-                    "The segment_manifests row of manifest {ManifestId} holds a plan_inputs_jsonb that cannot be " +
-                    "decoded as frozen inputs.",
-                    row.ManifestId);
-                throw Refuse(
-                    ReplayRefusedException.ManifestWithoutFrozenInputs, row.ManifestId, row.EmployeeId,
-                    "the projection row's plan_inputs_jsonb could not be decoded as frozen inputs; rebuild the projection");
-            }
-        }
-
-        return new SegmentManifest(
-            ManifestId: row.ManifestId,
-            PeriodStart: row.PeriodStart,
-            PeriodEnd: row.PeriodEnd,
-            EmployeeId: row.EmployeeId,
-            CalculationKind: row.CalculationKind,
-            BoundaryCauseSummary: row.BoundaryCauseSummary,
-            CreatedAt: row.CreatedAt,
-            Segments: segments,
-            PlanInputs: planInputs);
     }
 
     /// <summary>
     /// The legacy <see cref="PeriodCalculationCompleted"/> event. <paramref name="evaluatedAgreementCode"/> is the
-    /// agreement the period was evaluated under, the same single derivation the result reports (S145 R-12).
+    /// agreement the period was evaluated under, the same single derivation the result reports (S145 R-12). Pure:
+    /// since S146 / TASK-14604 it is persisted in the manifest's own transaction by <see cref="EmitManifestAsync"/>
+    /// (stream <see cref="PeriodCalculationCompletedStreamId"/>), so it exists exactly when the manifest does.
     /// </summary>
-    private async Task EmitLegacyPeriodCompletedAsync(
+    private static PeriodCalculationCompleted BuildLegacyPeriodCompleted(
         PlannedCalculation plan,
         string employeeId,
         string evaluatedAgreementCode,
         int ruleResultCount,
         int exportLineCount,
         decimal totalHours,
-        Guid? correlationId,
-        CancellationToken ct)
-    {
-        try
+        Guid? correlationId) => new()
         {
-            var calcEvent = new PeriodCalculationCompleted
-            {
-                EmployeeId = employeeId,
-                PeriodStart = plan.PeriodStart,
-                PeriodEnd = plan.PeriodEnd,
-                AgreementCode = evaluatedAgreementCode,
-                OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
-                RuleCount = ruleResultCount,
-                ExportLineCount = exportLineCount,
-                TotalHours = totalHours,
-                CorrelationId = correlationId,
-            };
-
-            await _eventStore.AppendAsync(
-                $"period-calc-{employeeId}-{plan.PeriodStart:yyyy-MM-dd}",
-                calcEvent, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to emit PeriodCalculationCompleted legacy event for {EmployeeId} manifest {ManifestId}",
-                employeeId, plan.ManifestId);
-        }
-    }
+            EmployeeId = employeeId,
+            PeriodStart = plan.PeriodStart,
+            PeriodEnd = plan.PeriodEnd,
+            AgreementCode = evaluatedAgreementCode,
+            OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
+            RuleCount = ruleResultCount,
+            ExportLineCount = exportLineCount,
+            TotalHours = totalHours,
+            CorrelationId = correlationId,
+        };
 
     // -------------------------------------------------------------------
     // Recorded hours — S145 TASK-14508 (R14, R25)

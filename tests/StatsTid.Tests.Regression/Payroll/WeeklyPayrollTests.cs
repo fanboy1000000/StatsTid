@@ -687,8 +687,7 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
         return new PeriodCalculationService(
             new SingleClientFactory(engineHandler),
             mappingService,
-            _store,
-            _db,
+            new PostgresSegmentManifestStore(_db, _store, _store),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new LiveClassifications(),

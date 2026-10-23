@@ -230,8 +230,7 @@ public sealed class MonthEndCrossingTests
         => new PeriodCalculationService(
                 new SingleClientHttpFactory(engine),
                 mappingService: null!,
-                new InMemoryEventStore(),
-                connectionFactory: null!,
+                new InMemorySegmentManifestStore(),
                 Configuration(),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<PeriodCalculationService>.Instance,
                 classificationProvider: new FixedClassifications(RuleSet),

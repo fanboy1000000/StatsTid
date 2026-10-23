@@ -20,7 +20,10 @@ builder.Services.AddSingleton(new DbConnectionFactory(connectionString));
 
 // ── Outbox: dual-binding per ADR-018 D3 + per-service publisher per D2/D6 ──
 // Payroll owns period-calculation-* + payroll-export-* + retroactive correction
-// streams per ADR-018 D6 stream-ownership table.
+// streams per ADR-018 D6 stream-ownership table. Since S146 TASK-14604 (R-21) the
+// manifest's streams travel through this outbox too: segment-manifest-{manifestId}
+// and the legacy period-calc-{employeeId}-{periodStart:yyyy-MM-dd}, enqueued by
+// PostgresSegmentManifestStore in one transaction with the segment_manifests row.
 builder.Services.AddSingleton(new OutboxServiceContext("payroll"));
 builder.Services.AddSingleton<PostgresEventStore>(sp => new PostgresEventStore(
     sp.GetRequiredService<DbConnectionFactory>(),
@@ -92,6 +95,13 @@ builder.Services.AddSingleton<PayrollExportRecordRepository>();
 // so this file — which also hosts the endpoints — never does (R58; TASK-14514's hours-repository
 // access guard keeps its allowlist to that one file).
 builder.Services.AddProjectionHoursReader();
+// S146 TASK-14604 (QUAL-205; rulings R-21, R-22): where a calculation's proof is written and read back.
+// PostgresSegmentManifestStore writes the manifest event, its segment_manifests row and the legacy
+// PeriodCalculationCompleted in ONE transaction through the outbox registered above (IOutboxEnqueue), and
+// loads a manifest for a replay (projection first, then the event store, IEventStore read only).
+// PeriodCalculationService takes it in place of the IEventStore + DbConnectionFactory pair it used only for
+// the manifest.
+builder.Services.AddSingleton<ISegmentManifestStore, PostgresSegmentManifestStore>();
 builder.Services.AddSingleton<PeriodCalculationService>();
 builder.Services.AddSingleton<RetroactiveCorrectionService>();
 // S45: cross-process audit projection for RetroactiveCorrectionRequested
@@ -364,7 +374,7 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // PlannedCalculation via the SAME BuildPlanWithHistoriesAsync and runs the SAME core, so
     // outcome.Result is bit-identical to what CalculateAsync(profile, …) returned here before:
     // the export payload / SLS lines are unchanged BY CONSTRUCTION. The outcome additionally
-    // exposes the ManifestId + AuditState.
+    // exposes the ManifestId and the AuditState, which the provability check below reads.
     // S145 TASK-14508 (R14): no hours are passed — the calculation reads the employee's recorded
     // rows itself (the body's lists were refused above when non-empty).
     PeriodCalculationService.PeriodCalculationOutcome outcome;
@@ -378,6 +388,15 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             authHeader,
             correlationId,
             ct);
+
+        // S146 TASK-14604 (QUAL-205; rulings R-22, R-27): no export without its proof. The calculation's
+        // manifest (written in one transaction with the legacy summary event) must be stored before anything
+        // is exported from the result. ThrowIfNotProvable is the ONE predicate both calculating routes call;
+        // it throws ManifestNotPersistedException (→ 503 below) when the manifest was not persisted, or when a
+        // successful result carries no manifest. It runs BEFORE StampAuditContext and the export, so a refusal
+        // writes no export record, no PayrollExportGenerated, no ADR-026 audit row and no outbox message, and
+        // stamps no manifest id. (The HTTP request log still records the failed request, by design.)
+        outcome.ThrowIfNotProvable();
     }
     catch (PlannerInvariantViolation ex) when (PayrollPlanRefusalProblem.TryCreate(ex) is { } problem)
     {
@@ -412,12 +431,20 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         // undo. Fixed 503; the upstream detail stays in the provider's log.
         return RulesUnavailable();
     }
+    catch (ManifestNotPersistedException)
+    {
+        // S146 TASK-14604 (QUAL-205): the calculation's manifest was not persisted (its one transaction did
+        // not commit — nothing of it exists), so the result is not provable and is not exported. Nothing was
+        // exported or written. Fixed 503; the cause is in the calculation service's Error log.
+        return ManifestNotPersisted();
+    }
 
-    // Thread the manifest id (and degraded audit state, when applicable) into HttpContext.Items
-    // BEFORE returning, so the AuditLoggingMiddleware — which reads Items AFTER the endpoint runs
-    // (post-_next) — writes it into audit_log.details, creating the ADR-016 D10
-    // segment_manifests⋈audit_log linkage. No-op when no manifest was produced (Guid.Empty), e.g.
-    // a calculation refused because a rule-engine call failed (S145 TASK-14511, adjudicator R-6).
+    // Thread the manifest id into HttpContext.Items BEFORE returning, so the AuditLoggingMiddleware —
+    // which reads Items AFTER the endpoint runs (post-_next) — writes it into audit_log.details,
+    // creating the ADR-016 D10 segment_manifests⋈audit_log linkage. Reached only by a provable outcome
+    // (the check above refused the rest). It stamps a PERSISTED manifest only (AuditState.Complete): a
+    // calculation refused because a rule-engine call failed (S145 TASK-14511, adjudicator R-6) carries a
+    // plan id that resolves in no store, so it is not stamped (S146 TASK-14604).
     PeriodCalculationService.StampAuditContext(httpContext, outcome);
 
     // Derive the SAME PeriodCalculationResult the endpoint returned before — the response body,
@@ -614,6 +641,15 @@ app.MapPost("/api/payroll/recalculate", async (
         // correction event and the idempotency marker are all untouched. Fixed 503.
         return RulesUnavailable();
     }
+    catch (ManifestNotPersistedException)
+    {
+        // S146 TASK-14604 (QUAL-205; R-22, R-27): the recalculation's manifest was not persisted, so the
+        // correction would link a manifest that exists nowhere. RetroactiveCorrectionService calls
+        // ThrowIfNotProvable BEFORE it opens its correction transaction, so nothing was written: no correction
+        // event, no ADR-026 audit row, no baseline change and no idempotency marker (a retry with the same
+        // token is not short-circuited). Fixed 503, the same body as /calculate-and-export's.
+        return ManifestNotPersisted();
+    }
 
     if (!result.Success)
         return Results.UnprocessableEntity(result);
@@ -736,6 +772,20 @@ static IResult RulesUnavailable() =>
         success = false,
         error = "The rule set could not be obtained from the Rule Engine, so the period could not be checked. Nothing was calculated, written or exported. Retry when the Rule Engine is reachable.",
         kind = "payroll-rules-unavailable"
+    }, statusCode: 503);
+
+// S146 TASK-14604 (QUAL-205; rulings R-22, R-27) — the ONE response for "the calculation's manifest was not
+// persisted, so its result is not provable and is not used". Both calculating routes answer it when
+// PeriodCalculationOutcome.ThrowIfNotProvable throws, before any payroll write. 503 because the usual cause is
+// the Payroll database being unavailable for the manifest's transaction, and the caller should retry. The body is
+// FIXED (ManifestNotPersistedException.ErrorSentence): no employee id, no date, no manifest id, never the
+// underlying database error (the calculation service logs that).
+static IResult ManifestNotPersisted() =>
+    Results.Json(new
+    {
+        success = false,
+        error = ManifestNotPersistedException.ErrorSentence,
+        kind = ManifestNotPersistedException.KindValue
     }, statusCode: 503);
 
 // S145 TASK-14512 (rulings R5(b), R16, N2) — the ONE response for "the previous month must be approved

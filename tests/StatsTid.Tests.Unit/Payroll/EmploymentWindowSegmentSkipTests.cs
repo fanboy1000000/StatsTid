@@ -129,7 +129,7 @@ public sealed class EmploymentWindowSegmentSkipTests
             call.Path.EndsWith(RecordingRuleEngine.TimelinePath, StringComparison.Ordinal)
                 ? RecordingRuleEngine.AllFail(call)
                 : RecordingRuleEngine.AllSucceedWithNoLineItems(call));
-        var eventStore = new InMemoryEventStore();
+        var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
@@ -159,7 +159,7 @@ public sealed class EmploymentWindowSegmentSkipTests
             call.Path.EndsWith("/evaluate-absence", StringComparison.Ordinal)
                 ? RecordingRuleEngine.AllFail(call)
                 : RecordingRuleEngine.AllSucceedWithNoLineItems(call));
-        var eventStore = new InMemoryEventStore();
+        var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
@@ -186,7 +186,7 @@ public sealed class EmploymentWindowSegmentSkipTests
             call.Path.EndsWith(RecordingRuleEngine.TimelinePath, StringComparison.Ordinal)
                 ? reply
                 : RecordingRuleEngine.AllSucceedWithNoLineItems(call));
-        var eventStore = new InMemoryEventStore();
+        var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
@@ -316,7 +316,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var plan = Plan(EmployeeId, Mar01, Mar31, windows: null);
         var engine = new RecordingRuleEngine();
         var resolver = new CountingProfileResolver(_ => null, agreementCode: "AC");
-        var eventStore = new InMemoryEventStore();
+        var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
@@ -343,7 +343,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var plan = Plan(EmployeeId, Mar01, Mar31, new[] { new EmploymentWindow(null, lastDay) });
 
         var engine = new RecordingRuleEngine();
-        var eventStore = new InMemoryEventStore();
+        var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
@@ -401,7 +401,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         Assert.Equal(EmploymentWindowStatus.NOT_EMPLOYED, Assert.Single(plan.Segments).EmploymentStatus);
 
         var engine = new RecordingRuleEngine(RecordingRuleEngine.AllFail); // would fail IF called
-        var eventStore = new InMemoryEventStore();
+        var eventStore = new InMemorySegmentManifestStore();
         var profileResolver = new CountingProfileResolver();
         var pcs = BuildPcs(engine, eventStore, profileResolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
@@ -443,7 +443,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var windowResolver = new FakeWindowResolver(new EmploymentWindow(hire, null));
         var profileResolver = new CountingProfileResolver();
         var engine = new RecordingRuleEngine();
-        var eventStore = new InMemoryEventStore();
+        var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, profileResolver, windowResolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).

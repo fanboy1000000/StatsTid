@@ -605,8 +605,7 @@ public sealed class RecalcBlockedLiveRulesetTests : IAsyncLifetime
         return new PeriodCalculationService(
             httpFactory,
             mappingService,
-            _eventStore,
-            _harness.Factory,
+            new PostgresSegmentManifestStore(_harness.Factory, _eventStore, _eventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryRuleClassificationProvider(classifications ?? LiveSet),

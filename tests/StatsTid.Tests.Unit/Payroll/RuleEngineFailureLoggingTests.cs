@@ -119,14 +119,14 @@ public sealed class RuleEngineFailureLoggingTests
             })
             .Build();
 
-        // The mapping service, event store, and connection factory are assigned but never
-        // dereferenced by the constructor, and are untouched by the rule-call logging path under
-        // test — so null! is safe here and keeps the fixture minimal (no DB / event store).
+        // The mapping service and the manifest store are assigned but never dereferenced by the
+        // constructor, and are untouched by the rule-call logging path under test (a failed rule
+        // call is refused before any manifest is written) — so null! is safe here and keeps the
+        // fixture minimal (no DB / manifest store).
         return new PeriodCalculationService(
             new SingleClientHttpFactory(handler),
             mappingService: null!,
-            eventStore: null!,
-            connectionFactory: null!,
+            manifestStore: null!,
             configuration,
             logger,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED

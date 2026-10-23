@@ -129,7 +129,15 @@ public sealed class RetroactiveCorrectionService
     /// next month's pay period (<see cref="RetroactiveCorrectionResult.NextPeriodToRecalculateStart"/> /
     /// <c>…End</c>), because the next month already paid this month's closing week.
     /// </para>
+    /// <para>
+    /// <strong>S146 / TASK-14604 (QUAL-205) — no correction without its proof.</strong> The correction event links
+    /// the recalculation's manifest (S145 R-19), so the manifest must exist. When it was not persisted,
+    /// <see cref="PeriodCalculationService.PeriodCalculationOutcome.ThrowIfNotProvable"/> throws
+    /// <see cref="ManifestNotPersistedException"/> before the correction transaction opens: nothing is written.
+    /// </para>
     /// </summary>
+    /// <exception cref="ManifestNotPersistedException">The recalculation's manifest was not persisted (or a
+    /// successful result carries none); nothing was written.</exception>
     public async Task<RetroactiveCorrectionResult> RecalculateAsync(
         EmploymentProfile profile,
         DateOnly periodStart,
@@ -240,6 +248,17 @@ public sealed class RetroactiveCorrectionService
             profile, periodStart, periodEnd,
             previousFlexBalance, authorizationHeader, correlationId, ct);
 #pragma warning restore CS0618
+
+        // S146 TASK-14604 (QUAL-205; rulings R-22, R-27): the recalculation's proof — its manifest, written in one
+        // transaction with the legacy summary event — must be stored before anything is corrected from it.
+        // ThrowIfNotProvable is the ONE predicate both calculating routes call; it throws
+        // ManifestNotPersistedException (the endpoint answers 503 payroll-manifest-not-persisted) when the manifest
+        // was not persisted, or when a successful result carries no manifest. It runs BEFORE the correction
+        // transaction below opens, so a refusal writes nothing: no correction event, no ADR-026 audit row, no
+        // baseline change and no idempotency marker. A failed recalculation (Success == false) passes and is
+        // answered below as before.
+        outcome.ThrowIfNotProvable();
+
         var newResult = outcome.Result;
 
         if (!newResult.Success)

@@ -238,8 +238,7 @@ public sealed class RetroactiveCorrectionTrailTests : IAsyncLifetime
                 Segmentation.TestFixtures.DefaultRuleEngineHandler)),
             new PayrollMappingService(
                 factory, NullLogger<PayrollMappingService>.Instance, new WageTypeMappingRepository(factory)),
-            eventStore,
-            factory,
+            new PostgresSegmentManifestStore(factory, eventStore, eventStore),
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ServiceUrls:RuleEngine"] = "http://rule-engine.test",

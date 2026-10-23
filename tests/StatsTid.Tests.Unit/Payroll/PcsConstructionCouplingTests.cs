@@ -84,8 +84,7 @@ public sealed class PcsConstructionCouplingTests
         new(
             new SingleClientHttpFactory(new RecordingRuleEngine()),
             mappingService: null!,
-            eventStore: new InMemoryEventStore(),
-            connectionFactory: null!,
+            manifestStore: new InMemorySegmentManifestStore(),
             Configuration(),
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: null,

@@ -92,7 +92,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
     //     Green before AND after the fix (regression guard — no data loss).
     // -------------------------------------------------------------------
     [Fact]
-    public async Task Replay_LegacyNumericBoundaryCauseRow_ProjectionOnly_StillReplays()
+    public async Task Replay_LegacyNumericBoundaryCauseRow_ProjectionRowWithoutEvent_StillReplays()
     {
         var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
         var manifestId = Guid.NewGuid();
@@ -122,7 +122,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
     //     "not found". GREEN after the fix.
     // -------------------------------------------------------------------
     [Fact]
-    public async Task Replay_StringBoundaryCauseRow_ProjectionOnly_StillReplays()
+    public async Task Replay_StringBoundaryCauseRow_ProjectionRowWithoutEvent_StillReplays()
     {
         var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
         var manifestId = Guid.NewGuid();

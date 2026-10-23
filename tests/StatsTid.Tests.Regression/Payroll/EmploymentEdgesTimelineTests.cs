@@ -191,8 +191,7 @@ public sealed class EmploymentEdgesTimelineTests : IAsyncLifetime
         return new PeriodCalculationService(
             new SingleClientFactory(engine),
             mappingService,
-            _harness.EventStore,
-            _harness.Factory,
+            new PostgresSegmentManifestStore(_harness.Factory, _harness.EventStore, _harness.EventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new LiveClassifications(),

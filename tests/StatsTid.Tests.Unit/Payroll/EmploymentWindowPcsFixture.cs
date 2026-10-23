@@ -37,10 +37,10 @@ namespace StatsTid.Tests.Unit.Payroll;
 ///     no per-segment flex call) with a ZERO delta; the
 ///     NON-ZERO-delta variant needs seeded wage-type mappings and lives in the Docker-gated
 ///     <c>EmploymentWindowPayrollTests</c>.</item>
-///   <item>The projection insert (<c>segment_manifests</c>) runs inside PCS's own swallowing
-///     try/catch by design (a degraded audit chain is reported as <c>AuditState</c>, never
-///     thrown), so a <c>null!</c> connection factory degrades the outcome to
-///     <c>AuditState.EventOnly</c> — the event-store half is what these tests read.</item>
+///   <item>PCS persists its manifest through <c>ISegmentManifestStore</c> (S146 TASK-14604); this
+///     fixture hands it the in-memory <c>InMemorySegmentManifestStore</c>, so no database is
+///     needed, the outcome is <c>AuditState.Complete</c>, and the persisted manifest and legacy
+///     event are what these tests read.</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -215,7 +215,7 @@ internal static class EmploymentWindowPcsFixture
 
     public static PeriodCalculationService BuildPcs(
         RecordingRuleEngine engine,
-        IEventStore? eventStore = null,
+        ISegmentManifestStore? manifestStore = null,
         IEmploymentProfileResolver? profileResolver = null,
         IEmploymentWindowResolver? windowResolver = null,
         IReadOnlyList<RuleClassification>? ruleSet = null,
@@ -235,10 +235,7 @@ internal static class EmploymentWindowPcsFixture
             // Never dereferenced: the stub rule engine returns no line items, so the
             // export mapper's per-line mapping lookup is never reached (see class doc).
             mappingService: null!,
-            eventStore ?? new InMemoryEventStore(),
-            // The projection insert is inside PCS's swallowing try/catch by design;
-            // the outcome degrades to AuditState.EventOnly (see class doc).
-            connectionFactory: null!,
+            manifestStore ?? new InMemorySegmentManifestStore(),
             Configuration(),
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryRuleClassificationProvider(ruleSet ?? RuleSet),
@@ -452,40 +449,8 @@ internal static class EmploymentWindowPcsFixture
     }
 
     // ---------------------------------------------------------------------
-    // Recording fakes for the two resolvers + the event store
+    // Recording fakes for the two resolvers (the in-memory manifest store is InMemorySegmentManifestStore)
     // ---------------------------------------------------------------------
-
-    /// <summary>In-memory <see cref="IEventStore"/> — captures the emitted
-    /// <see cref="SegmentManifestCreated"/> so the manifest's typed segments can be read.</summary>
-    public sealed class InMemoryEventStore : IEventStore
-    {
-        private readonly Dictionary<string, List<IDomainEvent>> _streams = new(StringComparer.Ordinal);
-        private readonly List<IDomainEvent> _all = new();
-
-        public IReadOnlyList<IDomainEvent> All => _all;
-
-        public SegmentManifestCreated? Manifest => _all.OfType<SegmentManifestCreated>().SingleOrDefault();
-
-        public Task AppendAsync(string streamId, IDomainEvent @event, CancellationToken ct = default)
-        {
-            if (!_streams.TryGetValue(streamId, out var list))
-                _streams[streamId] = list = new List<IDomainEvent>();
-            list.Add(@event);
-            _all.Add(@event);
-            return Task.CompletedTask;
-        }
-
-        public Task<IReadOnlyList<IDomainEvent>> ReadStreamAsync(string streamId, CancellationToken ct = default)
-            => Task.FromResult<IReadOnlyList<IDomainEvent>>(
-                _streams.TryGetValue(streamId, out var list) ? list.ToList() : Array.Empty<IDomainEvent>());
-
-        public Task<IReadOnlyList<IDomainEvent>> ReadAllAsync(int fromPosition = 0, int maxCount = 1000, CancellationToken ct = default)
-            => Task.FromResult<IReadOnlyList<IDomainEvent>>(_all.Skip(fromPosition).Take(maxCount).ToList());
-
-        public Task<T?> ReadLatestOfTypeAsync<T>(string streamId, CancellationToken ct = default)
-            where T : class, IDomainEvent
-            => Task.FromResult(_streams.TryGetValue(streamId, out var list) ? list.OfType<T>().LastOrDefault() : null);
-    }
 
     /// <summary>
     /// <see cref="IEmploymentProfileResolver"/> fake that RECORDS every as-of date PCS asks

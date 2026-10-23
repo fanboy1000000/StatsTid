@@ -490,8 +490,7 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         var calc = new PeriodCalculationService(
             new NoopHttpClientFactory(),
             mapping,
-            eventStore,
-            factory,
+            new PostgresSegmentManifestStore(factory, eventStore, eventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             // S145 R14/R25: PCS refuses to calculate without a reader. These calls passed NO hours

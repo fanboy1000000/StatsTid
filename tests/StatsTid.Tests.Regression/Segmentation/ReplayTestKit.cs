@@ -87,8 +87,7 @@ internal static class ReplayTestKit
         return new PeriodCalculationService(
             httpFactory,
             mappingService,
-            harness.EventStore,
-            harness.Factory,
+            new PostgresSegmentManifestStore(harness.Factory, harness.EventStore, harness.EventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryClassifications(TestFixtures.RuleSet),

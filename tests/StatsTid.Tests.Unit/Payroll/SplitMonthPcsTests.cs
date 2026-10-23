@@ -219,8 +219,7 @@ public sealed class SplitMonthPcsTests
         var pcs = new PeriodCalculationService(
             new SingleClientHttpFactory(engine),
             mappingService: null!,
-            new InMemoryEventStore(),
-            connectionFactory: null!,
+            new InMemorySegmentManifestStore(),
             Configuration(),
             logger,
             classificationProvider: new FixedProvider(live),
@@ -286,8 +285,8 @@ public sealed class SplitMonthPcsTests
         }
 
         var engine = Engine(() => Timeline(new[] { new TimelineLine(lineDate, 1.00m) }));
-        var store = new InMemoryEventStore();
-        var pcs = BuildPcs(engine, eventStore: store, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
+        var store = new InMemorySegmentManifestStore();
+        var pcs = BuildPcs(engine, manifestStore: store, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m));

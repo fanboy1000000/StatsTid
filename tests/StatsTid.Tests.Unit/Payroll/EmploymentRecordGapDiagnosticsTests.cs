@@ -247,9 +247,8 @@ public sealed class EmploymentRecordGapDiagnosticsTests
             // Never dereferenced: the stub rule engine returns no line items (and on the gap paths
             // it is never called at all), so the export mapper is never reached.
             mappingService: null!,
-            new InMemoryEventStore(),
-            // The projection insert sits inside PCS's own swallowing try/catch by design.
-            connectionFactory: null!,
+            // S146 TASK-14604-T: the in-memory manifest store (no database).
+            new InMemorySegmentManifestStore(),
             Configuration(),
             logger,
             classificationProvider: new FixedRuleClassificationProvider(RuleSet),
