@@ -82,8 +82,8 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14609 | DONE (merged `0a291582`, fix-up `ac56c72e`) | wave 1, after 14601-T · `test-qa` · harness outbox readiness (R-24) |
 | TASK-14604 | DONE (merged `384484cb`) | wave 2a · `payroll-integration` · QUAL-205 through the outbox; `ISegmentManifestStore`; the refusal predicate |
 | TASK-14604-T | DONE (merged `384484cb`) | wave 2a, paired · `test-qa` · in-memory store; 23-file census; AC-A1..A3 |
-| TASK-14605 | PLANNED | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4 |
-| TASK-14605-T | PLANNED | wave 2b, paired · `test-qa` · the site migration under the census rule |
+| TASK-14605 | RETURNED (`1992e4d5`, fix-up `f6d3f780`) | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4 |
+| TASK-14605-T | IN PROGRESS (same worktree) | wave 2b, paired · `test-qa` · the site migration under the census rule |
 | TASK-14606 | PLANNED | wave 2c · `test-qa` · the QUAL-188 pins |
 | TASK-14607 | PLANNED | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
 | TASK-14607-T | PLANNED | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
@@ -183,15 +183,47 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
   - the rebuild script and the `SegmentManifestProjectionRebuilder` comment require a **drained** Payroll outbox before a rebuild, not only quiesced writers (Fable W1: a rebuild run between a commit and the drain would drop that manifest's row);
   - QUAL-205 is marked BUILT. Its Docker facts are CI-pending until CI-W2.
 
+## Wave 2b — TASK-14605 + 14605-T (QUAL-188, the flex ledger)
+
+**What changes for the product.** A month's opening flex balance is no longer a number the caller sends. Each paid month's export record stores what the month opened at, what it closed at, and where the opening came from (`LEDGER_START`, `CHAINED` or `REHIRE`). The next month opens at the previous month's recorded closing. When the chain cannot be followed, payroll refuses with 409 and names the month to fix, instead of quietly starting at 0. One per-employee database lock serializes the export, the correction and the recheck, which is how QUAL-201 closes by construction (R-5).
+
+**TASK-14605 returned** (`worktree-agent-a7d25c1f742b46097` @ `1992e4d5`). The Orchestrator rebuilt every `src/**` project independently: 0 errors, the one documented CS0618, 0 CA2100. The test projects stop compiling (65 errors, all on the retired parameter, so no call silently shifts arguments) until 14605-T migrates them. The names as built are in the agent's report and in the 14605-T and 14606 prompts.
+
+**Decisions at its return:**
+- **Deviations accepted:**
+  - (1) A sibling `TryReadRecordForUpdateAsync` returns the balances, and the old method delegates to it. Changing the old return type would have broken three un-censused facts.
+  - (2) PCS owns the under-lock recheck, and the export calls it through a callback on `FlexLedgerWrite`. This keeps the windows semantics identical to admission.
+  - (3) A newly recorded zero-line month skips only the empty post-commit delivery. The Orchestrator checked that it still writes `PayrollExportGenerated` and its audit row inside the transaction (`PayrollExportService.cs:164-165, :250-279, :333-338`).
+- **The "M = S without `LEDGER_START`" throw accepted.** It is an invariant throw for a damaged ledger, not a month a user can reach.
+- **Brief contradiction "the event names S" — accepted as built.** The correction event carries `FlexProvenance = "UNTRACKED"` with null balances and no S. S (the ledger start month) can be read back from the employee's `LEDGER_START` record, which is never deleted and whose provenance never changes. The event's property doc now lists the fourth value (fix-up `f6d3f780`).
+- **Fix-up `f6d3f780`** (doc comments only): the `UNTRACKED` doc above; `ManifestNotPersistedException.cs` and `ISegmentManifestStore.cs` now say "the commit was not confirmed" (Codex W1 from 14604, the two sites outside 14605's first pass).
+- **N7, the agent's choice, goes to the 5a reviewers as a named question.** When a correction of month M finds M lost every employed day, the agent leaves M's recorded balances unchanged rather than refusing. The question for the reviewers: does a stale closing on M, with the C4 hint then not naming M+1, keep the ledger true?
+- **Consequences of C2, recorded, no check built:**
+  - Reviewer c3 N5: M+2 can still be exported for the first time from M+1's stale closing, because case 4a reads only P.
+  - A raw month before the ledger start whose lines carry `FLEX_PAYOUT` is never a same-hash no-op on `/calculate-and-export`; it answers 409 "use a correction".
+  - A raw export after the ledger start makes the next month refuse (case 4b) until that month is corrected.
+  - An employed zero-line month is now locked against reopen (OQ-4, informed).
+  - A `payroll-ledger-changed` at export leaves the calculation's manifest behind, like the existing export-time rechecks.
+- **Routed onward:**
+  - `frontend/src/pages/admin/opfoelgning/WorklistList.tsx:425` still names `PreviousFlexBalance` as a request field. It goes to TASK-14608 (wave 3, UX) as an authorized edit.
+  - `openapi.json` and `api-types.ts` drift (the nullable field, the new result members) is regenerated in O-2.
+  - The audit-catalog rows for the new mapper keys are the Orchestrator's, at D7.
+- **TASK-14605-T dispatched** in the same worktree. The Orchestrator's corrections to its brief:
+  - `RegressionTests.cs:44-54` added to the LEAVE list: it is the rule-engine core's input.
+  - Two more bodies authorized: `ManifestPersistenceHostTests.cs:339, :354`.
+  - The compiler's 30-file break list authorized for the drop-and-reader edit.
+  - Fake resolvers on correction paths may gain the in-tx surface.
+  - New: a **static chain census** of the Docker facts that export, correct or reopen several months for one employee, so CI-W2 holds no surprise. A changed asserted value is a STOP.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-23, master `0a291582` (wave 1 merged), local only; origin/master `0f02b484` |
-| **Phase** | wave-1 gate: O-1 green on `0a291582` (0 errors / 145 warnings, CA2100 115, Unit 1512, DemoSeed 170, Regression non-Docker 130); **CI-W1 GREEN** (run `39992507686`, all seven jobs, headSha `0a291582`; draft PR #39 closed unmerged, branch deleted); wave 2a in progress |
-| **Tasks** | Wave 1 DONE (see the ledger). **TASK-14604 returned** (`worktree-agent-a25a64ba2d5d72f4e` @ `8a818499`; production build clean; the 22 PCS-construction test files no longer compile until 14604-T). Orchestrator decisions at its return: (1) `StampAuditContext` stamps only on `Complete` (accepted; a refused 422 no longer stamps a dangling manifest id; 14604-T pins it); (2) the AC-A3 grep gate also matched two scenario-named tests in `BoundaryCauseEncodingTests.cs` (14604-T renames them); carried to 14605: `ReplayRefusedException.cs`'s "thrown only by ReplayAsync" doc. **TASK-14604-T dispatched** in the same worktree |
-| **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 after 14604/14605/14607 |
-| **Pending gates** | CI-W1 (all seven jobs; then the PR is closed unmerged and the branch deleted); then 14604's merge checklist |
+| **As of** | 2026-10-23, master `5087ab88` (wave 1 and wave 2a merged, D7 part 1), local only; origin/master `0f02b484` |
+| **Phase** | wave 2b in progress. Wave 2a gate: O-1 green on `384484cb` (0 / 145, Unit 1518, DemoSeed 170, Regression non-Docker 130) |
+| **Tasks** | Wave 1 and wave 2a DONE (see the ledger). **TASK-14605 returned** (`worktree-agent-a7d25c1f742b46097` @ `1992e4d5` + doc fix-up `f6d3f780`; production build verified by the Orchestrator; decisions in § Wave 2b). **TASK-14605-T dispatched** in the same worktree |
+| **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 part 1 DONE (`5087ab88`). D7 part 2 after 14605 merges (ADR-034 D3, ADR-013, QUAL-188 BUILT, QUAL-201 closed with R-5's text, the catalog rows); part 3 after 14607 (ADR-018:478) |
+| **Pending gates** | 14605 + 14605-T merge checklist: build · 5α (union) · 5a Fable (with N7 as a named question) · 5a Codex; then O-1; then wave 2c (14606) and CI-W2 |
 | **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · CI-W2 — · C-2 — · close — |
 | **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
-| **Next action** | On CI-W1 green: record the run id, flip wave 1's Docker facts to CI-verified, close PR #39 and delete `s146-ci-w1`. On 14604's return: dispatch 14604-T (refresh its `FrozenInputsSlotTests.cs:194-198` pointer to `:198-202`), then the 14604 merge checklist |
+| **Next action** | On 14605-T's return: rule on any STOP from its chain census, then run the 14605 merge checklist on the combined branch; on merge, O-1 and D7 part 2, then dispatch TASK-14606 (pack `s146-ctx/TASK-14606.md` is built) |
