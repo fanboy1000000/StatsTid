@@ -7,8 +7,8 @@ namespace StatsTid.Tests.Unit.Payroll;
 
 /// <summary>
 /// S146 / TASK-14604-T (QUAL-205; rulings R-21, R-22) — the in-memory <see cref="ISegmentManifestStore"/> every
-/// DB-free Payroll fixture builds <see cref="PeriodCalculationService"/> with. It replaces the nested
-/// <c>EmploymentWindowPcsFixture.InMemoryEventStore</c>, which was PCS's <c>IEventStore</c> before the manifest
+/// DB-free Payroll fixture builds <see cref="PeriodCalculationService"/> with. It replaces
+/// the fixture's nested in-memory event store, which was PCS's <c>IEventStore</c> before the manifest
 /// moved behind the seam.
 ///
 /// <para>
