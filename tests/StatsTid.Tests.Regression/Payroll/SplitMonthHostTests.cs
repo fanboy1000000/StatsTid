@@ -312,13 +312,13 @@ public sealed class SplitMonthHostTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(Kind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.Equal(SingleProfileReason, root.GetProperty("reason").GetString());
-        Assert.Equal(2, root.GetProperty("employedSegmentCount").GetInt32());
+        Assert.Equal(Kind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.Equal(SingleProfileReason, JsonAssert.RequiredMember(root, "reason").GetString());
+        Assert.Equal(2, JsonAssert.RequiredMember(root, "employedSegmentCount").GetInt32());
         Assert.Equal(new[] { "EmployeeProfileChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
-        Assert.Equal(SingleProfileSentence, root.GetProperty("error").GetString());
+            JsonAssert.RequiredMember(root, "interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.Equal(SingleProfileSentence, JsonAssert.RequiredMember(root, "error").GetString());
         Assert.True(
             !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
             "the single-profile-route variant carries no ruleId (it is not a rule's refusal)");
@@ -332,12 +332,12 @@ public sealed class SplitMonthHostTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(Kind, root.GetProperty("kind").GetString());
-        Assert.Equal(MidWeekReason, root.GetProperty("reason").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        Assert.Equal(Kind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.Equal(MidWeekReason, JsonAssert.RequiredMember(root, "reason").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(JsonAssert.RequiredMember(root, "error").GetString()));
         Assert.Equal(new[] { "AgreementCodeChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+            JsonAssert.RequiredMember(root, "interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
         Assert.True(
             !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
             "the week check's variant carries no ruleId (it is not a rule's refusal)");

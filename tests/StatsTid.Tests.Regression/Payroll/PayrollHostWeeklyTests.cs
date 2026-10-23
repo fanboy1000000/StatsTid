@@ -463,7 +463,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     /// approval row), so the 422 assertion trips. MB-7 (the evaluated-set filter disabled, EB-2): the planner
     /// refuses first with ITS body (a <c>ruleId</c> and no <c>reason</c>), so <c>AssertWeekCheckRefusal</c>'s
     /// <c>reason</c> assertion trips (C-B4). Stage A's mutation MD-24 (the prior-month check runs before the
-    /// per-plan lane's call to <c>BuildPlanForLegacyCallersAsync</c>, i.e. before planning) → <b>409</b> instead
+    /// per-plan lane's call to <c>BuildPlanWithHistoriesAsync</c>, i.e. before planning) → <b>409</b> instead
     /// of 422; <c>Assert.True(status == 422)</c> trips (re-observed at the close, TASK-14528).
     /// </para>
     /// </summary>
@@ -736,12 +736,12 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(RecalcBlockedKind, root.GetProperty("kind").GetString());
-        Assert.Equal(MidWeekReason, root.GetProperty("reason").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        Assert.Equal(RecalcBlockedKind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.Equal(MidWeekReason, JsonAssert.RequiredMember(root, "reason").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(JsonAssert.RequiredMember(root, "error").GetString()));
         Assert.Equal(new[] { "AgreementCodeChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+            JsonAssert.RequiredMember(root, "interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
         Assert.True(
             !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
             "the week check's variant carries no ruleId (it is not a rule's refusal)");
