@@ -122,8 +122,9 @@ public sealed record TeamOverviewEmployeeRow(
     // something false is the exact failure class PAT-012 exists to prevent.
     //
     // What deliberately STAYS visible, and why it cannot leak the month:
-    //   • NormExpected  — (weekdays / 5) × the agreement's weekly norm. A CONTRACT fact; no
-    //                     projection or registration input. It is the honest denominator that
+    //   • NormExpected  — weekdays × the employee's own per-day norm (agreement weekly norm ×
+    //                     part-time fraction at month end ÷ 5) (S146 / QUAL-198). A CONTRACT fact;
+    //                     no projection or registration input. It is the honest denominator that
     //                     makes "— / 155,4 t" readable.
     //   • FerieTotal    — entitlement_balances.total_quota, the standing annual quota. Only
     //                     `used` moves when the employee registers absence, so only `used` is

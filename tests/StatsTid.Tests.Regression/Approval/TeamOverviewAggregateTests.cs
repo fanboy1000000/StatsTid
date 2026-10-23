@@ -2,6 +2,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
@@ -537,7 +540,8 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalance").ValueKind);
 
         // STILL VISIBLE — the DENOMINATORS, which no registration can move: normExpected is
-        // (weekdays / 5) x the agreement's weekly norm; ferieTotal is the standing annual quota.
+        // weekdays x DayNorm.ForWeekday(the agreement's weekly norm, the employee's fraction at month
+        // end) (S146 / QUAL-198); ferieTotal is the standing annual quota.
         Assert.True(row.GetProperty("normExpected").GetDecimal() > 0m);
         Assert.Equal(25m, row.GetProperty("ferieTotal").GetDecimal());
     }
@@ -969,4 +973,109 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         SigningKey = DevFallbackSigningKey,
         ExpirationMinutes = 60,
     });
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  S146 / TASK-14602-T (QUAL-198) — a part-time employee's OWN monthly norm
+    //
+    //  Fixture month: MARCH 2026 — it starts on a Sunday and has 31 days, so 22 weekdays
+    //  (Mon 2 .. Tue 31). The HK weekly norm is the seeded 37.0, so a full-timer's row is
+    //  22 x 7.40 = 162.80 and the 0.811 employee's is 22 x round(37 x 0.811 / 5, 2) = 22 x 6.00
+    //  = 132.00. Expected values are the spec arithmetic, written as literals.
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary><b>Kind F.</b> The leader's team overview shows a 0.811 employee's own norm:
+    /// <c>normExpected == 132.00</c> for the 22-weekday March 2026, while a full-time teammate in
+    /// the SAME response keeps 162.80 (the R pin for full-time). The part-time row is a SUBMITTED
+    /// period and the teammate a zero-period synthetic DRAFT row, so the norm is proven on both row
+    /// states (it is a contract fact, visible on unsubmitted rows too).
+    ///
+    /// <para><b>Red conditions.</b> The <c>132.00m</c> assertion FAILS on pre-14602 code: the handler
+    /// computed <c>(weekdays / 5) x weeklyNorm</c> with no fraction and answered 162.80 for every row.
+    /// Docker-gated: CI-pending, not run locally.</para></summary>
+    [Fact]
+    public async Task TeamOverview_PartTime0811_NormExpected132()
+    {
+        await UpsertFractionAsync(Emp, 0.811m);
+        await UpsertFractionAsync(EmpNoPeriod, 1.000m);
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED", new DateOnly(2026, 3, 1), new DateOnly(2026, 3, 31));
+
+        var rows = await GetTeamOverviewAsync(Mgr, 2026, 3);
+        var byId = rows.ToDictionary(EmployeeId);
+
+        Assert.Equal(132.00m, byId[Emp].GetProperty("normExpected").GetDecimal());
+        Assert.Equal(162.80m, byId[EmpNoPeriod].GetProperty("normExpected").GetDecimal());
+    }
+
+    /// <summary><b>Kind N</b> (R-38; unconditional). The part-time fraction read is best-effort,
+    /// like <c>awayToday</c>: when it throws, the overview still answers 200, every row falls back to
+    /// fraction 1.0 (the part-time row shows 162.80 again) and no row is dropped.
+    ///
+    /// <para><b>Red conditions (argued; no assertion fails on today's code).</b> The fact names
+    /// <see cref="IPartTimeFractionBatchReader"/>, which TASK-14602 creates, and before that task the
+    /// overview answered 200 and 162.80, so no assertion of this fact fails on that code. Its RED is
+    /// the named MUTATION: remove the <c>try/catch (Exception) when (!ct.IsCancellationRequested)</c>
+    /// around <c>partTimeFractionReader.GetFractionsAtAsync</c> in <c>ApprovalEndpoints.cs</c> (the
+    /// (2h1) block, ~:1071) so the failure propagates. The throwing reader then makes the endpoint
+    /// answer 500 and the <c>HttpStatusCode.OK</c> assertion trips. Docker-gated: CI-pending, not run
+    /// locally.</para></summary>
+    [Fact]
+    public async Task TeamOverview_ProfileReadFails_FallsBackToFullTime_No500()
+    {
+        await UpsertFractionAsync(Emp, 0.811m);
+        await UpsertFractionAsync(EmpNoPeriod, 1.000m);
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED", new DateOnly(2026, 3, 1), new DateOnly(2026, 3, 31));
+
+        // Baseline roster from the healthy host: the rows that must survive the failure.
+        var healthyIds = (await GetTeamOverviewAsync(Mgr, 2026, 3)).Select(EmployeeId).OrderBy(i => i).ToList();
+        Assert.Contains(Emp, healthyIds);
+        Assert.Contains(EmpNoPeriod, healthyIds);
+
+        using var failingHost = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IPartTimeFractionBatchReader>();
+                services.AddSingleton<IPartTimeFractionBatchReader>(new ThrowingPartTimeFractionReader());
+            }));
+        var client = failingHost.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", MintLeaderToken(Mgr, "STY02"));
+
+        var rsp = await client.GetAsync("/api/approval/team-overview?year=2026&month=3");
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var rows = body.GetProperty("employees").EnumerateArray().ToList();
+        Assert.Equal(healthyIds, rows.Select(EmployeeId).OrderBy(i => i).ToList());
+        Assert.Equal(162.80m, rows.Single(r => EmployeeId(r) == Emp).GetProperty("normExpected").GetDecimal());
+        Assert.Equal(162.80m, rows.Single(r => EmployeeId(r) == EmpNoPeriod).GetProperty("normExpected").GetDecimal());
+    }
+
+    /// <summary>The live-profile fraction for a seeded user: updates the open row when a boot seeder
+    /// already wrote one, otherwise inserts an open-ended row covering every month-end date.</summary>
+    private async Task UpsertFractionAsync(string employeeId, decimal fraction)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var upd = new NpgsqlCommand(
+            "UPDATE employee_profiles SET part_time_fraction = @f WHERE employee_id = @emp AND effective_to IS NULL", conn);
+        upd.Parameters.AddWithValue("f", fraction);
+        upd.Parameters.AddWithValue("emp", employeeId);
+        if (await upd.ExecuteNonQueryAsync() > 0)
+            return;
+        await using var ins = new NpgsqlCommand(
+            """
+            INSERT INTO employee_profiles (employee_id, part_time_fraction, effective_from, effective_to, employment_category)
+            VALUES (@emp, @f, '0001-01-01', NULL, (SELECT u.employment_category FROM users u WHERE u.user_id = @emp))
+            """, conn);
+        ins.Parameters.AddWithValue("emp", employeeId);
+        ins.Parameters.AddWithValue("f", fraction);
+        await ins.ExecuteNonQueryAsync();
+    }
+
+    private sealed class ThrowingPartTimeFractionReader : IPartTimeFractionBatchReader
+    {
+        public Task<IReadOnlyDictionary<string, decimal>> GetFractionsAtAsync(
+            IReadOnlyCollection<string> employeeIds, DateOnly asOfDate, CancellationToken ct = default)
+            => throw new InvalidOperationException("S146 test: the part-time fraction read is down.");
+    }
 }
