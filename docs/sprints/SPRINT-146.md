@@ -215,15 +215,46 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
   - Fake resolvers on correction paths may gain the in-tx surface.
   - New: a **static chain census** of the Docker facts that export, correct or reopen several months for one employee, so CI-W2 holds no surprise. A changed asserted value is a STOP.
 
+**TASK-14605-T returned** (`3add5847`, then `57b011cf`).
+- **Census:**
+  - Constructions: 22 files, found by `priorPeriodApprovalReader:`. The brief's command finds only 20, because two files use target-typed `new(`.
+  - Bodies: 16 in 8 files. Direct-call sites: 65.
+  - The LEAVE hits all stay, `RegressionTests.cs:44, :54` included. Nothing is unclassified.
+  - A seventh non-zero opening, `ReplayFrozenInputsTests.cs:96`, is served by seeding inside `ReplayTestKit`.
+- **The static chain census** found no Docker fact whose status or asserted value changes, so nothing was re-seeded for the chain.
+- **One STOP, ruled.** `EmploymentWindowSegmentSkipTests.Shim_PreHireSegment_…` asserted a single window read. The second read is R-28's `[P.start, M.end]` derivation read, which is intended, so the fact now pins exactly the two reads.
+- **One offer, accepted.** `FrozenInputsSlotTests` is seeded at 12.5 again, so its "0 would be a wrong substitute" check is not vacuous.
+- **Gate:** 0 errors / 145 warnings; Unit 1518, DemoSeed 170, Regression non-Docker 130.
+
+**Step 5a on the production code** (in parallel with 14605-T, against a detached review checkout at `f6d3f780`):
+- 5α PASS.
+- Fable APPROVED-WITH-WARNINGS.
+- Codex REQUEST-CHANGES, on one BLOCKER. Neither calculating route required a whole calendar month: `/recalculate` accepts any range, and `/calculate-and-export` accepts any APPROVED range, including a legacy `WEEKLY` row. So a week's closing would be stored as the month's closing, and the next month would chain from it.
+
+**Rulings R-47 … R-53** (adjudicator, `.claude/reviews/S146-TASK-14605-5a-adjudication.md`):
+- **R-47:** the BLOCKER stands. Both calculating routes accept only one whole calendar month (400 `payroll-period-not-a-month`, before any read), with invariant throws at the two writers (`RecalculateAsync`, `FlexLedgerWriteFor`). The calculation service itself still calculates partial periods, which tested direct calls use; it writes no ledger.
+  - **Owner informed:** a legacy `WEEKLY` approval can no longer be sent through `/calculate-and-export`. It was already unusable there (the second week answered 409 and locked the month). The approval flow has produced only MONTHLY periods since S127.
+  - The pre-existing case where a partial `/recalculate` replaced the month's diff baseline closes with it.
+  - The Orchestrator re-ran the census on `57b011cf`: no partial-period date in the tests reaches either writer.
+- **R-48 (N7):** kept as built. A month that lost every employed day keeps the triple it was paid at. The hint is widened: M+1 is named when exported, and an ordinary correction of M+1 derives `REHIRE 0`. The parameter is renamed `nextMonthOpeningStale`.
+- **R-49:** the event stays structured; Codex W3's prose-on-the-event is declined. The catalog row gets the two reading rules at D7.
+- **R-50:** `EmptyLineSetContentHash` is deleted; `TryReadCurrentEffectiveLinesForUpdateAsync` is kept, because three facts read it.
+- **R-51:** one comment sentence says why the `UNTRACKED` set-aside is safe: M < S is permanent.
+- **R-52:** records and the D7 list.
+  - **Replay residual** (below the floor; recorded, not built): `PlanInputs.OpeningFlexProvenance` is outside `IsComplete`. A damaged manifest that lost the member replays as if it were pre-S146, so an `UNTRACKED` month would replay with `FLEX_PAYOUT` instead of refusing.
+- **R-53:** the fix-up goes to the same agent on the branch. Both lenses re-review the combined branch. TASK-14606 gains the R-47/R-48/R-49 pins (brief updated, Do 6b), and TASK-14608's help text also says "one whole calendar month".
+
+**Fix-up dispatched** (R-47, R-48, R-50, R-51; `src/**` only).
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-23, master `5087ab88` (wave 1 and wave 2a merged, D7 part 1), local only; origin/master `0f02b484` |
 | **Phase** | wave 2b in progress. Wave 2a gate: O-1 green on `384484cb` (0 / 145, Unit 1518, DemoSeed 170, Regression non-Docker 130) |
-| **Tasks** | Wave 1 and wave 2a DONE (see the ledger). **TASK-14605 returned** (`worktree-agent-a7d25c1f742b46097` @ `1992e4d5` + doc fix-up `f6d3f780`; production build verified by the Orchestrator; decisions in § Wave 2b). **TASK-14605-T dispatched** in the same worktree |
+| **Tasks** | Wave 1 and wave 2a DONE (see the ledger). TASK-14605 (`1992e4d5`, `f6d3f780`) and TASK-14605-T (`3add5847`, `57b011cf`) are on `worktree-agent-a7d25c1f742b46097`. Step 5a on the production code is done (Codex REQUEST-CHANGES → rulings R-47..R-53). **The 5a fix-up is dispatched** to the same agent |
 | **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 part 1 DONE (`5087ab88`). D7 part 2 after 14605 merges (ADR-034 D3, ADR-013, QUAL-188 BUILT, QUAL-201 closed with R-5's text, the catalog rows); part 3 after 14607 (ADR-018:478) |
-| **Pending gates** | 14605 + 14605-T merge checklist: build · 5α (union) · 5a Fable (with N7 as a named question) · 5a Codex; then O-1; then wave 2c (14606) and CI-W2 |
+| **Pending gates** | On the fix-up's return: 5α (the test diff and the fix-up) and both lenses re-review the combined branch (Codex must move off REQUEST-CHANGES); then merge, O-1 and D7 part 2; then wave 2c (14606) and CI-W2 |
 | **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · CI-W2 — · C-2 — · close — |
 | **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
-| **Next action** | On 14605-T's return: rule on any STOP from its chain census, then run the 14605 merge checklist on the combined branch; on merge, O-1 and D7 part 2, then dispatch TASK-14606 (pack `s146-ctx/TASK-14606.md` is built) |
+| **Next action** | On the fix-up's return: verify the build, then run 5α and the dual-lens re-review on the combined branch. On merge: O-1, D7 part 2 (the R-52 list), then dispatch TASK-14606 (pack `s146-ctx/TASK-14606.md` is built; the brief has Do 6b) |
