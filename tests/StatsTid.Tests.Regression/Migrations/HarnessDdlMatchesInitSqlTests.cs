@@ -87,6 +87,7 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
 
     private static readonly string[] HoursTables = { "time_entries_projection", "absences_projection" };
     private static readonly string[] ManifestTables = { "segment_manifests" };
+    private static readonly string[] PayrollExportTables = { "payroll_export_records" };
 
     /// <summary>A Postgres container that hosts the two fresh databases of the row under test.</summary>
     private TestFixtures.DockerHarness _host = null!;
@@ -107,7 +108,8 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
     [InlineData("ProjectionSchemaTestFixture")]
     [InlineData("TxContractTests")]
     [InlineData("TestFixtures.DockerHarness.SchemaDdl")]
-    public async Task HarnessDdl_HoursTablesAndManifests_MatchInitSqlSchema(string copy)
+    [InlineData("PayrollExportRecordsTestSchema")]
+    public async Task HarnessDdl_Copies_MatchInitSqlSchema(string copy)
     {
         var (ddl, tables) = ResolveCopy(copy);
 
@@ -218,6 +220,12 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
         "ProjectionSchemaTestFixture" => (ProjectionSchemaTestFixture.Ddl, HoursTables),
         "TxContractTests" => (StatsTid.Tests.Regression.Infrastructure.TxContractTests.SchemaDdl, HoursTables),
         "TestFixtures.DockerHarness.SchemaDdl" => (TestFixtures.DockerHarness.SchemaDdl, ManifestTables),
+        // S146 / TASK-14601-T (kind R, holds today): the copy's approval_periods FKs organizations, so the
+        // prerequisite DDL (PhaseE.AuditProjectionTestSchema) goes first on the fresh database.
+        "PayrollExportRecordsTestSchema" => (
+            StatsTid.Tests.Regression.PhaseE.AuditProjectionTestSchema.Ddl + "\n"
+                + StatsTid.Tests.Regression.Payroll.PayrollExportRecordsTestSchema.Ddl,
+            PayrollExportTables),
         _ => throw new ArgumentOutOfRangeException(nameof(copy), copy, "Unknown harness copy."),
     };
 

@@ -90,7 +90,17 @@ public sealed record PlanInputs(
     [property: JsonRequired] string EntriesDigest,
     [property: JsonRequired] string AbsencesDigest,
     [property: JsonRequired] IReadOnlyList<string> ConfigFingerprints,
-    [property: JsonRequired] string EvaluationModel);
+    [property: JsonRequired] string EvaluationModel)
+{
+    /// <summary>
+    /// The frozen provenance of <see cref="OpeningFlexBalance"/> (S146): <c>LEDGER_START</c>,
+    /// <c>CHAINED</c>, <c>REHIRE</c> or <c>UNTRACKED</c>. A replay copies it onto its result.
+    /// Optional and NOT <c>[JsonRequired]</c>: absent in a record stored before S146, read as
+    /// null. Deliberately non-positional so no existing construction changes, and deliberately
+    /// outside the completeness check of a stored record.
+    /// </summary>
+    public string? OpeningFlexProvenance { get; init; }
+}
 
 /// <summary>
 /// The per-piece profile inputs of one stretch of employed days, frozen into
