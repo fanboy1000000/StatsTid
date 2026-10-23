@@ -56,7 +56,7 @@ public sealed class ManifestProjectionRebuildTests : IAsyncLifetime
             sources: TestFixtures.OkStraddleSources(),
             options: PlannerOptions.Default,
             // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
-            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            // BuildPlanWithHistoriesAsync); without it MapSegmentToExportLinesAsync throws.
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
@@ -65,6 +65,10 @@ public sealed class ManifestProjectionRebuildTests : IAsyncLifetime
         // Snapshot the row pre-truncate so we can compare exactly after rebuild.
         var pre = await ReadSingleRowAsync(plan.ManifestId);
         Assert.NotNull(pre);
+
+        // S146 R-24: the rebuild reads the manifest from events; once the manifest rides the outbox it
+        // reaches events only after a publisher pass, so drain Payroll's partition first (a no-op today).
+        await PayrollOutboxDrain.DrainAsync(_harness.Factory);
 
         // Truncate.
         await using (var conn = new NpgsqlConnection(_harness.ConnectionString))

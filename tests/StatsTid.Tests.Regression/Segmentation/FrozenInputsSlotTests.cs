@@ -135,6 +135,10 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
         // S145 R-22:
         var (pcs, manifestId, forward) = await ForwardCalcAsync("EMP-FIS-ABSENT", previousFlexBalance: 0m);
 
+        // S146 R-24: the replay falls back to the events copy once the projection row is gone; drain
+        // Payroll's outbox partition first so that copy exists (a no-op until the manifest rides the outbox).
+        await PayrollOutboxDrain.DrainAsync(_harness.Factory);
+
         await ExecuteAsync("DELETE FROM segment_manifests WHERE manifest_id = @id", manifestId);
 
         var replay = await pcs.ReplayAsync(manifestId);

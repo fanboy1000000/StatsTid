@@ -202,6 +202,11 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
         AssertStringEncoded(liveSegmentsJson, "live forward-calc write");
         Assert.Equal(expectedCauses, ParseBoundaryCauseNames(liveSegmentsJson));
 
+        // S146 R-24: drain Payroll's outbox partition so the manifest event is in events before the
+        // rebuild reads it (a no-op until the manifest rides the outbox). The live-row read above is
+        // from the projection and does not need it.
+        await PayrollOutboxDrain.DrainAsync(_harness.Factory);
+
         // Truncate then rebuild from the event store (the ops drift-recovery path).
         await using (var conn = new NpgsqlConnection(_harness.ConnectionString))
         {
