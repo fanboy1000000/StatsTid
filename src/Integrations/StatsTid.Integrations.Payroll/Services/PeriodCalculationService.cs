@@ -991,6 +991,20 @@ public sealed class PeriodCalculationService
             return null;
 
         var result = outcome.Result;
+
+        // S146 R-47 — the writer's invariant: a ledger write is for one whole calendar month (the record's key; its closing
+        // is the month's, which the next month opens from). /calculate-and-export refuses a partial period with 400
+        // payroll-period-not-a-month before the calculation; reaching this with one is a programmer error.
+        if (!FlexLedgerOpening.IsWholeCalendarMonth(result.PeriodStart, result.PeriodEnd))
+        {
+            throw new InvalidOperationException(
+                $"PeriodCalculationService.FlexLedgerWriteFor: the period " +
+                $"[{result.PeriodStart.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}.." +
+                $"{result.PeriodEnd.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}] " +
+                $"for employee '{result.EmployeeId}' is not one whole calendar month, so its closing is not the month's and " +
+                "must not be recorded as it (R-47). Nothing was written.");
+        }
+
         var employeeId = result.EmployeeId;
         var month = FlexLedgerOpening.MonthStart(result.PeriodStart);
         return new FlexLedgerWrite

@@ -364,6 +364,11 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     if (RefuseBodyOpeningBalance(request.PreviousFlexBalance) is { } openingRefusal)
         return openingRefusal;
 
+    // S146 R-47 (Codex 5a BLOCKER): the period must be one whole calendar month. Placed after the body refusals and
+    // before the approval read, so nothing is read for a malformed period (a legacy WEEKLY APPROVED row answers 400).
+    if (RefusePeriodNotAMonth(request.PeriodStart, request.PeriodEnd) is { } periodRefusal)
+        return periodRefusal;
+
     // Approval guard: period must be APPROVED before payroll export
     var approval = await approvalRepo.GetByEmployeeAndPeriodAsync(
         request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd, ct);
@@ -607,6 +612,11 @@ app.MapPost("/api/payroll/recalculate", async (
     // the recorded ledger. Nothing is calculated or written.
     if (RefuseBodyOpeningBalance(request.PreviousFlexBalance) is { } openingRefusal)
         return openingRefusal;
+
+    // S146 R-47 (Codex 5a BLOCKER): the period must be one whole calendar month. Placed after the body refusals and
+    // before the idempotency lookup (a database read), so nothing is read or written for a malformed period.
+    if (RefusePeriodNotAMonth(request.PeriodStart, request.PeriodEnd) is { } periodRefusal)
+        return periodRefusal;
 
     var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
     Guid? correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var corrValues)
@@ -907,6 +917,23 @@ static IResult? RefuseBodyOpeningBalance(decimal? previousFlexBalance) =>
             kind = "payroll-opening-balance-not-accepted"
         }, statusCode: 400)
         : null;
+
+// S146 TASK-14605 fix-up (ruling R-47; Codex 5a BLOCKER) — the ONE refusal for "this period is not one whole calendar
+// month". Payroll records, locks and corrects a calendar month (ADR-034 D3/D5), and since S146 the month's export record
+// carries the flex balance the month closed at, which the next month opens from (R-14). A partial period would store its
+// own closing as the month's and the next month would chain from it; on the correction route it would also replace the
+// month's diff baseline with a partial period's lines. Both calculating routes therefore accept only periodStart = the
+// 1st and periodEnd = the last day of the same month. 400 like the two body refusals (the request's shape, not the
+// month's data). The body is FIXED: no employee id, no dates.
+static IResult? RefusePeriodNotAMonth(DateOnly periodStart, DateOnly periodEnd) =>
+    FlexLedgerOpening.IsWholeCalendarMonth(periodStart, periodEnd)
+        ? null
+        : Results.Json(new
+        {
+            success = false,
+            error = "The period must be one whole calendar month: periodStart the first day and periodEnd the last day of the same month. Payroll records, locks and corrects a calendar month, and the flex ledger chains from the month's closing balance, so a partial period cannot be calculated and exported or corrected. Nothing was calculated, written or exported.",
+            kind = "payroll-period-not-a-month"
+        }, statusCode: 400);
 
 // S146 TASK-14605 (QUAL-188; R-14) — the ONE response for a flex-ledger refusal. 409 because the month itself is
 // fine but the ledger is in a state the operator can fix (export or correct the named month first) or that a retry

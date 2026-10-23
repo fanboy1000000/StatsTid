@@ -252,6 +252,14 @@ public static class FlexLedgerOpening
 
     internal static DateOnly MonthStart(DateOnly day) => new(day.Year, day.Month, 1);
 
+    /// <summary>
+    /// R-47: true when [<paramref name="start"/>, <paramref name="end"/>] is exactly one calendar month, the only period a
+    /// ledger write may be made for: the record is keyed by the calendar month and its closing is the MONTH's closing,
+    /// which the next month opens from. A partial period has no place in the chain.
+    /// </summary>
+    public static bool IsWholeCalendarMonth(DateOnly start, DateOnly end) =>
+        start.Day == 1 && end == start.AddMonths(1).AddDays(-1);
+
     private static string Format(DateOnly month) =>
         month.ToString(FlexLedgerRefusalException.MonthFormat, CultureInfo.InvariantCulture);
 }

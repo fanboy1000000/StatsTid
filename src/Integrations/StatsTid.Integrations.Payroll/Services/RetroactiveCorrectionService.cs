@@ -148,7 +148,8 @@ public sealed class RetroactiveCorrectionService
     /// null, so no flex correction line is emitted and a payout already made is never clawed back; the balances stay
     /// null. A month that lost every EMPLOYED day (a windows edit) derives no opening (the function's precondition):
     /// its line diff is corrected, its recorded balances stay unchanged, and its event says so (no opening used,
-    /// no provenance, the same closing before and after; reviewer c3 N7, decided: leave unchanged, not refuse).
+    /// no provenance, the same closing before and after; reviewer c3 N7, decided: leave unchanged, not refuse),
+    /// and the next month is named when M held a ledger triple (R-48).
     /// </para>
     /// </summary>
     /// <exception cref="ManifestNotPersistedException">The recalculation's manifest was not persisted (or a
@@ -168,6 +169,19 @@ public sealed class RetroactiveCorrectionService
         string? previousOkVersion = null,
         CancellationToken ct = default)
     {
+        // S146 R-47 — the service's own invariant: a correction is of one whole calendar month (ADR-034 D5). The route
+        // refuses a partial period with 400 payroll-period-not-a-month before any read; reaching this service with one is
+        // a programmer error, never a month to correct: it would replace the month's diff baseline with a partial period's
+        // lines and store a partial period's closing as the month's, which the next month opens from.
+        if (!FlexLedgerOpening.IsWholeCalendarMonth(periodStart, periodEnd))
+        {
+            throw new InvalidOperationException(
+                $"RetroactiveCorrectionService invariant violated: the period " +
+                $"[{periodStart.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}.." +
+                $"{periodEnd.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}] " +
+                $"for employee '{profile.EmployeeId}' is not one whole calendar month (R-47). Nothing was written.");
+        }
+
         // Coherent-pair validation: either both split inputs are present or neither.
         // Mismatched inputs indicate a caller bug and must not silently fall through.
         // This guard is independent of segmentation — it pins the public contract of
@@ -385,6 +399,10 @@ public sealed class RetroactiveCorrectionService
             // that was really paid produces no correction line and is never clawed back. The set-aside payout lines
             // stay in the new effective baseline: nothing reversed them, so they are still what payroll holds
             // (current_effective_lines = the original plus every correction line, wage type by wage type).
+            // This is correct only because M < S is permanent: no month before the ledger start can ever become a
+            // ledger record (case 3a refuses a first export, case 3b never stores, case 2 applies only to an empty
+            // ledger, and no code deletes a record), so every later correction of M is UNTRACKED again and never diffs
+            // a tracked FLEX_PAYOUT against the set-aside one.
             var diffBaseline = lockedBaseline;
             var diffNew = newResult.ExportLines;
             var newEffectiveLines = newResult.ExportLines;
@@ -409,13 +427,17 @@ public sealed class RetroactiveCorrectionService
                 ? closingBefore
                 : untracked ? null : newResult.ClosingFlexBalance;
 
-            // S145 TASK-14512 — Q7 (b), ruling R37: does this correction leave the NEXT month stale?
-            // A plain read inside this tx (READ COMMITTED: it sees every export committed before it runs);
-            // it takes no lock and writes nothing to the next month — the response, the event and the
-            // audit row only name it. S146 TASK-14605 (C4, R-10): also when this correction changed M's closing,
-            // which M+1 opened at.
+            // S145 TASK-14512 — Q7 (b), ruling R37: does this correction leave the NEXT month stale? A plain read inside this
+            // tx (READ COMMITTED); it takes no lock and writes nothing to the next month — the response, the event and the
+            // audit row only name it. S146 TASK-14605 (C4, R-10): also when this correction changed M's closing, which M+1
+            // opened at. S146 R-48 (5a: Fable W1 = Codex W2): and when M lost every EMPLOYED day while holding a ledger
+            // triple — M+1 may have CHAINED from that closing, and a fresh derivation of M+1 now gives REHIRE 0 (case 4c),
+            // so M+1 is stale although M's closing did not move. M's triple stays as M was paid at (N7 (a)); only the hint
+            // widens. A raw M (no triple) is not named: M+1 cannot have chained from it (case 4b refuses).
+            var nextMonthOpeningStale = closingBefore != closingAfter
+                || (flexOpening is null && lockedRecord.OpeningBalance is not null);
             nextPeriod = await NextPeriodToRecalculateAsync(
-                conn, tx, profile.EmployeeId, corrYear, corrMonth, closingChanged: closingBefore != closingAfter, ct);
+                conn, tx, profile.EmployeeId, corrYear, corrMonth, nextMonthOpeningStale, ct);
 
             // Emit RetroactiveCorrectionRequested (MANDATORY — see BLOCKER 2 above).
             // The audit trail records what actually ran, never what the request body said:
@@ -449,7 +471,8 @@ public sealed class RetroactiveCorrectionService
                 // S146 TASK-14605 (C1; makes ADR-013 item 2 true): the opening this recalculation used, the month's
                 // closing before and after, and the opening's provenance. UNTRACKED: no opening, no closing after,
                 // provenance UNTRACKED (flex not tracked). No EMPLOYED day: no opening, no provenance, and the same
-                // closing before and after (the balances were left unchanged, reviewer c3 N7).
+                // closing before and after (the balances were left unchanged, reviewer c3 N7), and the next month is
+                // named when M held a ledger triple (R-48).
                 OpeningFlexBalanceUsed = flexOpening is null || untracked ? null : flexOpening.Balance,
                 ClosingFlexBalanceBefore = closingBefore,
                 ClosingFlexBalanceAfter = closingAfter,
@@ -604,24 +627,26 @@ public sealed class RetroactiveCorrectionService
     ///
     /// <para>
     /// <b>S146 / TASK-14605 (C4, R-10) — the closing test, in addition.</b> M+1 opened at M's recorded closing
-    /// balance (R-14 case 4a). When this correction changed that closing (<paramref name="closingChanged"/>,
-    /// any difference including a first value where there was none), M+1's opening is stale too, so M+1 is
-    /// named whenever it is exported, even when M ends on a Sunday (May 2026 ends on Sunday 31 May). The Sunday
-    /// test is the F1 trigger the overtime/flex model program removes; the closing test is the one that stays.
-    /// ADR-013 holds: nothing recalculates M+1 automatically.
+    /// balance (R-14 case 4a). When this correction changed that closing (any difference including a first value
+    /// where there was none), or when M lost every EMPLOYED day while holding a ledger triple (R-48): M+1 may have
+    /// chained from that closing and would now derive <c>REHIRE 0</c>, M+1's opening is stale
+    /// (<paramref name="nextMonthOpeningStale"/>), so M+1 is named whenever it is exported, even when M ends on a
+    /// Sunday (May 2026 ends on Sunday 31 May). The Sunday test is the F1 trigger the overtime/flex model program
+    /// removes; the closing test is the one that stays. ADR-013 holds: nothing recalculates M+1 automatically.
     /// </para>
     /// </summary>
     private static async Task<(DateOnly Start, DateOnly End)?> NextPeriodToRecalculateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
-        string employeeId, int year, int month, bool closingChanged, CancellationToken ct)
+        string employeeId, int year, int month, bool nextMonthOpeningStale, CancellationToken ct)
     {
         var monthStart = new DateOnly(year, month, 1);
         var monthEnd = monthStart.AddMonths(1).AddDays(-1);
 
         // The F1 trigger (owner ruling Q3 = F1; the model program removes it): the closing week ends inside M (M's
-        // last day is a Sunday), so M settled it and M+1 paid none of it. Unless M's closing balance changed (C4):
-        // then M+1's opening is stale whatever weekday M ends on.
-        if (WeeklyContext.WeekEnd(monthEnd) == monthEnd && !closingChanged)
+        // last day is a Sunday), so M settled it and M+1 paid none of it. Unless M+1's opening is stale
+        // (nextMonthOpeningStale: M's closing changed, C4, or M lost every EMPLOYED day while holding a ledger triple,
+        // R-48): then M+1 is named whatever weekday M ends on.
+        if (WeeklyContext.WeekEnd(monthEnd) == monthEnd && !nextMonthOpeningStale)
             return null;
 
         var nextStart = monthStart.AddMonths(1);

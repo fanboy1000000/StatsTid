@@ -108,9 +108,9 @@ public sealed class PayrollExportService
     /// the raw routes and under <c>UNTRACKED</c>.</description></item>
     /// <item><description><b>A zero-line month</b> (R-3): the calculating route passes the record's identity in
     /// <see cref="FlexLedgerWrite"/>, so a month with an EMPLOYED day but no lines still writes its record (lines
-    /// empty, balances set, corrections-only from then on). The empty line set hashes like any other through
-    /// <see cref="PayrollExportManifest.ComputeContentHash"/>: <see cref="EmptyLineSetContentHash"/>. Nothing is
-    /// delivered for it (no lines).</description></item>
+    /// empty, balances set, corrections-only from then on). The empty line set hashes like any other line set through
+    /// <see cref="PayrollExportManifest.ComputeContentHash"/> (the canonical JSON <c>[]</c>), defined once there. Nothing
+    /// is delivered for it (no lines).</description></item>
     /// <item><description><b>The same-hash no-op</b> (R-16) additionally compares the derived (opening,
     /// provenance) and the computed closing with the recorded triple; any difference is the existing
     /// <see cref="PayrollExportConflictException"/> ("the balance changed; use a correction"). <c>UNTRACKED</c>
@@ -555,14 +555,6 @@ public sealed class PayrollExportService
         new($"PayrollExportService.ExportAsync: the calculating route's flex-ledger write for employee " +
             $"'{flex.EmployeeId}' {flex.Year}-{flex.Month:D2} is {flex.Provenance} but carries no {which} balance; " +
             "a tracked month always has both. Nothing was written.");
-
-    /// <summary>
-    /// S146 / TASK-14605 (R-3) — the content hash of a month with no lines: the ordinary hash of the empty line set
-    /// (the canonical JSON <c>[]</c>), defined once by <see cref="PayrollExportManifest.ComputeContentHash"/> and named
-    /// here so a zero-line record's hash is recognisable.
-    /// </summary>
-    public static readonly string EmptyLineSetContentHash =
-        PayrollExportManifest.ComputeContentHash(Array.Empty<PayrollExportLine>());
 
     private readonly record struct ExportGroupKey(string EmployeeId, int Year, int Month);
 
