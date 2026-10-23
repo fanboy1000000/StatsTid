@@ -199,9 +199,14 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
     /// </para>
     ///
     /// Red conditions (Docker-gated — cannot run locally; CI-verified):
-    /// (0) On today's master the host ignores the seeded rows (hours come from the body, which is empty):
-    /// nothing is calculated into export lines, no record is written, and the "exported once" assertion trips
-    /// (0 rows, expected 1). The merarbejde and payout assertions pass vacuously today.
+    /// (0) On the pre-S145 master the host ignored the seeded rows (hours came from the body, which was empty):
+    /// nothing was calculated into export lines and no record was written, so the "exported once" assertion
+    /// tripped (0 rows, expected 1). <b>Since S146 R-3 that guard alone is vacuous</b> (an employed month with no
+    /// lines writes a zero-line record, so a host that saw no hours would still show one record); the fact
+    /// (S146 TASK-14606, Step 5a W-1; kind R) therefore reads the record's lines back and asserts one
+    /// <c>NORMAL_HOURS</c> line per September weekday. RED (0), restated: a host that sees no hours writes the zero-line
+    /// record, and the 22-dates assertion fails with an empty list. The merarbejde and payout assertions pass
+    /// vacuously in that case.
     /// (1) mutation MD-21 — the <c>IPriorPeriodApprovalReader</c> registration removed (PCS gets a null reader;
     /// R21's throw escapes the TestServer, 500 on Kestrel): the fact fails before or at the 200 assertion.
     /// MD-42 and MD-20 do not trip this fact (partition table: "Not: RE2").
@@ -221,13 +226,23 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
         Assert.True(status == HttpStatusCode.OK, $"expected 200, got {(int)status}: {json}");
         var result = ReadResult(json);
         var exportRecords = await CountExportRecordsAsync(employeeId, 2026, 9);
+        // S146 TASK-14606 (Step 5a W-1): the record's lines, read back. "One export record" no longer proves that hours
+        // were read, because an employed month with NO lines now writes a zero-line record too (R-3).
+        var recordedLines = await ReadExportedLinesAsync(employeeId, 2026, 9);
+        var recordedNormalDates = recordedLines
+            .Where(l => l.SourceTimeType == "NORMAL_HOURS")
+            .Select(l => l.PeriodStart) // per-line semantics: PeriodStart == PeriodEnd == the line item's date
+            .OrderBy(d => d)
+            .ToList();
 
         Assert.Multiple(
             () => Assert.Empty(LineItemsOf(result, "MERARBEJDE")),
             () => Assert.Empty(result.ExportLines.Where(l => l.SourceTimeType == "MERARBEJDE")),
             () => Assert.Empty(LineItemsOf(result, "FLEX_PAYOUT")),
-            // Non-vacuity guard: hours WERE read, so the month had something to export.
-            () => Assert.Equal(1, exportRecords));
+            // Non-vacuity guard: hours WERE read. One export record is not enough (R-3's zero-line record also makes
+            // one); the record must hold NORMAL_HOURS lines, one per September weekday (the 22 weekdays; none dated 31 Aug).
+            () => Assert.Equal(1, exportRecords),
+            () => Assert.Equal(WeekdaysBetween(Sep01, Sep30).ToList(), recordedNormalDates));
     }
 
     // ═════════════════════════════════════════════════════════════════════

@@ -179,4 +179,133 @@ public class AuditPayloadFormatPinTests
             "{\"kind\":\"TerminationSettled\",\"paragraph\":\"\\u00A726\\u002B\\u00A77\",\"employeeId\":\"EMP042\",\"entitlementType\":\"VACATION\",\"entitlementYear\":2025,\"sequence\":1,\"payoutDays\":11.25,\"modregningDays\":0,\"unearnedAdvanceDays\":0,\"carryoverIn\":2.5,\"okVersion\":\"OK24\"}";
         Assert.Equal(golden, row.DetailsJson);
     }
+
+    // ── S146 / TASK-14606 (AC-C7, R-49): the flex-ledger keys on the two payroll mappers ─────────
+
+    private static PayrollExportGenerated FlexExport(decimal? opening, decimal? closing, string? provenance) => new()
+    {
+        EmployeeId = "EMP042",
+        Year = 2026,
+        Month = 6,
+        ExportId = Guid.Parse("11111111-1111-1111-1111-111111111111"),
+        ContentHash = "abc123",
+        ExportedAt = new DateTimeOffset(2026, 7, 1, 8, 0, 0, TimeSpan.Zero),
+        OpeningFlexBalance = opening,
+        ClosingFlexBalance = closing,
+        FlexProvenance = provenance,
+    };
+
+    /// <summary>
+    /// S146 (AC-C7) — the export mapper's details carry <c>openingFlexBalance</c>, <c>closingFlexBalance</c> and
+    /// <c>flexProvenance</c>, in that order, after the existing keys; a zero opening is WRITTEN (zero is a value, not
+    /// absent). Kind N (names members this sprint creates). Red conditions: the golden below; a mapper that leaves a key
+    /// out, renames it, drops a zero, or reorders fails. The key names are the catalog's
+    /// (<c>audit-projection-catalog.md</c> row <c>PayrollExportGenerated</c>).
+    /// </summary>
+    [Fact]
+    public void PayrollExportGenerated_FlexKeys_WhenSet_AreCarried()
+    {
+        var row = new PayrollExportGeneratedAuditMapper().Map(FlexExport(0m, -3.5m, "LEDGER_START"), Ctx);
+
+        const string golden =
+            "{\"action\":\"PAYROLL_EXPORTED\",\"employeeId\":\"EMP042\",\"year\":2026,\"month\":6,\"exportId\":\"11111111-1111-1111-1111-111111111111\",\"contentHash\":\"abc123\",\"exportedAt\":\"2026-07-01T08:00:00+00:00\",\"openingFlexBalance\":0,\"closingFlexBalance\":-3.5,\"flexProvenance\":\"LEDGER_START\"}";
+        Assert.Equal(golden, row.DetailsJson);
+    }
+
+    /// <summary>
+    /// S146 (AC-C7) — a raw export (all three null) omits the three keys, so its details are byte-identical to the
+    /// pre-S146 golden of <c>PayrollExportGenerated_PayloadFormat_IsByteStable</c>. Kind N/R. Red conditions: the golden
+    /// has none of the three keys; a mapper that writes them as null fails.
+    /// </summary>
+    [Fact]
+    public void PayrollExportGenerated_FlexKeys_WhenNull_AreOmitted()
+    {
+        var row = new PayrollExportGeneratedAuditMapper().Map(FlexExport(null, null, null), Ctx);
+
+        const string golden =
+            "{\"action\":\"PAYROLL_EXPORTED\",\"employeeId\":\"EMP042\",\"year\":2026,\"month\":6,\"exportId\":\"11111111-1111-1111-1111-111111111111\",\"contentHash\":\"abc123\",\"exportedAt\":\"2026-07-01T08:00:00+00:00\"}";
+        Assert.Equal(golden, row.DetailsJson);
+    }
+
+    private static RetroactiveCorrectionRequested FlexCorrection(
+        decimal? openingUsed, decimal? before, decimal? after, string? provenance) => new()
+    {
+        EmployeeId = "EMP042",
+        OriginalPeriodStart = new DateOnly(2026, 6, 1),
+        OriginalPeriodEnd = new DateOnly(2026, 6, 30),
+        AgreementCode = "HK",
+        OkVersion = "OK26",
+        Reason = "r",
+        CorrectedByActorId = "ADMIN-1",
+        CorrectionLineCount = 2,
+        TotalDifferenceHours = 1.5m,
+        ManifestId = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+        OpeningFlexBalanceUsed = openingUsed,
+        ClosingFlexBalanceBefore = before,
+        ClosingFlexBalanceAfter = after,
+        FlexProvenance = provenance,
+    };
+
+    private const string CorrectionPrefix =
+        "{\"employeeId\":\"EMP042\",\"originalPeriodStart\":\"2026-06-01\",\"originalPeriodEnd\":\"2026-06-30\",\"agreementCode\":\"HK\",\"okVersion\":\"OK26\",\"reason\":\"r\",\"correctedByActorId\":\"ADMIN-1\",\"correctionLineCount\":2,\"totalDifferenceHours\":1.5,\"manifestId\":\"22222222-2222-2222-2222-222222222222\"";
+
+    /// <summary>
+    /// S146 (AC-C7) — the correction mapper's details carry <c>openingFlexBalanceUsed</c>, <c>closingFlexBalanceBefore</c>,
+    /// <c>closingFlexBalanceAfter</c> and <c>flexProvenance</c> when set (a CHAINED correction whose closing moved).
+    /// Kind N. Red conditions: the golden; a mapper that omits or renames any key, or mixes before and after, fails.
+    /// </summary>
+    [Fact]
+    public void RetroactiveCorrectionRequested_FlexKeys_WhenSet_AreCarried()
+    {
+        var row = new RetroactiveCorrectionRequestedAuditMapper().Map(FlexCorrection(4.5m, 10m, 12.75m, "CHAINED"), Ctx);
+
+        Assert.Equal(
+            CorrectionPrefix + ",\"openingFlexBalanceUsed\":4.5,\"closingFlexBalanceBefore\":10,\"closingFlexBalanceAfter\":12.75,\"flexProvenance\":\"CHAINED\"}",
+            row.DetailsJson);
+    }
+
+    /// <summary>
+    /// S146 (AC-C7) — a correction that carries no flex member (a raw correction, or any pre-S146 event) omits all four
+    /// keys: its details are the pre-S146 shape. Kind N/R. Red conditions: the golden has none of the four keys.
+    /// </summary>
+    [Fact]
+    public void RetroactiveCorrectionRequested_FlexKeys_WhenNull_AreOmitted()
+    {
+        var row = new RetroactiveCorrectionRequestedAuditMapper().Map(FlexCorrection(null, null, null, null), Ctx);
+
+        Assert.Equal(CorrectionPrefix + "}", row.DetailsJson);
+    }
+
+    /// <summary>
+    /// S146 (R-49 reading shape (i)) — <c>flexProvenance = "UNTRACKED"</c> with the three balance keys ABSENT: flex was
+    /// not tracked (a raw-recorded month before the ledger start; the balances stay null). The provenance key is present
+    /// and the balance keys are not. Kind N. Red conditions: the golden; a mapper that drops the UNTRACKED provenance
+    /// (thinking it is unstored), or writes the balances as 0, fails.
+    /// </summary>
+    [Fact]
+    public void RetroactiveCorrectionRequested_Untracked_CarriesProvenanceAndNoBalanceKeys()
+    {
+        var row = new RetroactiveCorrectionRequestedAuditMapper().Map(FlexCorrection(null, null, null, "UNTRACKED"), Ctx);
+
+        Assert.Equal(CorrectionPrefix + ",\"flexProvenance\":\"UNTRACKED\"}", row.DetailsJson);
+        Assert.DoesNotContain("openingFlexBalanceUsed", row.DetailsJson);
+        Assert.DoesNotContain("closingFlexBalance", row.DetailsJson);
+    }
+
+    /// <summary>
+    /// S146 (R-49 reading shape (ii)) — NO <c>flexProvenance</c> on a post-S146 event, with
+    /// <c>closingFlexBalanceBefore == closingFlexBalanceAfter</c>: the month held no EMPLOYED day, so no flex was settled
+    /// and the record's balances are unchanged (R-48). The opening-used key is absent too. Kind N. Red conditions: the
+    /// golden has before and after equal (10 and 10), no provenance and no opening; a mapper that infers a provenance or
+    /// writes an opening fails.
+    /// </summary>
+    [Fact]
+    public void RetroactiveCorrectionRequested_NoProvenance_EqualClosings_MeansNoFlexSettled()
+    {
+        var row = new RetroactiveCorrectionRequestedAuditMapper().Map(FlexCorrection(null, 10m, 10m, null), Ctx);
+
+        Assert.Equal(CorrectionPrefix + ",\"closingFlexBalanceBefore\":10,\"closingFlexBalanceAfter\":10}", row.DetailsJson);
+        Assert.DoesNotContain("flexProvenance", row.DetailsJson);
+        Assert.DoesNotContain("openingFlexBalanceUsed", row.DetailsJson);
+    }
 }
