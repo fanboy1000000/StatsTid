@@ -73,6 +73,10 @@ public sealed class ManifestProjectionRebuildPlanInputsTests : IAsyncLifetime
         Assert.NotEmpty(original.Pieces);
         Assert.NotEmpty(original.EntryEventIds);
 
+        // S146 R-24: the rebuild reads the manifest from events; drain Payroll's outbox partition first
+        // (a no-op until the manifest rides the outbox).
+        await TestSupport.PayrollOutboxDrain.DrainAsync(_harness.Factory);
+
         await using (var conn = _harness.Factory.Create())
         {
             await conn.OpenAsync();

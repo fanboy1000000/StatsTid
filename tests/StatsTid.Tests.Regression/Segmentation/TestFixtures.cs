@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using StatsTid.Infrastructure;
+using StatsTid.Infrastructure.Outbox;
 using StatsTid.Integrations.Payroll.Services;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
@@ -177,8 +178,8 @@ internal static class TestFixtures
     /// <summary>
     /// Builds the planner enrollment the PCS export path requires — the WtmNaturalKey
     /// snapshot hydrator (ADR-020 D1 / S29 TASK-2907). MIRRORS
-    /// <c>PeriodCalculationService.BuildPlanForLegacyCallersAsync</c> (PCS L626-630): the
-    /// obsolete CalculateAsync(profile, …) shim registers this seam so every segment's
+    /// <c>PeriodCalculationService.BuildPlanWithHistoriesAsync</c>, which registers this seam
+    /// on the plans the service builds itself, so every segment's
     /// snapshot carries the (OkVersion, AgreementCode, Position) triple that
     /// <c>MapSegmentToExportLinesAsync</c> reads back to drive the dated wage-type-mapping
     /// lookup. The straddle round-trip tests call <see cref="PeriodPlanner.Plan"/> DIRECTLY
@@ -591,6 +592,41 @@ internal static class TestFixtures
             CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_open
                 ON wage_type_mappings (time_type, ok_version, agreement_code, position)
                 WHERE effective_to IS NULL;
+
+            -- S146 R-24: the outbox table, so a store built with an OutboxServiceContext can enqueue here.
+            -- In S146 the segment manifest moves onto the transactional outbox (written to outbox_events in
+            -- one transaction, copied into events by the publisher later); the facts that run on this
+            -- harness must be able to follow it. Text-identical to docker/postgres/init.sql (outbox_events
+            -- and its three indexes); HarnessDdl_Copies_MatchInitSqlSchema guards it (QUAL-195).
+            CREATE TABLE IF NOT EXISTS outbox_events (
+                outbox_id        BIGSERIAL    PRIMARY KEY,
+                service_id       TEXT         NOT NULL,
+                stream_id        TEXT         NOT NULL,
+                event_id         UUID         NOT NULL UNIQUE,
+                event_type       TEXT         NOT NULL,
+                event_payload    JSONB        NOT NULL,
+                correlation_id   TEXT         NULL,
+                actor_id         TEXT         NULL,
+                actor_role       TEXT         NULL,
+                created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                published_at     TIMESTAMPTZ  NULL,
+                stream_version   INT          NULL,
+                attempts         INT          NOT NULL DEFAULT 0,
+                last_error       TEXT         NULL,
+                last_attempt_at  TIMESTAMPTZ  NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_outbox_unpublished
+                ON outbox_events (service_id, outbox_id)
+                WHERE published_at IS NULL;
+
+            CREATE INDEX IF NOT EXISTS idx_outbox_attempts
+                ON outbox_events (service_id, attempts, last_attempt_at)
+                WHERE published_at IS NULL AND attempts > 0;
+
+            CREATE INDEX IF NOT EXISTS idx_outbox_stream
+                ON outbox_events (stream_id, outbox_id)
+                WHERE published_at IS NULL;
             """;
 
         public PostgreSqlContainer Container { get; }
@@ -629,7 +665,9 @@ internal static class TestFixtures
             }
 
             var factory = new DbConnectionFactory(container.GetConnectionString());
-            var eventStore = new PostgresEventStore(factory);
+            // S146 R-24: the enqueue-capable store (the read-only constructor's EnqueueAndReturnIdAsync throws).
+            // "payroll" is the partition PayrollOutboxDrain drains, the service id Payroll runs under.
+            var eventStore = new PostgresEventStore(factory, new OutboxServiceContext("payroll"));
             return new DockerHarness(container, factory, eventStore);
         }
 

@@ -97,7 +97,8 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
         var cs = _container.GetConnectionString();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(cs);
         _db = new DbConnectionFactory(cs);
-        _store = new PostgresEventStore(_db);
+        // S146 R-24: the enqueue-capable store (the manifest moves onto the outbox in S146).
+        _store = new PostgresEventStore(_db, new StatsTid.Infrastructure.Outbox.OutboxServiceContext("payroll"));
         await TestFixtures.SeedWageTypeMappingsAsync(_db);
         _engine = new RuleEngineHost();
     }
