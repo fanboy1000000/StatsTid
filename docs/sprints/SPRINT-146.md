@@ -165,7 +165,7 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 | **As of** | 2026-10-23, master `0a291582` (wave 1 merged), local only; origin/master `0f02b484` |
 | **Phase** | wave-1 gate: O-1 green on `0a291582` (0 errors / 145 warnings, CA2100 115, Unit 1512, DemoSeed 170, Regression non-Docker 130); **CI-W1 GREEN** (run `39992507686`, all seven jobs, headSha `0a291582`; draft PR #39 closed unmerged, branch deleted); wave 2a in progress |
 | **Tasks** | Wave 1 DONE (see the ledger). TASK-14604 (`payroll-integration`) is in progress in a worktree; its gate is the production build only, since its constructor change breaks ~22 test files until TASK-14604-T migrates them. It also carries TASK-14600's two text warnings (W1, W2) |
-| **Track D** | D1–D4 DONE (`d188d2d1`, `e5aba3a4`); D5 (ADR-043 PROPOSED) being drafted by the planner into `.claude/plans/s146/ADR-043-draft.md`; D6 after D5; D7 after 14604/14605/14607 |
+| **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 after 14604/14605/14607 |
 | **Pending gates** | CI-W1 (all seven jobs; then the PR is closed unmerged and the branch deleted); then 14604's merge checklist |
 | **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · CI-W2 — · C-2 — · close — |
 | **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
