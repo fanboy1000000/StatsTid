@@ -144,6 +144,13 @@ builder.Services.AddSingleton<EntitlementConfigRepository>();
 builder.Services.AddSingleton<EmployeeProfileRepository>();
 builder.Services.AddSingleton<UserAgreementCodeRepository>();
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
+// S146 / TASK-14602 (QUAL-198) — the team overview's one-query read of every roster employee's
+// part-time fraction at month end. Registered under its INTERFACE so a test host can swap in one
+// that throws (RemoveAll + AddSingleton) and prove the overview falls back to fraction 1.0 instead
+// of answering 500. Stateless over the connection factory ⇒ singleton-safe. Required, not optional:
+// the team-overview handler takes it as a parameter, and an unregistered complex parameter on a
+// MapGet fails at endpoint-mapping time (see the EmploymentHistoryReadRepository note below).
+builder.Services.AddSingleton<IPartTimeFractionBatchReader, PartTimeFractionBatchReader>();
 // S136 / ADR-040 D1 — employment-window fact resolver, dual-binding per the IOutboxEnqueue
 // pattern: one concrete, exposed as the SharedKernel self-managed surface AND the
 // Infrastructure in-tx surface (the D3 strand/re-hire guards read in-lock through the

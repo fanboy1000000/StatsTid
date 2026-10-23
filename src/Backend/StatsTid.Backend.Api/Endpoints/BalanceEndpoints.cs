@@ -165,11 +165,19 @@ public static class BalanceEndpoints
             var weekdays = 0;
             for (var day = monthStart; day <= monthEnd; day = day.AddDays(1))
             {
-                if (day.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+                if (DayNorm.IsWeekday(day))
                     weekdays++;
             }
 
-            var normHoursExpected = (weekdays / 5.0m) * weeklyNormHours;
+            // S146 / TASK-14602 (QUAL-198, owner Q-1 2026-10-14) — the employee's OWN monthly norm:
+            // weekdays × the per-day norm the Rule Engine uses (DayNorm, ADR-002 S145 amendment),
+            // with the part-time fraction at MONTH END (the dated profile read above; 1.0 when there
+            // is none). Before, this was (weekdays / 5) × weeklyNormHours — a full-timer's norm shown
+            // to everyone: a 0.811 employee in a 22-weekday month saw 162.80 where the engine judges
+            // 22 × 6.00 = 132.00. Full-time values are unchanged (37.0 → 7.40/day, 36.0 → 7.20/day).
+            // A mid-month fraction change is valued at the month-end fraction for every weekday (the
+            // ruling); public holidays do not reduce the norm here or in the engine.
+            var normHoursExpected = weekdays * DayNorm.ForWeekday(weeklyNormHours, partTimeFraction);
 
             // Time entries: read from projection (date-range scoped to the month) — S27 TASK-2708.
             // Read-your-write is satisfied because the atomic POST handler (TASK-2707) commits
@@ -238,7 +246,8 @@ public static class BalanceEndpoints
                 employeeId, opDateOkVersion, user.AgreementCode, opDateAgreement);
 
             // S60 / TASK-6005 — partTimeFraction is sourced from the dated employment profile at
-            // month-end (resolved above, graceful ?? 1.0m). It is retained ONLY for the generic
+            // month-end (resolved above, graceful ?? 1.0m). Besides the monthly norm above (S146 /
+            // QUAL-198), it is used ONLY for the generic
             // ProRateByPartTime totalQuota ternary below (config-driven — admin CRUD may set the
             // flag on some types; ADR-023 D3 graceful ?? 1.0m polarity). As of S63 / ADR-031 every
             // SEEDED entitlement type is ProRateByPartTime=false, so the fraction no longer scales

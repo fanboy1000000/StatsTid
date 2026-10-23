@@ -822,6 +822,11 @@ public static class ApprovalEndpoints
             DbConnectionFactory connectionFactory,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
+            // S146 / TASK-14602 (QUAL-198) — the roster's part-time fractions at month end, behind
+            // an interface so a test host can make the read fail (see (2h)); and the logger the
+            // read's best-effort fallback reports through.
+            IPartTimeFractionBatchReader partTimeFractionReader,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -1037,15 +1042,42 @@ public static class ApprovalEndpoints
                     payrollExportedByEmployee[reader.GetString(0)] = reader.GetDateTime(1);
             }
 
-            // (2h) normExpected = (weekdays/5) × weeklyNorm per employee. weeklyNorm resolves from the
-            //      employee's agreement config, cached per distinct (agreement, ok) pair so the
-            //      lookups are bounded (≤ #distinct agreements, NOT per-employee). Mirrors the
-            //      /summary norm-expected derivation (weekday count × weekly norm / 5) without the
-            //      heavy per-employee dated-config resolution.
+            // (2h) normExpected = weekdays × the employee's OWN per-day norm,
+            //      DayNorm.ForWeekday(weeklyNorm, part-time fraction at month end) — S146 / TASK-14602
+            //      (QUAL-198, owner Q-1 2026-10-14). Before, this was (weekdays/5) × weeklyNorm, a
+            //      full-timer's norm on every row: a 0.811 employee in a 22-weekday month showed 162.80
+            //      where the engine judges 22 × 6.00 = 132.00. Same formula as /summary, and the same
+            //      per-day helper the Rule Engine uses (ADR-002 S145 amendment). weeklyNorm resolves
+            //      from the employee's agreement config, cached per distinct (agreement, ok) pair so the
+            //      lookups are bounded (≤ #distinct agreements, NOT per-employee); the fraction is ONE
+            //      set-based read over the roster (below), not the heavy per-employee resolver.
             var weekdays = 0;
             for (var d = monthStart; d <= monthEnd; d = d.AddDays(1))
-                if (d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
+                if (DayNorm.IsWeekday(d))
                     weekdays++;
+
+            // (2h1) Each roster employee's part-time fraction at MONTH END (the dated profile, the same
+            //       as-of /summary uses). PER-ROSTER FAULT-ISOLATED, the awayToday idiom (2g): a failure
+            //       of THIS read degrades EVERY row to fraction 1.0 — the full-time norm the screen
+            //       showed before QUAL-198 — and is logged, never a whole-table 500. A successful read
+            //       with no covering row for an employee is the same graceful 1.0 as /summary's
+            //       `?? 1.0m` (ADR-023 D3). The one thing NOT swallowed is the request's own
+            //       cancellation: a client that has gone away gets no degraded answer to discard.
+            IReadOnlyDictionary<string, decimal> fractionByEmployee;
+            try
+            {
+                fractionByEmployee = await partTimeFractionReader.GetFractionsAtAsync(employeeIds, monthEnd, ct);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                const string teamOverviewLogCategory = "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.TeamOverview";
+                loggerFactory.CreateLogger(teamOverviewLogCategory).LogWarning(
+                    ex,
+                    "Team overview {Year}-{Month}: the part-time fraction read failed for {RosterCount} roster employees; " +
+                    "normExpected falls back to fraction 1.0 (the full-time norm) on every row.",
+                    year, month, employeeIds.Length);
+                fractionByEmployee = new Dictionary<string, decimal>(StringComparer.Ordinal);
+            }
 
             // Resolve each roster employee's (agreement, ok) once (users row), then weekly norm once
             // per distinct pair. The agreement used is the PERIOD's when a period exists (the same
@@ -1093,7 +1125,10 @@ public static class ApprovalEndpoints
                 // Norm-expected uses the period's agreement when present (consistent with the row's
                 // displayed agreement), else the users agreement; ok is from users (the live cache).
                 var weeklyNorm = await ResolveWeeklyNormAsync(agreement, uOk);
-                var normExpected = (weekdays / 5.0m) * weeklyNorm;
+                // S146 / TASK-14602 (QUAL-198) — the employee's own norm; 1.0 when the fraction read
+                // (2h1) found no covering profile row or failed.
+                var partTimeFraction = fractionByEmployee.TryGetValue(r.EmployeeId, out var fraction) ? fraction : 1.0m;
+                var normExpected = weekdays * DayNorm.ForWeekday(weeklyNorm, partTimeFraction);
 
                 // S124 / TASK-12402 — the manager-visibility rule. `submittedToManager` is keyed on
                 // STATUS, not on `r.PeriodId`: a REAL DRAFT period row (created-but-not-submitted, or
