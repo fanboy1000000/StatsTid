@@ -61,4 +61,28 @@ public sealed class RetroactiveCorrectionRequested : DomainEventBase
     /// never employment dates. Optional and NOT required.
     /// </summary>
     public DateOnly? NextPeriodToRecalculateEnd { get; init; }
+
+    /// <summary>
+    /// The opening flex balance the recalculation used (S146 flex ledger). In plain terms: the
+    /// hours of flex the month opened at, as read from the ledger. Optional and NOT required:
+    /// null on raw corrections and on every pre-S146 event, which keep deserializing to null.
+    /// </summary>
+    public decimal? OpeningFlexBalanceUsed { get; init; }
+
+    /// <summary>
+    /// The month's closing flex balance on the export record before this correction (S146).
+    /// Optional and NOT required.
+    /// </summary>
+    public decimal? ClosingFlexBalanceBefore { get; init; }
+
+    /// <summary>
+    /// The month's closing flex balance after this correction (S146). Optional and NOT required.
+    /// </summary>
+    public decimal? ClosingFlexBalanceAfter { get; init; }
+
+    /// <summary>
+    /// Where the opening balance came from: <c>LEDGER_START</c>, <c>CHAINED</c> or
+    /// <c>REHIRE</c> (S146). Optional and NOT required: null on pre-S146 events.
+    /// </summary>
+    public string? FlexProvenance { get; init; }
 }
