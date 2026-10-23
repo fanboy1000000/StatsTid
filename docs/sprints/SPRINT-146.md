@@ -80,8 +80,8 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14602-T | DONE (merged `b104c4d7`) | wave 1, paired · `test-qa` · part-time pins; the fault-isolation pin (N) |
 | TASK-14603 | DONE (merged `a173ace3`, follow-up `900df51f`) | wave 1 · `test-qa` · E3: `JsonAssert.RequiredMember` in the five helpers |
 | TASK-14609 | DONE (merged `0a291582`, fix-up `ac56c72e`) | wave 1, after 14601-T · `test-qa` · harness outbox readiness (R-24) |
-| TASK-14604 | IN PROGRESS (dispatched 2026-10-23) | wave 2a · `payroll-integration` · QUAL-205 through the outbox; `ISegmentManifestStore`; the refusal predicate |
-| TASK-14604-T | IN PROGRESS (dispatched 2026-10-23) | wave 2a, paired · `test-qa` · in-memory store; 23-file census; AC-A1..A3 |
+| TASK-14604 | DONE (merged `384484cb`) | wave 2a · `payroll-integration` · QUAL-205 through the outbox; `ISegmentManifestStore`; the refusal predicate |
+| TASK-14604-T | DONE (merged `384484cb`) | wave 2a, paired · `test-qa` · in-memory store; 23-file census; AC-A1..A3 |
 | TASK-14605 | PLANNED | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4 |
 | TASK-14605-T | PLANNED | wave 2b, paired · `test-qa` · the site migration under the census rule |
 | TASK-14606 | PLANNED | wave 2c · `test-qa` · the QUAL-188 pins |
@@ -157,6 +157,31 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
   - **(3) to the register:** the two screens read the fraction differently when an agreement-code row is missing (QUAL-226);
   - **(2) the screens' different weekly-norm anchors, and (4) the month-end fraction versus the engine's per-day sum:** to the S147 program's input list (QUAL-226).
 - **TASK-14603, scope widened by Orchestrator decision** on the reviewer's recommendation: three more refusal-body helpers with the same crash risk, `AssertRulesUnavailable`, `AssertEntriesNotAccepted` and `AssertPriorMonthNotApproved` (follow-up `900df51f`), so the whole class is closed rather than left for 14605-T's census. The N-fact's RED uses the literal mutation in `JsonAssert.cs`: `if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var member))` becomes `if (true)`, and `return member;` becomes `return root.GetProperty(name);`. Result: `Failed: 1, Passed: 1`, actual `KeyNotFoundException` against expected `XunitException`. The reviewer re-ran it outside the repository after the dead `IsNotType` line was removed.
+
+
+## Wave 2a — TASK-14604 + 14604-T (QUAL-205)
+
+| Task | Branch @ sha | Build | 5α | 5a Fable | 5a Codex | Merged |
+|---|---|---|---|---|---|---|
+| TASK-14604 + 14604-T (`payroll-integration`, `test-qa`) | `worktree-agent-a25a64ba2d5d72f4e` @ `8a818499`, `f9ab1043`, `2c2fb456` | 0 / 144; Unit 1518, DemoSeed 170, Regression non-Docker 130 | PASS | APPROVED-WITH-WARNINGS | APPROVE-WITH-WARNINGS | `384484cb` |
+
+**O-1 on master after the merge:** 0 errors / 145 warnings · Unit **1518** (+6, the refusal facts) · DemoSeed 170 · Regression non-Docker 130 · the AC-A3 grep gate (`EventOnly|ProjectionOnly|AuditStateItemKey` over `src tests frontend/src`) is empty.
+
+**What changed for the product.** Before, a payroll month could be exported, or a correction written, even when the record proving how it was calculated (the manifest) had failed to save, and the "degraded" flag meant to say so was read by nobody. Now the manifest, its projection row and the legacy summary event are written in one transaction through the project's outbox (ADR-018), or both calculating routes refuse with 503 `payroll-manifest-not-persisted` before any payroll write.
+
+**Decisions at the merge:**
+- **`StampAuditContext` stamps only a committed manifest.** This is the brief's requirement. The S145 comment claimed the refused 422 path stamped `Guid.Empty`; it actually stamped a dangling `plan.ManifestId`. This is now pinned by a Unit fact with a mutation and a control.
+- **Two scenario-named tests renamed**, so the grep gate holds: `…_ProjectionOnly_StillReplays` → `…_ProjectionRowWithoutEvent_StillReplays`. Annotated in `SPRINT-145.md` BC-1/BC-2 (Fable W2).
+- **`FrozenInputsSlotTests.cs:61-68` scope extension ratified** (Fable NOTE 1): without the drain, that fact would trip for the wrong reason.
+- **Carried to TASK-14605**, which edits the same file next:
+  - Codex W1: the "did not commit" diagnostic becomes "commit not confirmed", because a lost commit acknowledgement can leave all three records committed; payroll still refuses safely.
+  - TASK-14604's doc note that `ReplayRefusedException.cs` says "thrown only by ReplayAsync".
+- **Known test-fake gap, recorded:** Codex W2, the in-memory store ignores cancellation and overwrites a duplicate manifest id, where the Postgres store propagates cancellation and keeps the existing row. The refusal facts stay meaningful.
+- **D7 part 1 (R-23), with the merge:**
+  - ADR-018 D6 names Payroll's real streams (`segment-manifest-{manifestId}`, `period-calc-{employeeId}-{periodStart}`);
+  - an ADR-016 D10 footnote (the manifest reaches `events` through the outbox);
+  - the rebuild script and the `SegmentManifestProjectionRebuilder` comment require a **drained** Payroll outbox before a rebuild, not only quiesced writers (Fable W1: a rebuild run between a commit and the drain would drop that manifest's row);
+  - QUAL-205 is marked BUILT. Its Docker facts are CI-pending until CI-W2.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
