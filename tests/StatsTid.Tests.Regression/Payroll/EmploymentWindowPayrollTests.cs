@@ -335,11 +335,14 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
         var engine = new RecordingRuleEngine();
         // S145 R14: payroll reads its own hours — the same entries reach PCS through an
         // in-memory IRecordedHoursReader instead of through the call.
+        // S146 R-14: the opening is no longer handed in. Seed what produces it: the employee (unbounded window,
+        // so employed in March) has a recorded March closing of 12.5, so April opens at 12.5 CHAINED (case 4a).
         var pcs = BuildPcs(engine, new InMemoryRecordedHoursReader(
-            TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30)));
+            TestFixtures.WeekdayEntriesForPeriod(employeeId, Apr01, Apr30)),
+            flexLedgerReader: InMemoryFlexLedgerReader.ClosedAt(Apr01, openingBalance));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(employeeId), previousFlexBalance: openingBalance);
+            plan, Profile(employeeId));
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
@@ -435,7 +438,8 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
 
     // ─── PCS wiring (the production DI shape, hand-built) ────────────────
 
-    private PeriodCalculationService BuildPcs(RecordingRuleEngine engine, IRecordedHoursReader hoursReader)
+    private PeriodCalculationService BuildPcs(
+        RecordingRuleEngine engine, IRecordedHoursReader hoursReader, IFlexLedgerReader? flexLedgerReader = null)
     {
         var httpFactory = new SingleClientFactory(engine);
         var wtmRepo = new WageTypeMappingRepository(_harness.Factory);
@@ -465,7 +469,10 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
             // S145 R14: the in-memory hours reader (payroll reads its own hours).
             hoursReader: hoursReader,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain unless the fact passes a reader; empty ledger → LEDGER_START 0 (the
+            // opening the former caller-supplied 0m said). This fact writes no record, so the fake is honest.
+            flexLedgerReader: flexLedgerReader ?? new InMemoryFlexLedgerReader());
     }
 
     private static async Task<PeriodCalculationService.PeriodCalculationOutcome> RunShimAsync(
@@ -474,7 +481,7 @@ public sealed class EmploymentWindowPayrollTests : IAsyncLifetime
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         return await pcs.CalculateWithOutcomeAsync(
-            Profile(employeeId), Apr01, Apr30, previousFlexBalance: 0m);
+            Profile(employeeId), Apr01, Apr30);
 #pragma warning restore CS0618
     }
 

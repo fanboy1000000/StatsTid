@@ -67,8 +67,7 @@ public sealed class ManifestCreationTests : IAsyncLifetime
         Assert.Equal(2, plan.Segments.Count);
 
         var result = await pcs.CalculateAsync(
-            plan, profile,
-            previousFlexBalance: 0m);
+            plan, profile);
 
         Assert.True(result.Success);
         Assert.NotEmpty(result.ExportLines);

@@ -893,7 +893,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
     };
 
     private static object RecalculateBody(
@@ -905,7 +905,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         reason = "S145 host pin — correction of an exported month",
         idempotencyToken,
     };

@@ -212,7 +212,7 @@ public sealed class SplitMonthHostTests : IAsyncLifetime
             absences = Array.Empty<AbsenceEntry>(),
             periodStart = Mar01,
             periodEnd = Mar31,
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
             reason = "S145 Stage B host pin - interior agreement change",
             idempotencyToken = token,
         });
@@ -446,7 +446,7 @@ public sealed class SplitMonthHostTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
     };
 
     /// <summary>A caller-calculated result: one NORMAL_HOURS line (7.4 h) on each given date - the shape the raw

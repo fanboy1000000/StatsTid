@@ -130,7 +130,9 @@ public sealed class RuleEngineFailureLoggingTests
             configuration,
             logger,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new EmploymentWindowPcsFixture.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new EmploymentWindowPcsFixture.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
     }
 
     private sealed class FixedResponseHandler : HttpMessageHandler

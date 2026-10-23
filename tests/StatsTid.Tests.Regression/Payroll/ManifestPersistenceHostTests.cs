@@ -336,7 +336,7 @@ public sealed class ManifestPersistenceHostTests : IAsyncLifetime
             absences = Array.Empty<AbsenceEntry>(),
             periodStart = Jun01,
             periodEnd = Jun30,
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         };
         return await PostAsync(host, "/api/payroll/calculate-and-export", body);
     }
@@ -351,7 +351,7 @@ public sealed class ManifestPersistenceHostTests : IAsyncLifetime
             absences = Array.Empty<AbsenceEntry>(),
             periodStart = Jun01,
             periodEnd = Jun30,
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
             reason = "S146 host pin: correction of an exported month",
             idempotencyToken = token,
         };

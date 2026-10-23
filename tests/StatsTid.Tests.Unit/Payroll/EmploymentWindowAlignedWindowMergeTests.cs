@@ -44,8 +44,7 @@ public sealed class EmploymentWindowAlignedWindowMergeTests
         var pcs = BuildPcs(engine, ruleSet: AlignedWindowRuleSet, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId),
-            previousFlexBalance: 0m);
+            plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
@@ -84,8 +83,7 @@ public sealed class EmploymentWindowAlignedWindowMergeTests
         var pcs = BuildPcs(engine, ruleSet: AlignedWindowRuleSet, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId),
-            previousFlexBalance: 0m);
+            plan, Profile(EmployeeId));
 
         // The calculation continues; the failure surfaces ON THE RULE (PCS merge contract).
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);

@@ -60,8 +60,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var pcs = BuildPcs(engine, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId),
-            previousFlexBalance: 0m);
+            plan, Profile(EmployeeId));
 
         Assert.False(outcome.Result.Success);
         // S145 R-6 (adjudicator): any failed rule-engine call refuses the whole calculation, one fixed sentence.
@@ -94,8 +93,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var pcs = BuildPcs(engine, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId),
-            previousFlexBalance: 0m);
+            plan, Profile(EmployeeId));
 
         Assert.False(outcome.Result.Success);
         // S145 R-6 (adjudicator): any failed rule-engine call refuses the whole calculation, one fixed sentence.
@@ -132,7 +130,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         // The timeline WAS attempted and the per-segment calls DID run: this is a partial failure.
         Assert.Single(engine.TimelineCalls);
@@ -162,7 +160,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         Assert.Single(engine.TimelineCalls);
         Assert.Contains(engine.Calls, c => c.Path.EndsWith("/evaluate-absence", StringComparison.Ordinal));
@@ -189,7 +187,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         // The timeline answered HTTP 200 and was structurally complete.
         Assert.Single(engine.TimelineCalls);
@@ -257,7 +255,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var resolver = new CountingProfileResolver(d => d >= sep01 ? "DEPARTMENT_HEAD" : null, agreementCode: "AC");
         var pcs = BuildPcs(engine, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, aug31, sep30));
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller);
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
         var pieces = Assert.Single(engine.TimelineCalls).Pieces!;
@@ -284,7 +282,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var resolver = new CountingProfileResolver(_ => null);
         var pcs = BuildPcs(engine, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller);
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
         var pieces = Assert.Single(engine.TimelineCalls).Pieces!;
@@ -319,7 +317,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var eventStore = new InMemorySegmentManifestStore();
         var pcs = BuildPcs(engine, eventStore, profileResolver: resolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller, previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, caller);
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
 
         // The engine really ran under the dated agreement (so "AC" is what the period was evaluated under).
@@ -347,8 +345,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var pcs = BuildPcs(engine, eventStore, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId),
-            previousFlexBalance: 0m);
+            plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success);
         Assert.Null(outcome.Result.ErrorMessage);
@@ -406,8 +403,7 @@ public sealed class EmploymentWindowSegmentSkipTests
         var pcs = BuildPcs(engine, eventStore, profileResolver, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId),
-            previousFlexBalance: 0m);
+            plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success);
         Assert.Null(outcome.Result.ErrorMessage);
@@ -449,7 +445,7 @@ public sealed class EmploymentWindowSegmentSkipTests
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         var outcome = await pcs.CalculateWithOutcomeAsync(
             Profile(EmployeeId),
-            Mar01, Mar31, previousFlexBalance: 0m);
+            Mar01, Mar31);
 #pragma warning restore CS0618
 
         Assert.True(outcome.Result.Success);
@@ -504,11 +500,13 @@ public sealed class EmploymentWindowSegmentSkipTests
 
         const decimal openingBalance = 12.5m;
         var engine = new RecordingRuleEngine();
-        var pcs = BuildPcs(engine, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31));
+        // S146 R-14: the opening is no longer handed in. This fixture has no resolver, so employment is implicit
+        // (R-37): February counts as employed and its recorded closing of 12.5 is March's CHAINED opening (case 4a).
+        var pcs = BuildPcs(engine, hoursReader: WeekdayHours(EmployeeId, Mar01, Mar31),
+            flexLedgerReader: InMemoryFlexLedgerReader.ClosedAt(Mar01, openingBalance));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId),
-            previousFlexBalance: openingBalance);
+            plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success);
 

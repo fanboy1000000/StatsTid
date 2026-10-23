@@ -551,7 +551,7 @@ public sealed class PriorMonthExportRaceHostTests : IAsyncLifetime
             absences = Array.Empty<AbsenceEntry>(),
             periodStart = Oct01,
             periodEnd = Oct31,
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         };
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/payroll/calculate-and-export")
         {

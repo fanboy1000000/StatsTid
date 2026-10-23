@@ -300,7 +300,7 @@ public sealed class BoundaryScenarioTests
         Assert.Equal(2, plan.Segments.Count);
 
         var result = await fixture.Pcs.CalculateAsync(
-            plan, profile, 0m);
+            plan, profile);
         Assert.True(result.Success);
 
         await using var conn = new NpgsqlConnection(fixture.ConnectionString);

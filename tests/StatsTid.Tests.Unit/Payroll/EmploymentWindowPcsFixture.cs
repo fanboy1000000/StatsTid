@@ -219,7 +219,8 @@ internal static class EmploymentWindowPcsFixture
         IEmploymentProfileResolver? profileResolver = null,
         IEmploymentWindowResolver? windowResolver = null,
         IReadOnlyList<RuleClassification>? ruleSet = null,
-        IRecordedHoursReader? hoursReader = null)
+        IRecordedHoursReader? hoursReader = null,
+        IFlexLedgerReader? flexLedgerReader = null)
     {
         // S137 Step-5a (Reviewer WARNING 1): PCS REFUSES a profile resolver without a window
         // resolver — that pairing is the dropped-DI shape that would silently pay a leaver all
@@ -248,7 +249,13 @@ internal static class EmploymentWindowPcsFixture
             // that calculates passes the hours it used to hand to the call (see WeekdayHours).
             hoursReader: hoursReader ?? new InMemoryRecordedHoursReader(),
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S146 R-14: the opening comes from the recorded ledger now, never from the caller. A fact that is
+            // not about the chain gets an EMPTY ledger (no records), so the month opens at LEDGER_START 0, which
+            // is what the former caller-supplied 0m said. A fact that needs a non-zero opening passes
+            // InMemoryFlexLedgerReader.ClosedAt(month, closing): an employed P (implicit, no resolver) with a
+            // recorded closing -> R-14 case 4a, CHAINED.
+            flexLedgerReader: flexLedgerReader ?? new InMemoryFlexLedgerReader());
     }
 
     /// <summary>

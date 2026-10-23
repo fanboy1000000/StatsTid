@@ -71,11 +71,11 @@ public sealed class AuditWiringExportParityTests : IAsyncLifetime
 #pragma warning disable CS0618 // Both planless overloads are [Obsolete] by design (legacy shim path).
         // OLD endpoint behaviour (pre-QUAL-003): the planless CalculateAsync, returning just the result.
         var resultOld = await pcs.CalculateAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd);
         // NEW endpoint behaviour (post-QUAL-003): the planless CalculateWithOutcomeAsync, returning the
         // full outcome (result + AuditState + ManifestId). outcome.Result is what the endpoint returns.
         var outcomeNew = await pcs.CalculateWithOutcomeAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd);
 #pragma warning restore CS0618
 
         // Both must succeed and produce export lines (NORM_CHECK emits one NORMAL_HOURS line per entry).
