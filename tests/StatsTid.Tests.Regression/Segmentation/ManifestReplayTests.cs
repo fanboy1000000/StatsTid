@@ -55,7 +55,7 @@ public sealed class ManifestReplayTests : IAsyncLifetime
             sources: TestFixtures.OkStraddleSources(),
             options: PlannerOptions.Default,
             // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
-            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            // BuildPlanWithHistoriesAsync); without it MapSegmentToExportLinesAsync throws.
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 

@@ -62,7 +62,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             sources: TestFixtures.OkStraddleSources(),
             options: PlannerOptions.Default,
             // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
-            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            // BuildPlanWithHistoriesAsync); without it MapSegmentToExportLinesAsync throws.
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
@@ -115,7 +115,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             sources: TestFixtures.OkStraddleSources(),
             options: PlannerOptions.Default,
             // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
-            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            // BuildPlanWithHistoriesAsync); without it MapSegmentToExportLinesAsync throws.
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
@@ -203,7 +203,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             hoursReader: new InMemoryRecordedHoursReader(entries, absences));
 
         // Forward calc via the (Obsolete) shim — this routes through
-        // BuildPlanForLegacyCallersAsync, which registers the WtmNaturalKey hydrator on the
+        // BuildPlanWithHistoriesAsync, which registers the WtmNaturalKey hydrator on the
         // PlannerEnrollment. The result's ExportLines carry the wage type that was effective
         // at segment.StartDate = 2026-01-01 (SLS_PRE — closed predecessor still effective).
 #pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.

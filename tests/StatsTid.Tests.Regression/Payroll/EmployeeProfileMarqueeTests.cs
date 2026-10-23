@@ -153,7 +153,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
 
         // ── Baseline forward calc via the (Obsolete) legacy shim — same entry
         // point S29 TASK-2909 marquee uses. The shim routes through
-        // BuildPlanForLegacyCallersAsync, which registers the WtmNaturalKey
+        // BuildPlanWithHistoriesAsync, which registers the WtmNaturalKey
         // hydrator on the plan's IPlannerEnrollment (S29) — required by
         // PCS.MapSegmentToExportLinesAsync at L1236. Direct
         // PeriodPlanner.Plan() bypasses this registration and fails replay.
@@ -227,7 +227,7 @@ public sealed class EmployeeProfileMarqueeTests : IAsyncLifetime
 
         var profileSeed = TestFixtures.Profile(EmployeeId);
 
-        // Legacy shim — registers WtmNaturalKey hydrator via BuildPlanForLegacyCallersAsync
+        // Legacy shim — registers WtmNaturalKey hydrator via BuildPlanWithHistoriesAsync
         // (S29 TASK-2909 precedent; required by PCS.MapSegmentToExportLinesAsync L1236).
 #pragma warning disable CS0618
         var baseline = await pcs.CalculateAsync(

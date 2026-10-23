@@ -139,7 +139,7 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
         var profileSeed = TestFixtures.Profile(EmployeeId) with { AgreementCode = PredecessorAgreementCode };
 
         // Baseline forward calc via the (Obsolete) legacy shim — same entry point
-        // S33 employee_profile marquee uses (BuildPlanForLegacyCallersAsync registers
+        // S33 employee_profile marquee uses (BuildPlanWithHistoriesAsync registers
         // the WtmNaturalKey hydrator on the plan's IPlannerEnrollment per S29).
 #pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.
         var baseline = await pcs.CalculateAsync(

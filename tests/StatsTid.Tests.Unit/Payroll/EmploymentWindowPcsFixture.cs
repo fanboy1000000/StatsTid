@@ -125,7 +125,7 @@ internal static class EmploymentWindowPcsFixture
 
     /// <summary>
     /// The WtmNaturalKey snapshot enrollment PCS's export mapper REQUIRES on every EMPLOYED
-    /// segment (ADR-020 D1) — mirrors <c>BuildPlanForLegacyCallersAsync</c>. Plans built for
+    /// segment (ADR-020 D1) — mirrors <c>BuildPlanWithHistoriesAsync</c>. Plans built for
     /// the plan-first entry point must register it or PCS throws at export time.
     /// </summary>
     public static IPlannerEnrollment WtmEnrollment()

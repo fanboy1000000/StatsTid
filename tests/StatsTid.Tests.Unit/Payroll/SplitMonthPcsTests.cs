@@ -28,7 +28,7 @@ namespace StatsTid.Tests.Unit.Payroll;
 ///
 /// <para>
 /// <b>C-U1 (binding).</b> No fact here plans a month with two or more EMPLOYED segments through the PCS
-/// builder (the planless shim or <c>BuildPlanForLegacyCallersAsync</c>) with the live registry set: every
+/// builder (the planless shim or <c>BuildPlanWithHistoriesAsync</c>) with the live registry set: every
 /// plan is built by the caller. That keeps MB-7 (the evaluated-set filter) a Docker mutation.
 /// </para>
 ///

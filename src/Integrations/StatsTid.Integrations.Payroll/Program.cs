@@ -62,7 +62,7 @@ builder.Services.AddHostedService<SettlementExportEmitter>();
 builder.Services.AddSingleton<UserAgreementCodeRepository>();
 builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResolver>();
 // S137 TASK-13702 (ADR-040 D5/D7): the employment-window read PCS consumes when it plans a
-// calculation — BuildPlanForLegacyCallersAsync asks "employed when?" via GetWindowsAsync and
+// calculation — BuildPlanWithHistoriesAsync asks "employed when?" via GetWindowsAsync and
 // turns the answer into EmploymentStarted/EmploymentEnded boundaries + EMPLOYED/NOT_EMPLOYED
 // segment typing. Read server-side inside THIS host (D7): the EmploymentProfile wire DTO never
 // carries employment dates. Registered next to IEmploymentProfileResolver because the two are
@@ -361,7 +361,7 @@ app.MapPost("/api/payroll/calculate-and-export", async (
 
     // S134 TASK-13404 (QUAL-003): call the planless CalculateWithOutcomeAsync overload — the
     // outcome-returning sibling of the legacy planless CalculateAsync shim. It builds the SAME
-    // PlannedCalculation via the SAME BuildPlanForLegacyCallersAsync and runs the SAME core, so
+    // PlannedCalculation via the SAME BuildPlanWithHistoriesAsync and runs the SAME core, so
     // outcome.Result is bit-identical to what CalculateAsync(profile, …) returned here before:
     // the export payload / SLS lines are unchanged BY CONSTRUCTION. The outcome additionally
     // exposes the ManifestId + AuditState.

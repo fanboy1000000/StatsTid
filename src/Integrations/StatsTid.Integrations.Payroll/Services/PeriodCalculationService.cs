@@ -294,7 +294,7 @@ public sealed class PeriodCalculationService
         _classificationProvider = classificationProvider ?? EmptyRuleClassificationProvider.Instance;
         // S21 TASK-2108 (ADR-017 D9c): null-tolerant — when the repository is not
         // registered (legacy unit-test fixtures, environments without the S21 schema),
-        // BuildPlanForLegacyCallersAsync skips the activation lookup and passes an
+        // BuildPlanWithHistoriesAsync skips the activation lookup and passes an
         // empty LocalProfileActivations list. The 13 existing PCS unit tests that
         // construct PCS via `new(...)` continue to work without modification.
         _localAgreementProfileRepo = localAgreementProfileRepo;
@@ -305,7 +305,7 @@ public sealed class PeriodCalculationService
         // DI-registered code paths get fail-closed semantics per ADR-023 D3.
         _profileResolver = profileResolver;
         // S137 TASK-13702 (ADR-040 D5/D7): null-tolerant ONLY on the legacy fixture path —
-        // when NO profile resolver is wired either, BuildPlanForLegacyCallersAsync passes null
+        // when NO profile resolver is wired either, BuildPlanWithHistoriesAsync passes null
         // employment windows + null employment boundary dates to the planner, which is the
         // pre-S137 plan byte-for-byte.
         //
@@ -1308,9 +1308,9 @@ public sealed class PeriodCalculationService
         IRecordedHoursReader hoursReader,
         CancellationToken ct)
     {
-        // BuildPlanForLegacyCallers became async in S21 TASK-2108 (ADR-017 D9c) so the
-        // shim can hydrate LocalProfileActivations from the local_agreement_profiles
-        // table. S145 TASK-14511: the plan comes back WITH the histories its planning read.
+        // Planning became async in S21 TASK-2108 (ADR-017 D9c) so it can hydrate
+        // LocalProfileActivations from the local_agreement_profiles table. S145 TASK-14511:
+        // the plan comes back WITH the histories its planning read.
         var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
 
         AssertPlanMatchesProfile(plan, profile);
@@ -1375,8 +1375,8 @@ public sealed class PeriodCalculationService
         "Use CalculateWithOutcomeAsync(PlannedCalculation, …). Boundary sources are limited to " +
         "OK-transitions, LocalProfileActivations (S21), employment-window, employee-profile-change " +
         "dates (S137) and agreement-code dates (S144) in this path; full segmentation requires explicit PlannedCalculation construction. " +
-        "The single surviving caller is the /calculate-and-export endpoint (S134 QUAL-003); full " +
-        "retirement is deferred per S20 Step 0b W2.",
+        "The two surviving callers are the /calculate-and-export endpoint (S134 QUAL-003) and " +
+        "RetroactiveCorrectionService (S145 R-11); full retirement is deferred per S20 Step 0b W2.",
         error: false)]
     public async Task<PeriodCalculationOutcome> CalculateWithOutcomeAsync(
         EmploymentProfile profile,
@@ -1448,7 +1448,7 @@ public sealed class PeriodCalculationService
     ///
     /// <para>
     /// <b>Same builder and same week check, by design.</b> This goes through the SAME private
-    /// <see cref="BuildPlanWithHistoriesAsync"/> (the body of <see cref="BuildPlanForLegacyCallersAsync"/>) as
+    /// <see cref="BuildPlanWithHistoriesAsync"/> as
     /// <see cref="CalculateWithOutcomeAsync(EmploymentProfile, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
     /// — same boundary sources, same rule classifications (<see cref="EvaluatedRuleIds"/>), same
     /// <see cref="PeriodPlanner.Plan"/> — and the SAME <see cref="EnsureNoMidWeekAgreementChange"/> the
@@ -1501,7 +1501,8 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// Build a <see cref="PlannedCalculation"/> for callers that haven't migrated to the
-    /// PlannedCalculation-first signature yet. Hydrates an OK-version boundary source from
+    /// PlannedCalculation-first signature yet, returning ALSO the employee histories the planning
+    /// read (S145 / TASK-14511; see "The histories" below). Hydrates an OK-version boundary source from
     /// <see cref="OkVersionResolver"/> — S20's end-to-end boundary — and (S21 TASK-2108,
     /// ADR-017 D9c) local-agreement-profile activation boundaries from
     /// <see cref="LocalAgreementProfileRepository"/>, and (S137 TASK-13702, ADR-040 D5/D7)
@@ -1542,11 +1543,10 @@ public sealed class PeriodCalculationService
     /// </para>
     ///
     /// <para>
-    /// <strong>Async (S21 TASK-2108)</strong>: the method became async to accommodate the
-    /// DB lookup against <c>local_agreement_profiles</c>. The single call site (the
-    /// <see cref="CalculateAsync(EmploymentProfile, DateOnly, DateOnly, decimal, string?, Guid?, CancellationToken)"/>
-    /// shim) was updated to <c>await</c>. Sync-over-async (<c>.GetAwaiter().GetResult()</c>)
-    /// was rejected to avoid ASP.NET deadlock risk.
+    /// <strong>Async (S21 TASK-2108)</strong>: planning became async to accommodate the
+    /// DB lookup against <c>local_agreement_profiles</c>, and its call sites <c>await</c> it.
+    /// Sync-over-async (<c>.GetAwaiter().GetResult()</c>) was rejected to avoid ASP.NET
+    /// deadlock risk.
     /// </para>
     ///
     /// <para>
@@ -1562,24 +1562,6 @@ public sealed class PeriodCalculationService
     /// the request's (see <see cref="ReadLocalProfileActivationsAsync"/>); without a profile
     /// resolver the caller's profile is that record.
     /// </para>
-    ///
-    /// <para>
-    /// <strong>Plan only (S145 / TASK-14511, TASK-14512).</strong> This returns the plan alone; its body
-    /// is <see cref="BuildPlanWithHistoriesAsync"/>, which every production caller uses because it also
-    /// returns the histories the planning read. The planning-shape tests invoke this method by name
-    /// (reflection), so it keeps its name and its <c>Task&lt;PlannedCalculation&gt;</c> shape.
-    /// </para>
-    /// </summary>
-    private async Task<PlannedCalculation> BuildPlanForLegacyCallersAsync(
-        EmploymentProfile profile,
-        DateOnly periodStart,
-        DateOnly periodEnd,
-        CancellationToken ct)
-        => (await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct)).Plan;
-
-    /// <summary>
-    /// The body of <see cref="BuildPlanForLegacyCallersAsync"/> (see its documentation for every
-    /// boundary source), returning ALSO the employee histories the planning read — S145 / TASK-14511.
     ///
     /// <para>
     /// <strong>The histories.</strong> The planless shims hand them to admission and evaluation, so the
@@ -3859,8 +3841,7 @@ public sealed class PeriodCalculationService
         // ADR-020 D1 / Implications §1 + S29 TASK-2907 (LOCKED — REFINEMENT-s29-phase-4d1.md
         // L122 + L275 + cycle 2 R2-B2): read the wage-type-mapping natural-key triple from
         // the replay-stable segment snapshot, NOT from segmentProfile. The hydrator
-        // registered in planning (BuildPlanWithHistoriesAsync, the body of
-        // BuildPlanForLegacyCallersAsync) lands a WtmNaturalKey record at
+        // registered in planning (BuildPlanWithHistoriesAsync) lands a WtmNaturalKey record at
         // Snapshot.Values["WtmNaturalKey"] — since S145 TASK-14512 (A4) the key of the employee's
         // dated record at THIS segment's start. Reading from segmentProfile would revert
         // to the pre-S29 profile-drift risk (the replay of that era took a caller-supplied profile
@@ -3892,7 +3873,7 @@ public sealed class PeriodCalculationService
                 $"snapshot (ADR-020 D1 / Implications §1). Segment range: [{plannedSegment.StartDate:yyyy-MM-dd}, " +
                 $"{plannedSegment.EndDate:yyyy-MM-dd}]; ManifestId={manifestId}. This indicates either a " +
                 "manifest persisted before S29 or a test-direct caller that bypassed " +
-                "PCS.BuildPlanForLegacyCallersAsync (where the WtmNaturalKey hydrator is registered).");
+                "PCS.BuildPlanWithHistoriesAsync (where the WtmNaturalKey hydrator is registered).");
         }
 
         WtmNaturalKey wtmKey = wtmKeyObj switch
