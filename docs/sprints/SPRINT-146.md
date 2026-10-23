@@ -81,7 +81,7 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14603 | DONE (merged `a173ace3`, follow-up `900df51f`) | wave 1 · `test-qa` · E3: `JsonAssert.RequiredMember` in the five helpers |
 | TASK-14609 | DONE (merged `0a291582`, fix-up `ac56c72e`) | wave 1, after 14601-T · `test-qa` · harness outbox readiness (R-24) |
 | TASK-14604 | IN PROGRESS (dispatched 2026-10-23) | wave 2a · `payroll-integration` · QUAL-205 through the outbox; `ISegmentManifestStore`; the refusal predicate |
-| TASK-14604-T | PLANNED | wave 2a, paired · `test-qa` · in-memory store; 23-file census; AC-A1..A3 |
+| TASK-14604-T | IN PROGRESS (dispatched 2026-10-23) | wave 2a, paired · `test-qa` · in-memory store; 23-file census; AC-A1..A3 |
 | TASK-14605 | PLANNED | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4 |
 | TASK-14605-T | PLANNED | wave 2b, paired · `test-qa` · the site migration under the census rule |
 | TASK-14606 | PLANNED | wave 2c · `test-qa` · the QUAL-188 pins |
@@ -164,7 +164,7 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 |---|---|
 | **As of** | 2026-10-23, master `0a291582` (wave 1 merged), local only; origin/master `0f02b484` |
 | **Phase** | wave-1 gate: O-1 green on `0a291582` (0 errors / 145 warnings, CA2100 115, Unit 1512, DemoSeed 170, Regression non-Docker 130); **CI-W1 GREEN** (run `39992507686`, all seven jobs, headSha `0a291582`; draft PR #39 closed unmerged, branch deleted); wave 2a in progress |
-| **Tasks** | Wave 1 DONE (see the ledger). TASK-14604 (`payroll-integration`) is in progress in a worktree; its gate is the production build only, since its constructor change breaks ~22 test files until TASK-14604-T migrates them. It also carries TASK-14600's two text warnings (W1, W2) |
+| **Tasks** | Wave 1 DONE (see the ledger). **TASK-14604 returned** (`worktree-agent-a25a64ba2d5d72f4e` @ `8a818499`; production build clean; the 22 PCS-construction test files no longer compile until 14604-T). Orchestrator decisions at its return: (1) `StampAuditContext` stamps only on `Complete` (accepted; a refused 422 no longer stamps a dangling manifest id; 14604-T pins it); (2) the AC-A3 grep gate also matched two scenario-named tests in `BoundaryCauseEncodingTests.cs` (14604-T renames them); carried to 14605: `ReplayRefusedException.cs`'s "thrown only by ReplayAsync" doc. **TASK-14604-T dispatched** in the same worktree |
 | **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 after 14604/14605/14607 |
 | **Pending gates** | CI-W1 (all seven jobs; then the PR is closed unmerged and the branch deleted); then 14604's merge checklist |
 | **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · CI-W2 — · C-2 — · close — |
