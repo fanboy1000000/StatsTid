@@ -59,6 +59,37 @@ internal static class FlexLedgerSeed
 }
 
 /// <summary>
+/// S146 / TASK-14605-T — turns an existing raw-recorded month into a LEDGER record in place: one UPDATE sets
+/// the three balance columns together (the CHECK needs all or none) and leaves the record's lines, hash and source
+/// exactly as the fact wrote them. Returns once the row is updated; fails the fact when no row exists.
+/// </summary>
+internal static class FlexLedgerFill
+{
+    public static async Task FillBalancesAsync(
+        string connectionString, string employeeId, DateOnly month, decimal opening, decimal closing,
+        string provenance = FlexLedgerOpening.LedgerStart, CancellationToken ct = default)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE payroll_export_records
+               SET opening_balance = @opening, closing_balance = @closing, balance_provenance = @prov
+             WHERE employee_id = @emp AND year = @year AND month = @month
+            """, conn);
+        cmd.Parameters.AddWithValue("emp", employeeId);
+        cmd.Parameters.AddWithValue("year", month.Year);
+        cmd.Parameters.AddWithValue("month", month.Month);
+        cmd.Parameters.Add(new NpgsqlParameter("opening", NpgsqlDbType.Numeric) { Value = opening });
+        cmd.Parameters.Add(new NpgsqlParameter("closing", NpgsqlDbType.Numeric) { Value = closing });
+        cmd.Parameters.AddWithValue("prov", provenance);
+        var rows = await cmd.ExecuteNonQueryAsync(ct);
+        if (rows != 1)
+            throw new InvalidOperationException($"FillBalancesAsync expected one record for {employeeId} {month:yyyy-MM}, updated {rows}.");
+    }
+}
+
+/// <summary>
 /// S146 / TASK-14605-T (R-14) — the in-memory <see cref="IFlexLedgerReader"/> for Regression facts that calculate
 /// but never write a record (the Regression twin of <c>StatsTid.Tests.Unit.Payroll.InMemoryFlexLedgerReader</c>).
 /// Built with no records it is the "empty ledger" (the month opens at LEDGER_START 0, R-14 case 2); built with one
