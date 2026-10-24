@@ -353,6 +353,15 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
         Assert.Equal(1, await _fx.CountAsync(
             "SELECT COUNT(*) FROM outbox_messages WHERE idempotency_token = @t", ("t", token))); // the pre-mark only
         Assert.Equal(0, _fx.Engine.CallCountFor(employeeId));
+
+        // 5a c2 positive control: the SAME pre-marked token on a VALID whole-month request is short-circuited by the
+        // idempotency guard (200 "Correction already processed"), so the pre-mark is live and the 400 above cannot be vacuous.
+        var control = await _fx.RecalculateMonthAsync(employeeId, Jun, token);
+        AssertStatus(HttpStatusCode.OK, control);
+        Assert.Contains("Correction already processed", control.Json);
+        Assert.Equal(1, await _fx.CountAsync(
+            "SELECT COUNT(*) FROM outbox_messages WHERE idempotency_token = @t", ("t", token)));
+        Assert.Equal(0, _fx.Engine.CallCountFor(employeeId));
     }
 
     // ═════════════════════════════════════════════════════════════════════
@@ -955,6 +964,15 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
         Assert.Equal(0, await _fx.CountRecordsAsync(employeeId));
         Assert.Equal(0, await _fx.CountManifestsAsync(employeeId));
         Assert.Equal(0, _fx.Engine.CallCountFor(employeeId));
+
+        // 5a c2: a partial period for an employee with NO approval row at all. A refusal moved to just after the approval
+        // read would answer 403 here; the 400 proves it precedes the approval lookup's answer. (The approved-week case above
+        // pins that the guard exists at all.)
+        var noApproval = await NewEmployeeAsync("R47-EXPORT-NOAPPROVAL");
+        var absent = await _fx.CalculateAndExportAsync(noApproval, Jun, new DateOnly(2026, 6, 7));
+        AssertRefusal(absent, HttpStatusCode.BadRequest, "payroll-period-not-a-month", noApproval);
+        Assert.Equal(0, await _fx.CountRecordsAsync(noApproval));
+        Assert.Equal(0, _fx.Engine.CallCountFor(noApproval));
     }
 
     /// <summary>

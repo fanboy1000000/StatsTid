@@ -65,8 +65,12 @@ internal sealed class FlexLedgerStubEngine
         _config[key] = (0m, payoutHours);
     }
 
-    public void Configure(string employeeId, DateOnly month, decimal closing, decimal? payoutHours = null) =>
-        _config[(employeeId, new DateOnly(month.Year, month.Month, 1))] = (closing, payoutHours);
+    public void Configure(string employeeId, DateOnly month, decimal closing, decimal? payoutHours = null)
+    {
+        var key = (employeeId, new DateOnly(month.Year, month.Month, 1));
+        _delta.TryRemove(key, out _); // the absolute and the opening-dependent modes exclude each other
+        _config[key] = (closing, payoutHours);
+    }
 
     /// <summary>Every timeline call, in arrival order.</summary>
     public IReadOnlyList<TimelineCall> TimelineCalls => _timelineCalls.ToList();

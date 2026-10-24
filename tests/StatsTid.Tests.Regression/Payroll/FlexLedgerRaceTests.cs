@@ -222,8 +222,7 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
     /// <summary>
     /// AC-C4 (i), the export FIRST (kind F, Docker). The same two requests, but the EXPORT of July is queued first: it wins the
     /// lock and records July (<c>CHAINED 10 -> 20</c>); the correction then runs, finds July exported and, because June's closing
-    /// moved 10 -> 15, NAMES July as the month to recalculate (June ends on a Tuesday, so the Sunday test alone would not
-    /// decide); June's record holds 15 and July's is untouched (ADR-013: nothing cascades).
+    /// moved 10 -> 15, NAMES July as the month to recalculate; June's record holds 15 and July's is untouched (ADR-013: nothing cascades).
     ///
     /// <para><b>Kinds and Red conditions (argued; 5a fix-up).</b> The NAMING of July is kind R, not F: 30 June 2026 is a Tuesday,
     /// so the pre-S146 F1 (Sunday) trigger already names July whenever July is exported; AC-C5 pins R-10 (closing changed, Sunday
