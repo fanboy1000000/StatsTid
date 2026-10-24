@@ -115,6 +115,10 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Null, row.GetProperty("hasWarning").ValueKind);
         Assert.Equal(JsonValueKind.Null, row.GetProperty("ferieUsed").ValueKind);
         Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalance").ValueKind);
+        // S146 R-7 (OQ-5): the withheld row says so with the closed-set state, and carries no month either.
+        // The seeded April ledger record (closing 4) must NOT leak. Kind F: flexBalanceState does not exist today.
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalanceMonth").ValueKind);
+        Assert.Equal("withheld", row.GetProperty("flexBalanceState").GetString());
         // The decision record survives.
         Assert.Equal(JsonValueKind.String, row.GetProperty("submittedAt").ValueKind);
         Assert.NotEqual(JsonValueKind.Null, row.GetProperty("decisionAt").ValueKind);
@@ -265,7 +269,7 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
         // Flex + vacation balance, so the team-overview flexBalance / ferieUsed nulls are meaningful
         // (a leak would surface these seeded values rather than pass against an empty employee).
         await SetVacationBalanceAsync(conn, Emp, 2025, used: 7m, totalQuota: 25m);
-        await InsertFlexEventAsync(conn, Emp, 4m);
+        await InsertFlexLedgerRecordAsync(Emp, 4m); // S146 R-7: was a FlexBalanceUpdated event
     }
 
     private static async Task SetVacationBalanceAsync(
@@ -285,26 +289,13 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private async Task InsertFlexEventAsync(NpgsqlConnection conn, string employeeId, decimal newBalance)
-    {
-        var streamId = $"employee-{employeeId}";
-        await using (var sCmd = new NpgsqlCommand(
-            "INSERT INTO event_streams (stream_id) VALUES (@s) ON CONFLICT DO NOTHING", conn))
-        {
-            sCmd.Parameters.AddWithValue("s", streamId);
-            await sCmd.ExecuteNonQueryAsync();
-        }
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
-        var data = $"{{\"eventId\":\"{Guid.NewGuid()}\",\"employeeId\":\"{employeeId}\",\"previousBalance\":0,\"newBalance\":{newBalance.ToString(inv)},\"delta\":{newBalance.ToString(inv)},\"reason\":\"test\"}}";
-        await using var cmd = new NpgsqlCommand(
-            """
-            INSERT INTO events (event_id, stream_id, stream_version, event_type, data, occurred_at)
-            VALUES (gen_random_uuid(), @s, 1, 'FlexBalanceUpdated', @data::jsonb, NOW())
-            """, conn);
-        cmd.Parameters.AddWithValue("s", streamId);
-        cmd.Parameters.AddWithValue("data", data);
-        await cmd.ExecuteNonQueryAsync();
-    }
+    // S146 R-7: this seed was a FlexBalanceUpdated event (deleted; nothing ever wrote it). The fact is about
+    // VISIBILITY, so the seed is now what the screen really reads: a LEDGER record (a payroll_export_records
+    // row with both balances and a provenance) for the month BEFORE the rejected month, closing at
+    // `closing`. A leak of the latest recorded closing would surface this 4, not pass against an empty ledger.
+    private async Task InsertFlexLedgerRecordAsync(string employeeId, decimal closing)
+        => await TestSupport.FlexLedgerSeed.SeedAsync(
+            _harness.ConnectionString, employeeId, new DateOnly(2026, 4, 1), closing);
 
     private async Task CleanupAsync(NpgsqlConnection conn)
     {
@@ -316,6 +307,7 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
         await ExecAsync(conn, "DELETE FROM time_entries_projection WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM work_time_projection WHERE employee_id = ANY(@ids)");
         await ExecAsync(conn, "DELETE FROM entitlement_balances WHERE employee_id = ANY(@ids)");
+        await ExecAsync(conn, "DELETE FROM payroll_export_records WHERE employee_id = ANY(@ids)"); // S146 R-7: the ledger seed
         await ExecAsync(conn, "DELETE FROM events WHERE stream_id = ANY(@streams)");
         await ExecAsync(conn, "DELETE FROM event_streams WHERE stream_id = ANY(@streams)");
         // The factory boot backfills an employee_profiles row per user (TASK-3403) → delete before users.

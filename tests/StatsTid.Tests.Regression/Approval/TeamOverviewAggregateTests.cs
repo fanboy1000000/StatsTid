@@ -355,29 +355,14 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private async Task InsertFlexEventAsync(string employeeId, decimal newBalance)
-    {
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
-        await conn.OpenAsync();
-        var streamId = $"employee-{employeeId}";
-        await using (var sCmd = new NpgsqlCommand(
-            "INSERT INTO event_streams (stream_id) VALUES (@s) ON CONFLICT DO NOTHING", conn))
-        {
-            sCmd.Parameters.AddWithValue("s", streamId);
-            await sCmd.ExecuteNonQueryAsync();
-        }
-        // camelCase, matching EventSerializer's stored shape (data->>'newBalance').
-        var data = $"{{\"eventId\":\"{Guid.NewGuid()}\",\"employeeId\":\"{employeeId}\",\"previousBalance\":0,\"newBalance\":{newBalance.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"delta\":{newBalance.ToString(System.Globalization.CultureInfo.InvariantCulture)},\"reason\":\"test\"}}";
-        await using var cmd = new NpgsqlCommand(
-            """
-            INSERT INTO events (event_id, stream_id, stream_version, event_type, data, occurred_at)
-            VALUES (gen_random_uuid(), @s, @ver, 'FlexBalanceUpdated', @data::jsonb, NOW())
-            """, conn);
-        cmd.Parameters.AddWithValue("s", streamId);
-        cmd.Parameters.AddWithValue("ver", _flexVersion++);
-        cmd.Parameters.AddWithValue("data", data);
-        await cmd.ExecuteNonQueryAsync();
-    }
+    // S146 R-7: this helper seeded a FlexBalanceUpdated event (deleted; nothing ever wrote it). A team-overview
+    // flex figure now comes from a LEDGER record: a payroll_export_records row with opening_balance,
+    // closing_balance and balance_provenance all set (the table's CHECK). One record per (employee, month).
+    private static readonly DateOnly LedgerMar = new(2026, 3, 1);
+    private static readonly DateOnly LedgerApr = new(2026, 4, 1);
+
+    private Task InsertLedgerRecordAsync(string employeeId, DateOnly month, decimal closing)
+        => TestSupport.FlexLedgerSeed.SeedAsync(_harness.ConnectionString, employeeId, month, closing);
 
     private async Task InsertPayrollExportRecordAsync(string employeeId, int year, int month, Guid? periodId = null)
     {
@@ -400,7 +385,6 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     }
 
     private int _outboxSeq = 1;
-    private int _flexVersion = 1;
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  Roster == act-authority (the key tests, RED-on-naive-/reports)
@@ -522,7 +506,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
         await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
         await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
-        await InsertFlexEventAsync(Emp, 3.5m);
+        await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: was a FlexBalanceUpdated event
 
         var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
 
@@ -538,6 +522,8 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         // moved the leader's Ferie column. Seeded as 7 above precisely so a leak would surface as 7.
         Assert.Equal(JsonValueKind.Null, row.GetProperty("ferieUsed").ValueKind);
         Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalance").ValueKind);
+        Assert.Equal("withheld", row.GetProperty("flexBalanceState").GetString());   // S146 OQ-5 (F: member new)
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalanceMonth").ValueKind);
 
         // STILL VISIBLE — the DENOMINATORS, which no registration can move: normExpected is
         // weekdays x DayNorm.ForWeekday(the agreement's weekly norm, the employee's fraction at month
@@ -570,6 +556,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await InsertPeriodAsync(Emp, "STY02", status);
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
         await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: the latest recorded closing (a released row shows it)
 
         var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
 
@@ -582,6 +569,11 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         // because they can carry the employee's own registrations.
         Assert.Equal(JsonValueKind.Number, row.GetProperty("ferieUsed").ValueKind);
         Assert.Equal(JsonValueKind.Number, row.GetProperty("flexBalance").ValueKind);
+        // S146 R-7: released as the latest RECORDED closing (seeded above: April, 3.5), with its month. Kind F
+        // (today the value is the event-derived 0 and flexBalanceMonth/State do not exist).
+        Assert.Equal(3.5m, row.GetProperty("flexBalance").GetDecimal());
+        Assert.Equal("2026-04", row.GetProperty("flexBalanceMonth").GetString());
+        Assert.Equal("recorded", row.GetProperty("flexBalanceState").GetString());
     }
 
     /// <summary>S127 / TASK-12712 (owner ruling R1) — the inversion of the deleted REJECTED arm above,
@@ -600,7 +592,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
         await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
         await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
-        await InsertFlexEventAsync(Emp, 3.5m);
+        await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: was a FlexBalanceUpdated event
 
         var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
 
@@ -614,6 +606,8 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         Assert.Equal(JsonValueKind.Null, row.GetProperty("hasWarning").ValueKind);
         Assert.Equal(JsonValueKind.Null, row.GetProperty("ferieUsed").ValueKind);
         Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalance").ValueKind);
+        Assert.Equal("withheld", row.GetProperty("flexBalanceState").GetString());   // S146 OQ-5 (F: member new)
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalanceMonth").ValueKind);
 
         // SURVIVES — the decision record the leader authored. R1 withholds in-progress content, not the
         // leader's own past decision; that answer to the S124 rationale is what these keep alive.
@@ -712,15 +706,71 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         }
     }
 
+    // S146 R-7 (TASK-14607-T, OQ-5): FlexBalance_ComesFromLatestFlexEvent (seeded from the never-written
+    // FlexBalanceUpdated event) is REPLACED by the three facts below. The flex column reads the latest
+    // RECORDED closing (a ledger record), labelled with its month, with a closed-set state:
+    // withheld (month unsubmitted) / none (submitted, nothing recorded) / recorded.
+
+    /// <summary>
+    /// OQ-5, kind R + F. <b>R — the withholding holds today:</b> a DRAFT month (unsubmitted) shows NO flex
+    /// figure even though a ledger record exists (closing 12.5, seeded so a leak would surface as 12.5 rather
+    /// than pass against an empty ledger). Owner ruling (S124, 2026-07-30, strict reading, OQ-5 2026-10-23):
+    /// "a manager cannot see anything before a month is submitted".
+    /// <para><b>Red conditions (F half):</b> <c>flexBalanceState == "withheld"</c> and a null
+    /// <c>flexBalanceMonth</c> fail today — neither member exists on the row. The null-balance assertion is
+    /// the R half and passes today.</para>
+    /// </summary>
     [Fact]
-    public async Task FlexBalance_ComesFromLatestFlexEvent()
+    public async Task FlexBalance_Unsubmitted_Withheld()
+    {
+        await InsertPeriodAsync(Emp, "STY02", "DRAFT");
+        await InsertLedgerRecordAsync(Emp, LedgerApr, 12.5m);
+
+        var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
+
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalance").ValueKind);   // R: holds today
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalanceMonth").ValueKind);
+        Assert.Equal("withheld", row.GetProperty("flexBalanceState").GetString());
+    }
+
+    /// <summary>
+    /// Kind F. A SUBMITTED month shows the latest RECORDED closing with its month: ledger records for March
+    /// (closing 3) and April (closing 12.5) are seeded, the later month wins (12.5, "2026-04"), the state is
+    /// <c>recorded</c>. The earlier closing is 3, so a wrong "first record" or "sum" reading cannot pass.
+    /// <para><b>Red conditions:</b> on today's code <c>flexBalance</c> is read from the never-written
+    /// <c>FlexBalanceUpdated</c> event, so with only ledger records seeded it is 0 (not 12.5), and
+    /// <c>flexBalanceMonth</c> / <c>flexBalanceState</c> do not exist: the first assertion fails.</para>
+    /// </summary>
+    [Fact]
+    public async Task FlexBalance_Submitted_ShowsLatestRecordedClosingWithMonth()
     {
         await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
-        await InsertFlexEventAsync(Emp, 3m);
-        await InsertFlexEventAsync(Emp, 12.5m); // the LATEST (highest stream_version) wins
+        await InsertLedgerRecordAsync(Emp, LedgerMar, 3m);
+        await InsertLedgerRecordAsync(Emp, LedgerApr, 12.5m); // the LATEST recorded month wins
 
-        var rows = await GetTeamOverviewAsync(Mgr, 2026, 5);
-        Assert.Equal(12.5m, rows.Single(r => EmployeeId(r) == Emp).GetProperty("flexBalance").GetDecimal());
+        var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
+
+        Assert.Equal(12.5m, row.GetProperty("flexBalance").GetDecimal());
+        Assert.Equal("2026-04", row.GetProperty("flexBalanceMonth").GetString());
+        Assert.Equal("recorded", row.GetProperty("flexBalanceState").GetString());
+    }
+
+    /// <summary>
+    /// Kind F. A SUBMITTED month for an employee with NO recorded month is "none" (the screen's "ingen
+    /// afregnet måned"), never 0: balance and month are both null.
+    /// <para><b>Red conditions:</b> <c>flexBalanceState == "none"</c> fails today (no such member), and
+    /// today's flexBalance for an employee with no event is 0, not null.</para>
+    /// </summary>
+    [Fact]
+    public async Task FlexBalance_Submitted_NoRecordedMonth_ShowsNone()
+    {
+        await InsertPeriodAsync(Emp, "STY02", "SUBMITTED");
+
+        var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
+
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalance").ValueKind);
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("flexBalanceMonth").ValueKind);
+        Assert.Equal("none", row.GetProperty("flexBalanceState").GetString());
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -884,8 +934,8 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await InsertPeriodAsync(EmpIm, "STY02", "SUBMITTED");
         await SetVacationBalanceAsync(Emp, 2025, 3m, 25m);
         await SetVacationBalanceAsync(EmpIm, 2025, 9m, 25m);
-        await InsertFlexEventAsync(Emp, 5m);
-        await InsertFlexEventAsync(EmpIm, -2m);
+        await InsertLedgerRecordAsync(Emp, LedgerApr, 5m); // S146 R-7: was a FlexBalanceUpdated event
+        await InsertLedgerRecordAsync(EmpIm, LedgerApr, -2m);
 
         var rows = await GetTeamOverviewAsync(Mgr, 2026, 5);
         var byId = rows.ToDictionary(EmployeeId);
@@ -898,6 +948,8 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         Assert.Equal(9m, byId[EmpIm].GetProperty("ferieUsed").GetDecimal());
         Assert.Equal(5m, byId[Emp].GetProperty("flexBalance").GetDecimal());
         Assert.Equal(-2m, byId[EmpIm].GetProperty("flexBalance").GetDecimal());
+        Assert.Equal("2026-04", byId[Emp].GetProperty("flexBalanceMonth").GetString());   // S146 R-7: labelled with its month
+        Assert.Equal("recorded", byId[EmpIm].GetProperty("flexBalanceState").GetString());
     }
 
     // ════════════════════════════════════════════════════════════════════════════════

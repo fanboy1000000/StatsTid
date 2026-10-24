@@ -53,10 +53,10 @@ public sealed class S120BalanceSpecRuntimeTests : IAsyncLifetime
     private static readonly DateOnly Clock = new(2026, 3, 5);
     private const int ClosedYear = 2021;
 
-    /// <summary>The EXACT 14 top-level members of <c>BalanceSummaryResponse</c>.</summary>
+    /// <summary>The EXACT 15 top-level members of <c>BalanceSummaryResponse</c> (S146 R-7: +<c>flexBalanceMonth</c>, the month the recorded balance closes).</summary>
     private static readonly string[] SummaryKeys =
     {
-        "employeeId", "year", "month", "flexBalance", "flexDelta", "vacationDaysUsed",
+        "employeeId", "year", "month", "flexBalance", "flexBalanceMonth", "flexDelta", "vacationDaysUsed",
         "vacationDaysEntitlement", "normHoursExpected", "normHoursActual", "overtimeHours",
         "agreementCode", "hasMerarbejde", "entitlements", "overtimeBalance",
     };
@@ -123,7 +123,7 @@ public sealed class S120BalanceSpecRuntimeTests : IAsyncLifetime
     //  Op 1 — GET /summary: the composite; overtimeBalance BOTH branches; settlement null.
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>The 14-member composite through the matcher; the 5 AC/OK24 entitlement rows each
+    /// <summary>The 15-member composite through the matcher; the 5 AC/OK24 entitlement rows each
     /// the exact 10-member shape with <c>settlement</c> served NULL (the list-nested wrapper's
     /// null branch, application #1); <c>overtimeBalance</c> NULL (no overtime_balances row —
     /// wrapper application #2's null branch), then POPULATED (exact 5-member, values verbatim

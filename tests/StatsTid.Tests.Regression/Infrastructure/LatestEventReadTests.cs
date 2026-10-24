@@ -12,7 +12,7 @@ namespace StatsTid.Tests.Regression.Infrastructure;
 /// every time registration, entitlement revaluation, waiver, feriehindring and termination payout an
 /// employee accumulates. Three read paths (<c>/balance/{id}/summary</c>, the year overview, and
 /// <c>/flex-balance</c>) called <c>ReadStreamAsync</c> and ran
-/// <c>.OfType&lt;FlexBalanceUpdated&gt;().LastOrDefault()</c> over the result — loading and
+/// <c>.OfType&lt;T&gt;().LastOrDefault()</c> over the result — loading and
 /// JSON-deserializing the employee's entire history to read one decimal. Cost grew with employment
 /// length and was invisible locally, because the demo world ships ZERO time registrations.</para>
 ///
@@ -41,13 +41,16 @@ public sealed class LatestEventReadTests : IAsyncLifetime
 
     // Formatted with InvariantCulture DELIBERATELY. This machine runs a Danish locale, where
     // `5.0m.ToString()` is "5,0" — interpolating a decimal straight into JSON produced
-    // `"previousBalance":5,0` and Postgres rejected it with 22P02. Worth keeping visible: it is the
+    // `"hours":5,0` and Postgres rejected it with 22P02. Worth keeping visible: it is the
     // same hazard, in miniature, that makes the production reader deserialize through EventSerializer
-    // rather than pulling `data->>'newBalance'` and running its own decimal.TryParse.
-    private static string FlexJson(decimal newBalance, decimal previous = 0m, decimal delta = 0m,
-        string reason = "S126 probe")
+    // rather than pulling `data->>'hours'` and running its own decimal.TryParse.
+    // S146 R-7: the sample event type was FlexBalanceUpdated (deleted with the dead /flex-balance
+    // route). The reader is generic, so the meaning is unchanged with AbsenceRegistered as the
+    // sample: registered, with required members of its own, and not the filler type
+    // (TimeEntryRegistered). `hours` plays the part `newBalance` played.
+    private static string SampleJson(decimal hours, string absenceType = "VACATION")
         => FormattableString.Invariant(
-            $$"""{"employeeId":"f5emp","previousBalance":{{previous}},"newBalance":{{newBalance}},"delta":{{delta}},"reason":"{{reason}}"}""");
+            $$"""{"employeeId":"f5emp","date":"2026-01-15","absenceType":"{{absenceType}}","hours":{{hours}},"agreementCode":"HK","okVersion":"2024"}""");
 
     public async Task InitializeAsync()
     {
@@ -68,9 +71,9 @@ public sealed class LatestEventReadTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The load-bearing one. A deep stream whose FlexBalanceUpdated sits EARLY (version 2) and whose
+    /// The load-bearing one. A deep stream whose AbsenceRegistered sample sits EARLY (version 2) and whose
     /// later rows include one the serializer cannot map. The old full-replay form throws on that row
-    /// before ever reaching the flex event; the bounded read never touches it and returns the right
+    /// before ever reaching the sample event; the bounded read never touches it and returns the right
     /// answer — so this fails against the pre-S126 implementation and passes after.
     /// </summary>
     [Fact]
@@ -80,10 +83,10 @@ public sealed class LatestEventReadTests : IAsyncLifetime
         await conn.OpenAsync();
         await ClearStreamAsync(conn, DeepStream);
 
-        // v1: an ordinary event. v2: the ONE flex event, deliberately early — the worst case for a
+        // v1: an ordinary event. v2: the ONE sample event, deliberately early — the worst case for a
         // backward scan, and the realistic shape for someone whose flex was adjusted once, long ago.
         await InsertEventAsync(conn, DeepStream, 1, "TimeEntryRegistered", TimeEntryJson);
-        await InsertEventAsync(conn, DeepStream, 2, "FlexBalanceUpdated", FlexJson(12.5m, previous: 5.0m, delta: 7.5m));
+        await InsertEventAsync(conn, DeepStream, 2, "AbsenceRegistered", SampleJson(12.5m, "SICK"));
         // v3: a row no registered mapper claims. The old form deserialized EVERY row, so this threw.
         await InsertEventAsync(conn, DeepStream, 3, "AnUnregisteredEventTypeFromTheFuture", """{"x": 1}""");
         for (var v = 4; v <= 60; v++)
@@ -97,14 +100,13 @@ public sealed class LatestEventReadTests : IAsyncLifetime
             () => store.ReadStreamAsync(DeepStream));
 
         // The NEW path answers correctly over the same rows.
-        var latest = await store.ReadLatestOfTypeAsync<FlexBalanceUpdated>(DeepStream);
+        var latest = await store.ReadLatestOfTypeAsync<AbsenceRegistered>(DeepStream);
         Assert.NotNull(latest);
-        Assert.Equal(12.5m, latest!.NewBalance);
-        // All four fields /flex-balance serves must survive the round-trip — the reason this reads
-        // `data` through EventSerializer instead of extracting one JSON key per field.
-        Assert.Equal(5.0m, latest.PreviousBalance);
-        Assert.Equal(7.5m, latest.Delta);
-        Assert.Equal("S126 probe", latest.Reason);
+        Assert.Equal(12.5m, latest!.Hours);
+        // Every field must survive the round-trip — the reason this reads `data` through
+        // EventSerializer instead of extracting one JSON key per field.
+        Assert.Equal("SICK", latest.AbsenceType);
+        Assert.Equal(new DateOnly(2026, 1, 15), latest.Date);
     }
 
     /// <summary>Highest stream_version wins, not insertion order or occurred_at.</summary>
@@ -115,18 +117,18 @@ public sealed class LatestEventReadTests : IAsyncLifetime
         await conn.OpenAsync();
         await ClearStreamAsync(conn, DeepStream);
 
-        await InsertEventAsync(conn, DeepStream, 1, "FlexBalanceUpdated", FlexJson(1.0m));
-        await InsertEventAsync(conn, DeepStream, 2, "FlexBalanceUpdated", FlexJson(2.0m));
-        await InsertEventAsync(conn, DeepStream, 3, "FlexBalanceUpdated", FlexJson(3.0m));
+        await InsertEventAsync(conn, DeepStream, 1, "AbsenceRegistered", SampleJson(1.0m));
+        await InsertEventAsync(conn, DeepStream, 2, "AbsenceRegistered", SampleJson(2.0m));
+        await InsertEventAsync(conn, DeepStream, 3, "AbsenceRegistered", SampleJson(3.0m));
 
         var store = new PostgresEventStore(_factory);
-        var latest = await store.ReadLatestOfTypeAsync<FlexBalanceUpdated>(DeepStream);
+        var latest = await store.ReadLatestOfTypeAsync<AbsenceRegistered>(DeepStream);
 
-        Assert.Equal(3.0m, latest!.NewBalance);
+        Assert.Equal(3.0m, latest!.Hours);
         // Equivalence with the form it replaced, asserted rather than assumed.
         var viaReplay = (await store.ReadStreamAsync(DeepStream))
-            .OfType<FlexBalanceUpdated>().LastOrDefault();
-        Assert.Equal(viaReplay!.NewBalance, latest.NewBalance);
+            .OfType<AbsenceRegistered>().LastOrDefault();
+        Assert.Equal(viaReplay!.Hours, latest.Hours);
     }
 
     /// <summary>No such event ⇒ null, which every caller maps to the 0m / no-history branch.</summary>
@@ -139,7 +141,7 @@ public sealed class LatestEventReadTests : IAsyncLifetime
         await InsertEventAsync(conn, EmptyStream, 1, "TimeEntryRegistered", TimeEntryJson);
 
         var store = new PostgresEventStore(_factory);
-        Assert.Null(await store.ReadLatestOfTypeAsync<FlexBalanceUpdated>(EmptyStream));
+        Assert.Null(await store.ReadLatestOfTypeAsync<AbsenceRegistered>(EmptyStream));
     }
 
     /// <summary>
@@ -154,18 +156,18 @@ public sealed class LatestEventReadTests : IAsyncLifetime
         await ClearStreamAsync(conn, DeepStream);
         await ClearStreamAsync(conn, EmptyStream);
 
-        await InsertEventAsync(conn, DeepStream, 1, "FlexBalanceUpdated", FlexJson(4.0m));
-        await InsertEventAsync(conn, DeepStream, 2, "FlexBalanceUpdated", FlexJson(9.0m));
+        await InsertEventAsync(conn, DeepStream, 1, "AbsenceRegistered", SampleJson(4.0m));
+        await InsertEventAsync(conn, DeepStream, 2, "AbsenceRegistered", SampleJson(9.0m));
         await InsertEventAsync(conn, EmptyStream, 1, "TimeEntryRegistered", TimeEntryJson);
 
-        var map = await PostgresEventStore.ReadLatestOfTypePerStreamAsync<FlexBalanceUpdated>(
+        var map = await PostgresEventStore.ReadLatestOfTypePerStreamAsync<AbsenceRegistered>(
             conn, tx: null, new[] { DeepStream, EmptyStream });
 
-        Assert.Equal(9.0m, map[DeepStream].NewBalance);
+        Assert.Equal(9.0m, map[DeepStream].Hours);
         Assert.DoesNotContain(EmptyStream, map.Keys);
 
         // An empty input must not issue a query that matches everything.
-        var none = await PostgresEventStore.ReadLatestOfTypePerStreamAsync<FlexBalanceUpdated>(
+        var none = await PostgresEventStore.ReadLatestOfTypePerStreamAsync<AbsenceRegistered>(
             conn, tx: null, Array.Empty<string>());
         Assert.Empty(none);
     }
