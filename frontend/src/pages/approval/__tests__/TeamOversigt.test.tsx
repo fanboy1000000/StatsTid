@@ -73,6 +73,8 @@ function row(over: Partial<TeamOverviewRow> = {}): TeamOverviewRow {
     normExpected: 147,
     normRegistered: 140,
     flexBalance: 3.5,
+    flexBalanceMonth: '2026-02', // S146 fixture shape: the regenerated contract requires the month + state
+    flexBalanceState: 'recorded',
     overtime: 0,
     ferieUsed: 5,
     ferieTotal: 25,
@@ -101,13 +103,13 @@ const team = [
   row({
     periodId: 'p-3', employeeId: 'emp003', displayName: 'Carla Eng', status: 'REJECTED',
     decisionAt: '2026-04-01T08:00:00Z', rejectionReason: 'Mangler fordeling',
-    normRegistered: null, flexBalance: null, overtime: null, ferieUsed: null, hasWarning: null,
+    normRegistered: null, flexBalance: null, flexBalanceMonth: null, flexBalanceState: 'withheld', overtime: null, ferieUsed: null, hasWarning: null,
   }),
   // S124 / TASK-12402 — an un-submitted row arrives with FIVE fields WITHHELD (null): the hours,
   // the derived overtime + warning, the flex balance and the ferie USED count. The old fixture said
   // `normRegistered: 0` — the server no longer sends that, and the fabricated zero was the very lie
   // this task removes. Only the DENOMINATORS survive (normExpected, ferieTotal) plus awayToday.
-  row({ periodId: null, employeeId: 'emp004', displayName: 'David Friis', status: 'DRAFT', normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, ferieUsed: null }),
+  row({ periodId: null, employeeId: 'emp004', displayName: 'David Friis', status: 'DRAFT', normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, flexBalanceMonth: null, flexBalanceState: 'withheld', ferieUsed: null }),
   row({ periodId: 'p-5', employeeId: 'emp005', displayName: 'Emil Holm', status: 'EMPLOYEE_APPROVED', flexBalance: 8.0, normRegistered: 130, hasWarning: true }),
 ]
 
@@ -391,6 +393,59 @@ describe('TeamOversigt — the rejection reason at row level (S127 / TASK-12713,
     expect(screen.getAllByText('Begrundelse for afvisning:')).toHaveLength(1)
     expect(within(screen.getByTestId('team-rejection-emp008'))
       .getByText('Begrundelse for afvisning:')).toBeInTheDocument()
+  })
+})
+
+// S146 / TASK-14608 — OQ-5 + R-33 item 5: the flex cell has THREE visibly different states, driven by
+// the server's `flexBalanceState` ("withheld" | "none" | "recorded"), not re-derived client-side.
+// Kind F: the "none" and "recorded" assertions fail on the pre-S146 code, which rendered a null
+// balance as "—" for BOTH withheld and none, and had no month at all. The withheld case is a
+// regression pin (R) — OQ-5 unchanged.
+describe('TeamOversigt — flex balance: withheld / none / recorded (S146 TASK-14608)', () => {
+  const states = [
+    row({ periodId: 'p-1', employeeId: 'emp001', displayName: 'Anna Berg', flexBalance: 12.5, flexBalanceMonth: '2026-09', flexBalanceState: 'recorded' }),
+    row({ periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl', flexBalance: null, flexBalanceMonth: null, flexBalanceState: 'none' }),
+    row({
+      periodId: null, employeeId: 'emp004', displayName: 'David Friis', status: 'DRAFT',
+      normRegistered: null, overtime: null, hasWarning: null, ferieUsed: null,
+      flexBalance: null, flexBalanceMonth: null, flexBalanceState: 'withheld',
+    }),
+  ]
+
+  it('recorded: the signed value, with the SETTLED month as "pr. <måned>" (a tooltip on the cell)', async () => {
+    mockOverview(states)
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    const cell = screen.getByTestId('team-row-emp001').querySelector('[class*="flexCell"]')
+    expect(cell?.textContent?.trim()).toBe('+12,5 t')
+    expect(cell?.getAttribute('title')).toBe('pr. september 2026')
+  })
+
+  it('none: submitted but nothing settled reads "ingen afregnet måned" — not a dash, not a number', async () => {
+    mockOverview(states)
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
+    const cell = screen.getByTestId('team-row-emp002').querySelector('[class*="flexCell"]')
+    expect(cell?.textContent?.trim()).toBe('ingen afregnet måned')
+    expect(cell?.getAttribute('title')).toBeNull()
+  })
+
+  it('withheld: still a bare em dash (OQ-5, unchanged) — visibly different from "none"', async () => {
+    mockOverview(states)
+    renderPage()
+    await waitFor(() => expect(screen.getByText('David Friis')).toBeInTheDocument())
+    const cell = screen.getByTestId('team-row-emp004').querySelector('[class*="flexCell"]')
+    expect(cell?.textContent?.trim()).toBe('—')
+  })
+
+  it('the expanded Overblik panel shows the month on a second line for a recorded row', async () => {
+    mockOverview(states)
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    await userEvent.setup().click(screen.getByTestId('team-row-emp001'))
+    const value = await screen.findByTestId('flex-state-emp001')
+    expect(value.textContent?.trim()).toBe('+12,5 t')
+    expect(value.parentElement?.textContent).toContain('pr. september 2026')
   })
 })
 

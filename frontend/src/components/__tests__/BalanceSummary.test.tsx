@@ -25,6 +25,7 @@ const summaryData: BalanceSummaryData = {
   year: 2026,
   month: 3,
   flexBalance: 4.2,
+  flexBalanceMonth: '2026-02', // S146: the month the headline is as-of (latest settled)
   // Deliberately DIFFERENT from any month aggregate: /summary's flexDelta is the
   // LAST event's delta (R10/Reviewer W3) — the component must NEVER render it on
   // the "Denne måned" sub-line.
@@ -96,6 +97,22 @@ describe('BalanceSummary — Flex card (R10 HYBRID sourcing)', () => {
     renderStrip()
     const num = screen.getByText('+4,2')
     expect(num.className).toContain('pos')
+  })
+
+  // S146 / TASK-14608 (AC-C9) — kind F: both fail on the pre-S146 card, which showed no month
+  // and rendered `data.flexBalance` unguarded (a null balance would have thrown / shown "0,0").
+  it('S146: names the SETTLED month the headline is as-of — "pr. februar 2026" (may differ from the viewed month)', () => {
+    renderStrip()
+    expect(screen.getByTestId('flex-balance-month').textContent).toBe('pr. februar 2026')
+    expect(screen.queryByTestId('flex-balance-none')).toBeNull()
+  })
+
+  it('S146: no settled month -> "ingen afregnet måned" and NO number on the headline', () => {
+    renderStrip({ data: { ...summaryData, flexBalance: null, flexBalanceMonth: null } })
+    expect(screen.getByTestId('flex-balance-none').textContent).toBe('ingen afregnet måned')
+    expect(screen.queryByTestId('flex-balance-month')).toBeNull()
+    expect(screen.queryByText('+4,2')).toBeNull()
+    expect(screen.queryByText('0,0')).toBeNull()
   })
 
   it('headline turns red when the /summary saldo is negative', () => {

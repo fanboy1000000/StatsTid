@@ -39,6 +39,14 @@ interface BalanceSummaryProps {
 
 const EM_DASH = '—'
 
+const NO_SETTLED_MONTH = 'ingen afregnet måned'
+
+/** Server month "2026-09" -> "september 2026" (lower-case, running Danish text). */
+function settledMonthWord(ym: string): string {
+  const [y, m] = ym.split('-')
+  return `${DANISH_MONTHS[Number(m) - 1].toLowerCase()} ${y}`
+}
+
 /** Signed 1-decimal Danish hours value ("+4,2" / "-0,1" / "0,0") — matches the
     grid Diff row's formatSignedDiff so the R2 reconciliation is textual too. */
 function formatSigned1(v: number): string {
@@ -140,14 +148,29 @@ export function BalanceSummary({
           derived delta (R10 HYBRID, R2); sub-line RIGHT = the D-A norm scalar. */}
       <div className={styles.card}>
         <p className={styles.label}>Flex saldo</p>
-        <p className={styles.value}>
-          <span
-            className={`${styles.num} ${data.flexBalance >= 0 ? styles.pos : styles.neg}`}
-          >
-            {formatSigned1(data.flexBalance)}
-          </span>
-          <span className={styles.unit}>t</span>
-        </p>
+        {/* S146 / TASK-14608 — the headline is the closing balance of the latest SETTLED
+            (paid) month, which can be earlier than the viewed month, so the month is named
+            ("pr. september 2026"). No settled month -> words, no number. `flexDelta` is on the
+            wire but deliberately NOT rendered. */}
+        {data.flexBalance !== null && data.flexBalanceMonth !== null ? (
+          <>
+            <p className={styles.value}>
+              <span
+                className={`${styles.num} ${data.flexBalance >= 0 ? styles.pos : styles.neg}`}
+              >
+                {formatSigned1(data.flexBalance)}
+              </span>
+              <span className={styles.unit}>t</span>
+            </p>
+            <p className={styles.month} data-testid="flex-balance-month">
+              pr. {settledMonthWord(data.flexBalanceMonth)}
+            </p>
+          </>
+        ) : (
+          <p className={styles.month} data-testid="flex-balance-none">
+            {NO_SETTLED_MONTH}
+          </p>
+        )}
         <p className={`${styles.month} ${styles.monthRow}`}>
           <span>
             Denne måned{' '}

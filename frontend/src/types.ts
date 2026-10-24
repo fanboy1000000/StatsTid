@@ -1,6 +1,6 @@
 // S120 / TASK-12001 (Typed API Contract retrofit Pass 7, PAT-012) — the
 // employee-facing bucket-C drain. The hand-written wire interfaces that lived
-// here (TimeEntry, AbsenceEntry, FlexBalanceInfo, the S119 skema-owned
+// here (TimeEntry, AbsenceEntry, the S119 skema-owned
 // Project, SkemaRowPreferenceProject/AbsenceType, SkemaRowPreferences,
 // SkemaCatalogs, ConsumptionBasisDay, WorkTimeInterval/Day, DailyNormDay,
 // SkemaMonthData) were DELETED; the names below are ALIASES onto the GENERATED
@@ -22,12 +22,6 @@ export type TimeEntry = Schemas['StatsTid.SharedKernel.Models.TimeEntry']
     (byte-identical to the deleted hand-written interface — faithful). */
 export type AbsenceEntry = Schemas['StatsTid.SharedKernel.Models.AbsenceEntry']
 
-/** GET /api/flex-balance/{employeeId} — the ruled S120 ONE shape (owner ruling
-    #1): all 5 members always present; the 3 history members are `null` (never
-    absent) on the no-history branch; the vestigial `message` member was
-    DROPPED backend-side. The deleted hand-written interface modeled the old
-    polymorphic branch as optional-absent members. */
-export type FlexBalanceInfo = Schemas['StatsTid.Backend.Api.Contracts.FlexBalanceResponse']
 
 export interface WeeklyCalculationResult {
   employeeId: string

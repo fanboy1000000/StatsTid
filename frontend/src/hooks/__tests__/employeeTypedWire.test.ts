@@ -23,7 +23,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { useTimeEntries } from '../useTimeEntries'
-import { useFlexBalance } from '../useFlexBalance'
 import { useBalanceSummary } from '../useBalanceSummary'
 import { useYearOverview } from '../useYearOverview'
 import { useCompliance, useCompensatoryRest } from '../useCompliance'
@@ -151,41 +150,6 @@ describe('useTimeEntries — typed GET + the 201 receipt POST', () => {
     expect(post.body).toEqual(entry)
     expect(Object.keys(post.body as Record<string, unknown>)).toEqual(Object.keys(entry))
     expect(returned).toEqual(receipt)
-  })
-})
-
-// ── flex balance (ruling #1 — the FE-side both-branch delta pin) ─────────────
-
-describe('useFlexBalance — the ruled ONE shape, both branches', () => {
-  it('GET /api/flex-balance/{employeeId} (exact legacy URL); the NO-HISTORY branch (nulls, NO message) flows to state unchanged', async () => {
-    const noHistory = {
-      employeeId: 'emp001',
-      balance: 0,
-      previousBalance: null,
-      delta: null,
-      reason: null,
-    }
-    const calls = captureCalls(() => ({ body: noHistory }))
-    const { result } = renderHook(() => useFlexBalance('emp001'))
-    await waitFor(() => expect(result.current.flexBalance).not.toBeNull())
-    expect(calls[0].url).toBe('/api/flex-balance/emp001')
-    expect(result.current.flexBalance).toEqual(noHistory)
-    // The ruled normalization: null-valued history, and NO vestigial `message`.
-    expect(result.current.flexBalance).not.toHaveProperty('message')
-  })
-
-  it('the WITH-HISTORY branch flows through byte-faithful', async () => {
-    const withHistory = {
-      employeeId: 'emp001',
-      balance: 4.2,
-      previousBalance: 1.7,
-      delta: 2.5,
-      reason: 'WEEKLY_CALCULATION',
-    }
-    captureCalls(() => ({ body: withHistory }))
-    const { result } = renderHook(() => useFlexBalance('emp001'))
-    await waitFor(() => expect(result.current.flexBalance).not.toBeNull())
-    expect(result.current.flexBalance).toEqual(withHistory)
   })
 })
 

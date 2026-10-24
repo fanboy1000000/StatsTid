@@ -422,8 +422,12 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
                             </li>
                             <li>
                               Kontrakt (<code>RecalculateRequest</code>): Profile, Entries, Absences, PeriodStart/PeriodEnd,
-                              PreviousFlexBalance, Reason — operatøren samler selv anmodningen. Denne side viser INGEN udfyldt
-                              anmodning: en sag på denne liste kender ikke payload'en, og et gæt her ville vildlede.
+                              Reason — operatøren samler selv anmodningen. Perioden skal være præcis én hel kalendermåned
+                              (første til sidste dag); alt andet afvises med 400 <code>payroll-period-not-a-month</code>.
+                              Feltet <code>PreviousFlexBalance</code> må IKKE angives: enhver værdi afvises med 400{' '}
+                              <code>payroll-opening-balance-not-accepted</code>, fordi åbningssaldoen afledes af flexregnskabet
+                              (ledgeren). Denne side viser INGEN udfyldt anmodning: en sag på denne liste kender ikke
+                              payload'en, og et gæt her ville vildlede.
                             </li>
                             <li>Kaldet foretages IKKE herfra — browseren kan ikke nå Payroll-tjenesten direkte.</li>
                           </ul>
