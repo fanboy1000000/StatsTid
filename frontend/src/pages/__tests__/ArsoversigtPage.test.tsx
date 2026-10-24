@@ -70,6 +70,7 @@ function makeOverview(overrides: Partial<YearOverview> = {}): YearOverview {
     },
     tiles: {
       flexBalance: 22.5,
+      flexBalanceMonth: '2026-02',
       ferieRemaining: 22,
       careDayRemaining: 1,
       seniorDayRemaining: 3,
@@ -181,8 +182,11 @@ describe('ArsoversigtPage — header + tiles', () => {
     // Flex tile is hours-first: the raw over/under-norm hours (22,5) with the
     // day-equivalent (22,5 ÷ 7,4 ≈ 3) in parens.
     expect(screen.getByText('22,5 (3 dage)')).toBeInTheDocument()
-    // Flex sub-line retained under the new label.
-    expect(screen.getByText('optjent overtid')).toBeInTheDocument()
+    // S146 / TASK-14608 (AC-C9; kind F) — the sub-label names what the figure IS: a settled flex
+    // balance and its month. The old "optjent overtid" (overtime earned) sat on a FLEX figure — that
+    // flex-versus-overtime confusion is retired. (This replaces the retired S123 pin on that text.)
+    expect(screen.getByText('afregnet flexsaldo pr. februar 2026')).toBeInTheDocument()
+    expect(screen.queryByText('optjent overtid')).not.toBeInTheDocument()
     // No 7th tile — Særlige feriedage appears ONLY as a matrix group header.
     expect(screen.getAllByText('Særlige feriedage')).toHaveLength(1)
     // rest → saldo EVERYWHERE: no 'rest' remains; 'saldo' subs on Ferie +
@@ -389,6 +393,16 @@ describe('ArsoversigtPage — days/hours display model (S123)', () => {
     // Flex tile stays hours-only ("22,5") — the hours-first "(… dage)" form is gone.
     expect(screen.getByText('22,5')).toBeInTheDocument()
     expect(screen.queryByText('22,5 (3 dage)')).not.toBeInTheDocument()
+  })
+
+  it('S146: no settled month -> the flex tile says "ingen afregnet måned" (no number, no em dash)', () => {
+    const ov = makeOverview()
+    ov.tiles = { ...ov.tiles, flexBalance: null, flexBalanceMonth: null }
+    mockUseYearOverview.mockReturnValue(overviewHook(ov))
+    renderPage()
+    expect(screen.getByText('ingen afregnet måned')).toBeInTheDocument()
+    expect(screen.queryByText('22,5 (3 dage)')).not.toBeInTheDocument()
+    expect(screen.getByText('afregnet flexsaldo')).toBeInTheDocument()
   })
 
   it('renders the flex tile hours-first with a SIGNED day-equivalent (-162,8 → -22 dage)', () => {

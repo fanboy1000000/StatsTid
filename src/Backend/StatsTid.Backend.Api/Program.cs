@@ -151,6 +151,13 @@ builder.Services.AddSingleton<IEmploymentProfileResolver, EmploymentProfileResol
 // the team-overview handler takes it as a parameter, and an unregistered complex parameter on a
 // MapGet fails at endpoint-mapping time (see the EmploymentHistoryReadRepository note below).
 builder.Services.AddSingleton<IPartTimeFractionBatchReader, PartTimeFractionBatchReader>();
+// S146 / TASK-14607 (refinement C5) — the flex ledger's read-only view: each employee's latest
+// RECORDED flex closing on the Payroll-owned payroll_export_records (ADR-034 D4: the Backend reads
+// it, never writes it). /summary and the year overview take it as a handler parameter (so it must
+// be registered — an unregistered complex parameter on a MapGet fails at endpoint-mapping time, see
+// the EmploymentHistoryReadRepository note below); the team overview calls its static batch read on
+// its own open connection. Stateless over the connection factory ⇒ singleton-safe.
+builder.Services.AddSingleton<FlexLedgerReadRepository>();
 // S136 / ADR-040 D1 — employment-window fact resolver, dual-binding per the IOutboxEnqueue
 // pattern: one concrete, exposed as the SharedKernel self-managed surface AND the
 // Infrastructure in-tx surface (the D3 strand/re-hire guards read in-lock through the

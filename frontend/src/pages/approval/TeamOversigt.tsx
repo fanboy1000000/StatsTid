@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, Fragment, type ReactNode } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useCalendarToday } from '../../contexts/CalendarContext'
-import { formatMonthLabel } from '../../lib/locale'
+import { NO_SETTLED_MONTH, formatMonthLabel, formatYearMonthWord } from '../../lib/locale'
 import { apiClient } from '../../lib/api'
 import { Dialog } from '../../components/ui/Dialog'
 import { ManagerSkemaGrid } from './ManagerSkemaGrid'
@@ -78,6 +78,27 @@ function flexColorClass(flex: number): string {
   if (flex > 0.05) return styles.flexPositive
   if (flex < -0.05) return styles.flexNegative
   return styles.flexZero
+}
+
+/** S146 / TASK-14608 (OQ-5, R-33 item 5) — the flex cell's three visibly different states,
+ *  read from the server's `flexBalanceState` discriminator (never re-derived from the status):
+ *  - withheld : the employee has not submitted the row's month -> em dash (unchanged);
+ *  - none     : submitted, but no month has been settled      -> "ingen afregnet måned";
+ *  - recorded : the latest settled month's closing balance     -> value, month as "pr. <måned>".
+ *  FAILS CLOSED (the 5a review's W2): only an explicit `none` shows "ingen afregnet måned". An
+ *  absent or unrecognised state, and a `recorded` row whose balance or month is null or malformed
+ *  (a contract slip), render the withheld dash with no month — because the dash is the OQ-5-safe
+ *  answer, and "ingen afregnet måned" on an unsubmitted row would itself disclose something. */
+function flexCell(row: TeamOverviewRow): { text: string; cls: string; month: string | null } {
+  const withheld = { text: WITHHELD, cls: '', month: null }
+  if (row.flexBalanceState === 'none') return { text: NO_SETTLED_MONTH, cls: styles.secondary, month: null }
+  if (row.flexBalanceState === 'recorded' && row.flexBalance !== null) {
+    const word = formatYearMonthWord(row.flexBalanceMonth)
+    if (word !== null) {
+      return { text: flexText(row.flexBalance), cls: flexColorClass(row.flexBalance), month: `pr. ${word}` }
+    }
+  }
+  return withheld
 }
 
 /** da-DK long date, e.g. "29. marts 2026"; null-safe. */
@@ -170,6 +191,7 @@ function TeamRowDetail({
     0.0001,
   )
 
+  const flex = flexCell(row)
   const imbalance = breakdown?.hasAllocationImbalance ?? false
   const under = breakdown?.underAllocated ?? 0
   const over = breakdown?.overAllocated ?? 0
@@ -198,9 +220,10 @@ function TeamRowDetail({
             <div className={styles.saldiGrid}>
               <div className={styles.saldiCell}>
                 <div className={styles.saldiCellLabel}>Flex saldo</div>
-                <div className={`${styles.saldiCellValue} ${row.flexBalance === null ? '' : flexColorClass(row.flexBalance)}`}>
-                  {row.flexBalance === null ? WITHHELD : flexText(row.flexBalance)}
+                <div className={`${styles.saldiCellValue} ${flex.cls}`} data-testid={`flex-state-${row.employeeId}`}>
+                  {flex.text}
                 </div>
+                {flex.month && <div className={styles.saldiCellLabel}>{flex.month}</div>}
               </div>
               <div className={styles.saldiCell}>
                 <div className={styles.saldiCellLabel}>Ferie</div>
@@ -809,6 +832,7 @@ export function TeamOversigt() {
             <tbody>
               {view.map(row => {
                 const meta = statusMeta(row.status)
+                const flexTd = flexCell(row)
                 // null ⇒ withheld (not sent): no ratio, so no progress bar — a bar at 0% would
                 // read as "registered nothing this month".
                 const ratio = row.normRegistered === null
@@ -899,8 +923,10 @@ export function TeamOversigt() {
                           </div>
                         )}
                       </td>
-                      <td className={`${styles.right} ${styles.flexCell} ${row.flexBalance === null ? '' : flexColorClass(row.flexBalance)}`}>
-                        {row.flexBalance === null ? WITHHELD : flexText(row.flexBalance)}
+                      <td className={`${styles.right} ${styles.flexCell} ${flexTd.cls}`}>
+                        {flexTd.text}
+                        {/* The month is VISIBLE text (a title tooltip is invisible to keyboard and touch). */}
+                        {flexTd.month && <div className={styles.secondary} data-testid={`flex-month-${row.employeeId}`}>{flexTd.month}</div>}
                       </td>
                       {/* The QUOTA stays (a standing entitlement, the honest denominator); only the
                           USED count is withheld — it moves the moment the employee drafts a day off. */}

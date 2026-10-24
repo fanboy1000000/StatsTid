@@ -6,7 +6,7 @@ import { useYearOverview, type YearOverview, type YearOverviewCategory } from '.
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Spinner } from '../components/ui/Spinner'
-import { formatDanishNumber } from '../lib/locale'
+import { NO_SETTLED_MONTH, formatDanishNumber, formatYearMonthWord } from '../lib/locale'
 import styles from './ArsoversigtPage.module.css'
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec']
@@ -37,6 +37,8 @@ interface TileSpec {
   value: number | null
   kind: TileKind
   sub: string
+  /** Words shown instead of the em dash when `value` is null (the flex tile's "no settled month"). */
+  emptyText?: string
 }
 
 interface TileDisplay {
@@ -92,8 +94,17 @@ function formatCategoryValue(days: number, hoursFirst: boolean, norm: number | n
 
 function buildTiles(data: YearOverview): TileSpec[] {
   const t = data.tiles
+  const flexMonth = formatYearMonthWord(t.flexBalanceMonth)
   const tiles: TileSpec[] = [
-    { label: 'Difference fra norm tid - år', value: t.flexBalance, kind: 'flex', sub: 'optjent overtid' },
+    {
+      label: 'Difference fra norm tid - år',
+      // A number without a well-formed month would be an unlabelled figure: fail closed to the empty state.
+      value: flexMonth !== null ? t.flexBalance : null,
+      kind: 'flex',
+      // S146 / TASK-14608 — a settled flex balance and its month, never "overtid" (flex is not overtime).
+      sub: t.flexBalance !== null && flexMonth !== null ? `afregnet flexsaldo pr. ${flexMonth}` : 'afregnet flexsaldo',
+      emptyText: NO_SETTLED_MONTH,
+    },
     { label: 'Ferie', value: t.ferieRemaining, kind: 'hoursFirstDays', sub: 'saldo' },
     { label: 'Omsorgsdage', value: t.careDayRemaining, kind: 'daysOnly', sub: 'saldo' },
   ]
@@ -226,7 +237,7 @@ export function ArsoversigtPage() {
                     {disp.paren ? ` ${disp.paren}` : ''}
                   </>
                 ) : (
-                  <span className={styles.dash}>{EM_DASH}</span>
+                  <span className={styles.dash}>{tile.emptyText ?? EM_DASH}</span>
                 )}
               </p>
               <p className={styles.statSub}>{tile.sub}</p>

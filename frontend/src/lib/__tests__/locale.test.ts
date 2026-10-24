@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'vitest'
-import { parseDanishNumber, formatDanishNumber } from '../locale'
+import { parseDanishNumber, formatDanishNumber, formatYearMonthWord } from '../locale'
+
+// S146 / TASK-14608 (kind N — new helper) — the guarded month formatter behind the flex screens.
+describe('formatYearMonthWord', () => {
+  it('formats a well-formed month as lower-case Danish: 2026-09 -> september 2026', () => {
+    expect(formatYearMonthWord('2026-09')).toBe('september 2026')
+    expect(formatYearMonthWord('2026-01')).toBe('januar 2026')
+    expect(formatYearMonthWord('2026-12')).toBe('december 2026')
+  })
+
+  it('returns null for month 0 and 13 (out of range)', () => {
+    expect(formatYearMonthWord('2026-00')).toBeNull()
+    expect(formatYearMonthWord('2026-13')).toBeNull()
+  })
+
+  it('returns null for garbage and never throws', () => {
+    for (const bad of ['', 'garbage', '2026-9', '2026-09-01', '26-09', ' 2026-09', 'abcd-ef']) {
+      expect(() => formatYearMonthWord(bad)).not.toThrow()
+      expect(formatYearMonthWord(bad)).toBeNull()
+    }
+  })
+
+  it('returns null for null and undefined', () => {
+    expect(formatYearMonthWord(null)).toBeNull()
+    expect(formatYearMonthWord(undefined)).toBeNull()
+  })
+})
 
 describe('parseDanishNumber', () => {
   it('parses a Danish decimal comma', () => {

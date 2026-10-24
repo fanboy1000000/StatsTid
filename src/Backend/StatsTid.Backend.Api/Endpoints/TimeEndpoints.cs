@@ -435,55 +435,13 @@ public static class TimeEndpoints
         // S120 / TASK-12000 — the NAMED SharedKernel model IS the wire shape (a BARE ARRAY).
         .Produces<IEnumerable<AbsenceEntry>>(StatusCodes.Status200OK);
 
-        // ── Flex Balance ──
-        //
-        // OUT OF SCOPE for S27 Phase 4c.6 / TASK-2707 (per refinement Assumption #4).
-        // FlexBalanceUpdated is NOT yet projected to a read-model table; this handler
-        // continues to read from the event stream. Phase 4d / 4e will introduce a
-        // flex_balance_projection if read-your-write is required for this endpoint.
-
-        app.MapGet("/api/flex-balance/{employeeId}", async (string employeeId, IEventStore eventStore, OrgScopeValidator scopeValidator, HttpContext context, CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-
-            if (actor.ActorRole == StatsTidRoles.Employee && employeeId != actor.ActorId)
-                return Results.Forbid();
-
-            // For higher roles, verify org scope covers the target employee
-            if (actor.ActorRole != StatsTidRoles.Employee)
-            {
-                var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
-                if (!allowed)
-                    return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-            }
-
-            // S126 / F5 — one row, not the whole consolidated stream. This handler reads FOUR fields
-            // off the event plus a distinct no-history branch, which is why it deserializes through
-            // EventSerializer rather than extracting `data->>'…'` per field: the wire shape stays
-            // owned by the serializer and the null branch below is unchanged.
-            var streamId = $"employee-{employeeId}";
-            var latest = await eventStore.ReadLatestOfTypeAsync<FlexBalanceUpdated>(streamId, ct);
-
-            // S120 / TASK-12000 — OWNER RULING #1 (branch-normalization class, 1st instance,
-            // ruled 2026-07-21): the no-history branch serves the ONE 5-member shape with the
-            // 3 history members null-filled; the vestigial `message` (no reader existed) DIES.
-            // The with-history branch below is BYTE-IDENTICAL to the pre-S120 wire.
-            if (latest is null)
-                return Results.Ok(new FlexBalanceResponse(
-                    EmployeeId: employeeId,
-                    Balance: 0m,
-                    PreviousBalance: null,
-                    Delta: null,
-                    Reason: null));
-
-            return Results.Ok(new FlexBalanceResponse(
-                EmployeeId: employeeId,
-                Balance: latest.NewBalance,
-                PreviousBalance: latest.PreviousBalance,
-                Delta: latest.Delta,
-                Reason: latest.Reason));
-        }).RequireAuthorization("EmployeeOrAbove")
-        .Produces<FlexBalanceResponse>(StatusCodes.Status200OK); // S120 / TASK-12000
+        // S146 / TASK-14607 (refinement C5) — GET /api/flex-balance/{employeeId} is DELETED, with its
+        // response record. It read a flex-balance event that nothing in the system ever wrote, so it
+        // answered 0 for everyone. The flex balance is now the latest recorded closing of the flex
+        // ledger, served (labelled with its month) by GET /api/balance/{employeeId}/summary and the
+        // year overview (BalanceEndpoints), and per row by the team overview (ApprovalEndpoints).
+        // S120 owner ruling #1 (the branch-normalization class) stands; its first instance — this
+        // route's no-history branch — retired with the route.
 
         return app;
     }

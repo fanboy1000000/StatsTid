@@ -971,27 +971,20 @@ public static class ApprovalEndpoints
                     ferieByEmployee[reader.GetString(0)] = (reader.GetDecimal(1), reader.GetDecimal(2));
             }
 
-            // (2f) flexBalance = the latest FlexBalanceUpdated NewBalance per employee. Flex has no
-            //      projection (it lives ONLY in the employee-{id} event stream), so this is a BOUNDED,
-            //      set-based read: DISTINCT ON (stream_id) over the team's streams, picking the highest
-            //      stream_version FlexBalanceUpdated row — NOT a per-employee full-stream replay loop.
+            // (2f) flex = each roster employee's latest RECORDED closing and its month — S146 /
+            //      TASK-14607 (refinement C5, AC-C9). ONE bounded, set-based read of the Payroll-owned
+            //      flex ledger (payroll_export_records rows carrying balances; READ-ONLY cross-context,
+            //      ADR-034 D4, the same contract as (2g2) below) on this request's connection: the
+            //      newest ledger record per employee, raw records (no balances) ignored. The SAME query
+            //      serves /summary and the year-overview tile, so a leader's row and the employee's own
+            //      screen can never pick a different "latest" month. An employee with no ledger record
+            //      is absent from the map ⇒ "none" below, never a made-up 0. Before S146 this read the
+            //      latest flex-balance event per stream, which nothing ever wrote, so every row read 0.
             //
-            //      S126 / F5 — this WAS that query, hand-rolled inline with a `data->>'newBalance'`
-            //      extraction and its own NumberStyles/InvariantCulture parse. It is now the batch
-            //      shape of the shared reader, so the four flex readers in this codebase share ONE
-            //      encoding of "latest event of this type" and the camelCase JSON key stays inside
-            //      EventSerializer instead of being restated here.
-            var flexByEmployee = new Dictionary<string, decimal>(StringComparer.Ordinal);
-            var flexStreamIds = employeeIds.Select(id => $"employee-{id}").ToArray();
-            var latestFlexByStream = await PostgresEventStore
-                .ReadLatestOfTypePerStreamAsync<FlexBalanceUpdated>(conn, tx: null, flexStreamIds, ct);
-            foreach (var (streamId, flexEvent) in latestFlexByStream)
-            {
-                var empId = streamId.StartsWith("employee-", StringComparison.Ordinal)
-                    ? streamId.Substring("employee-".Length)
-                    : streamId;
-                flexByEmployee[empId] = flexEvent.NewBalance;
-            }
+            //      Read for every roster employee; the OQ-5 withholding happens at row assembly (3),
+            //      server-side, exactly like the other withheld figures.
+            var recordedFlexByEmployee = await FlexLedgerReadRepository
+                .GetLatestClosingsAsync(conn, employeeIds, ct);
 
             // (2g) awayToday = an absence covering TODAY. PER-EMPLOYEE FAULT-ISOLATED: a failure of
             //      THIS read degrades EVERY row's awayToday to false (never a whole-table 500); a
@@ -1163,16 +1156,28 @@ public static class ApprovalEndpoints
                 // then lifted the tiering into ApprovalReadTier and gated THREE of the sibling reads
                 // (allocation-breakdown, compliance/period, balance/summary) with the same predicate —
                 // leader-tier 403 on non-submitted months. The REMAINING siblings (raw time entries,
-                // absences, flex-balance, balance year-overview/series, compensatory-rest, the
-                // overtime reads) still have NO period-status gate; that 9-read remainder is RECORDED
-                // in RES-002 with the corrected census. Describe enforcement as PARTIAL.
+                // absences, balance year-overview/series, compensatory-rest, the overtime reads)
+                // still have NO period-status gate; that remainder is RECORDED in RES-002 with the
+                // corrected census (9 reads there; 8 since S146 / TASK-14607 deleted GET
+                // /api/flex-balance). Since S146 the year overview's flex tile carries the real latest
+                // recorded closing, under that same RES-002 posture. Describe enforcement as PARTIAL.
                 var submittedToManager = ApprovalVisibility.IsSubmittedToManager(status);
 
                 var normRegistered = registeredByEmployee.GetValueOrDefault(r.EmployeeId, 0m);
                 var overtime = Math.Max(0m, normRegistered - normExpected);
 
                 var (ferieUsed, ferieTotal) = ferieByEmployee.GetValueOrDefault(r.EmployeeId, (0m, 0m));
-                var flexBalance = flexByEmployee.GetValueOrDefault(r.EmployeeId, 0m);
+                // S146 / TASK-14607 (owner ruling OQ-5) — the flex column. An unsubmitted month keeps
+                // it WITHHELD (the `submittedToManager ? … : null` gate at the row below, unchanged);
+                // a submitted month shows the latest recorded closing with its month, or "none" when
+                // nothing is recorded. The state is computed from the SAME two inputs as the gated
+                // balance and month (submittedToManager, recordedFlex), so the three members agree.
+                var recordedFlex = recordedFlexByEmployee.GetValueOrDefault(r.EmployeeId);
+                var flexBalanceState = !submittedToManager
+                    ? TeamOverviewFlexBalanceState.Withheld
+                    : recordedFlex is null
+                        ? TeamOverviewFlexBalanceState.None
+                        : TeamOverviewFlexBalanceState.Recorded;
                 var awayToday = awayTodayAvailable && awayTodaySet.Contains(r.EmployeeId);
 
                 // payrollExported = the month is sent to lønkørsel (a payroll_export_records row
@@ -1212,8 +1217,8 @@ public static class ApprovalEndpoints
                     }
                 }
 
-                // S116 / TASK-11600 — named record (BYTE-IDENTICAL wire JSON; the 18-field
-                // handler-assembled Teamoversigt row).
+                // S116 / TASK-11600 — named record (the handler-assembled Teamoversigt row; 18 fields
+                // until S146 / TASK-14607 added flexBalanceMonth and flexBalanceState).
                 employees.Add(new TeamOverviewEmployeeRow(
                     PeriodId: r.PeriodId,
                     EmployeeId: r.EmployeeId,
@@ -1229,7 +1234,11 @@ public static class ApprovalEndpoints
                     // blanking in the view would leave it readable in the network response, which is
                     // presentation, not access control.
                     NormRegistered: submittedToManager ? normRegistered : null,
-                    FlexBalance: submittedToManager ? flexBalance : null,
+                    // OQ-5: withheld on an unsubmitted month; on a submitted one, null only when no
+                    // month is recorded. flexBalanceState names which null it is.
+                    FlexBalance: submittedToManager ? recordedFlex?.ClosingBalance : null,
+                    FlexBalanceMonth: submittedToManager ? recordedFlex?.MonthLabel : null,
+                    FlexBalanceState: flexBalanceState,
                     Overtime: submittedToManager ? overtime : null,
                     FerieUsed: submittedToManager ? ferieUsed : null,
                     FerieTotal: ferieTotal,

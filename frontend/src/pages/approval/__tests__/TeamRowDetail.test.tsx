@@ -20,6 +20,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { TeamOversigt } from '../TeamOversigt'
+import type { TeamOverviewRow } from '../../../hooks/useTeamOverview'
 import { renderWithCalendar } from '../../../test/renderWithCalendar'
 
 // ── Auth mock (PAT-007: stable role; flip via the module-level holder) ───────
@@ -51,7 +52,7 @@ const mockReload = vi.fn()
 Object.defineProperty(window, 'location', { value: { reload: mockReload }, writable: true })
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
-function row(over: Partial<Record<string, unknown>> = {}) {
+function row(over: Partial<TeamOverviewRow> = {}): TeamOverviewRow {
   return {
     periodId: 'p-1',
     employeeId: 'emp001',
@@ -64,6 +65,8 @@ function row(over: Partial<Record<string, unknown>> = {}) {
     normExpected: 147,
     normRegistered: 140,
     flexBalance: 3.5,
+    flexBalanceMonth: '2026-02',
+    flexBalanceState: 'recorded',
     overtime: 2,
     ferieUsed: 5,
     ferieTotal: 25,
@@ -481,7 +484,7 @@ describe('TeamRowDetail — rejection reason', () => {
     mockRoutes({
       overview: [row({
         status: 'REJECTED', decisionAt: '2026-04-01T08:00:00Z', rejectionReason: 'Mangler fordeling',
-        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, ferieUsed: null,
+        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, flexBalanceMonth: null, flexBalanceState: 'withheld', ferieUsed: null,
       })],
     })
     renderPage()
@@ -658,7 +661,7 @@ describe("TeamRowDetail - the inline read-only employee skema (S124 / TASK-12403
     mockRoutes({
       overview: [row({
         periodId: null, employeeId: "emp009", displayName: "Withheld Person", status: "DRAFT",
-        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, ferieUsed: null,
+        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, flexBalanceMonth: null, flexBalanceState: 'withheld', ferieUsed: null,
       })],
     })
     renderPage()
@@ -681,7 +684,7 @@ describe("TeamRowDetail - the inline read-only employee skema (S124 / TASK-12403
     mockRoutes({
       overview: [row({
         status: "REJECTED", decisionAt: "2026-04-01T08:00:00Z", rejectionReason: "Mangler fordeling",
-        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, ferieUsed: null,
+        normRegistered: null, overtime: null, hasWarning: null, flexBalance: null, flexBalanceMonth: null, flexBalanceState: 'withheld', ferieUsed: null,
       })],
     })
     renderPage()

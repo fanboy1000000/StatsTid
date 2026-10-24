@@ -14,15 +14,12 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// event-sourced write's receipt, P3-fenced) + time-entries GET (a BARE ARRAY of the NAMED
 /// SharedKernel <c>TimeEntry</c> model — 12 members since S132's ADR-039 <c>sourceStintId</c>,
 /// wire exposure owner-ratified 2026-08-25 at the S134-close CI remediation), absences GET (a bare array of the NAMED
-/// <c>AbsenceEntry</c> — 6 members; a ZERO-FE-caller greenfield op, typed anyway), and the flex
-/// GET carrying <b>OWNER RULING #1</b> (branch-normalization class, 1st instance): the
-/// no-history branch serves the normalized ONE shape — all 5 keys present, the 3 history keys
-/// null, NO vestigial <c>message</c> key — while the with-history branch is byte-faithful to
-/// the pre-S120 wire.
+/// <c>AbsenceEntry</c> — 6 members; a ZERO-FE-caller greenfield op, typed anyway). S146 R-7: the
+/// fourth op, the flex GET (S120 OWNER RULING #1, first instance), is retired with its route.
 ///
-/// <para><b>Per-op policy pins:</b> all four ops are <c>EmployeeOrAbove</c> with the
+/// <para><b>Per-op policy pins:</b> the ops are <c>EmployeeOrAbove</c> with the
 /// employee-self gate — every op here is DRIVEN by the employee-self client and SUCCEEDS (the
-/// positive floor pins), and a FOREIGN employee actor is pinned 403 on all four (the self-gate
+/// positive floor pins), and a FOREIGN employee actor is pinned 403 on each (the self-gate
 /// half).</para>
 ///
 /// <para><b>UNCONDITIONED pin (Step-0b Reviewer N2):</b> the POST is sent with NO
@@ -32,8 +29,8 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// Contracts-suite harness — never the compose stack on :5432). ALL ids are S120-prefixed and
 /// DISJOINT from every existing suite: org <c>S120TIM1</c>, employees <c>s120t_*</c>. Time
 /// entries are created through the REAL POST (read-your-write choreography); the absence
-/// projection row and the flex <c>FlexBalanceUpdated</c> events are INPUT-data seeds (the
-/// established TeamOverviewAggregateTests convention — flex has no write endpoint; absence
+/// projection row is an INPUT-data seed (the
+/// established TeamOverviewAggregateTests convention — absence
 /// writes are owned by the Skema save whose rule-engine hop does not exist in this harness).
 /// Matcher + Support + S118/S119/S120 asserts consumed AS-IS.</para>
 /// </summary>
@@ -59,12 +56,6 @@ public sealed class S120TimeSpecRuntimeTests : IAsyncLifetime
     /// <summary>The EXACT 6 members of the NAMED SharedKernel <c>AbsenceEntry</c> model.</summary>
     private static readonly string[] AbsenceEntryKeys =
         { "employeeId", "date", "absenceType", "hours", "agreementCode", "okVersion" };
-
-    /// <summary>The EXACT 5 members of the RULING-#1 normalized <c>FlexBalanceResponse</c> —
-    /// the vestigial <c>message</c> key is NOT here, and the exact-key-set assert proves its
-    /// absence on the live no-history wire.</summary>
-    private static readonly string[] FlexKeys =
-        { "employeeId", "balance", "previousBalance", "delta", "reason" };
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
@@ -187,70 +178,26 @@ public sealed class S120TimeSpecRuntimeTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  Op 4 — GET /api/flex-balance/{employeeId} — the RULING-#1 DELTA pins.
+    //  S146 R-7 (TASK-14607-T): Op 4, GET /api/flex-balance/{employeeId}, is RETIRED. The route,
+    //  FlexBalanceResponse and the FlexBalanceUpdated event it read were deleted (dead since S120:
+    //  no emission site). S120 OWNER RULING #1 (branch normalisation) is a CLASS ruling and stands;
+    //  its FIRST INSTANCE, the flex no-history/with-history pair, is retired with the route. The
+    //  retired facts: Flex_Get200_NoHistoryBranch_NormalizedOneShape_Ruling1DeltaPin,
+    //  Flex_Get200_WithHistoryBranch_LatestEventValues_ByteFaithful and
+    //  Gate_IsRed_OnInjectedPhantomRequiredMember_AndGreenOnTheCommittedTruth (the injected-lie
+    //  technique lives on in the S117-S119 siblings). The /summary flex shape is pinned in
+    //  S120BalanceSpecRuntimeTests and FlexBalanceReadTests.
     // ════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary><b>RULING #1, the no-history branch (the DELTA — never byte-asserted against the
-    /// old wire):</b> a fresh employee with NO <c>FlexBalanceUpdated</c> history serves the
-    /// normalized ONE shape — ALL 5 keys present, <c>balance: 0</c>, the 3 history keys JSON
-    /// null, and NO <c>message</c> key (the vestigial member DIED; the exact-key-set assert
-    /// fails on its resurrection AND on any re-omission of the null-filled keys).</summary>
-    [Fact]
-    public async Task Flex_Get200_NoHistoryBranch_NormalizedOneShape_Ruling1DeltaPin()
-    {
-        var emp = await SeedEmployeeAsync("flx1");
-        using var employee = S120ContractAssert.EmployeeClient(_factory, emp, Org);
-
-        var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
-            _spec, employee,
-            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Get, $"/api/flex-balance/{emp}"),
-            "/api/flex-balance/{employeeId}", "get");
-
-        var root = JsonDocument.Parse(body).RootElement;
-        S118ContractAssert.AssertExactKeySet(root, FlexKeys, "flex no-history branch (ruling #1)");
-        Assert.Equal(emp, root.GetProperty("employeeId").GetString());
-        Assert.Equal(0m, root.GetProperty("balance").GetDecimal());
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("previousBalance").ValueKind); // null-filled
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("delta").ValueKind);           // null-filled
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("reason").ValueKind);          // null-filled
-        // NO `message` key: proven by the exact-key-set assert above (extra keys fail, named).
-    }
-
-    /// <summary><b>RULING #1, the with-history branch (byte-faithful — NOT part of the delta):</b>
-    /// two seeded <c>FlexBalanceUpdated</c> events (INPUT data on the employee stream; the
-    /// TeamOverviewAggregateTests seed convention) — the endpoint serves the LATEST event's
-    /// values on the SAME 5-key shape, every member non-null.</summary>
-    [Fact]
-    public async Task Flex_Get200_WithHistoryBranch_LatestEventValues_ByteFaithful()
-    {
-        var emp = await SeedEmployeeAsync("flx2");
-        await SeedFlexEventAsync(emp, version: 1, previous: 0m, next: 3.5m, reason: "S120 fleksopbygning");
-        await SeedFlexEventAsync(emp, version: 2, previous: 3.5m, next: 5.25m, reason: "S120 fleksregulering");
-
-        using var employee = S120ContractAssert.EmployeeClient(_factory, emp, Org);
-        var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
-            _spec, employee,
-            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Get, $"/api/flex-balance/{emp}"),
-            "/api/flex-balance/{employeeId}", "get");
-
-        var root = JsonDocument.Parse(body).RootElement;
-        S118ContractAssert.AssertExactKeySet(root, FlexKeys, "flex with-history branch");
-        Assert.Equal(emp, root.GetProperty("employeeId").GetString());
-        Assert.Equal(5.25m, root.GetProperty("balance").GetDecimal());          // the LATEST event
-        Assert.Equal(3.5m, root.GetProperty("previousBalance").GetDecimal());
-        Assert.Equal(1.75m, root.GetProperty("delta").GetDecimal());
-        Assert.Equal("S120 fleksregulering", root.GetProperty("reason").GetString());
-    }
-
     // ════════════════════════════════════════════════════════════════════════════════
-    //  The P7 self-gate pins — a FOREIGN employee actor, 403 on all four ops.
+    //  The P7 self-gate pins — a FOREIGN employee actor, 403 on the three remaining ops (S146: the flex op is retired).
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>The policy map's negative half: the SAME Employee role that succeeds on
-    /// self-access is 403 on a FOREIGN employee's id across all four ops (the employee-self
+    /// self-access is 403 on a FOREIGN employee's id across the three remaining ops (the employee-self
     /// gate; per-op pins, not a generalization).</summary>
     [Fact]
-    public async Task ForeignEmployee_403_OnAllFourOps_SelfGatePins()
+    public async Task ForeignEmployee_403_OnTheThreeRemainingOps_SelfGatePins()
     {
         var target = await SeedEmployeeAsync("tgt1");
         var alien = await SeedEmployeeAsync("alien1");
@@ -265,53 +212,12 @@ public sealed class S120TimeSpecRuntimeTests : IAsyncLifetime
         {
             $"/api/time-entries/{target}",
             $"/api/absences/{target}",
-            $"/api/flex-balance/{target}",
         })
         {
             using var get = await alienClient.SendAsync(
                 SpecRuntimeTestSupport.JsonRequest(HttpMethod.Get, url));
             Assert.Equal(403, (int)get.StatusCode);
         }
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  The RED-on-lie proof (the S120 pass's injected-lie demonstration).
-    // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>The established injected-lie technique (S117/S118/S119): the REAL flex 200
-    /// passes against the COMMITTED truth (GREEN), then the SAME body is matched against an
-    /// IN-MEMORY corrupted spec whose <c>FlexBalanceResponse</c> gains a phantom
-    /// <c>required</c> member — the matcher MUST go RED through the required-fidelity path with
-    /// the phantom member NAMED. The committed spec on disk is never touched (revert-free by
-    /// construction).</summary>
-    [Fact]
-    public async Task Gate_IsRed_OnInjectedPhantomRequiredMember_AndGreenOnTheCommittedTruth()
-    {
-        var emp = await SeedEmployeeAsync("red1");
-        using var employee = S120ContractAssert.EmployeeClient(_factory, emp, Org);
-        using var response = await employee.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Get, $"/api/flex-balance/{emp}"));
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.Equal(200, (int)response.StatusCode);
-
-        const string path = "/api/flex-balance/{employeeId}";
-
-        // GREEN — the committed truth passes on the real 200.
-        var truth = SpecRuntimeMatcher.ResolveSuccessContract(_spec, path, "get");
-        SpecRuntimeMatcher.AssertSuccessMatches(_spec, truth, 200, body, "truth");
-
-        // RED — the same response against the spec with a phantom required member injected.
-        var lieNode = JsonNode.Parse(_spec.GetRawText())!;
-        var schema = lieNode["components"]!["schemas"]!["StatsTid.Backend.Api.Contracts.FlexBalanceResponse"]!;
-        ((JsonArray)schema["required"]!).Add("s120PhantomMember");
-        var lieSpec = JsonDocument.Parse(lieNode.ToJsonString()).RootElement.Clone();
-
-        var lieContract = SpecRuntimeMatcher.ResolveSuccessContract(lieSpec, path, "get");
-        var ex = Assert.Throws<XunitException>(() =>
-            SpecRuntimeMatcher.AssertSuccessMatches(lieSpec, lieContract, 200, body, "injected-required-lie"));
-
-        Assert.Contains("s120PhantomMember", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("REQUIRED", ex.Message, StringComparison.Ordinal); // the required-fidelity path, not a kind check
     }
 
     // ─────────────────────────────── seeds / helpers ───────────────────────────────
@@ -323,29 +229,5 @@ public sealed class S120TimeSpecRuntimeTests : IAsyncLifetime
         var employeeId = "s120t_" + suffix;
         await RegressionSeed.SeedEmployeeAsync(_harness.ConnectionString, employeeId, Org, "AC", "OK24");
         return employeeId;
-    }
-
-    /// <summary>Seed one <c>FlexBalanceUpdated</c> event on the employee stream — INPUT data
-    /// (flex has NO write endpoint; the event stream IS its store). camelCase data matching the
-    /// EventSerializer stored shape, all 5 required members present (the
-    /// TeamOverviewAggregateTests convention).</summary>
-    private async Task SeedFlexEventAsync(string employeeId, int version, decimal previous, decimal next, string reason)
-    {
-        var streamId = $"employee-{employeeId}";
-        await S120ContractAssert.ExecAsync(_harness.ConnectionString,
-            "INSERT INTO event_streams (stream_id) VALUES (@s) ON CONFLICT DO NOTHING", ("s", streamId));
-
-        var data =
-            $"{{\"eventId\":\"{Guid.NewGuid()}\",\"employeeId\":\"{employeeId}\"," +
-            $"\"previousBalance\":{previous.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
-            $"\"newBalance\":{next.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
-            $"\"delta\":{(next - previous).ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
-            $"\"reason\":\"{reason}\"}}";
-        await S120ContractAssert.ExecAsync(_harness.ConnectionString,
-            """
-            INSERT INTO events (event_id, stream_id, stream_version, event_type, data, occurred_at)
-            VALUES (gen_random_uuid(), @s, @v, 'FlexBalanceUpdated', @d::jsonb, NOW())
-            """,
-            ("s", streamId), ("v", version), ("d", data));
     }
 }

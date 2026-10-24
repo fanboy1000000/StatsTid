@@ -142,35 +142,6 @@
         }
       }
     },
-    "/api/flex-balance/{employeeId}": {
-      "get": {
-        "tags": [
-          "StatsTid.Backend.Api"
-        ],
-        "parameters": [
-          {
-            "name": "employeeId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.FlexBalanceResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/admin/organizations": {
       "get": {
         "tags": [
@@ -6502,6 +6473,7 @@
           "employeeId",
           "entitlements",
           "flexBalance",
+          "flexBalanceMonth",
           "flexDelta",
           "hasMerarbejde",
           "month",
@@ -6528,7 +6500,12 @@
           },
           "flexBalance": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "nullable": true
+          },
+          "flexBalanceMonth": {
+            "type": "string",
+            "nullable": true
           },
           "flexDelta": {
             "type": "number",
@@ -7420,40 +7397,6 @@
           "version": {
             "type": "integer",
             "format": "int64"
-          }
-        },
-        "additionalProperties": false
-      },
-      "StatsTid.Backend.Api.Contracts.FlexBalanceResponse": {
-        "required": [
-          "balance",
-          "delta",
-          "employeeId",
-          "previousBalance",
-          "reason"
-        ],
-        "type": "object",
-        "properties": {
-          "employeeId": {
-            "type": "string"
-          },
-          "balance": {
-            "type": "number",
-            "format": "double"
-          },
-          "previousBalance": {
-            "type": "number",
-            "format": "double",
-            "nullable": true
-          },
-          "delta": {
-            "type": "number",
-            "format": "double",
-            "nullable": true
-          },
-          "reason": {
-            "type": "string",
-            "nullable": true
           }
         },
         "additionalProperties": false
@@ -10399,6 +10342,8 @@
           "ferieTotal",
           "ferieUsed",
           "flexBalance",
+          "flexBalanceMonth",
+          "flexBalanceState",
           "hasWarning",
           "normExpected",
           "normRegistered",
@@ -10463,6 +10408,18 @@
             "type": "number",
             "format": "double",
             "nullable": true
+          },
+          "flexBalanceMonth": {
+            "type": "string",
+            "nullable": true
+          },
+          "flexBalanceState": {
+            "enum": [
+              "withheld",
+              "none",
+              "recorded"
+            ],
+            "type": "string"
           },
           "overtime": {
             "type": "number",
@@ -11627,6 +11584,7 @@
           "childSickRemaining",
           "ferieRemaining",
           "flexBalance",
+          "flexBalanceMonth",
           "seniorDayEligible",
           "seniorDayRemaining",
           "sickDaysYtd"
@@ -11635,7 +11593,12 @@
         "properties": {
           "flexBalance": {
             "type": "number",
-            "format": "double"
+            "format": "double",
+            "nullable": true
+          },
+          "flexBalanceMonth": {
+            "type": "string",
+            "nullable": true
           },
           "ferieRemaining": {
             "type": "number",

@@ -196,43 +196,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/flex-balance/{employeeId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    employeeId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.FlexBalanceResponse"];
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/admin/organizations": {
         parameters: {
             query?: never;
@@ -5698,7 +5661,8 @@ export interface components {
             /** Format: int32 */
             month: number;
             /** Format: double */
-            flexBalance: number;
+            flexBalance: number | null;
+            flexBalanceMonth: string | null;
             /** Format: double */
             flexDelta: number;
             /** Format: int32 */
@@ -5959,16 +5923,6 @@ export interface components {
             effectiveFrom: string;
             /** Format: int64 */
             version: number;
-        };
-        "StatsTid.Backend.Api.Contracts.FlexBalanceResponse": {
-            employeeId: string;
-            /** Format: double */
-            balance: number;
-            /** Format: double */
-            previousBalance: number | null;
-            /** Format: double */
-            delta: number | null;
-            reason: string | null;
         };
         "StatsTid.Backend.Api.Contracts.ForestMaoNode": {
             orgId: string;
@@ -6805,6 +6759,9 @@ export interface components {
             normRegistered: number | null;
             /** Format: double */
             flexBalance: number | null;
+            flexBalanceMonth: string | null;
+            /** @enum {string} */
+            flexBalanceState: "withheld" | "none" | "recorded";
             /** Format: double */
             overtime: number | null;
             /** Format: double */
@@ -7137,7 +7094,8 @@ export interface components {
         };
         "StatsTid.Backend.Api.Contracts.YearOverviewTiles": {
             /** Format: double */
-            flexBalance: number;
+            flexBalance: number | null;
+            flexBalanceMonth: string | null;
             /** Format: double */
             ferieRemaining: number | null;
             /** Format: double */

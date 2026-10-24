@@ -162,6 +162,7 @@ function makeSummaryData(): BalanceSummaryData {
     year: 2026,
     month: 3,
     flexBalance: 4.2,
+    flexBalanceMonth: '2026-02',
     flexDelta: 99.9, // the LAST-event delta — must never reach the strip (R10)
     vacationDaysUsed: 8,
     vacationDaysEntitlement: 25,

@@ -24,7 +24,8 @@ public static class EventSerializer
         ["PayrollExportGenerated"] = typeof(PayrollExportGenerated),
         ["IntegrationDeliveryTracked"] = typeof(IntegrationDeliveryTracked),
         ["AbsenceRegistered"] = typeof(AbsenceRegistered),
-        ["FlexBalanceUpdated"] = typeof(FlexBalanceUpdated),
+        // S146 / TASK-14607: the flex-balance event type and its key are removed — it had zero
+        // emit sites ever (the flex balance is the Payroll ledger's recorded closing now).
         ["SupplementCalculated"] = typeof(SupplementCalculated),
         ["OvertimeCalculated"] = typeof(OvertimeCalculated),
         ["PeriodCalculationCompleted"] = typeof(PeriodCalculationCompleted),
@@ -242,7 +243,7 @@ public static class EventSerializer
     /// <para>Exists so a query that filters on <c>event_type</c> does not re-encode the string
     /// literal at the call site. This map is already the single source of truth for the
     /// name↔type binding on the WRITE and replay paths; a filtered read that hard-codes
-    /// <c>"FlexBalanceUpdated"</c> separately would be a second encoding, and a rename would turn it
+    /// <c>"PeriodApproved"</c> separately would be a second encoding, and a rename would turn it
     /// into an always-empty read that fails silently rather than loudly.</para>
     /// </summary>
     public static string EventTypeNameOf<T>() where T : IDomainEvent
