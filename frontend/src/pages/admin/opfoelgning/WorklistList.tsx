@@ -421,13 +421,16 @@ export default function WorklistList({ onResolved }: WorklistListProps) {
                               kræver rollen Global Administrator.
                             </li>
                             <li>
-                              Kontrakt (<code>RecalculateRequest</code>): Profile, Entries, Absences, PeriodStart/PeriodEnd,
-                              Reason — operatøren samler selv anmodningen. Perioden skal være præcis én hel kalendermåned
-                              (første til sidste dag); alt andet afvises med 400 <code>payroll-period-not-a-month</code>.
-                              Feltet <code>PreviousFlexBalance</code> må IKKE angives: enhver værdi afvises med 400{' '}
-                              <code>payroll-opening-balance-not-accepted</code>, fordi åbningssaldoen afledes af flexregnskabet
-                              (ledgeren). Denne side viser INGEN udfyldt anmodning: en sag på denne liste kender ikke
-                              payload'en, og et gæt her ville vildlede.
+                              Kontrakt (<code>RecalculateRequest</code>): Profile, PeriodStart/PeriodEnd og Reason — samt
+                              eventuelt IdempotencyToken og OkTransitionDate/PreviousOkVersion. Operatøren samler selv
+                              anmodningen. Perioden skal være præcis én hel kalendermåned (første til sidste dag); alt andet
+                              afvises med 400 <code>payroll-period-not-a-month</code>. Felterne <code>Entries</code> og{' '}
+                              <code>Absences</code> må IKKE sendes (ikke-tomme værdier afvises med 400{' '}
+                              <code>payroll-entries-not-accepted</code>), og det må <code>PreviousFlexBalance</code> heller ikke
+                              (enhver værdi afvises med 400 <code>payroll-opening-balance-not-accepted</code>): registreringer,
+                              fravær og åbningssaldo afledes af Payrolls egne registre og flexregnskabet (ledgeren). Denne
+                              side viser INGEN udfyldt anmodning: en sag på denne liste kender ikke payload'en, og et gæt
+                              her ville vildlede.
                             </li>
                             <li>Kaldet foretages IKKE herfra — browseren kan ikke nå Payroll-tjenesten direkte.</li>
                           </ul>

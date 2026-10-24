@@ -417,8 +417,9 @@ describe('TeamOversigt — flex balance: withheld / none / recorded (S146 TASK-1
     renderPage()
     await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
     const cell = screen.getByTestId('team-row-emp001').querySelector('[class*="flexCell"]')
-    expect(cell?.textContent?.trim()).toBe('+12,5 t')
-    expect(cell?.getAttribute('title')).toBe('pr. september 2026')
+    // The month is VISIBLE text in the cell (not only a tooltip): a second, muted line.
+    expect(cell?.firstChild?.textContent).toBe('+12,5 t')
+    expect(screen.getByTestId('flex-month-emp001').textContent).toBe('pr. september 2026')
   })
 
   it('none: submitted but nothing settled reads "ingen afregnet måned" — not a dash, not a number', async () => {
@@ -427,7 +428,7 @@ describe('TeamOversigt — flex balance: withheld / none / recorded (S146 TASK-1
     await waitFor(() => expect(screen.getByText('Bo Dahl')).toBeInTheDocument())
     const cell = screen.getByTestId('team-row-emp002').querySelector('[class*="flexCell"]')
     expect(cell?.textContent?.trim()).toBe('ingen afregnet måned')
-    expect(cell?.getAttribute('title')).toBeNull()
+    expect(screen.queryByTestId('flex-month-emp002')).toBeNull()
   })
 
   it('withheld: still a bare em dash (OQ-5, unchanged) — visibly different from "none"', async () => {
@@ -436,6 +437,25 @@ describe('TeamOversigt — flex balance: withheld / none / recorded (S146 TASK-1
     await waitFor(() => expect(screen.getByText('David Friis')).toBeInTheDocument())
     const cell = screen.getByTestId('team-row-emp004').querySelector('[class*="flexCell"]')
     expect(cell?.textContent?.trim()).toBe('—')
+  })
+
+  // S146 5a W2 — fail closed (kind F: the old final return printed "ingen afregnet måned" for ANY
+  // non-withheld/non-recorded state). The casts are a DELIBERATE runtime contract slip: tsc forbids
+  // these values, which is exactly why only a runtime pin can prove the view survives them.
+  it('fails closed: an unrecognised state, or a malformed/missing month, renders the dash with no month', async () => {
+    mockOverview([
+      row({ periodId: 'p-1', employeeId: 'emp001', displayName: 'Anna Berg', flexBalance: null, flexBalanceMonth: null, flexBalanceState: 'bogus' as unknown as 'none' }),
+      row({ periodId: 'p-2', employeeId: 'emp002', displayName: 'Bo Dahl', flexBalance: 3, flexBalanceMonth: '2026-13', flexBalanceState: 'recorded' }),
+      row({ periodId: 'p-3', employeeId: 'emp003', displayName: 'Carla Eng', flexBalance: 3, flexBalanceMonth: null, flexBalanceState: 'recorded' }),
+    ])
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    for (const id of ['emp001', 'emp002', 'emp003']) {
+      const cell = screen.getByTestId(`team-row-${id}`).querySelector('[class*="flexCell"]')
+      expect(cell?.textContent?.trim()).toBe('—')
+      expect(screen.queryByTestId(`flex-month-${id}`)).toBeNull()
+    }
+    expect(screen.queryByText('ingen afregnet måned')).toBeNull()
   })
 
   it('the expanded Overblik panel shows the month on a second line for a recorded row', async () => {

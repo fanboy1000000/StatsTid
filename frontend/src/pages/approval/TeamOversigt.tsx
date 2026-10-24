@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect, Fragment, type ReactNode } from 'react'
 import { useAuth } from '../../contexts/AuthContext'
 import { useCalendarToday } from '../../contexts/CalendarContext'
-import { formatMonthLabel } from '../../lib/locale'
+import { NO_SETTLED_MONTH, formatMonthLabel, formatYearMonthWord } from '../../lib/locale'
 import { apiClient } from '../../lib/api'
 import { Dialog } from '../../components/ui/Dialog'
 import { ManagerSkemaGrid } from './ManagerSkemaGrid'
@@ -80,30 +80,25 @@ function flexColorClass(flex: number): string {
   return styles.flexZero
 }
 
-/** "2026-09" -> "september 2026" (lower-case, as in running Danish text). */
-function monthWord(ym: string): string {
-  const [y, m] = ym.split('-')
-  return formatMonthLabel(Number(y), Number(m)).toLowerCase()
-}
-
-const NO_SETTLED_MONTH = 'ingen afregnet måned'
-
 /** S146 / TASK-14608 (OQ-5, R-33 item 5) — the flex cell's three visibly different states,
  *  read from the server's `flexBalanceState` discriminator (never re-derived from the status):
  *  - withheld : the employee has not submitted the row's month -> em dash (unchanged);
  *  - none     : submitted, but no month has been settled      -> "ingen afregnet måned";
  *  - recorded : the latest settled month's closing balance     -> value, month as "pr. <måned>".
- *  A "recorded" row whose balance or month is null (a stale/buggy wire) degrades to "none". */
+ *  FAILS CLOSED (the 5a review's W2): only an explicit `none` shows "ingen afregnet måned". An
+ *  absent or unrecognised state, and a `recorded` row whose balance or month is null or malformed
+ *  (a contract slip), render the withheld dash with no month — because the dash is the OQ-5-safe
+ *  answer, and "ingen afregnet måned" on an unsubmitted row would itself disclose something. */
 function flexCell(row: TeamOverviewRow): { text: string; cls: string; month: string | null } {
-  if (row.flexBalanceState === 'withheld') return { text: WITHHELD, cls: '', month: null }
-  if (row.flexBalanceState === 'recorded' && row.flexBalance !== null && row.flexBalanceMonth !== null) {
-    return {
-      text: flexText(row.flexBalance),
-      cls: flexColorClass(row.flexBalance),
-      month: `pr. ${monthWord(row.flexBalanceMonth)}`,
+  const withheld = { text: WITHHELD, cls: '', month: null }
+  if (row.flexBalanceState === 'none') return { text: NO_SETTLED_MONTH, cls: styles.secondary, month: null }
+  if (row.flexBalanceState === 'recorded' && row.flexBalance !== null) {
+    const word = formatYearMonthWord(row.flexBalanceMonth)
+    if (word !== null) {
+      return { text: flexText(row.flexBalance), cls: flexColorClass(row.flexBalance), month: `pr. ${word}` }
     }
   }
-  return { text: NO_SETTLED_MONTH, cls: styles.secondary, month: null }
+  return withheld
 }
 
 /** da-DK long date, e.g. "29. marts 2026"; null-safe. */
@@ -928,11 +923,10 @@ export function TeamOversigt() {
                           </div>
                         )}
                       </td>
-                      <td
-                        className={`${styles.right} ${styles.flexCell} ${flexTd.cls}`}
-                        title={flexTd.month ?? undefined}
-                      >
+                      <td className={`${styles.right} ${styles.flexCell} ${flexTd.cls}`}>
                         {flexTd.text}
+                        {/* The month is VISIBLE text (a title tooltip is invisible to keyboard and touch). */}
+                        {flexTd.month && <div className={styles.secondary} data-testid={`flex-month-${row.employeeId}`}>{flexTd.month}</div>}
                       </td>
                       {/* The QUOTA stays (a standing entitlement, the honest denominator); only the
                           USED count is withheld — it moves the moment the employee drafts a day off. */}

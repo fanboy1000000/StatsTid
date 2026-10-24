@@ -18,7 +18,7 @@
 // still shows — the cards never invent a norm client-side (Step-0b B1).
 import type { BalanceSummary as BalanceSummaryData } from '../hooks/useBalanceSummary'
 import type { MonthAbsenceUsage } from '../hooks/useBalanceSummary'
-import { DANISH_MONTHS, formatDanishNumber } from '../lib/locale'
+import { DANISH_MONTHS, NO_SETTLED_MONTH, formatDanishNumber, formatYearMonthWord } from '../lib/locale'
 import styles from './BalanceSummary.module.css'
 
 interface BalanceSummaryProps {
@@ -39,13 +39,6 @@ interface BalanceSummaryProps {
 
 const EM_DASH = '—'
 
-const NO_SETTLED_MONTH = 'ingen afregnet måned'
-
-/** Server month "2026-09" -> "september 2026" (lower-case, running Danish text). */
-function settledMonthWord(ym: string): string {
-  const [y, m] = ym.split('-')
-  return `${DANISH_MONTHS[Number(m) - 1].toLowerCase()} ${y}`
-}
 
 /** Signed 1-decimal Danish hours value ("+4,2" / "-0,1" / "0,0") — matches the
     grid Diff row's formatSignedDiff so the R2 reconciliation is textual too. */
@@ -130,6 +123,8 @@ export function BalanceSummary({
   }
 
   const monthName = DANISH_MONTHS[month - 1].toLowerCase()
+  // A malformed month (contract slip) is null -> the empty state, never a number without its month.
+  const settledMonth = formatYearMonthWord(data.flexBalanceMonth)
 
   const remainingFor = (type: string): number | null => {
     const entitlement = data.entitlements?.find((e) => e.type === type)
@@ -152,7 +147,7 @@ export function BalanceSummary({
             (paid) month, which can be earlier than the viewed month, so the month is named
             ("pr. september 2026"). No settled month -> words, no number. `flexDelta` is on the
             wire but deliberately NOT rendered. */}
-        {data.flexBalance !== null && data.flexBalanceMonth !== null ? (
+        {data.flexBalance !== null && settledMonth !== null ? (
           <>
             <p className={styles.value}>
               <span
@@ -163,7 +158,7 @@ export function BalanceSummary({
               <span className={styles.unit}>t</span>
             </p>
             <p className={styles.month} data-testid="flex-balance-month">
-              pr. {settledMonthWord(data.flexBalanceMonth)}
+              pr. {settledMonth}
             </p>
           </>
         ) : (

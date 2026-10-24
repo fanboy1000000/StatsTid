@@ -162,6 +162,7 @@ describe('useBalanceSummary / useYearOverview — typed reads, exact legacy URLs
       year: 2026,
       month: 3,
       flexBalance: 4.2,
+      flexBalanceMonth: '2026-02',
       flexDelta: 0.5,
       vacationDaysUsed: 8,
       vacationDaysEntitlement: 25,
@@ -197,7 +198,7 @@ describe('useBalanceSummary / useYearOverview — typed reads, exact legacy URLs
       today: '2026-03-15',
       header: { employeeName: 'Anna Berg', agreementCode: 'AC', okVersion: 'OK26', weeklyNormHours: 37 },
       tiles: {
-        flexBalance: 0, ferieRemaining: null, careDayRemaining: null, seniorDayRemaining: null,
+        flexBalance: null, flexBalanceMonth: null, ferieRemaining: null, careDayRemaining: null, seniorDayRemaining: null,
         sickDaysYtd: 0, childSickRemaining: null, childSickEligible: false, seniorDayEligible: false,
       },
       months: [],

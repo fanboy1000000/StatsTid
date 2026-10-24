@@ -6,18 +6,11 @@ import { useYearOverview, type YearOverview, type YearOverviewCategory } from '.
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Spinner } from '../components/ui/Spinner'
-import { DANISH_MONTHS, formatDanishNumber } from '../lib/locale'
+import { NO_SETTLED_MONTH, formatDanishNumber, formatYearMonthWord } from '../lib/locale'
 import styles from './ArsoversigtPage.module.css'
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec']
 const EM_DASH = '–'
-const NO_SETTLED_MONTH = 'ingen afregnet måned'
-
-/** Server month "2026-09" -> "september 2026" (lower-case, running Danish text). */
-function settledMonthWord(ym: string): string {
-  const [y, m] = ym.split('-')
-  return `${DANISH_MONTHS[Number(m) - 1].toLowerCase()} ${y}`
-}
 
 /** Signed da-DK number, e.g. +2,3 / -8. */
 function formatSigned(value: number): string {
@@ -101,13 +94,15 @@ function formatCategoryValue(days: number, hoursFirst: boolean, norm: number | n
 
 function buildTiles(data: YearOverview): TileSpec[] {
   const t = data.tiles
+  const flexMonth = formatYearMonthWord(t.flexBalanceMonth)
   const tiles: TileSpec[] = [
     {
       label: 'Difference fra norm tid - år',
-      value: t.flexBalance,
+      // A number without a well-formed month would be an unlabelled figure: fail closed to the empty state.
+      value: flexMonth !== null ? t.flexBalance : null,
       kind: 'flex',
       // S146 / TASK-14608 — a settled flex balance and its month, never "overtid" (flex is not overtime).
-      sub: t.flexBalance !== null && t.flexBalanceMonth !== null ? `afregnet flexsaldo pr. ${settledMonthWord(t.flexBalanceMonth)}` : 'afregnet flexsaldo',
+      sub: t.flexBalance !== null && flexMonth !== null ? `afregnet flexsaldo pr. ${flexMonth}` : 'afregnet flexsaldo',
       emptyText: NO_SETTLED_MONTH,
     },
     { label: 'Ferie', value: t.ferieRemaining, kind: 'hoursFirstDays', sub: 'saldo' },

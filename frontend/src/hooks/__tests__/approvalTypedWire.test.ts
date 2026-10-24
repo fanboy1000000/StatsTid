@@ -131,6 +131,8 @@ describe('useTeamOverview — typed read', () => {
       normExpected: 147,
       normRegistered: 140,
       flexBalance: 3.5,
+      flexBalanceMonth: '2026-06',
+      flexBalanceState: 'recorded',
       overtime: 0,
       ferieUsed: 5,
       ferieTotal: 25,
