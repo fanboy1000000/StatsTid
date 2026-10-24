@@ -50,7 +50,9 @@ public static class BalanceEndpoints
             AbsenceProjectionRepository absenceProjectionRepo,
             VacationSettlementRepository settlementRepo,
             DatedEntitlementConfigResolverFactory datedConfigResolverFactory,
-            IEventStore eventStore,
+            // S146 / TASK-14607 — the flex ledger's read-only view (replaces the IEventStore that
+            // served only the read of a flex event nothing ever wrote; the event type is deleted).
+            FlexLedgerReadRepository flexLedgerRepo,
             OrgScopeValidator scopeValidator,
             IEmploymentProfileResolver profileResolver,
             // S128 / TASK-12804 (RES-002) — period resolution for the leader-tier month gate.
@@ -196,17 +198,25 @@ public static class BalanceEndpoints
                 .Distinct()
                 .Count();
 
-            // Flex balance still comes from the event stream — flex projection is out of scope
-            // for S27 (Phase 4c.6 Assumption #4). The employee event stream is retained ONLY for
-            // this FlexBalanceUpdated read.
+            // S146 / TASK-14607 (refinement C5, AC-C9) — flex = the employee's latest RECORDED
+            // closing: the newest export record that carries balances (the Payroll-owned flex
+            // ledger, read read-only, ADR-034 D4), labelled with its month. Before, this read the
+            // latest flex-balance event, which nothing in the system ever wrote (S146 deletes the
+            // event type), so every employee saw 0. No ledger record ⇒ flexBalance and
+            // flexBalanceMonth are null — the UI's "ingen afregnet måned" ("no settled month"),
+            // never a made-up 0.
             //
-            // S126 / F5: this used to be ReadStreamAsync + .OfType<>().LastOrDefault(), i.e. load
-            // and deserialize the employee's ENTIRE consolidated stream to read two decimals. The
-            // stream grows with every time registration, so that cost grew with employment length.
-            var streamId = $"employee-{employeeId}";
-            var latestFlex = await eventStore.ReadLatestOfTypeAsync<FlexBalanceUpdated>(streamId, ct);
-            var flexBalance = latestFlex?.NewBalance ?? 0m;
-            var flexDelta = latestFlex?.Delta ?? 0m;
+            // The figure is NOT relative to the requested month: it is the latest settled month
+            // whichever month is being viewed, which is why its month travels with it.
+            //
+            // flexDelta keeps its wire type (decimal). It was the event's Delta (NewBalance −
+            // PreviousBalance); its ledger counterpart is the same record's closing − opening, so
+            // flexBalance − flexDelta is still the balance before the shown change. 0 when nothing
+            // is recorded.
+            var recordedFlex = await flexLedgerRepo.GetLatestClosingAsync(employeeId, ct);
+            decimal? flexBalance = recordedFlex?.ClosingBalance;
+            var flexBalanceMonth = recordedFlex?.MonthLabel;
+            var flexDelta = recordedFlex?.Delta ?? 0m;
 
             // Overtime: max(0, actual - expected)
             var overtimeHours = Math.Max(0m, normHoursActual - normHoursExpected);
@@ -436,6 +446,7 @@ public static class BalanceEndpoints
                 Year: year,
                 Month: month,
                 FlexBalance: flexBalance,
+                FlexBalanceMonth: flexBalanceMonth,
                 FlexDelta: flexDelta,
                 VacationDaysUsed: vacationDaysUsed,
                 VacationDaysEntitlement: vacationDaysEntitlement,
@@ -667,7 +678,9 @@ public static class BalanceEndpoints
             WorkTimeProjectionRepository workTimeProjectionRepo,
             VacationSettlementRepository settlementRepo,
             DatedEntitlementConfigResolverFactory datedConfigResolverFactory,
-            IEventStore eventStore,
+            // S146 / TASK-14607 — the flex tile's read (replaces the IEventStore that served only
+            // the read of a flex event nothing ever wrote; the event type is deleted).
+            FlexLedgerReadRepository flexLedgerRepo,
             IEmploymentProfileResolver profileResolver,
             ConfigResolutionService configResolver,
             StatsTid.Backend.Api.Services.DailyNormCalculator dailyNormCalculator,
@@ -1264,10 +1277,10 @@ public static class BalanceEndpoints
 
             // ── Tiles (the designed 6 — NO 7th tile for Feriefridage; matrix-only) ──
             // Live "current" balances anchored at TODAY (the entitlement year containing today).
-            // flexBalance = latest FlexBalanceUpdated (same read as /summary). S126 / F5 — bounded.
-            var streamId = $"employee-{employeeId}";
-            var flexBalance =
-                (await eventStore.ReadLatestOfTypeAsync<FlexBalanceUpdated>(streamId, ct))?.NewBalance ?? 0m;
+            // S146 / TASK-14607 (refinement C5, AC-C9) — flexBalance = the latest RECORDED closing
+            // and flexBalanceMonth its "YYYY-MM" (the same read as /summary); both null when the
+            // employee has no settled month ("ingen afregnet måned"), never a made-up 0.
+            var recordedFlex = await flexLedgerRepo.GetLatestClosingAsync(employeeId, ct);
 
             // Eligibility (display affordance). childSick = S59 opt-in eligibility as of today.
             // (seniorDayEligible is computed ABOVE the category loop — S123 / TASK-12302 — so the
@@ -1360,7 +1373,8 @@ public static class BalanceEndpoints
                     WeeklyNormHours: weeklyNormHours,
                     FullDayNormHours: fullDayNormHours),
                 Tiles: new YearOverviewTiles(
-                    FlexBalance: flexBalance,
+                    FlexBalance: recordedFlex?.ClosingBalance,
+                    FlexBalanceMonth: recordedFlex?.MonthLabel,
                     FerieRemaining: ferieRemaining,
                     CareDayRemaining: careDayRemaining,
                     SeniorDayRemaining: seniorDayRemaining,

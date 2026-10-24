@@ -89,8 +89,30 @@ public sealed record EmployeePeriodItem(
     string? RejectionReason,
     DateTime CreatedAt);
 
+/// <summary>
+/// S146 / TASK-14607 (owner ruling OQ-5, plan ruling R-33 item 5) — the closed set of
+/// <see cref="TeamOverviewEmployeeRow.FlexBalanceState"/>: WHICH state the row's flex column is in,
+/// so a client never has to read meaning into a null. Two of the three states carry a null
+/// balance, and they mean different things to a leader ("not yours to see yet" vs. "nothing
+/// settled yet"), so the null alone cannot tell them apart.
+/// </summary>
+public static class TeamOverviewFlexBalanceState
+{
+    /// <summary>The month is not submitted (S124 rule, OQ-5): balance and month are null.</summary>
+    public const string Withheld = "withheld";
+
+    /// <summary>Submitted, but the employee has no recorded (settled) month yet — "ingen afregnet
+    /// måned": balance and month are null.</summary>
+    public const string None = "none";
+
+    /// <summary>Submitted, and the balance is the latest recorded closing, the month its
+    /// <c>"YYYY-MM"</c>: both non-null.</summary>
+    public const string Recorded = "recorded";
+}
+
 /// <summary>One row of the <c>GET /api/approval/team-overview</c> envelope — the S87 handler-
-/// assembled 18-field Teamoversigt row. <paramref name="PeriodId"/> is null on a zero-period
+/// assembled Teamoversigt row (18 fields; 20 since S146 added <paramref name="FlexBalanceMonth"/>
+/// and <paramref name="FlexBalanceState"/>). <paramref name="PeriodId"/> is null on a zero-period
 /// DRAFT row (the roster LEFT JOIN); <paramref name="SubmittedAt"/>/<paramref name="DecisionAt"/>/
 /// <paramref name="RejectionReason"/>/<paramref name="PayrollExportedAt"/> are state-dependent
 /// nullable scalars. <paramref name="Status"/> includes the SYNTHETIC "DRAFT" the handler emits
@@ -98,6 +120,9 @@ public sealed record EmployeePeriodItem(
 /// <para>S124 / TASK-12402: <paramref name="NormRegistered"/>, <paramref name="Overtime"/> and
 /// <paramref name="HasWarning"/> are ALSO null on a non-submitted row — the manager-visibility rule
 /// (an un-submitted timesheet is not the manager's to read). See their inline note below.</para>
+/// <para>S146 / TASK-14607 (OQ-5): <paramref name="FlexBalance"/> and
+/// <paramref name="FlexBalanceMonth"/> are null on a non-submitted row too, and on a submitted row
+/// with no recorded month; <paramref name="FlexBalanceState"/> says which (see the inline note).</para>
 /// </summary>
 public sealed record TeamOverviewEmployeeRow(
     Guid? PeriodId,
@@ -135,11 +160,32 @@ public sealed record TeamOverviewEmployeeRow(
     // Non-withheld rows are UNCHANGED: a manager must keep seeing everything about what they are
     // asked to approve, and everything they already decided on.
     decimal? NormRegistered,
-    // FlexBalance is withheld too. It has NO emission site anywhere in src/ today, so it cannot
-    // currently carry draft data — but that makes showing it worthless (always 0), and the moment
-    // flex gains a registration-time writer it would silently become a leak. Withholding is the
-    // fail-safe reading of the ruling and costs nothing.
+    // FlexBalance (with its FlexBalanceMonth) is withheld too — by the owner's STRICT reading of
+    // the S124 ruling (S146 OQ-5, 2026-10-23). Since S146 the figure is the employee's latest
+    // RECORDED flex closing: the balance on the newest export record that carries one
+    // (payroll_export_records, written only by the Payroll service, read here read-only per
+    // ADR-034 D4), labelled with that record's month. That figure is a payroll fact, not the
+    // employee's in-progress registrations — so withholding it is not about a leak. It is withheld
+    // because "a manager cannot see anything before a month is submitted" is read as NOTHING on
+    // the row's figure columns, not merely nothing that moves with the draft. (Before S146 the
+    // reason given here was that the column had no writer at all and always read 0; S146 gave it
+    // one, so that premise no longer holds.)
+    //
+    // FlexBalanceState tells the client WHICH null it is looking at — a closed set
+    // (TeamOverviewFlexBalanceState), never an overloaded null:
+    //   withheld — the month is not submitted: FlexBalance and FlexBalanceMonth are null;
+    //   none     — submitted, but no recorded month yet ("ingen afregnet måned"): both null;
+    //   recorded — submitted: FlexBalance is the latest recorded closing and FlexBalanceMonth its
+    //              "YYYY-MM" (which may be any earlier settled month, not necessarily this one).
     decimal? FlexBalance,
+    string? FlexBalanceMonth,
+    // Authority: S146 owner ruling OQ-5 + plan ruling R-33 item 5 (a handler-derived closed set;
+    // no DB column) — the constants in TeamOverviewFlexBalanceState.
+    [property: AllowedValues(
+        TeamOverviewFlexBalanceState.Withheld,
+        TeamOverviewFlexBalanceState.None,
+        TeamOverviewFlexBalanceState.Recorded)]
+    string FlexBalanceState,
     decimal? Overtime,
     // entitlement_balances.used is incremented INSIDE the employee's own Skema save transaction
     // (SkemaEndpoints.cs → EntitlementBalanceRepository.CheckAndAdjustAsync) with NO approval

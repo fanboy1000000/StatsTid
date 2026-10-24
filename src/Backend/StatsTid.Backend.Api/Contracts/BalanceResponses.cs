@@ -71,13 +71,23 @@ public sealed record BalanceSummaryOvertimeInfo(
     [property: AllowedValues("AFSPADSERING", "UDBETALING")]
     string CompensationModel);
 
-/// <summary>The GET /api/balance/{employeeId}/summary 200 body — 12 scalars + the entitlement
-/// rows + the nullable overtime sub-object.</summary>
+/// <summary>The GET /api/balance/{employeeId}/summary 200 body — 13 scalars + the entitlement
+/// rows + the nullable overtime sub-object.
+/// <para>S146 / TASK-14607 (refinement C5, AC-C9) — the flex members come from the flex ledger:
+/// <paramref name="FlexBalance"/> is the employee's latest RECORDED closing (the newest
+/// <c>payroll_export_records</c> row carrying balances) and <paramref name="FlexBalanceMonth"/> is
+/// that record's month as <c>"YYYY-MM"</c>. Both are null together, meaning "no settled month"
+/// (the UI's "ingen afregnet måned") — never a made-up 0. Null has that one meaning here: a
+/// leader reading a month the employee has not submitted gets 403 before any figure is built
+/// (S128). The figure is the latest settled month whichever month is requested, which is why its
+/// month travels with it. <paramref name="FlexDelta"/> keeps its type: the same record's
+/// <c>closing − opening</c>, 0 when nothing is recorded.</para></summary>
 public sealed record BalanceSummaryResponse(
     string EmployeeId,
     int Year,
     int Month,
-    decimal FlexBalance,
+    decimal? FlexBalance,
+    string? FlexBalanceMonth,
     decimal FlexDelta,
     int VacationDaysUsed,
     decimal VacationDaysEntitlement,
@@ -131,9 +141,15 @@ public sealed record YearOverviewHeader(
 
 /// <summary>The <c>tiles</c> member of <see cref="YearOverviewResponse"/> — the designed 6
 /// current-balance tiles + the two eligibility affordances. The nullable remainings are null
-/// when the type has no config (or the employee is ineligible).</summary>
+/// when the type has no config (or the employee is ineligible).
+/// <para>S146 / TASK-14607 (refinement C5, AC-C9) — <paramref name="FlexBalance"/> is the
+/// employee's latest RECORDED flex closing and <paramref name="FlexBalanceMonth"/> its month as
+/// <c>"YYYY-MM"</c> (the same read as <c>/summary</c>). Both are null together, meaning "no settled
+/// month" ("ingen afregnet måned") — never a made-up 0; null has no other meaning on this
+/// tile.</para></summary>
 public sealed record YearOverviewTiles(
-    decimal FlexBalance,
+    decimal? FlexBalance,
+    string? FlexBalanceMonth,
     decimal? FerieRemaining,
     decimal? CareDayRemaining,
     decimal? SeniorDayRemaining,
