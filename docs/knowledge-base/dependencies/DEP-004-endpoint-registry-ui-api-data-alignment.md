@@ -108,7 +108,7 @@ These endpoints predate the Skema monthly spreadsheet (S9). Frontend hooks exist
 | `/api/time-entries/{employeeId}` | GET | — | useTimeEntries (legacy) | TimeEntry | — | Employee+ | Superseded by Skema |
 | `/api/absences` | POST | — | useAbsences (legacy) | AbsenceEntry | AbsenceRegistered | Employee+ | Superseded by Skema |
 | `/api/absences/{employeeId}` | GET | — | useAbsences (legacy) | AbsenceEntry | — | Employee+ | Superseded by Skema |
-| `/api/flex-balance/{employeeId}` | GET | — | useFlexBalance (legacy) | FlexBalance | — | Employee+ | Superseded by Skema |
+| ~~`/api/flex-balance/{employeeId}`~~ | GET | — | — (hook deleted S146) | — | — | — | **Deleted in S146 TASK-14607** (`88eb3da6`): it read an event nothing wrote. The latest recorded flex closing now comes with its month on `/summary`, the year overview and the team overview |
 | `/api/time-entries/calculate` | POST | — | — | CalculationResult | NormCheckCompleted | Employee+ | Superseded by Skema |
 | `/api/time-entries/calculate-week` | POST | — | — | CalculationResult | — | Employee+ | Superseded by Skema |
 

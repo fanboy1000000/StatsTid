@@ -167,7 +167,7 @@ For reference (these do NOT get rows in audit_projection):
 
 - `TimeEntryRegistered`, `AbsenceRegistered` (high-volume; visible via S27 projections)
 - `TimerCheckedIn`, `TimerCheckedOut` (operational)
-- `NormCheckCompleted`, `FlexBalanceUpdated`, `SupplementCalculated`, `OvertimeCalculated`, `PeriodCalculationCompleted`, `OvertimeCompensationApplied` (rule-engine internals)
+- `NormCheckCompleted`, `FlexBalanceUpdated` (never emitted; deleted in S146 TASK-14607), `SupplementCalculated`, `OvertimeCalculated`, `PeriodCalculationCompleted`, `OvertimeCompensationApplied` (rule-engine internals)
 - `RestPeriodViolationDetected`, `CompensatoryRestGranted` (compliance flags; future revisit)
 - `IntegrationDeliveryTracked` (outbox telemetry)
 - `SegmentManifestCreated` (PCS internals)

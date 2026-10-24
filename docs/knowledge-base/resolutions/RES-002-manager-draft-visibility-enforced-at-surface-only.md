@@ -1,4 +1,4 @@
-# [RES-002] Manager draft-visibility rule: surface withholding (S124) + endpoint gates on 3 of 12 reads (S128); 9-read remainder open
+# [RES-002] Manager draft-visibility rule: surface withholding (S124) + endpoint gates on 3 of 12 reads (S128); 9-read remainder open (8 since S146)
 
 | Field | Value |
 |-------|-------|
@@ -79,11 +79,13 @@ contract changes or per-row `approval_periods` joins, a materially larger change
 | `GET /api/balance/{employeeId}/series` | Entitlement series across months | no |
 | `GET /api/time-entries/{employeeId}` | Raw entry rows, unbounded by date | no |
 | `GET /api/absences/{employeeId}` | Absence rows (the `ferieUsed` source) | no |
-| `GET /api/flex-balance/{employeeId}` | The unwithheld twin of withheld `flexBalance` | no (latest event) |
+| ~~`GET /api/flex-balance/{employeeId}`~~ | Deleted in S146 TASK-14607 (`88eb3da6`); see the S146 note below | — |
 | `GET /api/compliance/{employeeId}/compensatory-rest` | All compensatory-rest rows, unbounded | no |
 | `GET /api/overtime/{employeeId}/balance` | Year overtime figures | year only |
 | `GET /api/overtime/{employeeId}/pre-approvals` | Pre-approval rows | no |
 | `GET /api/overtime/{employeeId}/compensation-choice` | Balance-derived choice state | year only |
+
+> **S146 note (2026-10-24; TASK-14607, merged `88eb3da6`; recorded neutrally, no ruling presumed).** The `flex-balance` route above is deleted, so the open remainder is **8 reads**. Until S146 every flex figure in this census was a meaningless 0, because it was read from an event nothing wrote. Since S146 the **year overview's flex tile** (row 1), and `/summary` for the HR tier (exempt from the S128 leader gate by R1), show a leader the employee's **real latest recorded (paid) flex closing**, labelled with its month, with no submission gate. That figure comes from a month already sent to payroll. The one exception is a GlobalAdmin raw export, which skips approval, followed by a correction; that can put a closing on a month the employee never submitted, through a known-accepted bypass. The leader **team overview** keeps the figure withheld on unsubmitted rows, per the owner's OQ-5 (2026-10-23), the strict reading of S124. This is the RES-002 posture carrying a real value for the first time, which is a revisit trigger under "revisit, not shield". Extending OQ-5's strict reading to the year tile is a possible later ruling.
 
 ## Rationale
 Withholding on the display surface removes the leak from the place a manager actually works, at UI

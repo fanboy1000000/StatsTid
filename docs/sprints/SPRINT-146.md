@@ -85,9 +85,9 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14605 | DONE (merged `8f366802`) | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4; 5a fix-ups R-47/R-48/R-50/R-51 |
 | TASK-14605-T | DONE (merged `8f366802`) | wave 2b, paired · `test-qa` · the site migration under the census rule; H14 re-seed |
 | TASK-14606 | DONE (merged `a9a677f1`) | wave 2c · `test-qa` · the QUAL-188 pins; M01–M26 and N1–N3 mutations killed; Docker facts at CI-W2 |
-| TASK-14607 | REVIEWED (`62b4c340`, fix-up `c9a37a76`; O-2 `cd9bdd23`) — merges with the stack | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
-| TASK-14607-T | REVIEWED (`d55531e3`) — merges with the stack | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
-| TASK-14608 | IN PROGRESS (branched from `cd9bdd23`) | wave 3, stacked · `ux` · C5 frontend |
+| TASK-14607 | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
+| TASK-14607-T | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
+| TASK-14608 | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked · `ux` · C5 frontend |
 
 Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1–D7, O-1..O-7, CI-W1, CI-W2, C-1..C-5.
 
@@ -308,7 +308,7 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 
 **O-1 on master after the merge:** 0 errors / 145 warnings, CA2100 115, Unit **1564** (+46), DemoSeed 170, Regression non-Docker 130.
 
-**CI-W2** (R-32): branch `s146-ci-w2` at `a9a677f1`, draft PR #40 "EVIDENCE ONLY", run `40049157171`. Pending.
+**CI-W2** (R-32): branch `s146-ci-w2`, draft PR #40 "EVIDENCE ONLY". Run `40049157171` on `a9a677f1` was RED on 1 fact of 2,216; six of seven jobs were green. The one red fact was a test-expectation defect, fixed and merged as `1af567fe`, and re-run `40055382782` on `1af567fe` is in progress. See § "CI-W2".
 
 ## Wave 3 (stacked) — TASK-14607 + 14607-T, O-2, TASK-14608 (C5, the flex screens)
 
@@ -355,17 +355,64 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 - `flexBalanceMonth` is added on all three responses;
 - `flexBalanceState` is required on the team row, with the enum `withheld | none | recorded`.
 
-**TASK-14608** (`ux`) branched from `cd9bdd23` and is in progress.
+**TASK-14608** (`ux`), `48386e4f`, with fix-up `20a2968a`:
+- **Card:** "pr. <måned år>", or "ingen afregnet måned" with no number.
+- **Year tile:** "afregnet flexsaldo pr. …", replacing the misleading "optjent overtid" (flex shown as overtime, the QUAL-217 confusion on screen).
+- **Team overview:** three visibly different states. Withheld shows "—". None shows "ingen afregnet måned". Recorded shows the value with its month as visible text.
+- **Deletions:** the dead card, hook and `FlexBalanceInfo`.
+- **Operator help text:** WorklistList names the refused fields (`Entries`, `Absences`, `PreviousFlexBalance`) and the whole-month rule.
+
+Step 5a: 5α PASS ×2; Fable CHANGES-REQUESTED → APPROVED (`20a2968a`). Fable's cycle 1 had two required findings and two the Orchestrator folded in:
+- **W1 (required):** the leader screen's test fixtures lacked the now-required state, so they rendered withheld rows as "ingen afregnet måned", the text OQ-5 forbids. The `row()` factory is now typed against the generated `TeamOverviewRow` (QUAL-121), so the next contract change fails `tsc`.
+- **W2 (required):** the cell now fails closed. Only an explicit `none` prints words; any unrecognised state, or a `recorded` row with a missing or malformed month, shows the dash.
+- **W3 (folded in):** the month is visible text in the table cell, no longer a hover-only `title`.
+- **W4 (folded in):** the operator text.
+- **N1 (folded in):** one guarded month formatter (`formatYearMonthWord` in `lib/locale.ts`) replaces three copies, two of which would have thrown on a malformed month. `lib/locale.ts` and its test file were added to the authorized list by the Orchestrator in the fix-up message (Fable N-a).
+
+Recorded, not built: the card's double divider and the column width (visual checks); the "Flex saldo" vs "flexsaldo" wording pass; a screen-level pin for a malformed month on the card and tile.
+
+**The stack merge:** `88eb3da6` (TASK-14607 + 14607-T + O-2 + TASK-14608), merged together so master's `tsc` is never red between the backend and frontend changes (R-25). **O-1 on master:** 0 errors / 145 warnings, CA2100 115, Unit 1564, DemoSeed 170, Regression non-Docker 130, `npx tsc --noEmit` 0, vitest 80 files / 1010 tests.
+
+**Owner notice (neutral; recorded in RES-002).** The year overview, and `/summary` for the HR tier, now show a leader a real last-paid flex figure without a submission gate, where they used to show a meaningless 0. The team overview keeps it withheld on unsubmitted rows (OQ-5). This is the RES-002 posture carrying a real value for the first time. Extending OQ-5's strict reading to the year tile is a possible later ruling.
+
+**D7 part 3 (with the merge):**
+- ADR-018 D13 `:478`: the example is retired; the rule stands.
+- ADR-026 `:189` and the audit catalog `:170`: the event is noted as deleted.
+- DEP-004: the route row is marked deleted.
+- RES-002: the census row, the "8 since S146" count and the S146 note.
+- The performance register's F5: a note that the four consumers are gone and that the latest-of-type reads and their index have no production workload.
+- QUAL-224: BUILT.
+
+**Recorded tidy items:**
+- Retire `ReadLatestOfTypeAsync`, `ReadLatestOfTypePerStreamAsync` and `ReadAllAsync`, which have no production caller, and re-justify or drop the `init.sql:36-48` index.
+- Consolidate `FlexLedgerHostHarness` helpers with `PayrollHostRealEngineTests`, and move to a collection fixture.
+- Align the double-`LEDGER_START` team-overview fixture.
+- Fix the stale "hand-written `TeamOverviewRow`" docstring at `useTeamOverview.ts:10`.
+
+## CI-W2 (R-32) — the first CI run of the wave-2 Docker facts
+
+- **Run `40049157171` on `a9a677f1` (2026-10-24): RED on exactly 1 of 2,216 Regression facts.** The other six jobs were green: lizard, gitleaks, `check_docs` (so the hand-synced `db-schema.md` holds), E2E (Playwright on the compose stack), smoke and the frontend build.
+- **What passed:** every QUAL-205 manifest fact and every QUAL-188 flex-ledger fact, including the host, race and replay facts.
+- **The red fact:** `PayrollHostRealEngineTests.CalculateAndExport_September_FullTimeAC_AtNorm_NoMerarbejde_RealEngine`. That is the non-vacuity guard TASK-14606 added at Fable's TASK-14605 cycle-2 W-1.
+  - **What it assumed:** that the export record's `NORMAL_HOURS` lines are dated per weekday.
+  - **What the code does:** the calculating route dates every exported line with its **segment range** (`PeriodCalculationService.MapSegmentToExportLinesAsync` → `BuildLine` with the planned segment's start and end). Only the raw `/export` and `/export-period` date per entry.
+  - **Verdict:** a `trace` agent confirmed a test-expectation defect, not a product one.
+- **The fix (`1bcf93b2`):** the guard asserts 22 `NORMAL_HOURS` lines summing to 162.80 h. It is still RED for a host that saw no hours (0 lines, 0.00 h).
+  - The Orchestrator qualified two older docstring sentences (`5e2a0450`, Small Tasks Exception).
+  - Codex APPROVE-WITH-WARNINGS (folded in), Fable APPROVED; merged as `1af567fe`.
+  - The agent's grep found no other fact expecting per-entry dates on calculating-route lines.
+- **Re-run `40055382782` on `1af567fe`:** pushed to the same evidence branch. Pending.
+
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-24, master `a9a677f1` + the wave-2c record (waves 1, 2a, 2b and 2c merged), local only; origin/master `0f02b484` |
-| **Phase** | CI-W2 running. Wave 2c gate: O-1 green on `a9a677f1` (0 / 145, CA2100 115, Unit 1564, DemoSeed 170, Regression non-Docker 130) |
-| **Tasks** | Waves 1, 2a, 2b and 2c DONE (see the ledger). Wave 3: TASK-14607 + 14607-T reviewed (Codex APPROVE, Fable APPROVED-WITH-WARNINGS); O-2 done on 14607's branch (`cd9bdd23`); TASK-14608 in progress on a branch from it |
-| **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 parts 1 and 2 DONE (`5087ab88`; part 2 with the 14605 merge record). Part 3 comes after 14607 (ADR-018:478) |
-| **Pending gates** | **CI-W2** (run `40049157171`, PR #40): on green, record it, flip the wave-2 Docker facts to CI-verified, close PR #40 unmerged and delete `s146-ci-w2`; on red, diagnose (trace) and fix before wave 3 |
-| **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · **CI-W2** `40049157171` on `a9a677f1` running (PR #40) · C-2 — · close — |
+| **As of** | 2026-10-24, master `88eb3da6` + the D7 part 3 record (all four waves merged), local only; origin/master `0f02b484` |
+| **Phase** | All waves merged; the close follows. The wave-3 gate is O-1 green on `88eb3da6`: 0 / 145, CA2100 115, Unit 1564, DemoSeed 170, Regression non-Docker 130, `tsc` 0, vitest 80 files / 1010 tests |
+| **Tasks** | Every task DONE (see the ledger) |
+| **Track D** | D1–D7 DONE. D7 part 1 `5087ab88`; part 2 with the 14605 record; part 3 with the wave-3 record (ADR-018:478, ADR-026:189, the catalog, DEP-004, RES-002's census and S146 note, the performance-register F5 note, QUAL-224 BUILT) |
+| **Pending gates** | CI-W2 re-run `40055382782` (then close PR #40 unmerged and delete `s146-ci-w2`); **C-1..C-5**: Step 7a dual-lens on the sprint base `13a40e68`..HEAD, the QUALITY.md re-grade, the model-routing register row, the INDEX row and the Test Verified line; **C-2**, the close CI run on master |
+| **CI** | G-0 `39755579330` · **CI-W1** `39992507686` GREEN (PR #39 closed) · **CI-W2** `40049157171` RED 1/2216 (a test-expectation defect, fixed `1af567fe`), re-run `40055382782` running (PR #40) · C-2 — · close — |
 | **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
-| **Next action** | On CI-W2: record and close PR #40, or diagnose. On TASK-14608's return: 5α, then 5a Fable; merge the stack (14607 + 14607-T + O-2 + 14608) to master together; O-1 with `npx tsc --noEmit` and vitest; D7 part 3 (ADR-018:478; RES-002 census; DEP-004 route registry; ADR-026:189 and catalog:170); C-2 |
+| **Next action** | Await the CI-W2 re-run. Meanwhile, start the close: Step 7a (both lenses) on `13a40e68..HEAD` |

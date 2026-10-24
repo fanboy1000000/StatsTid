@@ -119,6 +119,8 @@ convention stay owned by the serializer instead of being restated in the API lay
 `EventSerializer.EventTypeNameOf<T>()` supplies the `event_type` discriminator so a rename cannot
 silently produce an always-empty read. **All four consumers repointed** — no exceptions.
 
+*S146 note (2026-10-24, TASK-14607, merged `88eb3da6`):* the four consumers no longer exist. The flex screens read the recorded ledger closing (`payroll_export_records` through `FlexLedgerReadRepository`), and `/flex-balance` and `FlexBalanceUpdated` are deleted. `ReadLatestOfTypeAsync` and `ReadLatestOfTypePerStreamAsync` remain, pinned by `LatestEventReadTests`, but have no production caller, so the index below no longer serves a production workload. Retiring the reads and re-justifying the index (`init.sql:36-48`) is a later tidy item.
+
 **The index fork, resolved with evidence** (the AC required measurement, not reasoning). On a
 1,100-event stream whose single `FlexBalanceUpdated` sits at version 5, with 18,001
 `FlexBalanceUpdated` rows across 300 streams so the type is NOT selective (as in production):
