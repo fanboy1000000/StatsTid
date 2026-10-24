@@ -185,7 +185,8 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
     /// <para>
     /// <b>Before the fix</b> (refinement Stage A "Defect pinned": "the AC twin: before 125.8 merarbejde, after
     /// 0"): 125.8 h <c>MERARBEJDE</c> — the month judged as one 37 h week. As C-RE1 requires, this fact asserts
-    /// merarbejde and payout only; it does NOT inspect <c>NORMAL_HOURS</c> lines or any norm total. (31 August
+    /// merarbejde and payout only; it does NOT assert any <c>NORMAL_HOURS</c> date or norm total (since S146 it reads
+    /// those lines only to count them and sum their hours, for the non-vacuity guard below). (31 August
     /// at exactly the day norm moves neither merarbejde nor the flex payout, so it cannot trip MD-42.)
     /// </para>
     ///
@@ -193,8 +194,9 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
     /// <b>Non-vacuity guard (a deviation worth reading).</b> "No merarbejde and no payout" is trivially true of
     /// a month in which the host saw NO hours at all, and that is exactly today's master: it ignores the seeded
     /// rows and the body carries none. So the fact also asserts that exactly one <c>payroll_export_records</c>
-    /// row exists for September. A month with hours has <c>NORMAL_HOURS</c> lines to export; a month without
-    /// hours has nothing, and the host writes no record. This asserts that the month WAS exported — not
+    /// row exists for September. A month with hours has <c>NORMAL_HOURS</c> lines to export; until S146 a month
+    /// without hours had nothing, and the host wrote no record (since S146 R-3 it writes a zero-line record; see
+    /// the RED (0) restatement below). This asserted that the month WAS exported — not
     /// what its <c>NORMAL_HOURS</c> lines are — so C-RE1 stands.
     /// </para>
     ///
