@@ -203,9 +203,11 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
     /// nothing was calculated into export lines and no record was written, so the "exported once" assertion
     /// tripped (0 rows, expected 1). <b>Since S146 R-3 that guard alone is vacuous</b> (an employed month with no
     /// lines writes a zero-line record, so a host that saw no hours would still show one record); the fact
-    /// (S146 TASK-14606, Step 5a W-1; kind R) therefore reads the record's lines back and asserts one
-    /// <c>NORMAL_HOURS</c> line per September weekday. RED (0), restated: a host that sees no hours writes the zero-line
-    /// record, and the 22-dates assertion fails with an empty list. The merarbejde and payout assertions pass
+    /// (S146 TASK-14606, Step 5a W-1; kind R) therefore reads the record's lines back and COUNTS and SUMS
+    /// them: 22 <c>NORMAL_HOURS</c> lines totalling 162.80 h (not dated per weekday: the calculating route dates each line with
+    /// its segment range, unlike <c>/export</c>, which dates per entry; CI-W2 found the per-date version wrong). RED (0),
+    /// restated: a host that sees no hours writes the zero-line record, so the count is 0 and the sum 0.00; an in-period
+    /// 31 August would give 23 lines and 170.20 h. The merarbejde and payout assertions pass
     /// vacuously in that case.
     /// (1) mutation MD-21 — the <c>IPriorPeriodApprovalReader</c> registration removed (PCS gets a null reader;
     /// R21's throw escapes the TestServer, 500 on Kestrel): the fact fails before or at the 200 assertion.
@@ -229,20 +231,20 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
         // S146 TASK-14606 (Step 5a W-1): the record's lines, read back. "One export record" no longer proves that hours
         // were read, because an employed month with NO lines now writes a zero-line record too (R-3).
         var recordedLines = await ReadExportedLinesAsync(employeeId, 2026, 9);
-        var recordedNormalDates = recordedLines
-            .Where(l => l.SourceTimeType == "NORMAL_HOURS")
-            .Select(l => l.PeriodStart) // per-line semantics: PeriodStart == PeriodEnd == the line item's date
-            .OrderBy(d => d)
-            .ToList();
+        // Counted and summed, not dated: the calculating route dates every exported line with its SEGMENT range
+        // (PeriodStart/PeriodEnd = the segment's), unlike /export and /export-period, which date per entry.
+        var recordedNormal = recordedLines.Where(l => l.SourceTimeType == "NORMAL_HOURS").ToList();
 
         Assert.Multiple(
             () => Assert.Empty(LineItemsOf(result, "MERARBEJDE")),
             () => Assert.Empty(result.ExportLines.Where(l => l.SourceTimeType == "MERARBEJDE")),
             () => Assert.Empty(LineItemsOf(result, "FLEX_PAYOUT")),
             // Non-vacuity guard: hours WERE read. One export record is not enough (R-3's zero-line record also makes
-            // one); the record must hold NORMAL_HOURS lines, one per September weekday (the 22 weekdays; none dated 31 Aug).
+            // one); the record must hold 22 NORMAL_HOURS lines (one per September weekday) totalling 162.80 h. An in-period
+            // 31 August would give 23 lines and 170.20 h.
             () => Assert.Equal(1, exportRecords),
-            () => Assert.Equal(WeekdaysBetween(Sep01, Sep30).ToList(), recordedNormalDates));
+            () => Assert.Equal(22, recordedNormal.Count),
+            () => Assert.Equal(162.80m, recordedNormal.Sum(l => l.Hours)));
     }
 
     // ═════════════════════════════════════════════════════════════════════
