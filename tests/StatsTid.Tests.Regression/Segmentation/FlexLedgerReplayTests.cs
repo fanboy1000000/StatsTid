@@ -84,10 +84,12 @@ public sealed class FlexLedgerReplayTests : IClassFixture<FlexLedgerHostFixture>
     /// from the opening). The export record holds (12.5, 4, CHAINED). A replay of June's manifest, on a service with no ledger
     /// reader, returns that same closing 4, the frozen opening 12.5 and the frozen provenance <c>CHAINED</c>.
     ///
-    /// <para><b>Red conditions.</b> Pre-S146 the opening was a caller-supplied number the manifest froze but no provenance, and
-    /// the closing was never recorded: <c>record.Closing</c> does not exist. After S146 a replay that took its opening from the
-    /// ledger (0 here, since there is no reader: it would throw) or from 0 answers a different closing or fails; a manifest that
-    /// did not freeze the provenance leaves <c>replay.FlexProvenance</c> null, tripping the last assertion.</para>
+    /// <para><b>Red conditions (5a fix-up: the closing is now opening-dependent).</b> The stub closes the month at the opening
+    /// it is sent minus 8.5, so 12.5 gives the recorded 4. A replay that sends the engine anything but the frozen 12.5 (0, or a
+    /// number read from today's ledger) answers a DIFFERENT closing (<c>replay.ClosingFlexBalance != record.Closing</c>) and
+    /// fails the assertion that the replay's own timeline call carried <c>previousFlexBalance == 12.5</c>. A replay that read the
+    /// ledger would throw (this service has no ledger reader, R42). A manifest that did not freeze the provenance leaves
+    /// <c>replay.FlexProvenance</c> null. Pre-S146 <c>record.Closing</c> does not exist.</para>
     /// </summary>
     [Fact]
     public async Task Replay_DerivedOpening_ReproducesRecordedClosing()
@@ -97,7 +99,8 @@ public sealed class FlexLedgerReplayTests : IClassFixture<FlexLedgerHostFixture>
         await _fx.SeedLedgerRecordAsync(employeeId, May, closing: 12.5m);
         await _fx.SeedApprovedMonthAsync(employeeId, Jun);
         await _fx.SeedWeekdayHoursAsync(employeeId, Jun, new DateOnly(2026, 6, 30));
-        _fx.Engine.Configure(employeeId, Jun, closing: 4m);
+        // OPENING-DEPENDENT closing (5a fix-up): closing = the opening the engine is sent - 8.5, i.e. 4 at 12.5.
+        _fx.Engine.ConfigureOpeningDependent(employeeId, Jun, closingDelta: -8.5m);
         var exported = await _fx.CalculateAndExportMonthAsync(employeeId, Jun);
         Assert.True(exported.Status == HttpStatusCode.OK, $"forward export: {exported.Json}");
         var record = await _fx.RequireRecordAsync(employeeId, Jun);
@@ -110,6 +113,11 @@ public sealed class FlexLedgerReplayTests : IClassFixture<FlexLedgerHostFixture>
         Assert.Equal(record.Closing, replay.ClosingFlexBalance);
         Assert.Equal(record.Opening, replay.OpeningFlexBalance);
         Assert.Equal("CHAINED", replay.FlexProvenance);
+        // The replay's OWN timeline call (the second for this employee and month) was sent the frozen 12.5.
+        var calls = _fx.Engine.TimelineCalls.Where(c => c.EmployeeId == employeeId).ToList();
+        Assert.Equal(2, calls.Count);
+        Assert.Equal(12.5m, calls[0].PreviousFlexBalance);
+        Assert.Equal(12.5m, calls[1].PreviousFlexBalance);
     }
 
     /// <summary>
@@ -144,6 +152,11 @@ public sealed class FlexLedgerReplayTests : IClassFixture<FlexLedgerHostFixture>
         Assert.Equal("UNTRACKED", replay.FlexProvenance);
         Assert.Null(replay.OpeningFlexBalance);
         Assert.Null(replay.ClosingFlexBalance);
+        // The replay really called the engine, and with the frozen UNTRACKED opening 0 (the forward call's twin).
+        var calls = _fx.Engine.TimelineCalls.Where(c => c.EmployeeId == employeeId).ToList();
+        Assert.Equal(2, calls.Count);
+        Assert.Equal(calls[0].PreviousFlexBalance, calls[1].PreviousFlexBalance);
+        Assert.Equal(0m, calls[1].PreviousFlexBalance);
     }
 
     private sealed class SingleClientFactory : IHttpClientFactory

@@ -293,10 +293,11 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
 
     /// <summary>
     /// AC-C2, /calculate-and-export (kind F, Docker). A body carrying <c>previousFlexBalance</c> (0 AND 12.5: zero is a value)
-    /// answers 400 <c>payroll-opening-balance-not-accepted</c> with a fixed sentence, BEFORE any read: the employee has no
-    /// approval row, so a handler that read the approval first would answer 403, and the rule engine, the record table and
-    /// the manifest table are all untouched. The same request without the member passes the guard (403: the period is not
-    /// approved), the positive control.
+    /// answers 400 <c>payroll-opening-balance-not-accepted</c> with a fixed sentence. The employee has NO approval row, so a
+    /// handler that moved the refusal after the approval lookup would answer 403: the 400 proves the refusal precedes the
+    /// approval lookup's answer. The rule engine, the record table and the manifest table are untouched. The same request
+    /// without the member answers 403 (the period is not approved), the positive control. That NO read at all happens before
+    /// the refusal is verified by code reading (<c>Program.cs:364-370</c>), not by this fact.
     ///
     /// <para><b>Red conditions.</b> Pre-S146 the member was a required <c>decimal</c> and accepted: the response is 403 (or a
     /// calculation), never 400, so <c>AssertRefusal</c> fails at the status.</para>
@@ -320,9 +321,12 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
 
     /// <summary>
     /// AC-C2, /recalculate (kind F, Docker). A body carrying <c>previousFlexBalance</c> (0 included) answers 400
-    /// <c>payroll-opening-balance-not-accepted</c> before the idempotency lookup and any read: the month's record (a ledger
-    /// record closing at 10), the correction events, the audit rows and the idempotency marker of the token are all untouched,
-    /// and the rule engine was never called.
+    /// <c>payroll-opening-balance-not-accepted</c>. The request carries a token that is ALREADY DELIVERED (pre-marked in
+    /// <c>outbox_messages</c> as the idempotency guard reads it), so a handler that moved the refusal after the idempotency
+    /// lookup would answer 200 "Correction already processed", not 400: the 400 proves the refusal precedes the idempotency
+    /// lookup's answer. The month's record (a ledger record closing at 10), the correction events, the audit rows and the marker
+    /// (still exactly the one pre-mark) are untouched, and the rule engine was never called. That NO read at all happens before
+    /// the refusal is verified by code reading (<c>Program.cs:613-619</c>), not by this fact.
     ///
     /// <para><b>Red conditions.</b> Pre-S146 the member was accepted and ignored: the correction ran (status 200, a correction
     /// event written), so the status assertion fails first.</para>
@@ -334,6 +338,7 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
         await _fx.SeedLedgerRecordAsync(employeeId, Jun, closing: 10m);
         _fx.Engine.Configure(employeeId, Jun, closing: 99m);
         var token = Guid.NewGuid();
+        await _fx.PreMarkTokenDeliveredAsync(token);
         var before = await _fx.RequireRecordAsync(employeeId, Jun);
 
         var response = await _fx.RecalculateAsync(
@@ -345,8 +350,8 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
         AssertTriple(after, 0m, 10m, "LEDGER_START");
         Assert.Equal(0, await _fx.CountCorrectionEventsAsync(employeeId));
         Assert.Equal(0, await _fx.CountAuditRowsAsync(employeeId, "RetroactiveCorrectionRequested"));
-        Assert.Equal(0, await _fx.CountAsync(
-            "SELECT COUNT(*) FROM outbox_messages WHERE idempotency_token = @t", ("t", token)));
+        Assert.Equal(1, await _fx.CountAsync(
+            "SELECT COUNT(*) FROM outbox_messages WHERE idempotency_token = @t", ("t", token))); // the pre-mark only
         Assert.Equal(0, _fx.Engine.CallCountFor(employeeId));
     }
 
@@ -830,8 +835,10 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
     /// After the employee's fraction drops to 0.5 the same request has the same (empty) lines but a different closing:
     /// 409 <c>payroll-export-conflict</c>, and the record is unchanged.
     ///
-    /// <para><b>Red conditions.</b> A hash-only same-lines no-op (pre-S146, or a triple compare that skipped zero-line
-    /// months) answers 200: the status assertion fails.</para>
+    /// <para><b>Red conditions.</b> Pre-S146 the fact fails EARLIER than the 409: the first export wrote no record for a
+    /// zero-line month, so <c>RequireRecordAsync</c> ("expected a payroll_export_records row") fails, and the record has no
+    /// balance columns. After S146 the 409 assertion is what a triple compare that skipped zero-line months (a hash-only no-op)
+    /// fails: it would answer 200.</para>
     /// </summary>
     [Fact]
     public async Task ReRun_ZeroLineMonth_AfterFractionChange_Returns409()
@@ -929,6 +936,9 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
     /// <summary>
     /// R-47, /calculate-and-export (kind F, Docker). A WEEKLY APPROVED approval row exists for 1-7 June; a request for exactly
     /// that week answers 400 <c>payroll-period-not-a-month</c> and writes nothing (no record, no manifest, no rule-engine call).
+    /// The weekly row IS approved, so a refusal moved after the approval lookup would find it and proceed (not 400): the 400
+    /// proves the refusal precedes the approval lookup's answer. "No read at all" is verified by code reading
+    /// (<c>Program.cs:364-370</c>), not by this fact.
     ///
     /// <para><b>Red conditions.</b> Without the guard the legacy weekly row matches the approval lookup and the week is
     /// exported: the status is 200, and June's record would hold a week's closing balance for the next month to chain from.</para>
@@ -949,8 +959,10 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
 
     /// <summary>
     /// R-47, /recalculate (kind F, Docker). After a whole-month export (June, closing 10), a correction request for 1-15 June
-    /// answers 400 <c>payroll-period-not-a-month</c> with the lines, the triple, the events and the idempotency marker
-    /// unchanged, before any read.
+    /// answers 400 <c>payroll-period-not-a-month</c> with the lines, the triple, the events and the marker unchanged. The
+    /// request carries a token that is ALREADY DELIVERED (pre-marked), so a refusal moved after the idempotency lookup would
+    /// answer 200 "Correction already processed": the 400 proves the refusal precedes the idempotency lookup's answer. The
+    /// marker stays exactly the one pre-mark. "No read at all" is verified by code reading (<c>Program.cs:613-619</c>).
     ///
     /// <para><b>Red conditions.</b> Without the guard the partial period replaces the month's baseline lines and stores a
     /// part-month closing: the status is 200 (or the record changes), so the status and the unchanged-record assertions fail.</para>
@@ -967,6 +979,7 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
         var callsBefore = _fx.Engine.CallCountFor(employeeId);
         var eventsBefore = await _fx.CountExportEventsAsync(employeeId);
         var token = Guid.NewGuid();
+        await _fx.PreMarkTokenDeliveredAsync(token);
 
         var response = await _fx.RecalculateAsync(employeeId, Jun, new DateOnly(2026, 6, 15), token);
 
@@ -974,8 +987,8 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
         Assert.Equal(before, await _fx.RequireRecordAsync(employeeId, Jun));
         Assert.Equal(eventsBefore, await _fx.CountExportEventsAsync(employeeId));
         Assert.Equal(0, await _fx.CountCorrectionEventsAsync(employeeId));
-        Assert.Equal(0, await _fx.CountAsync(
-            "SELECT COUNT(*) FROM outbox_messages WHERE idempotency_token = @t", ("t", token)));
+        Assert.Equal(1, await _fx.CountAsync(
+            "SELECT COUNT(*) FROM outbox_messages WHERE idempotency_token = @t", ("t", token))); // the pre-mark only
         Assert.Equal(callsBefore, _fx.Engine.CallCountFor(employeeId));
     }
 
@@ -1026,7 +1039,8 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
     }
 
     /// <summary>
-    /// R-48, M is a RAW record (kind F, Docker). May holds a raw record (no triple), June is the ledger start, and May has no
+    /// R-48, M is a RAW record (kind N/B with a mutation argument, not F: the pre-S146 code also names nothing here, so no
+    /// assertion fails there). May holds a raw record (no triple), June is the ledger start, and May has no
     /// employed day (employment starts 10 June). A correction of May does NOT name June: June cannot have chained from a raw
     /// month (case 4b refuses that), May ends on a Sunday, and both closings are null. No flex provenance, no balance members.
     ///

@@ -51,6 +51,20 @@ internal sealed class FlexLedgerStubEngine
     private readonly ConcurrentQueue<(string Path, string EmployeeId)> _allCalls = new();
 
     /// <summary>The month's closing balance the stub reports, and an optional payout (hours above the cap).</summary>
+    private readonly ConcurrentDictionary<(string Employee, DateOnly Month), decimal> _delta = new();
+
+    /// <summary>
+    /// An OPENING-DEPENDENT closing for one employee and month (S146 TASK-14606 fix-up, replay fact): the stub answers
+    /// <c>closing = (the opening it was sent) + delta</c>. Absolute <see cref="Configure"/> closings are unchanged. With
+    /// this, a replay that sends the engine a different opening gets a different closing.
+    /// </summary>
+    public void ConfigureOpeningDependent(string employeeId, DateOnly month, decimal closingDelta, decimal? payoutHours = null)
+    {
+        var key = (employeeId, new DateOnly(month.Year, month.Month, 1));
+        _delta[key] = closingDelta;
+        _config[key] = (0m, payoutHours);
+    }
+
     public void Configure(string employeeId, DateOnly month, decimal closing, decimal? payoutHours = null) =>
         _config[(employeeId, new DateOnly(month.Year, month.Month, 1))] = (closing, payoutHours);
 
@@ -93,6 +107,8 @@ internal sealed class FlexLedgerStubEngine
             ? c
             : (Closing: 0m, Payout: (decimal?)null);
         var opening = sentOpening ?? 0m;
+        if (_delta.TryGetValue((employeeId, new DateOnly(periodStart.Year, periodStart.Month, 1)), out var delta))
+            config = (opening + delta, config.Payout);
 
         var inMonth = (root.TryGetProperty("entries", out var ents) ? ents.EnumerateArray().ToList() : new List<JsonElement>())
             .Where(e =>
@@ -554,6 +570,21 @@ public sealed class FlexLedgerHostFixture : IAsyncLifetime
         return Convert.ToInt32(await cmd.ExecuteScalarAsync());
     }
 #pragma warning restore CA2100
+
+    /// <summary>Marks an idempotency token as already delivered, the way the correction's own marker does
+    /// (<c>outbox_messages</c> status 'delivered'), so <c>IdempotencyGuard.HasBeenDeliveredAsync</c> answers true.</summary>
+    internal async Task PreMarkTokenDeliveredAsync(Guid token)
+    {
+        await using var conn = Db.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO outbox_messages (destination, payload, status, delivered_at, idempotency_token)
+            VALUES ('retroactive-correction', '{}', 'delivered', NOW(), @t)
+            """, conn);
+        cmd.Parameters.AddWithValue("t", token);
+        Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+    }
 
     internal Task<int> CountRecordsAsync(string employeeId) =>
         CountAsync("SELECT COUNT(*) FROM payroll_export_records WHERE employee_id = @e", ("e", employeeId));

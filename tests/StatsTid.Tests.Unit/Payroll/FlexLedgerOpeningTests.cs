@@ -120,8 +120,10 @@ public class FlexLedgerOpeningTests
 
     /// <summary>
     /// Case 4a — M &gt; S, P employed and a ledger record: M is CHAINED from P's recorded CLOSING (9.5, not P's opening 4).
-    /// Kind N. Red conditions: Balance 9.5 and CHAINED; a core that chains from P's opening, or from the latest record
-    /// rather than P, trips it (the chain's older records carry other closings).
+    /// A LATER ledger record (July, closing 77) also exists, a valid state (a re-run or correction of M while M+1 is recorded):
+    /// the derivation must read P, not the latest record. Kind N. Red conditions: Balance 9.5 and CHAINED; a core that chains
+    /// from P's opening trips it (4), and so does one that chains from the latest ledger record's closing (77), or from the
+    /// earliest (3).
     /// </summary>
     [Fact]
     public void Case4a_PreviousMonthEmployedAndRecorded_ChainsFromItsClosing()
@@ -131,6 +133,7 @@ public class FlexLedgerOpeningTests
             Ledger(Mar, 0m, 3m, FlexLedgerOpening.LedgerStart),
             Ledger(Apr, 3m, 4m, FlexLedgerOpening.Chained),
             Ledger(May, 4m, 9.5m, FlexLedgerOpening.Chained),
+            Ledger(new DateOnly(2026, 7, 1), 9.5m, 77m, FlexLedgerOpening.Chained),
         };
 
         var opening = FlexLedgerOpening.Derive(Jun, records, Continuous).Opening!;
@@ -295,6 +298,34 @@ public class FlexLedgerOpeningTests
         Assert.Equal(expected, FlexLedgerOpening.IsWholeCalendarMonth(new DateOnly(sy, sm, sd), new DateOnly(ey, em, ed)));
     }
 
+    // ---- SamePairAs (5a fix-up, Fable W-1) ----------------------------------------------------------------------
+
+    /// <summary>
+    /// The under-lock recheck compares the (opening, provenance) PAIR: the same balance with a different provenance (a
+    /// LEDGER_START 0 the calculation ran on versus the CHAINED 0 the lock now gives) is NOT the same pair. Kind N. Red
+    /// conditions: false; a predicate that compares the balance only returns true.
+    /// </summary>
+    [Fact]
+    public void SamePairAs_SameBalanceDifferentProvenance_IsFalse()
+    {
+        var ranOn = new FlexOpening(0m, FlexLedgerOpening.LedgerStart, Jun);
+        var now = new FlexOpening(0m, FlexLedgerOpening.Chained, Mar);
+
+        Assert.False(ranOn.SamePairAs(now));
+        Assert.False(now.SamePairAs(ranOn));
+    }
+
+    /// <summary>
+    /// Control for the fact above: the same balance and the same provenance are the same pair, whatever ledger start the two
+    /// derivations saw; a different balance with the same provenance is not. Kind N. Red conditions: true, true, false.
+    /// </summary>
+    [Fact]
+    public void SamePairAs_SameBalanceSameProvenance_IsTrue_DifferentBalance_IsFalse()
+    {
+        Assert.True(new FlexOpening(5m, FlexLedgerOpening.Chained, Mar).SamePairAs(new FlexOpening(5m, FlexLedgerOpening.Chained, Apr)));
+        Assert.False(new FlexOpening(5m, FlexLedgerOpening.Chained, Mar).SamePairAs(new FlexOpening(6m, FlexLedgerOpening.Chained, Mar)));
+    }
+
     // ---- refusal as data, damaged input -------------------------------------------------------------------------
 
     /// <summary>
@@ -315,8 +346,8 @@ public class FlexLedgerOpeningTests
     }
 
     /// <summary>
-    /// Damaged input is never papered over: two records of one month, and a ledger whose start month is not LEDGER_START,
-    /// throw InvalidOperationException. Kind N. Red conditions: both throw; a core that picks one of two records, or that
+    /// Damaged input is never papered over: two records of one month, a ledger whose start month is not LEDGER_START, and a
+    /// predecessor ledger record with an opening but no closing, throw InvalidOperationException. Kind N. Red conditions: both throw; a core that picks one of two records, or that
     /// opens a damaged ledger, trips it.
     /// </summary>
     [Fact]
@@ -328,6 +359,11 @@ public class FlexLedgerOpeningTests
         // M = S (the earliest ledger month) but its record says CHAINED: a damaged ledger.
         Assert.Throws<InvalidOperationException>(() =>
             FlexLedgerOpening.Derive(Jun, new[] { Ledger(Jun, 1m, 2m, FlexLedgerOpening.Chained) }, null));
+
+        // 5a fix-up: a predecessor LEDGER record with an opening but no closing (the schema's CHECK makes it impossible).
+        var noClosing = new FlexLedgerRecord(2026, 5, 1m, null, FlexLedgerOpening.Chained);
+        Assert.Throws<InvalidOperationException>(() =>
+            FlexLedgerOpening.Derive(Jun, new[] { Ledger(Mar, 0m, 3m, FlexLedgerOpening.LedgerStart), noClosing }, Continuous));
     }
 }
 
@@ -415,8 +451,9 @@ public class FlexLedgerNeverSilentTests
     /// InvalidOperationException as its first statement: the calculation service was never reached (the recording ledger
     /// reader, the hours reader and the engine all show zero reads), and no database was opened (the connection factory
     /// points nowhere: opening it would throw a different exception type). Kind N (names the whole-month guard). Red
-    /// conditions: exact type InvalidOperationException and the three zero counts; a service without the guard proceeds
-    /// into the calculation (ledger reader read once, or a refusal of another type), tripping the counts or the type.
+    /// conditions: the RED is the exception TYPE (mutation M18, guard off: the call proceeds to the connection and
+    /// throws <c>SocketException</c>, not <c>InvalidOperationException</c>, so <c>ThrowsAsync</c> fails). The three zero counts
+    /// are supporting assertions: they are not what fails under that mutation.
     /// </summary>
     [Fact]
     public async Task RecalculateAsync_PartialPeriod_Throws_BeforeAnyRead()

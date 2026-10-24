@@ -113,14 +113,17 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
     }
 
     /// <summary>Waits (bounded; fails loudly) until the request has been observed waiting on the ledger key.</summary>
-    private async Task AssertWaitingAsync(int waiters, Task request, string who)
+    private async Task AssertWaitingAsync(int waiters, Task<(HttpStatusCode Status, string Json)> request, string who)
     {
         var observed = await PriorMonthExportRaceTests.WaitUntilAsync(
             () => LedgerWaitersAtLeastAsync(waiters), TimeSpan.FromSeconds(30), () => request.IsCompleted);
+        var early = request.IsCompletedSuccessfully
+            ? $" The request already answered {(int)request.Result.Status}: {request.Result.Json}"
+            : string.Empty;
         Assert.True(observed,
             $"{who} was never observed waiting on the ledger lock (waiters expected: {waiters}; request status: " +
-            $"{request.Status}). The first statement of the writing transaction is not the ledger lock, or the request " +
-            $"ended before it.{PriorMonthExportRaceTests.DescribeFault(request)}");
+            $"{request.Status}). The ledger lock is not taken by this writer, or the request " +
+            $"ended before it.{early}{PriorMonthExportRaceTests.DescribeFault(request)}");
         Assert.False(request.IsCompleted, $"{who} finished while the ledger lock was still held.");
     }
 
@@ -222,9 +225,10 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
     /// moved 10 -> 15, NAMES July as the month to recalculate (June ends on a Tuesday, so the Sunday test alone would not
     /// decide); June's record holds 15 and July's is untouched (ADR-013: nothing cascades).
     ///
-    /// <para><b>Red conditions (argued).</b> Pre-S146 the correction named the next month only by the Sunday test (June ends on a
-    /// Tuesday: null), so <c>nextPeriodToRecalculateStart == 2026-07-01</c> fails; with no lock the two could also interleave
-    /// (the queue-wait assertion trips).</para>
+    /// <para><b>Kinds and Red conditions (argued; 5a fix-up).</b> The NAMING of July is kind R, not F: 30 June 2026 is a Tuesday,
+    /// so the pre-S146 F1 (Sunday) trigger already names July whenever July is exported; AC-C5 pins R-10 (closing changed, Sunday
+    /// end) without a race. The F parts are the lock ORDERING and the two triples: with no ledger lock the two writers would not
+    /// queue (the queue-wait assertion trips), and pre-S146 neither record has a triple (42703).</para>
     /// </summary>
     [Fact]
     public async Task CorrectionOfM_VsExportOfNextMonth_ExportFirst_CorrectionNamesNextMonth()
@@ -251,14 +255,15 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
 
     /// <summary>
     /// AC-C4 (ii), the EARLIER month first (kind F, Docker). Neither June nor July is recorded; both requests calculate on
-    /// <c>LEDGER_START 0</c> while the lock is held; June is queued first. June wins and starts the ledger (0 -> 10). July's
-    /// under-lock recheck now derives <c>CHAINED 10</c>: the (opening, provenance) pair differs from the <c>LEDGER_START 0</c> it
-    /// ran on, so July is 409 <c>payroll-ledger-changed</c> (<c>2026-07</c>) and writes nothing; its RETRY chains from June's 10.
+    /// <c>LEDGER_START 0</c> while the lock is held; June is queued first. June wins and starts the ledger with closing 0
+    /// (0 -> 0). July's under-lock recheck now derives <c>CHAINED 0</c>: the balance is the SAME 0 as the <c>LEDGER_START 0</c>
+    /// it ran on, so the pair differs ONLY by provenance. July is 409 <c>payroll-ledger-changed</c> (<c>2026-07</c>) and writes
+    /// nothing; its RETRY records <c>(0, 20, CHAINED)</c>.
     ///
-    /// <para><b>Red conditions (argued).</b> A recheck that compared the opening alone (0 and 10 differ here, so this one would
-    /// still refuse; a case with equal values is the unit-level provenance fact) is not what this fact isolates; what it pins is
-    /// that two concurrent first exports cannot BOTH be written as <c>LEDGER_START</c>: pre-S146 (no lock, no recheck) both
-    /// commit and July is recorded as a second start: the 409 assertion fails.</para>
+    /// <para><b>Red conditions (argued; 5a fix-up).</b> A recheck that compared the balance alone sees 0 == 0, lets July through
+    /// and records it as a second <c>LEDGER_START</c>: the 409 assertion fails. That is exactly the case R-14's provenance
+    /// compare exists for (the unit fact <c>SamePairAs_SameBalanceDifferentProvenance_IsFalse</c> pins the predicate). Pre-S146
+    /// (no lock, no recheck) both commit, so the 409 also fails.</para>
     /// </summary>
     [Fact]
     public async Task TwoFirstExports_EarlierMonthFirst_LaterGetsLedgerChanged_RetryChains()
@@ -267,7 +272,7 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
         await _fx.SeedEmployeeAsync(employeeId);
         await _fx.SeedApprovedMonthAsync(employeeId, Jun);
         await _fx.SeedApprovedMonthAsync(employeeId, Jul);
-        _fx.Engine.Configure(employeeId, Jun, closing: 10m);
+        _fx.Engine.Configure(employeeId, Jun, closing: 0m); // June closes at 0: July differs ONLY by provenance
         _fx.Engine.Configure(employeeId, Jul, closing: 20m);
 
         var (june, july) = await RaceAsync(
@@ -289,8 +294,8 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
         Assert.True(retry.Status == HttpStatusCode.OK, $"retry: {retry.Json}");
         var recordJune = await _fx.RequireRecordAsync(employeeId, Jun);
         var recordJuly = await _fx.RequireRecordAsync(employeeId, Jul);
-        Assert.Equal<(decimal?, decimal?, string?)>((0m, 10m, "LEDGER_START"), (recordJune.Opening, recordJune.Closing, recordJune.Provenance));
-        Assert.Equal<(decimal?, decimal?, string?)>((10m, 20m, "CHAINED"), (recordJuly.Opening, recordJuly.Closing, recordJuly.Provenance));
+        Assert.Equal<(decimal?, decimal?, string?)>((0m, 0m, "LEDGER_START"), (recordJune.Opening, recordJune.Closing, recordJune.Provenance));
+        Assert.Equal<(decimal?, decimal?, string?)>((0m, 20m, "CHAINED"), (recordJuly.Opening, recordJuly.Closing, recordJuly.Provenance));
     }
 
     /// <summary>
@@ -384,10 +389,10 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
     /// export racing a calculating export of the same employee waits behind it; the same-month UNIQUE key would serialize the pair
     /// even without the lock, which is why the observation, not the outcome, is what is pinned.
     ///
-    /// <para><b>Red conditions (argued).</b> The mutation "the raw routes skip the ledger lock" (or taking it after the first
-    /// row lock) leaves the request unqueued: <c>AssertWaitingAsync</c> fails with "never observed waiting". This is
-    /// deterministic: the lock statement is the first statement of the writing transaction, so a request that reaches it while A
-    /// holds the key blocks there.</para>
+    /// <para><b>Red conditions (argued; 5a fix-up).</b> The RED is exactly: "the raw route takes the ledger lock and waits on
+    /// it". The mutation "the raw routes skip the ledger lock" leaves the request unqueued, so <c>AssertWaitingAsync</c> fails
+    /// with "never observed waiting". This fact does NOT pin that the lock is the FIRST statement (a lock taken after an
+    /// uncontended row lock would still be observed waiting); the ordering claim rests on code reading.</para>
     /// </summary>
     [Fact]
     public async Task RawExportPeriod_IsObservedWaitingOnTheLedgerKey()
