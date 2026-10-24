@@ -25,12 +25,16 @@ internal static class FlexLedgerSeed
     /// Writes ONE ledger record (a calculating route's row: all three balance columns set) for
     /// <paramref name="month"/>, so the next month's derivation reads <paramref name="closing"/> as its CHAINED
     /// opening. The harness must have <c>payroll_export_records</c> (<c>PayrollExportRecordsTestSchema</c>).
-    /// Idempotent per (employee, year, month).
+    /// Throws when a record for (employee, year, month) already exists (S146 TASK-14606, N4): a conflicting seed is loud.
     /// </summary>
     public static async Task SeedAsync(
         string connectionString, string employeeId, DateOnly month, decimal closing,
-        decimal opening = 0m, string provenance = FlexLedgerOpening.LedgerStart, CancellationToken ct = default)
+        decimal opening = 0m, string provenance = FlexLedgerOpening.LedgerStart, CancellationToken ct = default,
+        string? contentHash = null)
     {
+        // S146 TASK-14606: <paramref name="contentHash"/> lets a fact seed a record whose lines hash equals what a
+        // calculation of the same (empty) line set computes, so a re-run reaches the triple compare instead of the
+        // hash compare. Default: the placeholder the earlier facts used.
         await using var conn = new NpgsqlConnection(connectionString);
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
@@ -50,11 +54,19 @@ internal static class FlexLedgerSeed
         cmd.Parameters.AddWithValue("emp", employeeId);
         cmd.Parameters.AddWithValue("year", month.Year);
         cmd.Parameters.AddWithValue("month", month.Month);
-        cmd.Parameters.AddWithValue("hash", "s146-flex-ledger-seed");
+        cmd.Parameters.AddWithValue("hash", contentHash ?? "s146-flex-ledger-seed");
         cmd.Parameters.Add(new NpgsqlParameter("opening", NpgsqlDbType.Numeric) { Value = opening });
         cmd.Parameters.Add(new NpgsqlParameter("closing", NpgsqlDbType.Numeric) { Value = closing });
         cmd.Parameters.AddWithValue("prov", provenance);
-        await cmd.ExecuteNonQueryAsync(ct);
+        // S146 TASK-14606 (Step 5a N4): a conflicting seed must be LOUD. ON CONFLICT DO NOTHING alone would leave the
+        // earlier row in place and let the fact run on a ledger it did not write.
+        var rows = await cmd.ExecuteNonQueryAsync(ct);
+        if (rows != 1)
+        {
+            throw new InvalidOperationException(
+                $"FlexLedgerSeed.SeedAsync expected to insert one record for {employeeId} {month:yyyy-MM}, inserted {rows}: " +
+                "a record for that month already exists (use FlexLedgerFill.FillBalancesAsync to give it balances).");
+        }
     }
 }
 

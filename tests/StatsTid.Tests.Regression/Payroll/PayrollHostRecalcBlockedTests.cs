@@ -1312,8 +1312,9 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// <para>
     /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-4 (TASK-14528: the week check
     /// ignores interior dates): the check finds nothing in the month, the route calculates and answers
-    /// <b>200</b>, so the 422 assertion trips. (A manifest is written, but no export record: IB1 seeds no
-    /// recorded hours, so the calculation has no lines and the route skips the export; R-119.) MB-7 (the evaluated-set
+    /// <b>200</b>, so the 422 assertion trips. (S146 R-3, TASK-14606 N1: a manifest is written, and so is a ZERO-LINE
+    /// export record, because IB1 seeds no recorded hours but the month holds EMPLOYED days; the route skips only the
+    /// empty post-commit delivery, no longer the record. Before R-3 it skipped the export altogether; R-119.) MB-7 (the evaluated-set
     /// filter disabled): the planner refuses first with ITS body, which has a <c>ruleId</c> and no
     /// <c>reason</c> — <c>AssertWeekCheckRefusal</c>'s <c>reason</c> assertion trips (C-B4).
     /// </para>

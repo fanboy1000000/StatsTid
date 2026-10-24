@@ -100,7 +100,7 @@ public sealed class FrozenInputsSlotTests : IAsyncLifetime
     /// refuse by name; it must not read the missing number as 0 and replay a different calculation.
     ///
     /// <para>
-    /// <b>S146 R-14 (docstring only).</b> The forward calculation no longer takes an opening from its caller (this
+    /// <b>S146 R-14 (the seeding changed; the fact's assertions did not).</b> The forward calculation no longer takes an opening from its caller (this
     /// fact used to pass 12.5): payroll derives it from the ledger. The helper seeds the previous month with a
     /// recorded closing of 12.5, so the month opens CHAINED at 12.5 (R-14 case 4a) and the frozen opening is again
     /// a distinct non-zero value: a replay that read the missing key as 0 would be a wrong, silent substitute.
