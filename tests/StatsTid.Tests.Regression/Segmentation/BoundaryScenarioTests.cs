@@ -293,14 +293,14 @@ public sealed class BoundaryScenarioTests
             sources: TestFixtures.OkStraddleSources(),
             options: PlannerOptions.Default,
             // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
-            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            // BuildPlanWithHistoriesAsync); without it MapSegmentToExportLinesAsync throws.
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
         Assert.Equal(2, plan.Segments.Count);
 
         var result = await fixture.Pcs.CalculateAsync(
-            plan, profile, 0m);
+            plan, profile);
         Assert.True(result.Success);
 
         await using var conn = new NpgsqlConnection(fixture.ConnectionString);

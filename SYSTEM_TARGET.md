@@ -42,6 +42,8 @@ Norm Time
 37 hours/week (standard)
 Part-time (pro rata)
 Irregular norm periods (e.g. 4-week norm)
+
+> The state norm period for HK/PROSA is one calendar month (V1); AC's is not weekly (C5). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
 Flex Arrangements
 Maximum saldo
 Carryover rules
@@ -161,6 +163,8 @@ Local administrators can configure operational parameters within centrally defin
 
 Five controlled configuration areas:
 1. **Working Time Planning** — Norm period length (1/4/8/12 weeks), planning start day, planning calendar
+
+> A calendar-month norm period cannot be expressed in weeks (QUAL-216). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
 2. **Flex Rules** — Maximum flex balance (within central limit), warning thresholds, payout triggers
 3. **Organizational Structure** — Departments, cost centers, projects, approval chains
 4. **Local Agreements (Lokalaftaler)** — Parameterized policies within central framework agreement boundaries
@@ -241,6 +245,8 @@ The agreement management UI must support:
 - NormModel = ANNUAL_ACTIVITY requires AnnualNormHours > 0
 - NormModel = WEEKLY_HOURS makes AnnualNormHours irrelevant (hidden in UI)
 - NormPeriodWeeks must be one of: 1, 2, 4, 8, 12
+
+> The set {1, 2, 4, 8, 12} cannot express the state default of one calendar month (QUAL-216). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
 - All rates and hours must be > 0 where applicable
 
 #### Future Extensions (not in first iteration)
@@ -370,6 +376,8 @@ Entitlement tracking (above) records what is *earned, used, and remaining*. **Se
 
 The system currently calculates overtime correctly but lacks governance controls. For a production system, overtime must be bounded and controllable.
 
+> It does not: every hour above a weekly norm becomes overtime automatically, where the sources pay overtime only for ordered or necessary work and route every other surplus hour to flex (QUAL-217, QUAL-218). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
+
 #### Maximum Overtime
 - `MaxOvertimeHoursPerPeriod`: configurable ceiling per agreement (e.g., 10 hours/week, 40 hours/month)
 - When exceeded, the system must flag but still record (overtime may be legitimate with approval)
@@ -382,6 +390,8 @@ The system currently calculates overtime correctly but lacks governance controls
 - Pre-approval is a workflow concept (not a rule engine concern) — modeled as a flag on TimeEntry or a separate approval record
 - Unapproved overtime must still be calculable (for retroactive approval) but flagged in export
 
+> Under the sources an unordered surplus hour is flex, not flagged overtime (V3, V6; QUAL-217). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
+
 ### M. Compensation Model (Afspadsering vs. Udbetaling)
 
 The system must explicitly model the choice between time-off compensation (afspadsering) and monetary payout for overtime and merarbejde. These map to different SLS wage types.
@@ -391,6 +401,8 @@ The system must explicitly model the choice between time-off compensation (afspa
 - **Udbetaling**: Overtime/merarbejde hours paid out as salary supplement
 - **Default model**: Configurable per agreement (`DefaultCompensationModel`: AFSPADSERING or UDBETALING)
 - **Employee choice**: Some agreements allow employee to choose per period — configurable (`EmployeeCompensationChoice`: boolean)
+
+> For HK, PROSA and AC the employer chooses time off vs pay (V10, C7; QUAL-221). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
 
 #### Overtime Balance
 - Separate from flex balance — overtime balance tracks accumulated overtime hours eligible for compensation

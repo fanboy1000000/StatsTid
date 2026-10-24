@@ -62,11 +62,11 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             sources: TestFixtures.OkStraddleSources(),
             options: PlannerOptions.Default,
             // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
-            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            // BuildPlanWithHistoriesAsync); without it MapSegmentToExportLinesAsync throws.
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        var forward1 = await pcs.CalculateAsync(plan1, profile, 0m);
+        var forward1 = await pcs.CalculateAsync(plan1, profile);
         Assert.True(forward1.Success);
         var hoursForward1 = forward1.ExportLines.Sum(l => l.Hours);
         Assert.True(hoursForward1 > 0, "Forward calculation must produce non-zero export hours for the determinism test to be meaningful.");
@@ -115,11 +115,11 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             sources: TestFixtures.OkStraddleSources(),
             options: PlannerOptions.Default,
             // F4-1: register the WtmNaturalKey enrollment the PCS export path requires (mirrors
-            // BuildPlanForLegacyCallersAsync); without it MapSegmentToExportLinesAsync throws.
+            // BuildPlanWithHistoriesAsync); without it MapSegmentToExportLinesAsync throws.
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        var forward2 = await pcs.CalculateAsync(plan2, profile, 0m);
+        var forward2 = await pcs.CalculateAsync(plan2, profile);
         Assert.NotEqual(plan1.ManifestId, plan2.ManifestId);
         Assert.True(forward2.Success);
 
@@ -203,12 +203,12 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             hoursReader: new InMemoryRecordedHoursReader(entries, absences));
 
         // Forward calc via the (Obsolete) shim — this routes through
-        // BuildPlanForLegacyCallersAsync, which registers the WtmNaturalKey hydrator on the
+        // BuildPlanWithHistoriesAsync, which registers the WtmNaturalKey hydrator on the
         // PlannerEnrollment. The result's ExportLines carry the wage type that was effective
         // at segment.StartDate = 2026-01-01 (SLS_PRE — closed predecessor still effective).
 #pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.
         var forward1 = await pcs.CalculateAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd);
 #pragma warning restore CS0618
         Assert.True(forward1.Success);
         Assert.NotEmpty(forward1.RuleResults);
@@ -275,7 +275,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
         // deterministic on the WTM row that was effective at the segment's left edge.
 #pragma warning disable CS0618
         var forward2 = await pcs.CalculateAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd);
 #pragma warning restore CS0618
         Assert.True(forward2.Success);
         Assert.All(forward2.ExportLines, line =>
@@ -303,8 +303,7 @@ public sealed class ReplayDeterminismTests : IAsyncLifetime
             hoursReader: new InMemoryRecordedHoursReader(postMutationEntries, absences));
 #pragma warning disable CS0618
         var forward3 = await pcsPostMutation.CalculateAsync(
-            profile, postMutationStart, postMutationEnd,
-            previousFlexBalance: 0m);
+            profile, postMutationStart, postMutationEnd);
 #pragma warning restore CS0618
         Assert.True(forward3.Success);
         Assert.All(forward3.ExportLines, line =>

@@ -9,8 +9,8 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// row) and <c>approval_periods</c> (for the B2 <c>FOR UPDATE</c> APPROVED re-check).
 ///
 /// <para>
-/// Mirrors <c>docker/postgres/init.sql</c> for the columns (payroll_export_records ~4140-4159,
-/// approval_periods ~783-804). <c>approval_periods.org_id</c> FKs <c>organizations</c>, supplied
+/// Mirrors <c>docker/postgres/init.sql</c> for the columns; the harness-drift guard
+/// (<c>HarnessDdlMatchesInitSqlTests</c>) compares <c>payroll_export_records</c>. <c>approval_periods.org_id</c> FKs <c>organizations</c>, supplied
 /// by <see cref="PhaseE.AuditProjectionTestSchema"/> (applied alongside in the test fixture).
 /// Schema drift between this DDL and production must be mirrored here.
 /// </para>
@@ -29,7 +29,15 @@ internal static class PayrollExportRecordsTestSchema
             current_effective_lines  JSONB         NOT NULL,
             content_hash             TEXT          NOT NULL,
             source                   TEXT          NOT NULL DEFAULT 'CALCULATE_AND_EXPORT',
-            CONSTRAINT uq_payroll_export_employee_month UNIQUE (employee_id, year, month)
+            opening_balance          NUMERIC       NULL,
+            closing_balance          NUMERIC       NULL,
+            balance_provenance       TEXT          NULL,
+            CONSTRAINT uq_payroll_export_employee_month UNIQUE (employee_id, year, month),
+            CONSTRAINT payroll_export_records_balances_paired CHECK (
+                (opening_balance IS NULL AND closing_balance IS NULL AND balance_provenance IS NULL)
+                OR (opening_balance IS NOT NULL AND closing_balance IS NOT NULL AND balance_provenance IS NOT NULL
+                    AND balance_provenance IN ('LEDGER_START', 'CHAINED', 'REHIRE'))
+            )
         );
 
         CREATE INDEX IF NOT EXISTS idx_payroll_export_records_period

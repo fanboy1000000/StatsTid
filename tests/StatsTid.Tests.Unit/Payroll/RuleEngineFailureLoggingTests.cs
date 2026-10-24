@@ -119,18 +119,20 @@ public sealed class RuleEngineFailureLoggingTests
             })
             .Build();
 
-        // The mapping service, event store, and connection factory are assigned but never
-        // dereferenced by the constructor, and are untouched by the rule-call logging path under
-        // test — so null! is safe here and keeps the fixture minimal (no DB / event store).
+        // The mapping service and the manifest store are assigned but never dereferenced by the
+        // constructor, and are untouched by the rule-call logging path under test (a failed rule
+        // call is refused before any manifest is written) — so null! is safe here and keeps the
+        // fixture minimal (no DB / manifest store).
         return new PeriodCalculationService(
             new SingleClientHttpFactory(handler),
             mappingService: null!,
-            eventStore: null!,
-            connectionFactory: null!,
+            manifestStore: null!,
             configuration,
             logger,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new EmploymentWindowPcsFixture.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new EmploymentWindowPcsFixture.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
     }
 
     private sealed class FixedResponseHandler : HttpMessageHandler

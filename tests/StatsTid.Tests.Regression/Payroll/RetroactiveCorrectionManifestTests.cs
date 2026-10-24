@@ -220,7 +220,6 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
             profile,
             periodStart: new DateOnly(year, month, 1),
             periodEnd: new DateOnly(year, month, DateTime.DaysInMonth(year, month)),
-            previousFlexBalance: 0m,
             reason: "test",
             actorId: "admin-test"));
 
@@ -299,7 +298,6 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
             profile,
             periodStart: new DateOnly(year, month, 1),
             periodEnd: new DateOnly(year, month, DateTime.DaysInMonth(year, month)),
-            previousFlexBalance: 0m,
             reason: "trigger tx-block failure",
             actorId: "admin-test"));
 
@@ -400,7 +398,6 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
             profile,
             periodStart: new DateOnly(year, month, 1),
             periodEnd: new DateOnly(year, month, DateTime.DaysInMonth(year, month)),
-            previousFlexBalance: 0m,
             reason: "atomic idempotency mark",
             actorId: "admin-mark",
             idempotencyToken: token);
@@ -433,7 +430,7 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         // First correction with token T: succeeds and marks T delivered atomically with the event.
         var first = await service.RecalculateAsync(
             profile, periodStart: ps, periodEnd: pe,
-            previousFlexBalance: 0m, reason: "first", actorId: actor, idempotencyToken: token);
+            reason: "first", actorId: actor, idempotencyToken: token);
         Assert.True(first.Success);
         Assert.Equal(1, await CountCorrectionEventsAsync(emp));
         Assert.Equal(1, await CountCorrectionAuditRowsAsync(actor));
@@ -447,7 +444,7 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         // and committed a PHANTOM second correction event + audit row (Success, no throw).
         await Assert.ThrowsAnyAsync<Exception>(() => service.RecalculateAsync(
             profile, periodStart: ps, periodEnd: pe,
-            previousFlexBalance: 0m, reason: "retry", actorId: actor, idempotencyToken: token));
+            reason: "retry", actorId: actor, idempotencyToken: token));
 
         // Still exactly ONE correction event + ONE audit row + ONE delivered marker — no phantom.
         Assert.Equal(1, await CountCorrectionEventsAsync(emp));
@@ -469,7 +466,9 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         var factory = _harness.Factory;
         var eventStore = new PostgresEventStore(factory, new OutboxServiceContext("payroll"));
         await Segmentation.TestFixtures.SeedWageTypeMappingsAsync(factory);
-        var calc = Segmentation.TestFixtures.BuildPcs(factory, eventStore);
+        // S146 R-14: a correction over the database reads the recorded ledger through the production reader.
+        var calc = Segmentation.TestFixtures.BuildPcs(
+            factory, eventStore, flexLedgerReader: new PostgresFlexLedgerReader(factory));
         return new RetroactiveCorrectionService(
             calc,
             factory,
@@ -490,15 +489,16 @@ public sealed class RetroactiveCorrectionManifestTests : IAsyncLifetime
         var calc = new PeriodCalculationService(
             new NoopHttpClientFactory(),
             mapping,
-            eventStore,
-            factory,
+            new PostgresSegmentManifestStore(factory, eventStore, eventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             // S145 R14/R25: PCS refuses to calculate without a reader. These calls passed NO hours
             // before (entries: [], absences: []), so the reader is empty — same meaning.
             hoursReader: new InMemoryRecordedHoursReader(),
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new Segmentation.TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new Segmentation.TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: a correction/ledger fact over the database: the production reader over payroll_export_records.
+            flexLedgerReader: new PostgresFlexLedgerReader(factory));
         return new RetroactiveCorrectionService(
             calc,
             factory,

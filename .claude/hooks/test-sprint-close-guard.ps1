@@ -380,7 +380,7 @@ try {
 }
 
 # T26 (S145 post-close review: added at cycle 1, reworked at cycles 2-4, rebuilt on PowerShell's tokenizer by
-# owner ruling R-141 after cycle 5, its claims matched to its checks by R-142 after cycle 6) - a static
+# owner ruling R-141 after cycle 5, its claims matched to its checks by R-142 after cycle 6 and R-143 after cycle 7) - a static
 # REGRESSION PIN on the hook's model-check block. It is not a proof. T21 runs only the reserved S99 with its one
 # Opus fixture, so an exception scoped to another sprint number leaves T21 green: S145's did, through K7 and K8,
 # and only T23 (now deleted) ever discriminated on it.
@@ -389,7 +389,7 @@ try {
 # once, in that order) through PowerShell's tokenizer (PSParser) and looks at these token types only; comments
 # are ignored. Because it reads tokens, a variable's spelling (`$sprintNum`, `${sprintNum}`, `$script:sprintNum`)
 # does not matter for the checks below, nor do a list operator's spacing or typographic dash. (The floor compare
-# must be the plain ASCII `-ne`: any other spelling of it fails as floor-compare.) It fails on:
+# must be `-ne` in any letter case; a typographic dash, `-cne`, `-ine` or any other form fails as floor-compare.) It fails on:
 #   - Variable tokens: `sprintNum` in any spelling or case; a scope prefix (script, global, local, private,
 #     using, variable); an environment variable other than the one telemetry switch, which must itself appear
 #     exactly once; the name `acceptedReviewModels`;
@@ -412,7 +412,8 @@ try {
 #     $reviewer, $codex, $waiver, and $tline once built); the BODY of the floor compare (a conditional `exit 2`);
 #     a pattern test on the model that does not spell a model id (`-like 'claude*'`, `-match 'opus'`) or one
 #     assembled from pieces ('claude' + '-opus-5-5'); an exception keyed on something else (the artifact's text,
-#     the date, a file); a multiple assignment (`$reviewedBy, $x = ...`); code assembled from strings and run
+#     the date, a file); the right-hand side of the one `$reviewedBy =` (what is assigned to the reviewed model is
+#     not inspected); a multiple assignment (`$reviewedBy, $x = ...`); code assembled from strings and run
 #     with Invoke-Expression (`iex`), the generic way around any token check; and any other construct the
 #     checks above do not name;
 #   - outside the block: code before it in the same loop (for example rewriting $content) and helpers defined

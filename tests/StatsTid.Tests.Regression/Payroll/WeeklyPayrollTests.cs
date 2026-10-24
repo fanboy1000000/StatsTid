@@ -97,7 +97,8 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
         var cs = _container.GetConnectionString();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(cs);
         _db = new DbConnectionFactory(cs);
-        _store = new PostgresEventStore(_db);
+        // S146 R-24: the enqueue-capable store (the manifest moves onto the outbox in S146).
+        _store = new PostgresEventStore(_db, new StatsTid.Infrastructure.Outbox.OutboxServiceContext("payroll"));
         await TestFixtures.SeedWageTypeMappingsAsync(_db);
         _engine = new RuleEngineHost();
     }
@@ -593,8 +594,15 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
             : d >= Sep21 && d <= Sep25 ? 7.8m
             : DayNorm);
 
-        var september = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Sep01, Sep30, previousFlex: 95m);
-        var october = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Oct01, Oct31, previousFlex: 100m);
+        // S146 R-14: no caller hands in an opening. August closed at 95 (employed, so September chains to it,
+        // case 4a); September closed at 100, the capped NewBalance the fact asserts, which October is fed by the
+        // ledger in the same way (a recorded September, so October is not refused 'prior month not recorded').
+        await FlexLedgerSeed.SeedAsync(_container.GetConnectionString(), emp, Aug01, closing: 95m);
+        var september = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Sep01, Sep30);
+        await FlexLedgerSeed.SeedAsync(
+            _container.GetConnectionString(), emp, Sep01, closing: 100m, opening: 95m,
+            provenance: FlexLedgerOpening.Chained);
+        var october = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Oct01, Oct31);
 
         var septemberPayouts = LineItemsOf(september.Result, "FLEX_PAYOUT");
         Assert.Multiple(
@@ -658,14 +666,13 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
         string employeeId,
         EmploymentProfile profile,
         DateOnly periodStart,
-        DateOnly periodEnd,
-        decimal previousFlex = 0m)
+        DateOnly periodEnd)
     {
         var recorder = new RecordingHandler(_engine.Server.CreateHandler());
         var pcs = BuildPcs(recorder);
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: previousFlex,
+            profile, periodStart, periodEnd,
             authorizationHeader: "Bearer " + MintGlobalAdminToken());
 #pragma warning restore CS0618
         Assert.True(outcome.Result.Success, $"{employeeId} {periodStart:yyyy-MM}: {outcome.Result.ErrorMessage}");
@@ -686,8 +693,7 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
         return new PeriodCalculationService(
             new SingleClientFactory(engineHandler),
             mappingService,
-            _store,
-            _db,
+            new PostgresSegmentManifestStore(_db, _store, _store),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new LiveClassifications(),
@@ -698,7 +704,10 @@ public sealed class WeeklyPayrollTests : IAsyncLifetime
             userAgreementCodeRepo: agreementCodes,
             hoursReader: new ProjectionHoursReader(_db,
                 new TimeEntryProjectionRepository(_db), new AbsenceProjectionRepository(_db)),
-            priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)));
+            priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)),
+            // S146 R-14: the production reader over payroll_export_records (the full schema is applied); a fact that
+            // needs a non-zero opening seeds a ledger record with FlexLedgerSeed, the rest read an empty ledger.
+            flexLedgerReader: new PostgresFlexLedgerReader(_db));
     }
 
     // ═════════════════════════════════════════════════════════════════════

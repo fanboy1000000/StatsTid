@@ -31,4 +31,23 @@ public sealed class PayrollExportGenerated : DomainEventBase
     /// <c>/export</c> + <c>/export-period</c> endpoints, which bypass approval.
     /// </summary>
     public Guid? PeriodId { get; init; }
+
+    /// <summary>
+    /// The flex balance the month opened at (S146 flex ledger). In plain terms: the hours
+    /// of flex the employee carried into this month. Optional and NOT required: null on the
+    /// raw exports and on every pre-S146 event, which keep deserializing to null.
+    /// </summary>
+    public decimal? OpeningFlexBalance { get; init; }
+
+    /// <summary>
+    /// The flex balance the month closed at (S146 flex ledger); the next month's opening.
+    /// Optional and NOT required: null on raw exports and pre-S146 events.
+    /// </summary>
+    public decimal? ClosingFlexBalance { get; init; }
+
+    /// <summary>
+    /// Where the opening balance came from: <c>LEDGER_START</c>, <c>CHAINED</c> or
+    /// <c>REHIRE</c> (S146). Optional and NOT required: null on raw exports and pre-S146 events.
+    /// </summary>
+    public string? FlexProvenance { get; init; }
 }

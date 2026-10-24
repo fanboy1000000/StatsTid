@@ -92,7 +92,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
     //     Green before AND after the fix (regression guard — no data loss).
     // -------------------------------------------------------------------
     [Fact]
-    public async Task Replay_LegacyNumericBoundaryCauseRow_ProjectionOnly_StillReplays()
+    public async Task Replay_LegacyNumericBoundaryCauseRow_ProjectionRowWithoutEvent_StillReplays()
     {
         var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
         var manifestId = Guid.NewGuid();
@@ -122,7 +122,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
     //     "not found". GREEN after the fix.
     // -------------------------------------------------------------------
     [Fact]
-    public async Task Replay_StringBoundaryCauseRow_ProjectionOnly_StillReplays()
+    public async Task Replay_StringBoundaryCauseRow_ProjectionRowWithoutEvent_StillReplays()
     {
         var pcs = TestFixtures.BuildPcs(_harness.Factory, _harness.EventStore);
         var manifestId = Guid.NewGuid();
@@ -192,7 +192,7 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
             enrollment: TestFixtures.StraddleEnrollment(),
             profile: profile);
 
-        await pcs.CalculateAsync(plan, profile, 0m);
+        await pcs.CalculateAsync(plan, profile);
 
         var expectedCauses = plan.Segments.Select(s => s.BoundaryCause.ToString()).ToList();
 
@@ -201,6 +201,11 @@ public sealed class BoundaryCauseEncodingTests : IAsyncLifetime
         var liveSegmentsJson = await ReadSegmentsJsonAsync(plan.ManifestId);
         AssertStringEncoded(liveSegmentsJson, "live forward-calc write");
         Assert.Equal(expectedCauses, ParseBoundaryCauseNames(liveSegmentsJson));
+
+        // S146 R-24: drain Payroll's outbox partition so the manifest event is in events before the
+        // rebuild reads it (a no-op until the manifest rides the outbox). The live-row read above is
+        // from the projection and does not need it.
+        await PayrollOutboxDrain.DrainAsync(_harness.Factory);
 
         // Truncate then rebuild from the event store (the ops drift-recovery path).
         await using (var conn = new NpgsqlConnection(_harness.ConnectionString))

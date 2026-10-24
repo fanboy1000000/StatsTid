@@ -139,11 +139,11 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
         var profileSeed = TestFixtures.Profile(EmployeeId) with { AgreementCode = PredecessorAgreementCode };
 
         // Baseline forward calc via the (Obsolete) legacy shim — same entry point
-        // S33 employee_profile marquee uses (BuildPlanForLegacyCallersAsync registers
+        // S33 employee_profile marquee uses (BuildPlanWithHistoriesAsync registers
         // the WtmNaturalKey hydrator on the plan's IPlannerEnrollment per S29).
 #pragma warning disable CS0618 // Obsolete shim is the public entry point for hydrator wiring.
         var baseline = await pcs.CalculateAsync(
-            profileSeed, PeriodStart, PeriodEnd, previousFlexBalance: 0m);
+            profileSeed, PeriodStart, PeriodEnd);
 #pragma warning restore CS0618
         Assert.True(baseline.Success);
         Assert.NotEmpty(baseline.RuleResults);
@@ -213,8 +213,7 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
         return new PeriodCalculationService(
             httpFactory,
             mappingService,
-            _harness.EventStore,
-            _harness.Factory,
+            new PostgresSegmentManifestStore(_harness.Factory, _harness.EventStore, _harness.EventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryRuleClassificationProvider(TestFixtures.RuleSet),
@@ -229,7 +228,9 @@ public sealed class AgreementCodeMarqueeTests : IAsyncLifetime
             // S145 R14: the in-memory hours reader (payroll reads its own hours).
             hoursReader: hoursReader,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
     }
 
     /// <summary>

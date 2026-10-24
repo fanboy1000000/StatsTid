@@ -463,7 +463,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     /// approval row), so the 422 assertion trips. MB-7 (the evaluated-set filter disabled, EB-2): the planner
     /// refuses first with ITS body (a <c>ruleId</c> and no <c>reason</c>), so <c>AssertWeekCheckRefusal</c>'s
     /// <c>reason</c> assertion trips (C-B4). Stage A's mutation MD-24 (the prior-month check runs before the
-    /// per-plan lane's call to <c>BuildPlanForLegacyCallersAsync</c>, i.e. before planning) → <b>409</b> instead
+    /// per-plan lane's call to <c>BuildPlanWithHistoriesAsync</c>, i.e. before planning) → <b>409</b> instead
     /// of 422; <c>Assert.True(status == 422)</c> trips (re-observed at the close, TASK-14528).
     /// </para>
     /// </summary>
@@ -651,7 +651,18 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     /// H14 <b>(guard)</b>. May 2026 ends on a Sunday (31 May), so its closing week closes inside May
     /// and June settles none of it. Recalculating exported May — with June ALSO exported, so that only
     /// the Sunday condition keeps June out — names nothing: no June date in the response or the audit
-    /// row. April is APPROVED (May's first week, 27 April – 3 May, reaches April, R26's host-fact
+    /// row.
+    ///
+    /// <para>
+    /// <b>S146 R-48.</b> May is seeded as the LEDGER START (opening 0, closing 0, <c>LEDGER_START</c>), not as a
+    /// raw record. A first correction of a raw-recorded month runs on an empty ledger, derives LEDGER_START 0 and
+    /// records a closing, so its closing "changes" from nothing to a number and the correction names June whatever
+    /// the day of the week is (C4/R-10, R-48). Seeding the closing the recalculation reproduces (0, the clamped
+    /// <c>NewBalance</c> this host's rule-engine stub always returns, <c>TestFixtures.cs:432</c>, taken as the
+    /// result's closing at <c>PeriodCalculationService.cs:1433</c>) puts the correction on R-14 case 1 with an
+    /// unchanged closing, so ONLY the Sunday condition is in play, as before. The closing-changed case is pinned by
+    /// TASK-14606's <c>Recalculate_ClosingChanged_SundayEndingMay2026_NamesJune</c>.
+    /// </para> April is APPROVED (May's first week, 27 April – 3 May, reaches April, R26's host-fact
     /// rule), so the months-in-order check does not interfere. Like H13, the fact first proves the
     /// recalculation really ran.
     ///
@@ -668,6 +679,10 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         await SeedEmployeeAsync(employeeId);
         await SeedApprovalAsync(employeeId, Apr01, Apr30, "APPROVED");
         await PersistExportRecordAsync(employeeId, 2026, 5);
+        // S146 R-48: May becomes the ledger start with the closing the recalculation reproduces (0: see above), so
+        // the C4/R-48 closing-change trigger does not fire. June stays a raw record (it is exported, not corrected).
+        await FlexLedgerFill.FillBalancesAsync(
+            _container.GetConnectionString(), employeeId, May01, opening: 0m, closing: 0m);
         await PersistExportRecordAsync(employeeId, 2026, 6);
 
         var (status, json) = await PostAsync(Host, "/api/payroll/recalculate",
@@ -697,9 +712,9 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(EntriesNotAcceptedKind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        Assert.Equal(EntriesNotAcceptedKind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(JsonAssert.RequiredMember(root, "error").GetString()));
 
         // A fixed sentence: it echoes neither the refused entry's date nor the employee.
         Assert.DoesNotMatch(IsoDatePattern, json);
@@ -711,16 +726,16 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(PriorMonthNotApprovedKind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        Assert.Equal(PriorMonthNotApprovedKind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(JsonAssert.RequiredMember(root, "error").GetString()));
 
         // The earlier month's PAY period — and nothing else date-shaped (no employment date, no
         // echo of the month being calculated).
         Assert.Equal(priorStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            root.GetProperty("periodStart").GetString());
+            JsonAssert.RequiredMember(root, "periodStart").GetString());
         Assert.Equal(priorEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-            root.GetProperty("periodEnd").GetString());
+            JsonAssert.RequiredMember(root, "periodEnd").GetString());
         var datesInBody = Regex.Matches(json, IsoDatePattern).Select(m => m.Value).OrderBy(v => v, StringComparer.Ordinal).ToArray();
         Assert.Equal(
             new[] { priorStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), priorEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) },
@@ -736,12 +751,12 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(RecalcBlockedKind, root.GetProperty("kind").GetString());
-        Assert.Equal(MidWeekReason, root.GetProperty("reason").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        Assert.Equal(RecalcBlockedKind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.Equal(MidWeekReason, JsonAssert.RequiredMember(root, "reason").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(JsonAssert.RequiredMember(root, "error").GetString()));
         Assert.Equal(new[] { "AgreementCodeChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+            JsonAssert.RequiredMember(root, "interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
         Assert.True(
             !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
             "the week check's variant carries no ruleId (it is not a rule's refusal)");
@@ -893,7 +908,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
     };
 
     private static object RecalculateBody(
@@ -905,7 +920,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         reason = "S145 host pin — correction of an exported month",
         idempotencyToken,
     };

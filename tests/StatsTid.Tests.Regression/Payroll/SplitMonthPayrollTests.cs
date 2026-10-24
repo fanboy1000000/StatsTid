@@ -91,7 +91,8 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         var cs = _container.GetConnectionString();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(cs);
         _db = new DbConnectionFactory(cs);
-        _store = new PostgresEventStore(_db);
+        // S146 R-24: the enqueue-capable store (the manifest moves onto the outbox in S146).
+        _store = new PostgresEventStore(_db, new StatsTid.Infrastructure.Outbox.OutboxServiceContext("payroll"));
         await TestFixtures.SeedWageTypeMappingsAsync(_db);
         _engine = new RuleEngineHost();
     }
@@ -277,7 +278,9 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
             : d >= Sep14 && d <= Sep18 ? 5.80m
             : DayNorm);
 
-        var september = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Sep01, Sep30, previousFlex: 95m);
+        // S146 R-14: August (employed) closed at 95, so September opens at 95 CHAINED (case 4a).
+        await FlexLedgerSeed.SeedAsync(_container.GetConnectionString(), emp, Aug01, closing: 95m);
+        var september = await CalculateAsync(emp, ProfileOf(emp, "HK", 1.0m), Sep01, Sep30);
 
         var timeline = september.Recorder.Timeline.Single();
         Assert.Multiple(
@@ -309,7 +312,9 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         await SeedWeekdaysAsync(emp, "AC", Aug31, Sep30, d =>
             d >= Sep21 && d <= Sep25 ? 11.40m : DayNorm);
 
-        var september = await CalculateAsync(emp, ProfileOf(emp, "AC", 1.0m), Sep01, Sep30, previousFlex: 170m);
+        // S146 R-14: August (employed) closed at 170, so September opens at 170 CHAINED (case 4a).
+        await FlexLedgerSeed.SeedAsync(_container.GetConnectionString(), emp, Aug01, closing: 170m);
+        var september = await CalculateAsync(emp, ProfileOf(emp, "AC", 1.0m), Sep01, Sep30);
 
         Assert.Multiple(
             () => Assert.Equal(190.00m, september.Recorder.Timeline.Single().FlexNewBalance()),
@@ -403,8 +408,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         var bearer = "Bearer " + MintGlobalAdminToken();
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         var forward = await pcs.CalculateWithOutcomeAsync(
-            ProfileOf(emp, "HK", 1.0m), Sep01, Sep30, previousFlexBalance: 0m,
-            authorizationHeader: bearer);
+            ProfileOf(emp, "HK", 1.0m), Sep01, Sep30, authorizationHeader: bearer);
 #pragma warning restore CS0618
         Assert.True(forward.Result.Success, forward.Result.ErrorMessage);
 
@@ -412,8 +416,10 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         var forwardPieces = recorder.Timeline.First().Pieces();
         var manifestStream = $"segment-manifest-{forward.ManifestId}";
         var periodStream = $"period-calc-{emp}-2026-09-01";
-        var manifestEventsBefore = (await _store.ReadStreamAsync(manifestStream)).Count;
-        var periodEventsBefore = (await _store.ReadStreamAsync(periodStream)).Count;
+        // S146 R-22: both events ride the Payroll outbox in the manifest's transaction and this host has no
+        // publisher, so they are read from outbox_events (not yet on events).
+        var manifestEventsBefore = await CountOutboxRowsAsync(manifestStream);
+        var periodEventsBefore = await CountOutboxRowsAsync(periodStream);
         Assert.Equal(1, manifestEventsBefore); // non-vacuity: the forward step wrote its manifest and period events
         Assert.Equal(1, periodEventsBefore);
 
@@ -442,8 +448,9 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
             () => Assert.Single(replay.RuleResults, r => r.RuleId == "FLEX_BALANCE" && r.Success));
 
         // No new audit event: the replay appends nothing to the manifest or period streams.
-        Assert.Equal(manifestEventsBefore, (await _store.ReadStreamAsync(manifestStream)).Count);
-        Assert.Equal(periodEventsBefore, (await _store.ReadStreamAsync(periodStream)).Count);
+        // S146 R-22: counted on outbox_events, where a replay that wrote an event would show.
+        Assert.Equal(manifestEventsBefore, await CountOutboxRowsAsync(manifestStream));
+        Assert.Equal(periodEventsBefore, await CountOutboxRowsAsync(periodStream));
     }
 
     // =====================================================================
@@ -471,14 +478,13 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         string employeeId,
         EmploymentProfile profile,
         DateOnly periodStart,
-        DateOnly periodEnd,
-        decimal previousFlex = 0m)
+        DateOnly periodEnd)
     {
         var recorder = new RecordingHandler(_engine.Server.CreateHandler());
         var pcs = BuildPcs(recorder);
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: previousFlex,
+            profile, periodStart, periodEnd,
             authorizationHeader: "Bearer " + MintGlobalAdminToken());
 #pragma warning restore CS0618
         Assert.True(outcome.Result.Success, $"{employeeId} {periodStart:yyyy-MM}: {outcome.Result.ErrorMessage}");
@@ -499,8 +505,7 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         return new PeriodCalculationService(
             new SingleClientFactory(engineHandler),
             mappingService,
-            _store,
-            _db,
+            new PostgresSegmentManifestStore(_db, _store, _store),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new LiveClassifications(),
@@ -511,7 +516,10 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
             userAgreementCodeRepo: agreementCodes,
             hoursReader: new ProjectionHoursReader(_db,
                 new TimeEntryProjectionRepository(_db), new AbsenceProjectionRepository(_db)),
-            priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)));
+            priorPeriodApprovalReader: new ApprovalPeriodPriorPeriodReader(new ApprovalPeriodRepository(_db)),
+            // S146 R-14: the production reader over payroll_export_records (the full schema is applied); a fact that
+            // needs a non-zero opening seeds a ledger record with FlexLedgerSeed, the rest read an empty ledger.
+            flexLedgerReader: new PostgresFlexLedgerReader(_db));
     }
 
     // =====================================================================
@@ -605,6 +613,16 @@ public sealed class SplitMonthPayrollTests : IAsyncLifetime
         Position = position,
         OrgId = OrgId,
     };
+
+    /// <summary>S146 R-22: the number of Payroll outbox rows (published or not) on <paramref name="streamId"/>.</summary>
+    private async Task<int> CountOutboxRowsAsync(string streamId)
+    {
+        await using var conn = _db.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("SELECT COUNT(*) FROM outbox_events WHERE stream_id = @s", conn);
+        cmd.Parameters.AddWithValue("s", streamId);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
 
     /// <summary>users + employee_profiles + user_agreement_codes with the history-covering '0001-01-01' rows (the
     /// dated record equals the request profile at the period start) + the organization.</summary>

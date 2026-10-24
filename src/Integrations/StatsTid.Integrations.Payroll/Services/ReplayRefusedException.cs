@@ -2,8 +2,11 @@ namespace StatsTid.Integrations.Payroll.Services;
 
 /// <summary>
 /// S145 / TASK-14513 (refinement A7; rulings R14, R15) — a replay that cannot reproduce its calculation
-/// faithfully, refused by name. Thrown only by
-/// <see cref="PeriodCalculationService.ReplayAsync(Guid, string?, Guid?, CancellationToken)"/>.
+/// faithfully, refused by name. Thrown by
+/// <see cref="PeriodCalculationService.ReplayAsync(Guid, string?, Guid?, CancellationToken)"/> and, since S146 /
+/// TASK-14604, by the manifest load it calls, <see cref="ISegmentManifestStore.TryLoadAsync"/> (a found
+/// projection row whose frozen inputs cannot be decoded, <see cref="ManifestWithoutFrozenInputs"/>). Production
+/// reaches that load only through <c>ReplayAsync</c>, so in production every refusal still comes out of a replay.
 ///
 /// <para>
 /// <b>Why refusals have names (plain language).</b> A replay either gives back exactly what was calculated,

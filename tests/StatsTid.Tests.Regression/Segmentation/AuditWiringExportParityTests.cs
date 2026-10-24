@@ -20,7 +20,7 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// planless <c>CalculateAsync(profile, …)</c> shim and return its <c>PeriodCalculationResult</c>. It
 /// now calls the new planless <c>CalculateWithOutcomeAsync(profile, …)</c> and returns
 /// <c>outcome.Result</c>. Both overloads build the plan through the SAME
-/// <c>BuildPlanForLegacyCallersAsync</c> and run the SAME sole logic entry point
+/// <c>BuildPlanWithHistoriesAsync</c> and run the SAME sole logic entry point
 /// (<c>CalculateWithOutcomeAsync(plan, …)</c>) — indeed the legacy <c>CalculateAsync</c> IS literally
 /// <c>CalculateWithOutcomeAsync(plan, …).Result</c>. So the export produced by the two paths is
 /// identical except for the per-call, freshly-minted manifest id — which was already
@@ -71,11 +71,11 @@ public sealed class AuditWiringExportParityTests : IAsyncLifetime
 #pragma warning disable CS0618 // Both planless overloads are [Obsolete] by design (legacy shim path).
         // OLD endpoint behaviour (pre-QUAL-003): the planless CalculateAsync, returning just the result.
         var resultOld = await pcs.CalculateAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd);
         // NEW endpoint behaviour (post-QUAL-003): the planless CalculateWithOutcomeAsync, returning the
         // full outcome (result + AuditState + ManifestId). outcome.Result is what the endpoint returns.
         var outcomeNew = await pcs.CalculateWithOutcomeAsync(
-            profile, periodStart, periodEnd, previousFlexBalance: 0m);
+            profile, periodStart, periodEnd);
 #pragma warning restore CS0618
 
         // Both must succeed and produce export lines (NORM_CHECK emits one NORMAL_HOURS line per entry).

@@ -27,6 +27,13 @@ public sealed class RetroactiveCorrectionRequestedAuditMapper : IAuditProjection
             // names nothing are byte-identical to before.
             nextPeriodToRecalculateStart = @event.NextPeriodToRecalculateStart,
             nextPeriodToRecalculateEnd = @event.NextPeriodToRecalculateEnd,
+            // S146 TASK-14605 (C1, AC-C7; ADR-013 item 2): the opening the recalculation used, the month's closing
+            // before and after, and the opening's provenance (UNTRACKED when flex is not tracked). Null on every
+            // pre-S146 event, and then omitted, like the next-period keys above.
+            openingFlexBalanceUsed = @event.OpeningFlexBalanceUsed,
+            closingFlexBalanceBefore = @event.ClosingFlexBalanceBefore,
+            closingFlexBalanceAfter = @event.ClosingFlexBalanceAfter,
+            flexProvenance = @event.FlexProvenance,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,

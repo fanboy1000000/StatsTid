@@ -179,7 +179,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
             profile = Profile(employeeId),
             periodStart = Mar01,
             periodEnd = Mar31,
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
             reason = "S144 host pin — agreement change recorded after export",
             idempotencyToken = Guid.NewGuid(),
         };
@@ -236,7 +236,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
             profile = Profile(employeeId),
             periodStart = Mar01,
             periodEnd = Mar31,
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         };
 
         // S145 B2 (R-58): the delivering host, so a committed export answers 200, not a look-alike 422.
@@ -508,7 +508,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
             profile = Profile(employeeId),
             periodStart = Mar01,
             periodEnd = Mar31,
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         };
 
         var response = await PostAsGlobalAdminAsync(UnavailableRulesFactory(), "/api/payroll/calculate-and-export", body);
@@ -546,7 +546,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
             profile = Profile(employeeId),
             periodStart = Mar01,
             periodEnd = Mar31,
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
             reason = "S144 host pin — Rule Engine outage during a correction",
             idempotencyToken = Guid.NewGuid(),
         };
@@ -587,11 +587,11 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal("payroll-rules-unavailable", root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
+        Assert.Equal("payroll-rules-unavailable", JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
         // N-c4-1 (S144 Step 7a cycle 4, ruled R38): the sentence itself, word for word — no longer
         // verified by inspection only. An upstream status or body leaking into it would trip this.
-        Assert.Equal(RulesUnavailableSentence, root.GetProperty("error").GetString());
+        Assert.Equal(RulesUnavailableSentence, JsonAssert.RequiredMember(root, "error").GetString());
         // The body is FIXED (Program.cs:618): exactly these three properties, so an added
         // upstream-detail field cannot slip past the pin (Step 7a cycle 3, C2).
         Assert.Equal(
@@ -682,13 +682,13 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(Kind, root.GetProperty("kind").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.Equal(SingleProfileRouteReason, root.GetProperty("reason").GetString());
-        Assert.Equal(2, root.GetProperty("employedSegmentCount").GetInt32());
+        Assert.Equal(Kind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.Equal(SingleProfileRouteReason, JsonAssert.RequiredMember(root, "reason").GetString());
+        Assert.Equal(2, JsonAssert.RequiredMember(root, "employedSegmentCount").GetInt32());
         Assert.Equal(new[] { "AgreementCodeChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
-        Assert.Equal(SingleProfileRouteSentence, root.GetProperty("error").GetString());
+            JsonAssert.RequiredMember(root, "interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.Equal(SingleProfileRouteSentence, JsonAssert.RequiredMember(root, "error").GetString());
         Assert.True(
             !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
             "the single-profile-route variant carries no ruleId (it is not a rule's refusal)");
@@ -1312,8 +1312,9 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     /// <para>
     /// <b>Red conditions</b> (Docker-gated — cannot run locally; CI-verified). MB-4 (TASK-14528: the week check
     /// ignores interior dates): the check finds nothing in the month, the route calculates and answers
-    /// <b>200</b>, so the 422 assertion trips. (A manifest is written, but no export record: IB1 seeds no
-    /// recorded hours, so the calculation has no lines and the route skips the export; R-119.) MB-7 (the evaluated-set
+    /// <b>200</b>, so the 422 assertion trips. (S146 R-3, TASK-14606 N1: a manifest is written, and so is a ZERO-LINE
+    /// export record, because IB1 seeds no recorded hours but the month holds EMPLOYED days; the route skips only the
+    /// empty post-commit delivery, no longer the record. Before R-3 it skipped the export altogether; R-119.) MB-7 (the evaluated-set
     /// filter disabled): the planner refuses first with ITS body, which has a <c>ruleId</c> and no
     /// <c>reason</c> — <c>AssertWeekCheckRefusal</c>'s <c>reason</c> assertion trips (C-B4).
     /// </para>
@@ -1349,12 +1350,12 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(Kind, root.GetProperty("kind").GetString());
-        Assert.Equal(MidWeekReason, root.GetProperty("reason").GetString());
-        Assert.False(root.GetProperty("success").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("error").GetString()));
+        Assert.Equal(Kind, JsonAssert.RequiredMember(root, "kind").GetString());
+        Assert.Equal(MidWeekReason, JsonAssert.RequiredMember(root, "reason").GetString());
+        Assert.False(JsonAssert.RequiredMember(root, "success").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(JsonAssert.RequiredMember(root, "error").GetString()));
         Assert.Equal(new[] { "AgreementCodeChange" },
-            root.GetProperty("interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
+            JsonAssert.RequiredMember(root, "interiorBoundaryCauses").EnumerateArray().Select(e => e.GetString()).ToArray());
         Assert.True(
             !root.TryGetProperty("ruleId", out var ruleId) || ruleId.ValueKind == JsonValueKind.Null,
             "the week check's variant carries no ruleId (it is not a rule's refusal)");
@@ -1403,7 +1404,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
     };
 
     private static object S145RecalculateBody(
@@ -1414,7 +1415,7 @@ public sealed class PayrollHostRecalcBlockedTests : IAsyncLifetime
         absences = Array.Empty<AbsenceEntry>(),
         periodStart,
         periodEnd,
-        previousFlexBalance = 0m,
+        // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         reason = "S145 host pin — correction of an exported month",
         idempotencyToken,
     };

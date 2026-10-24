@@ -120,7 +120,6 @@ public sealed class RetroactiveCorrectionTrailTests : IAsyncLifetime
 
         var result = await service.RecalculateAsync(
             body, periodStart, periodEnd,
-            previousFlexBalance: 0m,
             reason: "R-11: the event records what ran",
             actorId: "admin-r11");
         Assert.True(result.Success, result.ErrorMessage);
@@ -198,7 +197,6 @@ public sealed class RetroactiveCorrectionTrailTests : IAsyncLifetime
 
         var result = await service.RecalculateAsync(
             body, periodStart, periodEnd,
-            previousFlexBalance: 0m,
             reason: "R-19: the event links the manifest it wrote",
             actorId: "admin-r19");
         Assert.True(result.Success, result.ErrorMessage);
@@ -238,8 +236,7 @@ public sealed class RetroactiveCorrectionTrailTests : IAsyncLifetime
                 Segmentation.TestFixtures.DefaultRuleEngineHandler)),
             new PayrollMappingService(
                 factory, NullLogger<PayrollMappingService>.Instance, new WageTypeMappingRepository(factory)),
-            eventStore,
-            factory,
+            new PostgresSegmentManifestStore(factory, eventStore, eventStore),
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ServiceUrls:RuleEngine"] = "http://rule-engine.test",
@@ -250,7 +247,9 @@ public sealed class RetroactiveCorrectionTrailTests : IAsyncLifetime
             profileResolver: new EmploymentProfileResolver(factory, new UserAgreementCodeRepository(factory)),
             employmentWindowResolver: new EmploymentWindowResolver(factory),
             hoursReader: new InMemoryRecordedHoursReader(entries),
-            priorPeriodApprovalReader: new Segmentation.TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new Segmentation.TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: a correction/ledger fact over the database: the production reader over payroll_export_records.
+            flexLedgerReader: new PostgresFlexLedgerReader(factory));
 
         return new RetroactiveCorrectionService(
             calc,

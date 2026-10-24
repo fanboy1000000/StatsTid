@@ -5,7 +5,7 @@
 > Update the schema in `init.sql`, then run `python tools/generate_db_schema.py`.
 > CI fails (`tools/check_docs.py`) if this file drifts from init.sql.
 
-**Total: 68 tables** (51 primary, 17 audit).
+**Total: 67 tables** (50 primary, 17 audit).
 
 ---
 
@@ -153,24 +153,6 @@
 - `idx_wtm_natural_key_history` (UNIQUE) on (time_type, ok_version, agreement_code, position, effective_from)
 - `idx_wtm_natural_key_open` (UNIQUE) on (time_type, ok_version, agreement_code, position) WHERE effective_to IS NULL
 - `idx_wtm_natural_key_history` (UNIQUE) on (time_type, ok_version, agreement_code, position, effective_from)
-
-## flex_balance_snapshots
-
-| Column | Type | Null | Key | Default |
-|--------|------|------|-----|---------|
-| snapshot_id | UUID | No | PK | gen_random_uuid() |
-| employee_id | TEXT | No |  |  |
-| period_start | DATE | No |  |  |
-| period_end | DATE | No |  |  |
-| balance_hours | DECIMAL | No |  |  |
-| delta | DECIMAL | No |  |  |
-| ok_version | TEXT | No |  |  |
-| agreement_code | TEXT | No |  |  |
-| created_at | TIMESTAMPTZ | No |  | NOW() |
-
-**Indexes:**
-- `idx_flex_snapshots_employee` on (employee_id)
-- `idx_flex_snapshots_period` on (period_start, period_end)
 
 ## danish_public_holidays
 
@@ -1402,9 +1384,13 @@
 | current_effective_lines | JSONB | No |  |  |
 | content_hash | TEXT | No |  |  |
 | source | TEXT | No |  | 'CALCULATE_AND_EXPORT' |
+| opening_balance | NUMERIC | Yes |  |  |
+| closing_balance | NUMERIC | Yes |  |  |
+| balance_provenance | TEXT | Yes |  |  |
 
 **Table constraints:**
 - CONSTRAINT uq_payroll_export_employee_month UNIQUE (employee_id, year, month)
+- CONSTRAINT payroll_export_records_balances_paired CHECK ( (opening_balance IS NULL AND closing_balance IS NULL AND balance_provenance IS NULL) OR (opening_balance IS NOT NULL AND closing_balance IS NOT NULL AND balance_provenance IS NOT NULL AND balance_provenance IN ('LEDGER_START', 'CHAINED', 'REHIRE')) )
 
 **Indexes:**
 - `idx_payroll_export_records_period` on (period_id)
@@ -1457,64 +1443,63 @@
 | 6 | orchestrator_tasks | -- |
 | 7 | rule_versions | -- |
 | 8 | wage_type_mappings | -- |
-| 9 | flex_balance_snapshots | -- |
-| 10 | danish_public_holidays | -- |
-| 11 | audit_log | -- |
-| 12 | organizations | -- |
-| 13 | units | -- |
-| 14 | users | -- |
-| 15 | employee_profiles | -- |
-| 16 | employee_profile_audit | audit |
-| 17 | unit_leaders | -- |
-| 18 | user_agreement_codes | -- |
-| 19 | user_agreement_codes_audit | audit |
-| 20 | users_audit | audit |
-| 21 | roles | -- |
-| 22 | role_assignments | -- |
-| 23 | role_assignment_audit | audit |
-| 24 | local_configurations | -- |
-| 25 | local_configuration_audit | audit |
-| 26 | local_agreement_profiles | -- |
-| 27 | local_agreement_profile_audit | audit |
-| 28 | approval_periods | -- |
-| 29 | approval_audit | audit |
-| 30 | projects | -- |
-| 31 | user_project_selections | -- |
-| 32 | absence_type_visibility | -- |
-| 33 | positions | -- |
-| 34 | agreement_configs | -- |
-| 35 | agreement_config_audit | audit |
-| 36 | compensatory_rest | -- |
-| 37 | position_override_configs | -- |
-| 38 | position_override_config_audit | audit |
-| 39 | wage_type_mapping_audit | audit |
-| 40 | entitlement_configs | -- |
-| 41 | entitlement_config_audit | audit |
-| 42 | entitlement_balances | -- |
-| 43 | time_entries_projection | -- |
-| 44 | absences_projection | -- |
-| 45 | work_time_projection | -- |
-| 46 | overtime_balances | -- |
-| 47 | overtime_pre_approvals | -- |
-| 48 | segment_manifests | -- |
-| 49 | role_config_overrides | -- |
-| 50 | role_config_override_audit | audit |
-| 51 | overtime_authorization_audit | audit |
-| 52 | audit_projection | -- |
-| 53 | reporting_lines | -- |
-| 54 | reporting_line_audit | audit |
-| 55 | employee_entitlement_eligibility | -- |
-| 56 | employee_entitlement_eligibility_audit | audit |
-| 57 | vacation_settlements | -- |
-| 58 | vacation_transfer_agreements | -- |
-| 59 | vacation_settlement_audit | audit |
-| 60 | vacation_transfer_agreement_audit | audit |
-| 61 | settlement_payroll_inbox | -- |
-| 62 | settlement_export_lines | -- |
-| 63 | termination_payout_requests | -- |
-| 64 | user_skema_preferences | -- |
-| 65 | user_absence_selections | -- |
-| 66 | manager_vikar | -- |
-| 67 | payroll_export_records | -- |
-| 68 | hr_backdate_worklist | -- |
+| 9 | danish_public_holidays | -- |
+| 10 | audit_log | -- |
+| 11 | organizations | -- |
+| 12 | units | -- |
+| 13 | users | -- |
+| 14 | employee_profiles | -- |
+| 15 | employee_profile_audit | audit |
+| 16 | unit_leaders | -- |
+| 17 | user_agreement_codes | -- |
+| 18 | user_agreement_codes_audit | audit |
+| 19 | users_audit | audit |
+| 20 | roles | -- |
+| 21 | role_assignments | -- |
+| 22 | role_assignment_audit | audit |
+| 23 | local_configurations | -- |
+| 24 | local_configuration_audit | audit |
+| 25 | local_agreement_profiles | -- |
+| 26 | local_agreement_profile_audit | audit |
+| 27 | approval_periods | -- |
+| 28 | approval_audit | audit |
+| 29 | projects | -- |
+| 30 | user_project_selections | -- |
+| 31 | absence_type_visibility | -- |
+| 32 | positions | -- |
+| 33 | agreement_configs | -- |
+| 34 | agreement_config_audit | audit |
+| 35 | compensatory_rest | -- |
+| 36 | position_override_configs | -- |
+| 37 | position_override_config_audit | audit |
+| 38 | wage_type_mapping_audit | audit |
+| 39 | entitlement_configs | -- |
+| 40 | entitlement_config_audit | audit |
+| 41 | entitlement_balances | -- |
+| 42 | time_entries_projection | -- |
+| 43 | absences_projection | -- |
+| 44 | work_time_projection | -- |
+| 45 | overtime_balances | -- |
+| 46 | overtime_pre_approvals | -- |
+| 47 | segment_manifests | -- |
+| 48 | role_config_overrides | -- |
+| 49 | role_config_override_audit | audit |
+| 50 | overtime_authorization_audit | audit |
+| 51 | audit_projection | -- |
+| 52 | reporting_lines | -- |
+| 53 | reporting_line_audit | audit |
+| 54 | employee_entitlement_eligibility | -- |
+| 55 | employee_entitlement_eligibility_audit | audit |
+| 56 | vacation_settlements | -- |
+| 57 | vacation_transfer_agreements | -- |
+| 58 | vacation_settlement_audit | audit |
+| 59 | vacation_transfer_agreement_audit | audit |
+| 60 | settlement_payroll_inbox | -- |
+| 61 | settlement_export_lines | -- |
+| 62 | termination_payout_requests | -- |
+| 63 | user_skema_preferences | -- |
+| 64 | user_absence_selections | -- |
+| 65 | manager_vikar | -- |
+| 66 | payroll_export_records | -- |
+| 67 | hr_backdate_worklist | -- |
 

@@ -55,6 +55,11 @@ public sealed class ManifestProjectionRebuildPlanInputsTests : IAsyncLifetime
     /// slot is NULL, so the slot assertion fails, and a replay would refuse
     /// <c>replay-manifest-without-frozen-inputs</c>. Not MD-35: its null-slot fallback is a different
     /// path, and under it this fact is green because the slot is present unless MD-51.</para>
+    ///
+    /// <para><b>S146 TASK-14606 (R-33 item 2; kind R, CI-pending).</b> The member compare now includes
+    /// <c>OpeningFlexProvenance</c>, and the original is asserted to be <c>LEDGER_START</c> first (an empty ledger, the
+    /// first paid month), so the compare is not null against null. RED argued: a rebuilder that copies the slot without
+    /// the new member (or a serializer that drops it) reads the rebuilt provenance as null and the compare fails.</para>
     /// </summary>
     [Fact]
     public async Task Rebuild_PreservesPlanInputs_ReplaySucceeds()
@@ -72,6 +77,13 @@ public sealed class ManifestProjectionRebuildPlanInputsTests : IAsyncLifetime
         var original = Deserialize(originalText!);
         Assert.NotEmpty(original.Pieces);
         Assert.NotEmpty(original.EntryEventIds);
+        // S146 R-33 item 2: a first employed month with an empty ledger is LEDGER_START, so the frozen provenance is a
+        // real value here and the compare in AssertPlanInputsEqual is not null == null.
+        Assert.Equal("LEDGER_START", original.OpeningFlexProvenance);
+
+        // S146 R-24: the rebuild reads the manifest from events; drain Payroll's outbox partition first
+        // (a no-op until the manifest rides the outbox).
+        await TestSupport.PayrollOutboxDrain.DrainAsync(_harness.Factory);
 
         await using (var conn = _harness.Factory.Create())
         {
@@ -101,6 +113,8 @@ public sealed class ManifestProjectionRebuildPlanInputsTests : IAsyncLifetime
         Assert.Equal(expected.Pieces, actual.Pieces);
         Assert.Equal(expected.SettlementCutoff, actual.SettlementCutoff);
         Assert.Equal(expected.OpeningFlexBalance, actual.OpeningFlexBalance);
+        // S146 R-33 item 2: the frozen provenance is compared too, so the new member is never silently uncompared.
+        Assert.Equal(expected.OpeningFlexProvenance, actual.OpeningFlexProvenance);
         Assert.Equal(expected.EntryEventIds, actual.EntryEventIds);
         Assert.Equal(expected.AbsenceEventIds, actual.AbsenceEventIds);
         Assert.Equal(expected.AsOfOutboxId, actual.AsOfOutboxId);

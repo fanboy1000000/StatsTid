@@ -28,7 +28,7 @@ namespace StatsTid.Tests.Unit.Payroll;
 ///
 /// <para>
 /// <b>C-U1 (binding).</b> No fact here plans a month with two or more EMPLOYED segments through the PCS
-/// builder (the planless shim or <c>BuildPlanForLegacyCallersAsync</c>) with the live registry set: every
+/// builder (the planless shim or <c>BuildPlanWithHistoriesAsync</c>) with the live registry set: every
 /// plan is built by the caller. That keeps MB-7 (the evaluated-set filter) a Docker mutation.
 /// </para>
 ///
@@ -139,7 +139,7 @@ public sealed class SplitMonthPcsTests
         var engine = Engine(() => Timeline(normHours: 147.40m, actualHours: 150.00m, deviation: 2.60m));
         var pcs = BuildPcs(engine, ruleSet: StageBTripleSet, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         foreach (var ruleId in new[] { "OVERTIME_CALC", "NORM_CHECK_37H", "FLEX_BALANCE" })
@@ -181,7 +181,7 @@ public sealed class SplitMonthPcsTests
         var engine = Engine(() => Timeline());
         var pcs = BuildPcs(engine, ruleSet: StageBTripleSet, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
 
-        await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         var timeline = Assert.Single(engine.TimelineCalls);
         Assert.Contains(timeline.Pieces!, p => p.To == new DateOnly(2026, 3, 15));
@@ -219,15 +219,16 @@ public sealed class SplitMonthPcsTests
         var pcs = new PeriodCalculationService(
             new SingleClientHttpFactory(engine),
             mappingService: null!,
-            new InMemoryEventStore(),
-            connectionFactory: null!,
+            new InMemorySegmentManifestStore(),
             Configuration(),
             logger,
             classificationProvider: new FixedProvider(live),
             hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31),
-            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
 
-        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m);
+        var outcome = await pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success, outcome.Result.ErrorMessage);
         Assert.DoesNotContain(logger.Messages, m => m.Contains("No RuleClassification registered", StringComparison.Ordinal));
@@ -286,11 +287,11 @@ public sealed class SplitMonthPcsTests
         }
 
         var engine = Engine(() => Timeline(new[] { new TimelineLine(lineDate, 1.00m) }));
-        var store = new InMemoryEventStore();
-        var pcs = BuildPcs(engine, eventStore: store, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
+        var store = new InMemorySegmentManifestStore();
+        var pcs = BuildPcs(engine, manifestStore: store, hoursReader: WeekdayHours(EmployeeId, new DateOnly(2026, 2, 23), Mar31));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId), previousFlexBalance: 0m));
+            () => pcs.CalculateWithOutcomeAsync(plan, Profile(EmployeeId)));
 
         Assert.Contains("OVERTIME_CALC", ex.Message);
         Assert.DoesNotMatch(@"\d{4}-\d{2}-\d{2}", ex.Message);

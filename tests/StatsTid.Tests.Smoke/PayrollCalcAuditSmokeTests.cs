@@ -102,7 +102,7 @@ public sealed class PayrollCalcAuditSmokeTests
             absences = Array.Empty<object>(),
             periodStart = "2026-03-01",
             periodEnd = "2026-03-31",
-            previousFlexBalance = 0m,
+            // S146 R-14: no opening balance in the body — it comes from the recorded ledger; any value is now a 400.
         };
 
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{PayrollUrl}/api/payroll/calculate-and-export")

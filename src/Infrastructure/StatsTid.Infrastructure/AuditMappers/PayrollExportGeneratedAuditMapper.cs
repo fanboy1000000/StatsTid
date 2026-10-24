@@ -28,6 +28,12 @@ public sealed class PayrollExportGeneratedAuditMapper : IAuditProjectionMapper<P
             contentHash = @event.ContentHash,
             exportedAt = @event.ExportedAt,
             periodId = @event.PeriodId,
+            // S146 TASK-14605 (C1, AC-C7): the month's recorded flex balances — what it opened and closed at and
+            // where the opening came from. Null on the raw exports and every pre-S146 event, and then omitted
+            // (AuditMapperJsonOptions writes no nulls), so those details are byte-identical to before.
+            openingFlexBalance = @event.OpeningFlexBalance,
+            closingFlexBalance = @event.ClosingFlexBalance,
+            flexProvenance = @event.FlexProvenance,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,

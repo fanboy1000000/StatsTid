@@ -42,6 +42,14 @@ Not commitments or dates — direction.
 4. **Domain completeness** — the pre-launch agreement-correctness program: real domain-expert
    engagement (Phase B) for the ~80 still-unsourced agreement cells
    ([phase-b-handoff-package](docs/references/phase-b-handoff-package.md)).
+   **Next: the overtime/flex model program, opening in S147** (owner direction S146 OQ-3 = (b), 2026-10-23).
+   Two verified research dossiers (`docs/references/overtime-flex-model-research.md`,
+   `docs/references/agreement-cells-reverification-research.md`) showed the overtime model wrong in kind:
+   a weekly norm and automatic overtime where the state sources give a calendar-month norm, overtime only for
+   ordered work at a flat +50 % and surplus hours to flex. **ADR-043 (PROPOSED)** sets the direction; S147's model
+   refinement puts its forks F-1..F-9 to the owner, then accepts and builds it. Closes QUAL-189, QUAL-216..222,
+   QUAL-226 and QUAL-227; retires S145's weekly settlement machinery (frozen by OQ-2, with QUAL-209/210/212/213).
+   The source register's unreliable citations (QUAL-215) make the Phase-B engagement above more urgent.
 5. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.
    A precondition for any go-live. **Includes authentication through Statens SSO** (owner-raised 2026-10-16;
@@ -215,13 +223,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Tier-probe log noise** — every legitimate leader read logs a spurious "Access denied" WARNING. [S128 FU-A]
 
 ### Correctness / domain
-- **Scheduled for S146 (owner Q-1, 2026-10-14): part-time staff are shown a full-time monthly norm (QUAL-198).**
-  The balance summary and the manager's team overview compute "hours expected this month" as
-  `(weekdays / 5) × the agreement's weekly norm`, with no part-time fraction. A 30-hour employee sees
-  162.80 where payroll judges 132.00. It is display only. The fix covers both sites in one task:
-  `weekdays × DayNorm.ForWeekday(W, fraction)`, with the fraction from the dated profile at month end.
-  The team overview gains a per-employee profile read with fault isolation, and its contract note changes.
-  Surfaced by S145's TASK-14509; ruled outside R11 by the adjudicator.
+- **✅ BUILT IN S146 — part-time staff see their own monthly norm (QUAL-198, TASK-14602, merged `b104c4d7`, CI-verified at CI-W1).** Both screens use `weekdays × DayNorm.ForWeekday(W, fraction at month end)`. Residual inputs divergence registered as QUAL-226 (for the S147 program).
 - **Backlog — needs its own refinement: a leaver's post-end-date night-shift hours are paid by no month
   (QUAL-199).** The post-midnight half of a last shift falls on a NOT_EMPLOYED day. It predates S145.
   Whether such hours are payable, and in which month, is a domain question.
@@ -325,7 +327,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   across the whole month, each day under its own contract), and payroll hands the planner only the rules it runs
   (ADR-016 D2–D4, S145 amendments); none of the fix options below was taken. One case stays manual, an agreement
   change inside a settled week (QUAL-209), and the raw export routes refuse split months by their own reason.
-  Residuals: QUAL-209..213, and the design questions in the next entry. QUAL-149 BUILT (all four Stage B evidence runs matched in CI, S145 C-6/C-7).
+  Residuals: QUAL-209..213, and the design questions in the next entry. **S146 OQ-2 (2026-10-23):** QUAL-209, QUAL-210, QUAL-212 and QUAL-213 are frozen (no new work on the weekly settlement machinery); the S147 model program (ADR-043) resolves or retires them. QUAL-149 BUILT (all four Stage B evidence runs matched in CI, S145 C-6/C-7).
   Detail in `docs/sprints/SPRINT-145.md`.
   The entry below is kept as the statement of the problem that was solved.
   **AlignedWindow rules at a GENUINE split in the live rule set (QUAL-149; the S64 F4-1(b) gap — re-registered,

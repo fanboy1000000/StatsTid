@@ -31,6 +31,14 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
+/// S146 (TASK-14604): the manifest event reaches <c>events</c> through the Payroll
+/// transactional outbox (ADR-018), so quiesce writers AND let the Payroll outbox drain
+/// (no unpublished <c>segment-manifest-%</c> row in <c>outbox_events</c>) before a rebuild:
+/// a manifest still on the outbox is not yet in <c>events</c>, and a rebuild run before the
+/// drain would drop its projection row.
+/// </para>
+///
+/// <para>
 /// JSON shape (camelCase via <see cref="EventSerializer"/>) is stable, so the
 /// rebuild runs as pure SQL using <c>jsonb</c> operators — no C# deserialization
 /// is required and we never have to instantiate the <c>SegmentManifestCreated</c>

@@ -60,4 +60,19 @@ public interface IEmploymentWindowResolverInTx
     Task<EmploymentWindowStatus> GetStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
         string employeeId, DateOnly date, CancellationToken ct = default);
+
+    /// <summary>
+    /// S146 / TASK-14605 (ruling R-36) — the in-transaction mirror of the self-managed RANGE read
+    /// <see cref="StatsTid.SharedKernel.Interfaces.IEmploymentWindowResolver.GetWindowsAsync"/> (ADR-040 D5):
+    /// every employment spell overlapping <c>[from, to]</c> (both INCLUSIVE), riding the caller-supplied
+    /// <paramref name="conn"/> + <paramref name="tx"/>; never commits, rolls back, or closes them. Same
+    /// semantics and the same fail-loud contracts (an inverted range, a missing user) as the self-managed read.
+    /// Payroll's flex-ledger recheck reads the windows over <c>[the previous month's first day, this month's
+    /// last day]</c> here, under the per-employee ledger lock, so the derivation it re-runs sees exactly what a
+    /// concurrently committed write left; a per-day loop over <see cref="GetStatusAsync"/> would be the O(days)
+    /// round-trips the range read exists to avoid, held under that lock.
+    /// </summary>
+    Task<IReadOnlyList<EmploymentWindow>> GetWindowsAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx,
+        string employeeId, DateOnly from, DateOnly to, CancellationToken ct = default);
 }

@@ -386,8 +386,7 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
         return new PeriodCalculationService(
             httpFactory,
             mappingService,
-            _harness.EventStore,
-            _harness.Factory,
+            new PostgresSegmentManifestStore(_harness.Factory, _harness.EventStore, _harness.EventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new LiveRuleClassificationProvider(),
@@ -398,7 +397,9 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
             // S145 R14: the in-memory hours reader (payroll reads its own hours).
             hoursReader: hoursReader,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new TestFixtures.AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
     }
 
     private static async Task<PeriodCalculationService.PeriodCalculationOutcome> RunShimAsync(
@@ -407,7 +408,7 @@ public sealed class EmploymentWindowLiveRulesetTests : IAsyncLifetime
     {
 #pragma warning disable CS0618 // The planless shim IS the surviving production path (/calculate-and-export).
         return await pcs.CalculateWithOutcomeAsync(
-            Profile(employeeId), Apr01, Apr30, previousFlexBalance: 0m);
+            Profile(employeeId), Apr01, Apr30);
 #pragma warning restore CS0618
     }
 

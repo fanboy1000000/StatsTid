@@ -1832,8 +1832,8 @@ Fact keys resolve to full names in the table at the end of this section. Each li
 | FS-G2 | `StatsTid.Tests.Regression.Segmentation.FrozenInputsSlotTests.Replay_SegmentsSlotMalformed_FailsAsDamagedRow_NotEventFallback` (guard, R-17) |
 | RT-1 | `StatsTid.Tests.Regression.Payroll.RetroactiveCorrectionTrailTests.Recalculate_RequestProfileDiffersFromDatedRecord_EventRecordsDatedAgreementAndPosition` |
 | RT-2 | `StatsTid.Tests.Regression.Payroll.RetroactiveCorrectionTrailTests.Recalculate_NoEmployedSegment_EventLinksPersistedManifest` |
-| BC-1 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.Replay_LegacyNumericBoundaryCauseRow_ProjectionOnly_StillReplays` |
-| BC-2 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.Replay_StringBoundaryCauseRow_ProjectionOnly_StillReplays` |
+| BC-1 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.Replay_LegacyNumericBoundaryCauseRow_ProjectionOnly_StillReplays` *(S146, 2026-10-23: renamed `…_ProjectionRowWithoutEvent_StillReplays` when `AuditState.ProjectionOnly` was deleted, TASK-14604-T.)* |
+| BC-2 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.Replay_StringBoundaryCauseRow_ProjectionOnly_StillReplays` *(S146, 2026-10-23: renamed `…_ProjectionRowWithoutEvent_StillReplays` when `AuditState.ProjectionOnly` was deleted, TASK-14604-T.)* |
 | BC-3 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.NullSnapshot_Rebuild_OmitsKey_YetDeserializesToNull_AndReplays` |
 | BC-4 | `StatsTid.Tests.Regression.Segmentation.BoundaryCauseEncodingTests.ForwardCalcWrite_And_Rebuild_BothStringEncode_CorrectBoundaryCause` |
 | TS | `StatsTid.Tests.Regression.Payroll.EmploymentWindowPayrollTests.TwoSpells_FlexDeltaCarriesThroughNotEmployedMiddleSegment` |

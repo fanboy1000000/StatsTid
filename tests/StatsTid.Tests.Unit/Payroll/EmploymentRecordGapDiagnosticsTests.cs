@@ -95,8 +95,7 @@ public sealed class EmploymentRecordGapDiagnosticsTests
 
         var ex = await Assert.ThrowsAsync<EmployeeProfileNotFoundException>(() =>
             pcs.CalculateWithOutcomeAsync(
-                plan, Profile(EmployeeId),
-                previousFlexBalance: 0m));
+                plan, Profile(EmployeeId)));
 
         // FAIL CLOSED: nothing was evaluated, so no figure could have been produced on a guess.
         Assert.Empty(engine.Calls);
@@ -143,8 +142,7 @@ public sealed class EmploymentRecordGapDiagnosticsTests
 
         var ex = await Assert.ThrowsAsync<EmployeeProfileNotFoundException>(() =>
             pcs.CalculateWithOutcomeAsync(
-                plan, Profile(EmployeeId),
-                previousFlexBalance: 0m));
+                plan, Profile(EmployeeId)));
 
         // The resolver really was asked at the hire date (the correct as-of, ADR-040 D10) — so the
         // date genuinely was in play and its absence below is a property of the diagnostics, not
@@ -196,8 +194,7 @@ public sealed class EmploymentRecordGapDiagnosticsTests
         var pcs = BuildPcsWith(engine, logger, new CountingProfileResolver(), WeekdayHours(EmployeeId, Mar01, Mar31));
 
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            plan, Profile(EmployeeId),
-            previousFlexBalance: 0m);
+            plan, Profile(EmployeeId));
 
         Assert.True(outcome.Result.Success);
         Assert.NotEmpty(engine.Calls);
@@ -247,9 +244,8 @@ public sealed class EmploymentRecordGapDiagnosticsTests
             // Never dereferenced: the stub rule engine returns no line items (and on the gap paths
             // it is never called at all), so the export mapper is never reached.
             mappingService: null!,
-            new InMemoryEventStore(),
-            // The projection insert sits inside PCS's own swallowing try/catch by design.
-            connectionFactory: null!,
+            // S146 TASK-14604-T: the in-memory manifest store (no database).
+            new InMemorySegmentManifestStore(),
             Configuration(),
             logger,
             classificationProvider: new FixedRuleClassificationProvider(RuleSet),
@@ -262,7 +258,9 @@ public sealed class EmploymentRecordGapDiagnosticsTests
             // S145 R14: the in-memory hours reader (payroll reads its own hours).
             hoursReader: hoursReader,
             // S145 R26: this suite is not about the prior-month check; M−1 is treated as APPROVED
-            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods());
+            priorPeriodApprovalReader: new AlwaysApprovedPriorPeriods(),
+            // S146 R-14: not about the chain; empty ledger → LEDGER_START 0 (the opening the former caller-supplied 0m said).
+            flexLedgerReader: new InMemoryFlexLedgerReader());
 
     /// <summary>
     /// <see cref="IEmploymentProfileResolver"/> fake standing in for an employee with a hole in

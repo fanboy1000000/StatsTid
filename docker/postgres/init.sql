@@ -161,22 +161,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_open
 CREATE UNIQUE INDEX IF NOT EXISTS idx_wtm_natural_key_history
     ON wage_type_mappings (time_type, ok_version, agreement_code, position, effective_from);
 
--- Flex balance snapshots
-CREATE TABLE IF NOT EXISTS flex_balance_snapshots (
-    snapshot_id     UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    employee_id     TEXT        NOT NULL,
-    period_start    DATE        NOT NULL,
-    period_end      DATE        NOT NULL,
-    balance_hours   DECIMAL     NOT NULL,
-    delta           DECIMAL     NOT NULL,
-    ok_version      TEXT        NOT NULL,
-    agreement_code  TEXT        NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_flex_snapshots_employee ON flex_balance_snapshots(employee_id);
-CREATE INDEX IF NOT EXISTS idx_flex_snapshots_period ON flex_balance_snapshots(period_start, period_end);
-
 -- Danish public holidays (cache / reference)
 CREATE TABLE IF NOT EXISTS danish_public_holidays (
     holiday_date    DATE        NOT NULL,
@@ -4618,6 +4602,22 @@ $$;
 --   establishes the schema + event + audit mapper only (NO emit site yet).
 --   Greenfield only — no production data.
 -- =========================================================================
+-- S146 flex ledger, in plain language. Each paid month now records its flex
+-- balance on its export record: what the month opened at (opening_balance),
+-- what it closed at (closing_balance) and where the opening came from
+-- (balance_provenance: LEDGER_START = the employee's first ledger month,
+-- CHAINED = the previous month's closing, REHIRE = a new employment spell).
+-- This replaces the unused flex_balance_snapshots table, which is dropped.
+--   - ALL OR NOTHING: the three columns are all NULL (a raw export, or a record
+--     written before the ledger) or all set, enforced by the named CHECK
+--     payroll_export_records_balances_paired. A partial row would be a balance
+--     with no stated origin, or an origin with no balance.
+--   - NO UNTRACKED: UNTRACKED is a calculation-result state, never stored; the
+--     CHECK refuses it.
+--   - NO SCALE: NUMERIC without precision/scale, so a stored balance compares
+--     exactly with the rule engine's decimal (no silent rounding).
+-- Pre-S146 databases are reseeded, not upgraded; the S146-FLEX-LEDGER-SEGMENT
+-- at the end of this file carries the same DDL for a re-run of init.sql.
 CREATE TABLE IF NOT EXISTS payroll_export_records (
     export_id                UUID          PRIMARY KEY,
     period_id                UUID          NULL,         -- nullable: the raw /export endpoints bypass approval
@@ -4629,7 +4629,16 @@ CREATE TABLE IF NOT EXISTS payroll_export_records (
     current_effective_lines  JSONB         NOT NULL,     -- updated when a correction export commits (B3)
     content_hash             TEXT          NOT NULL,     -- idempotency content semantics
     source                   TEXT          NOT NULL DEFAULT 'CALCULATE_AND_EXPORT',
-    CONSTRAINT uq_payroll_export_employee_month UNIQUE (employee_id, year, month)
+    -- S146 flex ledger (see the comment block above this CREATE): all three NULL or all three set.
+    opening_balance          NUMERIC       NULL,         -- flex balance the month opened at (no scale: exact decimal)
+    closing_balance          NUMERIC       NULL,         -- flex balance the month closed at (no scale: exact decimal)
+    balance_provenance       TEXT          NULL,         -- where the opening came from: LEDGER_START | CHAINED | REHIRE
+    CONSTRAINT uq_payroll_export_employee_month UNIQUE (employee_id, year, month),
+    CONSTRAINT payroll_export_records_balances_paired CHECK (
+        (opening_balance IS NULL AND closing_balance IS NULL AND balance_provenance IS NULL)
+        OR (opening_balance IS NOT NULL AND closing_balance IS NOT NULL AND balance_provenance IS NOT NULL
+            AND balance_provenance IN ('LEDGER_START', 'CHAINED', 'REHIRE'))
+    )
 );
 
 -- Reopen lookup path (Backend cross-context read): the lock check resolves the
@@ -5121,3 +5130,47 @@ BEGIN
 END
 $$;
 -- S138-PROFILE-CATEGORY-NOTNULL-SEGMENT-END
+
+-- =========================================================================
+-- S146 / TASK-14601 - flex ledger on payroll_export_records.
+-- In plain language: each paid month records the flex balance it opened and
+-- closed at, and where the opening came from, on its export record. The three
+-- columns are all NULL or all set (a named CHECK). The unused
+-- flex_balance_snapshots table is dropped. The base CREATE of
+-- payroll_export_records already carries the columns and the CHECK; this
+-- segment is the idempotent re-run form (ADD COLUMN IF NOT EXISTS, then the
+-- CHECK dropped and re-added with identical text). Existing rows get all-NULL
+-- balances, which the CHECK accepts.
+--
+-- Placed AFTER the S138-PROFILE-CATEGORY-NOTNULL-SEGMENT (the last segment)
+-- and outside every other marker pair. No CREATE TABLE here or in the DO block
+-- (generate_db_schema.py reads constraints only from CREATE bodies).
+-- =========================================================================
+-- S146-FLEX-LEDGER-SEGMENT-BEGIN
+ALTER TABLE payroll_export_records
+    ADD COLUMN IF NOT EXISTS opening_balance NUMERIC NULL;
+ALTER TABLE payroll_export_records
+    ADD COLUMN IF NOT EXISTS closing_balance NUMERIC NULL;
+ALTER TABLE payroll_export_records
+    ADD COLUMN IF NOT EXISTS balance_provenance TEXT NULL;
+
+ALTER TABLE payroll_export_records
+    DROP CONSTRAINT IF EXISTS payroll_export_records_balances_paired;
+ALTER TABLE payroll_export_records
+    ADD CONSTRAINT payroll_export_records_balances_paired
+    CHECK (
+        (opening_balance IS NULL AND closing_balance IS NULL AND balance_provenance IS NULL)
+        OR (opening_balance IS NOT NULL AND closing_balance IS NOT NULL AND balance_provenance IS NOT NULL
+            AND balance_provenance IN ('LEDGER_START', 'CHAINED', 'REHIRE'))
+    );
+
+DROP TABLE IF EXISTS flex_balance_snapshots;
+
+DO $$
+BEGIN
+    INSERT INTO schema_migrations (migration_id, notes)
+    VALUES ('s146-flex-ledger', 'S146/TASK-14601: payroll_export_records gains opening_balance, closing_balance (NUMERIC, no scale) and balance_provenance (LEDGER_START, CHAINED or REHIRE), all NULL or all set under the named CHECK payroll_export_records_balances_paired; the unused flex_balance_snapshots table is dropped. Pre-S146 databases are reseeded, not upgraded: existing rows keep all-NULL balances, which the CHECK accepts.')
+    ON CONFLICT (migration_id) DO NOTHING;
+END
+$$;
+-- S146-FLEX-LEDGER-SEGMENT-END

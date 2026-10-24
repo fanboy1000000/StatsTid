@@ -23,6 +23,15 @@
 --   miss. If the rebuild aborts with that error, the projection is
 --   unchanged (TRUNCATE rolled back) — re-run after quiescing writers.
 --
+--   S146 (TASK-14604): the manifest event now reaches `events` through the
+--   Payroll transactional outbox. Before running, quiesce writers AND let the
+--   Payroll outbox drain: no row with service_id = 'payroll' and
+--   stream_id LIKE 'segment-manifest-%' may be unpublished
+--   (SELECT count(*) FROM outbox_events WHERE service_id = 'payroll'
+--    AND stream_id LIKE 'segment-manifest-%' AND published_at IS NULL = 0).
+--   A manifest still on the outbox is not yet in `events`, so a rebuild run
+--   before the drain would drop its projection row.
+--
 -- Invocation:
 --   psql -v ON_ERROR_STOP=1 -f rebuild_segment_manifests.sql
 --   (or programmatically via SegmentManifestProjectionRebuilder.RebuildAsync)

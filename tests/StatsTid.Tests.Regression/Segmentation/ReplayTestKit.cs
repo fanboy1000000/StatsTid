@@ -12,6 +12,7 @@ using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
 using StatsTid.Tests.Regression.Outbox;
+using StatsTid.Tests.Regression.TestSupport;
 
 namespace StatsTid.Tests.Regression.Segmentation;
 
@@ -84,11 +85,16 @@ internal static class ReplayTestKit
             })
             .Build();
 
-        return new PeriodCalculationService(
+        // S146 R-14: the opening is derived from the recorded ledger, never handed in. The kit owns ONE in-memory
+        // ledger per service: empty by default (LEDGER_START 0, the opening the former caller-supplied 0m said);
+        // ForwardAsync / FreshAsync seed it with an employed previous month's closing when a fact needs a non-zero
+        // opening (R-14 case 4a, CHAINED). These facts calculate and replay but never export, so no record is
+        // written and the fake (not the Postgres reader) is the honest ledger.
+        var ledger = new InMemoryFlexLedgerReader();
+        var pcs = new PeriodCalculationService(
             httpFactory,
             mappingService,
-            harness.EventStore,
-            harness.Factory,
+            new PostgresSegmentManifestStore(harness.Factory, harness.EventStore, harness.EventStore),
             configuration,
             NullLogger<PeriodCalculationService>.Instance,
             classificationProvider: new InMemoryClassifications(TestFixtures.RuleSet),
@@ -96,7 +102,27 @@ internal static class ReplayTestKit
             employmentWindowResolver: windowResolver,
             userAgreementCodeRepo: agreementCodeRepo,
             hoursReader: hours,
-            priorPeriodApprovalReader: approval);
+            priorPeriodApprovalReader: approval,
+            flexLedgerReader: ledger);
+        Ledgers.Add(pcs, ledger);
+        return pcs;
+    }
+
+    /// <summary>The kit-owned ledger of each service <see cref="BuildPcs"/> built (see there).</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<PeriodCalculationService, InMemoryFlexLedgerReader> Ledgers = new();
+
+    /// <summary>
+    /// S146 R-14 seed: when a fact needs a non-zero opening, an EMPLOYED previous month with a recorded closing of that
+    /// value (R-37: the kit's resolver is absent or unbounded, so employment is implicit and only P's record is
+    /// needed). R-14 case 4a then yields exactly <paramref name="openingFlexBalance"/> as a CHAINED opening. Zero
+    /// seeds nothing: the empty ledger already opens at 0 (case 2).
+    /// </summary>
+    private static void SeedOpening(PeriodCalculationService pcs, DateOnly periodStart, decimal openingFlexBalance)
+    {
+        if (openingFlexBalance == 0m) return;
+        Ledgers.TryGetValue(pcs, out var ledger);
+        Assert.NotNull(ledger);
+        ledger!.Add(InMemoryFlexLedgerReader.LedgerRecord(periodStart.AddMonths(-1), openingFlexBalance));
     }
 
     /// <summary>The real hours reader over the harness projection tables.</summary>
@@ -121,10 +147,10 @@ internal static class ReplayTestKit
         PeriodCalculationService pcs, string employeeId, DateOnly periodStart, DateOnly periodEnd,
         decimal openingFlexBalance = 0m)
     {
+        SeedOpening(pcs, periodStart, openingFlexBalance);
 #pragma warning disable CS0618 // The planless entry registers the WtmNaturalKey hydrator (S29 precedent).
         var outcome = await pcs.CalculateWithOutcomeAsync(
-            TestFixtures.Profile(employeeId, Ok), periodStart, periodEnd,
-            previousFlexBalance: openingFlexBalance);
+            TestFixtures.Profile(employeeId, Ok), periodStart, periodEnd);
 #pragma warning restore CS0618
         Assert.True(outcome.Result.Success, "the forward calculation must succeed");
         Assert.Equal(PeriodCalculationService.AuditState.Complete, outcome.AuditState);
@@ -138,10 +164,10 @@ internal static class ReplayTestKit
         PeriodCalculationService pcs, string employeeId, DateOnly periodStart, DateOnly periodEnd,
         decimal openingFlexBalance = 0m)
     {
+        SeedOpening(pcs, periodStart, openingFlexBalance);
 #pragma warning disable CS0618
         return await pcs.CalculateAsync(
-            TestFixtures.Profile(employeeId, Ok), periodStart, periodEnd,
-            previousFlexBalance: openingFlexBalance);
+            TestFixtures.Profile(employeeId, Ok), periodStart, periodEnd);
 #pragma warning restore CS0618
     }
 

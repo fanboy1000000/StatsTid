@@ -6,13 +6,16 @@ using StatsTid.Tests.Regression.Segmentation;
 namespace StatsTid.Tests.Regression.Migrations;
 
 /// <summary>
-/// S145 / TASK-14501 (R51) — the harness-drift guard: the test harness's private copies of the three
-/// tables that sprint 145 changes must equal what <c>docker/postgres/init.sql</c> builds.
+/// S145 / TASK-14501 (R51), widened in S146 — the harness-drift guard: the test harness's private copies
+/// of the tables that sprints 145 and 146 change must equal what <c>docker/postgres/init.sql</c> builds.
 ///
-/// <para><b>Plain language.</b> Three test helpers keep their own hand-written copies of production
-/// tables so a test can start with a small database instead of the whole schema:
-/// <c>ProjectionSchemaTestFixture</c> (the two hours tables), <c>TxContractTests</c> (the same two
-/// tables, again) and <c>TestFixtures.DockerHarness.SchemaDdl</c> (<c>segment_manifests</c>). A copy
+/// <para><b>Plain language.</b> Several test helpers keep their own hand-written copies of production
+/// tables so a test can start with a small database instead of the whole schema. The copies this guard
+/// covers: <c>ProjectionSchemaTestFixture</c> (the two hours tables), <c>TxContractTests</c> (the same two
+/// tables, again), <c>TestFixtures.DockerHarness.SchemaDdl</c> (<c>segment_manifests</c> from S145, and
+/// <c>outbox_events</c> from S146 / TASK-14609: the copy and its guard row are in force now, ahead of
+/// TASK-14604 moving the manifest onto the outbox) and
+/// <c>PayrollExportRecordsTestSchema</c> (<c>payroll_export_records</c>, S146 / TASK-14601-T). A copy
 /// that lags behind production breaks every test that writes a column the copy lacks, and it breaks
 /// them in setup, with an error that points at the test and not at the stale copy. S144's close went
 /// red on exactly that shape (<c>SPRINT-144.md</c> § C-5). This guard compares each copy with the real
@@ -33,8 +36,9 @@ namespace StatsTid.Tests.Regression.Migrations;
 ///
 /// <para><b>Scope, stated.</b> Only the tables named on each row are compared. The other tables the
 /// same helpers create (<c>events</c>, <c>wage_type_mappings</c>, <c>work_time_projection</c>,
-/// <c>entitlement_balances</c>, <c>outbox_events</c>, every <c>TxContractTests</c> table) are not
-/// checked by this guard. Column order is not compared (a copy may list columns in its own order);
+/// <c>entitlement_balances</c>, the <c>outbox_events</c> copy in <c>OutboxTestSchema</c>, every
+/// <c>TxContractTests</c> table) are not checked by this guard; the <c>DockerHarness</c> copy of
+/// <c>outbox_events</c> is (S146). Column order is not compared (a copy may list columns in its own order);
 /// comments are not compared.</para>
 ///
 /// <para><b>Red conditions (guard, no MD: it passes once the copies and <c>init.sql</c> agree).</b>
@@ -87,6 +91,8 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
 
     private static readonly string[] HoursTables = { "time_entries_projection", "absences_projection" };
     private static readonly string[] ManifestTables = { "segment_manifests" };
+    private static readonly string[] PayrollExportTables = { "payroll_export_records" };
+    private static readonly string[] OutboxTables = { "outbox_events" };
 
     /// <summary>A Postgres container that hosts the two fresh databases of the row under test.</summary>
     private TestFixtures.DockerHarness _host = null!;
@@ -107,7 +113,11 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
     [InlineData("ProjectionSchemaTestFixture")]
     [InlineData("TxContractTests")]
     [InlineData("TestFixtures.DockerHarness.SchemaDdl")]
-    public async Task HarnessDdl_HoursTablesAndManifests_MatchInitSqlSchema(string copy)
+    [InlineData("PayrollExportRecordsTestSchema")]
+    // S146 / TASK-14609 (kind F: the copy has no outbox_events table before this task, so the copy's snapshot
+    // is empty and the row fails on every "only in init.sql" line).
+    [InlineData("TestFixtures.DockerHarness.SchemaDdl.Outbox")]
+    public async Task HarnessDdl_Copies_MatchInitSqlSchema(string copy)
     {
         var (ddl, tables) = ResolveCopy(copy);
 
@@ -218,6 +228,14 @@ public sealed class HarnessDdlMatchesInitSqlTests : IAsyncLifetime
         "ProjectionSchemaTestFixture" => (ProjectionSchemaTestFixture.Ddl, HoursTables),
         "TxContractTests" => (StatsTid.Tests.Regression.Infrastructure.TxContractTests.SchemaDdl, HoursTables),
         "TestFixtures.DockerHarness.SchemaDdl" => (TestFixtures.DockerHarness.SchemaDdl, ManifestTables),
+        // S146 / TASK-14601-T (kind R, holds today): the copy's approval_periods FKs organizations, so the
+        // prerequisite DDL (PhaseE.AuditProjectionTestSchema) goes first on the fresh database.
+        "PayrollExportRecordsTestSchema" => (
+            StatsTid.Tests.Regression.PhaseE.AuditProjectionTestSchema.Ddl + "\n"
+                + StatsTid.Tests.Regression.Payroll.PayrollExportRecordsTestSchema.Ddl,
+            PayrollExportTables),
+        // S146 / TASK-14609 (R-24, kind F): the same DockerHarness DDL, now compared on its outbox_events table.
+        "TestFixtures.DockerHarness.SchemaDdl.Outbox" => (TestFixtures.DockerHarness.SchemaDdl, OutboxTables),
         _ => throw new ArgumentOutOfRangeException(nameof(copy), copy, "Unknown harness copy."),
     };
 
