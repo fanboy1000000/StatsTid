@@ -317,15 +317,23 @@ app.MapPost("/api/payroll/export-period", async (
     }
 }).RequireAuthorization("GlobalAdminOnly");
 
+// S146 Step 7a (R-56): the log category of the flex-ledger refusal line (FlexLedgerRefused), taken by the two
+// calculating handlers, /calculate-and-export and /recalculate.
+const string FlexLedgerLogCategory = "StatsTid.Integrations.Payroll.FlexLedger";
+
 app.MapPost("/api/payroll/calculate-and-export", async (
     CalculateAndExportRequest request,
     PeriodCalculationService calculator,
     PayrollExportService export,
     ApprovalPeriodRepository approvalRepo,
     OrgScopeValidator scopeValidator,
+    ILoggerFactory loggerFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
 {
+    // S146 Step 7a (R-56): a flex-ledger refusal is logged where it is answered (FlexLedgerRefused).
+    var flexLedgerLogger = loggerFactory.CreateLogger(FlexLedgerLogCategory);
+
     // Resource-scope guard (TASK-1902): the caller's scope must cover the target
     // employee's org. Pre-fix, LocalAdminOrAbove + the APPROVED-period match below
     // were treated as equivalent to per-org scoping, but the approval guard only
@@ -452,7 +460,7 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         // ledger — an unrecorded month before the ledger start (payroll-export-out-of-order, naming the start) or
         // an employed previous month with no ledger record (payroll-prior-month-not-recorded, naming it). Raised by
         // admission after the prior-month check and before any rule call, so nothing was calculated or written.
-        return FlexLedgerRefused(ex);
+        return FlexLedgerRefused(flexLedgerLogger, ex, "calculate-and-export admission");
     }
     catch (RuleClassificationsUnavailableException)
     {
@@ -515,6 +523,9 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             PeriodId = approval.PeriodId,
             PriorMonthToRecheck = outcome.PriorMonthApprovalRequired,
             FlexLedger = flexWrite,
+            // S146 Step 7a (R-54): the calculation's manifest rides PayrollExportGenerated, so even a record with no
+            // lines names it. A committed manifest: this point is past ThrowIfNotProvable and StampAuditContext.
+            ManifestId = outcome.ManifestId,
             Source = "CALCULATE_AND_EXPORT",
             ActorId = actorId,
             ActorRole = actor.ActorRole,
@@ -533,7 +544,7 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             // (another export or a correction recorded the previous month meanwhile). The transaction rolled back:
             // no export record, no PayrollExportGenerated, no audit row. The calculation's own manifest stays, as
             // with the other export-time rechecks. 409 payroll-ledger-changed: retry.
-            return FlexLedgerRefused(ex);
+            return FlexLedgerRefused(flexLedgerLogger, ex, "calculate-and-export export");
         }
         catch (PriorMonthNotApprovedException ex)
         {
@@ -597,9 +608,13 @@ app.MapPost("/api/payroll/recalculate", async (
     RecalculateRequest request,
     RetroactiveCorrectionService correctionService,
     IdempotencyGuard idempotencyGuard,
+    ILoggerFactory loggerFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
 {
+    // S146 Step 7a (R-56): a flex-ledger refusal is logged where it is answered (FlexLedgerRefused).
+    var flexLedgerLogger = loggerFactory.CreateLogger(FlexLedgerLogCategory);
+
     // S145 TASK-14508 (R14): hours in the body are refused, loudly — payroll reads the employee's
     // recorded hours itself. This route has no org-scope check (GlobalAdminOnly) and no approval read,
     // so the refusal comes FIRST: before the idempotency lookup below (a database read) and before
@@ -711,7 +726,7 @@ app.MapPost("/api/payroll/recalculate", async (
         // (payroll-ledger-changed), and the transaction rolled back. Either way nothing was written: no baseline
         // or balance change, no correction event, no audit row, no idempotency marker (a retry with the same token
         // is not short-circuited). 409 naming the month.
-        return FlexLedgerRefused(ex);
+        return FlexLedgerRefused(flexLedgerLogger, ex, "recalculate");
     }
     catch (RuleClassificationsUnavailableException)
     {
@@ -941,14 +956,23 @@ static IResult? RefusePeriodNotAMonth(DateOnly periodStart, DateOnly periodEnd) 
 // pay month, never an employment date — plus the members every sibling body has (success, error, kind). The
 // sentence is fixed per kind: no employee id and no date. Shared by /calculate-and-export (admission and the
 // export's under-lock recheck) and /recalculate (admission and the correction's under-lock recheck).
-static IResult FlexLedgerRefused(FlexLedgerRefusalException ex) =>
-    Results.Json(new
+//
+// S146 Step 7a (R-56): the refusal is logged first, as a Warning on the caller's FlexLedger-category logger, with
+// the exception, its kind, the route that answered (calculate-and-export admission | calculate-and-export export |
+// recalculate), the named month and the diagnostic message, which never reaches the response. A refusal is by
+// design a non-event (R-14), so this is a diagnosability line, not an audit row. The 409 body is unchanged.
+static IResult FlexLedgerRefused(ILogger logger, FlexLedgerRefusalException ex, string route)
+{
+    logger.LogWarning(ex, "Flex ledger refusal {Kind} on {Route}, month {Month}: {Diagnostic}",
+        ex.Kind, route, ex.MonthText, ex.Message);
+    return Results.Json(new
     {
         success = false,
         error = ex.ErrorSentence,
         kind = ex.Kind,
         month = ex.MonthText
     }, statusCode: 409);
+}
 
 // S146 TASK-14605 (R-14 case 3b) — the success body of /calculate-and-export with the "flex not tracked" statement
 // beside the result: the result exactly as Results.Ok(result) would serialize it (the host's own JSON options), plus

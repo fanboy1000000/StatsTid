@@ -161,10 +161,11 @@ public sealed class PayrollExportRecordRepository
     /// <b>One statement for several employees, ordered by the KEY</b> (reviewer c3 N2). <c>ExportAsync</c> writes
     /// every line group of its call in one transaction, so it locks every employee of the call at once, de-duplicated
     /// and ordered by the hashed key value: two ids whose <c>hashtext</c> collides are the same lock, so ordering by
-    /// id could take two keys in opposite orders in two calls; ordering by key cannot. The key lives in the
-    /// <c>payroll-ledger-</c> namespace, which never contends with the <c>employee-</c> family (ADR-032 D4) or any
-    /// org key the Backend's reopen takes; the reopen never takes a ledger key, so payroll transactions lock in one
-    /// order: advisory, then approval rows, then records.
+    /// id could take two keys in opposite orders in two calls; ordering by key cannot. The keys are distinct by name
+    /// (<c>payroll-ledger-</c> vs the <c>employee-</c> and org keys); <c>hashtext</c> is 32-bit, so a
+    /// collision is possible but harmless: it would only serialize two unrelated transactions, and no wait cycle can
+    /// form because every writer takes its advisory keys as its first statement, before any row lock. Payroll
+    /// transactions lock in one order: advisory, then approval rows, then records.
     /// </para>
     /// </summary>
     public static async Task AcquireFlexLedgerLocksAsync(

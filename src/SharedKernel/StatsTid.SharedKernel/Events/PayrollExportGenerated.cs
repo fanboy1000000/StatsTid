@@ -50,4 +50,12 @@ public sealed class PayrollExportGenerated : DomainEventBase
     /// <c>REHIRE</c> (S146). Optional and NOT required: null on raw exports and pre-S146 events.
     /// </summary>
     public string? FlexProvenance { get; init; }
+
+    /// <summary>
+    /// The manifest of the calculation whose figures this export stores (ADR-016 D10). Set on
+    /// <c>/calculate-and-export</c> only; null on the raw <c>/export</c> + <c>/export-period</c> (their lines
+    /// carry what their caller sent) and on every pre-fix event, which keep deserializing to null. A later
+    /// correction's manifest is on its own <c>RetroactiveCorrectionRequested</c>. Optional and NOT required.
+    /// </summary>
+    public Guid? ManifestId { get; init; }
 }
