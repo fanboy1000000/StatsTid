@@ -1156,9 +1156,11 @@ public static class ApprovalEndpoints
                 // then lifted the tiering into ApprovalReadTier and gated THREE of the sibling reads
                 // (allocation-breakdown, compliance/period, balance/summary) with the same predicate —
                 // leader-tier 403 on non-submitted months. The REMAINING siblings (raw time entries,
-                // absences, flex-balance, balance year-overview/series, compensatory-rest, the
-                // overtime reads) still have NO period-status gate; that 9-read remainder is RECORDED
-                // in RES-002 with the corrected census. Describe enforcement as PARTIAL.
+                // absences, balance year-overview/series, compensatory-rest, the overtime reads)
+                // still have NO period-status gate; that remainder is RECORDED in RES-002 with the
+                // corrected census (9 reads there; 8 since S146 / TASK-14607 deleted GET
+                // /api/flex-balance). Since S146 the year overview's flex tile carries the real latest
+                // recorded closing, under that same RES-002 posture. Describe enforcement as PARTIAL.
                 var submittedToManager = ApprovalVisibility.IsSubmittedToManager(status);
 
                 var normRegistered = registeredByEmployee.GetValueOrDefault(r.EmployeeId, 0m);

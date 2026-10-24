@@ -120,6 +120,11 @@ public sealed class PostgresEventStore : IEventStore, IOutboxEnqueue
     //  NumberStyles parse (ApprovalEndpoints). The inline fourth is the reason this is an extraction
     //  rather than a new helper beside the old ones.
     //
+    //  History, not current callers: those four were all reads of one flex event, and they served
+    //  until S146 / TASK-14607, which moved the flex screens to the Payroll flex ledger
+    //  (FlexLedgerReadRepository), deleted GET /api/flex-balance and the event type. NO production
+    //  caller of either shape remains; the generic reads stay, pinned by LatestEventReadTests.
+    //
     //  Both shapes select `data` and go through EventSerializer, NOT `data->>'field'`. That keeps
     //  the JSON key names and the camelCase convention inside the serializer (ADR-018), where the
     //  write path already owns them — per-field extraction in a caller is a second encoding of the

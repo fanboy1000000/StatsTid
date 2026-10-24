@@ -57,8 +57,11 @@ public sealed record RecordedFlexClosing(int Year, int Month, decimal OpeningBal
 ///   <item>A <i>raw</i> record (written by the raw export routes, or before the ledger existed)
 ///   carries no balances and is ignored, even when it is the employee's newest month.</item>
 ///   <item>The latest one is the ledger record with the greatest <c>(year, month)</c>. The key
-///   <c>UNIQUE (employee_id, year, month)</c> makes that order total, so the pick is deterministic,
-///   and the same unique index serves the <c>DISTINCT ON … ORDER BY</c>.</item>
+///   <c>UNIQUE (employee_id, year, month)</c> makes that order total, so the pick is deterministic.
+///   Its index narrows the read to the requested employees, but it is ascending while the query
+///   sorts year and month DESCENDING and filters on <c>opening_balance IS NOT NULL</c>, so the
+///   planner may still sort the matched rows — immaterial at roster size (a few dozen employees,
+///   one row per paid month each).</item>
 ///   <item>A month in which the employee was employed but registered nothing still writes a ledger
 ///   record (no lines, balances set); it is a valid latest closing like any other.</item>
 /// </list>

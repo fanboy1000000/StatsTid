@@ -80,8 +80,10 @@ public sealed record BalanceSummaryOvertimeInfo(
 /// (the UI's "ingen afregnet måned") — never a made-up 0. Null has that one meaning here: a
 /// leader reading a month the employee has not submitted gets 403 before any figure is built
 /// (S128). The figure is the latest settled month whichever month is requested, which is why its
-/// month travels with it. <paramref name="FlexDelta"/> keeps its type: the same record's
-/// <c>closing − opening</c>, 0 when nothing is recorded.</para></summary>
+/// month travels with it. <paramref name="FlexDelta"/> keeps its type and is the flex movement
+/// in the month named by <paramref name="FlexBalanceMonth"/> — <c>closing − opening</c> of that
+/// same ledger record — NOT the movement in the requested <paramref name="Month"/>; 0 when
+/// nothing is recorded.</para></summary>
 public sealed record BalanceSummaryResponse(
     string EmployeeId,
     int Year,

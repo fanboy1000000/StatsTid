@@ -4,7 +4,6 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Config;
-using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Exceptions;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
@@ -90,8 +89,10 @@ public static class BalanceEndpoints
             // ── S128 / TASK-12804 (RES-002) — THE LEADER MONTH GATE on this sibling read ────────
             // The manager-visibility rule (a manager sees NOTHING of a month the employee has not
             // sent — S124/TASK-12402; REJECTED withheld too since S127/R1) now covers this read:
-            // normHoursActual / overtimeHours / flex are recomputed from the same in-progress
-            // registrations the Teamoversigt row withholds. S128 rulings: R1 TIERED — self and
+            // normHoursActual / overtimeHours are recomputed from the same in-progress
+            // registrations the Teamoversigt row withholds. (Flex is not: since S146 / TASK-14607
+            // it is the latest RECORDED closing from the flex ledger, a payroll figure, not a
+            // recomputation of this month's registrations.) S128 rulings: R1 TIERED — self and
             // HR-or-above (the corrective tier) are exempt, decided by the shared ApprovalReadTier;
             // R5 NARROW-ONLY — the population admitted above (self OR org-scope; deliberately NO
             // designated-edge branch on this endpoint, and this gate must NOT add one) is
@@ -209,10 +210,11 @@ public static class BalanceEndpoints
             // The figure is NOT relative to the requested month: it is the latest settled month
             // whichever month is being viewed, which is why its month travels with it.
             //
-            // flexDelta keeps its wire type (decimal). It was the event's Delta (NewBalance −
-            // PreviousBalance); its ledger counterpart is the same record's closing − opening, so
-            // flexBalance − flexDelta is still the balance before the shown change. 0 when nothing
-            // is recorded.
+            // flexDelta keeps its wire type (decimal). It is the flex MOVEMENT IN THE MONTH NAMED BY
+            // flexBalanceMonth — closing − opening of that same ledger record — NOT the movement in
+            // the requested month; 0 when nothing is recorded. (It was the event's Delta, NewBalance
+            // − PreviousBalance; this is its ledger counterpart, so flexBalance − flexDelta is still
+            // the balance before the shown change.)
             var recordedFlex = await flexLedgerRepo.GetLatestClosingAsync(employeeId, ct);
             decimal? flexBalance = recordedFlex?.ClosingBalance;
             var flexBalanceMonth = recordedFlex?.MonthLabel;
