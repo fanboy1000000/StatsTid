@@ -85,9 +85,9 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14605 | DONE (merged `8f366802`) | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4; 5a fix-ups R-47/R-48/R-50/R-51 |
 | TASK-14605-T | DONE (merged `8f366802`) | wave 2b, paired · `test-qa` · the site migration under the census rule; H14 re-seed |
 | TASK-14606 | DONE (merged `a9a677f1`) | wave 2c · `test-qa` · the QUAL-188 pins; M01–M26 and N1–N3 mutations killed; Docker facts at CI-W2 |
-| TASK-14607 | PLANNED | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
-| TASK-14607-T | PLANNED | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
-| TASK-14608 | PLANNED | wave 3, stacked · `ux` · C5 frontend |
+| TASK-14607 | REVIEWED (`62b4c340`, fix-up `c9a37a76`; O-2 `cd9bdd23`) — merges with the stack | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
+| TASK-14607-T | REVIEWED (`d55531e3`) — merges with the stack | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
+| TASK-14608 | IN PROGRESS (branched from `cd9bdd23`) | wave 3, stacked · `ux` · C5 frontend |
 
 Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1–D7, O-1..O-7, CI-W1, CI-W2, C-1..C-5.
 
@@ -310,15 +310,62 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 
 **CI-W2** (R-32): branch `s146-ci-w2` at `a9a677f1`, draft PR #40 "EVIDENCE ONLY", run `40049157171`. Pending.
 
+## Wave 3 (stacked) — TASK-14607 + 14607-T, O-2, TASK-14608 (C5, the flex screens)
+
+**What changes for the product.** Three screens have shown a flex balance of 0 for everyone, because they read an event, `FlexBalanceUpdated`, that nothing ever wrote. The screens are the employee's card on `/summary`, the year-overview tile and the leader's team overview. They now show the employee's latest *paid* month's closing balance, labelled with its month, or "no settled month".
+- **Team overview (OQ-5):** the figure stays withheld on rows whose month is unsubmitted, as the owner ruled. A closed state field (`flexBalanceState`: `withheld`, `none` or `recorded`) tells the screen which of the three cases a row is in, so a null never has to be guessed at.
+- **Deleted:** the dead route `GET /api/flex-balance/{employeeId}`, its response type and the never-written event.
+
+**TASK-14607** (`backend-infrastructure`), `62b4c340`, with the comments-only fix-up `c9a37a76`:
+- **The read:** a new Infrastructure `FlexLedgerReadRepository` reads the Payroll-owned `payroll_export_records`, read-only (the ADR-034 D4 precedent), and picks the latest ledger row per employee. The production build is clean.
+- **Declared deviations, accepted by both lenses:**
+  - `/summary`'s `flexDelta` keeps its type, but its value is now the flex movement in the month named by `flexBalanceMonth`, and 0 when there is none. The deleted event always gave 0. The frontend never renders it.
+  - The two `BalanceEndpoints` handlers swap `IEventStore` for the repository.
+  - The read record also carries the opening balance.
+
+**TASK-14607-T** (`test-qa`), `d55531e3`:
+- **Pins:**
+  - three OQ-5 team-overview facts (withheld R+F, recorded F, none F);
+  - the new `Balance/FlexBalanceReadTests.cs`: the latest ledger record and its month, a later raw record ignored, no record gives null and not 0, raw-only gives null, and the scope 403s (R);
+  - extended Draft, Rejected and Theory facts, with the seeds moved to ledger records;
+  - `S120BalanceSpecRuntimeTests` now pins 15 `/summary` keys. That file was added to the authorized list by the Orchestrator at dispatch; Fable ratified it (N-1).
+- **Retired** (in `S120TimeSpecRuntimeTests`), with the route:
+  - `Flex_Get200_NoHistoryBranch_NormalizedOneShape_Ruling1DeltaPin`;
+  - `Flex_Get200_WithHistoryBranch_LatestEventValues_ByteFaithful`;
+  - `Gate_IsRed_OnInjectedPhantomRequiredMember_AndGreenOnTheCommittedTruth`. Its technique is still pinned in the S117–S119 spec tests, verified by both lenses.
+  - `ForeignEmployee_403_OnAllFourOps_SelfGatePins` was renamed `…OnTheThreeRemainingOps…`.
+  - `FlexBalance_ComesFromLatestFlexEvent` was replaced by the three OQ-5 facts.
+  - S120 ruling #1's first instance retires with the route; the class rule stands.
+- **Gate:** 0 errors / 145; Unit 1564, DemoSeed 170, Regression non-Docker 130; `PayrollExportRecordsWriteGuardTests` green. No live `FlexBalanceUpdated` use remains.
+
+**Step 5a.** 5α PASS twice (`62b4c340`, then the union to `c9a37a76`). Codex APPROVE-WITH-WARNINGS → APPROVE. Fable APPROVED-WITH-WARNINGS on both cycles.
+- **The OQ-5 question** (raised by the implementing agent, and weighed by both lenses):
+  - **What the agent raised:** the team overview withholds the figure for an unsubmitted month, but the same leader sees the same latest recorded closing on the employee's year overview, which has no month gate. In the normal case that closing comes from an exported month, which is approved and therefore submitted. The edge case is a GlobalAdmin raw export, which skips approval, followed by a correction; that can put a closing on a month the employee never submitted.
+  - **Ruling (Orchestrator, with Fable): an accepted consequence, no code change.** OQ-5 binds the team overview by its own words. The year overview is in RES-002's owner-accepted ungated remainder: S128 gated 3 of 12 manager reads and left 9 open as deferred hardening, and the year overview already shows a leader every month's actuals. The edge path is the GlobalAdmin approval bypass, a known-accepted hole. Codex's fix (withhold the figure when its source month is unsubmitted) was conditional on that stricter intent, which RES-002's ruled posture does not carry.
+  - **For the owner (a neutral notice, no decision asked):** the year overview, and `/summary` for the HR tier, now show a leader a real last-paid flex figure without a submission gate, where they used to show a meaningless 0. This is RES-002's posture carrying a real value for the first time. Extending OQ-5's strict reading to the year tile is a possible later ruling. RES-002's census row is updated at the docs pass.
+- **Recorded for later:**
+  - A "boundary pin — holds today" fact for a leader reading the year tile would make that posture visible in the suite (Fable N-2). It is a candidate for the RES-002 revisit.
+  - One team-overview fixture seeds two `LEDGER_START` months, a state a real ledger never holds; the Backend read ignores provenance. Align it when next touched (Fable N-3).
+  - `ReadLatestOfTypeAsync`, `ReadLatestOfTypePerStreamAsync` and `ReadAllAsync` have no production caller left, and the `init.sql:36-48` index rationale is written around the deleted event. This is a quality-register candidate.
+- **Sequencing (Fable W-1):** the S120 balance spec facts are red against the committed `openapi.json` until O-2. They are CI-verifiable only on the post-O-2 branch, which is how the stack merges.
+
+**O-2 on 14607's branch** (`cd9bdd23`, Orchestrator): `openapi.json` and `api-types.ts` were regenerated. The drift is exactly the reported wire change:
+- the route and `FlexBalanceResponse` are gone;
+- `flexBalance` is nullable on `/summary` and the year tile;
+- `flexBalanceMonth` is added on all three responses;
+- `flexBalanceState` is required on the team row, with the enum `withheld | none | recorded`.
+
+**TASK-14608** (`ux`) branched from `cd9bdd23` and is in progress.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-24, master `a9a677f1` + the wave-2c record (waves 1, 2a, 2b and 2c merged), local only; origin/master `0f02b484` |
 | **Phase** | CI-W2 running. Wave 2c gate: O-1 green on `a9a677f1` (0 / 145, CA2100 115, Unit 1564, DemoSeed 170, Regression non-Docker 130) |
-| **Tasks** | Waves 1, 2a, 2b and 2c DONE (see the ledger). Next is wave 3 (stacked): TASK-14607 + 14607-T, then O-2 on 14607's branch, then TASK-14608 |
+| **Tasks** | Waves 1, 2a, 2b and 2c DONE (see the ledger). Wave 3: TASK-14607 + 14607-T reviewed (Codex APPROVE, Fable APPROVED-WITH-WARNINGS); O-2 done on 14607's branch (`cd9bdd23`); TASK-14608 in progress on a branch from it |
 | **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 parts 1 and 2 DONE (`5087ab88`; part 2 with the 14605 merge record). Part 3 comes after 14607 (ADR-018:478) |
 | **Pending gates** | **CI-W2** (run `40049157171`, PR #40): on green, record it, flip the wave-2 Docker facts to CI-verified, close PR #40 unmerged and delete `s146-ci-w2`; on red, diagnose (trace) and fix before wave 3 |
 | **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · **CI-W2** `40049157171` on `a9a677f1` running (PR #40) · C-2 — · close — |
 | **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
-| **Next action** | Await CI-W2. Meanwhile, read TASK-14607's brief and build its context pack (wave 3, `backend-infrastructure`: C5, the three screens read the latest recorded closing; `/api/flex-balance`, `FlexBalanceResponse` and `FlexBalanceUpdated` deleted) |
+| **Next action** | On CI-W2: record and close PR #40, or diagnose. On TASK-14608's return: 5α, then 5a Fable; merge the stack (14607 + 14607-T + O-2 + 14608) to master together; O-1 with `npx tsc --noEmit` and vitest; D7 part 3 (ADR-018:478; RES-002 census; DEP-004 route registry; ADR-026:189 and catalog:170); C-2 |
