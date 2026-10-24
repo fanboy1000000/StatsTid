@@ -84,7 +84,7 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14604-T | DONE (merged `384484cb`) | wave 2a, paired · `test-qa` · in-memory store; 23-file census; AC-A1..A3 |
 | TASK-14605 | DONE (merged `8f366802`) | wave 2b · `payroll-integration` (cross-domain: two audit mappers; the in-tx range overload, R-36) · QUAL-188 C1–C4; 5a fix-ups R-47/R-48/R-50/R-51 |
 | TASK-14605-T | DONE (merged `8f366802`) | wave 2b, paired · `test-qa` · the site migration under the census rule; H14 re-seed |
-| TASK-14606 | PLANNED | wave 2c · `test-qa` · the QUAL-188 pins |
+| TASK-14606 | DONE (merged `a9a677f1`) | wave 2c · `test-qa` · the QUAL-188 pins; M01–M26 and N1–N3 mutations killed; Docker facts at CI-W2 |
 | TASK-14607 | PLANNED | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
 | TASK-14607-T | PLANNED | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
 | TASK-14608 | PLANNED | wave 3, stacked · `ux` · C5 frontend |
@@ -270,15 +270,55 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
   - QUAL-188 is BUILT and QUAL-201 is CLOSED BY CONSTRUCTION, with R-5's text.
   - QUAL-205's status said "Docker facts CI-verified at CI-W2", which anticipated a checkpoint that has not run. It is corrected to CI-pending.
 
+## Wave 2c — TASK-14606 (the QUAL-188 pins)
+
+**What it adds.** These are the tests that define "done" for the flex ledger.
+- **Pure function (Unit).** One test per case of the function that decides a month's opening, plus "employed in the previous month" read correctly for a Monday-start month and for a spell that ends inside the previous month. Also covered: the whole-month check, damaged-ledger inputs, the opening comparison, and the never-silent reader.
+- **Old event payloads (Unit).** They still deserialize after the event change.
+- **Audit-row shapes (Unit).** The audit rows carry the new keys only when set, including R-49's two reading shapes.
+- **Docker host facts.** The month's record holds what the engine closed at. The 400 and 409 refusals are named. A correction keeps the balance right and names the next month. A re-run whose balance moved refuses. A replay reproduces the recorded closing.
+- **Race facts.** Each forces the ordering by holding the ledger lock on a second connection.
+
+| Task | Branch @ sha | Build | 5α | 5a Fable | 5a Codex | Merged |
+|---|---|---|---|---|---|---|
+| TASK-14606 (`test-qa`) | `worktree-agent-aa99696e76b27d7bc` @ `a88c8c2f`, `68c9a75a`, `3e5e08c4` | 0 / 145; Unit 1564, DemoSeed 170, Regression non-Docker 130 | PASS (`a88c8c2f`); PASS (`68c9a75a`) | CHANGES-REQUESTED → APPROVED-WITH-WARNINGS → APPROVED (`3e5e08c4`) | REQUEST-CHANGES → APPROVE-WITH-WARNINGS → APPROVE (`3e5e08c4`) | `a9a677f1` |
+
+**The review rounds, and what they changed:**
+- **The mutation proof.** A background run was reaped for low memory after M06, and the agent was also cut off by an API session limit. M07–M26 were then run one at a time in the foreground.
+  - Every mutation was killed: M01–M26, plus N1–N3 for the new pins.
+  - Results are in the scratchpad, `mutation-results.txt` and `mutation-results2.txt`.
+- **Codex's cycle-1 BLOCKER:** the only replay pin could not fail, because the stub's closing was a constant. It is now opening-dependent for that employee, and the replay's own engine call must carry the frozen 12.5.
+- **"Nothing is read before the refusal".** Both lenses agreed a production code hook is out of scope for a tests-only task, so the facts prove it by behaviour instead:
+  - a correction request reuses an already-delivered idempotency key, so a refusal moved after that check would answer 200 "already processed";
+  - an export request has no approval, so a moved refusal would answer 403;
+  - a positive control proves the pre-mark is live.
+- **The opening comparison under the lock.** Fable's W-1: the comparison of where the opening came from (its provenance) was pinned nowhere. Race (ii) now differs only by provenance, and a Unit fact pins it.
+- **Smaller fixes:**
+  - case 4a now rejects "use the latest closing";
+  - the damaged input now includes "previous record without a closing";
+  - race (iv)'s claim is narrowed;
+  - race (i)'s naming is relabelled R;
+  - two other labels and four docstrings are corrected.
+- **Accepted deviations, recorded:**
+  - `FlexLedgerHostHarness.cs`: a harness beyond the brief's "stub". Consolidating it with `PayrollHostRealEngineTests` helpers, and moving to a collection fixture, are later items.
+  - The extra `LEDGER_START` assertion in `ManifestProjectionRebuildPlanInputsTests.cs`.
+  - `FlexLedgerSeed` now throws on an existing record. No caller seeds a month twice; verified.
+  - The FIFO assumption: PostgreSQL grants a contended single-key advisory lock in queue order. It is disclosed, and both lenses judged it sound for these facts.
+- **TASK-14605's Fable W-1, N1 and N4** are closed here (brief Do 6c).
+
+**O-1 on master after the merge:** 0 errors / 145 warnings, CA2100 115, Unit **1564** (+46), DemoSeed 170, Regression non-Docker 130.
+
+**CI-W2** (R-32): branch `s146-ci-w2` at `a9a677f1`, draft PR #40 "EVIDENCE ONLY", run `40049157171`. Pending.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-24, master `8f366802` + the D7 part 2 record (waves 1, 2a and 2b merged), local only; origin/master `0f02b484` |
-| **Phase** | wave 2c next. Wave 2b gate: O-1 green on `8f366802` (0 / 145, CA2100 115, Unit 1518, DemoSeed 170, Regression non-Docker 130) |
-| **Tasks** | Waves 1, 2a and 2b DONE (see the ledger). TASK-14606 (the QUAL-188 pins) is next: its brief carries Do 6b (R-47/R-48/R-49 pins) and Do 6c (Fable W-1, N1, N4), and its pack is at `s146-ctx/TASK-14606.md` |
+| **As of** | 2026-10-24, master `a9a677f1` + the wave-2c record (waves 1, 2a, 2b and 2c merged), local only; origin/master `0f02b484` |
+| **Phase** | CI-W2 running. Wave 2c gate: O-1 green on `a9a677f1` (0 / 145, CA2100 115, Unit 1564, DemoSeed 170, Regression non-Docker 130) |
+| **Tasks** | Waves 1, 2a, 2b and 2c DONE (see the ledger). Next is wave 3 (stacked): TASK-14607 + 14607-T, then O-2 on 14607's branch, then TASK-14608 |
 | **Track D** | D1–D6 DONE: D1–D3 `d188d2d1`; D4 `e5aba3a4`; D5 ADR-043 PROPOSED (drafted by the planner, Fable seat R-40..R-46, filed with its INDEX row; SYSTEM_TARGET.md dated notes `19cf4bae`); D6 ROADMAP. D7 parts 1 and 2 DONE (`5087ab88`; part 2 with the 14605 merge record). Part 3 comes after 14607 (ADR-018:478) |
-| **Pending gates** | TASK-14606: build · 5α · 5a Fable · 5a Codex; merge; O-1; then **CI-W2**, the first CI run of the wave-2 Docker facts (QUAL-205, QUAL-188) |
-| **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · CI-W2 — · C-2 — · close — |
+| **Pending gates** | **CI-W2** (run `40049157171`, PR #40): on green, record it, flip the wave-2 Docker facts to CI-verified, close PR #40 unmerged and delete `s146-ci-w2`; on red, diagnose (trace) and fix before wave 3 |
+| **CI** | G-0 `39755579330` · **CI-W1** `39992507686` on `0a291582` **GREEN** (all seven jobs; PR #39 closed unmerged, branch deleted) · **CI-W2** `40049157171` on `a9a677f1` running (PR #40) · C-2 — · close — |
 | **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
-| **Next action** | Dispatch TASK-14606 (`test-qa`, worktree from master at the D7 part 2 commit). Paste TASK-14605's names as built, including the fix-up's `IsWholeCalendarMonth`, `RefusePeriodNotAMonth` and `nextMonthOpeningStale`, and 14605-T's helpers (`InMemoryFlexLedgerReader`, `FlexLedgerSeed`, `FlexLedgerFill`) |
+| **Next action** | Await CI-W2. Meanwhile, read TASK-14607's brief and build its context pack (wave 3, `backend-infrastructure`: C5, the three screens read the latest recorded closing; `/api/flex-balance`, `FlexBalanceResponse` and `FlexBalanceUpdated` deleted) |
