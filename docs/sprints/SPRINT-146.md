@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | OPEN — plan READY at Step 0b (2026-10-23); wave 1 not yet dispatched |
+| **Status** | **CLOSED 2026-10-26.** All tasks done (TASK-14600..14610 and their paired passes); D1–D7 done; Step 7a passed on both lenses at cycle 4 (Codex APPROVE; internal lens on Opus by the owner's direction, APPROVED); the close passes the guard under the narrow review-floor waiver (owner decision 2026-10-26) |
 | **Theme** | Every paid month becomes provable: its proof is written in one transaction through the outbox, or payroll refuses (QUAL-205). Flex gets one recorded balance per paid month, chained, serialized, corrected and visible (QUAL-188). QUAL-201 closes by construction (a bounded residual remains for months at or before the ledger start, R-57). Part-timers stop seeing a full-time norm (QUAL-198). Three S145 tidy-ups. Beside the code, the Orchestrator's decision track (D1–D7) turns the verified flex/overtime research into tracked docs, register rows, a re-verification and a PROPOSED model ADR, so S147 opens the model program on verified ground |
 | **Predecessor** | S145: close `13a40e68` (CI green `39571040922`) · C-9 docs-only `6e3ba7ef` · post-close `6c29efc2` … `0f02b484` (the close guard's S145 exception deleted, owner R-104; T26 across eight review cycles, R-141..R-144) · CI green `39755579330` on `0f02b484`, all seven jobs |
 | **Base commit (Step 7a)** | **`13a40e68`**, the S145 close commit, not HEAD (`docs/WORKFLOW.md` step 7a), so the post-close hook commits fall inside S146's Step-7a diff |
@@ -13,6 +13,7 @@
 | **Entropy scan (Step 0a)** | 2026-10-23 at `0f02b484`. Tree clean except the untracked `.claude/plans/PLAN-s145.md` and `.claude/plans/s145/` (**DEBT**, settled at this open commit: the S145 plan and its `TASK-*.md` briefs are committed, not the evidence logs). 0 extra worktrees; no local branches but master; remote branches dependabot/actions only. No `FindFirst("scopes")`; no hard-coded localhost; no PAT-005 direct rule calls. Endpoint authorization CLEAN (only login and `/health` are anonymous). KB paths: 42 cited, 2 benign non-resolving. Orphans (`FlexBalanceCard`, `useFlexBalance`, `/api/flex-balance`, `flex_balance_snapshots`, `FlexBalanceUpdated`, `BuildPlanForLegacyCallersAsync`) are all in S146 scope. **DRIFT:** `danish-agreements.md` "Weekly Settlement Rules" asserts "the sources are silent", which the verified research contradicts; fixed first by D1–D3. `check_docs.py` is not runnable locally (no Python); the CI docs job is green. Grades: Payroll A− stands; the close re-grade states the contradicted weekly premise. **Orchestrator finding during the scan:** the refinement's R-17 would have added a second atomic-event path beside ADR-018's outbox; the adjudicator upheld it (R-21..R-23) |
 | **Baseline** | S145 final (`SPRINT-145.md:6`): build 0 errors / 145 warnings · CA2100 115 · Unit 1512 · DemoSeed 170 · Regression 2150 in CI / non-Docker 128 locally · Smoke 7 · vitest 1005. Re-measured at the first gate, never carried forward |
 | **Pre-merge gate G-0** | SATISFIED: `39755579330` green on `0f02b484` |
+| **Test Verified** | **CI GREEN `40300521014`** on `c532f004`, all seven jobs: Unit 1566 · DemoSeed 170 · **Regression 2225** (the Docker-gated facts included, all executed) · Smoke 7 · frontend build (lint, e2e typecheck, build, vitest 1010) · e2e · docs · gitleaks · lizard. The commits after it change no product code (docs; the close guard and its harness, 26/26 locally). **Locally**, O-1 on `e395c4ec`: 0 errors / 145 warnings, CA2100 115, Unit 1566, DemoSeed 170, Regression non-Docker 130, `tsc` 0, `npm run lint` 0, `typecheck:e2e` 0, vitest 1010 |
 
 ## Plain-language summary
 
@@ -517,15 +518,51 @@ Recorded, not built: the card's double divider and the column width (visual chec
 - **Final choice: a narrow review-floor waiver.** A new `SPRINT-<N>-review-floor-WAIVED.md`, beside the guard's other narrow waivers, lifts only the reviewer artifact's model check. Every other close gate stays enforced, and T26 stays untouched.
 - **Who builds it:** the Orchestrator, through a `general-purpose` Opus agent working to an exact spec, with two harness tests. It gets its own Step 7a review (cycle 3), as T26's comment requires.
 
+
+**Step 7a cycles 3 and 4.**
+- **Cycle 3** (scope `c532f004..28b00ae2`: the docs fixes and the close-guard waiver):
+  - Codex APPROVE-WITH-WARNINGS:
+    - W1: the guard harness's restore was not abort-safe.
+    - W2: the "no artifact" marker was on the wrong row.
+  - Internal lens (Opus) APPROVED-WITH-WARNINGS:
+    - W-1, the same marker.
+    - W-2: WORKFLOW layer 4 did not name the waiver.
+  - Fixed: `6c624b30` (docs) and `bd70b017`, merged as `22bf4fe6`. The harness is abort-safe in one outer try/finally (a forced crash restores a planted waiver byte for byte), and the comment names T21, T22 and T25. Harness 26/26.
+- **Cycle 4** (scope `28b00ae2..22bf4fe6`): **Codex APPROVE; internal lens (Opus) APPROVED**, with no blocker or warning.
+  - Notes recorded:
+    - N-B: the guard's comment says "should" and WORKFLOW says "must"; the hook checks only that the waiver file exists.
+    - N-C: the comment calls the narrow waiver "the one" exception, but the all-gates waiver also passes.
+  - Both are for the next hook edit; a hook edit now would trigger another Step 7a cycle.
+- **Artifacts:** `.claude/reviews/SPRINT-146-step7a-{codex,reviewer}.md` against `22bf4fe6`, and `SPRINT-146-review-floor-WAIVED.md`, which names the model (cycles 2–4 on `claude-opus-5-5`) and quotes the owner.
+
+**The close.**
+- **Worktrees:** every one torn down (all clean and merged), and the 12 merged agent branches deleted.
+- **Task ledger:** all 11 TASK ids in this log carry a disposition.
+- **Untracked files:** none under `src/`, `tests/`, `tools/` or `frontend/`.
+- **CI:** green on all seven jobs, `40300521014`, on `c532f004`: Unit 1566, DemoSeed 170, **Regression 2225** (Docker facts included, all executed), Smoke 7, the frontend build, e2e, docs, gitleaks and lizard. The commits after it change no product code: docs, and the close guard plus its harness. QUAL-224 and QUAL-228 flip to CI-verified on that run.
+- **C-2** is the CI run on the pushed master.
+
+**Tidy items recorded, not built:**
+- the `frontend/eslint.config.mjs:111` leftover;
+- the TASK-14610-T notes N-1..N-5;
+- the guard's N-B and N-C wording;
+- retiring the unused latest-of-type reads and re-justifying their index;
+- the `FlexLedgerHostHarness` consolidation and its collection fixture;
+- the double-`LEDGER_START` fixture;
+- the `useTeamOverview.ts:10` docstring;
+- the sibling 409s' logging;
+- the card's double divider and the column width;
+- the "Flex saldo" vs "flexsaldo" wording pass.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-26, master `c532f004` plus the Step 7a cycle-2 record, local only; origin/master `0f02b484` |
-| **Phase** | The close. TASK-14610 is merged (`e395c4ec`) and D7 part 4 has landed. O-1 is green on `e395c4ec`. Next: Step 7a cycle 2 (Codex, plus the internal lens on Opus by the owner's instruction), CI, the close docs, then the close |
+| **As of** | 2026-10-26, the close commit on top of `22bf4fe6`; pushed at close |
+| **Phase** | **CLOSED.** Step 7a passed at cycle 4 on both lenses |
 | **Tasks** | Every task DONE, including the Step 7a fix TASK-14610 + 14610-T |
 | **Track D** | D1–D7 DONE. D7 part 1 `5087ab88`; part 2 with the 14605 record; part 3 with the wave-3 record (ADR-018:478, ADR-026:189, the catalog, DEP-004, RES-002's census and S146 note, the performance-register F5 note, QUAL-224 BUILT) |
-| **Pending gates** | (1) Step 7a cycle 2 on both lenses over `3c23f708..HEAD`; the internal lens runs on Opus by the owner's instruction (Fable at its usage limit), so the close guard's Fable-floor check needs a documented owner exception. (2) CI on the final head (CI-W3 `40294555527` is still running; frontend-build was red on the lint list, fixed `dc606dc7`). (3) The close docs: QUALITY.md, the routing register row, INDEX, Test Verified. (4) Worktree teardown, C-2 and the close |
-| **CI** | G-0 `39755579330` · **CI-W1** `39992507686` GREEN (PR #39 closed) · **CI-W2** `40049157171` RED 1/2216 (a test-expectation defect, fixed `1af567fe`), re-run **`40055382782` GREEN** (all seven jobs) · **CI-W3** `40294555527` on `a6fcd6f6` running (PR #40) · C-2 — · close — |
+| **Pending gates** | After the push: C-2 (the CI run on master), then close PR #40 unmerged and delete `s146-ci-w2` |
+| **CI** | G-0 `39755579330` · CI-W1 `39992507686` GREEN · CI-W2 `40049157171` RED 1/2216 (a test-expectation defect, fixed) → `40055382782` GREEN · CI-W3 `40294555527` RED (the frontend lint list only, fixed `dc606dc7`; its Docker job green) · **`40300521014` GREEN** on `c532f004`, all seven jobs · C-2: the push |
 | **Open rulings** | none. Owner Q-1 (2026-10-26) = S147 first payroll item for QUAL-229. For S147 (ADR-043's forks): the order of work, the local days off, the part-timer default, PROSA groups 3–4, the AC office-staff period, and the leaver's last closing (R-61c) |
-| **Next action** | Run Step 7a cycle 2: Codex, plus the Opus stand-in for the internal lens |
+| **Next action** | S147 opens. First payroll item: QUAL-229, the M+2 stale-chain guard (owner Q-1). Then the overtime/flex model program (ADR-043's forks F-1..F-9, the leaver sub-question). Owed after this close: C-2, PR #40 and the evidence branch |
