@@ -556,6 +556,12 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
       payroll interface's requirements toward Statens Lønsystem.
     - **For the scoping to judge:** the fællesoffentlige arkitekturprincipper (the joint public architecture
       principles); ISO 22301 (business continuity); and anything a customer authority adds in its contract.
+    - **What real state buyers ask for** (added 2026-10-26): `docs/references/tender-requirements-analysis.md`
+      measures two historical tenders (Erhvervsministeriet 2023, Vejdirektoratet 2025) requirement by requirement.
+      Beyond the sources above, both name ØS's *Løsningsarkitektur for betalingsafledende systemer* (EM wants
+      compliance documented yearly, VD on request), an audit trail that meets Rigsrevisionen's requirements, the
+      four-eyes principle (VD ties it to payroll-affecting actions under *Regnskabsbekendtgørelsen*), and FRAV
+      absence reporting under circular 2022/9247.
   - **A proposed systematic approach** (for the refinement, not decided):
     1. **A conformance register:** `docs/operations/compliance-register.md`, built like the SEC and QUAL registers.
        - **One row per requirement source,** then one row per clause or control that applies.
