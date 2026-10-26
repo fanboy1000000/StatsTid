@@ -55,14 +55,22 @@ $ciHealthWaiver  = Join-Path $reviewsDir "SPRINT-99-ci-health-WAIVED.md"
 $ciPendingWaiver = Join-Path $reviewsDir "SPRINT-99-ci-pending-WAIVED.md"
 $untrackedWaiver = Join-Path $reviewsDir "SPRINT-99-untracked-WAIVED.md"
 $reviewFloorWaiver = Join-Path $reviewsDir "SPRINT-99-review-floor-WAIVED.md"
-# S146 - the review-floor waiver (T27-T28). A file already at this path would let T21's Opus fixture through and
-# turn T21 red, so it is saved byte for byte, removed for the run, and restored in Cleanup.
+# S146 - the review-floor waiver (T27-T28). A file already at this path would turn T21, T22 and T25 red: it lets
+# T21's Opus fixture and T22's bracket-suffixed floor id past the model check, and a waived run writes no
+# telemetry echo, which is T25's evidence. So it is saved byte for byte here, removed inside the try below, and
+# restored in that try's finally.
 $savedReviewFloorWaiver = $null
 if (Test-Path $reviewFloorWaiver) {
     $savedReviewFloorWaiver = [System.IO.File]::ReadAllBytes($reviewFloorWaiver)
-    Remove-Item $reviewFloorWaiver
 }
 $mock = 'git commit -m "S99 TASK-9999: sprint close -- test"'
+
+# S146 Step 7a cycle 3 (Codex WARNING / Opus N-5): everything from here to the results output is ONE try/finally,
+# so a terminating error anywhere in the run still restores the saved waiver and removes the S99 fixtures. The
+# body is deliberately not indented: the here-string sprint logs below must keep their column-0 lines (the
+# ledger gate's heading match allows at most three leading spaces).
+try {
+if ($null -ne $savedReviewFloorWaiver) { Remove-Item $reviewFloorWaiver }
 
 # Deterministic seams (S63 post-close gates): default the CI-health mock to
 # 'success' and point the sprints dir at an empty temp dir so T1-T7 keep their
@@ -541,18 +549,29 @@ try {
     Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 }
 
-# Cleanup
-Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver,$ledgerWaiver -ErrorAction SilentlyContinue
-Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item $tmpLedgerLog -ErrorAction SilentlyContinue   # S145 Step 7a cycle 3 (Opus N3-4): left behind since S141
-Remove-Item Env:\STATSTID_CI_HEALTH_MOCK -ErrorAction SilentlyContinue
-Remove-Item Env:\STATSTID_SPRINTS_DIR -ErrorAction SilentlyContinue
-Remove-Item Env:\STATSTID_UNTRACKED_MOCK -ErrorAction SilentlyContinue
-Remove-Item Env:\STATSTID_WORKTREE_MOCK -ErrorAction SilentlyContinue
-Remove-Item Env:\STATSTID_TELEMETRY_SUPPRESS -ErrorAction SilentlyContinue
-# S146: a review-floor waiver saved at the top goes back byte for byte.
-Remove-Item $reviewFloorWaiver -ErrorAction SilentlyContinue
-if ($null -ne $savedReviewFloorWaiver) { [System.IO.File]::WriteAllBytes($reviewFloorWaiver, $savedReviewFloorWaiver) }
+} finally {
+    # Cleanup - the outer finally, so it runs on success and on abort alike. The saved waiver goes back FIRST, in
+    # its own try, so no cleanup error can stand between it and its restore; the fixture cleanup runs in that
+    # try's finally. Paths are filtered for $null: a run that aborted early has not defined all of them, and
+    # Remove-Item fails on a $null path even with -ErrorAction SilentlyContinue.
+    try {
+        # S146: a review-floor waiver saved at the top goes back byte for byte.
+        Remove-Item $reviewFloorWaiver -ErrorAction SilentlyContinue
+        if ($null -ne $savedReviewFloorWaiver) { [System.IO.File]::WriteAllBytes($reviewFloorWaiver, $savedReviewFloorWaiver) }
+    } finally {
+        $fixtures = @($codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver,$ledgerWaiver,$mockLog) | Where-Object { $_ }
+        if ($fixtures) { Remove-Item $fixtures -ErrorAction SilentlyContinue }
+        if ($tmpSprints) { Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($tmpLedgerLog) { Remove-Item $tmpLedgerLog -ErrorAction SilentlyContinue }   # S145 Step 7a cycle 3 (Opus N3-4): left behind since S141
+        Remove-Item Env:\STATSTID_CI_HEALTH_MOCK -ErrorAction SilentlyContinue
+        Remove-Item Env:\STATSTID_SPRINTS_DIR -ErrorAction SilentlyContinue
+        Remove-Item Env:\STATSTID_UNTRACKED_MOCK -ErrorAction SilentlyContinue
+        Remove-Item Env:\STATSTID_WORKTREE_MOCK -ErrorAction SilentlyContinue
+        Remove-Item Env:\STATSTID_TELEMETRY_SUPPRESS -ErrorAction SilentlyContinue
+        Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
+        Remove-Item Env:\STATSTID_TELEMETRY_LOG_MOCK -ErrorAction SilentlyContinue
+    }
+}
 
 Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
