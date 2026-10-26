@@ -88,8 +88,8 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14607 | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
 | TASK-14607-T | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
 | TASK-14608 | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked · `ux` · C5 frontend |
-| TASK-14610 | REVIEWED (`aa00fb96`, `df4e79e9`, comments `753e0cc8`, `a6fcd6f6`); merge owes Fable's scoped check of 14610-T | Step 7a fix · `payroll-integration` (cross-domain: the event member, the mapper key) · R-54, R-56, R-61(a) |
-| TASK-14610-T | DONE on the branch (`f77ac71c`) | paired · `test-qa` · R-55's pins |
+| TASK-14610 | DONE (merged `e395c4ec`) | Step 7a fix · `payroll-integration` (cross-domain: the event member, the mapper key) · R-54, R-56, R-61(a) |
+| TASK-14610-T | DONE (merged `e395c4ec`) | paired · `test-qa` · R-55's pins |
 
 Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1–D7, O-1..O-7, CI-W1, CI-W2, C-1..C-5.
 
@@ -459,15 +459,51 @@ Recorded, not built: the card's double divider and the column width (visual chec
 
 **CI-W3:** `a6fcd6f6` (master `3c23f708` plus TASK-14610 and 14610-T) pushed to `s146-ci-w2`, run `40294555527`. Pending.
 
+**CI-W3 red on the frontend (2026-10-26).** `frontend-build` failed at the "No-`as` / typed-client lint" step, because the frontend lint script names its files one by one and still listed `src/hooks/useFlexBalance.ts`, which TASK-14608 had deleted. ESLint stops on a missing named file. Two gaps let this through:
+- TASK-14608's deletion census searched `frontend/src` only, so it missed `package.json`;
+- the local O-1 ran `tsc` and vitest but not `npm run lint`.
+
+**Fixed** in `dc606dc7` (Orchestrator, Small Tasks Exception). `npm run lint`, `typecheck:e2e` and `build` all exit 0 locally. **From here on, the frontend part of O-1 runs `npm run lint` and `npm run typecheck:e2e` as well.** The other CI-W3 jobs were green, including the end-to-end tests (Playwright on the compose stack); the Docker Regression job was still running at this record.
+
+**The owner's instruction on review models (2026-10-26): "Lets just use opus for now."** The Fable model hit its usage limit during the close, and the owner chose to run the internal review lens on Opus 5.5 rather than wait for it.
+- **How it runs:** the `reviewer` agent is locked to Fable by the routing guard, so the stand-in runs as a `general-purpose` agent on Opus with the same brief.
+- **How it is labelled:** its artifacts say `reviewed-by-model: claude-opus-5-5` and state the instruction. No Opus review is labelled as Fable.
+- **External lens:** Codex is unchanged.
+- **Consequence at close:** the close guard requires the Step 7a internal artifact on the Fable floor, so it needs a documented owner exception (see the close record).
+
+**TASK-14610-T scoped review (cycle 2): Opus stand-in APPROVED** (`.claude/reviews/S146-TASK-14610-5a-reviewer-c2.md`). Its five notes are recorded as tidy items:
+- **N-1:** the refusal facts assert only the exception type; pin the "names no manifest" message.
+- **N-2:** the unit golden's Guid has no hex letters, so it doesn't test letter case.
+- **N-3:** a stale "three keys" docstring.
+- **N-4:** a redundant `DoesNotContain`.
+- **N-5:** two loose red-condition docstrings.
+
+**Merged as `e395c4ec`.** O-1 on master: 0 errors / 145 warnings, CA2100 115, Unit **1566**, DemoSeed 170, Regression non-Docker 130; `tsc` 0, `npm run lint` 0, `typecheck:e2e` 0, vitest 80 files / 1010 tests.
+
+**D7 part 4 (with the merge):**
+- the audit catalog: the `manifestId` key, with its note;
+- ADR-016 D10: a footnote (R-54);
+- ADR-034:
+  - D3 item 1: the event now names the manifest;
+  - D4: the collision wording corrected, including the reopen's two arms (R-61(a)), plus the QUAL-201 residual (R-57);
+- the register:
+  - QUAL-188 and QUAL-205 flipped to CI-verified (`40055382782`);
+  - QUAL-201's residual widened (R-57);
+  - QUAL-219 points to ADR-043 F-5;
+  - new **QUAL-228**, FIXED (TASK-14610);
+  - new **QUAL-229**, REGISTERED, built in S147 by the owner's Q-1;
+- ADR-043 F-5: the leaver sub-question (R-61(c));
+- WORKFLOW step 5a: save the reviewer's report before acting on it (R-58).
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-24, master `88eb3da6` + the D7 part 3 record (all four waves merged), local only; origin/master `0f02b484` |
-| **Phase** | The close: Step 7a cycle 1 is ruled (R-54 … R-62); the TASK-14610 fix is reviewed except for Fable's scoped check of 14610-T (cut off by the Fable usage limit, 2026-10-26); CI-W3 is running |
-| **Tasks** | Every planned task DONE. TASK-14610 + 14610-T are on `worktree-agent-a89846fb6ad2baa8d` @ `a6fcd6f6`, not yet merged |
+| **Phase** | The close. TASK-14610 is merged (`e395c4ec`) and D7 part 4 has landed. O-1 is green on `e395c4ec`. Next: Step 7a cycle 2 (Codex, plus the internal lens on Opus by the owner's instruction), CI, the close docs, then the close |
+| **Tasks** | Every task DONE, including the Step 7a fix TASK-14610 + 14610-T |
 | **Track D** | D1–D7 DONE. D7 part 1 `5087ab88`; part 2 with the 14605 record; part 3 with the wave-3 record (ADR-018:478, ADR-026:189, the catalog, DEP-004, RES-002's census and S146 note, the performance-register F5 note, QUAL-224 BUILT) |
-| **Pending gates** | (1) Fable's scoped 5a on `df4e79e9..a6fcd6f6`, needing a Fable reset or credits; then merge TASK-14610, run O-1 and D7 part 4 (`scratchpad/d7d.pl <merge-sha>`: the catalog, the ADR-016 footnote, ADR-034 D3, D4 and its residual, QUAL-188/205 flips, QUAL-201, QUAL-219, new QUAL-228 and QUAL-229, ADR-043 F-5, WORKFLOW 5a). (2) Step 7a cycle 2 on both lenses over `3c23f708..HEAD`. (3) CI-W3 `40294555527`. (4) The close docs: QUALITY.md, the routing register (the 5a-artifact line per R-58), INDEX, Test Verified. (5) Worktree teardown, then C-2 and the close |
+| **Pending gates** | (1) Step 7a cycle 2 on both lenses over `3c23f708..HEAD`; the internal lens runs on Opus by the owner's instruction (Fable at its usage limit), so the close guard's Fable-floor check needs a documented owner exception. (2) CI on the final head (CI-W3 `40294555527` is still running; frontend-build was red on the lint list, fixed `dc606dc7`). (3) The close docs: QUALITY.md, the routing register row, INDEX, Test Verified. (4) Worktree teardown, C-2 and the close |
 | **CI** | G-0 `39755579330` · **CI-W1** `39992507686` GREEN (PR #39 closed) · **CI-W2** `40049157171` RED 1/2216 (a test-expectation defect, fixed `1af567fe`), re-run **`40055382782` GREEN** (all seven jobs) · **CI-W3** `40294555527` on `a6fcd6f6` running (PR #40) · C-2 — · close — |
 | **Open rulings** | none. Owner Q-1 (2026-10-26) = S147 first payroll item for QUAL-229. For S147 (ADR-043's forks): the order of work, the local days off, the part-timer default, PROSA groups 3–4, the AC office-staff period, and the leaver's last closing (R-61c) |
-| **Next action** | When Fable is available: resume the scoped 5a on TASK-14610-T and the comment fix-ups (`df4e79e9..a6fcd6f6`), then work the pending gates in order |
+| **Next action** | Run Step 7a cycle 2: Codex, plus the Opus stand-in for the internal lens |

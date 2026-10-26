@@ -295,6 +295,7 @@ groups; fuldmægtige's standby interaction and suspension in peak periods.
 - (c) A new table — a third home for local rules.
 - **Lean (a)**, per-subgroup caps as an S147 sub-question. Without a local agreement the central defaults apply
   (monthly settlement, forfeiture). QUAL-225 (an explicit opening balance) is revisited here.
+- **Sub-question (S146 Step 7a, Fable N-6; R-61c):** the leaver's last closing. (a) Settled in the leaving month per the local parameter (payout, forfeiture or transfer to the overtime account), recorded as a dated movement; or (b) carried to a rehire. Today a rehire never inherits (R-14 case 4c). Asked with QUAL-219 and QUAL-225.
 
 **F-6 — AC's period.**
 - (a) Flex monthly; merarbejde without a fixed period — each claim states its own (normally ≥ 4 weeks), reported at
