@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | OPEN — plan READY at Step 0b (2026-10-23); wave 1 not yet dispatched |
-| **Theme** | Every paid month becomes provable: its proof is written in one transaction through the outbox, or payroll refuses (QUAL-205). Flex gets one recorded balance per paid month, chained, serialized, corrected and visible (QUAL-188). QUAL-201 closes by construction. Part-timers stop seeing a full-time norm (QUAL-198). Three S145 tidy-ups. Beside the code, the Orchestrator's decision track (D1–D7) turns the verified flex/overtime research into tracked docs, register rows, a re-verification and a PROPOSED model ADR, so S147 opens the model program on verified ground |
+| **Theme** | Every paid month becomes provable: its proof is written in one transaction through the outbox, or payroll refuses (QUAL-205). Flex gets one recorded balance per paid month, chained, serialized, corrected and visible (QUAL-188). QUAL-201 closes by construction (a bounded residual remains for months at or before the ledger start, R-57). Part-timers stop seeing a full-time norm (QUAL-198). Three S145 tidy-ups. Beside the code, the Orchestrator's decision track (D1–D7) turns the verified flex/overtime research into tracked docs, register rows, a re-verification and a PROPOSED model ADR, so S147 opens the model program on verified ground |
 | **Predecessor** | S145: close `13a40e68` (CI green `39571040922`) · C-9 docs-only `6e3ba7ef` · post-close `6c29efc2` … `0f02b484` (the close guard's S145 exception deleted, owner R-104; T26 across eight review cycles, R-141..R-144) · CI green `39755579330` on `0f02b484`, all seven jobs |
 | **Base commit (Step 7a)** | **`13a40e68`**, the S145 close commit, not HEAD (`docs/WORKFLOW.md` step 7a), so the post-close hook commits fall inside S146's Step-7a diff |
 | **Orchestrator model** | Opus 5.5 seat throughout (client 2.1.301), never switched (owner ruling 2026-09-29). Drafting: `planner` (Opus 5.5). Judgment: `adjudicator` and `reviewer` (Fable 5.1). Research: `general-purpose` (Opus 5.5) with web search, plus an independent verifier. Implementation by role name. External lens: Codex. The session restarted once on 2026-10-23 (machine reboot) after the owner picked the theme; the refinement was restarted from the same brief, with nothing lost. The planner was interrupted once by an API session limit and resumed |
@@ -38,7 +38,7 @@ StatsTid pays overtime automatically on every hour above a *weekly* norm, in two
 - **The flex screens.** Today they show 0 for everyone; they will show the real settled balance, labelled with its month.
 - **QUAL-198:** part-timers see their own norm.
 - **The S145 leftovers.**
-- **QUAL-201 is not built.** Once months chain from recorded balances, the race cannot happen.
+- **QUAL-201 is not built.** Once months chain from recorded balances, the race cannot happen for any month after the ledger start. A bounded residual remains for the ledger-start month and any month before it (Step 7a, R-57).
 
 ## Refinement record (Steps 1–4)
 
@@ -130,7 +130,7 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 | Task | Branch @ sha | Build | 5α | 5a Fable | 5a Codex | Merged |
 |---|---|---|---|---|---|---|
 | TASK-14600 (`payroll-integration`) | `worktree-agent-a1d308c8b658cfbee` @ `370d10cb` | 0 errors / 145 warnings; Unit 1512, DemoSeed 170, Regression non-Docker 128 | PASS | APPROVED-WITH-WARNINGS | APPROVE | `92ecaa13` |
-| TASK-14601 + 14601-T (`data-model`, `test-qa`) | `worktree-agent-a84e58f3b84c8b514` @ `7af3625f`, `dece4112`, fix-up `c67881f9` | 0 / 145; 1512 / 170 / 128 | PASS | APPROVED-WITH-WARNINGS → fix-up APPROVED | APPROVE-WITH-WARNINGS → fix-up APPROVE | `cda60da5` |
+| TASK-14601 + 14601-T (`data-model`, `test-qa`) | `worktree-agent-a84e58f3b84c8b514` @ `7af3625f`, `dece4112`, fix-up `c67881f9` | 0 / 145; 1512 / 170 / 128 | PASS | APPROVED-WITH-WARNINGS → fix-up APPROVED (no artifact; see note under Step 7a) | APPROVE-WITH-WARNINGS → fix-up APPROVE | `cda60da5` |
 | TASK-14602 + 14602-T (`backend-infrastructure`, `test-qa`) | `worktree-agent-a1d9823947d197303` @ `3505b620`, `2429016b` | 0 / 144; 1512 / 170 / 128 | PASS | APPROVED | — (display only) | `b104c4d7` |
 | TASK-14603 (`test-qa`) | `worktree-agent-aead3545374bb4a42` @ `41e7992f`, follow-up `900df51f` | 0 errors; 1512 / — / 130 | PASS (both commits) | APPROVED, follow-up APPROVED | — (tests only) | `a173ace3` |
 | TASK-14609 (`test-qa`) | `worktree-agent-aa258d3371368d250` @ `bb9e733a`, fix-up `ac56c72e` | 0 / 144; 1512 / 170 / 130 | PASS | APPROVED-WITH-WARNINGS → fix-up APPROVED | — (tests only) | `0a291582` |
@@ -266,10 +266,10 @@ Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1�
 - **O-1 on master after the merge:** 0 errors / 145 warnings, CA2100 115, Unit **1518**, DemoSeed 170, Regression non-Docker 130. The Docker facts are CI-pending until CI-W2.
 - **D7 part 2 (with the merge):**
   - ADR-034 D3 is amended: the flex triple on the calculating routes, the zero-line record (R-3), the whole-month rule (R-47) and the triple no-op (R-16).
-  - ADR-034 D4 gains a note: the ledger advisory lock comes first, then the approval rows, then the record. QUAL-201 closes by construction.
+  - ADR-034 D4 gains a note: the ledger advisory lock comes first, then the approval rows, then the record. QUAL-201 closes by construction, with a bounded residual (R-57).
   - ADR-013 is amended: item 2 now holds, and the next-month hint is widened (R-10, R-48).
   - The audit catalog gains the new keys on both rows and R-49's two reading rules.
-  - QUAL-188 is BUILT and QUAL-201 is CLOSED BY CONSTRUCTION, with R-5's text.
+  - QUAL-188 is BUILT and QUAL-201 is CLOSED BY CONSTRUCTION, with R-5's text (its residual widened at Step 7a, R-57).
   - QUAL-205's status said "Docker facts CI-verified at CI-W2", which anticipated a checkpoint that has not run. It is corrected to CI-pending.
 
 ## Wave 2c — TASK-14606 (the QUAL-188 pins)
@@ -432,12 +432,13 @@ Recorded, not built: the card's double divider and the column width (visual chec
 
 **Owner, 2026-10-26: Q-1 = (b).** The M+2 stale-chain guard (QUAL-229) is built in **S147, as the first payroll item**, before the model program touches the same chain.
 
-**W-2 recovered in full.** All eight missing internal 5a reports were recovered verbatim from the session transcript and saved under `.claude/reviews/` with a provenance header:
+**W-2: eight of nine recovered.** Eight of the nine missing internal 5a reports were recovered verbatim from the session transcript and saved under `.claude/reviews/` with a provenance header. The ninth, TASK-14609's fix-up review, was not found (corrected at Step 7a cycle 2, W-1). The eight:
 - 14600; 14601 + its fix-up; 14602 (+T); 14603 + its follow-up; 14604 (+T); 14609.
 - No verdict rests on memory.
 - Their verdicts: 14600 AwW, 14601 AwW, 14601 fix-up A, 14602 A, 14603 A, 14603 follow-up A, 14604 AwW, 14609 AwW.
+- **Internal-lens 5a artifact not persisted for TASK-14609's fix-up (`ac56c72e`):** verdict APPROVED, as in the merge table; the findings acted on are those recorded above; no other finding from that review is known to be outstanding (R-58(2)). The recovered TASK-14609 text has no `reviewed-by-model` line.
 
-**The refusal order, as built (R-61(b)).** The org-scope 403 comes first, then the three fixed 400s (hours, opening balance, period not a month), then the approval 403, then the 422s, then the 409s and 503s.
+**The refusal order, as built (R-61(b)).** The org-scope 403 comes first, then the three fixed 400s (hours, opening balance, period not a month), then the approval 403. After that the plan-time and admission-time refusals come in the order the calculation reaches them: the rules-unavailable 503 and the planner's 422s while the plan is built, admission's 409s, the calculation's own 422, the manifest 503, and the export-time 409s (order corrected at Step 7a cycle 2, N-4). Never "400 before 403".
 
 **TASK-14610** (`payroll-integration`), `aa00fb96` and fix-up `df4e79e9`:
 - the event member and the appended audit key;
@@ -453,7 +454,7 @@ Recorded, not built: the card's double divider and the column width (visual chec
 - 5α PASS.
 - Codex APPROVE on the production change, then APPROVE-WITH-WARNINGS on the tests and comment (the warning is fixed in `a6fcd6f6`).
 - Fable APPROVED-WITH-WARNINGS on the production change (the W-1 comment, fixed).
-- **Fable's scoped check of 14610-T was cut off by the Fable usage limit (2026-10-26) and is still owed before the merge.**
+- **Fable's scoped check of 14610-T was cut off by the Fable usage limit (2026-10-26)**, and the Opus stand-in did it before the merge (see below).
 
 **CI-W2 GREEN** on the re-run: `40055382782` on `1af567fe`, all seven jobs; every wave-2 Docker fact CI-verified.
 
@@ -495,11 +496,32 @@ Recorded, not built: the card's double divider and the column width (visual chec
 - ADR-043 F-5: the leaver sub-question (R-61(c));
 - WORKFLOW step 5a: save the reviewer's report before acting on it (R-58).
 
+
+**Step 7a cycle 2 on `c532f004`** (scope `3c23f708..c532f004`):
+- **Codex: APPROVE** (`.claude/reviews/S146-step7a-codex-c2.md`). Its cycle-1 BLOCKER and WARNING are closed, it found no new defect, and the docs match the code.
+- **Internal lens on Opus (owner's instruction): APPROVED-WITH-WARNINGS** (`.claude/reviews/S146-step7a-reviewer-c2.md`).
+  - **W-1:** the claim that every missing 5a text had been recovered was wrong; it is eight of nine. Corrected above.
+  - **N-1:** two ADR sentences overstated. Corrected in ADR-016 D10 and ADR-034 D4.
+  - **N-2:** stale handoff and QUAL-201 wording. Corrected.
+  - **N-3:**
+    - `docs/FRONTEND.md` still listed the deleted card and hook; corrected.
+    - The stronger frontend gate is now written in WORKFLOW (Phase 4).
+    - The leftover `useFlexBalance.ts` entry in `frontend/eslint.config.mjs:111` is harmless (an unmatched pattern) and recorded as a tidy item.
+  - **N-4:** the recorded refusal order was approximate; corrected.
+  - **N-5:** the close guard's model check needs an owner decision. See the next paragraph.
+  - **N-6, a real behaviour that predates S146.** Each export line carries its calculation's manifest id, and the content hash covers it, so ADR-034 D3's same-hash no-op only ever fires for an employed zero-line month. A re-run of a month with lines always answers the "use a correction" 409. This is safe (corrections-only). It is recorded in ADR-034 D3 item 3 and not changed; it falls below the register's Medium floor.
+
+**The owner's decision on the close guard (2026-10-26).** The guard accepts the Step 7a internal artifact only on Fable, and S146's ran on Opus.
+- **First answer, withdrawn:** the owner first chose S145's route, a one-sprint exception in the guard.
+- **Why it was withdrawn:** the Orchestrator then found that S145's post-close review cycles had added harness test T26, which pins that the model check carries no sprint-number exception. That route would have meant weakening T26, so the Orchestrator went back to the owner.
+- **Final choice: a narrow review-floor waiver.** A new `SPRINT-<N>-review-floor-WAIVED.md`, beside the guard's other narrow waivers, lifts only the reviewer artifact's model check. Every other close gate stays enforced, and T26 stays untouched.
+- **Who builds it:** the Orchestrator, through a `general-purpose` Opus agent working to an exact spec, with two harness tests. It gets its own Step 7a review (cycle 3), as T26's comment requires.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
-| **As of** | 2026-10-24, master `88eb3da6` + the D7 part 3 record (all four waves merged), local only; origin/master `0f02b484` |
+| **As of** | 2026-10-26, master `c532f004` plus the Step 7a cycle-2 record, local only; origin/master `0f02b484` |
 | **Phase** | The close. TASK-14610 is merged (`e395c4ec`) and D7 part 4 has landed. O-1 is green on `e395c4ec`. Next: Step 7a cycle 2 (Codex, plus the internal lens on Opus by the owner's instruction), CI, the close docs, then the close |
 | **Tasks** | Every task DONE, including the Step 7a fix TASK-14610 + 14610-T |
 | **Track D** | D1–D7 DONE. D7 part 1 `5087ab88`; part 2 with the 14605 record; part 3 with the wave-3 record (ADR-018:478, ADR-026:189, the catalog, DEP-004, RES-002's census and S146 note, the performance-register F5 note, QUAL-224 BUILT) |

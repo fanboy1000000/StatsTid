@@ -107,7 +107,7 @@ All UI components are barrel-exported from `ui/index.ts`.
 | Component | File | Description |
 |-----------|------|-------------|
 | BalanceSummary | `BalanceSummary.tsx` | Employee balance overview (norm, flex, absence) |
-| FlexBalanceCard | `FlexBalanceCard.tsx` | Flex balance display card |
+| ~~FlexBalanceCard~~ | — | Deleted in S146 (TASK-14608): the flex balance shows on the Skema balance card, the year tile and the team overview |
 | SkemaGrid | `SkemaGrid.tsx` | Monthly spreadsheet grid (days x projects/absence rows); supports read-only/locked rendering (S55) |
 | AllocationSummary | `AllocationSummary.tsx` | Work-time allocation reconciliation summary (S56/ADR-028) |
 | ComplianceWarnings | `ComplianceWarnings.tsx` | EU-WTD compliance warnings |
@@ -203,7 +203,7 @@ Legacy/orphaned pages still in source but **not routed**: `TimeRegistration` (su
 | `useEditPerson` | Multi-PUT save orchestration for the admin person drawer (per-section If-Match, partial-failure tolerant; S76b) |
 | `useEntitlementConfig` | Entitlement config (GlobalAdmin) |
 | `useEntitlementEligibility` | HR-only per-employee entitlement eligibility — CHILD_SICK opt-in + senior-day gate (ADR-029) |
-| `useFlexBalance` | Fetch flex balance data |
+| ~~`useFlexBalance`~~ | Deleted in S146 (TASK-14608): the flex balance comes with `/summary`, the year overview and the team overview |
 | `useForest` | Org forest (organizations ⊕ units) for the merged admin page's structure tree (S107) |
 | `useOrgMutations` | Organisation/MAO structure mutations for the merged admin page (S108) |
 | `usePlacement` | Person→unit placement routing over the stamdata/unit PUTs (merged admin drawer; S109) |
@@ -286,7 +286,6 @@ frontend/
       layout/                  # AppLayout, Header, TopNav, Sidebar
       guards/                  # RequireAuth, RequireRole
       BalanceSummary.tsx        # Domain: balance overview
-      FlexBalanceCard.tsx       # Domain: flex display
       SkemaGrid.tsx             # Domain: monthly spreadsheet (lockable)
       AllocationSummary.tsx     # Domain: work-time allocation (S56)
       ComplianceWarnings.tsx    # Domain: EU-WTD warnings
