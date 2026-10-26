@@ -164,9 +164,10 @@ public sealed class PayrollExportRecordRepository
     /// id could take two keys in opposite orders in two calls; ordering by key cannot. The keys are distinct by name
     /// (<c>payroll-ledger-</c> vs the <c>employee-</c> and org keys), and <c>hashtext</c> is 32-bit, so a collision is
     /// possible. A single collision is harmless: it only serializes two unrelated transactions, and no wait cycle can
-    /// form, because every writer takes its advisory keys before any row lock (the Backend reopen's first
-    /// in-transaction statement is a plain read, step 1 of <c>ReportingLineRepository.AcquireTreeLockForEmployeeAsync</c>;
-    /// its <c>reporting-org-</c> and <c>unit-org-</c> advisory keys follow, before its approval-row lock). A
+    /// form, because every writer takes its advisory keys before any row lock (the Backend reopen's leader arm first
+    /// does a plain read, step 1 of <c>ReportingLineRepository.AcquireTreeLockForEmployeeAsync</c>, then takes its
+    /// <c>reporting-org-</c> and <c>unit-org-</c> advisory keys before its approval-row lock; its employee arm takes no
+    /// advisory key and starts with the approval-row lock, so it cannot join an advisory cycle). A
     /// cycle among advisory locks alone would need two simultaneous collisions taken in opposite orders; Postgres's
     /// deadlock detector would then cancel one transaction, which is safe because both writers are transactional.
     /// Payroll transactions lock in one order: advisory, then approval rows, then records.
