@@ -54,6 +54,14 @@ $waiver   = Join-Path $reviewsDir "SPRINT-99-step7a-WAIVED.md"
 $ciHealthWaiver  = Join-Path $reviewsDir "SPRINT-99-ci-health-WAIVED.md"
 $ciPendingWaiver = Join-Path $reviewsDir "SPRINT-99-ci-pending-WAIVED.md"
 $untrackedWaiver = Join-Path $reviewsDir "SPRINT-99-untracked-WAIVED.md"
+$reviewFloorWaiver = Join-Path $reviewsDir "SPRINT-99-review-floor-WAIVED.md"
+# S146 - the review-floor waiver (T27-T28). A file already at this path would let T21's Opus fixture through and
+# turn T21 red, so it is saved byte for byte, removed for the run, and restored in Cleanup.
+$savedReviewFloorWaiver = $null
+if (Test-Path $reviewFloorWaiver) {
+    $savedReviewFloorWaiver = [System.IO.File]::ReadAllBytes($reviewFloorWaiver)
+    Remove-Item $reviewFloorWaiver
+}
 $mock = 'git commit -m "S99 TASK-9999: sprint close -- test"'
 
 # Deterministic seams (S63 post-close gates): default the CI-health mock to
@@ -490,6 +498,49 @@ function Test-FloorBlock([string]$text) {
 $floorCheck = Test-FloorBlock $hookSource
 $results += "T26 (the model-check block shows none of the pinned exception patterns, token-based static pin): $floorCheck $(if($floorCheck -eq 'ok'){'PASS'}else{'FAIL'})"
 
+# ---------------------------------------------------------------------------
+# T27-T28 - the review-floor waiver (S146, owner decision 2026-10-26: Fable was at its usage limit and the
+# owner directed the reviews onto Opus 5.5). SPRINT-<N>-review-floor-WAIVED.md lifts the reviewer artifact's
+# model check and nothing else; before it, the only way past that check was SPRINT-<N>-step7a-WAIVED.md, which
+# lifts every gate.
+# T27 is the discriminating test: the S99 Opus fixture that T21 blocks (here without the suffix) gets past the
+# model check once the waiver exists, and fails if the hook's condition ignores the waiver. Its evidence is
+# positive: the waiver line, the CI-health gate reached (only after the artifact loop), exit 0, and no
+# review-floor message. It also pins that a waived close writes no telemetry: the S99 echo (T25's evidence) is
+# absent, because the telemetry line lives inside the skipped check.
+# T28 pins the "only": the same fixture and waiver with a stale reviewed-against-commit still blocks, with the
+# staleness message for the reviewer artifact, not the review-floor one.
+# The ledger gate runs after the model check, so give it the neutral log.
+# ---------------------------------------------------------------------------
+$env:STATSTID_SPRINTLOG_MOCK = $tmpLedgerLog
+Set-Content -Path $codex    -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+Set-Content -Path $reviewer -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+Set-Content -Path $reviewFloorWaiver -Value "waiver rationale (test fixture): the Step 7a internal review ran on claude-opus-5-5 by the owner's direction" -Encoding UTF8
+try {
+    # T27: Opus review + review-floor waiver gets past the model check
+    $r = Invoke-Hook $mock
+    $waiverLine  = $r.Stderr -match 'has a review-floor waiver at .*SPRINT-99-review-floor-WAIVED\.md'
+    $noFloor     = -not ($r.Stderr -match 'the review floor is')
+    $ciReached   = $r.Stderr -match 'CI-health gate using MOCKED conclusion'
+    $noTelemetry = -not ($r.Stderr -match 'telemetry suppressed')
+    $ok = ($r.Exit -eq 0) -and $waiverLine -and $noFloor -and $ciReached -and $noTelemetry
+    $results += "T27 (review-floor waiver lets an Opus review past the model check): exit=$($r.Exit) expect=0 waiver-line=$waiverLine no-floor-block=$noFloor ci-gate-reached=$ciReached no-telemetry=$noTelemetry $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    # T28: the waiver lifts only the floor check; a stale reviewed-against-commit still blocks
+    Set-Content -Path $reviewer -Value "reviewed-by-model: claude-opus-5-5`nverdict: APPROVED`nreviewed-against-commit: $staleSha" -Encoding UTF8
+    $r = Invoke-Hook $mock
+    $waiverLine = $r.Stderr -match 'has a review-floor waiver at .*SPRINT-99-review-floor-WAIVED\.md'
+    $staleBlock = ($r.Stderr -match 'Artifact is STALE') -and ($r.Stderr -match 'SPRINT-99-step7a-reviewer\.md')
+    $noFloor    = -not ($r.Stderr -match 'the review floor is')
+    $ok = ($r.Exit -eq 2) -and $waiverLine -and $staleBlock -and $noFloor
+    $results += "T28 (review-floor waiver lifts only the floor: a stale Opus review still blocks): exit=$($r.Exit) expect=2 waiver-line=$waiverLine stale-block=$staleBlock no-floor-block=$noFloor $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+} finally {
+    Remove-Item $reviewFloorWaiver -ErrorAction SilentlyContinue
+    Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
+}
+
 # Cleanup
 Remove-Item $codex,$reviewer,$waiver,$ciHealthWaiver,$ciPendingWaiver,$untrackedWaiver,$ledgerWaiver -ErrorAction SilentlyContinue
 Remove-Item $tmpSprints -Recurse -Force -ErrorAction SilentlyContinue
@@ -499,15 +550,18 @@ Remove-Item Env:\STATSTID_SPRINTS_DIR -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_UNTRACKED_MOCK -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_WORKTREE_MOCK -ErrorAction SilentlyContinue
 Remove-Item Env:\STATSTID_TELEMETRY_SUPPRESS -ErrorAction SilentlyContinue
+# S146: a review-floor waiver saved at the top goes back byte for byte.
+Remove-Item $reviewFloorWaiver -ErrorAction SilentlyContinue
+if ($null -ne $savedReviewFloorWaiver) { [System.IO.File]::WriteAllBytes($reviewFloorWaiver, $savedReviewFloorWaiver) }
 
 Write-Output $results
 $failed = $results | Where-Object { $_ -match 'FAIL' }
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 # S145 Step 7a (Codex W1; Opus N-D at cycle 2): a skipped test is not a passed one, and "ALL" means the
-# full count of PASS lines, not merely the absence of FAIL. 24: T1-T22, T25 and T26 (T23-T24 were deleted,
-# R-139).
+# full count of PASS lines, not merely the absence of FAIL. 26: T1-T22 and T25-T28 (T23-T24 were deleted,
+# R-139; T27-T28 added in S146 for the review-floor waiver).
 $skipped = @($results | Where-Object { $_ -cmatch 'SKIPPED' })   # case-sensitive: only the explicit "SKIPPED" marker counts
 $passed  = @($results | Where-Object { $_ -match '^T\d+ .* PASS$' })
 Write-Output ""
-if ($skipped.Count -gt 0 -or $passed.Count -ne 24) { Write-Output "$($passed.Count) OF 24 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 24 RAN"; exit 1 }
-else { Write-Output "ALL 24 TESTS PASSED ($($passed.Count) PASS lines)" }
+if ($skipped.Count -gt 0 -or $passed.Count -ne 26) { Write-Output "$($passed.Count) OF 26 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 26 RAN"; exit 1 }
+else { Write-Output "ALL 26 TESTS PASSED ($($passed.Count) PASS lines)" }

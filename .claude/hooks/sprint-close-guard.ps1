@@ -15,6 +15,8 @@
 #   .claude/reviews/SPRINT-{N}-untracked-WAIVED.md -> bypasses the untracked-source gate only
 #   .claude/reviews/SPRINT-{N}-worktree-WAIVED.md  -> bypasses the worktree-teardown gate only
 #   .claude/reviews/SPRINT-{N}-ledger-WAIVED.md    -> bypasses the task-ledger gate only
+#   .claude/reviews/SPRINT-{N}-review-floor-WAIVED.md -> bypasses the Step 7a internal artifact's review-floor model check only
+#     (S146, owner decision 2026-10-26: Fable was at its usage limit and the owner directed the reviews onto Opus 5.5.)
 #
 # Why this exists: post-S35 governance change (commit a094630) requires
 # Codex + Reviewer dual-lens at every sprint-end. Advisory memory + WORKFLOW.md
@@ -165,6 +167,32 @@ try {
     [Console]::Error.WriteLine("sprint-close-guard: git rev-parse HEAD failed ($_); skipping staleness check")
 }
 
+# --- Review-floor waiver (S146, owner decision 2026-10-26) ------------------
+# WHY THIS EXISTS. The model check in the artifact loop below holds the Step 7a internal
+# lens to the review floor. In S146 Fable reached its usage limit and the owner directed
+# the reviews to run on Opus 5.5. Until then the only waiver that could lift that check
+# was SPRINT-<N>-step7a-WAIVED.md, which lifts EVERY gate. This one lifts the model check
+# alone: the reviewer artifact must still exist and carry its "verdict:" line and a
+# "reviewed-against-commit:" line naming HEAD (the staleness check still runs), and the
+# Codex artifact and every later gate are untouched.
+#
+# It lifts the WHOLE model check, so the reviewer artifact's "reviewed-by-model:" line is
+# neither required nor compared. The waiver file should therefore name the model the
+# review ran on and the owner's direction.
+#
+# When waived, the telemetry line written inside the model check is not written either,
+# so a waived close leaves no entry in .claude/telemetry/model-routing.log; the waiver
+# file itself is the record.
+#
+# Kept OUTSIDE the model-check block on purpose: harness test T26 pins that block by its
+# tokens and refuses any use of the sprint number in it. Inside the block the waiver is one
+# boolean on the reviewer condition.
+$reviewFloorWaiver = Join-Path $reviewsDir "SPRINT-$sprintNum-review-floor-WAIVED.md"
+$reviewFloorWaived = Test-Path $reviewFloorWaiver
+if ($reviewFloorWaived) {
+    [Console]::Error.WriteLine("sprint-close-guard: S$sprintNum has a review-floor waiver at $reviewFloorWaiver -- the Step 7a internal artifact's reviewed-by-model is not checked against the floor; every other gate still applies")
+}
+
 # --- Verdict line + staleness check ---------------------------------------
 #
 # Stronger contract added post-S38 (after retroactive Codex review caught
@@ -209,7 +237,7 @@ foreach ($artifact in @($codex, $reviewer)) {
     # `reviewed-by-model:` as its first line and REFUSES on the wrong model — this is the
     # fourth layer, at close: a sprint cannot close on a review that ran cheap. Applies to the
     # reviewer artifact only (the Codex artifact is the external lens; no Claude model).
-    if ($artifact -eq $reviewer) {
+    if ($artifact -eq $reviewer -and -not $reviewFloorWaived) {
         $reviewFloor = 'claude-fable-5-1'
         if ($content -notmatch '(?im)^\s*reviewed-by-model\s*:\s*(\S+)') {
             [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
