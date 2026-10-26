@@ -485,8 +485,8 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
        - then a standing cadence, e.g. a dependency slot each sprint or month, plus an auto-merge rule for patch updates
          with green CI.
     4. **Central package management** (`Directory.Packages.props`), so each version is set once.
-  - **Open question for the owner:** when. The runtime's end of support makes the .NET upgrade the time-bound part,
-    against S147's planned start (QUAL-229, then the overtime/flex model program).
+  - **Timing (owner, 2026-10-26):** it can wait. The system is not in production; the item only needs to be on the
+    roadmap. The .NET 8 end-of-support date is recorded as a fact for whenever the item is picked up.
 - **Backlog — pin the Rule Engine's "fixed, value-free 400 sentences" (S145 TASK-14511 adjudication, declined NOTE 1).** Payroll now
   logs the timeline endpoint's 400 `error` sentence, capped at 200 characters, with the employee id. That is safe only because
   every `TimelineInputException` message is a literal with no interpolation (`WeeklyTimelineCore.cs`, `RuleRegistry.cs`), and that
@@ -575,10 +575,9 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
     5. **Keeping it current:** a review at each entropy scan and before any go-live decision. New features declare
        which register rows they touch, the way PII and security concerns are declared today. The production hardening
        pass (§1 item 5) uses the register as its checklist.
-  - **Open questions for the owner:**
-    - **The order:** start with the scoping and the register skeleton, or with one mandatory source end to end (ISO
-      27001 or GDPR/DPIA)?
-    - **When:** relative to S147's planned start and the .NET upgrade above.
+  - **Timing (owner, 2026-10-26):** it can wait. The system is not in production; the item only needs to be on the
+    roadmap. The order (the scoping and the register skeleton first, or one mandatory source end to end) is decided
+    when the item is picked up.
 - **★ A thorough governance review: is the process getting bloated?** (owner, 2026-10-01: *"I have a
   feeling our governance is getting bloated. We need to do a thorough review."*). A follow-up, raised during
   S145 planning. Evidence measured the day it was raised, so the review starts from numbers, not from the feeling:
