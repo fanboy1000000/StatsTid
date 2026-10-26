@@ -52,6 +52,8 @@ Not commitments or dates — direction.
    The source register's unreliable citations (QUAL-215) make the Phase-B engagement above more urgent.
 5. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.
+   **The dependency part no longer waits for this pass** (owner-raised 2026-10-26): see §2 "Tooling / infra /
+   environment", *Dependency inventory, security and updates*. The .NET 8 runtime leaves support on 2026-11-10.
    A precondition for any go-live. **Includes authentication through Statens SSO** (owner-raised 2026-10-16;
    SAML 2.0 / OIOSAML Service Provider; see §2 "Security & access control").
 6. **Go-to-production decision** — owner's call; not on the near horizon.
@@ -437,6 +439,49 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   production; not enforced today. [CONVENTIONS.md]
 
 ### Tooling / infra / environment
+- **★ Dependency inventory, security and updates** (owner-raised 2026-10-26: *"We need to have an overview of what
+  packages we use, make sure they are secure and updated."*).
+  - **Why it matters.** Every library and base image the system runs on is code the project did not write. A known
+    vulnerability in one of them is a vulnerability in StatsTid, and an unsupported runtime stops receiving security
+    fixes at all. Today nobody can say, from one place, which packages are in use, which are out of date, or whether
+    any has a published vulnerability.
+  - **What exists today (checked 2026-10-26):**
+    - **Dependabot has run since S39** (TASK-3903; `.github/dependabot.yml`). It covers NuGet, npm, GitHub Actions and
+      the Docker images, and opens update pull requests weekly. Review is manual, and the auto-merge policy S39 deferred
+      was never decided.
+    - **34 of its pull requests are open and untriaged, the oldest from 2026-05-24.**
+      - **Major-version jumps:** the .NET 8 → 10 base images and `Microsoft.Extensions.*`, Npgsql 8 → 10, Testcontainers
+        3 → 4, the xunit runner, `react-router-dom` 6 → 7, `@vitejs/plugin-react` 4 → 6, and five GitHub Actions.
+      - **Patch updates on security-relevant paths,** e.g. `Microsoft.AspNetCore.Authentication.JwtBearer` 8.0.8 →
+        8.0.27, the library that validates every login token. Patch releases on a supported line typically carry security
+        fixes.
+    - **Dependabot security alerts are turned off for the repository** (GitHub answers "disabled"). **CI runs no
+      vulnerability scan**: no `dotnet list package --vulnerable`, no `npm audit`. The only supply-chain-adjacent check
+      is gitleaks, which looks for leaked secrets, not vulnerable packages.
+    - **No inventory exists.** Each project file pins its own versions; there is no central package management (no
+      `Directory.Packages.props`). That is 15 distinct NuGet packages, about 27 declared npm packages plus their
+      transitive tree, and the Docker base images.
+    - **.NET 8, the runtime every service runs on, leaves Microsoft support on 2026-11-10;** .NET 10 is the current
+      long-term-support release. CI already warns that GitHub's Node 20 action runtime is deprecated.
+  - **A proposed shape** (for the refinement, not decided):
+    1. **Inventory:** a generated `docs/generated/dependencies.md`, built from the project files, `package-lock.json` and
+       the Dockerfiles. It lists each package, its version, where it is used, its licence and the latest available version,
+       and CI checks it for drift the way it checks `db-schema.md`.
+    2. **Security:**
+       - turn on Dependabot alerts and security updates (an owner action in the repository settings);
+       - add a CI job that fails on high or critical findings from `dotnet list package --vulnerable
+         --include-transitive` and `npm audit`;
+       - optionally, scan the container images.
+    3. **Updates:**
+       - triage the 34 open pull requests: patch and minor updates in tested batches, each major update as its own
+         planned task;
+       - the .NET 8 → 10 move is the largest and most time-bound major update. It touches every service, Dockerfile, the
+         CI workflow and the generated contracts;
+       - then a standing cadence, e.g. a dependency slot each sprint or month, plus an auto-merge rule for patch updates
+         with green CI.
+    4. **Central package management** (`Directory.Packages.props`), so each version is set once.
+  - **Open question for the owner:** when. The runtime's end of support makes the .NET upgrade the time-bound part,
+    against S147's planned start (QUAL-229, then the overtime/flex model program).
 - **Backlog — pin the Rule Engine's "fixed, value-free 400 sentences" (S145 TASK-14511 adjudication, declined NOTE 1).** Payroll now
   logs the timeline endpoint's 400 `error` sentence, capped at 200 characters, with the employee id. That is safe only because
   every `TimelineInputException` message is a literal with no interpolation (`WeeklyTimelineCore.cs`, `RuleRegistry.cs`), and that
