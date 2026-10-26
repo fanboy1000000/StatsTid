@@ -235,6 +235,56 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
     }
 
     /// <summary>
+    /// R-54 (kind F, Docker; TASK-14610-T). After the employed zero-line export the record has NO lines, so the event is the
+    /// only carrier of the link to the calculation: the latest <c>PayrollExportGenerated</c> event AND its audit row carry a
+    /// <c>manifestId</c> equal to the one <c>segment_manifests.manifest_id</c> stored for (employee, June, <c>forward-calc</c>),
+    /// and equal to the manifest id the request log (<c>audit_log.details.manifest_id</c>) stamped for the same request.
+    ///
+    /// <para><b>Red conditions.</b> A host that leaves <c>PayrollExportContext.ManifestId</c> null is refused by the guard (the
+    /// request fails, so <c>AssertStatus(OK)</c> fails); one that sets it to a different id (the dropped
+    /// <c>ManifestId = outcome.ManifestId</c> replaced by <c>Guid.NewGuid()</c>) fails the equality with the stored
+    /// manifest; a mapper or event that drops the member leaves the key absent and fails the same equality. CI-pending.</para>
+    /// </summary>
+    [Fact]
+    public async Task Export_EmployedZeroLineMonth_EventAndAudit_NameTheStoredManifest()
+    {
+        var employeeId = await NewEmployeeAsync("R54-ZEROLINE");
+        await _fx.SeedApprovedMonthAsync(employeeId, Jun);
+        _fx.Engine.Configure(employeeId, Jun, closing: -148m);
+
+        var response = await _fx.CalculateAndExportMonthAsync(employeeId, Jun);
+
+        AssertStatus(HttpStatusCode.OK, response);
+        Assert.Empty(ReadResult(response.Json).ExportLines);
+        Assert.Equal(1, await _fx.CountManifestsAsync(employeeId));
+        var stored = await ReadStoredManifestIdAsync(employeeId);
+
+        using var evt = await _fx.LatestEventAsync(employeeId, "PayrollExportGenerated");
+        Assert.Equal(stored.ToString("D"), Str(evt.RootElement, "manifestId"));
+        using var audit = await _fx.LatestAuditDetailsAsync(employeeId, "PayrollExportGenerated");
+        Assert.Equal(stored.ToString("D"), Str(audit.RootElement, "manifestId"));
+        Assert.Equal(1, await _fx.CountAsync(
+            "SELECT COUNT(*) FROM audit_log WHERE http_path = '/api/payroll/calculate-and-export' AND details->>'manifest_id' = @m",
+            ("m", stored.ToString("D"))));
+    }
+
+    private async Task<Guid> ReadStoredManifestIdAsync(string employeeId)
+    {
+        await using var conn = _fx.Db.Create();
+        await conn.OpenAsync();
+        await using var cmd = new Npgsql.NpgsqlCommand(
+            """
+            SELECT manifest_id FROM segment_manifests
+            WHERE employee_id = @e AND period_start = @s AND calculation_kind = 'forward-calc'
+            """, conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        cmd.Parameters.AddWithValue("s", Jun);
+        var id = await cmd.ExecuteScalarAsync();
+        Assert.True(id is Guid, $"expected exactly one forward-calc manifest for {employeeId} June");
+        return (Guid)id!;
+    }
+
+    /// <summary>
     /// AC-C1, the REAL engine (kind F, Docker). A full-time HK employee works 7.40 h on every June 2026 weekday except
     /// Wednesday 10 June (21 of the 22 weekdays; June has no public holiday): the engine's own arithmetic is
     /// <c>closing = min(opening + worked - norm, cap)</c> = 0 + 155.40 - 162.80 = -7.40 (the cap is not reached), so the record

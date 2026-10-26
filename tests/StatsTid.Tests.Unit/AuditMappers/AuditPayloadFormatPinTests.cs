@@ -182,7 +182,7 @@ public class AuditPayloadFormatPinTests
 
     // ── S146 / TASK-14606 (AC-C7, R-49): the flex-ledger keys on the two payroll mappers ─────────
 
-    private static PayrollExportGenerated FlexExport(decimal? opening, decimal? closing, string? provenance) => new()
+    private static PayrollExportGenerated FlexExport(decimal? opening, decimal? closing, string? provenance, Guid? manifestId = null) => new()
     {
         EmployeeId = "EMP042",
         Year = 2026,
@@ -193,6 +193,7 @@ public class AuditPayloadFormatPinTests
         OpeningFlexBalance = opening,
         ClosingFlexBalance = closing,
         FlexProvenance = provenance,
+        ManifestId = manifestId,
     };
 
     /// <summary>
@@ -224,6 +225,25 @@ public class AuditPayloadFormatPinTests
 
         const string golden =
             "{\"action\":\"PAYROLL_EXPORTED\",\"employeeId\":\"EMP042\",\"year\":2026,\"month\":6,\"exportId\":\"11111111-1111-1111-1111-111111111111\",\"contentHash\":\"abc123\",\"exportedAt\":\"2026-07-01T08:00:00+00:00\"}";
+        Assert.Equal(golden, row.DetailsJson);
+        Assert.DoesNotContain("manifestId", row.DetailsJson); // R-54: an export naming no manifest omits the key too
+    }
+
+    /// <summary>
+    /// S146 Step 7a (R-54, TASK-14610-T) — a calculating export's details carry <c>manifestId</c> in Guid "D" form
+    /// (lower-case, hyphenated) as the LAST key, after <c>flexProvenance</c>, so every earlier golden is unchanged.
+    /// Kind N (names <c>PayrollExportGenerated.ManifestId</c>). Red conditions: the exact golden below. MUTATION: delete
+    /// the <c>manifestId = @event.ManifestId</c> line from <c>PayrollExportGeneratedAuditMapper</c> and the key is absent;
+    /// move it before <c>flexProvenance</c> and the order differs; both fail the string equality.
+    /// </summary>
+    [Fact]
+    public void PayrollExportGenerated_ManifestId_WhenSet_IsCarried()
+    {
+        var row = new PayrollExportGeneratedAuditMapper().Map(
+            FlexExport(0m, -3.5m, "LEDGER_START", Guid.Parse("44444444-4444-4444-4444-444444444444")), Ctx);
+
+        const string golden =
+            "{\"action\":\"PAYROLL_EXPORTED\",\"employeeId\":\"EMP042\",\"year\":2026,\"month\":6,\"exportId\":\"11111111-1111-1111-1111-111111111111\",\"contentHash\":\"abc123\",\"exportedAt\":\"2026-07-01T08:00:00+00:00\",\"openingFlexBalance\":0,\"closingFlexBalance\":-3.5,\"flexProvenance\":\"LEDGER_START\",\"manifestId\":\"44444444-4444-4444-4444-444444444444\"}";
         Assert.Equal(golden, row.DetailsJson);
     }
 
