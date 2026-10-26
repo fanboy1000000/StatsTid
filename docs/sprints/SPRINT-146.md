@@ -88,6 +88,8 @@ Transcribed from the plan (draft 2.1). Dispositions are updated at each wave gat
 | TASK-14607 | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked · `backend-infrastructure` · C5 backend; OQ-5; `flexBalanceState`; route, response and event deleted |
 | TASK-14607-T | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked, paired · `test-qa` · AC-C9 incl. OQ-5 |
 | TASK-14608 | DONE (merged with the stack, `88eb3da6`) | wave 3, stacked · `ux` · C5 frontend |
+| TASK-14610 | REVIEWED (`aa00fb96`, `df4e79e9`, comments `753e0cc8`, `a6fcd6f6`); merge owes Fable's scoped check of 14610-T | Step 7a fix · `payroll-integration` (cross-domain: the event member, the mapper key) · R-54, R-56, R-61(a) |
+| TASK-14610-T | DONE on the branch (`f77ac71c`) | paired · `test-qa` · R-55's pins |
 
 Orchestrator items, not tasks: T7 (the hook comment, with its own Step 7a), D1–D7, O-1..O-7, CI-W1, CI-W2, C-1..C-5.
 
@@ -404,15 +406,68 @@ Recorded, not built: the card's double divider and the column width (visual chec
 - **Re-run `40055382782` on `1af567fe`:** pushed to the same evidence branch. Pending.
 
 
+## Step 7a (sprint end, dual-lens) — cycle 1 and the TASK-14610 fix
+
+**Cycle 1 on `3c23f708`** (the base is `13a40e68`, S145's close commit):
+- **Codex: REQUEST-CHANGES** (`.claude/reviews/S146-step7a-codex-c1.md`).
+  - **BLOCKER:** the employed zero-line month's record and its `PayrollExportGenerated` named no manifest. ADR-016 D10's durable link rides on the export lines, and such a month has none, so its recorded closing was provable only by searching the month's manifests.
+  - **WARNING:** flex-ledger refusals were not logged.
+- **Fable: APPROVED-WITH-WARNINGS** (`.claude/reviews/S146-step7a-reviewer-c1.md`).
+  - **W-1:** QUAL-201's closure sentence missed the UNTRACKED case.
+  - **W-2:** six tasks' internal 5a artifacts were not saved.
+  - **W-3:** CI evidence for wave 3, and the QUAL-188/205 flips.
+  - **W-4:** register the M+2 stale-chain gap.
+  - Plus notes. The internal lens traced both writers end to end and found the chain holds.
+
+**Adjudication R-54 … R-62** (`.claude/reviews/S146-step7a-adjudication-c1.md`):
+- **R-54:** the BLOCKER stands. `PayrollExportGenerated` gains an optional `ManifestId`, set on `/calculate-and-export`, plus the audit key `manifestId`. There is no new column: the correction route's link is event-only already (S145 R-19).
+- **R-55:** the fix is built as TASK-14610 and 14610-T.
+- **R-56:** the refusal is logged, with no durable refusal record.
+- **R-57:** the QUAL-201 residual is corrected.
+- **R-58:** recover the missing 5a texts, and add a WORKFLOW 5a sentence.
+- **R-59:** the CI flips and the C-2 gate.
+- **R-60:** register QUAL-229, with the owner deciding the timing.
+- **R-61:** the N-2 wording, the N-3 refusal order, and the N-6 F-5 sub-question.
+- **R-62:** the venue.
+
+**Owner, 2026-10-26: Q-1 = (b).** The M+2 stale-chain guard (QUAL-229) is built in **S147, as the first payroll item**, before the model program touches the same chain.
+
+**W-2 recovered in full.** All eight missing internal 5a reports were recovered verbatim from the session transcript and saved under `.claude/reviews/` with a provenance header:
+- 14600; 14601 + its fix-up; 14602 (+T); 14603 + its follow-up; 14604 (+T); 14609.
+- No verdict rests on memory.
+- Their verdicts: 14600 AwW, 14601 AwW, 14601 fix-up A, 14602 A, 14603 A, 14603 follow-up A, 14604 AwW, 14609 AwW.
+
+**The refusal order, as built (R-61(b)).** The org-scope 403 comes first, then the three fixed 400s (hours, opening balance, period not a month), then the approval 403, then the 422s, then the 409s and 503s.
+
+**TASK-14610** (`payroll-integration`), `aa00fb96` and fix-up `df4e79e9`:
+- the event member and the appended audit key;
+- the context member;
+- a guard that refuses a calculating-route export naming no manifest (null or empty) before its transaction;
+- `Program.cs` sets the committed `outcome.ManifestId`;
+- the three refusal sites log a warning; the 409 body is unchanged;
+- the lock comment, corrected three times (`df4e79e9`, then `753e0cc8` for Fable W-1 and `a6fcd6f6` for Codex W).
+
+**TASK-14610-T** (`test-qa`), `f77ac71c`: Unit pins for the key and the round trip, with the mutations run and killed; four service-level Docker facts (the calculating context carries the id, the raw context omits it, a null or empty id refuses with nothing written); and a host fact proving that the zero-line month's event and audit row name the one stored manifest.
+
+**Step 5a:**
+- 5α PASS.
+- Codex APPROVE on the production change, then APPROVE-WITH-WARNINGS on the tests and comment (the warning is fixed in `a6fcd6f6`).
+- Fable APPROVED-WITH-WARNINGS on the production change (the W-1 comment, fixed).
+- **Fable's scoped check of 14610-T was cut off by the Fable usage limit (2026-10-26) and is still owed before the merge.**
+
+**CI-W2 GREEN** on the re-run: `40055382782` on `1af567fe`, all seven jobs; every wave-2 Docker fact CI-verified.
+
+**CI-W3:** `a6fcd6f6` (master `3c23f708` plus TASK-14610 and 14610-T) pushed to `s146-ci-w2`, run `40294555527`. Pending.
+
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
 |---|---|
 | **As of** | 2026-10-24, master `88eb3da6` + the D7 part 3 record (all four waves merged), local only; origin/master `0f02b484` |
-| **Phase** | All waves merged; the close follows. The wave-3 gate is O-1 green on `88eb3da6`: 0 / 145, CA2100 115, Unit 1564, DemoSeed 170, Regression non-Docker 130, `tsc` 0, vitest 80 files / 1010 tests |
-| **Tasks** | Every task DONE (see the ledger) |
+| **Phase** | The close: Step 7a cycle 1 is ruled (R-54 … R-62); the TASK-14610 fix is reviewed except for Fable's scoped check of 14610-T (cut off by the Fable usage limit, 2026-10-26); CI-W3 is running |
+| **Tasks** | Every planned task DONE. TASK-14610 + 14610-T are on `worktree-agent-a89846fb6ad2baa8d` @ `a6fcd6f6`, not yet merged |
 | **Track D** | D1–D7 DONE. D7 part 1 `5087ab88`; part 2 with the 14605 record; part 3 with the wave-3 record (ADR-018:478, ADR-026:189, the catalog, DEP-004, RES-002's census and S146 note, the performance-register F5 note, QUAL-224 BUILT) |
-| **Pending gates** | CI-W2 re-run `40055382782` (then close PR #40 unmerged and delete `s146-ci-w2`); **C-1..C-5**: Step 7a dual-lens on the sprint base `13a40e68`..HEAD, the QUALITY.md re-grade, the model-routing register row, the INDEX row and the Test Verified line; **C-2**, the close CI run on master |
-| **CI** | G-0 `39755579330` · **CI-W1** `39992507686` GREEN (PR #39 closed) · **CI-W2** `40049157171` RED 1/2216 (a test-expectation defect, fixed `1af567fe`), re-run `40055382782` running (PR #40) · C-2 — · close — |
-| **Open rulings** | none. For S147 (in D5's ADR): the order of work (split the holiday table first), the local days off, the part-timer default (legal input), PROSA groups 3–4, the AC office-staff period |
-| **Next action** | Await the CI-W2 re-run. Meanwhile, start the close: Step 7a (both lenses) on `13a40e68..HEAD` |
+| **Pending gates** | (1) Fable's scoped 5a on `df4e79e9..a6fcd6f6`, needing a Fable reset or credits; then merge TASK-14610, run O-1 and D7 part 4 (`scratchpad/d7d.pl <merge-sha>`: the catalog, the ADR-016 footnote, ADR-034 D3, D4 and its residual, QUAL-188/205 flips, QUAL-201, QUAL-219, new QUAL-228 and QUAL-229, ADR-043 F-5, WORKFLOW 5a). (2) Step 7a cycle 2 on both lenses over `3c23f708..HEAD`. (3) CI-W3 `40294555527`. (4) The close docs: QUALITY.md, the routing register (the 5a-artifact line per R-58), INDEX, Test Verified. (5) Worktree teardown, then C-2 and the close |
+| **CI** | G-0 `39755579330` · **CI-W1** `39992507686` GREEN (PR #39 closed) · **CI-W2** `40049157171` RED 1/2216 (a test-expectation defect, fixed `1af567fe`), re-run **`40055382782` GREEN** (all seven jobs) · **CI-W3** `40294555527` on `a6fcd6f6` running (PR #40) · C-2 — · close — |
+| **Open rulings** | none. Owner Q-1 (2026-10-26) = S147 first payroll item for QUAL-229. For S147 (ADR-043's forks): the order of work, the local days off, the part-timer default, PROSA groups 3–4, the AC office-staff period, and the leaver's last closing (R-61c) |
+| **Next action** | When Fable is available: resume the scoped 5a on TASK-14610-T and the comment fix-ups (`df4e79e9..a6fcd6f6`), then work the pending gates in order |
