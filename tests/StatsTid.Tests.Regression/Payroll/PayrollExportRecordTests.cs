@@ -418,6 +418,163 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
         Assert.Contains("SLS_0110", reader.GetString(3));               // the manifest holds the line
     }
 
+    // ── S146 Step 7a (R-54, TASK-14610-T): the export event names its manifest ──────────────────────────
+    // Status: Docker-gated, CI-pending until C-2 (never locally green). The RED of each fact is argued in its docstring.
+
+    /// <summary>A calculating route's flex-ledger write for one (employee, year, month): the opening 0, a closing of -7.40
+    /// and <c>LEDGER_START</c>; the under-lock recheck answers "unchanged" (the ledger is not what these facts probe).</summary>
+    private static FlexLedgerWrite LedgerWrite(string employeeId, int year, int month) => new()
+    {
+        EmployeeId = employeeId,
+        Year = year,
+        Month = month,
+        Provenance = "LEDGER_START",
+        OpeningBalance = 0m,
+        ClosingBalance = -7.40m,
+        RecheckUnderLock = (_, _, _) => Task.CompletedTask,
+    };
+
+    private static PayrollExportContext CalculatingContext(
+        Guid periodId, string employeeId, int year, int month, Guid? manifestId) => new()
+    {
+        PeriodId = periodId,
+        Source = "CALCULATE_AND_EXPORT",
+        ActorId = "admin-test",
+        ActorRole = "GlobalAdmin",
+        ResolvedTargetOrgId = OrgId,
+        FlexLedger = LedgerWrite(employeeId, year, month),
+        ManifestId = manifestId,
+    };
+
+    private async Task<string> ReadEventPayloadAsync(string employeeId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            @"SELECT event_payload::text FROM outbox_events
+              WHERE stream_id=@s AND event_type='PayrollExportGenerated' ORDER BY outbox_id DESC LIMIT 1", conn);
+        cmd.Parameters.AddWithValue("s", $"employee-{employeeId}");
+        var payload = await cmd.ExecuteScalarAsync() as string;
+        Assert.True(payload is not null, $"no PayrollExportGenerated event for {employeeId}");
+        return payload!;
+    }
+
+    private async Task<string> ReadAuditDetailsAsync(string employeeId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            @"SELECT details::text FROM audit_projection
+              WHERE event_type='PayrollExportGenerated' AND target_resource_id=@e
+              ORDER BY projected_at DESC, outbox_id DESC LIMIT 1", conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        var details = await cmd.ExecuteScalarAsync() as string;
+        Assert.True(details is not null, $"no PayrollExportGenerated audit row for {employeeId}");
+        return details!;
+    }
+
+    private async Task<int> CountAuditRowsForAsync(string employeeId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM audit_projection WHERE event_type='PayrollExportGenerated' AND target_resource_id=@e", conn);
+        cmd.Parameters.AddWithValue("e", employeeId);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    private async Task AssertNothingWrittenAsync(string employeeId, int year, int month)
+    {
+        Assert.Equal(0, await CountRecordsAsync(employeeId, year, month));
+        Assert.Equal(0, await CountExportEventsAsync(employeeId));
+        Assert.Equal(0, await CountAuditRowsForAsync(employeeId));
+    }
+
+    /// <summary>
+    /// R-54 (kind N: names <c>PayrollExportContext.ManifestId</c> and <c>PayrollExportGenerated.ManifestId</c>). A
+    /// calculating export (<c>FlexLedger</c> set, <c>ManifestId = X</c>) emits an event whose <c>outbox_events</c> payload
+    /// AND whose <c>audit_projection</c> details both carry <c>manifestId = X</c> (Guid "D" form).
+    ///
+    /// <para><b>Red conditions.</b> A service that does not copy <c>context.ManifestId</c> onto the event (the mutation: delete
+    /// <c>ManifestId = context.ManifestId</c> from the event initializer) writes neither key, so both equalities fail on a
+    /// missing key. CI-pending.</para>
+    /// </summary>
+    [Fact]
+    public async Task Export_CalculatingContext_EventAndAuditRow_CarryManifestId()
+    {
+        const string emp = "EMP_MFID_SET";
+        var manifest = Guid.Parse("a1b2c3d4-0000-4000-8000-00000000d054");
+        var periodId = await SeedApprovedPeriodAsync(emp, 2026, 8);
+
+        await _service.ExportAsync(
+            new[] { Line(emp, 2026, 8) }, CalculatingContext(periodId, emp, 2026, 8, manifest));
+
+        using var evt = System.Text.Json.JsonDocument.Parse(await ReadEventPayloadAsync(emp));
+        Assert.Equal(manifest.ToString("D"), evt.RootElement.GetProperty("manifestId").GetString());
+        using var audit = System.Text.Json.JsonDocument.Parse(await ReadAuditDetailsAsync(emp));
+        Assert.Equal(manifest.ToString("D"), audit.RootElement.GetProperty("manifestId").GetString());
+    }
+
+    /// <summary>
+    /// R-54 (kind R). A RAW export (no <c>FlexLedger</c>, no <c>ManifestId</c>) names no manifest: the audit details omit the
+    /// <c>manifestId</c> key (the mapper writes no nulls) and the event payload carries no manifest value.
+    ///
+    /// <para><b>Red conditions.</b> A service or mapper that stamps a manifest on the raw route (an empty Guid, say) fails
+    /// <c>DoesNotContain</c> on the audit details and the absent check on the event. Holds today. CI-pending.</para>
+    /// </summary>
+    [Fact]
+    public async Task Export_RawContext_EventOmitsManifestId()
+    {
+        const string emp = "EMP_MFID_RAW";
+
+        await _service.ExportAsync(new[] { Line(emp, 2026, 8) }, RawExportContext());
+
+        using var evt = System.Text.Json.JsonDocument.Parse(await ReadEventPayloadAsync(emp));
+        var hasValue = evt.RootElement.TryGetProperty("manifestId", out var m)
+            && m.ValueKind != System.Text.Json.JsonValueKind.Null;
+        Assert.False(hasValue, "a raw export's event names no manifest");
+        Assert.DoesNotContain("manifestId", await ReadAuditDetailsAsync(emp));
+    }
+
+    /// <summary>
+    /// R-54 (kind N). A calculating export (<c>FlexLedger</c> set) whose context names no manifest (<c>ManifestId</c> null) is
+    /// refused with <see cref="InvalidOperationException"/> BEFORE the transaction opens: no record, no event, no audit row.
+    ///
+    /// <para><b>Red conditions.</b> MUTATION: delete the guard in <c>PayrollExportService.ExportAsync</c> (the
+    /// <c>context.ManifestId is not { } ... throw</c> block): the export then succeeds, so <c>ThrowsAsync</c> fails with "no
+    /// exception was thrown". CI-pending.</para>
+    /// </summary>
+    [Fact]
+    public async Task Export_CalculatingContext_WithoutManifestId_Throws_NothingWritten()
+    {
+        const string emp = "EMP_MFID_NULL";
+        var periodId = await SeedApprovedPeriodAsync(emp, 2026, 8);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ExportAsync(
+            new[] { Line(emp, 2026, 8) }, CalculatingContext(periodId, emp, 2026, 8, manifestId: null)));
+
+        await AssertNothingWrittenAsync(emp, 2026, 8);
+    }
+
+    /// <summary>
+    /// R-54 (kind N). The same refusal for an EMPTY manifest id (<c>Guid.Empty</c>, the "no persisted manifest" meaning the
+    /// request-log stamp gives it): refused, nothing written.
+    ///
+    /// <para><b>Red conditions.</b> MUTATION: drop the <c>|| manifestId == Guid.Empty</c> arm of the guard: the export succeeds
+    /// and writes an event naming the all-zero Guid, so <c>ThrowsAsync</c> fails. CI-pending.</para>
+    /// </summary>
+    [Fact]
+    public async Task Export_CalculatingContext_EmptyManifestId_Throws_NothingWritten()
+    {
+        const string emp = "EMP_MFID_EMPTY";
+        var periodId = await SeedApprovedPeriodAsync(emp, 2026, 8);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _service.ExportAsync(
+            new[] { Line(emp, 2026, 8) }, CalculatingContext(periodId, emp, 2026, 8, Guid.Empty)));
+
+        await AssertNothingWrittenAsync(emp, 2026, 8);
+    }
+
     // ── A stub IHttpClientFactory whose client always returns 200 OK (mock-payroll delivery). ──
     private sealed class OkHttpClientFactory : IHttpClientFactory
     {

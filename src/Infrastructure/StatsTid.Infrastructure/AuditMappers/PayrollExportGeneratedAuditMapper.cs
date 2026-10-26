@@ -34,6 +34,10 @@ public sealed class PayrollExportGeneratedAuditMapper : IAuditProjectionMapper<P
             openingFlexBalance = @event.OpeningFlexBalance,
             closingFlexBalance = @event.ClosingFlexBalance,
             flexProvenance = @event.FlexProvenance,
+            // S146 Step 7a (R-54; TASK-14610): the manifest of the calculation whose figures this export stores, so a
+            // record with no lines (the employed zero-line month) still names it. Null on the raw exports and every
+            // pre-fix event, and then omitted like the flex keys above. Appended LAST so every existing golden is unchanged.
+            manifestId = @event.ManifestId,
         };
         return new AuditProjectionRowData(
             VisibilityScope: AuditVisibilityScope.TenantTargeted,

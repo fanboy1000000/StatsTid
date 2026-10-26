@@ -106,6 +106,11 @@ public sealed class PayrollExportService
     /// whole transaction with <see cref="FlexLedgerRefusalException"/> <c>payroll-ledger-changed</c>.</description></item>
     /// <item><description><b>The balances</b> are written with the record (opening, closing, provenance); null on
     /// the raw routes and under <c>UNTRACKED</c>.</description></item>
+    /// <item><description><b>The manifest</b> (S146 Step 7a, R-54). The calculating route's
+    /// <see cref="PayrollExportContext.ManifestId"/> rides the <see cref="PayrollExportGenerated"/> event and its audit
+    /// row (<c>manifestId</c>), so a record with no lines still names the calculation that produced its closing; a
+    /// calculating-route context without one (null or <see cref="Guid.Empty"/>) is refused before the transaction
+    /// opens. Null on the raw routes.</description></item>
     /// <item><description><b>A zero-line month</b> (R-3): the calculating route passes the record's identity in
     /// <see cref="FlexLedgerWrite"/>, so a month with an EMPLOYED day but no lines still writes its record (lines
     /// empty, balances set, corrections-only from then on). The empty line set hashes like any other line set through
@@ -160,6 +165,16 @@ public sealed class PayrollExportService
                     $"PayrollExportService.ExportAsync: the calculating route's flex-ledger write is for employee " +
                     $"'{flex.EmployeeId}' {flex.Year}-{flex.Month:D2}, but its lines also fall in another (employee, " +
                     "year, month). A calculation is one employee and one month; nothing was written.");
+            }
+            // S146 Step 7a (R-54): the calculating route's export names the manifest of the calculation that produced
+            // it, carried onto PayrollExportGenerated. A record with no lines (R-3's employed zero-line month) has no
+            // other carrier of that link, so an export without it is refused here, before the transaction opens. An
+            // empty Guid counts as no manifest, the meaning StampAuditContext gives it ("no persisted manifest").
+            if (context.ManifestId is not { } manifestId || manifestId == Guid.Empty)
+            {
+                throw new InvalidOperationException(
+                    "PayrollExportService.ExportAsync: the calculating route's export names no manifest (null or empty); " +
+                    "a recorded closing must link the calculation that produced it (ADR-016 D10). Nothing was written.");
             }
             if (groups.Count == 0)
                 groups.Add((key, Array.Empty<PayrollExportLine>()));
@@ -265,6 +280,8 @@ public sealed class PayrollExportService
                         OpeningFlexBalance = balances?.Opening,
                         ClosingFlexBalance = balances?.Closing,
                         FlexProvenance = balances?.Provenance,
+                        // S146 Step 7a (R-54): the calculation's manifest — null on the raw routes.
+                        ManifestId = context.ManifestId,
                     };
                     var streamId = $"employee-{key.EmployeeId}";
                     var outboxId = await _outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
@@ -686,6 +703,16 @@ public sealed class PayrollExportContext
     /// unchanged.
     /// </summary>
     public FlexLedgerWrite? FlexLedger { get; init; }
+
+    /// <summary>
+    /// S146 Step 7a (R-54; TASK-14610) — the manifest of the calculation whose figures this export stores
+    /// (ADR-016 D10), carried onto <see cref="PayrollExportGenerated.ManifestId"/>: calculate-and-export only; null
+    /// on the raw routes. Required whenever <see cref="FlexLedger"/> is set — <see cref="PayrollExportService.ExportAsync"/>
+    /// refuses a calculating-route export that names no manifest (null or <see cref="Guid.Empty"/>), before its
+    /// transaction opens, because a record with no lines (the employed zero-line month) has no other carrier of the
+    /// link.
+    /// </summary>
+    public Guid? ManifestId { get; init; }
 
     /// <summary>The originating endpoint: CALCULATE_AND_EXPORT / EXPORT / EXPORT_PERIOD.</summary>
     public required string Source { get; init; }

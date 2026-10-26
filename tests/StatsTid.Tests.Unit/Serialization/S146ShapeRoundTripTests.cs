@@ -50,7 +50,7 @@ public sealed class S146ShapeRoundTripTests
     // PayrollExportGenerated: openingFlexBalance, closingFlexBalance, flexProvenance
     // -------------------------------------------------------------------------------------------
 
-    private static PayrollExportGenerated Export(decimal? opening, decimal? closing, string? provenance) => new()
+    private static PayrollExportGenerated Export(decimal? opening, decimal? closing, string? provenance, Guid? manifestId = null) => new()
     {
         EmployeeId = "EMP-1",
         Year = 2026,
@@ -61,6 +61,7 @@ public sealed class S146ShapeRoundTripTests
         OpeningFlexBalance = opening,
         ClosingFlexBalance = closing,
         FlexProvenance = provenance,
+        ManifestId = manifestId,
     };
 
     /// <summary>
@@ -88,15 +89,32 @@ public sealed class S146ShapeRoundTripTests
     public void PayrollExportGenerated_WithoutFlexTriple_ReadsNull()
     {
         var oldPayload = RemoveKeys(
-            EventSerializer.Serialize(Export(12.25m, -3.5m, "CHAINED")),
-            "openingFlexBalance", "closingFlexBalance", "flexProvenance");
+            EventSerializer.Serialize(Export(12.25m, -3.5m, "CHAINED", Guid.Parse("55555555-5555-5555-5555-555555555555"))),
+            "openingFlexBalance", "closingFlexBalance", "flexProvenance", "manifestId");
 
         var back = Assert.IsType<PayrollExportGenerated>(EventSerializer.Deserialize("PayrollExportGenerated", oldPayload));
 
         Assert.Null(back.OpeningFlexBalance);
         Assert.Null(back.ClosingFlexBalance);
         Assert.Null(back.FlexProvenance);
+        Assert.Null(back.ManifestId); // R-54: a pre-fix event names no manifest
         Assert.Equal("EMP-1", back.EmployeeId);
+    }
+
+    /// <summary>
+    /// S146 Step 7a (R-54, TASK-14610-T) — the export event names its manifest and reads it back exactly. Kind N
+    /// (names <c>PayrollExportGenerated.ManifestId</c>). Red conditions: equals the Guid after the round trip.
+    /// MUTATION: a <c>[JsonIgnore]</c> on the member reads null, failing the equality.
+    /// </summary>
+    [Fact]
+    public void PayrollExportGenerated_ManifestId_RoundTrips()
+    {
+        var manifest = Guid.Parse("55555555-5555-5555-5555-555555555555");
+
+        var back = Assert.IsType<PayrollExportGenerated>(EventSerializer.Deserialize(
+            "PayrollExportGenerated", EventSerializer.Serialize(Export(12.25m, -3.5m, "CHAINED", manifest))));
+
+        Assert.Equal(manifest, back.ManifestId);
     }
 
     // -------------------------------------------------------------------------------------------
