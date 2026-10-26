@@ -162,10 +162,13 @@ public sealed class PayrollExportRecordRepository
     /// every line group of its call in one transaction, so it locks every employee of the call at once, de-duplicated
     /// and ordered by the hashed key value: two ids whose <c>hashtext</c> collides are the same lock, so ordering by
     /// id could take two keys in opposite orders in two calls; ordering by key cannot. The keys are distinct by name
-    /// (<c>payroll-ledger-</c> vs the <c>employee-</c> and org keys); <c>hashtext</c> is 32-bit, so a
-    /// collision is possible but harmless: it would only serialize two unrelated transactions, and no wait cycle can
-    /// form because every writer takes its advisory keys as its first statement, before any row lock. Payroll
-    /// transactions lock in one order: advisory, then approval rows, then records.
+    /// (<c>payroll-ledger-</c> vs the <c>employee-</c> and org keys), and <c>hashtext</c> is 32-bit, so a collision is
+    /// possible. A single collision is harmless: it only serializes two unrelated transactions, and no wait cycle can
+    /// form, because every writer takes its advisory keys before any row lock (the Backend reopen does a plain,
+    /// unlocked read first, <c>ReportingLineRepository.AcquireTreeLockForEmployeeAsync</c>, which takes no lock). A
+    /// cycle among advisory locks alone would need two simultaneous collisions taken in opposite orders; Postgres's
+    /// deadlock detector would then cancel one transaction, which is safe because both writers are transactional.
+    /// Payroll transactions lock in one order: advisory, then approval rows, then records.
     /// </para>
     /// </summary>
     public static async Task AcquireFlexLedgerLocksAsync(

@@ -109,7 +109,8 @@ public sealed class PayrollExportService
     /// <item><description><b>The manifest</b> (S146 Step 7a, R-54). The calculating route's
     /// <see cref="PayrollExportContext.ManifestId"/> rides the <see cref="PayrollExportGenerated"/> event and its audit
     /// row (<c>manifestId</c>), so a record with no lines still names the calculation that produced its closing; a
-    /// calculating-route context without one is refused before the transaction opens. Null on the raw routes.</description></item>
+    /// calculating-route context without one (null or <see cref="Guid.Empty"/>) is refused before the transaction
+    /// opens. Null on the raw routes.</description></item>
     /// <item><description><b>A zero-line month</b> (R-3): the calculating route passes the record's identity in
     /// <see cref="FlexLedgerWrite"/>, so a month with an EMPLOYED day but no lines still writes its record (lines
     /// empty, balances set, corrections-only from then on). The empty line set hashes like any other line set through
@@ -167,12 +168,13 @@ public sealed class PayrollExportService
             }
             // S146 Step 7a (R-54): the calculating route's export names the manifest of the calculation that produced
             // it, carried onto PayrollExportGenerated. A record with no lines (R-3's employed zero-line month) has no
-            // other carrier of that link, so an export without it is refused here, before the transaction opens.
-            if (context.ManifestId is null)
+            // other carrier of that link, so an export without it is refused here, before the transaction opens. An
+            // empty Guid counts as no manifest, the meaning StampAuditContext gives it ("no persisted manifest").
+            if (context.ManifestId is not { } manifestId || manifestId == Guid.Empty)
             {
                 throw new InvalidOperationException(
-                    "PayrollExportService.ExportAsync: the calculating route's export names no manifest; a recorded " +
-                    "closing must link the calculation that produced it (ADR-016 D10). Nothing was written.");
+                    "PayrollExportService.ExportAsync: the calculating route's export names no manifest (null or empty); " +
+                    "a recorded closing must link the calculation that produced it (ADR-016 D10). Nothing was written.");
             }
             if (groups.Count == 0)
                 groups.Add((key, Array.Empty<PayrollExportLine>()));
@@ -706,8 +708,9 @@ public sealed class PayrollExportContext
     /// S146 Step 7a (R-54; TASK-14610) — the manifest of the calculation whose figures this export stores
     /// (ADR-016 D10), carried onto <see cref="PayrollExportGenerated.ManifestId"/>: calculate-and-export only; null
     /// on the raw routes. Required whenever <see cref="FlexLedger"/> is set — <see cref="PayrollExportService.ExportAsync"/>
-    /// refuses a calculating-route export that names no manifest, before its transaction opens, because a record
-    /// with no lines (the employed zero-line month) has no other carrier of the link.
+    /// refuses a calculating-route export that names no manifest (null or <see cref="Guid.Empty"/>), before its
+    /// transaction opens, because a record with no lines (the employed zero-line month) has no other carrier of the
+    /// link.
     /// </summary>
     public Guid? ManifestId { get; init; }
 
