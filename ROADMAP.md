@@ -54,6 +54,9 @@ Not commitments or dates — direction.
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.
    **The dependency part no longer waits for this pass** (owner-raised 2026-10-26): see §2 "Tooling / infra /
    environment", *Dependency inventory, security and updates*. The .NET 8 runtime leaves support on 2026-11-10.
+   **Its checklist is the conformance register** (owner-raised 2026-10-26; see §2 "Governance / docs",
+   *Standards and requirements conformance*): ISO 27001, the tekniske minimumskrav, NIS2, GDPR, Rigsarkivet,
+   accessibility.
    A precondition for any go-live. **Includes authentication through Statens SSO** (owner-raised 2026-10-16;
    SAML 2.0 / OIOSAML Service Provider; see §2 "Security & access control").
 6. **Go-to-production decision** — owner's call; not on the near horizon.
@@ -436,7 +439,9 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   - the team overview's "away today" filter (`ApprovalEndpoints.cs:1003`) gets its pin, since a retraction is the first change that can make it matter;
   - QUAL-196 is revisited: a missing balance row is seeded at `used = 0`.
 - **Accessibility (WCAG)** — rises from "polish" to a genuine requirement as the target firms toward
-  production; not enforced today. [CONVENTIONS.md]
+  production; not enforced today. [CONVENTIONS.md] For a public-sector system it is a legal requirement (the
+  webtilgængelighedslov: WCAG 2.1 AA and an accessibility statement); it is one row of the conformance register
+  (§2 "Governance / docs", owner-raised 2026-10-26).
 
 ### Tooling / infra / environment
 - **★ Dependency inventory, security and updates** (owner-raised 2026-10-26: *"We need to have an overview of what
@@ -511,6 +516,69 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **`SkemaPage` 7203-pin vitest flake** — one absorbed CI flake; graduates to a finding on recurrence. [S128 FU-D]
 
 ### Governance / docs
+- **★ Standards and requirements conformance — a systematic approach** (owner-raised 2026-10-26: *"What ISO
+  standards, tekniske minimumskrav etc. do we need to measure the system against. We need to add a systematic
+  approach."*).
+  - **Why it matters.** A system for the Danish state is judged against a set of standards, laws and government
+    requirements, not only against its own rules. Some apply to the software itself; others apply to the authority
+    that runs it, which then expects its supplier's system to make them possible. Today the project has no list of
+    which requirements apply, nothing that maps them to the code, and no way to show conformance. The security,
+    quality and HR registers each cover one slice; nothing covers the whole.
+  - **The candidate sources** (first pass, 2026-10-26; applicability to be verified, see the approach below):
+    - **ISO/IEC 27001** (information security management). It has been mandatory for state authorities since 2016,
+      and the NIS2 requirements build largely on top of it (Digitaliseringsstyrelsen, answer to Folketinget's DIU
+      committee, question 152, August 2025:
+      <https://www.ft.dk/samling/20241/almdel/diu/spm/152/svar/2155572/3055963.pdf>). Its Annex A controls (logging,
+      access control, secure development, supplier relations) are the natural checklist for the software's own share.
+      Related: ISO/IEC 27002 (the control guidance) and ISO/IEC 27701 (privacy), to be judged in the scoping.
+    - **The tekniske minimumskrav for statslige myndigheder** (technical minimum requirements). They are mandatory, and
+      an authority may not exempt a system on the strength of its own risk assessment. The current set has **29
+      requirements, in force from 1 July 2024** (guidance:
+      <https://www.sikkerdigital.dk/Media/638550029138627340/Vejledning%20til%20de%2029%20tekniske%20minimumskrav%202024%20-%20juni.pdf>).
+      Most concern the authority's own clients, mail, network and websites; the ones that reach a web application need
+      picking out.
+    - **The NIS2 law** (*lov om foranstaltninger til sikring af et højt cybersikkerhedsniveau*), in force since 1 July
+      2025. State authorities must meet its security measures, including **supply-chain security** and **security in
+      the acquisition, development and maintenance of IT systems** (§ 6, stk. 1, nr. 4 and 5), which reaches a
+      supplier's system directly. Supervision is by Styrelsen for Samfundssikkerhed (Folketinget DIU question 84:
+      <https://www.ft.dk/samling/20241/almdel/diu/spm/84/svar/2141245/3025221.pdf>).
+    - **GDPR and the Danish databeskyttelseslov.** StatsTid holds employees' working time, absence and sick days, and
+      sickness is health data under Article 9. Expect a DPIA (a data protection impact assessment), retention and
+      erasure rules, data-subject access, and the audit log's own privacy footprint.
+    - **Rigsarkivet** (the national archives). State authorities must notify an IT system before it is put into use,
+      under circular 9290 of 2013 (<https://rigsarkivet.dk/wp-content/uploads/2024/09/Vejledning-til-cirkulaere-nr-9290.pdf>).
+      A system judged worth preserving must be able to deliver an archiving version under executive order 128/2020.
+      That is an export capability the system may need.
+    - **Web accessibility:** the Danish webtilgængelighedslov (WCAG 2.1 AA via EN 301 549, plus a published
+      accessibility statement). The existing **Accessibility (WCAG)** item under "Usability / accessibility" becomes
+      one row of this register.
+    - **Authentication through Statens SSO** (OIOSAML; the existing item under "Security & access control"), and the
+      payroll interface's requirements toward Statens Lønsystem.
+    - **For the scoping to judge:** the fællesoffentlige arkitekturprincipper (the joint public architecture
+      principles); ISO 22301 (business continuity); and anything a customer authority adds in its contract.
+  - **A proposed systematic approach** (for the refinement, not decided):
+    1. **A conformance register:** `docs/operations/compliance-register.md`, built like the SEC and QUAL registers.
+       - **One row per requirement source,** then one row per clause or control that applies.
+       - **Each row records:** who it binds (the software, the operating authority, or the hosting); the requirement
+         in plain language; status (met, partly met, gap, or not applicable, with the reason); evidence (code, tests,
+         docs, CI); owner; and a revisit trigger, such as a new version of the standard or law.
+       - **Same semantics as the other registers:** "revisit, not shield".
+    2. **Scoping first.** Decide, per source, which clauses fall on the software and which on the organisation. Most
+       ISO 27001 and minimumskrav controls are organisational, and the register should not pretend the software can
+       meet them alone.
+    3. **Research with an independent verifier,** as the S65–S67 and S146 dossiers were done, for each source's
+       current text and applicability. A **qualified expert's review** is needed before any conformance claim, as
+       with the Phase B agreement experts. Requirements and laws change, so every citation is dated.
+    4. **A gap analysis, mandatory sources first:** ISO 27001 Annex A (the software's share), the relevant
+       minimumskrav, NIS2 § 6, GDPR (the DPIA first), accessibility, and Rigsarkivet. The gaps become register rows,
+       then tasks.
+    5. **Keeping it current:** a review at each entropy scan and before any go-live decision. New features declare
+       which register rows they touch, the way PII and security concerns are declared today. The production hardening
+       pass (§1 item 5) uses the register as its checklist.
+  - **Open questions for the owner:**
+    - **The order:** start with the scoping and the register skeleton, or with one mandatory source end to end (ISO
+      27001 or GDPR/DPIA)?
+    - **When:** relative to S147's planned start and the .NET upgrade above.
 - **★ A thorough governance review: is the process getting bloated?** (owner, 2026-10-01: *"I have a
   feeling our governance is getting bloated. We need to do a thorough review."*). A follow-up, raised during
   S145 planning. Evidence measured the day it was raised, so the review starts from numbers, not from the feeling:
