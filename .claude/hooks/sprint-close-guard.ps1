@@ -237,6 +237,9 @@ foreach ($artifact in @($codex, $reviewer)) {
     # `reviewed-by-model:` as its first line and REFUSES on the wrong model — this is the
     # fourth layer, at close: a sprint cannot close on a review that ran cheap. Applies to the
     # reviewer artifact only (the Codex artifact is the external lens; no Claude model).
+    # The one owner-authorized exception is the narrow SPRINT-<N>-review-floor-WAIVED.md (S146,
+    # owner decision 2026-10-26), checked outside this block ("Review-floor waiver" above); it
+    # lifts this check alone.
     if ($artifact -eq $reviewer -and -not $reviewFloorWaived) {
         $reviewFloor = 'claude-fable-5-1'
         if ($content -notmatch '(?im)^\s*reviewed-by-model\s*:\s*(\S+)') {
