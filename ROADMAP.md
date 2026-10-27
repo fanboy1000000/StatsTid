@@ -423,6 +423,18 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   months are ambiguous by construction — record that, do not guess), and the screen's missing 403 branch on
   resolve. Nothing is at risk meanwhile: the screen still refuses the verb.
 
+- **Notify the manager to give a leaver's final month its last approval** (owner-raised 2026-10-27, with the
+  S147 OQ-2 ruling). From S147, a leaver's own manager can still approve their final month for 5 days after the
+  last working day; after that only HR can (QUAL-230). Nothing tells the manager that window is open or about to
+  close: StatsTid sends no notifications of any kind today (the tender analysis, EM A15 / VD 22,
+  `docs/references/tender-requirements-analysis.md`). **Proposed shape:**
+  - a notification to the manager when the leaver's final month is ready, asking for the final confirmation;
+  - a reminder before the grace period ends;
+  - after it, the month is on HR's leaver list (HRP-011, `docs/operations/hr-follow-up-process-register.md`).
+
+  It needs a notification capability that does not exist yet, so it belongs with the HR register's escalation gap
+  ("nothing escalates it") rather than as a one-off mail.
+
 ### Usability / accessibility
 
 - **Backdate worklist: a "show resolved rows" toggle** (S144 Step-0b ruling R7, 2026-09-29). From S144 every resolution records the block set that was in force when the claim was made (event `BlockedBy`, row `resolution_blocked_by`, GET `resolutionBlockedBy`) — but the screen lists open rows only and re-fetches after each resolve, so HR never sees a resolved row and the display of that audit fact was cut as unreachable UI. The honest way to surface it is a toggle that lists resolved rows too (a query flag the API already accepts, `BackdateWorklistEndpoints.cs:71` defaults to open). Small UX task; source: `.claude/plans/PLAN-s144.md` R7.
