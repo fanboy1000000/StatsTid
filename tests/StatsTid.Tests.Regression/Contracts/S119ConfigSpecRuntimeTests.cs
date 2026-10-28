@@ -158,7 +158,7 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
     /// <summary>The 2-member rows off the hard-coded <c>AbsenceTypeLabels</c> dict. The
     /// binder-required-but-dead <c>agreementCode</c>/<c>okVersion</c> query params are SENT
     /// (the spec documents them required non-nullable — the Docker test honors the documented
-    /// contract). With no visibility overrides all 10 dict entries serve; SICK_DAY/Sygedag is
+    /// contract). With no visibility overrides all 11 dict entries serve (S147 T2 (QUAL-235): was 10, SPECIAL_HOLIDAY_ALLOWANCE joined the shared label map); SICK_DAY/Sygedag is
     /// value-pinned. EMPLOYEE-driven.</summary>
     [Fact]
     public async Task AbsenceTypes_Get200_BinderRequiredQueryParamsSent_TwoMemberRows()
@@ -171,7 +171,7 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
             "/api/config/{orgId}/absence-types", "get");
 
         var rows = JsonDocument.Parse(body).RootElement;
-        Assert.Equal(10, rows.GetArrayLength()); // the full C# dict — no overrides on the fresh S119 org
+        Assert.Equal(11, rows.GetArrayLength()); // S147 T2 (QUAL-235): was 10 — the shared label map gained SPECIAL_HOLIDAY_ALLOWANCE. The full C# dict — no overrides on the fresh S119 org
         foreach (var row in rows.EnumerateArray())
             S118ContractAssert.AssertExactKeySet(row, AbsenceTypeKeys, "absence-type row");
         var sick = FindByType(rows, "SICK_DAY");
@@ -196,7 +196,7 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
 
     /// <summary>The LocalAdmin visibility toggle: matcher + the EXACT 3-member echo
     /// (<c>orgId</c>/<c>absenceType</c>/<c>isHidden</c>), then the NON-VACUOUS flip — the
-    /// hidden type disappears from the subsequent absence-types GET (9 of 10 rows), proving
+    /// hidden type disappears from the subsequent absence-types GET (10 of 11 rows; S147 T2 (QUAL-235): was 9 of 10), proving
     /// the write landed rather than a constant echo.</summary>
     [Fact]
     public async Task Visibility_Post200_ThreeMemberEcho_AndTheAbsenceTypesFilterFlips()
@@ -215,14 +215,14 @@ public sealed class S119ConfigSpecRuntimeTests : IAsyncLifetime
         Assert.Equal("LEAVE_WITHOUT_PAY", root.GetProperty("absenceType").GetString());
         Assert.True(root.GetProperty("isHidden").GetBoolean());
 
-        // The flip: the hidden type is filtered from the read (9 of the 10 dict entries).
+        // The flip: the hidden type is filtered from the read (S147 T2 (QUAL-235): 10 of the 11 dict entries; was 9 of 10).
         var after = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
             _spec, admin,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Get,
                 $"/api/config/{AbsenceOrg}/absence-types?agreementCode=AC&okVersion=OK24"),
             "/api/config/{orgId}/absence-types", "get");
         var rows = JsonDocument.Parse(after).RootElement;
-        Assert.Equal(9, rows.GetArrayLength());
+        Assert.Equal(10, rows.GetArrayLength()); // S147 T2 (QUAL-235): was 9
         Assert.DoesNotContain(rows.EnumerateArray(),
             r => string.Equals(r.GetProperty("type").GetString(), "LEAVE_WITHOUT_PAY", StringComparison.Ordinal));
     }
