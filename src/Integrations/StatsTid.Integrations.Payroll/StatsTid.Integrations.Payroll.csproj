@@ -11,4 +11,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- S147 TASK-14700: the Unit project reaches FlexLedgerOpening's internal link-count seam
+       (AC-229-5, "each link evaluated once"), as SharedKernel and Infrastructure already allow.
+       Orchestrator ruling on the implementer's brief challenge 1. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="StatsTid.Tests.Unit" />
+  </ItemGroup>
+
 </Project>
