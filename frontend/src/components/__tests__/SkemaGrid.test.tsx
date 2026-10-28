@@ -102,14 +102,14 @@ describe('SkemaGrid — structure', () => {
     expect(headerCells[32].textContent).toBe('Sum')
   })
 
-  it('renders the handoff row order: Diff → Registrér arbejdstid → divider → Projekter band → project rows → Ferie og fravær band → absence rows → I alt', () => {
+  it('renders the handoff row order: Diff → Reg. Arbejdstid → divider → Projekter band → project rows → Ferie og fravær band → absence rows → I alt', () => {
     const { container } = renderGrid()
     const trs = Array.from(container.querySelectorAll('tbody tr'))
     expect(trs.length).toBe(9)
     expect(trs[0].className).toContain('diffRow')
     expect(trs[0].querySelector('td')?.textContent).toBe('Diff. fra normtid')
     expect(trs[1].className).toContain('workRow')
-    expect(trs[1].querySelector('td')?.textContent).toBe('Registrér arbejdstid')
+    expect(trs[1].querySelector('td')?.textContent).toBe('Reg. Arbejdstid')
     expect(trs[2].className).toContain('dividerRow')
     expect(trs[2].textContent).toBe('') // no label, no gap — a pure rule
     expect(trs[3].className).toContain('bandRow')
@@ -134,7 +134,7 @@ describe('SkemaGrid — structure', () => {
     expect(screen.queryByText(/Tilføj periode/)).toBeNull()
     expect(screen.queryByText(/Tilføj timer/)).toBeNull()
     // Without onOpenDay the work row has no click targets.
-    const workRow = rowByLabel(container, 'Registrér arbejdstid')
+    const workRow = rowByLabel(container, 'Reg. Arbejdstid')
     expect(workRow.querySelectorAll('button').length).toBe(0)
     // The legacy-supplied work time still feeds the arithmetic: 4h + 2h worked,
     // nothing allocated → under-allocated remainder "6,0" on Mar 2.
@@ -236,7 +236,7 @@ describe('SkemaGrid — visibility-independence (R3 pins)', () => {
     // Diff: worked 7,4 + absence 0 − norm 7,4 = 0,0
     expect(dayCell(rowByLabel(container, 'Diff. fra normtid'), 2).textContent).toBe('0,0')
     // Remainder: 7,4 − (4,4 + 1,0) = 2,0 — over ALL served project rows
-    expect(dayCell(rowByLabel(container, 'Registrér arbejdstid'), 2).textContent).toBe('2,0')
+    expect(dayCell(rowByLabel(container, 'Reg. Arbejdstid'), 2).textContent).toBe('2,0')
     // I alt: 5,4 over ALL served cells
     const totalRow = rowByLabel(container, 'I alt')
     expect(dayCell(totalRow, 2).textContent).toBe('5,4')
@@ -322,7 +322,7 @@ describe('SkemaGrid — visibility-independence (R3 pins)', () => {
   })
 })
 
-describe('SkemaGrid — Registrér arbejdstid (interactive row)', () => {
+describe('SkemaGrid — Reg. Arbejdstid (interactive row)', () => {
   it('classifies ✓ / amber / over at the gate tolerance (R5: 2dp rounding, |Δ| < 0,005)', () => {
     const { container } = renderGrid({
       manualHours: new Map([
@@ -337,7 +337,7 @@ describe('SkemaGrid — Registrér arbejdstid (interactive row)', () => {
       ]),
       onOpenDay: vi.fn(),
     })
-    const workRow = rowByLabel(container, 'Registrér arbejdstid')
+    const workRow = rowByLabel(container, 'Reg. Arbejdstid')
 
     const balanced = dayCell(workRow, 2).querySelector('button') as HTMLElement
     expect(balanced.textContent).toBe('✓')
@@ -351,9 +351,12 @@ describe('SkemaGrid — Registrér arbejdstid (interactive row)', () => {
     expect(over.textContent).toBe('+1,0')
     expect(over.className).toContain('workOver')
 
-    // A day with no work and no allocation renders empty (still clickable).
+    // A day with no work and no allocation shows only the decorative "+" add hint (still clickable).
     const empty = dayCell(workRow, 5).querySelector('button') as HTMLElement
-    expect(empty.textContent).toBe('')
+    expect(empty.textContent).toBe('+')
+    const hint = empty.querySelector('span') as HTMLElement
+    expect(hint.className).toContain('addHint')
+    expect(hint.getAttribute('aria-hidden')).toBe('true')
   })
 
   it('fires onOpenDay with the dateKey when a day cell is clicked', () => {
@@ -401,7 +404,7 @@ describe('SkemaGrid — Registrér arbejdstid (interactive row)', () => {
       ]),
       onOpenDay: vi.fn(),
     })
-    const total = sumCell(rowByLabel(container, 'Registrér arbejdstid'))
+    const total = sumCell(rowByLabel(container, 'Reg. Arbejdstid'))
     expect(total.textContent).toBe('3,0')
     expect((total.querySelector('span') as HTMLElement).className).toContain('workUnder')
   })
@@ -448,7 +451,7 @@ describe('SkemaGrid — weekend band + today (R8)', () => {
   it('applies the weekend class to the interactive/project/absence rows ONLY — Diff and I alt stay grey', () => {
     const { container } = renderGrid({ onOpenDay: vi.fn() })
     // Mar 1 2026 is a Sunday → td index 1.
-    expect(dayCell(rowByLabel(container, 'Registrér arbejdstid'), 1).className).toContain('weekend')
+    expect(dayCell(rowByLabel(container, 'Reg. Arbejdstid'), 1).className).toContain('weekend')
     expect(dayCell(rowByLabel(container, 'Drift'), 1).className).toContain('weekend')
     expect(dayCell(rowByLabel(container, 'Ferie'), 1).className).toContain('weekend')
     expect(dayCell(rowByLabel(container, 'Diff. fra normtid'), 1).className).not.toContain('weekend')

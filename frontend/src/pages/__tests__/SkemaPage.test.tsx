@@ -411,7 +411,7 @@ describe('SkemaPage — page chrome (handoff §1)', () => {
     expect(screen.queryByText('Fordeling af arbejdstid')).toBeNull()
     // Grid + footer
     expect(gridRow(container, 'Diff. fra normtid')).toBeInTheDocument()
-    expect(gridRow(container, 'Registrér arbejdstid')).toBeInTheDocument()
+    expect(gridRow(container, 'Reg. Arbejdstid')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Godkend måned' })).toBeInTheDocument()
   })
 
@@ -701,7 +701,7 @@ describe('SkemaPage — R3 visibility-independence end-to-end', () => {
     const diffBefore = lastCell(gridRow(container, 'Diff. fra normtid')).textContent
     const totalBefore = lastCell(gridRow(container, 'I alt')).textContent
     expect(totalBefore).toBe('20,6')
-    expect(dayCell(gridRow(container, 'Registrér arbejdstid'), 2).textContent).toBe('✓')
+    expect(dayCell(gridRow(container, 'Reg. Arbejdstid'), 2).textContent).toBe('✓')
 
     // Hide Drift (it carries 7,4 h on Mar 2) via the modal flow
     fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
@@ -728,7 +728,7 @@ describe('SkemaPage — R3 visibility-independence end-to-end', () => {
     // asserted against the SETTLED server-truth state, not the optimistic frame
     expect(lastCell(gridRow(container, 'Diff. fra normtid')).textContent).toBe(diffBefore)
     expect(lastCell(gridRow(container, 'I alt')).textContent).toBe(totalBefore)
-    expect(dayCell(gridRow(container, 'Registrér arbejdstid'), 2).textContent).toBe('✓')
+    expect(dayCell(gridRow(container, 'Reg. Arbejdstid'), 2).textContent).toBe('✓')
     expect(screen.getByText('1 skjulte rækker har timer i denne måned')).toBeInTheDocument()
 
     // Close the modal, then the employee-approve gate's 422 surface still renders
@@ -762,7 +762,7 @@ describe('SkemaPage — R3 visibility-independence end-to-end', () => {
     // I alt spans it: 20,6 + 4 = 24,6
     expect(lastCell(gridRow(container, 'I alt')).textContent).toBe('24,6')
     // The work row sees its allocation on Mar 5 (worked 0, allocated 4 → over)
-    expect(dayCell(gridRow(container, 'Registrér arbejdstid'), 5).textContent).toBe('+4,0')
+    expect(dayCell(gridRow(container, 'Reg. Arbejdstid'), 5).textContent).toBe('+4,0')
     // Diff: Mar 5 now has a registration → 0 + 0 − 7,4 = −7,4; total −1,6 − 7,4 = −9,0
     expect(lastCell(gridRow(container, 'Diff. fra normtid')).textContent).toBe('-9,0')
     // …and the Flex card reconciles (R2 — the same single computation)
@@ -900,7 +900,7 @@ describe('SkemaPage — R5 locked months', () => {
     // readOnly grid: no editable inputs anywhere on the page
     expect(container.querySelectorAll('input').length).toBe(0)
     // the interactive row renders as DATA — no panel triggers
-    expect(gridRowOrNull(container, 'Registrér arbejdstid')).toBeNull()
+    expect(gridRowOrNull(container, 'Reg. Arbejdstid')).toBeNull()
     const workRow = gridRow(container, 'Arbejdstid')
     expect(workRow.querySelectorAll('button').length).toBe(0)
     expect(screen.queryByRole('dialog')).toBeNull()
