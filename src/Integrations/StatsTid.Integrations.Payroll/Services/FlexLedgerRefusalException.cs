@@ -15,7 +15,7 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
-/// <b>The three kinds.</b>
+/// <b>The four kinds.</b>
 /// <list type="bullet">
 /// <item><see cref="ExportOutOfOrder"/> (<c>payroll-export-out-of-order</c>) — admission: a month with no
 /// export record that precedes the ledger start S; <see cref="Month"/> is S (R-14 case 3a).</item>
@@ -25,6 +25,12 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <item><see cref="LedgerChanged"/> (<c>payroll-ledger-changed</c>) — the under-lock recheck inside the
 /// writing transaction derived a different opening, or a refusal, than the calculation used; nothing was
 /// written and the caller should retry. <see cref="Month"/> is the month whose write was refused.</item>
+/// <item><see cref="PriorMonthStale"/> (<c>payroll-prior-month-stale</c>) — S147 TASK-14700 (QUAL-229, R-2):
+/// admission's walk over the employee's recorded chain found a month X after the ledger start and up to P whose
+/// recorded opening no longer follows from its predecessor (a later correction, or an employment-dates edit, made
+/// it stale), or whose own re-derivation refuses; <see cref="Month"/> is the EARLIEST such X, the month to
+/// recalculate first. Raised on both calculating routes; the under-lock recheck reports a chain that went stale
+/// while the month was being computed as <see cref="LedgerChanged"/>, and the retry then names the month.</item>
 /// </list>
 /// The host maps every kind to a 409 <c>{ success:false, error, kind, month }</c>: <c>error</c> is the fixed
 /// <see cref="ErrorSentence"/> (no employee id, no date, no digit), <c>month</c> the named month as
@@ -43,6 +49,12 @@ public sealed class FlexLedgerRefusalException : Exception
     /// <summary>R-14 "the under-lock recheck": the ledger changed between the calculation and the write.</summary>
     public const string LedgerChanged = "payroll-ledger-changed";
 
+    /// <summary>
+    /// S147 R-2: a recorded month X after the ledger start and up to P is out of date with its predecessor, or its
+    /// re-derivation refuses. Names the earliest such X: recalculate it first.
+    /// </summary>
+    public const string PriorMonthStale = "payroll-prior-month-stale";
+
     /// <summary>The <c>yyyy-MM</c> form the host's 409 body carries in <c>month</c>.</summary>
     public const string MonthFormat = "yyyy-MM";
 
@@ -59,7 +71,7 @@ public sealed class FlexLedgerRefusalException : Exception
     /// <summary>The refusal's discriminator, one of the constants on this type.</summary>
     public string Kind { get; }
 
-    /// <summary>The first day of the month the refusal names (S, P, or the month whose write was refused).</summary>
+    /// <summary>The first day of the month the refusal names (S, P, the earliest stale month, or the month whose write was refused).</summary>
     public DateOnly Month { get; }
 
     /// <summary>The named month as the host's 409 body carries it (<c>yyyy-MM</c>).</summary>
