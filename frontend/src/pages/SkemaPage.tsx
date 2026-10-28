@@ -83,6 +83,7 @@ import styles from './SkemaPage.module.css'
 const DANISH_ABSENCE_LABELS: Record<string, string> = {
   VACATION: 'Ferie',
   SPECIAL_HOLIDAY: 'Særlige feriedage',
+  SPECIAL_HOLIDAY_ALLOWANCE: 'Særlige feriedage',
   CARE_DAY: 'Omsorgsdage',
   CHILD_SICK: 'Barns sygedag',
   SENIOR_DAY: 'Seniordage',

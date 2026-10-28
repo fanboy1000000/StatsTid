@@ -94,6 +94,7 @@ const summary = {
   overtimeBalance: null,
 }
 
+let saveReject: { status: number; body: unknown } | null = null
 let saveBodies: Array<{ absences: { date: string; absenceType: string; hours: number }[] | null }>
 
 function json(body: unknown) {
@@ -102,6 +103,7 @@ function json(body: unknown) {
 
 beforeEach(() => {
   saveBodies = []
+  saveReject = null
   mockFetch.mockReset()
   mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url.includes('/api/skema/emp001/month')) return json(monthData)
@@ -111,6 +113,10 @@ beforeEach(() => {
     }
     if (url.includes('/api/skema/emp001/save') && (init?.method ?? 'GET') === 'POST') {
       saveBodies.push(JSON.parse(String(init?.body)))
+      if (saveReject) {
+        const rej = saveReject
+        return { ok: false, status: rej.status, headers: new Headers(), json: async () => rej.body, text: async () => JSON.stringify(rej.body) }
+      }
       return json({})
     }
     return json({})
@@ -149,5 +155,30 @@ describe('SkemaPage — AC-235-6: the served SPECIAL_HOLIDAY_ALLOWANCE row (B, b
     expect(saveBodies[0].absences).toEqual([
       { date: '2026-03-05', absenceType: 'SPECIAL_HOLIDAY_ALLOWANCE', hours: 7.4 },
     ])
+  })
+
+  // S147 TASK-14702 fix-up - F, fails on today's code: DANISH_ABSENCE_LABELS had no
+  // SPECIAL_HOLIDAY_ALLOWANCE key, so the quota alert fell back to the raw code.
+  // Red conditions (observed before the fix): AssertionError: expected 'Du har overskredet din kvote for SPEC…' to contain 'Særlige feriedage'; received "Du har overskredet din kvote for SPECIAL_HOLIDAY_ALLOWANCE. Du har 0,0 dage tilbage, ...". Breaks again if the label key is removed.
+  it('names the absence type "Særlige feriedage" (not the raw code) in a served quota error', async () => {
+    saveReject = { status: 422, body: { absenceType: 'SPECIAL_HOLIDAY_ALLOWANCE', remaining: 0, requested: 1 } }
+    renderWithCalendar(
+      '2026-03-15',
+      <MemoryRouter initialEntries={['/tid/registrering?year=2026&month=3']}>
+        <SkemaPage />
+      </MemoryRouter>,
+    )
+    await screen.findByText('Drift & support')
+    const input = (await screen.findByLabelText('Særlig feriedag dag 5')) as HTMLInputElement
+    vi.useFakeTimers()
+    fireEvent.change(input, { target: { value: '7,4' } })
+    fireEvent.blur(input)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    const alert = await screen.findByText(/Du har overskredet din kvote for/)
+    expect(alert.textContent).toContain('Særlige feriedage')
+    expect(alert.textContent).not.toContain('SPECIAL_HOLIDAY_ALLOWANCE')
   })
 })
