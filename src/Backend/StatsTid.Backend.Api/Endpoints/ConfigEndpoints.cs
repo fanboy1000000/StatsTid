@@ -507,8 +507,12 @@ public static class ConfigEndpoints
                 visibilityEntries.Where(v => v.IsHidden).Select(v => v.AbsenceType),
                 StringComparer.Ordinal);
 
-            // Filter absence types by visibility
-            var absenceTypes = AbsenceTypeLabels
+            // Filter absence types by visibility.
+            // S147 / TASK-14701 (QUAL-235) — the list is the ONE shared label map (the private copy
+            // that lived here is gone), so every labelled code, særlige feriedage
+            // (SPECIAL_HOLIDAY_ALLOWANCE) included, is listed for the org to hide or show. Served
+            // in the map's display order.
+            var absenceTypes = StatsTid.Backend.Api.Services.AbsenceTypeLabels.InDisplayOrder
                 .Where(kv => !hiddenTypes.Contains(kv.Key))
                 .Select(kv => new AbsenceTypeResponse(Type: kv.Key, Label: kv.Value))
                 .ToList();
@@ -611,21 +615,6 @@ public static class ConfigEndpoints
     /// </summary>
     private static object? MapProfileResponse(LocalAgreementProfile? profile) =>
         profile is null ? null : MapProfile(profile);
-
-    // ── Danish absence type labels ──
-    private static readonly Dictionary<string, string> AbsenceTypeLabels = new(StringComparer.Ordinal)
-    {
-        ["SICK_DAY"] = "Sygedag",
-        ["VACATION"] = "Ferie",
-        ["CARE_DAY"] = "Omsorgsdag",
-        ["CHILD_SICK_DAY"] = "Barns 1. sygedag",
-        ["CHILD_SICK_DAY_2"] = "Barns 2. sygedag",
-        ["CHILD_SICK_DAY_3"] = "Barns 3. sygedag",
-        ["PARENTAL_LEAVE"] = "Barsel",
-        ["SENIOR_DAY"] = "Seniordag",
-        ["LEAVE_WITH_PAY"] = "Tjenestefri m. løn",
-        ["LEAVE_WITHOUT_PAY"] = "Tjenestefri u. løn"
-    };
 
     // ── Request DTOs (co-located) ──
 

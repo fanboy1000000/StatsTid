@@ -18,24 +18,22 @@ namespace StatsTid.Backend.Api.Endpoints;
 public static class SkemaEndpoints
 {
     // ── Danish absence type labels ──
-    private static readonly Dictionary<string, string> AbsenceTypeLabels = new(StringComparer.Ordinal)
-    {
-        ["SICK_DAY"] = "Sygedag",
-        ["VACATION"] = "Ferie",
-        ["CARE_DAY"] = "Omsorgsdag",
-        ["CHILD_SICK_DAY"] = "Barns 1. sygedag",
-        ["CHILD_SICK_DAY_2"] = "Barns 2. sygedag",
-        ["CHILD_SICK_DAY_3"] = "Barns 3. sygedag",
-        ["PARENTAL_LEAVE"] = "Barsel",
-        ["SENIOR_DAY"] = "Seniordag",
-        ["LEAVE_WITH_PAY"] = "Tjenestefri m. l\u00f8n",
-        ["LEAVE_WITHOUT_PAY"] = "Tjenestefri u. l\u00f8n"
-    };
+    // S147 / TASK-14701 (QUAL-235) — the private copy of the label table is gone: Skema and the
+    // admin visibility list (ConfigEndpoints) read the ONE shared map in
+    // Services/AbsenceTypeLabels.cs, so a code labelled there is labelled on every absence-type
+    // surface. This local alias keeps the call sites below unchanged (the same alias shape as
+    // AbsenceToEntitlementType further down).
+    private static readonly IReadOnlyDictionary<string, string> AbsenceTypeLabels =
+        StatsTid.Backend.Api.Services.AbsenceTypeLabels.ByCode;
 
     // ── Base absence types common to all agreements ──
+    // S147 / TASK-14701 (QUAL-235): SPECIAL_HOLIDAY_ALLOWANCE (særlige feriedage) joins the base
+    // list, beside VACATION. It is listed for every agreement, but ComputeAbsenceCatalogAsync
+    // serves it only where a SPECIAL_HOLIDAY entitlement config resolves at the catalogue anchor
+    // (gate (c) there), so the row exists exactly where the agreement grants the days.
     private static readonly string[] BaseAbsenceTypes =
     [
-        "SICK_DAY", "VACATION", "CARE_DAY", "CHILD_SICK_DAY",
+        "SICK_DAY", "VACATION", "SPECIAL_HOLIDAY_ALLOWANCE", "CARE_DAY", "CHILD_SICK_DAY",
         "PARENTAL_LEAVE", "SENIOR_DAY", "LEAVE_WITH_PAY", "LEAVE_WITHOUT_PAY"
     ];
 
@@ -2537,6 +2535,10 @@ public static class SkemaEndpoints
     ///     S59 / Step-7a BLOCKER 2: the SENIOR_DAY config is resolved AS-OF the anchor (not
     ///     the live/open row) so min_age and the age computation share the same anchor
     ///     (determinism, P4 / ADR-020).</item>
+    ///   <item><b>(c) SPECIAL_HOLIDAY (S147 / TASK-14701, QUAL-235):</b> the særlige-feriedage
+    ///     row (<c>SPECIAL_HOLIDAY_ALLOWANCE</c>) is served only when a <c>SPECIAL_HOLIDAY</c>
+    ///     entitlement config resolves for the agreement at the anchor (dated read, OK version
+    ///     resolved from the anchor). Org visibility hides it like any other type.</item>
     /// </list>
     /// </summary>
     private static async Task<List<AbsenceCatalogEntry>> ComputeAbsenceCatalogAsync(
@@ -2566,6 +2568,18 @@ public static class SkemaEndpoints
         var seniorVisible = seniorMinAge is null // no age gate configured ⇒ unrestricted
             || (user.BirthDate is { } dob && AgeAsOf(dob, anchor) >= seniorMinAge.Value);
 
+        // (c) SPECIAL_HOLIDAY — S147 / TASK-14701 (QUAL-235): særlige feriedage are served only
+        //     where the employee's agreement configures them. Same dated repository read as gate
+        //     (b) (GetByTypeAtAsync at the catalogue anchor), with the OK version IN FORCE at the
+        //     anchor (OkVersionResolver.ResolveVersion(anchor)) — the S73 H2 convention the served
+        //     fullDayOnly flag below and the save path's consumption reads use — so the row is
+        //     offered exactly where a save would be valued against a config. No dated row ⇒ not
+        //     served (fail-closed). The resolved row also seeds the served fullDayOnly flag below:
+        //     one read, so the gate and the flag can never come from two different rows.
+        var specialHolidayConfig = await entitlementConfigRepo.GetByTypeAtAsync(
+            "SPECIAL_HOLIDAY", agreementCode, OkVersionResolver.ResolveVersion(anchor), anchor, ct);
+        var specialHolidayConfigured = specialHolidayConfig is not null;
+
         // Agreement → visibility → eligibility, in the established order.
         var agreementAbsenceTypes = GetAbsenceTypesForAgreement(agreementCode);
         var filteredTypes = agreementAbsenceTypes
@@ -2573,6 +2587,8 @@ public static class SkemaEndpoints
             .Where(t => childSickEligible
                 || !string.Equals(GetEntitlementType(t), "CHILD_SICK", StringComparison.Ordinal))
             .Where(t => seniorVisible || !string.Equals(t, "SENIOR_DAY", StringComparison.Ordinal))
+            .Where(t => specialHolidayConfigured
+                || !string.Equals(GetEntitlementType(t), "SPECIAL_HOLIDAY", StringComparison.Ordinal))
             .ToList();
 
         // ── S73 / TASK-7301 (R3) — the served fullDayOnly flag, per entitlement type ──
@@ -2590,6 +2606,12 @@ public static class SkemaEndpoints
         // read above, whose user.OkVersion anchor is pre-existing S59 behavior and out of this
         // fix's scope) so every served fullDayOnly value shares this one OK-version convention.
         var fullDayOnlyByEntitlementType = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        // S147 / TASK-14701 — SPECIAL_HOLIDAY IS pre-seeded (unlike SENIOR_DAY): gate (c) above
+        // made exactly the read this loop would make (same type, agreement, anchor-resolved OK
+        // version and anchor), so its row's flag is reused rather than read a second time.
+        if (specialHolidayConfig is not null)
+            fullDayOnlyByEntitlementType["SPECIAL_HOLIDAY"] = specialHolidayConfig.FullDayOnly;
 
         var catalog = new List<AbsenceCatalogEntry>(filteredTypes.Count);
         foreach (var t in filteredTypes)
