@@ -374,6 +374,38 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   (sites 1–5, 7, 8 opted in). Phase-B-adjacent domain question. [S137 refinement scope cut]
 - **Demo-seed write-free rerun** — the loader-evidence arm is written but unobserved (no container
   runtime on the dev machine). [S128 FU-C]
+- **Absence day rules — one kind of absence per day, and absence never pushes a day past its norm (owner
+  rulings 2026-10-28; QUAL-230).** Raised in owner UI testing of the Skema "Ferie og fravær" band. Nothing
+  today stops two kinds of absence on one day, and the server's norm limit can be bypassed (QUAL-230).
+  Owner rulings:
+  1. **One absence type per day.** No two different kinds of absence on the same day (e.g. not Ferie and
+     Sygdom). Part-day absence stays allowed.
+  2. **A second absence type is refused with a warning at the cell**, e.g. "Der er allerede registreret Ferie
+     denne dag — fjern den først". It never silently replaces the first.
+  3. **Work and absence may share a day, but together never exceed the day's norm.** 4 t arbejde + 3,4 t
+     sygdom on a 7,4 t day is fine; 4 + 7,4 is not. A day with no absence keeps today's rules (work alone
+     has its 24 t cap, so overtime and flex are unaffected).
+  4. **Too much absence falls back to the maximum as you type**, with a short note at the cell ("Højst 3,4 t
+     denne dag"), instead of being refused and jumping back to the old value.
+  Scheduling: backlog, not the next sprint (owner, 2026-10-28). What building it involves:
+  - QUAL-230 first. The server checks only the cells in one save while the grid saves cell by cell, so any
+    day rule checked the same way is just as easy to get around. Rules 1 to 3 must judge the day's
+    *resulting* state (stored rows plus the posted ones, absence and work time), read inside the
+    per-employee lock. The grid copy of the rules is for instant feedback only.
+  - It needs **Clearing a Skema cell** (Usability, below): rule 2's warning asks the user to remove the first
+    absence, which cannot be done today.
+  - The grid copy of the rules needs a test comparing it with the server's, over every pair of types
+    (same-type pairs and work+absence included), per the S125 mirror lesson.
+  - Rule 4 must apply while typing, not when the user leaves the cell. The grid autosaves after 1 s, so a
+    check on leaving the cell would come after the too-large value was already sent (the S123 lesson).
+  - To confirm when refined: (a) adding *work* to a day already full of absence: proposed to be refused the
+    same way as ruling 2; (b) rule 3 means a day with any absence never earns flex (6 t arbejde + 2,4 t ferie
+    is refused), so check it against the S147 overtime/flex model (ADR-043) before building; (c) zero-norm
+    days (weekends) keep today's behaviour unless ruled otherwise; (d) existing violating days are not
+    migrated: three on `admin01` in the local demo DB, none created by the demo seed. Users fix them by
+    clearing a cell.
+  [owner UI testing 2026-10-28; working notes in `.claude/refinements/REFINEMENT-absence-day-rules.md`
+  (gitignored, so this entry carries the rulings)]
 
 ### HR operations — the follow-up processes (owner-raised 2026-09-03)
 
@@ -430,6 +462,8 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   the norm rule would emit a 0-hour `NORMAL_HOURS` line (`NormCheckRule.cs:179-186`). Full-day-only absence
   types also need their clear rule stated. S145's storage design leaves room for this. A small UX + backend
   task; source: the S145 refinement, ruling R24.
+  **Now also needed by the absence day rules** (Correctness / domain, owner 2026-10-28): their warning
+  asks the user to remove the first absence, which this item makes possible.
   When it is designed, two items from S145's Step 5a review of TASK-14507 come with it:
   - the team overview's "away today" filter (`ApprovalEndpoints.cs:1003`) gets its pin, since a retraction is the first change that can make it matter;
   - QUAL-196 is revisited: a missing balance row is seeded at `used = 0`.
