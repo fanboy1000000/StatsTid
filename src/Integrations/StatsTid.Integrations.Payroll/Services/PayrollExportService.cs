@@ -391,14 +391,42 @@ public sealed class PayrollExportService
     /// <c>status='APPROVED'</c>. The held row lock blocks a concurrent reopen's status flip from
     /// committing until this export tx commits, closing the export↔reopen TOCTOU window. A period
     /// that is missing or not APPROVED at this point aborts the whole export tx.
+    ///
+    /// <para><b>S147 / TASK-14704 (SEC-053, owner ruling OQ-1 = (a)) — the payroll checkpoint of
+    /// four-eyes.</b> Payroll is where an approval turns into money, so it re-checks the two
+    /// segregation-of-duties rules on the locked row rather than trusting that every path that wrote
+    /// <c>APPROVED</c> enforced them: the approver (<c>approved_by</c>) must be neither the month's
+    /// sender (<c>employee_approved_by</c>, else the legacy <c>submitted_by</c> — the same expression the
+    /// Backend's approve guard and transactional predicate use) nor the employee (SEC-009). Either
+    /// match throws the existing conflict (→ 409), which rolls the whole export back. A month with no
+    /// sender stamp passes the sender half; a null value never matches anything.</para>
     /// </summary>
     private static async Task AssertPeriodApprovedForUpdateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, Guid periodId, ExportGroupKey key, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
-            "SELECT status FROM approval_periods WHERE period_id = @periodId FOR UPDATE", conn, tx);
+            """
+            SELECT status, approved_by, COALESCE(employee_approved_by, submitted_by) AS sender, employee_id
+              FROM approval_periods
+             WHERE period_id = @periodId
+               FOR UPDATE
+            """, conn, tx);
         cmd.Parameters.AddWithValue("periodId", periodId);
-        var status = (string?)await cmd.ExecuteScalarAsync(ct);
+
+        string? status = null;
+        string? approvedBy = null;
+        string? sender = null;
+        string? employeeId = null;
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            if (await reader.ReadAsync(ct))
+            {
+                status = reader.GetString(0);
+                approvedBy = reader.IsDBNull(1) ? null : reader.GetString(1);
+                sender = reader.IsDBNull(2) ? null : reader.GetString(2);
+                employeeId = reader.GetString(3);
+            }
+        }
 
         if (status is null)
         {
@@ -410,6 +438,20 @@ public sealed class PayrollExportService
             throw new PayrollExportConflictException(
                 $"Approval period '{periodId}' is '{status}', not APPROVED, at export time; payroll export aborted.");
         }
+        if (SameActor(approvedBy, sender))
+        {
+            throw new PayrollExportConflictException(
+                $"Approval period '{periodId}' was approved by the person who sent it (four-eyes); payroll export aborted.");
+        }
+        if (SameActor(approvedBy, employeeId))
+        {
+            throw new PayrollExportConflictException(
+                $"Approval period '{periodId}' was approved by its own employee (segregation of duties); payroll export aborted.");
+        }
+
+        // Ordinal, and a null or empty id never matches (the Backend guards' rule).
+        static bool SameActor(string? a, string? b) =>
+            !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b) && string.Equals(a, b, StringComparison.Ordinal);
     }
 
     /// <summary>

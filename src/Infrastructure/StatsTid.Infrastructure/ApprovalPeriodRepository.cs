@@ -1852,6 +1852,16 @@ public sealed class ApprovalPeriodRepository
     /// This MUST be the FIRST mutation in the action tx so a <c>null</c> (0-row) result short-circuits
     /// with NO FallbackTraversalWarning enqueue, NO audit row, and NO action outbox event written.
     /// </para>
+    ///
+    /// <para>
+    /// <b>S147 / TASK-14704 (SEC-053) — four-eyes on the manager signatures.</b> When
+    /// <paramref name="status"/> is <c>APPROVED</c> or <c>REJECTED</c> the statement also refuses a row
+    /// whose sender (<c>COALESCE(employee_approved_by, submitted_by)</c>) is <paramref name="actorId"/>,
+    /// so <c>null</c> then means "source state moved" OR "the actor sent this month". In that form the
+    /// row stays locked to the end of the transaction even when refused, so the caller tells the two
+    /// apart by re-reading the row in the same transaction. Every other target status keeps the
+    /// statement it had.
+    /// </para>
     /// </summary>
     public async Task<string?> TryUpdateStatusConditionalAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,
@@ -1864,7 +1874,8 @@ public sealed class ApprovalPeriodRepository
             conn, tx, periodId, status, actorId, rejectionReason, designatedApproverId, approvalMethod,
             allowedSourceStates);
         // The conditional form RETURNs the captured pre-update status (BLOCKER 1). A NULL/absent scalar
-        // means 0 rows matched the allowed source set → the caller returns a clean 409.
+        // means 0 rows matched the allowed source set → the caller returns a clean 409 (for APPROVED /
+        // REJECTED: or the four-eyes predicate refused the row — the caller re-reads to tell which).
         var result = await cmd.ExecuteScalarAsync(ct);
         return result is string s ? s : null;
     }
@@ -1892,30 +1903,73 @@ public sealed class ApprovalPeriodRepository
             _ => throw new ArgumentException($"Invalid status: {status}")
         };
 
-        string sql;
-        if (conditional)
+        NpgsqlCommand cmd;
+        if (conditional && (status is "APPROVED" or "REJECTED"))
         {
-            // BLOCKER 1: snapshot the pre-update status in-statement (FOR UPDATE row-locks it before SET
-            // applies) and RETURN it. The outer WHERE re-guards the same period AND the allowed source
-            // set, so a row already moved out of the allowed states matches 0 rows → no scalar returned →
-            // the caller treats null as the 409 loser. `status = ANY(@allowedSourceStates)` is a bound
-            // parameter (the set is data, not interpolated SQL).
-            sql = $"""
-                UPDATE approval_periods AS t
-                SET {setClause}
-                FROM (SELECT status AS old_status FROM approval_periods WHERE period_id = @periodId FOR UPDATE) AS prev
-                WHERE t.period_id = @periodId AND t.status = ANY(@allowedSourceStates)
-                RETURNING prev.old_status
+            // S147 / TASK-14704 (SEC-053, owner ruling OQ-1 = (a): strict four-eyes) — the two MANAGER
+            // SIGNATURES (approve, reject) additionally refuse a row whose SENDER is the actor:
+            // `COALESCE(t.employee_approved_by, t.submitted_by) IS DISTINCT FROM @actorId`, the same
+            // expression ApprovalSenderGuard mirrors at the endpoint. It is evaluated on the row the
+            // UPDATE actually writes (under READ COMMITTED a concurrently-changed row is re-checked on
+            // its newest version before the write), so a month reopened and re-sent by this actor
+            // between the endpoint's early check and this statement is refused here and never updated.
+            //
+            // The shape differs from the plain conditional form below in one respect, for the caller's
+            // sake: the status snapshot is a MATERIALIZED CTE the outer SELECT always reads, so the row
+            // is locked FOR UPDATE to the end of the transaction EVEN WHEN the UPDATE refuses it. (In the
+            // plain form the snapshot sits on one side of a join and is not read when the target row is
+            // filtered out, so a refusal there may take no lock.) The caller (approve / reject) can
+            // therefore re-read the row in the same transaction and tell the four-eyes refusal (403)
+            // from the source-state loser (409) against exactly the row it was refused on. The returned
+            // scalar keeps its contract: the snapshotted old status when the row was updated, NULL when
+            // it was refused for either reason, no row at all when the period does not exist.
+            //
+            // Its own command construction rather than a third value of the shared `sql` below:
+            // CA2100 (a build error here) proves a command text constant by tracking the set of
+            // literals it can hold, and that set is bounded. The two existing shapes already fill it
+            // (five SET clauses each); a third branch on the same variable overflowed it.
+            var signatureSql = $"""
+                WITH prev AS MATERIALIZED (
+                    SELECT status AS old_status FROM approval_periods WHERE period_id = @periodId FOR UPDATE
+                ), upd AS (
+                    UPDATE approval_periods AS t
+                    SET {setClause}
+                    FROM prev
+                    WHERE t.period_id = @periodId AND t.status = ANY(@allowedSourceStates)
+                      AND COALESCE(t.employee_approved_by, t.submitted_by) IS DISTINCT FROM @actorId
+                    RETURNING prev.old_status
+                )
+                SELECT upd.old_status FROM prev LEFT JOIN upd ON TRUE
                 """;
+            cmd = tx is null ? new NpgsqlCommand(signatureSql, conn) : new NpgsqlCommand(signatureSql, conn, tx);
         }
         else
         {
-            // The UNCONDITIONAL legacy path (submit / employee-approve / sequential reopen) — unchanged
-            // shape, no RETURNING, ExecuteNonQuery by the non-conditional callers.
-            sql = $"UPDATE approval_periods SET {setClause} WHERE period_id = @periodId";
-        }
+            string sql;
+            if (conditional)
+            {
+                // BLOCKER 1: snapshot the pre-update status in-statement (FOR UPDATE row-locks it before
+                // SET applies) and RETURN it. The outer WHERE re-guards the same period AND the allowed
+                // source set, so a row already moved out of the allowed states matches 0 rows → no scalar
+                // returned → the caller treats null as the 409 loser. `status = ANY(@allowedSourceStates)`
+                // is a bound parameter (the set is data, not interpolated SQL).
+                sql = $"""
+                    UPDATE approval_periods AS t
+                    SET {setClause}
+                    FROM (SELECT status AS old_status FROM approval_periods WHERE period_id = @periodId FOR UPDATE) AS prev
+                    WHERE t.period_id = @periodId AND t.status = ANY(@allowedSourceStates)
+                    RETURNING prev.old_status
+                    """;
+            }
+            else
+            {
+                // The UNCONDITIONAL legacy path (submit / employee-approve / sequential reopen) —
+                // unchanged shape, no RETURNING, ExecuteNonQuery by the non-conditional callers.
+                sql = $"UPDATE approval_periods SET {setClause} WHERE period_id = @periodId";
+            }
 
-        var cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
+            cmd = tx is null ? new NpgsqlCommand(sql, conn) : new NpgsqlCommand(sql, conn, tx);
+        }
         cmd.Parameters.AddWithValue("periodId", periodId);
         cmd.Parameters.AddWithValue("actorId", (object?)actorId ?? DBNull.Value);
         if (status == "REJECTED")

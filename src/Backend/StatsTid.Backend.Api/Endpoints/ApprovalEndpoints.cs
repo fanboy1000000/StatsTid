@@ -257,6 +257,24 @@ public static class ApprovalEndpoints
                     statusCode: 403);
             }
 
+            // ── S147 / TASK-14704 (SEC-053, OQ-1 = (a)) — FOUR-EYES: the sender cannot approve ─────────
+            // Whoever sent this month (EmployeeApprovedBy, else the legacy SubmittedBy) may not also
+            // sign it as approved. Same placement as SEC-009's guard and for the same reason: after the
+            // load, BEFORE the status check, so a sender asking about an APPROVED month gets 403, not a
+            // state-revealing 409. SEC-009 runs first, so its matrix (and its reason text) is unchanged
+            // when the employee is also the sender. A structured WARNING; no audit_log row (a denied
+            // action is not a domain event — OQ-2 of S130). The in-transaction predicate below closes
+            // the reopen-and-re-send race this early check cannot see.
+            if (ApprovalSenderGuard.IsSender(actor, period))
+            {
+                logger.LogWarning(
+                    "SEC-053 sender-decision denied: actor {ActorId} sent period {PeriodId} (approve)",
+                    actor.ActorId, periodId);
+                return Results.Json(
+                    new { error = "Access denied", reason = ApprovalSenderGuard.DenialReason },
+                    statusCode: 403);
+            }
+
             // Both SUBMITTED (legacy) and EMPLOYEE_APPROVED (new flow) can be manager-approved
             if (period.Status is not ("SUBMITTED" or "EMPLOYEE_APPROVED"))
                 return Results.Conflict(new { error = $"Cannot approve period with status {period.Status}. Only SUBMITTED or EMPLOYEE_APPROVED periods can be approved." });
@@ -378,7 +396,27 @@ public static class ApprovalEndpoints
                 approvalMethod: approvalMethod,
                 ct: ct);
             if (oldStatus is null)
+            {
+                // S147 / TASK-14704 (SEC-053) — the conditional UPDATE now refuses a row for TWO reasons:
+                // the source state moved (the S78 double-transition loser → 409), or the locked row's
+                // sender IS this actor (the four-eyes predicate → 403). Typically the latter is a month
+                // that was reopened and re-sent by this actor after the early guard above read it. The
+                // statement holds the row lock to the end of this transaction even when it updated
+                // nothing, so this in-transaction re-read sees exactly the row it was refused on; a
+                // sender match is answered as the early guard answers it. Nothing has been written.
+                var refused = await approvalRepo.GetByEmployeeAndPeriodAsync(
+                    conn, tx, period.EmployeeId, period.PeriodStart, period.PeriodEnd, ct);
+                if (refused is not null && ApprovalSenderGuard.IsSender(actor, refused))
+                {
+                    logger.LogWarning(
+                        "SEC-053 sender-decision denied in-transaction: actor {ActorId} sent period {PeriodId} (approve)",
+                        actor.ActorId, periodId);
+                    return Results.Json(
+                        new { error = "Access denied", reason = ApprovalSenderGuard.DenialReason },
+                        statusCode: 403);
+                }
                 return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
+            }
 
             // Emit FallbackTraversalWarning if depth > 3 (ADR-027 D5). AFTER the conditional UPDATE so a
             // 0-row loser writes no warning.
@@ -487,6 +525,19 @@ public static class ApprovalEndpoints
                     statusCode: 403);
             }
 
+            // ── S147 / TASK-14704 (SEC-053, OQ-1 = (a)) — FOUR-EYES: the sender cannot reject ──────────
+            // A reject is the other manager signature on the month, so the same rule as approve: the
+            // sender is refused, after SEC-009's guard and BEFORE the status check (403, never 409).
+            if (ApprovalSenderGuard.IsSender(actor, period))
+            {
+                logger.LogWarning(
+                    "SEC-053 sender-decision denied: actor {ActorId} sent period {PeriodId} (reject)",
+                    actor.ActorId, periodId);
+                return Results.Json(
+                    new { error = "Access denied", reason = ApprovalSenderGuard.DenialReason },
+                    statusCode: 403);
+            }
+
             // Both SUBMITTED (legacy) and EMPLOYEE_APPROVED (new flow) can be rejected
             if (period.Status is not ("SUBMITTED" or "EMPLOYEE_APPROVED"))
                 return Results.Conflict(new { error = $"Cannot reject period with status {period.Status}. Only SUBMITTED or EMPLOYEE_APPROVED periods can be rejected." });
@@ -564,7 +615,23 @@ public static class ApprovalEndpoints
                 approvalMethod: approvalMethod,
                 ct: ct);
             if (oldStatus is null)
+            {
+                // S147 / TASK-14704 (SEC-053) — tell the four-eyes refusal (403) from the source-state
+                // loser (409) by re-reading the row the conditional statement left locked (same shape
+                // and reasoning as approve). Nothing has been written.
+                var refused = await approvalRepo.GetByEmployeeAndPeriodAsync(
+                    conn, tx, period.EmployeeId, period.PeriodStart, period.PeriodEnd, ct);
+                if (refused is not null && ApprovalSenderGuard.IsSender(actor, refused))
+                {
+                    logger.LogWarning(
+                        "SEC-053 sender-decision denied in-transaction: actor {ActorId} sent period {PeriodId} (reject)",
+                        actor.ActorId, periodId);
+                    return Results.Json(
+                        new { error = "Access denied", reason = ApprovalSenderGuard.DenialReason },
+                        statusCode: 403);
+                }
                 return Results.Conflict(new { error = "Period status changed concurrently; refresh and retry." });
+            }
 
             // Emit FallbackTraversalWarning if depth > 3 (ADR-027 D5). AFTER the conditional UPDATE.
             if (depth > 3)
