@@ -219,6 +219,9 @@ public class FlexLedgerOpeningTests
         var records = new[]
         {
             Ledger(Mar, 0m, 3m, FlexLedgerOpening.LedgerStart),
+            // S147 R-2 (QUAL-229): April is recorded so the chain March -> April -> May has no missing month; without it
+            // the walk refuses May's link (April is employed but unrecorded). The assertion below is unchanged.
+            Ledger(Apr, 3m, 3m, FlexLedgerOpening.Chained),
             Ledger(May, 3m, 2m, FlexLedgerOpening.Chained),
         };
         var opening = FlexLedgerOpening.Derive(Jun, records, Continuous).Opening!;
@@ -243,6 +246,8 @@ public class FlexLedgerOpeningTests
         var records = new[]
         {
             Ledger(Mar, 0m, 3m, FlexLedgerOpening.LedgerStart),
+            // S147 R-2 (QUAL-229): April is recorded so the chain has no missing month (see the Monday-start fact).
+            Ledger(Apr, 3m, 3m, FlexLedgerOpening.Chained),
             Ledger(May, 3m, 4m, FlexLedgerOpening.Chained),
         };
         var opening = FlexLedgerOpening.Derive(Jun, records, windows).Opening!;
@@ -362,8 +367,16 @@ public class FlexLedgerOpeningTests
 
         // 5a fix-up: a predecessor LEDGER record with an opening but no closing (the schema's CHECK makes it impossible).
         var noClosing = new FlexLedgerRecord(2026, 5, 1m, null, FlexLedgerOpening.Chained);
+        // S147 R-2 (QUAL-229): April is recorded (3 -> 1 CHAINED, consistent with March's closing 3 and with May's opening 1)
+        // so the walk reaches June's own link, which meets May's missing closing and throws; without April the walk refuses
+        // May's link first (a missing month) and returns a refusal instead of throwing.
         Assert.Throws<InvalidOperationException>(() =>
-            FlexLedgerOpening.Derive(Jun, new[] { Ledger(Mar, 0m, 3m, FlexLedgerOpening.LedgerStart), noClosing }, Continuous));
+            FlexLedgerOpening.Derive(Jun, new[]
+            {
+                Ledger(Mar, 0m, 3m, FlexLedgerOpening.LedgerStart),
+                Ledger(Apr, 3m, 1m, FlexLedgerOpening.Chained),
+                noClosing,
+            }, Continuous));
     }
 }
 

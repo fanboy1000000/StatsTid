@@ -874,16 +874,21 @@ public sealed class PeriodCalculationService
 
     /// <summary>
     /// Admission's half of R-14 (C2 "PCS owns the derivation"): the opening of the plan's month M, on SELF-MANAGED
-    /// reads — the employee's export records (<see cref="IFlexLedgerReader.ReadRecordsAsync(string, CancellationToken)"/>)
-    /// and the employment windows over <c>[P.start, M.end]</c>
-    /// (<see cref="IEmploymentWindowResolver.GetWindowsAsync"/>; R-28: the derivation's own read, never the plan's
+    /// reads — the employee's export records (<see cref="IFlexLedgerReader.ReadRecordsAsync(string, CancellationToken)"/>),
+    /// read FIRST, then the employment windows over
+    /// <see cref="FlexLedgerOpening.WindowsReadRange(DateOnly, DateOnly?)"/> with the ledger start S those records give
+    /// (S147 R-13: <c>[min(S, P).start, M.end]</c>, or <c>[P.start, M.end]</c> without an S;
+    /// <see cref="IEmploymentWindowResolver.GetWindowsAsync"/>; R-28: the derivation's own read, never the plan's
     /// <c>[periodStart, periodEnd]</c> histories, which can miss a spell that ended inside P). Returns <c>null</c>
     /// without reading anything when the plan holds no EMPLOYED segment (the function's precondition: no flex is
     /// settled and no record is written). Without a window resolver the windows are <c>null</c> and every day is
-    /// EMPLOYED (R-37), so the chain needs only P's ledger record. A refusal throws
-    /// <see cref="FlexLedgerRefusalException"/>; a missing reader throws <see cref="InvalidOperationException"/>
-    /// (<see cref="RequireFlexLedgerReader"/>). M is the calendar month of the period start, the month the export
-    /// record is keyed by.
+    /// EMPLOYED (R-37). <see cref="FlexLedgerOpening.Derive(DateOnly, IReadOnlyList{FlexLedgerRecord}, IReadOnlyList{EmploymentWindow})"/>
+    /// walks the recorded chain from S to P before it derives M (S147 TASK-14700, R-2), so this is where both
+    /// calculating routes, and every re-run or correction of a later month, refuse a month whose chain is stale. A
+    /// refusal throws <see cref="FlexLedgerRefusalException"/> (<c>payroll-export-out-of-order</c>,
+    /// <c>payroll-prior-month-not-recorded</c> or <c>payroll-prior-month-stale</c>) before any rule call; a missing
+    /// reader throws <see cref="InvalidOperationException"/> (<see cref="RequireFlexLedgerReader"/>). M is the
+    /// calendar month of the period start, the month the export record is keyed by.
     /// </summary>
     private async Task<FlexOpening?> DeriveFlexOpeningAtAdmissionAsync(PlannedCalculation plan, CancellationToken ct)
     {
@@ -899,7 +904,8 @@ public sealed class PeriodCalculationService
         IReadOnlyList<EmploymentWindow>? windows = null;
         if (_employmentWindowResolver is not null)
         {
-            var (from, to) = FlexLedgerOpening.WindowsReadRange(month);
+            // S147 R-13: the range takes S from the records just read, so the walk can test every month from S to P.
+            var (from, to) = FlexLedgerOpening.WindowsReadRange(month, FlexLedgerOpening.LedgerStartOf(records));
             windows = await _employmentWindowResolver.GetWindowsAsync(plan.EmployeeId, from, to, ct);
         }
 
@@ -910,14 +916,19 @@ public sealed class PeriodCalculationService
     /// S146 / TASK-14605 (R-14 "the under-lock recheck"; R-36) — the writing transaction's half: the SAME function
     /// re-run inside the caller's <paramref name="conn"/> + <paramref name="tx"/>, which must already hold the
     /// employee's ledger lock (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>, the first
-    /// statement of every writer). Records through the reader's in-transaction surface; windows through
+    /// statement of every writer). Records through the reader's in-transaction surface, read FIRST; windows through
     /// <see cref="IEmploymentWindowResolverInTx.GetWindowsAsync(NpgsqlConnection, NpgsqlTransaction, string, DateOnly, DateOnly, CancellationToken)"/>
-    /// over the same <c>[P.start, M.end]</c> (null on both reads when no window resolver is wired, R-37).
+    /// over the same helper as admission, <see cref="FlexLedgerOpening.WindowsReadRange(DateOnly, DateOnly?)"/> with the
+    /// S of the in-transaction records (S147 R-13; null on both reads when no window resolver is wired, R-37).
     ///
     /// <para>
     /// The write proceeds only when the function returns no refusal and the same (opening, provenance) pair as
     /// <paramref name="used"/>, the pair the calculation ran on; otherwise this throws
     /// <see cref="FlexLedgerRefusalException"/> <c>payroll-ledger-changed</c> and the caller's transaction rolls back.
+    /// The function walks the recorded chain from S to P here too (S147 R-2), so a correction of an earlier month that
+    /// commits between admission and this recheck, making a month before M stale, is caught here as
+    /// <c>payroll-ledger-changed</c> (the diagnostic names the inner <c>payroll-prior-month-stale</c>); the caller's
+    /// retry then refuses at admission with <c>payroll-prior-month-stale</c>, naming the month to recalculate (R-8).
     /// A correction compares against ITS OWN calculation's pair, never M's recorded values: the point of a
     /// correction is that M's recorded opening may be stale. With provenance in the compare, two concurrent first
     /// exports of consecutive months that both computed <c>LEDGER_START 0</c> cannot both be written: the later
@@ -955,7 +966,8 @@ public sealed class PeriodCalculationService
                     "the EmploymentWindowResolver singleton in src/Integrations/StatsTid.Integrations.Payroll/Program.cs " +
                     "(beside IEmploymentWindowResolver), and pass it as the employmentWindowResolverInTx constructor " +
                     "argument (or use a window resolver that implements both surfaces).");
-            var (from, to) = FlexLedgerOpening.WindowsReadRange(monthStart);
+            // S147 R-13: the same helper as admission, with S from the in-transaction records read above.
+            var (from, to) = FlexLedgerOpening.WindowsReadRange(monthStart, FlexLedgerOpening.LedgerStartOf(records));
             windows = await inTx.GetWindowsAsync(conn, tx, employeeId, from, to, ct);
         }
 

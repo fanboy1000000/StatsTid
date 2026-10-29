@@ -28,8 +28,9 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
-/// <b>The function</b> (precondition: M holds an EMPLOYED day of E — otherwise no flex is settled, no record is
-/// written and the function is not called; a replay never calls it, R42):
+/// <b>The link</b> (<see cref="DeriveLink"/>; precondition: M holds an EMPLOYED day of E — otherwise no flex is
+/// settled, no record is written and the function is not called; a replay never calls it, R42). It reads only M's
+/// record, P's record, S and the windows, and never walks:
 /// <code>
 /// 1. M ∈ Ledger and Ledger[M].provenance = LEDGER_START → (Ledger[M].opening, LEDGER_START)
 /// 2. Ledger is empty                                    → (0, LEDGER_START)
@@ -48,12 +49,49 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </para>
 ///
 /// <para>
+/// <b>The walk</b> (<see cref="Derive(DateOnly, IReadOnlyList{FlexLedgerRecord}, IReadOnlyList{EmploymentWindow})"/>;
+/// S147 TASK-14700, QUAL-229, rulings R-2 with R-11 … R-14). The month index
+/// is built once. When M is after S, X walks ascending over S &lt; X ≤ P, and for every X that holds an EMPLOYED day
+/// and has a ledger record, the link of X is compared with X's recorded (opening, provenance):
+/// <code>
+/// the earliest X whose link differs from its record → REFUSE payroll-prior-month-stale, naming X
+/// the earliest X whose link itself refuses          → REFUSE payroll-prior-month-stale, naming X
+///                                                      (the inner kind in the diagnostic, never in the body)
+/// otherwise                                         → the link of M
+/// </code>
+/// Each link is evaluated once, so the walk is O(n) over the in-memory index (n = months since S). The walk always
+/// starts at S, even when M's own stretch of employment would open at REHIRE 0 (R-12). S itself is never re-derived
+/// (case 1). A month with no EMPLOYED day keeps the triple it was paid at and is not compared, because a correction
+/// of it derives nothing and so could never repair it; its successor is compared, re-derives REHIRE 0 against a
+/// recorded CHAINED, and is named (R-14, R-26). A month with no ledger record (never exported, or exported raw) has no
+/// recorded pair to compare; a hole of that kind shows up as the refusing link of the next ledger month (case 4b
+/// inside it), or, when it is P itself, as M's own case-4b refusal, exactly as before.
+/// </para>
+///
+/// <para>
+/// <b>The guarantee</b> (R-12). At every export and every correction, every recorded month of this employee is
+/// consistent with its predecessor: its recorded opening is what its predecessor's record gives today (S needs no
+/// predecessor; a month with no employed day keeps what it was paid at). So no month is ever opened on a closing
+/// that a later correction made stale, however far back the correction was.
+/// </para>
+///
+/// <para>
+/// <b>The repair sequence.</b> A correction of month X can change X's closing (or remove X's last employed day),
+/// which makes X+1's recorded opening stale; the correction names X+1 (HRP-003). Until X+1 is recalculated, every
+/// export or correction of a later month is refused with <c>payroll-prior-month-stale</c>, naming the EARLIEST stale
+/// month. The administrator recalculates that month through <c>/recalculate</c>: its correction re-derives the
+/// opening from the now-current predecessor and records it. The next attempt names the next stale month, if any,
+/// and so on up to P; then M is paid. A recalculation of the named month never refuses itself on this rule: every
+/// month before it is consistent, which is why it was the earliest. (When a month is named because its own link
+/// refuses — its predecessor is employed but has no ledger record, a hole an employment-dates edit can open — its
+/// recalculation answers that case-4b refusal instead, naming the predecessor to export or correct first.)
+/// </para>
+///
+/// <para>
 /// <b>Consequences, stated rather than rediscovered</b> (C2). Within a stretch of consecutive employed months,
 /// months are paid in order from the ledger start; a stretch that begins after a month with no employed day
-/// starts at 0 (REHIRE). A leaving month left unrecorded does not block a rehire month, because the chain reads
-/// only P. A broken link is NOT detected: after a correction changes M's closing, M+1 is named, but M+2 can still
-/// be exported for the first time from M+1's stale closing, because 4a reads only P (reviewer c3 N5; a
-/// <c>P.opening ≠ (P−1).closing</c> check is a plan option, not built).
+/// starts at 0 (REHIRE). A leaving month left unrecorded does not block a rehire month: it has no record, so the
+/// walk does not compare it, and the rehire month's own link reads only its own P, which holds no employed day.
 /// </para>
 /// </summary>
 public static class FlexLedgerOpening
@@ -82,15 +120,56 @@ public static class FlexLedgerOpening
     public const string FlexPayoutTimeType = "FLEX_PAYOUT";
 
     /// <summary>
-    /// R-28 / R-36: the range the derivation reads the employment windows over, at admission and in the
-    /// recheck alike: <c>[P.start, M.end]</c>, i.e. the first day of the previous month to the last day of
-    /// this month. Never the calculation's own <c>[periodStart, periodEnd]</c> read, which scopes the windows to
-    /// spells overlapping the period and so can miss a spell that ended inside P.
+    /// R-28 / R-36, widened by S147 R-13: the ONE range the derivation reads the employment windows over, at
+    /// admission and in the recheck alike. With a ledger start S (<paramref name="ledgerStart"/>, taken from the
+    /// records the caller already holds, <see cref="LedgerStartOf"/>) it is <c>[min(S, P).start, M.end]</c>, so the
+    /// walk can test <see cref="EmployedIn"/> for every month from S to P; without one (an empty ledger, or
+    /// <c>null</c>) it is today's <c>[P.start, M.end]</c>, the first day of the previous month to the last day of this
+    /// month. When M is after S the range starts at S; otherwise (M ≤ S) it is the same as without one. Never the
+    /// calculation's own <c>[periodStart, periodEnd]</c> read, which scopes the windows to spells overlapping the
+    /// period and so can miss a spell that ended inside P. Both callers read the records first and pass S through
+    /// this one helper, so their two reads cannot drift apart.
     /// </summary>
-    public static (DateOnly From, DateOnly To) WindowsReadRange(DateOnly month)
+    public static (DateOnly From, DateOnly To) WindowsReadRange(DateOnly month, DateOnly? ledgerStart = null)
     {
         var m = MonthStart(month);
-        return (m.AddMonths(-1), m.AddMonths(1).AddDays(-1));
+        var p = m.AddMonths(-1);
+        var from = ledgerStart is { } s && MonthStart(s) < p ? MonthStart(s) : p;
+        return (from, m.AddMonths(1).AddDays(-1));
+    }
+
+    /// <summary>
+    /// S147 R-13: the ledger start S the records give — the earliest month holding a ledger record (one with an
+    /// opening) — or <c>null</c> when there is none (raw records do not count, as in case 2). The callers pass it to
+    /// <see cref="WindowsReadRange"/>; it is the same S <see cref="BuildIndex"/> computes.
+    /// </summary>
+    public static DateOnly? LedgerStartOf(IReadOnlyList<FlexLedgerRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        return EarliestLedgerMonth(records);
+    }
+
+    /// <summary>
+    /// S147 R-11: the month index <see cref="DeriveLink"/> reads: the records keyed by month, with S computed once.
+    /// Throws <see cref="InvalidOperationException"/> on two records for one month (the table's UNIQUE key makes that
+    /// impossible, so the input is not a read of it).
+    /// </summary>
+    public static FlexLedgerIndex BuildIndex(IReadOnlyList<FlexLedgerRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+
+        var byMonth = new Dictionary<DateOnly, FlexLedgerRecord>(records.Count);
+        foreach (var record in records)
+        {
+            if (!byMonth.TryAdd(record.MonthStart, record))
+            {
+                throw new InvalidOperationException(
+                    $"FlexLedgerOpening.BuildIndex: two export records for {Format(record.MonthStart)}; the table's UNIQUE " +
+                    "(employee_id, year, month) key makes that impossible, so the input is not a read of it.");
+            }
+        }
+
+        return new FlexLedgerIndex(byMonth, EarliestLedgerMonth(byMonth.Values));
     }
 
     /// <summary>
@@ -117,39 +196,118 @@ public static class FlexLedgerOpening
     }
 
     /// <summary>
-    /// The function (see the type's doc). <paramref name="month"/> may be any day of M; <paramref name="records"/>
-    /// are ALL of the employee's export records, ledger and raw alike (at most one per month: the table's UNIQUE
-    /// key); <paramref name="windows"/> are the employee's employment windows read over
-    /// <see cref="WindowsReadRange"/> (<c>null</c> when no window resolver is wired). Returns the opening, or a
-    /// refusal. Throws <see cref="InvalidOperationException"/> only on input that the schema makes impossible
-    /// (two records for one month; a ledger record without a closing; a ledger-start month that is not
-    /// <see cref="LedgerStart"/>).
+    /// The function (see the type's doc): the walk, then the link of M. <paramref name="month"/> may be any day of M;
+    /// <paramref name="records"/> are ALL of the employee's export records, ledger and raw alike (at most one per
+    /// month: the table's UNIQUE key); <paramref name="windows"/> are the employee's employment windows read over
+    /// <see cref="WindowsReadRange(DateOnly, DateOnly?)"/> with the S of these records (<c>null</c> when no window
+    /// resolver is wired). Returns the opening, or a refusal: the link's own (3a, 4b) or the walk's
+    /// <see cref="FlexLedgerRefusalException.PriorMonthStale"/>. Throws <see cref="InvalidOperationException"/> only on
+    /// input that the schema makes impossible (two records for one month; a ledger record without a closing; a
+    /// ledger-start month that is not <see cref="LedgerStart"/>).
     /// </summary>
     public static FlexLedgerDecision Derive(
         DateOnly month,
         IReadOnlyList<FlexLedgerRecord> records,
-        IReadOnlyList<EmploymentWindow>? windows)
+        IReadOnlyList<EmploymentWindow>? windows) =>
+        Derive(month, records, windows, onLinkEvaluated: null);
+
+    /// <summary>
+    /// <see cref="Derive(DateOnly, IReadOnlyList{FlexLedgerRecord}, IReadOnlyList{EmploymentWindow})"/> with a counter
+    /// seam: <paramref name="onLinkEvaluated"/>, when given, is called once with the month of every link evaluation,
+    /// in evaluation order (the walk's months, then M), so a test can observe that each link is evaluated once.
+    /// Internal: it is not part of the public signature, and production passes <c>null</c>.
+    /// </summary>
+    internal static FlexLedgerDecision Derive(
+        DateOnly month,
+        IReadOnlyList<FlexLedgerRecord> records,
+        IReadOnlyList<EmploymentWindow>? windows,
+        Action<DateOnly>? onLinkEvaluated)
     {
         ArgumentNullException.ThrowIfNull(records);
 
+        // The month index, built once (R-11): every link below reads it, none rebuilds it.
+        var index = BuildIndex(records);
         var m = MonthStart(month);
-        var p = m.AddMonths(-1);
 
-        var byMonth = new Dictionary<DateOnly, FlexLedgerRecord>(records.Count);
-        foreach (var record in records)
+        // The walk (R-2, R-12): only when M is after S, from S+1 up to P, ascending. S itself is never re-derived
+        // (case 1); an empty ledger (case 2) and M ≤ S (cases 1, 3, and the damaged-ledger throw) have nothing to walk.
+        if (index.LedgerStart is { } s && m > s)
         {
-            if (!byMonth.TryAdd(record.MonthStart, record))
+            var p = m.AddMonths(-1);
+            for (var x = s.AddMonths(1); x <= p; x = x.AddMonths(1))
             {
-                throw new InvalidOperationException(
-                    $"FlexLedgerOpening.Derive: two export records for {Format(record.MonthStart)}; the table's UNIQUE " +
-                    "(employee_id, year, month) key makes that impossible, so the input is not a read of it.");
+                // R-14: a month with no EMPLOYED day keeps the triple it was paid at and is not compared; its successor
+                // is (it re-derives REHIRE 0 against its recorded CHAINED and is named).
+                if (!EmployedIn(x, windows))
+                    continue;
+
+                // A month with no ledger record has no recorded (opening, provenance) to compare. An unrecorded or
+                // raw month before P surfaces as the next ledger month's refusing link (its case 4b); P itself as
+                // M's own case 4b below, exactly as before the walk.
+                if (!index.TryGetRecord(x, out var recordX) || !recordX.IsLedgerRecord)
+                    continue;
+
+                var link = DeriveLinkCore(x, index, windows, onLinkEvaluated);
+
+                // The earliest X whose link itself refuses: named, with the inner kind in the diagnostic only.
+                if (link.Refusal is { } inner)
+                {
+                    return FlexLedgerDecision.Refuse(new FlexLedgerRefusal(
+                        FlexLedgerRefusalException.PriorMonthStale, x, PriorMonthStaleSentence,
+                        $"The month {Format(m)} cannot be opened: the recorded month {Format(x)} no longer follows from " +
+                        $"its predecessor, because re-deriving its opening itself refuses ({inner.Kind}, naming " +
+                        $"{Format(inner.Month)}: {inner.Diagnostic}). {Format(x)} is the earliest such month; recalculate " +
+                        "it first (S147 R-2, the refusing link)."));
+                }
+
+                // The earliest X whose link differs from its record: named.
+                var derived = link.Opening!;
+                if (derived.Balance != recordX.OpeningBalance!.Value
+                    || !string.Equals(derived.Provenance, recordX.Provenance, StringComparison.Ordinal))
+                {
+                    return FlexLedgerDecision.Refuse(new FlexLedgerRefusal(
+                        FlexLedgerRefusalException.PriorMonthStale, x, PriorMonthStaleSentence,
+                        $"The month {Format(m)} cannot be opened: the recorded month {Format(x)} opened at " +
+                        $"{recordX.Provenance ?? "(none)"} {recordX.OpeningBalance.Value.ToString(CultureInfo.InvariantCulture)}, " +
+                        $"but its predecessor's record now gives {derived.Provenance} " +
+                        $"{derived.Balance.ToString(CultureInfo.InvariantCulture)}. {Format(x)} is the earliest stale month; " +
+                        "recalculate it first, then each later month in order (S147 R-2)."));
+                }
             }
         }
 
-        var ledger = byMonth.Values.Where(r => r.IsLedgerRecord).ToList();
+        return DeriveLinkCore(m, index, windows, onLinkEvaluated);
+    }
+
+    /// <summary>
+    /// S147 R-11 — the link: cases 1 … 4c of the type's doc for ONE month X, reading only X's record, X−1's record,
+    /// S (from <paramref name="index"/>) and <paramref name="windows"/>. It never walks, so the walk in
+    /// <see cref="Derive(DateOnly, IReadOnlyList{FlexLedgerRecord}, IReadOnlyList{EmploymentWindow})"/> evaluates each
+    /// link once. For a chain with no earlier month to walk it gives exactly what <c>Derive</c> gives (the S146
+    /// function, unchanged). <paramref name="month"/> may be any day of X. Throws <see cref="InvalidOperationException"/>
+    /// only on input the schema makes impossible (a ledger record of X−1 without a closing; X = S whose record is not
+    /// <see cref="LedgerStart"/>).
+    /// </summary>
+    public static FlexLedgerDecision DeriveLink(
+        DateOnly month,
+        FlexLedgerIndex index,
+        IReadOnlyList<EmploymentWindow>? windows) =>
+        DeriveLinkCore(month, index, windows, onLinkEvaluated: null);
+
+    private static FlexLedgerDecision DeriveLinkCore(
+        DateOnly month,
+        FlexLedgerIndex index,
+        IReadOnlyList<EmploymentWindow>? windows,
+        Action<DateOnly>? onLinkEvaluated)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+
+        var m = MonthStart(month);
+        var p = m.AddMonths(-1);
+        onLinkEvaluated?.Invoke(m);
 
         // 1. M is a ledger-start record: a start is never re-derived (re-run and correction alike).
-        if (byMonth.TryGetValue(m, out var recordM)
+        if (index.TryGetRecord(m, out var recordM)
             && recordM.IsLedgerRecord
             && string.Equals(recordM.Provenance, LedgerStart, StringComparison.Ordinal))
         {
@@ -158,16 +316,14 @@ public static class FlexLedgerOpening
 
         // 2. No ledger record at all: the first month the system pays, whatever month it is. Raw records do not
         //    count, so raw history never dead-ends.
-        if (ledger.Count == 0)
+        if (index.LedgerStart is not { } s)
             return FlexLedgerDecision.Open(new FlexOpening(0m, LedgerStart, m));
-
-        var s = ledger.Min(r => r.MonthStart);
 
         // 3. M precedes the ledger start.
         if (m < s)
         {
             // 3a. No record of M: a first export of a month before the start is out of order.
-            if (!byMonth.ContainsKey(m))
+            if (recordM is null)
             {
                 return FlexLedgerDecision.Refuse(new FlexLedgerRefusal(
                     FlexLedgerRefusalException.ExportOutOfOrder, s, ExportOutOfOrderSentence,
@@ -185,21 +341,21 @@ public static class FlexLedgerOpening
             if (EmployedIn(p, windows))
             {
                 // 4a. P is employed and recorded: chain from its closing.
-                if (byMonth.TryGetValue(p, out var recordP) && recordP.IsLedgerRecord)
+                var pHasRecord = index.TryGetRecord(p, out var recordP);
+                if (pHasRecord && recordP!.IsLedgerRecord)
                 {
                     var closing = recordP.ClosingBalance ?? throw new InvalidOperationException(
-                        $"FlexLedgerOpening.Derive: the ledger record of {Format(p)} has an opening but no closing; the " +
+                        $"FlexLedgerOpening.DeriveLink: the ledger record of {Format(p)} has an opening but no closing; the " +
                         "CHECK payroll_export_records_balances_paired makes that impossible.");
                     return FlexLedgerDecision.Open(new FlexOpening(closing, Chained, s));
                 }
 
                 // 4b. P is employed but not a ledger record: refuse, naming P.
-                var pIsRaw = byMonth.ContainsKey(p);
                 return FlexLedgerDecision.Refuse(new FlexLedgerRefusal(
                     FlexLedgerRefusalException.PriorMonthNotRecorded, p,
-                    pIsRaw ? PriorMonthRawSentence : PriorMonthUnrecordedSentence,
+                    pHasRecord ? PriorMonthRawSentence : PriorMonthUnrecordedSentence,
                     $"The month {Format(m)} opens at the recorded closing of {Format(p)}, which was employed but " +
-                    (pIsRaw
+                    (pHasRecord
                         ? "was exported without a flex balance (a raw export record); correct it first (R-14 case 4b)."
                         : "has no export record; export it first (R-14 case 4b).")));
             }
@@ -211,7 +367,7 @@ public static class FlexLedgerOpening
         // M = S, but M's record is not a LEDGER_START ledger record (case 1 did not match). S is the earliest ledger
         // month, and a ledger is only ever started by case 2, so this is a damaged ledger, never a month.
         throw new InvalidOperationException(
-            $"FlexLedgerOpening.Derive: {Format(m)} is the employee's ledger start but its record's provenance is " +
+            $"FlexLedgerOpening.DeriveLink: {Format(m)} is the employee's ledger start but its record's provenance is " +
             $"'{recordM?.Provenance ?? "(none)"}', not {LedgerStart}. The ledger is damaged; nothing is derived from it.");
     }
 
@@ -233,6 +389,17 @@ public static class FlexLedgerOpening
         "named by month, which was exported without a flex balance. Correct that month first; the correction " +
         "records its balance. Nothing was calculated, written or exported.";
 
+    /// <summary>
+    /// S147 TASK-14700 (R-2) — the fixed body sentence of <see cref="FlexLedgerRefusalException.PriorMonthStale"/>, the
+    /// same on the export and the correction route: what is wrong, what to do, and that nothing happened. No employee
+    /// id, no date, no digit; the named month travels in the body's <c>month</c> member.
+    /// </summary>
+    public const string PriorMonthStaleSentence =
+        "This month cannot be calculated: the recorded flex balance of an earlier month, named by month, is out of " +
+        "date, because a month before it was corrected, or the employment dates changed, after it was paid. " +
+        "Recalculate the named month first; the next attempt names the next month to recalculate, if any. Nothing " +
+        "was calculated, written or exported.";
+
     /// <summary>The fixed body sentence of <see cref="FlexLedgerRefusalException.LedgerChanged"/> on the export routes.</summary>
     public const string LedgerChangedExportSentence =
         "The previous month's balance changed; retry. It changed while this month was being calculated, so " +
@@ -251,6 +418,18 @@ public static class FlexLedgerOpening
         $"flex not tracked: the month precedes the ledger start {Format(ledgerStart)}";
 
     internal static DateOnly MonthStart(DateOnly day) => new(day.Year, day.Month, 1);
+
+    /// <summary>S: the earliest month holding a ledger record, or <c>null</c> (the one definition both S readers use).</summary>
+    private static DateOnly? EarliestLedgerMonth(IEnumerable<FlexLedgerRecord> records)
+    {
+        DateOnly? earliest = null;
+        foreach (var record in records)
+        {
+            if (record.IsLedgerRecord && (earliest is null || record.MonthStart < earliest.Value))
+                earliest = record.MonthStart;
+        }
+        return earliest;
+    }
 
     /// <summary>
     /// R-47: true when [<paramref name="start"/>, <paramref name="end"/>] is exactly one calendar month, the only period a
@@ -286,6 +465,33 @@ public sealed record FlexLedgerRecord(
 
     /// <summary>True when the record carries balances (written or filled by a calculating route).</summary>
     public bool IsLedgerRecord => OpeningBalance is not null;
+}
+
+/// <summary>
+/// S147 / TASK-14700 (QUAL-229; ruling R-11) — the employee's export records keyed by month, with the ledger start
+/// S computed once: what <see cref="FlexLedgerOpening.DeriveLink"/> reads, so that a link never scans the records
+/// and the walk stays O(n). Built only by <see cref="FlexLedgerOpening.BuildIndex"/> (which refuses two records for
+/// one month); immutable.
+/// </summary>
+public sealed class FlexLedgerIndex
+{
+    private readonly IReadOnlyDictionary<DateOnly, FlexLedgerRecord> _byMonth;
+
+    internal FlexLedgerIndex(IReadOnlyDictionary<DateOnly, FlexLedgerRecord> byMonth, DateOnly? ledgerStart)
+    {
+        _byMonth = byMonth;
+        LedgerStart = ledgerStart;
+    }
+
+    /// <summary>S: the first day of the earliest month holding a ledger record, or <c>null</c> when the ledger is empty.</summary>
+    public DateOnly? LedgerStart { get; }
+
+    /// <summary>The number of records (ledger and raw) in the index.</summary>
+    public int Count => _byMonth.Count;
+
+    /// <summary>The record of the month holding <paramref name="month"/> (any day of it), ledger or raw, if any.</summary>
+    public bool TryGetRecord(DateOnly month, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out FlexLedgerRecord? record) =>
+        _byMonth.TryGetValue(FlexLedgerOpening.MonthStart(month), out record);
 }
 
 /// <summary>
