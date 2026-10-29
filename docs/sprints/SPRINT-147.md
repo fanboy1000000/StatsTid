@@ -172,6 +172,13 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
 11. **From the 14703 report and security consult.**
    - The stale comment at `ApprovalPeriodRepository.cs:63-64` ("the Payroll host registers no TimeProvider") is now false.
    - The 403-and-log helper is copied privately into three endpoint files; it could become one helper in `Endpoints/Helpers/`.
+12. **From the 14704 reviews (Fable NOTEs 1–5, Codex NOTEs 2–3).**
+   - A repository-level Docker pin for the SQL predicate's legacy `submitted_by` half (RES-003 item 4's differential pair).
+   - Payroll: pre-screen the sender/approver equalities in the admission read, or give the four-eyes refusal its own `kind` (today it is calculated, then answered as the generic `payroll-export-conflict`).
+   - Mark `ApprovalPeriodRepository.UpdateStatusAsync` test-only in its docstring.
+   - In `PayrollSenderSeparationHostTests.cs`, assert no audit row in `AssertNothingWrittenAsync` (`:244`).
+   - **A follow-up beyond tidy:** Teamoversigt should show the server's reason, in Danish, for both segregation 403s (SEC-009 and SEC-053). Today it says only "Kunne ikke godkende X."
+   - **Demo runbook:** the GLOBAL_ADMIN persona can no longer approve demo months by hand; the HR and Leder personas can.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 

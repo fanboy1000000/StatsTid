@@ -79,7 +79,7 @@
     - `MaxOvertimeHoursPerPeriod` becomes an optional warning over decided hours, in D-8's list, with no default.
     - SYSTEM_TARGET §L is rewritten at acceptance.
     - *Anchor:* § D-4 (D-4.4; D-4.2 item 4).
-14. **D-7.P1, office hours are a clock window per weekday.** The editor warns, but does not refuse, when the five windows do not add up to the full-time week's norm (37 h; the profile's own `weekly_norm_hours` where one is set, Prov. 18); how a part-timer's windows scale is Prov. 14 (D-7.P1 as corrected).
+14. **D-7.P1, office hours are a clock window per weekday.** The editor warns, but does not refuse, when the five windows do not add up to the full-time week's norm (37 h; the profile's own `weekly_norm_hours` where one is set, ADR-043 provisional item 18); how a part-timer's windows scale is ADR-043 provisional item 14 (D-7.P1 as corrected).
     - *Anchor:* § D-7 (D-7.4; D-7.2 item 3), as corrected by `.claude/reviews/S147-ADR-043-adjudication-c1.md` R-5: the windows are set per institution and the fraction is a person's, so the warning compares with the full-time week.
 15. **D-7.P2, the third condition uses PAV's daily form:** only hours after the day's first 7 h 24 min can leave flex.
     - Ordered weekend and søgnehelligdag work is § 14's first, whatever the office hours. The expert confirms this.
@@ -266,7 +266,7 @@
 | **Closes when built** | QUAL-189; QUAL-216 … QUAL-222; QUAL-223 (resolved into QUAL-227, F-7 and F-8); QUAL-226 (D1's one month-norm function); QUAL-227; QUAL-232 and QUAL-202 (D11); QUAL-233 and QUAL-182 (D12); QUAL-234 (D10); QUAL-231's residual and QUAL-237 (D2, stage 0); QUAL-239 (its interim in stage 0; retires with the compensate route, D8). **Answers** QUAL-204: yes, a local profile changes pay (D12). **Designs** QUAL-225, an HR-entered opening flex balance (D6). **Closes in design** SEC-056's creator-not-approver and compensation halves (D3, D8); S147's T9 closes its self part. QUAL-215 is the root cause; its lesson is recorded below |
 | **Domains** | Rule Engine, Payroll Integration, Backend, Data Model, SharedKernel, Frontend, Security, Test |
 | **Tags** | overtime, merarbejde, flex, norm-period, monthly-norm, public-holidays, supplements, compensation, ordered-work, forfeiture, office-hours, customary-days, clock-times, worked-time-classes, local-configuration, staged-build |
-| **Evidence** | `docs/references/overtime-flex-model-research.md` (V1–V12), `docs/references/agreement-cells-reverification-research.md` (C1–C7) and `docs/references/sick-day-credit-and-agreement-texts-research.md` (R1–R5), each verified claim by claim; Part 1 of each governs. The owner's answers, verbatim: `docs/sprints/SPRINT-147.md`, "Owner rulings in force". The adjudications that settled each question's wording and its recorded proposals: `.claude/reviews/S147-D-batch1-adjudication.md`, `S147-D-10-adjudication.md`, `S147-D-batch2-adjudication.md`, `S147-D-batch3-adjudication.md`. Code citations verified at `fdb52d48` (S146) and re-verified at `c4eb6184` (S147) |
+| **Evidence** | `docs/references/overtime-flex-model-research.md` (V1–V12), `docs/references/agreement-cells-reverification-research.md` (C1–C7) and `docs/references/sick-day-credit-and-agreement-texts-research.md` (R1–R5), each verified claim by claim; Part 1 of each governs. The owner's answers, verbatim: `docs/sprints/SPRINT-147.md`, "Owner rulings in force". The adjudications that settled each question's wording and its recorded proposals: `.claude/reviews/S147-D-batch1-adjudication.md`, `S147-D-10-adjudication.md`, `S147-D-batch2-adjudication.md`, `S147-D-batch3-adjudication.md`. Code citations verified at `fdb52d48` (S146); the other citations re-verified at `c4eb6184` (S147), and the citations added in review cycle 1 at `a522865f` |
 
 *How to read the labels.* **Dn** (no hyphen) is a decision of this ADR. **D-n** (with a hyphen) is one of S147's twelve decide-track questions, and **F-n** one of the nine forks this ADR left open in S146. The two series are different: D-10 is the part-timer question, D10 the clock-times decision. **V-n, C-n and R1–R5** are verified findings in the three dossiers above. **R-1 … R-7** and **D-4.P1 … D-12.P9** are the adjudicator's recorded proposals: told to the owner in the question's prose, not asked. **R-A … R-E** are research still owed.
 
@@ -856,7 +856,10 @@ are proposals, and the new core gets a new name rather than a version of the wee
   central caps and the live demo caps land with stage 1), the office-hours windows, the paid-absence credit basis with
   the AC label, the customary-days table and its editor; the two HR-recorded facts, flex membership and the overtime
   regime, with one HR editor (the build input's placement; S148's refinement confirms); demo profile rows, seeded with
-  their cap values (37 h, as SDU and DTU), which have no pay effect until stage 1; and demo customs.
+  their cap values (37 h, as SDU and DTU), which have no pay effect until stage 1; and demo customs. The demo caps are
+  seeded into D6's new typed plus-cap column; the legacy `max_flex_balance` column stays null, so the resolver
+  (`ConfigResolutionService.cs:237-239`) keeps forwarding today's central cap to the weekly core until stage 1 maps the
+  new column; the editor shows the seeded values.
 - *Marker:* the arithmetic is unchanged but the replay contract changes, since configs are frozen rather than
   fingerprinted; proposed: move the marker, so that a manifest written before the stage is refused by name. S148's
   refinement confirms this, or names the refusal that does the same job.
@@ -888,8 +891,8 @@ are proposals, and the new core gets a new name rather than a version of the wee
 
 **Stage 3.**
 - *Lands:* D5's AC claims (the claim record, the quarterly reminder, the standby condition, the regime gate, the
-  decision-month movement, earnings into D8's ledger (after research cell R-B; the claim record, reminder and regime
-  gate may land first)), the AC part-timer check, and AC's time-off deadline once R-B is answered.
+  earnings into D8's ledger (with the decision-month movement, after research cell R-B; the claim record, reminder and
+  regime gate may land first)), the AC part-timer check, and AC's time-off deadline once R-B is answered.
 - *Marker:* `monthly-norm-v3`.
 - *Named interim limits:* none of the model's own, except items S148's refinement places later.
 
@@ -1165,6 +1168,11 @@ each institution's configuration.
   - Notes: postponements are the leaders' (N1); the send gate's tense (N2); "will open" on `weekly-timeline-v2` (N3);
     D-9's two declined options (N4); a backdated "applies from" date (N5); how a placement is confirmed afterwards (N6);
     the regime's placement marked as the build input's (N9).
+  - The citations this cycle added were verified at `a522865f` (`ApprovalEndpoints.cs:2230`,
+    `OvertimeEndpoints.cs:567-583`, `WorkTimeProjectionRepository.cs:29-32`, `:93-101`, with `init.sql:2525-2532`,
+    `agreement-cells-reverification-research.md:190`, `:589`, `docs/ARCHITECTURE.md:61`, `:86`, `:150`, `:195-196`
+    and `.claude/plans/s147/decide/D-04-marking-workflow.md:86`); so was cycle 2's one addition,
+    `ConfigResolutionService.cs:237-239` (the config stage's demo caps).
 
 <!-- ===== End of the amended ADR-043 text ===== -->
 
@@ -1204,3 +1212,8 @@ each institution's configuration.
   - stage 3's "Lands" marks the earnings into D8's ledger "after research cell R-B; the claim record, reminder and regime gate may land first" (R-1);
   - the config stage's "Lands" says the demo profile rows are seeded with their cap values, which have no pay effect until stage 1 (R-6). The build input's C-12 and S1-7 now say the same (its draft 2.1).
   - The batch-3 historical record of R-B ("Blocks: stage 3 only") is left as it is. The two factual corrections stand, confirmed by the Orchestrator: N2 cites `ApprovalEndpoints.cs:2230`; N4 says "offered to the owner and declined" (`docs/sprints/SPRINT-147.md:12`).
+- **WC-2.2 (2026-10-29).** `planner` (Opus 5.5), at `a522865f`, on the Orchestrator's rulings on the cycle-2 internal review (`.claude/reviews/S147-ADR-043-reviewer-c2.md`, READY-TO-ACCEPT; Codex cycle 2 CLEAN). Consequential fixes following R-6 and citation corrections, no new ruling:
+  - **WARNING 1, option (a):** the config stage's "Lands" says how the demo caps have no pay effect until stage 1: they are seeded into D6's new typed plus-cap column, the legacy `max_flex_balance` stays null, and the resolver (`ConfigResolutionService.cs:237-239`, verified at `a522865f`) keeps forwarding today's central cap until stage 1 maps the new column. The build input's C-12 and S1-7 say the same; the stage's pin stays the confirmation.
+  - **NOTE 1:** stage 3's "Lands" puts the decision-month movement inside the R-B parenthetical, with the earnings, matching S3-3.
+  - **NOTE 2:** the Evidence row names `a522865f` for the cycle-1 citations; the cycle-1 revision entry lists them; the build input's S0-9 cites both guarded updates (`OvertimeBalanceRepository.cs:76-99`, `:106-129`).
+  - **NOTE 3:** item 14 writes "ADR-043 provisional item 18" and "ADR-043 provisional item 14".
