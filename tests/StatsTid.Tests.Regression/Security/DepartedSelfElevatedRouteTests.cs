@@ -1149,6 +1149,8 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
     //  Helpers: SQL
     // ═════════════════════════════════════════════════════════════════════════════════════
 
+    // CA2100 suppression: every caller passes a string LITERAL (test seed or read); values go through parameters.
+#pragma warning disable CA2100
     private async Task<int> ExecAsync(string sql, params (string Name, object? Value)[] ps)
     {
         await using var conn = new NpgsqlConnection(Cs);
@@ -1169,6 +1171,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         var result = await cmd.ExecuteScalarAsync();
         return result is DBNull ? null : result;
     }
+#pragma warning restore CA2100
 
     private async Task<long> CountAsync(string sql, params (string Name, object? Value)[] ps) =>
         Convert.ToInt64(await ScalarAsync(sql, ps));
