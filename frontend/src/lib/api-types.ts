@@ -7596,6 +7596,7 @@ export interface components {
             success: boolean;
             violations: components["schemas"]["StatsTid.SharedKernel.Models.ComplianceViolation"][];
             warnings: components["schemas"]["StatsTid.SharedKernel.Models.ComplianceViolation"][];
+            restNotCheckedDays: string[];
         };
         /**
          * Format: int32
