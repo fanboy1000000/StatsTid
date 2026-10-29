@@ -149,6 +149,14 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
    - `:246-248` names `SkemaMonthlyAccrualGuardTests`, which does not exist.
 5. **14701-T optional pins (Codex NOTE):** a SPECIAL_HOLIDAY config ending mid-month, and the April 2026 OK-transition month.
 6. **14702 cosmetic:** `.toBeEnabled()` → `.toBeInTheDocument()` (c2 NOTE 2); the F test comment's header says "fix-up" rather than "fix-up 2".
+7. **14709 W1, a wording decision, not a mechanical fix.** The frontend names the five entitlement types in three spellings:
+   - the Skema quota alert's `ENTITLEMENT_LABELS` in `SkemaPage.tsx:88-94`, deliberately plural ("Omsorgsdage");
+   - `entitlementConstants.ts:13-19` `TYPE_LABELS` / `entitlementTypeLabel`, singular ("Omsorgsdag", "Barnets sygedag");
+   - `ArsoversigtPage.tsx:109-119`, a third set.
+
+   One wording per context should be chosen and the tables collapsed. If it is not done in the tidy pass, it becomes a backlog item.
+8. **14709 NOTE 1, a backend fix.** The full-day rule message interpolates `{requiredHours}` under the server's culture (`SkemaEndpoints.cs` ~`:1070`, ~`:2031`). The container has no `LANG`, so a Danish user reads "(7.4 timer)". Format it explicitly as da-DK at the emitters; the Skema alert now shows this sentence.
+9. **14709 NOTE 2, recorded so nobody files it as a regression.** The not-eligible alerts now speak in the third person ("Medarbejderen er ikke berettiget …"), the server's voice. That fits the page's two audiences: the employee and a manager or HR viewing someone else's Skema.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
