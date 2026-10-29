@@ -526,6 +526,17 @@ for "441" or a ceiling found only the dossier.
 
 **Contrary evidence searched for.** I looked for a PROSA ceiling clause (none in 079-25) and for a later HK change (none in 085-25 of 12 May 2025; the OK26 HK organisation agreement had not been reissued in what I found). I also checked whether PAV's narrower "merarbejdsregler" wording reflects a real difference; the circular remark is explicit and governs.
 
+> **Citation correction (S147, 2026-10-29; ADR-043 D-11.5).** 085-25 is superseded. **Medst. 087-25** (14 May 2025, *Cirkulære om organisationsaftale for Kontorfunktionærer, laboranter og It-medarbejdere (HK)*, in effect from 1 April 2024) repeals it two days after it was issued, which is why 085-25 is marked *Historisk*. 087-25 is at https://cirkulaere.medst.dk/media/aprizyyh/087-25.pdf.
+>
+> The provisions this section relies on were re-read in 087-25 and are **word for word identical**:
+> - § 3 stk. 4 (PDF p. 10), the 31 March 2012 level;
+> - § 4 stk. 2 (PDF p. 11), base pay of 441,037 kr. or more, so the chef-pay agreement's §§ 5–6 apply;
+> - the remark to § 4 stk. 2 (p. 11), exemption from overtime and merarbejde pay.
+>
+> So C3's rule, figure, level date and confidence stand, and only the circular number changes. Read "085-25" in this section as "087-25", with the same pages.
+>
+> The check was a `general-purpose` research pass (Sonnet 5.5) that diffed both PDFs' text, rated HIGH. Not confirmed: that nothing supersedes 087-25 through 28 Oct 2026. No later HK circular was found, but MedSt's search page could not be reached. This text is unchanged in ADR-043 F-8's ruling, where D-11 = (b) means the figure is never encoded.
+
 ---
 
 ## C4 — Part-timers' hours above their contracted hours
