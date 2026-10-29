@@ -71,9 +71,12 @@ describe('ComplianceWarnings', () => {
   })
 
   // ── S147 / TASK-14707 (QUAL-234 interim) — AC-234i-1, the screen half ──
-  // Kind N (names the new `restNotCheckedDays` member). Red conditions: before the
-  // component reads the member, the N=2 assertion finds no "Hviletid ikke kontrolleret
-  // for 2 dage" text and fails; the empty/absent pins are boundary pins — hold today.
+  // Kind F for both count facts (the component never reads the member on master's code, so they
+  // FAIL there). Red conditions: 'S147: two not-checked days' fails at
+  // getByText('Hviletid ikke kontrolleret for 2 dage') (no such text rendered);
+  // 'S147: one not-checked day' fails at getByText('Hviletid ikke kontrolleret for 1 dag').
+  // Supporting mutation: making `restNotCheckedNotice` always return null fails exactly these
+  // two facts. The empty/absent pin is kind B (boundary pin — holds today).
 
   it('S147: two not-checked days show "Hviletid ikke kontrolleret for 2 dage" (even with no violations)', () => {
     render(

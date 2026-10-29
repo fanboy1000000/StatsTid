@@ -444,9 +444,12 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     await waitFor(() => expect(screen.getByText(/For kort hviletid den 10\./)).toBeInTheDocument())
   })
 
-  // S147 / TASK-14707 (QUAL-234 interim) — AC-234i-1, the Teamoversigt half. Kind N (names the
-  // new `restNotCheckedDays` member). Red conditions: before the panel reads the member, the
-  // N=2 assertion finds no notice and fails; the empty-list pin is a boundary pin — holds today.
+  // S147 / TASK-14707 (QUAL-234 interim) — AC-234i-1, the Teamoversigt half. The N=2 fact is
+  // kind F (the panel never reads the member on master's code). Red conditions: it fails at
+  // getByText('Hviletid ikke kontrolleret for 2 dage') inside waitFor (no such line rendered).
+  // Supporting mutation: `restNotCheckedNotice` always returning null fails exactly this fact.
+  // The empty-list pin is kind B (boundary pin — holds today), anchored on the compliance read
+  // having landed (the "Advarsel:" line) so it cannot pass vacuously.
   it('S147: two not-checked days → one "Hviletid ikke kontrolleret for 2 dage" line in the panel', async () => {
     const user = userEvent.setup()
     mockRoutes({ compliance: { ...cleanCompliance, restNotCheckedDays: ['2026-03-10', '2026-03-11'] } })
@@ -455,12 +458,18 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     await waitFor(() => expect(screen.getByText('Hviletid ikke kontrolleret for 2 dage')).toBeInTheDocument())
   })
 
-  it('S147 boundary pin — holds today: an empty list shows no notice', async () => {
+  it('S147 boundary pin — holds today: an empty list shows no notice (compliance read landed)', async () => {
     const user = userEvent.setup()
-    mockRoutes({})
+    mockRoutes({
+      compliance: {
+        ...cleanCompliance,
+        warnings: [{ violationType: 0, date: '2026-03-10', actualValue: 9, thresholdValue: 11, severity: 0, isVoluntaryExempt: false, message: 'For kort hviletid den 10.' }],
+        restNotCheckedDays: [],
+      },
+    })
     renderPage()
     await expandFirstRow(user)
-    await waitFor(() => expect(screen.getByText('Overblik')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Advarsel:/)).toBeInTheDocument())
     expect(screen.queryByText(/Hviletid ikke kontrolleret/)).not.toBeInTheDocument()
   })
 
