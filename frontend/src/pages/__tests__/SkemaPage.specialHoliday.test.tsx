@@ -199,13 +199,18 @@ describe('SkemaPage — AC-235-6: the served SPECIAL_HOLIDAY_ALLOWANCE row (B, b
     expect(within(dialog).getByRole('button', { name: 'Tilføj Særlig feriedag' })).toBeEnabled()
   })
 
-  // S147 TASK-14702 fix-up - F, fails on today's code: DANISH_ABSENCE_LABELS had no
-  // SPECIAL_HOLIDAY_ALLOWANCE key, so the full-day / eligibility rule alerts (formatAbsenceRuleError,
-  // which keys on the served `absenceType`) fell back to the raw code. (The QUOTA alert already
-  // resolved, because the server keys it on the entitlement type SPECIAL_HOLIDAY.)
-  // Red conditions: the alert reads "SPECIAL_HOLIDAY_ALLOWANCE skal registreres som en hel dag…"
-  // instead of "Særlige feriedage skal …". Breaks again if the label key is removed.
-  it('names the absence type "Særlige feriedage" (not the raw code) in a served full-day rule error', async () => {
+  // This fact pins the NO-`message` FALLBACK (the served catalogue's label). Today's server never
+  // triggers it: every rule 422 carries a `message`, and this mock deliberately sends none.
+  // History (TASK-14702 fix-up, kind F, fails on that fix-up's pre-fix code): the rule alert fell back
+  // to the raw code SPECIAL_HOLIDAY_ALLOWANCE. (The QUOTA alert already resolved, because the server
+  // keys it on the entitlement type SPECIAL_HOLIDAY.)
+  // S147 QUAL-231 (TASK-14709), kind F: the label map is gone from the rule alerts; with no `message`
+  // the alert names the code by the SERVED CATALOGUE's label ("Særlig feriedag", the name the row
+  // shows). Was: "Særlige feriedage".
+  // Red conditions (QUAL-231): on the pre-change code the alert reads "Særlige feriedage skal
+  // registreres som en hel dag..." (the label map), failing the toContain('Særlig feriedag skal...')
+  // assertion. Also breaks if the fallback stops reading the catalogue (the raw code shows).
+  it('names the absence type by its served catalogue label (not the raw code) in a full-day rule error with no message', async () => {
     saveReject = {
       status: 422,
       body: { error: 'absence_full_day_only', absenceType: 'SPECIAL_HOLIDAY_ALLOWANCE', date: '2026-03-05', requiredHours: 7.4 },
@@ -226,7 +231,8 @@ describe('SkemaPage — AC-235-6: the served SPECIAL_HOLIDAY_ALLOWANCE row (B, b
     })
     vi.useRealTimers()
     const alert = await screen.findByText(/skal registreres som en hel dag/)
-    expect(alert.textContent).toContain('Særlige feriedage')
+    // S147 QUAL-231: was toContain('Særlige feriedage').
+    expect(alert.textContent).toContain('Særlig feriedag skal registreres som en hel dag')
     expect(alert.textContent).not.toContain('SPECIAL_HOLIDAY_ALLOWANCE')
   })
 })
