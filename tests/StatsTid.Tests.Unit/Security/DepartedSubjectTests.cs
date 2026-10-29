@@ -31,6 +31,9 @@ public class DepartedSubjectTests
         => Assert.False(DepartedSubject.IsDeparted(Subject(true, null), Today));
 
     /// <summary>Kind N; mutation M-11 (&lt; to &lt;=). Red condition: the last day itself reads as departed.
+    /// RED captured at the wave gate (detached worktree, `d < today` to `d <= today`): this fact failed
+    /// with "Assert.False() Failure  Expected: False  Actual: True", and the `(true, 0, false)` row of
+    /// ColumnOverload_AgreesWithSpec failed with "Assert.Equal() Failure: Values differ  Expected: False  Actual: True"; 13 of 15 passed.
     /// The last day is still employed (ADR-040 D1; OQ-2: access ends the day AFTER).</summary>
     [Fact]
     public void ActiveEndDateToday_IsNotDeparted_LastDayIsStillEmployed()
