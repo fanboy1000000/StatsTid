@@ -1,6 +1,6 @@
 // S72 / TASK-7202 — Skema grid restructured to the design_handoff_skema layout
 // (README §3 "Month grid"). Row order top→bottom: Diff. fra normtid (read-only) →
-// Registrér arbejdstid (the ONE interactive row) → divider → ▾ Projekter band →
+// Reg. Arbejdstid (the ONE interactive row) → divider → ▾ Projekter band →
 // project rows → ▾ Ferie og fravær band → absence rows → I alt. The grid is
 // PRESENTATION-ONLY (SPRINT-72 R16): it owns no fetching and no save plumbing —
 // the day panel opens via `onOpenDay(date)`, the manager modal via `onOpenManager`.
@@ -85,7 +85,7 @@ interface SkemaGridProps {
   /** S72 R4/R12 — the VISIBLE row sets + order. Absent → ALL served rows render
       (the approval surface / pre-S72 fallback). */
   rowPreferences?: SkemaRowPreferences
-  /** S72 R16 — clicking a Registrér arbejdstid cell opens the day panel for that
+  /** S72 R16 — clicking a Reg. Arbejdstid cell opens the day panel for that
       date ("YYYY-MM-DD"). Absent or readOnly → the row renders as data. */
   onOpenDay?: (date: string) => void
   /** S72 R3 — the hidden-rows affordance links to the manager modal. */
@@ -394,7 +394,7 @@ export function SkemaGrid({
     return round2(sum)
   }, [dateKeys, dayTotals])
 
-  // Trailing Registrér arbejdstid total = Σ amber (under-allocated) hours only —
+  // Trailing Reg. Arbejdstid total = Σ amber (under-allocated) hours only —
   // never nets against over-allocated days (the S56 per-day gate lesson holds).
   const amberTotal = useMemo(() => {
     let sum = 0
@@ -690,9 +690,9 @@ export function SkemaGrid({
             </td>
           </tr>
 
-          {/* 2 — Registrér arbejdstid (the ONE interactive row; R12 read-only = data) */}
+          {/* 2 — Reg. Arbejdstid (the ONE interactive row; R12 read-only = data) */}
           <tr className={styles.workRow}>
-            <td className={styles.rowLabel}>{readOnly ? 'Arbejdstid' : 'Registrér arbejdstid'}</td>
+            <td className={styles.rowLabel}>{readOnly ? 'Arbejdstid' : 'Reg. Arbejdstid'}</td>
             {days.map((day) => {
               const dateKey = formatDateKey(day)
               const worked = workedPerDay.get(dateKey) ?? 0
@@ -731,7 +731,9 @@ export function SkemaGrid({
                       title="Åbn dag — registrér perioder & fordel"
                       aria-label={`Registrér arbejdstid ${dateKey}`}
                     >
-                      {content}
+                      {/* An empty day shows a muted "+" so it reads as "add time here"; decorative —
+                          the button's aria-label already names the action. */}
+                      {content || <span className={styles.addHint} aria-hidden="true">+</span>}
                     </button>
                   ) : (
                     <span className={`${styles.workDisplay} ${stateClass}`}>{content}</span>
