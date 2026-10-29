@@ -162,6 +162,7 @@ const cleanCompliance = {
   success: true,
   violations: [],
   warnings: [],
+  restNotCheckedDays: [], // S147 / TASK-14707: required since the regen
 }
 
 interface Routes {
@@ -441,6 +442,26 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     renderPage()
     await expandFirstRow(user)
     await waitFor(() => expect(screen.getByText(/For kort hviletid den 10\./)).toBeInTheDocument())
+  })
+
+  // S147 / TASK-14707 (QUAL-234 interim) — AC-234i-1, the Teamoversigt half. Kind N (names the
+  // new `restNotCheckedDays` member). Red conditions: before the panel reads the member, the
+  // N=2 assertion finds no notice and fails; the empty-list pin is a boundary pin — holds today.
+  it('S147: two not-checked days → one "Hviletid ikke kontrolleret for 2 dage" line in the panel', async () => {
+    const user = userEvent.setup()
+    mockRoutes({ compliance: { ...cleanCompliance, restNotCheckedDays: ['2026-03-10', '2026-03-11'] } })
+    renderPage()
+    await expandFirstRow(user)
+    await waitFor(() => expect(screen.getByText('Hviletid ikke kontrolleret for 2 dage')).toBeInTheDocument())
+  })
+
+  it('S147 boundary pin — holds today: an empty list shows no notice', async () => {
+    const user = userEvent.setup()
+    mockRoutes({})
+    renderPage()
+    await expandFirstRow(user)
+    await waitFor(() => expect(screen.getByText('Overblik')).toBeInTheDocument())
+    expect(screen.queryByText(/Hviletid ikke kontrolleret/)).not.toBeInTheDocument()
   })
 
   it('a failed compliance fetch → soft "Advarsler kunne ikke hentes"; the rest still renders', async () => {

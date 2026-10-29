@@ -37,6 +37,7 @@ const withViolation: ComplianceCheckResult = {
     },
   ],
   warnings: [],
+  restNotCheckedDays: [], // S147 / TASK-14707: required since the regen
 }
 
 const clean: ComplianceCheckResult = {
@@ -45,6 +46,7 @@ const clean: ComplianceCheckResult = {
   success: true,
   violations: [],
   warnings: [],
+  restNotCheckedDays: [], // S147 / TASK-14707: required since the regen
 }
 
 describe('ComplianceWarnings', () => {
@@ -66,6 +68,37 @@ describe('ComplianceWarnings', () => {
     expect(screen.queryByRole('heading', { name: 'Arbejdstidskontrol' })).not.toBeInTheDocument()
     rerender(<ComplianceWarnings result={clean} loading={false} hideTitle />)
     expect(screen.queryByRole('heading', { name: 'Arbejdstidskontrol' })).not.toBeInTheDocument()
+  })
+
+  // ── S147 / TASK-14707 (QUAL-234 interim) — AC-234i-1, the screen half ──
+  // Kind N (names the new `restNotCheckedDays` member). Red conditions: before the
+  // component reads the member, the N=2 assertion finds no "Hviletid ikke kontrolleret
+  // for 2 dage" text and fails; the empty/absent pins are boundary pins — hold today.
+
+  it('S147: two not-checked days show "Hviletid ikke kontrolleret for 2 dage" (even with no violations)', () => {
+    render(
+      <ComplianceWarnings
+        result={{ ...clean, restNotCheckedDays: ['2025-10-14', '2025-10-15'] }}
+        loading={false}
+      />,
+    )
+    expect(screen.getByText('Hviletid ikke kontrolleret for 2 dage')).toBeInTheDocument()
+  })
+
+  it('S147: one not-checked day uses the singular "dag"', () => {
+    render(
+      <ComplianceWarnings result={{ ...clean, restNotCheckedDays: ['2025-10-14'] }} loading={false} />,
+    )
+    expect(screen.getByText('Hviletid ikke kontrolleret for 1 dag')).toBeInTheDocument()
+  })
+
+  it('S147 boundary pin — holds today: an empty or absent list shows no notice', () => {
+    const { rerender } = render(<ComplianceWarnings result={clean} loading={false} />)
+    expect(screen.queryByText(/Hviletid ikke kontrolleret/)).not.toBeInTheDocument()
+    const absent = { ...withViolation } as Partial<ComplianceCheckResult>
+    delete absent.restNotCheckedDays
+    rerender(<ComplianceWarnings result={absent as ComplianceCheckResult} loading={false} />)
+    expect(screen.queryByText(/Hviletid ikke kontrolleret/)).not.toBeInTheDocument()
   })
 
   // ── S120 — the integer-enum repair pins (the masked prod bug) ──
