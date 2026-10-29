@@ -46,8 +46,9 @@ public sealed class S120ComplianceSpecRuntimeTests : IAsyncLifetime
 {
     private const string Org = "S120CMP1";
 
-    /// <summary>The EXACT 5 members of the NAMED <c>ComplianceCheckResult</c>.</summary>
-    private static readonly string[] ResultKeys = { "ruleId", "employeeId", "success", "violations", "warnings" };
+    /// <summary>The EXACT 6 members of the NAMED <c>ComplianceCheckResult</c>.</summary>
+    // S147 T7 (QUAL-234 interim): 5 -> 6 keys; the member `restNotCheckedDays` is served (empty array by default).
+    private static readonly string[] ResultKeys = { "ruleId", "employeeId", "success", "violations", "warnings", "restNotCheckedDays" };
 
     /// <summary>The EXACT 7 members of a <c>ComplianceViolation</c> row.</summary>
     private static readonly string[] ViolationKeys =
