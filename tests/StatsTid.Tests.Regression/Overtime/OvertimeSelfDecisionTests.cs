@@ -105,7 +105,15 @@ public sealed class OvertimeSelfDecisionFixture : IAsyncLifetime
     {
         await using var conn = new NpgsqlConnection(ConnectionString);
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand($"SELECT COUNT(*) FROM {table}", conn);
+        // Constant SQL per allowed table (no interpolation: keeps CA2100 quiet and the table list closed).
+        var sql = table switch
+        {
+            "audit_log" => "SELECT COUNT(*) FROM audit_log",
+            "audit_projection" => "SELECT COUNT(*) FROM audit_projection",
+            "outbox_events" => "SELECT COUNT(*) FROM outbox_events",
+            _ => throw new ArgumentOutOfRangeException(nameof(table), table, "unsupported table"),
+        };
+        await using var cmd = new NpgsqlCommand(sql, conn);
         return (long)(await cmd.ExecuteScalarAsync())!;
     }
 
@@ -391,8 +399,9 @@ public sealed class OvertimeSelfDecisionTests : IClassFixture<OvertimeSelfDecisi
 /// reverting the implementation: M1 "drop the null/empty actor-id short-circuit" turns
 /// <see cref="IsSelf_NullOrEmptyActor_NeverMatches"/> red; M2 "compare OrdinalIgnoreCase" turns
 /// <see cref="IsSelf_IsOrdinal_CaseDiffers_IsNotSelf"/> red; M3 "return false" turns
-/// <see cref="IsSelf_SameId_IsSelf"/> and the period-overload fact red; M4 "return true" turns
-/// <see cref="IsSelf_DifferentId_IsNotSelf"/> red.</para>
+/// <see cref="IsSelf_SameId_IsSelf"/> and the period-overload fact red (each run at the wave gate: M1 → 1 failed, M2 → 1 failed, M3 → 2 failed).
+/// <see cref="IsSelf_DifferentId_IsNotSelf"/> is the boundary partner of the same-id fact (a "return true"
+/// mutation would turn it red; not run).</para>
 /// </summary>
 public sealed class ApprovalSelfGuardIsSelfTests
 {
