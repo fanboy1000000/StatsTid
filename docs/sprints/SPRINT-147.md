@@ -155,8 +155,15 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
    - `ArsoversigtPage.tsx:109-119`, a third set.
 
    One wording per context should be chosen and the tables collapsed. If it is not done in the tidy pass, it becomes a backlog item.
-8. **14709 NOTE 1, a backend fix.** The full-day rule message interpolates `{requiredHours}` under the server's culture (`SkemaEndpoints.cs` ~`:1070`, ~`:2031`). The container has no `LANG`, so a Danish user reads "(7.4 timer)". Format it explicitly as da-DK at the emitters; the Skema alert now shows this sentence.
+8. **14709 NOTE 1, a backend fix.** The full-day rule message interpolates `{requiredHours}` under the server's culture (`SkemaEndpoints.cs` ~`:1070`, ~`:2031`). The container has no `LANG`, so a Danish user reads "(7.4 timer)". Format it explicitly as da-DK at the emitters; the Skema alert now shows this sentence. When it lands, append to the comment at `SkemaPage.test.tsx:958`: "the decimal comma is the da-DK target of tidy item 8; the container renders 7.4 until then" (14709 c2 NOTE 1).
 9. **14709 NOTE 2, recorded so nobody files it as a regression.** The not-eligible alerts now speak in the third person ("Medarbejderen er ikke berettiget …"), the server's voice. That fits the page's two audiences: the employee and a manager or HR viewing someone else's Skema.
+10. **From the 14708 report.**
+   - `docker/postgres/init.sql:1249-1250`, a comment, points to the deleted `AbsenceRule.cs:112-114` identity switch. Re-point it in the tidy pass; it is a comment only, the Orchestrator's to approve. `danish-agreements.md:247` has the same pointer and is fixed in O-4.
+   - Absence-code literals outside 14708's authority (`BalanceEndpoints.cs:197` `"VACATION"`, `VacationSettlementService.cs:1910` `"SPECIAL_HOLIDAY_ALLOWANCE"`) could move to the constants in the tidy pass.
+   - For QUAL-236's row at close: the new 422 checks the vocabulary, not the agreement's list, so a hand-built HK request can still save `CHILD_SICK_DAY_3`.
+11. **From the 14703 report and security consult.**
+   - The stale comment at `ApprovalPeriodRepository.cs:63-64` ("the Payroll host registers no TimeProvider") is now false.
+   - The 403-and-log helper is copied privately into three endpoint files; it could become one helper in `Endpoints/Helpers/`.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
