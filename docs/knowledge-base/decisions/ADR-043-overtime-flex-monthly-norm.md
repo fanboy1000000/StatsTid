@@ -49,7 +49,7 @@ holiday), and on Tuesday 17 June also 17:00–23:00 on a release the manager ord
 | Flex for the month | 154.00 − 155.40 = **−1.40 h** (the ordered 6 h inside it) | (154.00 − 6) − 148.00 = **0.00 h** |
 | Overtime | week 16–22 June: 43 h → **3 h at 1.5 + 3 h at 2.0** | **6 h at +50 %** in the overtime account: 9 h off, or paid, at the employer's choice |
 
-The 6 evening hours earn a supplement either way (1.25 today, +25 % here); the tables part ways at night, at weekends
+The 6 evening hours earn a supplement either way (1.25 today for hours registered with clock times, i.e. through the legacy time-entry API — Skema-registered hours earn none today because their clock times never reach payroll, QUAL-234; +25 % here); the tables part ways at night, at weekends
 and on 5 June.
 
 ## Why it happened — the part worth remembering
@@ -124,8 +124,7 @@ Each item says what the model does, the verdict it rests on and the register row
 - Local exceptions are dated local parameters: a manager's exception, transfer to the overtime account, 1:1 cash by
   agreement (V7, C6; F-5).
 - The S146 ledger's rails (`opening_balance`, `closing_balance`, `balance_provenance` on `payroll_export_records`,
-  `init.sql:4633-4640`) carry the new closing unchanged in shape. Status at `fdb52d48`: the columns are merged;
-  TASK-14604 is in progress; TASK-14605's DeriveOpening (refinement C2) has not landed. **Closes** QUAL-219.
+  `init.sql:4633-4640`) carry the new closing unchanged in shape. Status at the S146 close (`b510e45b`): the ledger is built (TASK-14605, `FlexLedgerOpening.Derive`); S147 TASK-14700 adds the full chain walk (QUAL-229). (Superseded status line, kept for the record: "at `fdb52d48`: the columns are merged; TASK-14604 is in progress; TASK-14605's DeriveOpening (refinement C2) has not landed.") **Closes** QUAL-219.
 
 ### D7 — One +25 % supplement; § 14's compensation outside the hours count
 - HK/PROSA: one +25 % supplement for work 17:00–06:00, at weekends, on søgnehelligdage, on Grundlovsdag after 12:00
@@ -289,8 +288,8 @@ caps (pro rata, per subgroup); a daily credit cap; what happens above the cap (f
 manager's exception, transfer to the overtime account, 1:1 cash); what happens at leaving; fikstid/kontortid; excluded
 groups; fuldmægtige's standby interaction and suspension in peak periods.
 - (a) Typed columns on `local_agreement_profiles`: organisation × agreement × OK version, dated, audited, and already
-  holding the flex cap and carry-over (`init.sql:856-872`; audit `:885-895`). Typed and already resolved into the
-  engine's config; but per-subgroup caps do not fit one row per agreement.
+  holding the flex cap and carry-over (`init.sql:856-872`; audit `:885-895`). Typed, and resolved by `ConfigResolutionService` for the
+  screens and booking only — not by the Rule Engine, so not into pay (QUAL-204, QUAL-233; D-6 decides whether payroll reads it); and per-subgroup caps do not fit one row per agreement.
 - (b) `local_configurations` (key + JSON, area `FLEX_RULES`; `init.sql:803-822`). Flexible; untyped, validated only in code.
 - (c) A new table — a third home for local rules.
 - **Lean (a)**, per-subgroup caps as an S147 sub-question. Without a local agreement the central defaults apply
