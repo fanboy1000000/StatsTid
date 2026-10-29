@@ -21,8 +21,10 @@ namespace StatsTid.Tests.Regression.Hosting;
 /// needs the validator. So each fact resolves the validator from the host's own services — the same
 /// resolution a request does.</para>
 ///
-/// <para><b>Kind N</b> for all three (each names the new constructor dependency; the facts resolve
-/// <see cref="OrgScopeValidator"/> whose constructor this sprint changed). Red conditions (argued here
+/// <para><b>Kind N</b> for the Payroll and Orchestrator facts (their hosts gained the clock registration in
+/// S147, so the facts name something this sprint creates); <b>kind R</b> for the Backend fact (regression pin,
+/// holds today: the Backend registered a clock before S147, and the fact keeps the new constructor dependency
+/// resolvable there). Red conditions (argued here
 /// because Docker facts cannot be run locally): <b>M-10</b> — delete the
 /// <c>AddSingleton(TimeProvider.System)</c> line from the host's <c>Program.cs</c> (Payroll and
 /// Orchestrator; for the Backend, the line at its <c>Program.cs</c> TimeProvider registration). Then
@@ -42,7 +44,9 @@ public sealed class TimeProviderRegistrationHostTests : IClassFixture<DepartedSe
     private readonly DepartedSelfDbFixture _fx;
     public TimeProviderRegistrationHostTests(DepartedSelfDbFixture fx) => _fx = fx;
 
-    /// <summary>Kind N (M-10). The Backend host builds the validator with a registered clock.</summary>
+    /// <summary>Kind R (regression pin - holds today; the Backend registered a TimeProvider before S147, so no
+/// S147 mutation of the Backend host is claimed to redden it beyond removing that pre-existing line).
+/// The Backend host builds the validator with a registered clock.</summary>
     [Fact]
     public async Task Backend_HostStarts_ValidatorResolves()
     {

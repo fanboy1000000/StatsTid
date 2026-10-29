@@ -25,7 +25,8 @@ public class DepartedSubjectTests
         IsActive = isActive, EmploymentEndDate = end,
     };
 
-    /// <summary>Kind N. Red conditions: any mutation that makes an open-ended employee departed.</summary>
+    /// <summary>Kind N. Red condition: an open-ended employee (no end date) reads as departed. Mutation M-22 (null end date
+    /// counts as departed) captured RED: "Assert.False() Failure  Expected: False  Actual: True".</summary>
     [Fact]
     public void ActiveNoEndDate_IsNotDeparted()
         => Assert.False(DepartedSubject.IsDeparted(Subject(true, null), Today));
@@ -39,7 +40,8 @@ public class DepartedSubjectTests
     public void ActiveEndDateToday_IsNotDeparted_LastDayIsStillEmployed()
         => Assert.False(DepartedSubject.IsDeparted(Subject(true, Today), Today));
 
-    /// <summary>Kind N. Red condition: end date yesterday not reported departed (e.g. a mutation
+    /// <summary>Kind N. Red condition: end date yesterday not reported departed. Mutation M-21 (drop the end-date arm) captured
+    /// RED: "Assert.True() Failure  Expected: True  Actual: False". (Original wording: e.g. a mutation
     /// comparing with the wrong direction or dropping the end-date arm).</summary>
     [Fact]
     public void ActiveEndDateYesterday_IsDeparted()
@@ -51,12 +53,17 @@ public class DepartedSubjectTests
     public void DeactivatedNoEndDate_IsDeparted()
         => Assert.True(DepartedSubject.IsDeparted(Subject(false, null), Today));
 
-    /// <summary>Kind N; M-12. Deactivated with a FUTURE end date is still departed (the flag governs).</summary>
+    /// <summary>Kind N. Deactivated with a FUTURE end date is still departed (the flag governs). Red condition: the
+    /// deactivated flag is ignored when an end date is present. Mutation M-12 (drop the deactivated arm) captured RED:
+    /// "Assert.True() Failure  Expected: True  Actual: False".</summary>
     [Fact]
     public void DeactivatedFutureEndDate_IsDeparted()
         => Assert.True(DepartedSubject.IsDeparted(Subject(false, Today.AddDays(5)), Today));
 
-    /// <summary>Kind N. The column overload agrees with the User overload on the four spec cases.</summary>
+    /// <summary>Kind N. The column overload agrees with the User overload on the four spec cases. Red conditions, each captured:
+    /// M-11 (&lt; to &lt;=) reddens the (true, 0, false) row; M-12 (drop the deactivated arm) reddens the (false, null, true) row;
+    /// M-21 (drop the end-date arm) reddens the (true, -1, true) row; M-22 (null end date departed) reddens the
+    /// (true, null, false) row - each "Assert.Equal() Failure: Values differ".</summary>
     [Theory]
     [InlineData(true, null, false)]
     [InlineData(true, 0, false)]
@@ -91,7 +98,8 @@ public class DepartedSubjectTests
         Assert.False(DepartedSubject.IsSelf("", "mette"));
     }
 
-    /// <summary>Kind N (G1). Whitespace is not trimmed: " mette" is another id. Red condition: a trim.</summary>
+    /// <summary>Kind N (G1). Whitespace is not trimmed: " mette" is another id. Red condition: a trim. Mutation M-14d (IsSelf trims both ids) captured RED:
+    /// "Assert.False() Failure  Expected: False  Actual: True".</summary>
     [Fact]
     public void IsSelf_WhitespaceIds_DoNotMatchAcrossTrim()
     {
@@ -99,12 +107,14 @@ public class DepartedSubjectTests
         Assert.False(DepartedSubject.IsSelf("mette ", "mette"));
     }
 
-    /// <summary>Kind N. The positive: identical ids match.</summary>
+    /// <summary>Kind N. The positive: identical ids match. Red condition: <c>IsSelf</c> never matches. Mutation M-14c (IsSelf
+    /// returns false) captured RED: "Assert.True() Failure  Expected: True  Actual: False". (M-14a/b/d leave it green, as they should.)</summary>
     [Fact]
     public void IsSelf_ExactSameId_Matches()
         => Assert.True(DepartedSubject.IsSelf("mette", "mette"));
 
-    /// <summary>Kind N. The reason is non-empty and date-free (ADR-040 D7).</summary>
+    /// <summary>Kind N. The reason is non-empty and date-free (ADR-040 D7). Red condition: the sentence carries a date. Mutation
+    /// M-20 (DenyReason gains "(last day 2026-03-04)") captured RED: "Assert.DoesNotMatch() Failure: Match found".</summary>
     [Fact]
     public void DenyReason_IsDateFree()
     {
