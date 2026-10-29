@@ -86,7 +86,7 @@ Artifacts: `.claude/reviews/PLAN-s147-{codex,reviewer}-c{1,2,3}.md`, `PLAN-s147-
 | TASK-14705 / 14705-T | 2a | backend-infrastructure / test-qa | SEC-056, the overtime self guards (T9) | planned |
 | TASK-14706 / 14706-T, TASK-14707 | 2a | rule-engine, cross-domain / test-qa; ux (stacked) | QUAL-234 interim, "not checked" (T7) | planned |
 | TASK-14708 / 14708-T | 2a | rule-engine, cross-domain / test-qa | QUAL-231, one vocabulary; sick days credited (T3a + T3b) | planned |
-| TASK-14709 | 2a | ux | QUAL-231, the dead frontend copy | planned |
+| TASK-14709 | 2a | ux | QUAL-231, the dead frontend copy (+ addendum A-1, the alert vocabulary) | **merged** `9de1ae79` (with fix-up 1); frontend GATE green (vitest 81 files / 1013 tests) |
 | TASK-14710 / 14710-T, TASK-14711 | 2b | backend-infrastructure, cross-domain / test-qa; ux (stacked) | QUAL-230 T5a: the 5-day grace, login, own-write floor, project-route retirement | planned |
 | TASK-14712 / 14712-T | 2b | backend-infrastructure / test-qa | QUAL-230 T5c: a departed approver | planned |
 | TASK-14713 / 14713-T, TASK-14714 | 3 | backend-infrastructure, cross-domain / test-qa; ux (stacked) | QUAL-230 T5b: HR only from day 6 | planned |
@@ -133,6 +133,14 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
 - **14702, Fable c1 WARNING 1.** The first fix-up's test mocked a quota response the server never sends. It was re-pointed at the full-day rule alert. *Correction to commit `53c9cb03`'s wording:* the label key fixes the full-day and eligibility rule alerts. The quota alert already resolved through the entitlement key `SPECIAL_HOLIDAY`.
 - **14702, Fable c1 WARNING 2 (Orchestrator ruling).** A user with a saved row selection adds the new row through "Administrer rækker"; the saved selection is authoritative (R4). Demo employees have no saved selection, so the demo shows the row. The frontend honours the served selection; the server computes it (Fable c2 NOTE 1).
 - **14702, the remaining findings.** The c1 NOTEs 3 and 4 were fixed. NOTE 5 went to the TASK-14709 addendum; its wider scope was confirmed by the Orchestrator on 2026-10-29.
+
+### Wave 2a — the merge record (in progress)
+
+| Task | Branch tip | Build / gate | 5α | 5a-R (Fable 5.1) | 5a-C (Codex) | Merged |
+|---|---|---|---|---|---|---|
+| 14709 (+ fix-up 1) | `a696b937` | frontend: tsc / lint / typecheck:e2e / build exit 0; vitest 81 files / 1013 tests | c1 VIOLATION (a moved assertion lacked kind + Red conditions) → c2 PASS | c1 READY-TO-MERGE (1 W, 6 N) → c2 READY-TO-MERGE (2 N) | — (a frontend task, per the plan) | `9de1ae79` |
+
+*In plain words (14709):* the dead absence-code list is gone. When the server refuses an absence in Skema, the employee now reads the server's own Danish sentence, the same source that names the rows. The quota alert keeps a small table of the five entitlement names, because the server's quota message is in English. **Plan deviation:** 14709 merged ahead of 14703, against the plan's "14703 merges first", because it is frontend-only and shares no file with 14703. The residuals are tidy items 7–9.
 
 ### Tidy list (small follow-ups gathered at the gates; one tidy pass before C-1)
 

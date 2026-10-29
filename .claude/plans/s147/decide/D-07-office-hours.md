@@ -75,7 +75,7 @@
 **Recorded proposals** — *adjudicated, told to the owner, not asked* (D-7.4; all accepted). They are listed in `../ADR-043-working.md`, "Provisional items and recorded proposals".
 - **D-7.P1, office hours are a clock window per weekday — accepted, with a warning rule** (D-7.2 item 3).
   - Each weekday has a start and an end, not just a number of hours. The "outside office hours" test needs times, and the window's length gives the credit.
-  - **The warning rule:** the five windows normally add up to 37 h × fraction. When they do not, the editor warns; it does not refuse.
+  - **The warning rule (D-7.P1 as corrected, `.claude/reviews/S147-ADR-043-adjudication-c1.md` R-5):** the five windows normally add up to the full-time week's norm (37 h; the profile's own `weekly_norm_hours` where one is set, ADR-043 provisional item 18). When they do not, the editor warns; it does not refuse. How a part-timer's windows scale is ADR-043 provisional item 14 (D-7.P5). *(Draft 2 said "37 h × fraction"; the windows are set per institution and the fraction is a person's, so the check is against the full-time week.)*
 - **D-7.P2, the third condition uses PAV's daily form — accepted, with § 14's precedence** (D-7.2 item 2).
   - An ordered hour leaves flex only beyond the day's first 7 h 24 min, at the person's per-day amount (`DayNorm`), as F-4 (b) already says.
   - **§ 14 comes first.** Ordered work at the weekend or on a søgnehelligdag (a public holiday on a weekday) is § 14's, whatever the office hours. It is kept out of the hours count at +50 % (D-4.P3). The domain expert confirms this for office-hours institutions (022-26 § 3 lets a local agreement depart).
@@ -109,7 +109,7 @@
 
 **What the S148 build gets from each answer.**
 - **(b):**
-  - *The setting:* the local profile gains an optional clock window per weekday (Monday–Friday), dated, audited and frozen into the manifest. It is off unless set (D-6's config stage). The editor warns when the windows do not add up to 37 h × fraction (P1).
+  - *The setting:* the local profile gains an optional clock window per weekday (Monday–Friday), dated, audited and frozen into the manifest. It is off unless set (D-6's config stage). The editor warns, and does not refuse, when the windows do not add up to the full-time week's norm (37 h; the profile's own `weekly_norm_hours` where one is set, ADR-043 provisional item 18); how a part-timer's windows scale is ADR-043 provisional item 14 (P1 as corrected).
   - *One served figure, the day's planned hours* (P3, P4): the window's length where set, otherwise the norm share. The absence cap (`SkemaEndpoints.cs:946-977`, `:1941-1963`), the vacation divisor (`ConsumptionCalculator.cs:184-194`) and the paid-absence credit read it. The month norm keeps reading the norm share.
   - *Stage 1:* a paid-absence day on a weekday with office hours is credited with that window's length, unless D-8's paid-absence credit basis says otherwise. The screen's per-day diff shows the same figure.
   - *Stage 2:* an ordered or accepted hour stays in flex when it falls inside office hours or within the day's first per-day amount. Only hours outside both leave flex as overtime. § 14's weekend and holiday work comes first (P2).
@@ -140,3 +140,4 @@
     - item 5: TASK-14708 is not on master at `26b70a08`.
   - **D-7.3–D-7.5:** the lean is confirmed with the adjudicator's reasons. P1–P6 are marked accepted (P5 as an expert item). "What the owner should know" is replaced by D-7.5.
   - **Other:** the working-copy F-4 citation (`:332-337`, which was off) now cites the section, because the working copy's line numbers move as its lists grow. D-4 is now "being asked", and the filter does not depend on its answer.
+- Draft 2.1 (2026-10-29): `.claude/reviews/S147-ADR-043-adjudication-c1.md` R-5 applied (the adjudicator's D-7.2 item 3 corrected). P1's warning rule (`:78`) and the build line (`:112`) now compare the five windows with the full-time week's norm (37 h, or the profile's own `weekly_norm_hours`), not "37 h × fraction"; a part-timer's windows stay ADR-043 provisional item 14. Nothing else changed; the owner's D-7 answer is untouched.

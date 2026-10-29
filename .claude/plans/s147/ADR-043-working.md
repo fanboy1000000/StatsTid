@@ -26,11 +26,18 @@
 | **D-5** (F-3, with SEC-056) | *Told, no owner question* (batch-3 ruling 1): the movement ledger (F-3 (b)); the § 10 clock from the worked period; the employer's choice, time off first; the saved-days balance designed (P10) after research cell R-A | told 2026-10-29 — "this one has no question; say so if you want any of it asked"; the owner asked for nothing to be asked | 2026-10-29 |
 | **D-12** (F-9) | *Some state institutions give their staff a paid day or afternoon off on 5 June, 24 December, 31 December or 1 May by local custom; others close on those days and staff cover them with their own leave or flex. None of these days is a public holiday, so none lowers the month's norm; a paid customary day is a day of paid absence the system credits, so flex does not move. Should an institution be able to record both kinds of customary day in StatsTid — each dated, and marked either as a paid day off (credited like a paid-absence day, whole or part; given to everyone or on request) or as a closure day (shown in Skema; the employee covers it with leave, time off in lieu or flex) — or paid days off only, with closure days left unrecorded?* | "(c) Both kinds (Recommended)" | 2026-10-29 |
 
-*(The decide track is complete on 2026-10-29: D-1 … D-12 answered (D-8 as D-8a and D-8b; D-5 told). Next: the planner writes the amended ADR-043 text from the rulings table and the one list; then one dual-lens review of the amended ADR; then ADR-043 ACCEPTED (O-10) and the S148 build input.)* *(WC-1, 2026-10-29: the amended text is written below, and the S148 build input beside it; next is the dual-lens review.)*
+*(The decide track is complete on 2026-10-29: D-1 … D-12 answered (D-8 as D-8a and D-8b; D-5 told). Next: the planner writes the amended ADR-043 text from the rulings table and the one list; then one dual-lens review of the amended ADR; then ADR-043 ACCEPTED (O-10) and the S148 build input.)* *(WC-1, 2026-10-29: the amended text is written below, and the S148 build input beside it; next is the dual-lens review.)* *(WC-2, 2026-10-29: cycle 1's adjudication applied, `.claude/reviews/S147-ADR-043-adjudication-c1.md`; next is the narrow cycle 2 on both lenses.)*
 
 *(D-1 answered 2026-10-29: stages, each with its own evaluation-model marker. The interim limits were told with the question: ordered hours go to flex 1:1 with no supplement until stage 2; AC extra work is flex only until stage 3; reseed per stage; stage 1 moves every HK/PROSA demo payslip. D-1.4 "no supplement in stage 1" stays a recorded proposal and becomes ADR text with this ruling. Adjudication: `.claude/reviews/S147-D-batch1-adjudication.md` § D-1.)*
 
 *(D-2 answered 2026-10-29: the rest-check half in S148 stage 0 (Backend compliance, no payroll marker; T7's notice retires); the supplement half in stage 2 (ADR-016 D10 amended; intervals in the digest and manifest); one source of time of day per hour. D-2.4 "manual hours retired" becomes ADR text with this ruling. D-3 answered the same day: refusal first (stage 0), the sourced three-column model in a later stage (stage 2 or later), SYSTEM_TARGET §C's travel line reworded to the sourced rule. D-6 answered the same day: a config stage of its own, before the first stage that needs a local value; D-6.5's stage-0 label stays a recorded proposal; QUAL-204 answered (a local profile changes pay). D-9 answered the same day after the owner asked for, and got, an expansion of why the lean departs from C5's quarter; D-9.4 "AC's month norm uses D1's function" becomes ADR text as a labelled default. Next asked: D-11, then D-10.)*
+
+## To tell the owner at acceptance (O-10)
+
+*What this is.* The dual-lens review of the amended ADR (cycle 1) was adjudicated in `.claude/reviews/S147-ADR-043-adjudication-c1.md`. It altered no owner decision, but two of its rulings, R-4 and R-6, change provisional or staging text the owner was told with the questions. The Orchestrator reads these two sentences to the owner at acceptance, as information, not as questions (the adjudication's "Owner decisions altered?", verbatim):
+
+1. *(R-4)* "For AC staff the regime HR records has the three values ADR-024 already seeds — contractual claim / discretionary / none — all provisional; 'discretionary' means no claim in StatsTid and any one-off payment outside it."
+2. *(R-6)* "The config stage changes no pay figure; the central caps go away and the demo caps bite in stage 1, with forfeiture, as D6's table already said."
 
 ## Provisional items and recorded proposals (not owner rulings)
 
@@ -72,8 +79,8 @@
     - `MaxOvertimeHoursPerPeriod` becomes an optional warning over decided hours, in D-8's list, with no default.
     - SYSTEM_TARGET §L is rewritten at acceptance.
     - *Anchor:* § D-4 (D-4.4; D-4.2 item 4).
-14. **D-7.P1, office hours are a clock window per weekday.** The editor warns, but does not refuse, when the five windows do not add up to 37 h × fraction.
-    - *Anchor:* § D-7 (D-7.4; D-7.2 item 3).
+14. **D-7.P1, office hours are a clock window per weekday.** The editor warns, but does not refuse, when the five windows do not add up to the full-time week's norm (37 h; the profile's own `weekly_norm_hours` where one is set, Prov. 18); how a part-timer's windows scale is Prov. 14 (D-7.P1 as corrected).
+    - *Anchor:* § D-7 (D-7.4; D-7.2 item 3), as corrected by `.claude/reviews/S147-ADR-043-adjudication-c1.md` R-5: the windows are set per institution and the fraction is a person's, so the warning compares with the full-time week.
 15. **D-7.P2, the third condition uses PAV's daily form:** only hours after the day's first 7 h 24 min can leave flex.
     - Ordered weekend and søgnehelligdag work is § 14's first, whatever the office hours. The expert confirms this.
     - The AU monthly variant is recorded, not built.
@@ -255,8 +262,8 @@
 |-------|-------|
 | **Status** | **PROPOSED — amended 2026-10-29 from the S147 decide track; ACCEPTED after the dual-lens review (O-10).** Drafted in S146 (track D5) to the owner's direction OQ-3 = (b). In S147 the nine forks this ADR left open (F-1 … F-9) and three tender findings (QUAL-232, QUAL-233, QUAL-234) were put to the owner one at a time, each explained first, and answered on 2026-10-29; one of them, the overtime account (D-5), was told with no question, and the owner asked for nothing to be asked. Until acceptance nothing here binds code. S145's Q2 = A, Q3 = F1 and Q7 (b) stay "superseded in principle by the verified sources; in force in code until the model program replaces them; no new work on F1 machinery" (OQ-2 = (a), S146 refinement "Decisions recorded") |
 | **Sprint** | S146 (draft) → S147 (rulings, amendment, acceptance) → S148 onward (built in stages; see "How it is built") |
-| **Supersedes / amends (on acceptance)** | **Supersedes** the S145 owner rulings Q3 = F1 and Q7 (b); keeps Q2 = A only as the month norm's building block (D1). **Amends ADR-016 D10** in four places: the evaluation-model marker moves once per stage (the stage map); the read-only contract on Backend tables (`ADR-016:179`) grows from two tables to three with `work_time_projection` (D10), and the decided records of hours (D3) join it in stage 2, the hours digest (`:185`) and the manifest recording both; "freeze what is data, fingerprint what is code" (`:169`) and the fingerprint contract (`:181`) give way to configs frozen as inputs (D12); the frozen pieces (`:171`) gain the overtime regime and flex membership. **Amends ADR-024 D1/D2:** the per-category merarbejde overrides become the seed of the HR-recorded overtime regime, not a second source pay reads (D4). **Amends ADR-024 D7:** from dormant design to the payroll path, its records naming clock spans rather than time entries, with a creator column, decided in Teamoversigt (D3). **Amends ADR-032 D7:** a vacation day on a søgnehelligdag, or on the credited part of a paid customary day, consumes nothing, and the vacation divisor reads the planned-hours figure (D2, D9). **Amends ADR-017:** the local profile gains typed, dated flex columns, a customary-days table sits beside it, and `overtime_requires_pre_approval` retires (D3, D6, D9). **Confirms ADR-014** on the pay path, with an implementation note (D12) |
-| **Closes when built** | QUAL-189; QUAL-216 … QUAL-222; QUAL-223 (resolved into QUAL-227, F-7 and F-8); QUAL-226 (D1's one month-norm function); QUAL-227; QUAL-232 and QUAL-202 (D11); QUAL-233 and QUAL-182 (D12); QUAL-234 (D10); QUAL-231's residual and QUAL-237 (D2, stage 0); QUAL-239 (retires with the compensate route, D8). **Answers** QUAL-204: yes, a local profile changes pay (D12). **Designs** QUAL-225, an HR-entered opening flex balance (D6). **Closes in design** SEC-056's creator-not-approver and compensation halves (D3, D8); S147's T9 closes its self part. QUAL-215 is the root cause; its lesson is recorded below |
+| **Supersedes / amends (on acceptance)** | **Supersedes** the S145 owner rulings Q3 = F1 and Q7 (b); keeps Q2 = A only as the month norm's building block (D1). **Amends ADR-016 D10** in four places: the evaluation-model marker moves once per stage (the stage map); the read-only contract on Backend tables (`ADR-016:179`) grows from two tables to three with `work_time_projection` (D10), and the decided records of hours (D3) join it in stage 2, the hours digest (`:185`) and the manifest recording both, by value; "freeze what is data, fingerprint what is code" (`:169`) and the fingerprint contract (`:181`) give way to configs frozen as inputs (D12); the frozen pieces (`:171`) gain the overtime regime and flex membership. **Amends ADR-024 D1/D2:** the per-category merarbejde overrides become the seed of the HR-recorded overtime regime, not a second source pay reads (D4). **Amends ADR-024 D7:** from dormant design to the payroll path, its records naming clock spans rather than time entries, with a creator column, decided in Teamoversigt (D3). **Amends ADR-032 D7:** a vacation day on a søgnehelligdag, or on the credited part of a paid customary day, consumes nothing, and the vacation divisor reads the planned-hours figure (D2, D9). **Amends ADR-017:** the local profile gains typed, dated flex columns, a customary-days table sits beside it, and `overtime_requires_pre_approval` retires (D3, D6, D9). **Confirms ADR-014** on the pay path, with an implementation note (D12) |
+| **Closes when built** | QUAL-189; QUAL-216 … QUAL-222; QUAL-223 (resolved into QUAL-227, F-7 and F-8); QUAL-226 (D1's one month-norm function); QUAL-227; QUAL-232 and QUAL-202 (D11); QUAL-233 and QUAL-182 (D12); QUAL-234 (D10); QUAL-231's residual and QUAL-237 (D2, stage 0); QUAL-239 (its interim in stage 0; retires with the compensate route, D8). **Answers** QUAL-204: yes, a local profile changes pay (D12). **Designs** QUAL-225, an HR-entered opening flex balance (D6). **Closes in design** SEC-056's creator-not-approver and compensation halves (D3, D8); S147's T9 closes its self part. QUAL-215 is the root cause; its lesson is recorded below |
 | **Domains** | Rule Engine, Payroll Integration, Backend, Data Model, SharedKernel, Frontend, Security, Test |
 | **Tags** | overtime, merarbejde, flex, norm-period, monthly-norm, public-holidays, supplements, compensation, ordered-work, forfeiture, office-hours, customary-days, clock-times, worked-time-classes, local-configuration, staged-build |
 | **Evidence** | `docs/references/overtime-flex-model-research.md` (V1–V12), `docs/references/agreement-cells-reverification-research.md` (C1–C7) and `docs/references/sick-day-credit-and-agreement-texts-research.md` (R1–R5), each verified claim by claim; Part 1 of each governs. The owner's answers, verbatim: `docs/sprints/SPRINT-147.md`, "Owner rulings in force". The adjudications that settled each question's wording and its recorded proposals: `.claude/reviews/S147-D-batch1-adjudication.md`, `S147-D-10-adjudication.md`, `S147-D-batch2-adjudication.md`, `S147-D-batch3-adjudication.md`. Code citations verified at `fdb52d48` (S146) and re-verified at `c4eb6184` (S147) |
@@ -272,9 +279,9 @@ account. One hour is never both.**
 ## What changes, in plain words
 
 Once all of it is built:
-- **Employees.** An hour above the month's norm is flex, hour for hour, unless a leader ordered it or accepted afterwards that it was necessary. Only those hours become overtime (+50 %) or count toward an extra-work (merarbejde) claim, and they leave flex. An evening or weekend hour earns its supplement only when its placement was ordered or rostered. Overtime waits in an account with a clock: time off is due within 3 months, and if it is not given, the hours are paid. The employer chooses time off or pay, time off first; the employee's "choose pay or time off" setting goes away. A sick day, a holiday day or any other day of paid absence leaves flex unchanged.
-- **Leaders.** A decision step inside month approval, in Teamoversigt (the team overview where months are approved): accept or reject hours an employee marks as ordered or necessary. Orders and rosters can be recorded in advance. A "time off due" list. No one can order or decide their own hours.
-- **HR.** Two dated facts per person, the overtime regime and whether the person is on the flex scheme, plus a leaver's flex settlement, an opening balance, postponements and cap exceptions, each a registered hand-off.
+- **Employees.** An hour above the month's norm is flex, hour for hour, unless a leader ordered it or accepted afterwards that it was necessary. Only those hours become overtime (+50 %) or count toward an extra-work (merarbejde) claim, and they leave flex. An evening or weekend hour earns its supplement only when its placement was ordered or rostered. Overtime waits in an account with a clock: time off is due within 3 months, and if it is not given, the hours are paid. The employer chooses time off or pay, time off first; the employee's "choose pay or time off" setting goes away. A sick day, a holiday day or any other day of paid absence is credited as the planned working day, so it costs no flex; where an institution sets office hours a single day may move flex by that weekday's difference from 7.4 h, and a week of them nets to zero.
+- **Leaders.** A decision step inside month approval, in Teamoversigt (the team overview where months are approved): accept or reject hours an employee marks as ordered or necessary. Orders and rosters can be recorded in advance. A "time off due" list; they record a postponement the employee signs. No one can order or decide their own hours.
+- **HR.** Two dated facts per person, the overtime regime and whether the person is on the flex scheme, plus a leaver's flex settlement, an opening balance and cap exceptions, each a registered hand-off.
 - **Institutions.** Their own flex rules (caps, office hours, customary days off), in dated local settings that reach pay. There is no central flex cap.
 - **Payroll.** Still hours and wage types, never kroner. Every value a month was calculated with, the configuration and the decisions about hours included, is frozen into that month's proof.
 
@@ -395,7 +402,7 @@ Each item says what the model does, the verdict it rests on and the register row
   absence is credited, not the norm (D-7.P4, D-12.P2).
 - **Closes** QUAL-216; QUAL-222 with D9; QUAL-226.
 
-### D2 — Surplus hours go to flex; a day of paid absence leaves flex unchanged
+### D2 — Surplus hours go to flex; a day of paid absence is credited as the day planned
 - An hour above the norm that no leader ordered or accepted is a flex hour, carried hour for hour (V6: PAV 19.5.6 and
   the AC remark to § 13). Saved flex not taken by period end is not overtime (V11).
 - Flex settles once over the month's own days, as today (`WeeklyTimelineCore.cs:295-335`); its opening and closing ride
@@ -463,7 +470,8 @@ Each item says what the model does, the verdict it rests on and the register row
   credited (D8). No exported month is reopened (ADR-013, ADR-034). The time-off clock still runs from the period the
   hours were worked in (D8). This also answers the sub-question this ADR left in D5, for AC claims.
 - **The decided records reach the pure engine as a frozen input** (ADR-002). Payroll reads them under ADR-016 D10's
-  read-only contract on Backend tables, which they join in stage 2, and the replay digest and the manifest record them.
+  read-only contract on Backend tables, which they join in stage 2; they are frozen into the manifest by value, with
+  their state at calculation time; the digest covers them.
 - **ADR-024 D7 is the starting point, now on the payroll path.** Its distinction between an approval given beforehand
   and one given afterwards is kept (`ADR-024:222`). Its acknowledgement endpoint (`:218`), never built, is built naming
   clock spans rather than time-entry ids (the dormant event names ids, `OvertimeNecessityAcknowledged.cs:23`). Its
@@ -481,7 +489,9 @@ Each item says what the model does, the verdict it rests on and the register row
     office hours; and it came after the day's first 7 h 24 min, at the person's per-day amount (PAV's daily form, D-7.P2);
   - ordered work at the weekend or on a søgnehelligdag stays § 14's whatever the office hours (D7; the expert confirms,
     provisional item 12);
-  - the editor warns, and does not refuse, when the five windows do not add up to 37 h × fraction (D-7.P1);
+  - the editor warns, and does not refuse, when the five windows do not add up to the full-time week's norm (37 h; the
+    profile's own `weekly_norm_hours` where one is set, provisional item 18); how a part-timer's windows scale is
+    provisional item 14 (D-7.P1 as corrected);
   - the Aarhus University template's monthly variant (160.33 h) is recorded, not built; core hours (*fikstid*) govern
     presence, not pay, and are not modelled for pay (D-7.P6); part-timers under office hours are an expert question
     (provisional item 14).
@@ -509,8 +519,16 @@ Each item says what the model does, the verdict it rests on and the register row
     its remark, § 3 stk. 4; C3, re-cited against Medst. 087-25 in S147 and found word for word the same,
     `agreement-cells-reverification-research.md:529-539`);
   - PROSA: overtime (pay groups 1–2), or merarbejde (groups 3–4, V5);
-  - AC: provisional values (provisional item 5); for AC the attribute decides whether a merarbejde claim can be raised
-    at all (D5).
+  - AC: ADR-024 D2's three states, all provisional (provisional item 5), seeded per category (Fuldmægtig CONTRACTUAL,
+    Specialkonsulent DISCRETIONARY, Chefkonsulent and Kontorchef NONE; `init.sql:2525-2532`); for AC the attribute
+    decides whether a merarbejde claim can be raised at all (D5):
+    - **CONTRACTUAL** — may raise a § 14 claim (D5).
+    - **DISCRETIONARY** — no § 14 claim in StatsTid; hours recorded; any compensation a one-off kroner payment
+      (*engangsvederlag*) decided and paid outside StatsTid (the payroll boundary); the claim gate reads it as NONE;
+      whether StatsTid shows HR the surplus as information is stage 3's design, never a pay line.
+    - **NONE** — no claim, no such report.
+  - PROSA groups 3–4 are the same family (V5; provisional item 17). One closed value set with five meanings; the enum
+    names are S148's.
   - ADR-024's per-category overrides (D1/D2; the table `init.sql:2448`, seeded at `:2524-2533`) become the seed HR starts
     from, not a second source pay reads (D-11.4).
   - StatsTid stores no salary: the employee profile holds the part-time fraction, position and employment category
@@ -536,7 +554,8 @@ Each item says what the model does, the verdict it rests on and the register row
 - **A decided claim.** An accepted claim's hours leave flex as a dated movement in the decision month (D3; exported
   months are not reopened) and earn into the same overtime ledger (D8) at +50 %. Whether AC time off has a deadline is
   owed research R-B.
-- **Who may claim.** The overtime regime (D4) decides whether an AC employee can raise a claim at all (D-11.4).
+- **Who may claim.** The overtime regime (D4) decides whether an AC employee can raise a claim at all (CONTRACTUAL
+  only; D-11.4).
 - Stage 3 designs who "the employer" is when it decides, and whether PROSA groups 3–4's merarbejde is a claim of this
   kind or a decided hour under D3.
 - Until stage 3, AC extra work is flex only (the stage map).
@@ -549,7 +568,7 @@ Each item says what the model does, the verdict it rests on and the register row
   maxFlexBalance must be <= central MaxFlexBalance" (`:174`) rest on a false premise the code never enforced: the only
   checker, `ConfigResolutionService.ValidateLocalOverride` (`ConfigResolutionService.cs:324-327`), is `[Obsolete]` and
   has no production caller. So: caps live only in the local profile; the central fields become nullable and are seeded
-  null; a month with no cap records "no flex cap configured" and forfeits nothing; the profile editor shows the caps as
+  null (the central fields go null in stage 1, with the payout's retirement); a month with no cap records "no flex cap configured" and forfeits nothing; the profile editor shows the caps as
   unset; and the demo seed sets caps for the demo institutions (37 h, as SDU and DTU). *Given up:* an out-of-the-box
   number. SYSTEM_TARGET §G's principle that local rules never override a centrally negotiated rule stands, for +50 %,
   +25 % and § 14.
@@ -605,7 +624,9 @@ Each item says what the model does, the verdict it rests on and the register row
   on 24 December from 14:00 (C2: § 13), paid regardless of overtime. It is due only for work done *"efter ordre eller
   godkendt tjenestefordeling"*, by order or under an approved roster (`sick-day-credit-and-agreement-texts-research.md:824`),
   so it reads D3's placement fact, not its surplus fact. An evening or weekend hour the employee placed there under flex
-  earns nothing extra.
+  earns nothing extra. The placement fact is set by an order or roster beforehand, or by the leader's acceptance of a
+  mark afterwards (D3's record holds it; `.claude/plans/s147/decide/D-04-marking-workflow.md:86`), so a necessary
+  evening whose placement the leader confirms earns the supplement; one the employee chose under flex does not.
 - Ordered or rostered weekend and søgnehelligdag work for day workers (`:854`): +50 % as time off or pay (employer's
   choice), kept out of the month's hours count, the +25 % on top, no overtime on top (C2: § 14 stk. 1–3). It earns into
   the overtime account with its own clock (D8).
@@ -662,10 +683,12 @@ Each item says what the model does, the verdict it rests on and the register row
   month-approval authority, never on the decider's own hours (403); a request awaiting a decision, such as the
   employee's time-off booking, is decided by someone else. Today's compensate route (`OvertimeEndpoints.cs:512-603`)
   adjusts the unfed yearly row with no decided movement behind it, and discards its guarded update's result
-  (`:567-576`; QUAL-239); it retires with the yearly row, and S147's T9 guard on it is defence in depth until then.
+  (`:567-576`; QUAL-239); until it retires with the yearly row it reads that result and refuses (409) before
+  enqueueing (stage 0), and S147's T9 guard on it is defence in depth.
 - **Taking time off in lieu is a Skema absence (D-5.P5).** A new *afspadsering* type in the credit class (S147
   TASK-14708's classification, in which every absence code is exactly one of credit, reduction or neutral), credited by
-  the paid-absence credit basis (D2), so a whole day off leaves flex unchanged. It draws on the earning with the earliest
+  the paid-absence credit basis (D2), so a whole day off is credited as a planned day (flex unchanged where no office
+  hours are set). It draws on the earning with the earliest
   deadline first, cannot exceed the time off owed, is bounded by D2's rule for partly worked days (its draw on the
   account clipped with its credit, or the month refused), and is approved with the month.
 - **The deadline is a visible hand-off: HRP-021 becomes decision-ready (D-5.P7).** *Trigger:* an earning's deadline
@@ -703,8 +726,8 @@ Each item says what the model does, the verdict it rests on and the register row
 - A vacation day booked on a søgnehelligdag consumes nothing, ending ADR-032 D7's accepted limitation (`ADR-032:47`); so
   does one on the credited part of a paid customary day (below).
 - **Customary days (F-9 = (c)).** An institution's admin records each custom in a dated, audited table beside the
-  local profile (D-12.P1): the day; its kind, a paid day off or a closure day; the part, the whole day or from a clock
-  time; for a paid day, its mode; and a validity period, so that a custom's withdrawal (possible with reasonable notice,
+  local profile (D-12.P1): the day; its kind, a paid day off or a closure day; the part: the whole day, from a clock
+  time where office hours are set, or a number of full-time hours where they are not; for a paid day, its mode; and a validity period, so that a custom's withdrawal (possible with reasonable notice,
   FV2016.0107) and its reinstatement are dated facts, not deletions. Keyed by date, not OK version, and frozen into the
   manifest (D12). A custom may be narrowed to one agreement; a staff-group scope has no machinery (D2).
   - *A paid day off is a credit, not a norm cut (D-12.P2).* It is a day of paid absence read by D2's credit basis; D1's
@@ -726,8 +749,9 @@ Each item says what the model does, the verdict it rests on and the register row
 ### D10 — Clock times: one source of time of day per hour (QUAL-234)
 - **Payroll and the rest check read Skema's work intervals (D-2 (a)).** The intervals the employee enters
   (`work_time_projection`, `init.sql:1973-1984`) supply the time of day; flex and pay keep reading the hours from the
-  project entries. A month cannot be sent unless, every day, the interval hours equal the project hours to the hundredth
-  of an hour (`ApprovalEndpoints.cs:2225-2272`; `AllocationBalance.cs:7-11`), so for a sent month the intervals describe
+  project entries. A month cannot be sent unless, every day, the work-time hours equal the project hours (today interval
+  hours plus manual hours, `ApprovalEndpoints.cs:2230`; intervals alone once manual hours retire) to the hundredth of an
+  hour (`ApprovalEndpoints.cs:2225-2272`; `AllocationBalance.cs:7-11`), so for a sent month the intervals describe
   exactly the hours paid.
 - **One source of time of day per hour (D-2.2).** The legacy `POST /api/time-entries` route's own start and end times
   and its "voluntary unsocial hours" flag (`TimeEndpoints.cs:24`, `:150-157`; `TimeEntryRegistered.cs:16`) are either
@@ -739,8 +763,8 @@ Each item says what the model does, the verdict it rests on and the register row
     (`ComplianceEndpoints.cs:179`, `:210-215`), reads the intervals from stage 0. Payroll never runs the rest rule, so no
     payroll marker moves, and S147's interim "not checked" notice (T7) retires.
   - *The supplement* reads them from stage 2, when D3's placement fact exists. Payroll's read-only contract on Backend
-    tables (`ADR-016:179`) grows from two tables to three, the intervals join the replay digest (`:185`) and the
-    manifest, and the marker moves.
+    tables (`ADR-016:179`) grows from two tables to three, the intervals are frozen by value into the manifest (a
+    latest-wins table cannot be pinned by id) and join the digest (`:185`), and the marker moves.
 - The 11-hour rule then lives in two places, the Skema screen's own check and the engine's; the build either proves
   that they agree or has the server serve its verdict to the screen. How an interval is assigned to a day follows
   ADR-039's rule for timed entries (S148's refinement). The send check's "ordinary hours that name a project" predicate
@@ -782,6 +806,8 @@ Each item says what the model does, the verdict it rests on and the register row
   `:181`; `ConfigFingerprint.cs:13-17`); the refusal `replay-config-changed` (`ReplayRefusedException.cs:38`) changes
   meaning or retires.
 - **A publish never changes an exported month.** Exported months change only by an explicit correction (ADR-013, ADR-034).
+  An "applies from" date may lie in the past; it reaches an exported month only through an explicit correction
+  (ADR-013), never by the publish.
 - **One path for every configured value this ADR adds:** office hours (D3), the flex parameters (D6), the paid-absence
   credit basis (D2), customary days (D9). The two HR-recorded facts about a person, flex membership (D2) and the overtime
   regime (D4), are not configuration; they are resolved under ADR-040 and frozen the same way.
@@ -800,12 +826,12 @@ most hours, and its sprint log names what it does not yet handle. A stage that c
 it (`WeeklyTimelineCore.cs:126-134`); a month calculated before the move is then refused on replay, by name, rather than
 silently re-proved under arithmetic that did not produce it. Nothing real is lost, because there is no real data, and the
 development database is reseeded at each stage ("reseed, don't migrate"). Marker names are S148's to fix; the names below
-are proposals, and the new core gets a new name rather than a version of the weekly one. S148 opens on
-`weekly-timeline-v2`, the one marker move S147's TASK-14708 makes for the sick-day credit.
+are proposals, and the new core gets a new name rather than a version of the weekly one. S148 will open on
+`weekly-timeline-v2` once TASK-14708 merges: the one marker move S147 makes, for the sick-day credit.
 
 | Stage | In plain words | Marker (proposed) |
 |---|---|---|
-| **0** | Stop paying what is wrong today, and let the rest check see Skema's times | none for payroll, unless QUAL-236's call-home day enters the credit class |
+| **0** | Stop paying what is wrong today, and let the rest check see Skema's times | none unless a stage-0 item changes the engine's arithmetic or the replay contract (R-7) |
 | **Config** | Make the editors' values reach pay, dated and frozen | `weekly-timeline-v3` |
 | **1** | The monthly norm and flex by default; the calendar split; forfeiture recorded | `monthly-norm-v1` |
 | **2** | Decided hours: orders and marks, overtime, supplements, the overtime account | `monthly-norm-v2` |
@@ -816,28 +842,32 @@ are proposals, and the new core gets a new name rather than a version of the wee
   quotas per agreement and OK version, the per-episode limit, OK26's third day and call-home day); D10's rest-check half,
   retiring T7's notice; manual hours retired and one source of time of day per hour (both placed here by the build input,
   for S148's refinement to confirm); D2's bound on partly worked paid-absence days, in both save directions, on the
-  central credit basis; D12's editor label.
-- *Marker:* none for payroll. These are Backend and validation changes, and the rest rule is not a payroll rule. If
-  QUAL-236's call-home day joins the credit class, the weekly core's marker moves once (ADR-016 D10's convention, `:180`).
+  central credit basis; D12's editor label; QUAL-239's interim (the compensate route reads its guarded update's result
+  and refuses 409 before enqueueing).
+- *Marker:* none for payroll unless a stage-0 item changes the engine's arithmetic or the replay contract — QUAL-236's
+  call-home day joining the credit class, D2's bound computed engine-side, or the digest's line form changing when the
+  voluntary flag is rerouted or retired; then the weekly core's marker moves once (ADR-016 D10, `:180`, `:185`), or
+  S148's refinement names the refusal that does the same job.
 - *Named interim limits:* on-call, call-ins and travel cannot be registered until D11's later stage; the editors do not
   reach pay (labelled); every pay figure is still today's weekly model.
 
 **The config stage.**
-- *Lands:* D12 in full; the local profile's new columns (D6's table), the central caps nullable and seeded null, the
-  office-hours windows, the paid-absence credit basis with the AC label, the customary-days table and its editor; the two
-  HR-recorded facts, flex membership and the overtime regime, with one HR editor; demo profile rows with caps, and demo
-  customs.
+- *Lands:* D12 in full; the local profile's new columns (D6's table; the cap columns exist; their pay effect, the null
+  central caps and the live demo caps land with stage 1), the office-hours windows, the paid-absence credit basis with
+  the AC label, the customary-days table and its editor; the two HR-recorded facts, flex membership and the overtime
+  regime, with one HR editor (the build input's placement; S148's refinement confirms); demo profile rows, seeded with
+  their cap values (37 h, as SDU and DTU), which have no pay effect until stage 1; and demo customs.
 - *Marker:* the arithmetic is unchanged but the replay contract changes, since configs are frozen rather than
   fingerprinted; proposed: move the marker, so that a manifest written before the stage is refused by name. S148's
   refinement confirms this, or names the refusal that does the same job.
-- *Named interim limits:* the values are dated and frozen, but the weekly model still computes pay. Today's automatic
-  flex payout still runs until stage 1, so how a local cap set in this stage meets it is a sequencing point the build
-  input carries.
+- *Named interim limits:* the values are dated and frozen, but the weekly formula still computes pay, on today's
+  central caps; no pay figure changes, and the stage's pin is identical demo pay lines before and after.
 
 **Stage 1.**
 - *Lands:* D9's calendar split first, then D1's monthly norm for all three agreements; D2's flex by default, with the
   weekly overtime rule retired for every agreement; the paid-absence credit through the planned-hours figure, including
-  the office-hours credit; flex membership switching settlement off; D6's forfeiture or "no flex cap configured", the
+  the office-hours credit; flex membership switching settlement off; the central caps nulled and the demo caps live,
+  with D6's forfeiture or "no flex cap configured", the
   minus and daily caps, the leaver's settlement (and the opening balance, if S148's refinement schedules it); D9's paid
   customary days in both modes, and closure days; F1's settlement machinery retired; `SUPPLEMENT_CALC` returning no lines.
 - *Marker:* `monthly-norm-v1`.
@@ -858,8 +888,8 @@ are proposals, and the new core gets a new name rather than a version of the wee
 
 **Stage 3.**
 - *Lands:* D5's AC claims (the claim record, the quarterly reminder, the standby condition, the regime gate, the
-  decision-month movement, earnings into D8's ledger), the AC part-timer check, and AC's time-off deadline once R-B is
-  answered.
+  decision-month movement, earnings into D8's ledger (after research cell R-B; the claim record, reminder and regime
+  gate may land first)), the AC part-timer check, and AC's time-off deadline once R-B is answered.
 - *Marker:* `monthly-norm-v3`.
 - *Named interim limits:* none of the model's own, except items S148's refinement places later.
 
@@ -880,7 +910,7 @@ ADR's one list of such items.
 2. *Default.* The award's "comparable full-timer" condition is held as met for every part-timer, with nothing checked; AC-agreement part-timers were not examined and are checked with D5 in stage 3. — D4; D-10.4, D-10.2 item 8.
 3. *Default, owner-ruled 2026-10-29.* For AC-agreement staff a paid sick day is credited by § 7 nr. 2 by analogy, changeable through the local credit basis. — D2; D-8b.
 4. *Default.* AC's monthly flex uses D1's month-norm function, and the AC norm falls on søgnehelligdage. — D1; D-9.4.
-5. *Default.* The AC values of the overtime regime are provisional. — D4; D-11.4.
+5. *Default.* The AC values are ADR-024 D2's three states, CONTRACTUAL / DISCRETIONARY / NONE, provisional; whether special and chief consultants differ is the expert's (ADR-024 left it pending Phase B; C5 item 7 puts both under one-off payments). — D4; D-11.4.
 6. *Default.* The per-day norm is `round(weekly × fraction ÷ 5, 2)`, summed over the month's norm-bearing weekdays (S145 Q2 = A's precision rule). — D1.
 7. *Default, MEDIUM.* A partly worked day of paid absence is credited at most the credit basis minus the hours worked (the max(worked, planned) reading); a local agreement may differ. — D2; R-7.
 8. *Default.* At leaving, a positive flex balance not taken during notice is forfeited, and a negative one is recorded, not deducted. — D6; R-4.
@@ -902,7 +932,7 @@ ADR's one list of such items.
 *None blocks this ADR's acceptance.* Each names what it blocks.
 
 - **R-A — § 11 in full.** Who sets the saved-days maximum; how saved days are taken; whether they lapse; what happens at leaving; whether § 14 time off may be converted too; whether AC § 15 mirrors it; and whether the saved-days election may be made before the deadline. *Blocks:* building the saved-days balance (D8) only.
-- **R-B — The AC merarbejde time-off deadline** under § 14 stk. 5, if there is one. *Blocks:* stage 3's deadline only.
+- **R-B — The AC merarbejde time-off deadline** under § 14 stk. 5, if there is one. *Blocks:* a decided claim earning into D8's ledger (S3-3) and the deadline item (S3-4); the claim record, the reminder and the regime gate (S3-1, S3-2) may be built first. *Input:* C5 already records § 14 stk. 5's following-quarter rule (`agreement-cells-reverification-research.md:190`, `:589`); the cell confirms it, the quarter's start and the cash default (stk. 6).
 - **R-C — A leaver's owed time off and saved days: when they are settled, and in what form.** *An expert item for S148's refinement;* until then, provisional item 9.
 - **R-D — The rationale for holding "comparable full-timer" as met.** The adjudicator's reasoning, that where no comparable full-timer exists the directive's definition falls back to the applicable collective agreement (clause 3(2) of the framework agreement annexed to Directive 97/81/EC), is from the adjudicator's knowledge and must be verified before it is quoted. *Blocks:* quoting it; not the default (provisional item 2).
 - **R-E — Watch for the state's text implementing FV2025-795.** None as of 28 October 2026 (R4; OK26 funds the negotiation). When it appears, it is encoded as a new dated variant of `PartTimeBandRule`. *Blocks:* nothing; it ends provisional item 1.
@@ -923,7 +953,7 @@ ADR's one list of such items.
 | The week-based period setting; AC's 4-week overrides | `AgreementRuleConfig.cs:13`, `:61`; `PositionOverrideConfigs.cs:26-46` | 1 |
 | Grundlovsdag as a holiday, in three lists | `DanishPublicHolidays.cs:49`; `init.sql:367`, `:380`, `:397`; `DemoSeed/Generation/DanishHolidays.cs:68` | 1 |
 | Automatic `FLEX_PAYOUT` | `FlexBalanceRule.cs:44-48`, `:68-82` | 1 |
-| The central flex caps | `CentralAgreementConfigs.cs:23`, `:46`, `:77` (OK26 `:108`, `:131`, `:162`) | config |
+| The central flex caps | `CentralAgreementConfigs.cs:23`, `:46`, `:77` (OK26 `:108`, `:131`, `:162`) | 1 |
 | "Fingerprint what is code" | `ADR-016:169`, `:181`; `ConfigFingerprint.cs:13-17` | config |
 | Manual hours | `init.sql:1977` (the readers are in the build input) | 0 |
 | The holiday 2.0 branch; evening, night and weekend rates | `SupplementRule.cs:54-117`; `AgreementRuleConfig.cs:40` | no lines from 1; replaced in 2 |
@@ -967,6 +997,12 @@ ADR's one list of such items.
 - **Auditability.** Every new decision about hours is an audited record with a creator and a decider (D3); every
   movement of overtime is dated and frozen into the month it lands in (D8); every configured value a calculation used is
   frozen into its proof (D12). No exported month is ever edited.
+- **Frozen by value (ADR-016 D10's rule).** Inputs that are data are frozen in the manifest or pinned by id; what cannot
+  be pinned by id is frozen by value. So every new frozen input in a latest-wins or editable store — the intervals
+  (D10; `work_time_projection` keeps one row per employee and date, overwritten on each save, `init.sql:1973-1984`,
+  `WorkTimeProjectionRepository.cs:29-32`, `:93-101`), a decided record's state at calculation time (D3), the overtime
+  movements (D8), configs (D12), customary days (D9) — is frozen **by value** into the manifest; event-id-keyed,
+  superseded-not-removed inputs may stay pinned and digested; the shape is S148's.
 - **Security and access.** Four-eyes now covers every decision about hours and compensation (D3's four conditions), and
   the authority to decide is the month approver's, not bare organisation scope. SEC-056 closes in design.
 - **Usability.** Leaders gain a decision step inside the month approval they already do, and a "time off due" list;
@@ -1000,8 +1036,9 @@ the owner's approval.* Each line names its target.
 - `docs/references/danish-agreements.md:62-69` (thresholds) and the S146 note `:64`, which still says part-timers' hours up to full time are 1:1 (§ 8): a dated note that § 8 stk. 2's 1:1 band is not applied, by owner ruling of 2026-10-29, provisional until the state's implementing text, citing FV2025-795 (D4; D-10.3).
 - `docs/references/danish-agreements.md:71-92` (weekly settlement; notes `:73`, `:75`) → superseded by D1 and D2; `:94-111` (compensation model; note `:96`) → D8.
 - `docs/references/agreement-source-register.md`: the row the part-timer cell rests on (today SR-HK-OK24-006, `:1090`, or a new row for the `PartTimeBandRule` slot) names FV2025-795 and the owner ruling (QUAL-215's lesson); the rows S146 flagged as disputed get this ADR's verdicts.
+- `docs/ARCHITECTURE.md:61`, `:86`, `:150`, `:195-196`: `CentralAgreementConfigs` stops being the static source of truth (D12: seed and defence-in-depth fallback at most; the database configs are what payroll reads, passed in the engine's request); the read-only cross-context contract grows (D10, D3), `ProjectionHoursReader` staying the one Payroll type that names the Backend repositories.
 - `docs/knowledge-base/decisions/ADR-014-agreement-configs-database-backed.md`: an implementation note (D12).
-- `docs/knowledge-base/decisions/ADR-016-temporal-period-handling.md` D10: the marker per stage; the read contract (three tables, then the decided records); configs frozen in place of fingerprints; the frozen pieces gain regime and membership.
+- `docs/knowledge-base/decisions/ADR-016-temporal-period-handling.md` D10: the marker per stage; the read contract (three tables, then the decided records); configs frozen in place of fingerprints; the frozen pieces gain regime and membership; the digest's canonical forms: an interval line form if intervals are digested; the entry line form without the voluntary flag if it retires.
 - `docs/knowledge-base/decisions/ADR-017-local-agreement-configuration-as-a-profile.md`: the profile's flex columns, the customary-days table, the retired switch, the lapsed `weekly_norm_hours` premise (an expert item).
 - `docs/knowledge-base/decisions/ADR-024-role-within-agreement-modeling.md`: D1/D2 (the overrides become the regime's seed); D7's implementation status (`:554`), point 3's "Approval page" (`:220`) → Teamoversigt, and the "Bug #4 seed flip" (`:228`, `:254`) resolved by retirement.
 - `docs/knowledge-base/decisions/ADR-032-vacation-consumption-correctness.md:47`: the limitation ends; the credited part of a paid customary day consumes nothing; the divisor reads the planned-hours figure.
@@ -1027,7 +1064,8 @@ balance separate from flex (`SYSTEM_TARGET.md:408`). Not a valid path.
 
 **Offered to the owner on 2026-10-29, and not chosen.** F-1 (a) one cut-over; F-2 (a) every decision afterwards, with no
 record of an order given in advance; F-4 (a) office hours not modelled; F-5 (a) one rule set with everyone on flex, and
-(c) rule sets per staff group; F-6 (b) a fixed assessment period per AC group; F-7 (i) the printed 1:1 rule; F-8 (a)
+(c) rule sets per staff group; F-6 (b) a fixed assessment period per AC group; the quarter as an institution-level
+option; and an adjudicator check of that option before ruling — the last two offered to the owner and declined; F-7 (i) the printed 1:1 rule; F-8 (a)
 importing base pay, which would cross the payroll boundary and could only be the owner's exception, and (c) inferring the
 regime from position, which misclassifies wherever position and pay group diverge; F-9 (a) paid days only; QUAL-232 (b)
 the refusal as the end state; QUAL-233 (b) configs are code, and (c) the split; QUAL-234 (b) derived times stamped on
@@ -1115,6 +1153,18 @@ each institution's configuration.
     `SYSTEM_TARGET.md:163` → `:165`, `:243` → `:247`, `:371` → `:377`, `:374` → `:382`, `:383` → `:391`, `:393` → `:403`,
     `:396` → `:408`; `db-schema.md:258-270` → `:258-271` (now cited in D4). The test-file count is
     re-taken (51 at `c4eb6184`).
+- **Amendment A1, review cycle 1 (2026-10-29).** `planner` (Opus 5.5) applied the adjudication of the dual-lens review
+  (`.claude/reviews/S147-ADR-043-adjudication-c1.md`, R-1 … R-11; no owner decision altered):
+  - R-B gates a decided AC claim's earning and the deadline, not all of stage 3 (R-1); D9's part day is a clock time or
+    full-time hours (R-2); QUAL-239's interim refusal in stage 0 (R-3); the AC regime is ADR-024 D2's three states, all
+    provisional, DISCRETIONARY defined (R-4); the office-hours warning is against the full-time week (R-5).
+  - The config stage changes no pay figure; the caps' pay effect moves to stage 1 (R-6); stage 0's marker exception
+    covers every arithmetic or replay-contract change (R-7); a paid-absence day is "credited as the day planned" (R-8);
+    new inputs in latest-wins or editable stores are frozen by value (R-9); `docs/ARCHITECTURE.md` joins the documents
+    owed (R-10).
+  - Notes: postponements are the leaders' (N1); the send gate's tense (N2); "will open" on `weekly-timeline-v2` (N3);
+    D-9's two declined options (N4); a backdated "applies from" date (N5); how a placement is confirmed afterwards (N6);
+    the regime's placement marked as the build input's (N9).
 
 <!-- ===== End of the amended ADR-043 text ===== -->
 
@@ -1143,3 +1193,14 @@ each institution's configuration.
   - **In the amended text:** each fork F-1 … F-9 decided (the owner's verbatim answer, the date, the reason) and folded into D1–D9; D10 (QUAL-234), D11 (QUAL-232) and D12 (QUAL-233/QUAL-204, ADR-014 on the pay path) added; every recorded proposal folded into its decision; the stage map; one list of provisional items (20) and one of owed research (R-A … R-E, two of them new: R-D the directive clause behind "comparable full-timer", R-E the watch for FV2025-795's implementing text); "Documents owed at acceptance"; the header's "Supersedes / amends" and "Closes when built" widened.
   - **Apparatus:** the header rows say where the amended text is; the fold map maps items 1–45 and the adjudicators' rulings to the amended sections; note 1 records the re-check as done.
   - **The line-number re-check (the coordinator's item):** every file:line in the amended text opened at `c4eb6184`. Changed from the knowledge-base text: `PeriodCalculationService.cs:2220` → `:2610`, `:2380-2388` → `:2770-2779`, `:3170` → `:3313`, `:3505` → `:3648`, `:3548` → `:3691`, `:3584` → `:3727`; `ReplayRefusedException.cs:38` → `:41`; `PayrollExportService.cs:334-342` → `:450-459`; `ApprovalEndpoints.cs:1801` → `:1810`, `:2110` → `:2119`; `SYSTEM_TARGET.md:163` → `:165`, `:243` → `:247`, `:371` → `:377`, `:374` → `:382`, `:383` → `:391`, `:393` → `:403`, `:396` → `:408`; `db-schema.md:258-270` → `:258-271`. Changed from the briefs where they are carried: `PeriodCalculationService.cs:2155-2163` (D-1, D-2, D-3) → `:2167-2175`, `:3205`/`:3203` → `:3217`/`:3215`, `:2758-2767` → `:2770-2779`, `:2775-2784` (D-6) → `:2787-2796`, `:2678` (D-11) → `:2690`; `SkemaEndpoints.cs:2051-2067` → `:2049-2066`, `:2057` → `:2055`, `:2084-2106` → `:2082-2104` (D-2, D-3; TASK-14701 shifted the file); the manual-hours census in `SkemaEndpoints.cs` (D-2) shifted by −2, and `:2670` → `:2692`; `SkemaPage.tsx:335-379` (D-2) → 39 matching lines spanning `:25`–`:1090`; `init.sql:2516-2526` (D-11's seeds) → `:2524-2533`; C5 in `agreement-cells-reverification-research.md:572-605` (D-9) → `:583-621`. Not verifiable at this HEAD: the T7 notice's file:lines (TASK-14706/14707, not on master) and TASK-14708's `AbsenceClassification.cs` (not on master); both are cited by brief, not by line.
+- **WC-2 (2026-10-29).** `planner` (Opus 5.5), at `9de1ae79`, applied the adjudication of the dual-lens review, cycle 1 (`.claude/reviews/S147-ADR-043-adjudication-c1.md`, RULED; Codex FINDINGS 3B/4W/1N, Fable READY-TO-ACCEPT 5W/11N). No owner answer and no rulings-table row changed.
+  - **In the amended text:** R-1 (R-B gates S3-3's earning and S3-4; its input, C5's following-quarter rule); R-2 (D9's part: a clock time where office hours are set, else full-time hours); R-3 (D8: QUAL-239's interim 409 in stage 0; the header's "Closes when built"); R-4 (D4's AC values, ADR-024 D2's three states with their definitions; Prov. 5; D5 "CONTRACTUAL only"); R-5 (D3's office-hours warning against the full-time week); R-6 (the config stage's "Lands" and interim limits; stage 1's "Lands"; D6; the retire table's central caps → stage 1); R-7 (stage 0's marker exception); R-8 ("What changes" for employees; D2's title; D8's time off in lieu); R-9 (the rule "Frozen by value" stated once, in Consequences; D10, D3, the header, the ADR-016 line of "Documents owed"); R-10 (`docs/ARCHITECTURE.md` in "Documents owed"); R-11 N1 (postponements to the leaders), N2 (the send gate's tense), N3 ("will open"), N4 (D-9's two further declined options), N5 (a backdated "applies from" date), N6 (how a placement is confirmed afterwards, after D7's first bullet), N9 (the regime's placement marked as the build input's). The ADR's own revision history gains "Amendment A1, review cycle 1".
+  - **Apparatus:** item 14 (D-7.P1) corrected per R-5; the new section "To tell the owner at acceptance (O-10)" holds the adjudication's two sentences (R-4, R-6) verbatim.
+  - **Not applied (declined by the adjudication):** Fable N7, N10, N11; Codex W1's "adjudicated mapping before building"; Codex W2's sprint-ledger alignment; the event-id supersession alternative; R-B as a stage-wide gate.
+  - **Placement notes:** N2's citation is `ApprovalEndpoints.cs:2230`, where the interval-plus-manual sum sits at both `68187917` and `9de1ae79` (the adjudication says `:2229`, the line before); N4 says "offered to the owner and declined", as `docs/sprints/SPRINT-147.md:12` records it ("offered and not chosen"), for the adjudication's "asked for and declined"; R-5's "item 18" is written "provisional item 18" in the ADR and "Prov. 18" here, because this file's own list has a different item 18; R-B's and N6's bare citations carry their file names (`agreement-cells-reverification-research.md`, `.claude/plans/s147/decide/D-04-marking-workflow.md`).
+- **WC-2.1 (2026-10-29).** `planner` (Opus 5.5), on the Orchestrator's ruling: the four inconsistencies WC-2 left are fixed, each following a ruling already made (no new adjudication). In the stage map:
+  - row 0's marker cell → "none unless a stage-0 item changes the engine's arithmetic or the replay contract (R-7)";
+  - stage 0's "Lands" gains QUAL-239's interim (R-3);
+  - stage 3's "Lands" marks the earnings into D8's ledger "after research cell R-B; the claim record, reminder and regime gate may land first" (R-1);
+  - the config stage's "Lands" says the demo profile rows are seeded with their cap values, which have no pay effect until stage 1 (R-6). The build input's C-12 and S1-7 now say the same (its draft 2.1).
+  - The batch-3 historical record of R-B ("Blocks: stage 3 only") is left as it is. The two factual corrections stand, confirmed by the Orchestrator: N2 cites `ApprovalEndpoints.cs:2230`; N4 says "offered to the owner and declined" (`docs/sprints/SPRINT-147.md:12`).
