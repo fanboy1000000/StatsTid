@@ -932,7 +932,7 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
           absenceType: 'CARE_DAY',
           date: '2026-03-03',
           requiredHours: 7.4,
-          message: 'full day only',
+          message: 'Omsorgsdag kan kun registreres som hel dag (7,4 timer) den 03-03-2026.',
         },
         422,
       )
@@ -955,8 +955,14 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     await waitFor(() =>
       expect((screen.getByLabelText('Omsorgsdage dag 3') as HTMLInputElement).value).toBe(''),
     )
-    // …and the new 422 body surfaces a comprehensible Danish alert.
-    expect(screen.getByText(/Omsorgsdage skal registreres som en hel dag/)).toBeInTheDocument()
+    // …and the 422 body's own server-composed Danish sentence is shown, plus the page's rollback sentence.
+    // S147 QUAL-231: kind F. Fails on the pre-change formatAbsenceRuleError, which ignored `message`
+    // and rendered a label-table sentence ("Omsorgsdage skal registreres som en hel dag (7,4 t). ...").
+    // Red conditions: the getByText below finds nothing (that sentence is rendered instead). Was
+    // /Omsorgsdage skal registreres som en hel dag/.
+    expect(
+      screen.getByText('Omsorgsdag kan kun registreres som hel dag (7,4 timer) den 03-03-2026. Registreringen blev derfor sat tilbage.'),
+    ).toBeInTheDocument()
   })
 
   it('S123: a daily-norm ABSENCE cap 422 surfaces the dedicated cap alert (shape-discriminated, NOT the generic page-level swallow)', async () => {

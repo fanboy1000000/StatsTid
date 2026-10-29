@@ -80,35 +80,44 @@ import type {
 } from '../types'
 import styles from './SkemaPage.module.css'
 
-const DANISH_ABSENCE_LABELS: Record<string, string> = {
+// S147 QUAL-231 (A-1): ONE vocabulary per error family. This map is keyed by ENTITLEMENT TYPE
+// only (the five EntitlementMapping.AbsenceToEntitlementType values) and serves the QUOTA alert
+// alone, because the quota 422 sends the entitlement type in `absenceType` and an ENGLISH
+// `message`. It holds no stored absence code: the rule alerts (full-day / not-eligible) take the
+// server's Danish `message`, else the served catalogue's `label` for the stored code.
+const ENTITLEMENT_LABELS: Record<string, string> = {
   VACATION: 'Ferie',
   SPECIAL_HOLIDAY: 'Særlige feriedage',
-  SPECIAL_HOLIDAY_ALLOWANCE: 'Særlige feriedage',
   CARE_DAY: 'Omsorgsdage',
   CHILD_SICK: 'Barns sygedag',
   SENIOR_DAY: 'Seniordage',
 }
 
 function formatQuotaError(q: QuotaError): string {
-  const label = DANISH_ABSENCE_LABELS[q.absenceType] ?? q.absenceType
+  const label = ENTITLEMENT_LABELS[q.absenceType] ?? q.absenceType
   const remaining = q.remaining.toFixed(1).replace('.', ',')
   const requested = q.requested.toFixed(1).replace('.', ',')
   return `Du har overskredet din kvote for ${label}. Du har ${remaining} dage tilbage, men forsøgte at registrere ${requested} dage.`
 }
 
 /** S73 R4 — the new save-422 families (`absence_full_day_only` /
-    `absence_type_not_eligible`) → a comprehensible Danish alert. */
-function formatAbsenceRuleError(e: AbsenceRuleError): string {
-  const label = DANISH_ABSENCE_LABELS[e.absenceType] ?? e.absenceType
+    `absence_type_not_eligible`) → a comprehensible Danish alert.
+    S147 QUAL-231 (A-1): the server's composed Danish `message` leads when present; the page
+    adds its own sentence about the rolled-back value. With no `message`, the stored code is
+    named by `labelFor` (the served Skema catalogue's label; the raw code if it is not there). */
+function formatAbsenceRuleError(e: AbsenceRuleError, labelFor: (absenceType: string) => string): string {
+  const rolledBack = 'Registreringen blev derfor sat tilbage.'
+  if (e.message) return `${e.message} ${rolledBack}`
+  const label = labelFor(e.absenceType)
   if (e.error === 'absence_full_day_only') {
     const required =
       e.requiredHours !== undefined ? `${e.requiredHours.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')} t` : null
     return required
-      ? `${label} skal registreres som en hel dag (${required}). Registreringen blev derfor sat tilbage.`
-      : `${label} skal registreres som en hel dag. Registreringen blev derfor sat tilbage.`
+      ? `${label} skal registreres som en hel dag (${required}). ${rolledBack}`
+      : `${label} skal registreres som en hel dag. ${rolledBack}`
   }
   // absence_type_not_eligible
-  return `Du er ikke berettiget til ${label} på denne dato. Registreringen blev derfor sat tilbage.`
+  return `Du er ikke berettiget til ${label} på denne dato. ${rolledBack}`
 }
 
 /** S123 / TASK-12303 — the daily-norm ABSENCE cap 422 (a day's summed absence
@@ -1018,7 +1027,7 @@ export function SkemaPage() {
           reverted to server truth; this alert explains why. */}
       {absenceRuleError && (
         <Alert variant="error" onDismiss={clearAbsenceRuleError}>
-          {formatAbsenceRuleError(absenceRuleError)}
+          {formatAbsenceRuleError(absenceRuleError, (t) => data?.absenceTypes.find((a) => a.type === t)?.label ?? t)}
         </Alert>
       )}
 
