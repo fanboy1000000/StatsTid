@@ -956,7 +956,10 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
       expect((screen.getByLabelText('Omsorgsdage dag 3') as HTMLInputElement).value).toBe(''),
     )
     // …and the new 422 body surfaces a comprehensible Danish alert.
-    expect(screen.getByText(/Omsorgsdage skal registreres som en hel dag/)).toBeInTheDocument()
+    // S147 QUAL-231: was /Omsorgsdage skal registreres som en hel dag/ (a label-table sentence).
+    // The rule alert now leads with the server's composed `message` (here the mock's
+    // 'full day only') and adds the page's own rolled-back sentence.
+    expect(screen.getByText('full day only Registreringen blev derfor sat tilbage.')).toBeInTheDocument()
   })
 
   it('S123: a daily-norm ABSENCE cap 422 surfaces the dedicated cap alert (shape-discriminated, NOT the generic page-level swallow)', async () => {

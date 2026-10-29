@@ -34,16 +34,6 @@ export interface WeeklyCalculationResult {
   success: boolean
 }
 
-export const ABSENCE_TYPES = [
-  { value: 'VACATION', label: 'Ferie (Vacation)' },
-  { value: 'CARE_DAY', label: 'Omsorgsdag (Care Day)' },
-  { value: 'CHILD_SICK_1', label: 'Barns 1. sygedag (Child Sick Day)' },
-  { value: 'PARENTAL_LEAVE', label: 'Barsel (Parental Leave)' },
-  { value: 'SENIOR_DAY', label: 'Seniordag (Senior Day)' },
-  { value: 'LEAVE_WITH_PAY', label: 'Tjenestefri m. lon (Leave with Pay)' },
-  { value: 'LEAVE_WITHOUT_PAY', label: 'Tjenestefri u. lon (Leave without Pay)' },
-] as const
-
 export const AGREEMENT_CODES = ['AC', 'HK', 'PROSA'] as const
 
 // S118 / TASK-11801 — the hand-written `LoginRequest` / `LoginResponse`
