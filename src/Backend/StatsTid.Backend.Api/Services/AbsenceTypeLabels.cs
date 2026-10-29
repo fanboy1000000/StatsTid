@@ -1,3 +1,5 @@
+using StatsTid.SharedKernel.Models;
+
 namespace StatsTid.Backend.Api.Services;
 
 /// <summary>
@@ -22,9 +24,16 @@ namespace StatsTid.Backend.Api.Services;
 /// </para>
 ///
 /// <para>
-/// <b>Keyed by the stored string.</b> TASK-14708 (S147 wave 2a) moves the codes to the
-/// SharedKernel constants; the keys stay the stored strings, so re-keying is a rename of the
-/// literal, never a value change.
+/// <b>Keyed by the stored string.</b> S147 / TASK-14708 (QUAL-231): the keys are the SharedKernel
+/// <see cref="AbsenceTypes"/> constants, whose values ARE the stored strings, so re-keying was a
+/// rename of the literal, never a value change. Every code here is a vocabulary code; the
+/// vocabulary's one classification is <see cref="AbsenceClassification"/>.
+/// </para>
+///
+/// <para>
+/// <b>One fallback rule.</b> A reader that needs a label calls <see cref="LabelFor"/>, which
+/// falls back to the code itself; no reader spells that fallback by hand (S147 / TASK-14708,
+/// review follow-up A-2: the six Skema label sites route through it).
 /// </para>
 ///
 /// <para>
@@ -42,20 +51,20 @@ public static class AbsenceTypeLabels
     /// </summary>
     public static readonly IReadOnlyList<KeyValuePair<string, string>> InDisplayOrder =
     [
-        new("SICK_DAY", "Sygedag"),
-        new("VACATION", "Ferie"),
+        new(AbsenceTypes.SickDay, "Sygedag"),
+        new(AbsenceTypes.Vacation, "Ferie"),
         // S147 / TASK-14701 (QUAL-235): særlige feriedage (Cirkulære 021-24 §12), the absence code
         // EntitlementMapping maps to the SPECIAL_HOLIDAY entitlement. The label matches the
         // frontend's entitlement label (frontend/src/lib/entitlementConstants.ts).
-        new("SPECIAL_HOLIDAY_ALLOWANCE", "Særlig feriedag"),
-        new("CARE_DAY", "Omsorgsdag"),
-        new("CHILD_SICK_DAY", "Barns 1. sygedag"),
-        new("CHILD_SICK_DAY_2", "Barns 2. sygedag"),
-        new("CHILD_SICK_DAY_3", "Barns 3. sygedag"),
-        new("PARENTAL_LEAVE", "Barsel"),
-        new("SENIOR_DAY", "Seniordag"),
-        new("LEAVE_WITH_PAY", "Tjenestefri m. løn"),
-        new("LEAVE_WITHOUT_PAY", "Tjenestefri u. løn"),
+        new(AbsenceTypes.SpecialHolidayAllowance, "Særlig feriedag"),
+        new(AbsenceTypes.CareDay, "Omsorgsdag"),
+        new(AbsenceTypes.ChildSick1, "Barns 1. sygedag"),
+        new(AbsenceTypes.ChildSick2, "Barns 2. sygedag"),
+        new(AbsenceTypes.ChildSick3, "Barns 3. sygedag"),
+        new(AbsenceTypes.ParentalLeave, "Barsel"),
+        new(AbsenceTypes.SeniorDay, "Seniordag"),
+        new(AbsenceTypes.LeaveWithPay, "Tjenestefri m. løn"),
+        new(AbsenceTypes.LeaveWithoutPay, "Tjenestefri u. løn"),
     ];
 
     /// <summary>The same map for lookup, ordinal-keyed (the stored strings are case-exact).</summary>
@@ -64,7 +73,9 @@ public static class AbsenceTypeLabels
 
     /// <summary>
     /// The Danish label for <paramref name="absenceType"/>, or the code itself when it has none
-    /// (the fallback every pre-S147 reader of either copied table used).
+    /// (the fallback every pre-S147 reader of either copied table used). The one place that
+    /// rule is spelled: the Skema catalogue, visible rows, row-preferences echo and the save's
+    /// 422 messages all call this.
     /// </summary>
     public static string LabelFor(string absenceType)
         => ByCode.TryGetValue(absenceType, out var label) ? label : absenceType;

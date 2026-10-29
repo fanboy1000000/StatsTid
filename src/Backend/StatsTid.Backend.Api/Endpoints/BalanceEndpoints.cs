@@ -1348,7 +1348,7 @@ public static class BalanceEndpoints
             // distinct-date is the right primitive). Uses the raw absence_type (SICK_DAY maps to a
             // null entitlement type, so it is intentionally NOT in mappedAbsences).
             var sickDaysYtd = allAbsences
-                .Where(a => string.Equals(a.AbsenceType, "SICK_DAY", StringComparison.Ordinal)
+                .Where(a => string.Equals(a.AbsenceType, AbsenceTypes.SickDay, StringComparison.Ordinal)
                             && a.Date.Year == today.Year)
                 .Select(a => a.Date)
                 .Distinct()

@@ -1,3 +1,5 @@
+using StatsTid.SharedKernel.Models;
+
 namespace StatsTid.Backend.Api.Services;
 
 /// <summary>
@@ -46,22 +48,25 @@ internal static class EntitlementMapping
     /// <summary>
     /// Absence type → entitlement type mapping (<c>null</c> = no entitlement gating / skip).
     /// Promoted verbatim from <c>SkemaEndpoints</c>; the StringComparer.Ordinal keying is
-    /// preserved.
+    /// preserved. S147 / TASK-14708 (QUAL-231): the KEYS are the SharedKernel
+    /// <see cref="AbsenceTypes"/> constants (the stored spelling — same strings as before, so
+    /// no lookup changes); the VALUES are entitlement types, a different vocabulary, and stay
+    /// as written.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string?> AbsenceToEntitlementType =
         new Dictionary<string, string?>(StringComparer.Ordinal)
         {
-            ["VACATION"] = "VACATION",
-            ["CARE_DAY"] = "CARE_DAY",
-            ["CHILD_SICK_DAY"] = "CHILD_SICK",
-            ["CHILD_SICK_DAY_2"] = "CHILD_SICK",
-            ["CHILD_SICK_DAY_3"] = "CHILD_SICK",
-            ["PARENTAL_LEAVE"] = null,
-            ["SENIOR_DAY"] = "SENIOR_DAY",
-            ["SPECIAL_HOLIDAY_ALLOWANCE"] = "SPECIAL_HOLIDAY",
-            ["LEAVE_WITH_PAY"] = null,
-            ["LEAVE_WITHOUT_PAY"] = null,
-            ["SICK_DAY"] = null
+            [AbsenceTypes.Vacation] = "VACATION",
+            [AbsenceTypes.CareDay] = "CARE_DAY",
+            [AbsenceTypes.ChildSick1] = "CHILD_SICK",
+            [AbsenceTypes.ChildSick2] = "CHILD_SICK",
+            [AbsenceTypes.ChildSick3] = "CHILD_SICK",
+            [AbsenceTypes.ParentalLeave] = null,
+            [AbsenceTypes.SeniorDay] = "SENIOR_DAY",
+            [AbsenceTypes.SpecialHolidayAllowance] = "SPECIAL_HOLIDAY",
+            [AbsenceTypes.LeaveWithPay] = null,
+            [AbsenceTypes.LeaveWithoutPay] = null,
+            [AbsenceTypes.SickDay] = null
         };
 
     /// <summary>

@@ -12,29 +12,34 @@ using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
+// ── Danish absence type labels ──
+// S147 / TASK-14701 (QUAL-235) — Skema and the admin visibility list (ConfigEndpoints) read the
+// ONE shared map in Services/AbsenceTypeLabels.cs, so a code labelled there is labelled on every
+// absence-type surface. S147 / TASK-14708 (review follow-up A-2) — every label site below calls
+// its LabelFor (label, else the code itself), so that fallback is spelled in one place; this alias
+// replaces the former private dictionary field of the same name, which shadowed the class.
+using AbsenceTypeLabels = StatsTid.Backend.Api.Services.AbsenceTypeLabels;
 
 namespace StatsTid.Backend.Api.Endpoints;
 
 public static class SkemaEndpoints
 {
-    // ── Danish absence type labels ──
-    // S147 / TASK-14701 (QUAL-235) — the private copy of the label table is gone: Skema and the
-    // admin visibility list (ConfigEndpoints) read the ONE shared map in
-    // Services/AbsenceTypeLabels.cs, so a code labelled there is labelled on every absence-type
-    // surface. This local alias keeps the call sites below unchanged (the same alias shape as
-    // AbsenceToEntitlementType further down).
-    private static readonly IReadOnlyDictionary<string, string> AbsenceTypeLabels =
-        StatsTid.Backend.Api.Services.AbsenceTypeLabels.ByCode;
-
     // ── Base absence types common to all agreements ──
+    // S147 / TASK-14708 (QUAL-231): the codes are the SharedKernel AbsenceTypes constants (the
+    // stored spelling; the engine credits by the same vocabulary).
     // S147 / TASK-14701 (QUAL-235): SPECIAL_HOLIDAY_ALLOWANCE (særlige feriedage) joins the base
     // list, beside VACATION. It is listed for every agreement, but ComputeAbsenceCatalogAsync
     // serves it only where a SPECIAL_HOLIDAY entitlement config resolves at the catalogue anchor
-    // (gate (c) there), so the row exists exactly where the agreement grants the days.
+    // (gate (c) there). That gate is a DISPLAY affordance, mirroring the SENIOR_DAY gate's dated
+    // read; it is not the check that values a save. The save's quota check keys on the live open
+    // config row instead (GetCurrentOpenAsync in the save path); with no live row the save records
+    // HasNoLiveConfig (QuotaPreCheckPlan.WithoutLiveConfig): the absence is still saved, no quota
+    // is checked and no balance moves.
     private static readonly string[] BaseAbsenceTypes =
     [
-        "SICK_DAY", "VACATION", "SPECIAL_HOLIDAY_ALLOWANCE", "CARE_DAY", "CHILD_SICK_DAY",
-        "PARENTAL_LEAVE", "SENIOR_DAY", "LEAVE_WITH_PAY", "LEAVE_WITHOUT_PAY"
+        AbsenceTypes.SickDay, AbsenceTypes.Vacation, AbsenceTypes.SpecialHolidayAllowance,
+        AbsenceTypes.CareDay, AbsenceTypes.ChildSick1, AbsenceTypes.ParentalLeave,
+        AbsenceTypes.SeniorDay, AbsenceTypes.LeaveWithPay, AbsenceTypes.LeaveWithoutPay
     ];
 
     /// <summary>
@@ -46,11 +51,13 @@ public static class SkemaEndpoints
         var types = new HashSet<string>(BaseAbsenceTypes, StringComparer.Ordinal);
 
         // HK gets 2 child sick days, PROSA gets 3
+        // (S147 / TASK-14708: the codes read the constants; WHICH agreements get day 2 and day 3
+        // is unchanged here — that is QUAL-236's, S148.)
         if (agreementCode is "HK" or "PROSA")
-            types.Add("CHILD_SICK_DAY_2");
+            types.Add(AbsenceTypes.ChildSick2);
 
         if (agreementCode is "PROSA")
-            types.Add("CHILD_SICK_DAY_3");
+            types.Add(AbsenceTypes.ChildSick3);
 
         return types;
     }
@@ -414,7 +421,7 @@ public static class SkemaEndpoints
                 AbsenceTypes: visibleAbsenceTypes
                     .Select((t, i) => new SkemaRowPreferenceAbsenceRow(
                         Type: t,
-                        Label: AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t,
+                        Label: AbsenceTypeLabels.LabelFor(t),
                         FullDayOnly: fullDayOnlyByType.TryGetValue(t, out var fdo) && fdo,
                         SortOrder: i))
                     .ToList());
@@ -900,6 +907,28 @@ public static class SkemaEndpoints
                 }
             }
 
+            // ── The absence vocabulary gate (S147 / TASK-14708, QUAL-231; NR-4) ──
+            // Every absence code must be one of the SharedKernel vocabulary (AbsenceTypes), each
+            // classified exactly once in AbsenceClassification. Why: payroll passes the stored code
+            // to the Rule Engine unchanged, and the engine credits or reduces by that one
+            // classification. A code outside it would be saved, exported, and then silently count
+            // as neither — exactly the kind of drift QUAL-231 was (Skema stored SICK_DAY and
+            // CHILD_SICK_DAY while the engine's list spelled other codes). The grid only posts
+            // codes it was served, so this refuses a hand-built or stale request. Refused here,
+            // before any absence lookup, the rule-engine call, the advisory lock and the
+            // transaction, so nothing is written. The body names the code, never a date (the gate
+            // is about the code, not the day).
+            foreach (var absence in request.Absences ?? Array.Empty<SkemaAbsence>())
+            {
+                if (!AbsenceClassification.IsKnown(absence.AbsenceType))
+                    return Results.Json(new
+                    {
+                        error = "absence_type_unknown",
+                        absenceType = absence.AbsenceType,
+                        message = $"Fraværstypen '{absence.AbsenceType}' findes ikke."
+                    }, statusCode: 422);
+            }
+
             // ── Per-day absence validation (S47 TASK-2C) ──
             // Reject early if the request contains duplicate absence types on the same day
             // or if total absence hours for any single day exceed the standard norm (7.4h).
@@ -1067,7 +1096,7 @@ public static class SkemaEndpoints
                                 absenceType = absence.AbsenceType,
                                 date = absence.Date,
                                 requiredHours,
-                                message = $"{AbsenceTypeLabels.GetValueOrDefault(absence.AbsenceType, absence.AbsenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {absence.Date:dd-MM-yyyy}.",
+                                message = $"{AbsenceTypeLabels.LabelFor(absence.AbsenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {absence.Date:dd-MM-yyyy}.",
                             }, statusCode: 422);
                     }
                 }
@@ -1107,7 +1136,7 @@ public static class SkemaEndpoints
                                     absenceType = absence.AbsenceType,
                                     entitlementType = "CHILD_SICK",
                                     date = absence.Date,
-                                    message = $"Medarbejderen er ikke berettiget til {AbsenceTypeLabels.GetValueOrDefault(absence.AbsenceType, absence.AbsenceType)} på {absence.Date:dd-MM-yyyy}."
+                                    message = $"Medarbejderen er ikke berettiget til {AbsenceTypeLabels.LabelFor(absence.AbsenceType)} på {absence.Date:dd-MM-yyyy}."
                                 }, statusCode: 422);
                         }
 
@@ -2028,7 +2057,7 @@ public static class SkemaEndpoints
                                         absenceType = absence.AbsenceType,
                                         date = absence.Date,
                                         requiredHours,
-                                        message = $"{AbsenceTypeLabels.GetValueOrDefault(absence.AbsenceType, absence.AbsenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {absence.Date:dd-MM-yyyy}.",
+                                        message = $"{AbsenceTypeLabels.LabelFor(absence.AbsenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {absence.Date:dd-MM-yyyy}.",
                                     });
                             }
                         }
@@ -2461,7 +2490,7 @@ public static class SkemaEndpoints
                 AbsenceTypes: orderedAbsenceTypes
                     .Select(a => new SkemaRowPreferenceAbsenceRow(
                         Type: a.AbsenceType,
-                        Label: AbsenceTypeLabels.TryGetValue(a.AbsenceType, out var l) ? l : a.AbsenceType,
+                        Label: AbsenceTypeLabels.LabelFor(a.AbsenceType),
                         FullDayOnly: prefFullDayOnlyByType.TryGetValue(a.AbsenceType, out var fdo) && fdo,
                         SortOrder: a.SortOrder))
                     .ToList()));
@@ -2572,10 +2601,15 @@ public static class SkemaEndpoints
         //     where the employee's agreement configures them. Same dated repository read as gate
         //     (b) (GetByTypeAtAsync at the catalogue anchor), with the OK version IN FORCE at the
         //     anchor (OkVersionResolver.ResolveVersion(anchor)) — the S73 H2 convention the served
-        //     fullDayOnly flag below and the save path's consumption reads use — so the row is
-        //     offered exactly where a save would be valued against a config. No dated row ⇒ not
+        //     fullDayOnly flag below and the save path's consumption reads use. No dated row ⇒ not
         //     served (fail-closed). The resolved row also seeds the served fullDayOnly flag below:
         //     one read, so the gate and the flag can never come from two different rows.
+        //     S147 / TASK-14708 (review follow-up A-1): this gate is a DISPLAY affordance, like
+        //     gate (b)'s dated read; it does not decide whether a save is counted against a quota.
+        //     The save's quota check keys on the live open config row (GetCurrentOpenAsync in the
+        //     save path). With no live row the save records HasNoLiveConfig
+        //     (QuotaPreCheckPlan.WithoutLiveConfig): the absence is still saved, no quota is
+        //     checked and no balance moves.
         var specialHolidayConfig = await entitlementConfigRepo.GetByTypeAtAsync(
             "SPECIAL_HOLIDAY", agreementCode, OkVersionResolver.ResolveVersion(anchor), anchor, ct);
         var specialHolidayConfigured = specialHolidayConfig is not null;
@@ -2586,7 +2620,7 @@ public static class SkemaEndpoints
             .Where(t => !hiddenTypes.Contains(t))
             .Where(t => childSickEligible
                 || !string.Equals(GetEntitlementType(t), "CHILD_SICK", StringComparison.Ordinal))
-            .Where(t => seniorVisible || !string.Equals(t, "SENIOR_DAY", StringComparison.Ordinal))
+            .Where(t => seniorVisible || !string.Equals(t, AbsenceTypes.SeniorDay, StringComparison.Ordinal))
             .Where(t => specialHolidayConfigured
                 || !string.Equals(GetEntitlementType(t), "SPECIAL_HOLIDAY", StringComparison.Ordinal))
             .ToList();
@@ -2630,7 +2664,7 @@ public static class SkemaEndpoints
             }
 
             catalog.Add(new AbsenceCatalogEntry(
-                t, AbsenceTypeLabels.TryGetValue(t, out var l) ? l : t, fullDayOnly));
+                t, AbsenceTypeLabels.LabelFor(t), fullDayOnly));
         }
 
         return catalog;

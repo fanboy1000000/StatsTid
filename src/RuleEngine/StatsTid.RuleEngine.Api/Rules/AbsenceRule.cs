@@ -17,6 +17,20 @@ namespace StatsTid.RuleEngine.Api.Rules;
 /// screen and the weekly norm use. It applies in <see cref="Evaluate"/>,
 /// <see cref="GetNormCreditHours"/>, <see cref="GetNormReductionHours"/> and the weekly core.
 /// </para>
+///
+/// <para>
+/// <b>S147 / TASK-14708 (QUAL-231).</b> Whether an absence is credited or reduces the norm is no
+/// longer decided here: it is read from the one SharedKernel classification,
+/// <see cref="AbsenceClassification"/>, which the Backend's Skema save also uses to refuse an
+/// unknown code. Two things changed with it. The child's sick days are now matched under the
+/// spelling Skema stores (<c>CHILD_SICK_DAY</c>, <c>_2</c>, <c>_3</c>; before, the list used an
+/// old numbered spelling that nothing stored), and a paid sick day (<c>SICK_DAY</c>) is
+/// credited for every agreement (Statens arbejdstidsaftale § 7 nr. 2; for AC-agreement staff a
+/// labelled default by analogy, owner ruling D-8b = (a)). The amount is unchanged: the stored
+/// hours (<see cref="EffectiveHours"/>), which the Skema save caps at the day's norm. The
+/// evaluation-model marker moved to <c>weekly-timeline-v2</c> with this change
+/// (<see cref="WeeklyTimelineCore.EvaluationModel"/>).
+/// </para>
 /// </summary>
 public static class AbsenceRule
 {
@@ -28,21 +42,14 @@ public static class AbsenceRule
     private static readonly decimal DefaultCreditWeeklyBasis = FullTimeNormCreditPerDay * DayNorm.WorkingDaysPerWeek;
 
     /// <summary>
-    /// Absence types that grant norm credit (count toward norm fulfillment).
-    /// LEAVE_WITHOUT_PAY does NOT grant norm credit — it reduces the effective norm.
+    /// The absence types that grant norm credit (count toward norm fulfilment): a projection of
+    /// <see cref="AbsenceClassification"/>, never a list of its own (S147 / TASK-14708, P-14).
+    /// LEAVE_WITHOUT_PAY is not among them — it reduces the effective norm instead.
     /// </summary>
-    private static readonly HashSet<string> NormCreditTypes = new()
-    {
-        AbsenceTypes.Vacation,
-        AbsenceTypes.CareDay,
-        AbsenceTypes.ChildSick1,
-        AbsenceTypes.ChildSick2,
-        AbsenceTypes.ChildSick3,
-        AbsenceTypes.ParentalLeave,
-        AbsenceTypes.SeniorDay,
-        AbsenceTypes.SpecialHolidayAllowance,
-        AbsenceTypes.LeaveWithPay,
-    };
+    private static readonly HashSet<string> NormCreditTypes = AbsenceClassification.InDeclarationOrder
+        .Where(kv => kv.Value == AbsenceNormEffect.Credit)
+        .Select(kv => kv.Key)
+        .ToHashSet(StringComparer.Ordinal);
 
     public static CalculationResult Evaluate(
         EmploymentProfile profile,
@@ -62,7 +69,11 @@ public static class AbsenceRule
 
             lineItems.Add(new CalculationLineItem
             {
-                TimeType = MapAbsenceToTimeType(absence.AbsenceType),
+                // The line's time type IS the stored absence code, which the payroll wage-type
+                // mapping keys on (S147 / TASK-14708: one vocabulary). The pre-S147 code switch
+                // mapped every code to itself except the never-stored old numbered child's-sick
+                // spelling, so for every code Skema stores the line is byte-identical.
+                TimeType = absence.AbsenceType,
                 Hours = hours,
                 Rate = 1.0m,
                 Date = absence.Date
@@ -114,8 +125,11 @@ public static class AbsenceRule
         return NormCreditTypes.Contains(absenceType);
     }
 
-    /// <summary>True for the absence type that reduces the norm instead of crediting it (unpaid leave).</summary>
-    public static bool ReducesNorm(string absenceType) => absenceType == AbsenceTypes.LeaveWithoutPay;
+    /// <summary>
+    /// True for an absence type that reduces the norm instead of crediting it (unpaid leave), as
+    /// <see cref="AbsenceClassification"/> classifies it.
+    /// </summary>
+    public static bool ReducesNorm(string absenceType) => AbsenceClassification.IsReduction(absenceType);
 
     /// <summary>
     /// Pure (R35): the hours a 0-hour absence stands for — one working day at
@@ -136,19 +150,4 @@ public static class AbsenceRule
             ? absence.Hours
             : DefaultHoursForZeroHourAbsence(partTimeFraction);
     }
-
-    private static string MapAbsenceToTimeType(string absenceType) => absenceType switch
-    {
-        AbsenceTypes.Vacation => "VACATION",
-        AbsenceTypes.CareDay => "CARE_DAY",
-        AbsenceTypes.ChildSick1 => "CHILD_SICK_DAY",
-        AbsenceTypes.ChildSick2 => "CHILD_SICK_DAY_2",
-        AbsenceTypes.ChildSick3 => "CHILD_SICK_DAY_3",
-        AbsenceTypes.ParentalLeave => "PARENTAL_LEAVE",
-        AbsenceTypes.SeniorDay => "SENIOR_DAY",
-        AbsenceTypes.SpecialHolidayAllowance => "SPECIAL_HOLIDAY_ALLOWANCE",
-        AbsenceTypes.LeaveWithPay => "LEAVE_WITH_PAY",
-        AbsenceTypes.LeaveWithoutPay => "LEAVE_WITHOUT_PAY",
-        _ => absenceType
-    };
 }
