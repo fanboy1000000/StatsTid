@@ -1,6 +1,6 @@
 # D-8 — F-5: each institution's own flex rules, and five related items (the parent brief)
 
-*Brief, draft 2, 2026-10-29: adjudicated (`.claude/reviews/S147-D-batch2-adjudication.md` § D-8.4, § D-8.5 and rulings 2–5). Drafted by `planner` (Opus 5.5). Code facts were verified at `61d6a98a` and re-checked at `26b70a08`; no file under `src/`, `docker/`, `frontend/` or `tools/` changed in between. It builds on D-6 = (a), D-1 = (b), D-9 = (a), D-3 = (c) and D-11 = (b), all answered 2026-10-29.*
+*Brief, draft 2.1, 2026-10-29: adjudicated (`.claude/reviews/S147-D-batch2-adjudication.md` § D-8.4, § D-8.5 and rulings 2–5; R-7 widened by `.claude/reviews/S147-D-batch3-adjudication.md` ruling 3). Its two questions are answered: D-8a = (b) and D-8b = (a), 2026-10-29. Drafted by `planner` (Opus 5.5). Code facts were verified at `61d6a98a` and re-checked at `26b70a08`; no file under `src/`, `docker/`, `frontend/` or `tools/` changed in between. It builds on D-6 = (a), D-1 = (b), D-9 = (a), D-3 = (c) and D-11 = (b), all answered 2026-10-29.*
 
 **What this file is.** D-8 bundles F-5 with five related items. Asked as one, it would break the one-question-at-a-time rule, so the adjudicator confirmed a split (ruling 5):
 - **Two owner questions, each in its own brief, asked one at a time:**
@@ -18,7 +18,7 @@
 | 6 | The leaver's last closing | R-4, accepted | below |
 | 7 | QUAL-225: an explicit opening balance | R-5, a recorded design proposal (ruling 3) | below |
 | 8 | The tenth parameter | R-6, widened to the **paid-absence credit basis** (ruling 4) | below |
-| 9 | QUAL-231's partial-day residual | R-7, accepted with QUAL-237's coupling and a second direction | below |
+| 9 | QUAL-231's partial-day residual | R-7, accepted with QUAL-237's coupling and a second direction; widened to every credit-class type (batch-3 ruling 3) | below |
 
 **Why it matters.**
 - **There is no central state flex agreement.** Every institution's flex scheme is its own local agreement (PAV 19.5.1; `docs/references/agreement-cells-reverification-research.md:624`). The schemes differ in:
@@ -157,15 +157,18 @@ All seven are listed in `../ADR-043-working.md`, "Provisional items and recorded
 - **One served "planned hours" figure.** Every credit-class absence code (TASK-14708's classification) reads it, and ADR-032's divisor reads the same figure. That is a build item (D-7.2 item 4). If S148 builds it in steps, the sprint log names which classes read the basis.
 - **The ADR change:** F-5's text gains RR-12's sentence, worded "paid-absence credit basis".
 
-**R-7. QUAL-231's partial-day residual: a check when Skema saves. Accepted, with QUAL-237's coupling and a second direction.**
-- **The rule:** a day's sick hours may not exceed the day's credit basis minus the hours worked that day, floored at 0. That is the max(worked, planned) reading (RR-3), labelled MEDIUM, and a local agreement may differ.
+**R-7. QUAL-231's partial-day residual: a check when Skema saves. Accepted, with QUAL-237's coupling and a second direction; widened to every credit-class type** (batch-3 ruling 3, `.claude/reviews/S147-D-batch3-adjudication.md`).
+- **The rule as first accepted:** a day's sick hours may not exceed the day's credit basis minus the hours worked that day, floored at 0. That is the max(worked, planned) reading (RR-3), labelled MEDIUM, and a local agreement may differ.
+- **Widened (ruling 3), verbatim:** *"a day's paid-absence hours, of any credit-class type, may not exceed the credit basis minus the hours worked that day; judged at the Skema save in both directions (QUAL-237)"*. So a vacation day, a day of time off in lieu (D-5.P5) or a paid customary day (D-12.P5) that is partly worked is bounded the same way as a sick day. Stage 0; the MEDIUM label is kept.
 - **Both directions are judged:**
-  - a sick-hours save on a day that already holds worked hours;
-  - a later work save on a day that already holds sick hours.
-  - *Or, instead of the check,* the engine computes the credit as min(stored sick hours, max(0, planned − worked)).
+  - a paid-absence save on a day that already holds worked hours;
+  - a later work save on a day that already holds paid-absence hours.
+  - *Or, instead of the check,* the engine computes the credit as min(stored paid-absence hours, max(0, planned − worked)).
 - **Built with QUAL-237's lesson:** it judges the day's stored state plus the posted cells, not the posted cells alone. The two are fixed together.
 - **Where it lands:** stage 0, in the Backend with no payroll marker, on the central basis. It reads R-6's parameter once D-6's config stage lands.
-- *An open point for the build input, not widened here:* the rule as ruled covers sick hours. Whether the same check covers every credit-class absence (for example, a vacation day partly worked) is left to the build input.
+- **Build-input note (ruling 3): quota types.** Some credit-class codes also draw on an entitlement balance (a *quota*: vacation, særlige feriedage and the like). For those, a backstop that clips the credit must also clip the consumption, or refuse the month. Otherwise the balance would be debited for hours the day never credited.
+- *Orchestrator item at close (ruling 3):* QUAL-231's and QUAL-237's register rows gain the widened sentence.
+- *(The open point draft 2 left here, whether the check covers every credit-class absence, is closed by ruling 3.)*
 
 ## What it builds on (the owner's answers, and how they narrow it)
 
@@ -174,8 +177,8 @@ All seven are listed in `../ADR-043-working.md`, "Provisional items and recorded
 - **D-9 = (a):** the owner was told that "a local agreement may still set another settlement period under D-8". That is honoured as a parameter, with `month` the only value S148 builds (amendment ii). AC's sick-day default (D-8b) uses the same analogy as D-9.4.
 - **D-3 = (c):** AC's travel cap "unless agreed locally" joins the list and lands with D-3's later stage.
 - **D-11 = (b):** D-8a's lean copies its pattern, a dated fact recorded by HR. Staff off flex still have their ordered hours routed by the regime.
-- **D-7 (queued):** office hours are parameter 6, and the paid-absence credit basis (R-6) can override them.
-- **D-4 (being asked):** `MaxOvertimeHoursPerPeriod` moves here as an optional warning over decided hours (D-4.P6). It reads decided hours under either of D-4's offered answers.
+- **D-7 = (b):** office hours are parameter 6, opt-in and off by default, and the paid-absence credit basis (R-6) can override them.
+- **D-4 = (c):** `MaxOvertimeHoursPerPeriod` moves here as an optional warning over decided hours (D-4.P6): hours named by an order recorded in advance or by an accepted mark.
 
 ## What the owner should know (D-8.5)
 
@@ -208,7 +211,7 @@ All seven are listed in `../ADR-043-working.md`, "Provisional items and recorded
     - the paid-absence credit basis, one served "planned hours" figure.
   - *Stage 2:* the transfer to the overtime account (D-5), D-7's filter, and `MaxOvertimeHoursPerPeriod`'s warning.
   - *Stage 3:* the standby interaction.
-  - *Stage 0:* R-7's check in both directions, with QUAL-237.
+  - *Stage 0:* R-7's check in both directions, with QUAL-237, for every credit-class type (ruling 3), with the quota-type note.
   - SYSTEM_TARGET §G text (`:168`, `:174`), owed to the owner as a factual correction (ruling 2).
 
 ## The ADR-043 text it rewrites
@@ -231,7 +234,7 @@ All seven are listed in `../ADR-043-working.md`, "Provisional items and recorded
 - **The profile's two overtime columns:** `overtime_requires_pre_approval` retires (D-4.P6). `max_overtime_hours_per_period` becomes an optional warning over decided hours (amendment iii).
 - **AC's annual-norm variants** (D-9.4's gap) are a norm question. They stay in the build-input gap list, not in D-8a (D-8a.2 item 5).
 
-**Waits on.** Nothing for the asking (D-6 is answered). Asking order: D-8a, then D-8b, one at a time, after D-4 and D-7.
+**Waits on.** Nothing. D-8a and D-8b were asked one at a time, after D-4 and D-7, and both are answered (2026-10-29).
 
 ---
 *Revision history.*
@@ -250,3 +253,4 @@ All seven are listed in `../ADR-043-working.md`, "Provisional items and recorded
   - **D-8a.2:** items 2, 3 and 5 are folded here (the dormant `flex_carryover_max`; the demo seed's missing profile rows; the settlement period; the AC annual-norm gap moved to the build input).
   - **D-8.5:** "What the owner should know" is replaced by D-8.5.
   - **Other:** the obsolete-validator citation is corrected to `ConfigResolutionService.cs:324-326`, the `[Obsolete]` attribute. The re-check sha is `26b70a08`.
+- Draft 2.1 (2026-10-29, at `bd5a3d3f`): **R-7 widened** by the batch-3 adjudication's ruling 3 (`.claude/reviews/S147-D-batch3-adjudication.md`). R-7 gains the verbatim sentence (every credit-class type, judged at the Skema save in both directions), the build-input note on quota types (a backstop that clips the credit must also clip the consumption or refuse the month) and the Orchestrator's close item (QUAL-231's and QUAL-237's rows). The open point draft 2 left on R-7 is closed. Table row 9, the stage-0 build line and the header follow. The header, "What it builds on" (D-7 = (b), D-4 = (c)) and "Waits on" now state the answers as facts (D-4, D-7, D-8a and D-8b answered 2026-10-29). Nothing else changed.

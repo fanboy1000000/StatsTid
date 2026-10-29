@@ -1,6 +1,6 @@
 # S147 decide track: the question briefs
 
-*Kept by the `planner`. Started 2026-10-28 at `e7478f24`; updated at `26b70a08`.*
+*Kept by the `planner`. Started 2026-10-28 at `e7478f24`; updated at `bd5a3d3f`.*
 
 ## What this is
 
@@ -9,11 +9,12 @@ S146's research found that StatsTid's overtime/flex model is wrong in kind. ADR-
 The questions are put to the owner one at a time, in a fixed order. Each one goes through four steps:
 
 1. **A brief.** One page in this folder: the question, the options and what each gives up, the lean, what it waits on, and the ADR-043 text it rewrites.
-2. **Adjudication.** The `adjudicator` confirms or replaces the lean and settles the wording. The plan names one file per question, `.claude/reviews/S147-D-NN-adjudication.md`. In practice there are three files so far:
+2. **Adjudication.** The `adjudicator` confirms or replaces the lean and settles the wording. The plan names one file per question, `.claude/reviews/S147-D-NN-adjudication.md`. In practice there are four files:
    - **Batch 1**, `.claude/reviews/S147-D-batch1-adjudication.md` (Fable, RULED-WITH-QUESTIONS): D-1, D-2, D-3, D-6, D-9 and D-11, in one sectioned file. Each brief points at its section (§ D-NN).
    - **D-10**, on its own: `.claude/reviews/S147-D-10-adjudication.md` (Fable, RULED-WITH-QUESTIONS).
    - **Batch 2**, `.claude/reviews/S147-D-batch2-adjudication.md` (Fable, RULED-WITH-QUESTIONS): D-4, D-7 and D-8, with D-8 split into D-8a and D-8b, plus five rulings.
-3. **The ask.** The Orchestrator explains the question in prose, then asks it on its own (`PLAN-s147.md:269-274`). Each adjudicated brief carries the settled wording under "The question as it will be asked".
+   - **Batch 3**, `.claude/reviews/S147-D-batch3-adjudication.md` (Fable, RULED-WITH-QUESTIONS): D-5 and D-12, plus four rulings.
+3. **The ask.** The Orchestrator explains the question in prose, then asks it on its own (`PLAN-s147.md:269-274`). Each adjudicated brief carries the settled wording under "The question as it will be asked". *One exception:* D-5 has no owner question (batch-3 ruling 1). It is told in prose, ending "this one has no question — say so if you want any of it asked".
 4. **The record.** The answer goes verbatim into the `SPRINT-147.md` ledger and into the rulings table of `../ADR-043-working.md`.
 
 A brief whose question depends on an earlier answer is normally written only after that answer is given, so that it can state what it builds on. The adjudicator ruled that D-5 and D-12 may be drafted before D-4 and D-8b are answered (batch 2, "Asking order").
@@ -25,29 +26,28 @@ A brief whose question depends on an earlier answer is normally written only aft
 | D-1 | **F-1** One cut-over or stages | `:244-252` | (b), confirmed; asked as (a)/(b), (c) not offered | nothing | — | **ANSWERED (b), 2026-10-29** (§ D-1) | `D-01-order-of-work.md` |
 | D-2 | **QUAL-234** How Skema's clock times reach payroll and the rest check (sub-question: manual hours) | new D10 | (a), confirmed; manual hours retired as a recorded proposal (not asked) | nothing | R5 ✓ | **ANSWERED (a), 2026-10-29** (§ D-2) | `D-02-clock-times.md` |
 | D-3 | **QUAL-232** Which time counts as worked time | new D11 | (c), confirmed; asked as (c)/(b), (a) not offered | nothing | R3 ✓ | **ANSWERED (c), 2026-10-29** (§ D-3) | `D-03-worked-time-classes.md` |
-| D-4 | **F-2** The marking workflow, with SEC-056 (ruling 1's four conditions) and RR-12 | `:254-269` | (c), confirmed; asked as (c)/(a), (b) not offered; P1–P6 accepted | D-2, D-3 (both answered) | — | **adjudicated — being asked** (batch 2 § D-4) | `D-04-marking-workflow.md` (draft 2) |
-| D-5 | **F-3** The overtime account. Includes SEC-056: compensation only behind an approved movement | `:271-277` | **Reframing proposed:** F-3's storage (b) told (P1); asked: where saved days live, (i) a balance in StatsTid (lean) or (ii) the conversion recorded, HR keeps the days; (iii) not offered; nine recorded proposals | D-4, for the asking order only; the question does not depend on D-4's answer | for building (i): § 11's text | **brief drafted (draft 1)** | `D-05-overtime-account.md` |
+| D-4 | **F-2** The marking workflow, with SEC-056 (ruling 1's four conditions) and RR-12 | `:254-269` | (c), confirmed; asked as (c)/(a), (b) not offered; P1–P6 accepted | D-2, D-3 (both answered) | — | **ANSWERED (c), 2026-10-29** (batch 2 § D-4) | `D-04-marking-workflow.md` (draft 2) |
+| D-5 | **F-3** The overtime account. Includes SEC-056: compensation only behind an approved movement | `:271-277` | No question (ruling 1): F-3 (b), the movement ledger, told; the saved-days balance designed as P10, a recorded design proposal; (iii) "no election" not offered; P1–P10 accepted | D-4 (answered) | R-A for building P10; R-B for stage 3; R-C an expert item (none blocks the telling or the ADR) | **told — no owner question** (batch 3 § D-5) | `D-05-overtime-account.md` (draft 2) |
 | D-6 | **QUAL-233** (with QUAL-204) Does payroll read what the admin editors write | ADR-014; ADR-016 D10; F-5 (a) | (a), confirmed; all three options asked | nothing | — | **ANSWERED (a), 2026-10-29** (§ D-6) | `D-06-config-source.md` |
-| D-7 | **F-4** Office hours. The credit for every paid-absence day follows the hours fixed for the day (ruling 4) | `:279-284` | (b), off by default, confirmed; asked as (b)/(a); P1–P6 accepted | D-6 (answered) | — | **adjudicated — queued** (batch 2 § D-7) | `D-07-office-hours.md` (draft 2) |
-| D-8 | **F-5** Local flex parameters: the parent brief, holding R-1..R-7 as amended (R-2's five amendments incl. "no central cap", ruling 2; R-5 per ruling 3; R-6 the paid-absence credit basis, ruling 4; R-7 with QUAL-237) | `:286-297` | split confirmed (ruling 5) | D-6 (answered) | — | **adjudicated** (batch 2 § D-8.4, § D-8.5) — its two questions below | `D-08-local-flex-parameters.md` (draft 2) |
-| D-8a | **F-5's per-group sub-question**: can an institution's flex rules treat groups of staff differently? | `:287`, `:292`, `:295` | (b), confirmed; all three asked, (b) first | D-6 (answered) | — | **adjudicated — queued** (batch 2 § D-8a) | `D-08a-flex-membership.md` (draft 2) |
-| D-8b | **Q-1**: AC's sick-day credit default | F-5 (RR-1, RR-12) | (a), confirmed; asked as (a)/(b), (c) not offered | nothing | R1 ✓ | **adjudicated — queued** (batch 2 § D-8b) | `D-08b-ac-sick-day-default.md` (draft 2) |
+| D-7 | **F-4** Office hours. The credit for every paid-absence day follows the hours fixed for the day (ruling 4) | `:279-284` | (b), off by default, confirmed; asked as (b)/(a); P1–P6 accepted | D-6 (answered) | — | **ANSWERED (b), 2026-10-29** (batch 2 § D-7) | `D-07-office-hours.md` (draft 2) |
+| D-8 | **F-5** Local flex parameters: the parent brief, holding R-1..R-7 as amended (R-2's five amendments incl. "no central cap", ruling 2; R-5 per ruling 3; R-6 the paid-absence credit basis, ruling 4; R-7 with QUAL-237, widened to every credit-class type by batch-3 ruling 3) | `:286-297` | split confirmed (ruling 5) | D-6 (answered) | — | **adjudicated** (batch 2 § D-8.4, § D-8.5; R-7 batch 3 ruling 3) — its two questions below, both answered | `D-08-local-flex-parameters.md` (draft 2.1) |
+| D-8a | **F-5's per-group sub-question**: can an institution's flex rules treat groups of staff differently? | `:287`, `:292`, `:295` | (b), confirmed; all three asked, (b) first | D-6 (answered) | — | **ANSWERED (b), 2026-10-29** (batch 2 § D-8a) | `D-08a-flex-membership.md` (draft 2) |
+| D-8b | **Q-1**: AC's sick-day credit default | F-5 (RR-1, RR-12) | (a), confirmed; asked as (a)/(b), (c) not offered | nothing | R1 ✓ | **ANSWERED (a), 2026-10-29** (batch 2 § D-8b) | `D-08b-ac-sick-day-default.md` (draft 2) |
 | D-9 | **F-6** AC's period | `:299-305` | (a), confirmed; asked as (a)/(b), (c) not offered | nothing | R1 corroborates (RR-12) | **ANSWERED (a), 2026-10-29** (§ D-9) | `D-09-ac-period.md` |
 | D-10 | **F-7** The part-timer default: a provisional owner default, pending a qualified expert. RR-8 adds the evidence and two citation fixes | `:307-311` | (c) for the shape (told, not asked); the value (ii), the award, confirmed; asked as (ii)/(i); "comparable full-timer" held as met as a recorded proposal | nothing (built in stage 2; building waits on D-4) | R4 ✓ | **ANSWERED F-7 = (c), default (ii), 2026-10-29** (own file, `S147-D-10-adjudication.md`) | `D-10-part-timer-default.md` |
 | D-11 | **F-8** The HK pay ceiling; PROSA pay groups 3–4 | `:313-320` | (b), confirmed; all three options asked, (b) first | nothing | — | **ANSWERED (b), 2026-10-29** (§ D-11) | `D-11-pay-ceiling.md` |
-| D-12 | **F-9** Customary days off | `:322-328` | (c), both kinds per institution and date; also offered (a) paid only and (d) not modelled; (b) closure-only not offered; nine recorded proposals | R-1 (adjudicated) | — | **brief drafted (draft 1)** | `D-12-customary-days-off.md` |
+| D-12 | **F-9** Customary days off | `:322-328` | (c), confirmed; asked as (c)/(a); (b) closure-only and (d) not modelled not offered (ruling 2); P1–P9 accepted | R-1 (adjudicated); D-5 told first | — | **adjudicated — being asked** (batch 3 § D-12) | `D-12-customary-days-off.md` (draft 2) |
 
-*In the status column, "§ D-NN" is a section of `.claude/reviews/S147-D-batch1-adjudication.md`, and "batch 2 § …" a section of `.claude/reviews/S147-D-batch2-adjudication.md`. D-10's adjudication is its own file.*
+*In the status column, "§ D-NN" is a section of `.claude/reviews/S147-D-batch1-adjudication.md`, "batch 2 § …" a section of `.claude/reviews/S147-D-batch2-adjudication.md`, and "batch 3 § …" a section of `.claude/reviews/S147-D-batch3-adjudication.md`. D-10's adjudication is its own file.*
 
 **The order and the asking.**
 - **O-1 (batch 1), the order stands:** D-1, D-2, D-3, D-6, D-9, D-11. D-1 frames the stages every later answer lands in; D-2 and D-3 gate D-4 and D-5; D-6 gates D-7, D-8 and D-12.
 - **D-10 followed D-11** (its own adjudication's order), as the seventh independent question.
-- **Seven answered, 2026-10-29, all on the recommended option:** D-1 (b), D-2 (a), D-3 (c), D-6 (a), D-9 (a), D-11 (b), and D-10, F-7 = (c) default (ii).
-- **The asking order now: D-4, D-7, D-8a, D-8b, then D-5, then D-12.**
-  - D-4 is being asked.
-  - D-7, D-8a and D-8b are adjudicated and queued.
-  - D-5 and D-12 have draft-1 briefs, which go to adjudication next.
-  - This order meets the batch-2 adjudication's two constraints: D-5 after D-4's answer, and D-12 after D-8b.
+- **Eleven answered, 2026-10-29, all on the recommended option:** D-1 (b), D-2 (a), D-3 (c), D-6 (a), D-9 (a), D-11 (b), D-10 (F-7 = (c) default (ii)), D-4 (c), D-7 (b), D-8a (b) and D-8b (a).
+- **What remains, in order: D-5 told, then D-12 asked** (batch 3, "Asking order").
+  - **D-5 is told, not asked** (ruling 1): its own prose block, ending "this one has no question — say so if you want any of it asked".
+  - **D-12 is adjudicated and being asked,** as (c)/(a).
+  - This order met the batch-2 adjudication's two constraints: D-5 after D-4's answer, and D-12 after D-8b.
 - **O-2, one at a time, confirmed; no batching.** Each question is explained in prose and asked on its own, even when several were adjudicated together.
 
 **Batch 2, adjudicated 2026-10-29** (`.claude/reviews/S147-D-batch2-adjudication.md`, RULED-WITH-QUESTIONS).
@@ -63,38 +63,21 @@ A brief whose question depends on an earlier answer is normally written only aft
   - **R-1..R-7 are accepted**, four of them amended. Ruling 2: there is no central flex cap, and nothing is forfeited until an institution sets one. Ruling 3: QUAL-225 is a recorded design proposal. Ruling 4: the paid-absence credit basis. R-7 adds QUAL-237 and the second direction.
 - **The five rulings** are listed as items the Orchestrator tells the owner, in `../ADR-043-working.md` ("Provisional items and recorded proposals", items 8–26 and the rulings block).
 
-**The two briefs drafted 2026-10-29 (draft 1, not adjudicated).**
-- **D-5, the overtime account.** *A reframing is proposed.*
-  - F-3's storage is told, not asked: only (b), the movement ledger, can apply the § 10 clock the adjudicator recorded as a fact.
-  - The owner question becomes where saved days (*opsparingsdage*) live:
-    - **(i)** a balance in StatsTid (lean);
-    - **(ii)** the conversion recorded, with HR keeping the days;
-    - **(iii)**, no election, is proposed as not offered.
-  - **Nine recorded proposals are proposed:**
-    - the ledger;
-    - SEC-056 on ruling 1's terms;
-    - the employer chooses, with time off first;
-    - the clocks as facts;
-    - time off in lieu as a Skema absence;
-    - a postponement signed by both parties;
-    - the deadline as a visible hand-off (HRP-021);
-    - *opsparing af frihed* not modelled;
-    - a leaver's time off paid out.
-  - Nothing in it depends on D-4's (c) or (a).
-- **D-12, customary days off.**
-  - *Lean (c):* both kinds, a paid day off credited like paid absence, and a closure day, per institution and date. Also offered: (a), paid only, and (d), not modelled. (b), closure only, is proposed as not offered.
-  - **Nine recorded proposals are proposed:**
-    - a dated table beside the profile (R-1);
-    - a credit, not a norm cut;
-    - part days;
-    - two modes, given to everyone or on request (1 May);
-    - one credit per day;
-    - closure days earn nothing;
-    - the § 13 windows are separate;
-    - a configuration, not a hand-off;
-    - demo customs.
+**Batch 3, adjudicated 2026-10-29** (`.claude/reviews/S147-D-batch3-adjudication.md`, RULED-WITH-QUESTIONS).
+- **D-5, the overtime account: told, with no owner question** (ruling 1).
+  - **The storage is told:** only (b), the movement ledger, can apply the § 10 clock (time off due 3 months after the month worked). A yearly total cannot say which hours reached their deadline.
+  - **Where saved days (*opsparingsdage*) live is a scope item, not an owner fork.** Either way, stage 2 records the employee's election, so no saved hour is ever paid. The draft-1 lean, a saved-days balance in StatsTid, becomes **P10, a recorded design proposal**: designed after a research cell on § 11 (R-A); its sprint is S148's refinement's; until then a saved day taken is registered as paid leave.
+  - **(iii), "no election, always pay", is not offered** (confirmed).
+  - **P1–P10 accepted.** P9 is split: a leaver's owed time off is paid (derived), and its timing is a labelled default (R-C).
+  - **Research owed, none blocking the telling or the ADR:** R-A (§ 11 in full; blocks building P10), R-B (AC's time-off deadline; blocks stage 3), R-C (a leaver's time off and saved days; an expert item for S148's refinement).
+- **D-12, customary days off: asked as (c)/(a)** (ruling 2).
+  - **Settled wording,** (c) both kinds first, then (a) paid days only.
+  - **Not offered:** (b), closure days only (it cannot represent the paid custom), and (d), not modelled (ADR-043 D9 already names customary days as the third kind of day).
+  - **P1–P9 accepted.** P4's two modes are kept, with the reason reworded; P5 is extended (the credited part nets off hours worked).
+- **Ruling 3:** R-7 is widened to every credit-class type (the D-8 parent's R-7; the working copy's item 26).
+- **Ruling 4:** T9 stands as briefed; SEC-056's row is corrected at close; the compensate route's discarded update result is QUAL-239; HRP-021 is confirmed.
 
-**What the adjudication settled without asking the owner (batch 1).** Four of the planner's additions became *recorded proposals*: adjudicated, told to the owner in the prose, not asked. They are D-1.4 (no supplement in stage 1), D-2.4 (manual hours retired), D-9.4 (AC's month norm uses D1's function) and D-11.4 (one regime attribute also covers AC). Two further items are recorded for the build input: D-6.5's stage-0 label and D-3.5's home on-call rest flag as a domain-expert item. All of them, with D-10.4 and batch 2's items 8–26, sit in one list in `../ADR-043-working.md`, "Provisional items and recorded proposals (not owner rulings)". None is an owner ruling; the rulings table holds only the owner's answers (seven so far).
+**What the adjudication settled without asking the owner (batch 1).** Four of the planner's additions became *recorded proposals*: adjudicated, told to the owner in the prose, not asked. They are D-1.4 (no supplement in stage 1), D-2.4 (manual hours retired), D-9.4 (AC's month norm uses D1's function) and D-11.4 (one regime attribute also covers AC). Two further items are recorded for the build input: D-6.5's stage-0 label and D-3.5's home on-call rest flag as a domain-expert item. All of them, with D-10.4, batch 2's items 8–26 and batch 3's items 27–45, sit in one list in `../ADR-043-working.md`, "Provisional items and recorded proposals (not owner rulings)". None is an owner ruling; the rulings table holds only the owner's answers (eleven so far).
 
 **Note on D-10.** The plan (`PLAN-s147.md:289`) and the refinement (`REFINEMENT-s147…:514`) give R4 as D-10's only gate, and R4 is answered. The first pass grouped it with the dependent questions. The coordinator then ruled (2026-10-28) that it should be drafted now. The batch adjudication declined it as outside its six ("draftable now"); its own adjudication followed (`.claude/reviews/S147-D-10-adjudication.md`, 2026-10-29). It confirmed the lean, (c) for the shape and (ii) for the value, and made "comparable full-timer held as met" a recorded proposal (D-10.4; the working copy's one list, item 7). With D-1 answered (b), D-10 is built in stage 2; building still waits on D-4.
 - **Answered 2026-10-29:** F-7 = (c), default (ii).
@@ -117,6 +100,11 @@ A brief whose question depends on an earlier answer is normally written only aft
   - ADR-024 D7 point 3 (`ADR-024:220`) and ADR-043 F-2 (`:265-266`) say "the approval page". It becomes Teamoversigt (D-4.2 item 1).
   - SYSTEM_TARGET §G's "central limit" (`SYSTEM_TARGET.md:168`, `:174`) is corrected (ruling 2).
   - SEC-056's row is refined (ruling 1).
+- **Batch 3** (`.claude/reviews/S147-D-batch3-adjudication.md`).
+  - **Ruling 4(a):** T9 stands as briefed. The TASK-14705 merge record says: *"the compensate guard protects a path no production write reaches at `26b70a08` (the balance is never fed); defence in depth until D-5 retires the route."* (The brief carries a dated note, `../TASK-14705.md`.)
+  - **Ruling 4(b), at close:** SEC-056's row is corrected. The compensate half is a latent shape, not a live capability; the High label rests on approve/reject; the "→" cell gains "closed in design by D-4 = (c) with ruling 1 and by D-5.P2; T9 closes the self part in S147", and cross-references QUAL-239 (ruling 4(c)).
+  - **Ruling 3, at close:** QUAL-231's and QUAL-237's rows gain R-7's widened sentence.
+  - **D-12.2 item 5, at acceptance:** `SYSTEM_TARGET.md:86` gains the third kind of day.
 
 **Also recorded with the track** (RR-6, RR-12, ruling 4):
 - **F-5's text gains one sentence:** the **paid-absence** credit basis is a local parameter, defaulting to § 7 nr. 2 (ruling 4 widened RR-12's "sick-day").
@@ -149,3 +137,7 @@ If the round cannot finish before C-1, the deferred branch applies (AC-D3): the 
   - **The asking order:** D-4, D-7, D-8a, D-8b, then D-5, then D-12.
   - **Step 2** names the batch-2 file. The batch-2 Orchestrator docs items are added.
   - **Working-copy citations** in the briefs are now by section, not line.
+- 2026-10-29, at `bd5a3d3f`, after the batch-3 adjudication (`.claude/reviews/S147-D-batch3-adjudication.md`):
+  - **Status column:** D-4 ANSWERED (c), D-7 ANSWERED (b), D-8a ANSWERED (b), D-8b ANSWERED (a), all 2026-10-29. D-5 "told — no owner question" (draft 2). D-12 "adjudicated — being asked" (draft 2); no answer is recorded here.
+  - **Batch 3 summarised** (D-5 told, P10 a recorded design proposal, research cells R-A..R-C; D-12 asked as (c)/(a); ruling 3 widening R-7; ruling 4). The D-8 parent is at draft 2.1 for R-7.
+  - **Step 2** names the batch-3 file; step 3 notes D-5's exception. The "order and the asking" bullets and the answered count (eleven) are brought up to date. The batch-3 Orchestrator items are added.
