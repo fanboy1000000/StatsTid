@@ -199,14 +199,17 @@ describe('SkemaPage — AC-235-6: the served SPECIAL_HOLIDAY_ALLOWANCE row (B, b
     expect(within(dialog).getByRole('button', { name: 'Tilføj Særlig feriedag' })).toBeEnabled()
   })
 
-  // S147 TASK-14702 fix-up - F, fails on that fix-up's pre-fix code: the rule alert fell back to the
-  // raw code SPECIAL_HOLIDAY_ALLOWANCE. (The QUOTA alert already resolved, because the server keys
-  // it on the entitlement type SPECIAL_HOLIDAY.)
-  // S147 QUAL-231 (TASK-14709): the label map is gone from the rule alerts. With no server
-  // `message` (this mock sends none), the alert names the code by the SERVED CATALOGUE's label
-  // ("Særlig feriedag", the same name the row shows). Was: "Særlige feriedage".
-  // Red conditions: the alert reads "SPECIAL_HOLIDAY_ALLOWANCE skal registreres som en hel dag…"
-  // (the raw code) instead of the catalogue label. Breaks if the fallback stops reading the catalogue.
+  // This fact pins the NO-`message` FALLBACK (the served catalogue's label). Today's server never
+  // triggers it: every rule 422 carries a `message`, and this mock deliberately sends none.
+  // History (TASK-14702 fix-up, kind F, fails on that fix-up's pre-fix code): the rule alert fell back
+  // to the raw code SPECIAL_HOLIDAY_ALLOWANCE. (The QUOTA alert already resolved, because the server
+  // keys it on the entitlement type SPECIAL_HOLIDAY.)
+  // S147 QUAL-231 (TASK-14709), kind F: the label map is gone from the rule alerts; with no `message`
+  // the alert names the code by the SERVED CATALOGUE's label ("Særlig feriedag", the name the row
+  // shows). Was: "Særlige feriedage".
+  // Red conditions (QUAL-231): on the pre-change code the alert reads "Særlige feriedage skal
+  // registreres som en hel dag..." (the label map), failing the toContain('Særlig feriedag skal...')
+  // assertion. Also breaks if the fallback stops reading the catalogue (the raw code shows).
   it('names the absence type by its served catalogue label (not the raw code) in a full-day rule error with no message', async () => {
     saveReject = {
       status: 422,
