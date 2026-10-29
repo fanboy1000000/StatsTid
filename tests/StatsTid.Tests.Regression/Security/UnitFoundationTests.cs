@@ -366,6 +366,8 @@ public sealed class UnitFoundationTests : IAsyncLifetime
         var validator = new OrgScopeValidator(
             new OrganizationRepository(_dbFactory),
             new UserRepository(_dbFactory),
+            // S147 R-30: fixed provider; the clause is pinned in DepartedSelfValidatorTests
+            new StatsTid.Tests.Regression.Hosting.FixedTimeProvider(new DateOnly(2026, 3, 16)),
             NullLogger<OrgScopeValidator>.Instance);
 
         var u1Actor = new ActorContext(

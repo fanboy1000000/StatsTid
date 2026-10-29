@@ -194,6 +194,8 @@ public sealed class S93FlatRoleScopeTests : IAsyncLifetime
         return new OrgScopeValidator(
             new OrganizationRepository(factory),
             new UserRepository(factory),
+            // S147 R-30: fixed provider; the clause is pinned in DepartedSelfValidatorTests
+            new StatsTid.Tests.Regression.Hosting.FixedTimeProvider(new DateOnly(2026, 3, 16)),
             NullLogger<OrgScopeValidator>.Instance);
     }
 }

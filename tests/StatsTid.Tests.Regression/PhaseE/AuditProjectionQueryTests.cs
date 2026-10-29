@@ -69,6 +69,8 @@ public sealed class AuditProjectionQueryTests : IAsyncLifetime
         _orgScopeValidator = new OrgScopeValidator(
             new OrganizationRepository(_harness.Factory),
             new UserRepository(_harness.Factory),
+            // S147 R-30: fixed provider; the clause is pinned in DepartedSelfValidatorTests
+            new StatsTid.Tests.Regression.Hosting.FixedTimeProvider(new DateOnly(2026, 3, 16)),
             NullLogger<OrgScopeValidator>.Instance);
     }
 

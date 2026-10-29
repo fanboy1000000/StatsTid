@@ -287,16 +287,26 @@ public sealed class SendCommandTerminatedSubjectTests : SendCommandMatrixTestBas
     }
 
     /// <summary>
-    /// ACCEPTED BEHAVIOUR, pinned as a decision on record — the S136 Step-5a adjudication (a)
+    /// S138 TRAIL (kept): ACCEPTED BEHAVIOUR, pinned as a decision on record — the S136 Step-5a adjudication (a)
     /// applied to the send surface by the same D3 letter: a lifecycle-DEACTIVATED LocalHR actor's
     /// still-valid JWT CAN send their OWN covered month → 200. The floor reads "subject deactivated ⇒
-    /// LocalHR or above", and this actor IS LocalHR; the validator admits self through its own HR
-    /// scope (R9b + R9f1 both clear), and the in-lock D3 re-check passes for the same reason. The
-    /// deactivated-self 403 above bites sub-HR tokens only. If this pin reddens, someone re-decided
-    /// the adjudication — take it back to the owner, do not "fix" silently.
+    /// LocalHR or above", and this actor IS LocalHR; the validator admitted self through its own HR
+    /// scope (R9b + R9f1 both clear), and the in-lock D3 re-check passed for the same reason. The
+    /// deactivated-self 403 above bit sub-HR tokens only.
+    ///
+    /// <para><b>S147 RE-DECISION (OQ-2 / R-30) — renamed from
+    /// <c>DeactivatedHrActor_OwnCoveredMonth_Sends200_AdjudicatedAccepted</c>.</b> The owner re-decided the
+    /// residual: the leaver's OWN access ends the day after the last day, whatever the role. The shared
+    /// organisation-scope check now refuses a departed actor acting on their OWN record, BEFORE its HR gate
+    /// (<c>DepartedSubject</c>), so the same send answers 403 with the clause's date-free reason and writes
+    /// nothing. An INTENTIONAL flip, not a regression to hide (TASK-14703-T point 7b). (The sentence above that
+    /// "the deactivated-self 403 bites sub-HR tokens only" is stale since S147: it bites every role.)</para>
+    ///
+    /// <para>Kind F. Red conditions: <c>Assert 403</c> and the no-row / no-event asserts — until S147 the HR
+    /// gate admitted the deactivated HR self and the month was sent (200).</para>
     /// </summary>
     [Fact]
-    public async Task DeactivatedHrActor_OwnCoveredMonth_Sends200_AdjudicatedAccepted()
+    public async Task DeactivatedHrActor_OwnCoveredMonth_Is403_ReDecidedS147()
     {
         const string hrActor = "t13805_deact_hr_self";
         await SeedDeactivatedLeaverWithCoveredMonthAsync(hrActor);
@@ -304,9 +314,13 @@ public sealed class SendCommandTerminatedSubjectTests : SendCommandMatrixTestBas
         using var client = ClientForRole(hrActor, StatsTidRoles.LocalHR, Org);
         var rsp = await PostSendAsync(client, hrActor);
 
-        await AssertOkEmployeeApprovedAsync(rsp);
-        var periodId = await FindPeriodIdAsync(hrActor, MarchStart, MarchEnd);
-        Assert.NotNull(periodId);
-        Assert.Equal("Employee self-approval", await ReadFirstAuditCommentAsync(periodId!.Value, "SUBMITTED"));
+        // S147 OQ-2 / R-30: was AssertOkEmployeeApprovedAsync(rsp) and an EMPLOYEE_APPROVED period.
+        var raw = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden, $"expected 403, got {(int)rsp.StatusCode}: {raw}");
+        using (var doc = JsonDocument.Parse(raw))
+            Assert.Equal(DepartedSubject.DenyReason, doc.RootElement.GetProperty("reason").GetString());
+        // S147 OQ-2 / R-30: nothing is written.
+        Assert.False(await RowExistsAsync(hrActor, MarchStart, MarchEnd));
+        Assert.Equal(0L, await CountOutboxTotalAsync(StreamId(hrActor)));
     }
 }
