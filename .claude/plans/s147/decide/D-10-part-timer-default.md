@@ -32,15 +32,15 @@ Recorded as "F-7 = (c), default (ii)" / "(c), default (i)".
   - HK and PROSA run on the default thresholds of 37 h and 40 h (`src/SharedKernel/StatsTid.SharedKernel/Models/AgreementRuleConfig.cs:43-44`); no agreement in `CentralAgreementConfigs.cs` overrides them.
   - Every hour above the norm counts, with no "ordered" test (`src/RuleEngine/StatsTid.RuleEngine.Api/Rules/OvertimeRule.cs:45-48`). The tiers are `:61-91`: +50 % up to the upper threshold, and +100 % above 40 h × fraction (the 100 % line, `:82-90`).
   - So a part-timer is paid +50 % from their own norm, ordered or not.
-- **This answers the check S146's C4 left open** (`docs/references/agreement-cells-reverification-research.md:533`). Today's code follows the award's direction, not the printed text, and it skips the "ordered" precondition. ADR-043 retires both the tiers and the automatic trigger (D3, D4). Because the engine already pays +50 % from the own norm, answer (ii) moves no demo payslip on this point (D-10.3).
-- **No dated switch for this band exists.** The § 14 weekend +50 % applies to part-timers' extra hours whatever the band rule (C4, `:561`; ADR-043 D7).
+- **This answers the check S146's C4 left open** (`docs/references/agreement-cells-reverification-research.md:544`). Today's code follows the award's direction, not the printed text, and it skips the "ordered" precondition. ADR-043 retires both the tiers and the automatic trigger (D3, D4). Because the engine already pays +50 % from the own norm, answer (ii) moves no demo payslip on this point (D-10.3).
+- **No dated switch for this band exists.** The § 14 weekend +50 % applies to part-timers' extra hours whatever the band rule (C4, `agreement-cells…:572`; ADR-043 D7).
 
-**What the sources say** (R4 verified 28 Oct 2026; `docs/references/sick-day-credit-and-agreement-texts-research.md:12`, `:307-356`; C4, `agreement-cells-reverification-research.md:531-568`).
+**What the sources say** (R4 verified 28 Oct 2026; `docs/references/sick-day-credit-and-agreement-texts-research.md:12`, `:307-356`; C4, `agreement-cells-reverification-research.md:542-579`).
 - **The printed rule is unchanged.** 022-26 § 8 stk. 2: *"… godtgøres dog kun med afspadsering af samme varighed eller med almindelig timeløn"* (hours up to full time: equal time off or ordinary hourly pay). PAV 19.2.7.1 and 19.3.1.6 say the same.
-- **The award.** FV2025-795 (4 Feb 2026): MedSt (the state employer agency) must recognise that paying part-timers *who have comparable full-timers* (*"for hvem der findes sammenlignelige fuldtidsansatte"*, `agreement-cells…:538`) overtime only above the full-time norm breaches directive 97/81/EF, from 20 Jan 2000.
+- **The award.** FV2025-795 (4 Feb 2026): MedSt (the state employer agency) must recognise that paying part-timers *who have comparable full-timers* (*"for hvem der findes sammenlignelige fuldtidsansatte"*, `agreement-cells…:549`) overtime only above the full-time norm breaches directive 97/81/EF, from 20 Jan 2000.
 - **The +50 % in (ii) is derived, not quoted** (D-10.2 item 3).
   - The award's operative part is a declaration that MedSt must acknowledge (R4-9, `sick-day…research.md:354`).
-  - The "rule" is in its remedy reasoning: compliance must come from paying part-timers *overtidshonorering*, overtime pay, for work in the band between their own norm and the full-time norm (`agreement-cells…:541`).
+  - The "rule" is in its remedy reasoning: compliance must come from paying part-timers *overtidshonorering*, overtime pay, for work in the band between their own norm and the full-time norm (`agreement-cells…:552`).
   - The award names no rate. The +50 % is § 8 stk. 1's overtime rate (V2; ADR-043 D4) applied to the band.
 - **No implementing text yet** (as of 28 Oct 2026).
   - MedSt's circular list was read on pages 1–32, through 068-26 of 27 Oct 2026; its news archive was read as well.
@@ -53,7 +53,7 @@ Recorded as "F-7 = (c), default (ii)" / "(c), default (i)".
 **The options** (ADR-043 F-7, `:307-311`).
 
 *The shape, told and not asked: (c), a dated, named rule variant* (D-10.3).
-- **One encoding now, behind a named, dated slot** (C4's `PartTimeBandRule`, `agreement-cells…:557-559`). Only the chosen variant is built. The other arithmetic is built when the state's text and its date are known (D-10.2 item 5).
+- **One encoding now, behind a named, dated slot** (C4's `PartTimeBandRule`, `agreement-cells…:568-570`). Only the chosen variant is built. The other arithmetic is built when the state's text and its date are known (D-10.2 item 5).
 - **Every month's manifest names the variant that paid it,** so a replay can prove it (auditability).
 - *Gives up:* a little more than an unnamed rule: a variant name and a from-date carried into the manifest.
 
@@ -69,7 +69,7 @@ Recorded as "F-7 = (c), default (ii)" / "(c), default (i)".
 *Not offered:* ADR-043's (a) and (b) are (i) and (ii) without the dated slot (see "Not offered, and why" above).
 
 **The lean: (c) for the shape, (ii) for the value — confirmed by the adjudicator** (D-10.3; ADR-043 `:311`). The reasons:
-- It is the binding legal position (HIGH confidence; C4 `:566`; R4 `sick-day…research.md:309`).
+- It is the binding legal position (HIGH confidence; C4 `agreement-cells…:577`; R4 `sick-day…research.md:309`).
 - It is the simpler encoding.
 - Today's engine already pays +50 % from the own norm (`WeeklyTimelineCore.cs:173-175`; `OvertimeRule.cs:61-80`), so (ii) moves no demo payslip on this point.
 - The implementing text can only refine conditions, and the slot absorbs that on its date.
@@ -84,6 +84,8 @@ Recorded as "F-7 = (c), default (ii)" / "(c), default (i)".
 - It lives in the one list of provisional items (`../ADR-043-working.md`, "Provisional items and recorded proposals", item 7).
 
 **A gap, not a blocker: AC-agreement part-timers** (D-10.2 item 8). This brief is silent on part-timers under the AC agreement, and they were not examined. The AC case is a note for the expert and, in the adjudicator's words, "a check in D-5's build".
+- **Which "D-5" that means** (the Orchestrator's ruling, 2026-10-29): **ADR-043's D5, the AC merarbejde claims, built in stage 3.** It does not mean decide-track question D-5 (F-3, the overtime account).
+- So the AC part-timer check sits with the AC claims, where an AC employee's extra hours first become payable.
 
 **What the owner should know** (D-10.5, with D-10.4).
 - **Only ordered or accepted hours are touched.** An unordered extra hour is flex, hour for hour, under both answers.
@@ -103,6 +105,7 @@ Recorded as "F-7 = (c), default (ii)" / "(c), default (i)".
 - **(c), default (ii):** the `PartTimeBandRule` slot with one variant built, the award's direction: overtime from the part-timer's own norm, the same arithmetic as a full-timer's. The variant's name and from-date are frozen into every manifest. No comparable-full-timer field or check.
 - **(c), default (i):** the same slot with the printed rule's variant: the full-time month norm as a second threshold, a 1:1 band wage type or time-off movement, and +50 % only above full time. Same manifest recording.
 - **Under either answer,** the state's text, when it arrives, becomes a new dated variant in the same slot.
+- **AC-agreement part-timers:** a check in **stage 3**, with ADR-043 D5's AC claims (the Orchestrator's ruling, 2026-10-29; see "A gap, not a blocker").
 
 **The ADR-043 text it rewrites.**
 - F-7 (`:307-311`) becomes a decision.
@@ -119,3 +122,6 @@ Recorded as "F-7 = (c), default (ii)" / "(c), default (i)".
 *Revision history.*
 - Draft 1 (2026-10-28): first brief, on the coordinator's ruling (1).
 - Draft 2 (2026-10-29): the adjudication applied (`.claude/reviews/S147-D-10-adjudication.md`, D-10.1–.5). Added "The question as it will be asked" ((ii) first) with the three options not offered and why; folded D-10.2's eight corrections (verification sha `b2ece3a1`; full paths and `OvertimeRule.cs` lines; the +50 % derived, not quoted; (i)'s higher build cost; one encoding behind a named, dated slot; (i)'s cost line reworded; the comparable-full-timer rationale, marked "verify before quoting"; the AC part-timer gap); the lean confirmed for shape and value; the comparable-full-timer item marked as a recorded proposal; "What the owner should know" added; the asking order added (after D-11, before D-4); the build placement filled from D-1 = (b): stage 2.
+- Draft 2.1 (2026-10-29), after the owner's answer (F-7 = (c), default (ii)):
+  - **The Orchestrator's ruling on "a check in D-5's build"** is recorded under "A gap, not a blocker" and in the build placement. It means ADR-043's D5, the AC claims, built in stage 3, not decide-track D-5.
+  - **The C4 citations are re-located by 11 lines.** The D-11.5 correction note inserted at `agreement-cells-reverification-research.md:529-539` in `f37d7cd3` moved them (for example, `:531-568` → `:542-579`). No wording changed.
