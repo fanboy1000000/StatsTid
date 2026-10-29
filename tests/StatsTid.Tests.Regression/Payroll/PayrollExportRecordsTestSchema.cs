@@ -59,6 +59,9 @@ internal static class PayrollExportRecordsTestSchema
             agreement_code      TEXT        NOT NULL,
             ok_version          TEXT        NOT NULL,
             created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            -- S147 OQ-1 (SEC-053): the payroll export's four-eyes re-check reads the sender stamp
+            -- COALESCE(employee_approved_by, submitted_by); same definition as init.sql:1138.
+            employee_approved_by TEXT,
             UNIQUE (employee_id, period_start, period_end)
         );
 

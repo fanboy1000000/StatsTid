@@ -59,6 +59,10 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     // org server-side, so no per-op org constant is needed.
 
     private const string GlobalAdminId = "s116a_gadmin";
+    // S147 OQ-1 (SEC-053): strict four-eyes — whoever SENT a month cannot approve or reject it. The
+    // fixture sends as GlobalAdminId (the send stamp), so every manager decision below is taken by this
+    // SECOND global admin instead; it is a token only (no users row is needed, as for GlobalAdminId).
+    private const string ApproverAdminId = "s116a_gadmin2";
     private const string ManagerId = "s116a_mgr";
     private const int SendYear = 2026;   // the month-keyed /send target; the read tests query month=3
     private const int SendMonth = 3;
@@ -92,16 +96,20 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
         // covers each employee's month first, then posts /send (→ EMPLOYEE_APPROVED).
 
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
+        // S147 OQ-1 (SEC-053): the second signer — approves and rejects what `admin` sent.
+        using var approver = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, ApproverAdminId, Mao);
 
         // e1: send → approve ⇒ APPROVED (approvedBy/approvedAt populated; /send already reached
         // EMPLOYEE_APPROVED, and approve accepts it).
         _e1Approved = await SendAsync(admin, "s116a_e1");
-        await PostActionAsync(admin, $"/api/approval/{_e1Approved}/approve", jsonBody: null);
+        // S147 OQ-1 (SEC-053): approved by the second admin, not the sender.
+        await PostActionAsync(approver, $"/api/approval/{_e1Approved}/approve", jsonBody: null);
 
         // e2: send → reject ⇒ REJECTED (rejectionReason populated; decisionAt written; reject accepts
         // EMPLOYEE_APPROVED).
         _e2Rejected = await SendAsync(admin, "s116a_e2");
-        await PostActionAsync(admin, $"/api/approval/{_e2Rejected}/reject",
+        // S147 OQ-1 (SEC-053): rejected by the second admin, not the sender.
+        await PostActionAsync(approver, $"/api/approval/{_e2Rejected}/reject",
             """{ "reason": "S116 afvist — dokumentation mangler" }""");
 
         // e4: send ⇒ EMPLOYEE_APPROVED (submittedAt POPULATED — the pending/by-month populated state;
@@ -231,7 +239,8 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Get, "/api/approval/s116a_e1"),
             "/api/approval/{employeeId}", "get");
         var approvedRow = FindByPeriodId(JsonDocument.Parse(approvedBody).RootElement, _e1Approved);
-        Assert.Equal(GlobalAdminId, approvedRow.GetProperty("approvedBy").GetString());
+        // S147 OQ-1 (SEC-053): was GlobalAdminId (the sender); the approver is now the second admin.
+        Assert.Equal(ApproverAdminId, approvedRow.GetProperty("approvedBy").GetString());
         Assert.Equal(JsonValueKind.String, approvedRow.GetProperty("approvedAt").ValueKind);
         Assert.Equal(JsonValueKind.Null, approvedRow.GetProperty("rejectionReason").ValueKind);
         Assert.Equal("OK24", approvedRow.GetProperty("okVersion").GetString());
@@ -384,9 +393,11 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     public async Task Approve_Post200_SchemaMatchesRuntime_StatusLiteralAPPROVED()
     {
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
+        // S147 OQ-1 (SEC-053): the sender (admin) cannot approve; the second admin does.
+        using var approver = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, ApproverAdminId, Mao);
         var periodId = await SendAsync(admin, "s116a_m2"); // → EMPLOYEE_APPROVED, then manager-approve
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
-            _spec, admin,
+            _spec, approver,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, $"/api/approval/{periodId}/approve"),
             "/api/approval/{periodId}/approve", "post");
         var root = JsonDocument.Parse(body).RootElement;
@@ -418,9 +429,11 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
     public async Task Reject_Post200_SiblingSchemaMatchesRuntime_ReasonEchoed()
     {
         using var admin = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, GlobalAdminId, Mao);
+        // S147 OQ-1 (SEC-053): the sender (admin) cannot reject; the second admin does.
+        using var approver = SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, ApproverAdminId, Mao);
         var periodId = await SendAsync(admin, "s116a_m4"); // → EMPLOYEE_APPROVED, then manager-reject
         var body = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
-            _spec, admin,
+            _spec, approver,
             SpecRuntimeTestSupport.JsonRequest(HttpMethod.Post, $"/api/approval/{periodId}/reject",
                 """{ "reason": "S116 reject-op afvisningsgrund" }"""),
             "/api/approval/{periodId}/reject", "post");
