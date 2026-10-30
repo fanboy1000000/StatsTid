@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
+using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
@@ -366,6 +367,7 @@ public static class OvertimeEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -374,6 +376,23 @@ public static class OvertimeEndpoints
             var existing = await preApprovalRepo.GetByIdAsync(id, ct);
             if (existing is null)
                 return Results.NotFound(new { error = "Pre-approval not found" });
+
+            // ── S147 / SEC-056 (owner Q-A = (a)) — SEGREGATION OF DUTIES (self-decision guard) ─────────
+            // Nobody approves an overtime pre-approval that names THEMSELVES (RES-003; the overtime
+            // sibling of SEC-009). Placed right after the row load, BEFORE the scope check and BEFORE
+            // the status check, so a self-request on a non-PENDING row still self-denies (403) rather
+            // than leaking the row's state as a 400 (SEC-055's lesson). A structured WARNING log for
+            // detection — NOT an audit row (a denied action is not a domain event). The reason is
+            // date-free (ADR-040 D7).
+            if (ApprovalSelfGuard.IsSelf(actor, existing.EmployeeId))
+            {
+                loggerFactory.CreateLogger(ApprovalSelfGuard.OvertimeLogCategory).LogWarning(
+                    "SEC-056 self-decision denied: actor {ActorId} on own overtime pre-approval {PreApprovalId} (approve)",
+                    actor.ActorId, id);
+                return Results.Json(
+                    new { error = "Access denied", reason = "self-decision on an overtime pre-approval is not permitted (segregation of duties)" },
+                    statusCode: 403);
+            }
 
             // Validate scope access to the employee
             var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, existing.EmployeeId, ct);
@@ -446,6 +465,7 @@ public static class OvertimeEndpoints
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
             OrgScopeValidator scopeValidator,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -454,6 +474,21 @@ public static class OvertimeEndpoints
             var existing = await preApprovalRepo.GetByIdAsync(id, ct);
             if (existing is null)
                 return Results.NotFound(new { error = "Pre-approval not found" });
+
+            // ── S147 / SEC-056 — SEGREGATION OF DUTIES (self-decision guard) ──────────────────────────
+            // Reject is a decision too: nobody rejects an overtime pre-approval that names THEMSELVES.
+            // Same early placement as approve (after the load, BEFORE the scope and status checks) so a
+            // self-request on a non-PENDING row self-denies (403), never a state-leaking 400. WARNING
+            // log, no audit row; date-free reason.
+            if (ApprovalSelfGuard.IsSelf(actor, existing.EmployeeId))
+            {
+                loggerFactory.CreateLogger(ApprovalSelfGuard.OvertimeLogCategory).LogWarning(
+                    "SEC-056 self-decision denied: actor {ActorId} on own overtime pre-approval {PreApprovalId} (reject)",
+                    actor.ActorId, id);
+                return Results.Json(
+                    new { error = "Access denied", reason = "self-decision on an overtime pre-approval is not permitted (segregation of duties)" },
+                    statusCode: 403);
+            }
 
             var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, existing.EmployeeId, ct);
             if (!allowed)
@@ -516,10 +551,27 @@ public static class OvertimeEndpoints
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             OrgScopeValidator scopeValidator,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+
+            // ── S147 / SEC-056 — SEGREGATION OF DUTIES (self-decision guard) ──────────────────────────
+            // Nobody pays out or converts their OWN overtime. At the top of the handler, BEFORE the
+            // scope check and every validation, so a self-request is refused (403) whatever its body.
+            // Defence in depth until S148 retires this route (ADR-043 F-3): no production write feeds
+            // the balance today, so compensate cannot reach its update — the guard closes the path
+            // before anything can. WARNING log, no audit row; date-free reason.
+            if (ApprovalSelfGuard.IsSelf(actor, employeeId))
+            {
+                loggerFactory.CreateLogger(ApprovalSelfGuard.OvertimeLogCategory).LogWarning(
+                    "SEC-056 self-decision denied: actor {ActorId} on own overtime balance {PeriodYear} (compensate)",
+                    actor.ActorId, request.PeriodYear);
+                return Results.Json(
+                    new { error = "Access denied", reason = "self-decision on overtime compensation is not permitted (segregation of duties)" },
+                    statusCode: 403);
+            }
 
             var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(actor, employeeId, ct);
             if (!allowed)

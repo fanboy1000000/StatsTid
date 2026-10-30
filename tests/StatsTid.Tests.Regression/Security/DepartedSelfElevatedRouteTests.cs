@@ -73,6 +73,9 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
     private const string OrgA = "STY01";   // settlement / overtime / agreement / users / role facts
     private const string OrgB = "STY02";   // reporting-line / unit facts
+    // SEC-056 (TASK-14705) reasons, copied as literals (the production strings live on the TASK-14705 branch).
+    private const string PreApprovalSelfReason = "self-decision on an overtime pre-approval is not permitted (segregation of duties)";
+    private const string CompensateSelfReason = "self-decision on overtime compensation is not permitted (segregation of duties)";
 
     /// <summary>A fixed past last day (Wednesday 2026-03-04): the subject is departed for any real today after it.</summary>
     private static readonly DateOnly Gone = new(2026, 3, 4);
@@ -111,7 +114,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
 
     /// <summary>
     /// Kind F. Approve of her OWN pending pre-approval: 403, the row stays PENDING; approve of another
-    /// employee's pending row: 200 APPROVED. Red conditions: <c>Assert 403</c> — today the validator
+    /// employee's pending row: 200 APPROVED. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red conditions: <c>Assert 403</c> — today the validator
     /// admits the covered leader's own id and the route approves the row (200).
     /// </summary>
     [Fact]
@@ -124,7 +127,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         using var client = ClientFor(Leader(mette, OrgA));
 
         var self = await client.PutAsJsonAsync($"/api/overtime/pre-approval/{own}/approve", new { reason = "s147" });
-        await AssertDeniedAsync(self);
+        await AssertDeniedEitherAsync(self, PreApprovalSelfReason);
         Assert.Equal("PENDING", await PreApprovalStatusAsync(own));
         await AssertNoWriteTrailAsync(mette);
 
@@ -133,7 +136,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         Assert.Equal("APPROVED", await PreApprovalStatusAsync(theirs));
     }
 
-    /// <summary>Kind F. As above for reject. Red condition: <c>Assert 403</c> (today the row is rejected, 200).</summary>
+    /// <summary>Kind F. As above for reject. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red condition: <c>Assert 403</c> (today the row is rejected, 200).</summary>
     [Fact]
     public async Task LocalLeader_PreApprovalReject_OwnPending_403_OtherEmployee_200()
     {
@@ -144,7 +147,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         using var client = ClientFor(Leader(mette, OrgA));
 
         var self = await client.PutAsJsonAsync($"/api/overtime/pre-approval/{own}/reject", new { reason = "s147" });
-        await AssertDeniedAsync(self);
+        await AssertDeniedEitherAsync(self, PreApprovalSelfReason);
         Assert.Equal("PENDING", await PreApprovalStatusAsync(own));
         await AssertNoWriteTrailAsync(mette);
 
@@ -155,7 +158,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
 
     /// <summary>
     /// Kind F. Compensate naming herself: 403, <c>paid_out</c> unchanged; for another employee: 200 and
-    /// <c>paid_out</c> moved. Red condition: <c>Assert 403</c> (today the balance is adjusted, 200).
+    /// <c>paid_out</c> moved. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red condition: <c>Assert 403</c> (today the balance is adjusted, 200).
     /// </summary>
     [Fact]
     public async Task LocalLeader_Compensate_ForHerself_403_OtherEmployee_200()
@@ -168,7 +171,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
 
         var self = await client.PostAsJsonAsync($"/api/overtime/{mette}/compensate",
             new { periodYear = 2026, hours = 1m, compensationType = "PAYOUT" });
-        await AssertDeniedAsync(self);
+        await AssertDeniedEitherAsync(self, CompensateSelfReason);
         Assert.Equal(0m, await PaidOutAsync(mette));
         await AssertNoWriteTrailAsync(mette);
 
@@ -908,6 +911,19 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden, $"expected 403, got {(int)rsp.StatusCode}: {raw}");
         using var doc = JsonDocument.Parse(raw);
         Assert.Equal(DepartedSubject.DenyReason, doc.RootElement.GetProperty("reason").GetString());
+    }
+
+    /// <summary>Own-record refusal on the overtime routes: 403 whose reason is EITHER the departed-self
+    /// reason OR SEC-056's route reason (SEC-056 answers first by the Orchestrator's ruling (a), 2026-10-29).
+    /// <see cref="AssertDeniedAsync"/> stays exact for the other facts.</summary>
+    private static async Task AssertDeniedEitherAsync(HttpResponseMessage rsp, params string[] reasons)
+    {
+        var raw = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden, $"expected 403, got {(int)rsp.StatusCode}: {raw}");
+        using var doc = JsonDocument.Parse(raw);
+        var reason = doc.RootElement.GetProperty("reason").GetString();
+        Assert.True(reason == DepartedSubject.DenyReason || Array.IndexOf(reasons, reason) >= 0,
+            $"reason was '{reason}', expected the departed-self reason or one of: {string.Join(" | ", reasons)}");
     }
 
     /// <summary>"Nothing was written": no outbox event and no audit-projection row carries the departed

@@ -17,20 +17,44 @@ namespace StatsTid.Backend.Api.Endpoints.Helpers;
 /// one leg that bypasses that predicate — the org-scope / HR-Admin fallback, which is SEC-009's
 /// exact path. One predicate, one place, applied at the three manager-decision endpoints.</para>
 ///
-/// <para><b>Identity model.</b> <see cref="ActorContext.ActorId"/> and
-/// <see cref="ApprovalPeriod.EmployeeId"/> are the same user/employee id space, so a self-decision
-/// is a string-equal id (Ordinal, mirroring the <c>SettlementReversalService</c> precedent). The
-/// null/empty short-circuit keeps an unauthenticated / id-less actor from ever matching a period
-/// that (in a corrupt row) also lacked an employee id.</para>
+/// <para><b>S147 / SEC-056 (owner Q-A = (a)) — the overtime side workflow.</b> The same rule now
+/// also covers the overtime decisions: approving or rejecting an overtime pre-approval, and
+/// compensating (paying out / converting to time off) an overtime balance. Those rows carry an
+/// employee id but are not <see cref="ApprovalPeriod"/>s, so the predicate is generalised to a bare
+/// employee id (<see cref="IsSelf(ActorContext, string)"/>); the period overload delegates to it with
+/// its behaviour unchanged. Creating a pre-approval for oneself stays allowed — a request decides
+/// nothing, and someone else then approves it.</para>
+///
+/// <para><b>Identity model.</b> <see cref="ActorContext.ActorId"/>,
+/// <see cref="ApprovalPeriod.EmployeeId"/> and the overtime rows' employee ids are the same
+/// user/employee id space, so a self-decision is a string-equal id (Ordinal, mirroring the
+/// <c>SettlementReversalService</c> precedent). The null/empty short-circuit keeps an
+/// unauthenticated / id-less actor from ever matching a row that (in a corrupt row) also lacked an
+/// employee id.</para>
 /// </summary>
 internal static class ApprovalSelfGuard
 {
     /// <summary>
-    /// Returns <c>true</c> iff <paramref name="actor"/> is acting on their OWN period — i.e. the
-    /// actor id is present AND string-equal (Ordinal) to the period's employee id. A <c>true</c>
-    /// result at a manager-decision site MUST deny (403): a self-decision violates SoD.
+    /// S147 / SEC-056 — the log category the overtime decision endpoints (pre-approval approve /
+    /// reject, compensate) stamp their self-denial WARNING under, so the denied-attempt signal is
+    /// greppable in one place (the overtime sibling of <c>ApprovalEndpoints</c>' self-guard category).
+    /// </summary>
+    internal const string OvertimeLogCategory = "StatsTid.Backend.Api.Endpoints.OvertimeEndpoints.SelfGuard";
+
+    /// <summary>
+    /// Returns <c>true</c> iff <paramref name="actor"/> is acting on THEMSELVES — i.e. the actor id
+    /// is present AND string-equal (Ordinal) to <paramref name="employeeId"/>. A <c>true</c> result at
+    /// a manager-decision site MUST deny (403): a self-decision violates SoD.
+    /// </summary>
+    public static bool IsSelf(ActorContext actor, string employeeId) =>
+        !string.IsNullOrEmpty(actor.ActorId)
+        && string.Equals(actor.ActorId, employeeId, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Returns <c>true</c> iff <paramref name="actor"/> is acting on their OWN period — the
+    /// <see cref="IsSelf(ActorContext, string)"/> predicate applied to the period's employee id.
+    /// A <c>true</c> result at a manager-decision site MUST deny (403): a self-decision violates SoD.
     /// </summary>
     public static bool IsSelf(ActorContext actor, ApprovalPeriod period) =>
-        !string.IsNullOrEmpty(actor.ActorId)
-        && string.Equals(actor.ActorId, period.EmployeeId, StringComparison.Ordinal);
+        IsSelf(actor, period.EmployeeId);
 }
