@@ -127,6 +127,8 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
 - An actor whose only role is Employee is answered by the own-data branch first, so the clause is not reached; TASK-14710's floor covers that case.
 - The Payroll and Orchestrator hosts register `TimeProvider.System` from S147. Their test hosts must override it with a fixed provider (PAT-008).
 
+**The active-but-departed window (recorded 2026-10-30, TASK-14719 review NOTE 5).** A leaver is switched to inactive only by the leaver job (`SettlementCloseService`, polling every 5 minutes, and once at host start). So from Copenhagen midnight after the last working day until the job's next successful poll, the person is still `is_active` but already departed. The window is nominally 5 minutes or less. It is longer if the Backend is down or a switch-off fails and retries, and from TASK-14710 it is D+1 to D+5 by design (the manager's grace), plus that lag. Login checks only `is_active`, so during the window a fresh login still succeeds. **The departed-self clause above is then the only control on the person's own record.** That is why it tests the end date and not only the active flag.
+
 **When adding a write route keyed on the caller's own id:** route it through the shared validator, or add the inline guard before the route's first write.
 
 ### The mixed-role scope-floor invariant (S76 / B1)
