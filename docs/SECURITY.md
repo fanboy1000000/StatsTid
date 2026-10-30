@@ -155,7 +155,7 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
    - at payroll, where an approval turns into money (`PayrollExportService.cs:404-444`; a null sender passes).
 
    **Reopen is not guarded**, because it signs nothing and clears both stamps. The demo loader approves as a second identity.
-3. **A leader cannot decide their own overtime** (SEC-056; owner Q-A = (a)). This joins the section when TASK-14705 merges.
+3. **A leader cannot decide their own overtime** (SEC-056; owner Q-A = (a); S147 TASK-14705, merged `b2a65fb8`). A leader can neither approve nor reject an overtime pre-approval that names themselves, and cannot compensate their own overtime balance (`OvertimeEndpoints.cs:387`, `:483`, `:566`, through `ApprovalSelfGuard.IsSelf`). The refusal is a 403 with a date-free reason and a WARNING under its own log category. It is checked before the scope check and the status check, so it also answers first for a departed leader (the Orchestrator's ruling (a)), and it does not reveal a row's state. *Creating* a pre-approval that names oneself stays allowed: a request is not a decision, and someone else decides it.
 
 **Outside these rules (recorded, not hidden):**
 - The raw GlobalAdmin exports (`/api/payroll/export`, `/export-period`) do not pass through the approval check at all. That is SEC-054, handled by TASK-14716.
