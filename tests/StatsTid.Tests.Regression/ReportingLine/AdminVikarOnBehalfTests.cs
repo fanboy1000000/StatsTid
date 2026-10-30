@@ -917,7 +917,8 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// TEST 3 — S147 OQ-2 / R-30 (P-1): re-decided. This was the ACTIVE→INACTIVE RACE self-DELETE arm
+    /// TEST 3 — S147 OQ-2 / P-1 (census B15): re-decided. Kind F; red on <c>991a5890</c>: 200, the row
+    /// closed through the persisted-only fallback. This was the ACTIVE→INACTIVE RACE self-DELETE arm
     /// (the absent approver = the actor, Mgr deactivated before the call), which used to answer a clean
     /// 200 via the persisted-only fallback in AcquireRevokeTreeLocksAsync. TASK-14703's inline guard now
     /// refuses a departed manager clearing their OWN stand-in BEFORE the transaction, so the self arm
@@ -925,6 +926,8 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     /// "does not 500 for a deactivated subject" purpose lives on the unguarded admin on-behalf path:
     /// <see cref="AdminDelete_InactiveManager_RevokeSafe_NoCurrentRootDerive_StillSucceeds"/> (TEST 1)
     /// and <see cref="AdminDelete_RevokeSafe_WhenManagerAndVikarInactive_StillSucceeds"/>.
+    /// This is now the only pin of a deactivated self with NO end date on this route (the S147 departed-self
+    /// facts seed end-dated subjects).
     /// </summary>
     [Fact]
     public async Task SelfDelete_SubjectDeactivated_Refused403_StandInStaysActive()
@@ -935,7 +938,7 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
         var client = LeaderClient(Mgr, "STY02");
         var rsp = await client.DeleteAsync("/api/reporting-lines/delegate");
 
-        // S147 OQ-2 / R-30 (K-13): re-decided — a departed self's own stand-in clear is refused (was 200).
+        // S147 OQ-2 / P-1 (census B15): re-decided — a departed self's own stand-in clear is refused (was 200).
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
         Assert.Contains(DepartedSubject.DenyReason, await rsp.Content.ReadAsStringAsync());
         Assert.NotNull(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));

@@ -28,7 +28,9 @@ public sealed class DepartedSelfHostFixture : IAsyncLifetime
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         ConnectionString = _harness.ConnectionString;
-        Factory = new StatsTidWebApplicationFactory(ConnectionString);
+        // S147 TASK-14719 fix-up 1: no leaver-flip job on this host or any WithFixedToday host derived from it —
+        // every grace-state subject here is active with a past end date, which that job would deactivate.
+        Factory = new StatsTidWebApplicationFactory(ConnectionString, withoutLeaverJob: true);
         _ = Factory.CreateClient(); // boots the host and its seeders
     }
 
@@ -257,6 +259,11 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         using var host = _fx.Factory.WithFixedToday(new DateOnly(2026, 3, 5));
         using var client = ClientFor(Hr(mette, OrgA), host);
 
+        // S147 TASK-14719 fix-up 1: pin the row's meaning at the moment of the request — the !deactivated case is a
+        // genuinely STILL-ACTIVE self, the deactivated case a deactivated one; nothing may flip it unseen.
+        Assert.Equal(deactivated ? 0L : 1L, await CountAsync(
+            "SELECT COUNT(*) FROM users WHERE user_id=@e AND is_active", ("e", mette)));
+
         var self = await TerminationRequestAsync(client, mette);
         await AssertDeniedAsync(self);
         Assert.Equal(0L, await CountAsync("SELECT COUNT(*) FROM termination_payout_requests WHERE employee_id=@e", ("e", mette)));
@@ -416,9 +423,8 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         var clock = new DateOnly(2026, 3, 16);
         var lastDay = await SeedAsync("ds_bd_a", OrgA, active: true, end: clock);
         var dayAfter = await SeedAsync("ds_bd_b", OrgA, active: true, end: clock.AddDays(-1));
-        // S147 TASK-14719: the leaver-flip poller is off here. On its first poll it would flip dayAfter
-        // (end < clock) to inactive before the request, and the active-only read would answer 404, not the guard's 403.
-        using var host = _fx.Factory.WithFixedTodayWithoutLeaverFlip(clock);
+        // (The fixture's host runs without the leaver-flip job, so dayAfter stays active and the guard answers.)
+        using var host = _fx.Factory.WithFixedToday(clock);
 
         using (var client = ClientFor(Admin(lastDay, OrgA), host))
             Assert.Equal(HttpStatusCode.Created, (await GrantAsync(client, lastDay)).StatusCode);

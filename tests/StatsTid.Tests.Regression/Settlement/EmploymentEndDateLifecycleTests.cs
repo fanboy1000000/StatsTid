@@ -516,7 +516,8 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
     // S70 Step-7a W1 (internal Reviewer) — self-target exclusion on the end-date PUT: 403 for
     // ALL actors (active or terminated), BEFORE any DB work; a second administrator performs
-    // legitimate self-departures. The GET stays self-readable.
+    // legitimate self-departures. The GET stays self-readable while the actor is employed; a departed
+    // self's read is refused (S147 OQ-2 / consult R1, ruled intended; see the re-decided fact below).
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>An ACTIVE in-subtree HR actor PUTting its OWN end date → 403, nothing mutated
@@ -543,8 +544,10 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
     /// <summary>The W1 attack choreography: a lifecycle-deactivated HR actor's STILL-VALID JWT
     /// (8h lifetime, no revocation) PUTs its own <c>employmentEndDate: null</c> — pre-W1 this
     /// permanently self-reinstated via the R1(c) reactivation. Must 403; the user stays
-    /// deactivated. S147 OQ-2 / R-30 (K-13): the GET is no longer self-readable either — a departed
-    /// self's read is refused with <see cref="DepartedSubject.DenyReason"/>.</summary>
+    /// deactivated. S147 consult R1 (ruled intended) / SECURITY.md departed-self section: the GET is no
+    /// longer self-readable either — a departed self's read is refused with
+    /// <see cref="DepartedSubject.DenyReason"/>. Kind F; red on <c>991a5890</c>: GET 200 (the
+    /// terminated-inclusive validator admitted the HR self).</summary>
     [Fact]
     public async Task EndDatePut_TerminatedSelf_HrActor_CannotSelfReinstate_403_StaysInactive()
     {
@@ -554,7 +557,7 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
 
         var selfClient = ClientWith(HrToken(hrActor, CoveringOrg)); // the still-valid own JWT
 
-        // S147 OQ-2 / R-30 (K-13): re-decided — a departed self's read is refused
+        // S147 OQ-2 / consult R1 (ruled intended): re-decided — a departed self's read is refused
         // (the shared validator's departed-self clause; was: GET stays self-readable).
         var get = await selfClient.GetAsync(EndDateUrl(hrActor));
         Assert.Equal(HttpStatusCode.Forbidden, get.StatusCode);

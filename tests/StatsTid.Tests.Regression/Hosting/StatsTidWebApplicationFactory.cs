@@ -59,9 +59,19 @@ public sealed class StatsTidWebApplicationFactory : WebApplicationFactory<Progra
 {
     private readonly string _connectionString;
 
-    public StatsTidWebApplicationFactory(string connectionString)
+    private readonly bool _withoutLeaverJob;
+
+    /// <param name="connectionString">The per-test container's connection string.</param>
+    /// <param name="withoutLeaverJob">S147 / TASK-14719 fix-up 1 — when true this host (and every host
+    /// derived from it, <c>WithFixedToday</c> included) does NOT run <c>SettlementCloseService</c>. That job
+    /// runs its leaver-deactivation step at boot and every 5 minutes, flipping every still-active user whose
+    /// end date has passed to inactive. A fact that seeds an ACTIVE departed-by-end-date self would then race
+    /// the flip: when it wins, active-only routes answer 404 before the guard under test runs. Use it for
+    /// fixtures whose facts seed that grace state; do NOT use it where a fact relies on the job.</param>
+    public StatsTidWebApplicationFactory(string connectionString, bool withoutLeaverJob = false)
     {
         _connectionString = connectionString;
+        _withoutLeaverJob = withoutLeaverJob;
     }
 
     /// <summary>
@@ -112,6 +122,20 @@ public sealed class StatsTidWebApplicationFactory : WebApplicationFactory<Progra
                 ["ConnectionStrings:EventStore"] = _connectionString,
             });
         });
+
+        if (_withoutLeaverJob)
+            builder.ConfigureTestServices(services =>
+            {
+                var job = services
+                    .Where(d => d.ServiceType == typeof(IHostedService)
+                                && d.ImplementationType == typeof(SettlementCloseService))
+                    .ToList();
+                // Fail loud: a switch that silently does nothing would hide the very race it exists to remove.
+                if (job.Count == 0)
+                    throw new InvalidOperationException(
+                        "SettlementCloseService hosted-service registration not found; the withoutLeaverJob option would do nothing.");
+                foreach (var d in job) services.Remove(d);
+            });
     }
 
     /// <summary>
@@ -246,30 +270,6 @@ public sealed class StatsTidWebApplicationFactory : WebApplicationFactory<Progra
         => WithWebHostBuilder(builder =>
             builder.ConfigureTestServices(services =>
                 services.AddSingleton<TimeProvider>(new FixedTimeProvider(today))));
-
-    /// <summary>
-    /// S147 / TASK-14719 — <see cref="WithFixedToday"/> PLUS the leaver-deactivation poller switched off.
-    /// Why: <c>SettlementCloseService</c> runs "Step A" on its FIRST poll the moment a host starts and flips
-    /// every still-active user whose end date is before the host's (pinned) today to inactive. A fact that
-    /// seeds an ACTIVE departed-by-end-date self and then boots this host races that flip, and when the flip
-    /// wins the user is gone from every active-only read (404) before the guard under test runs. This host
-    /// does not register that one hosted service, so the user stays in the grace state the fact seeded.
-    /// Throws if the registration is not found, so the switch can never silently do nothing.
-    /// </summary>
-    public WebApplicationFactory<Program> WithFixedTodayWithoutLeaverFlip(DateOnly today)
-        => WithWebHostBuilder(builder =>
-            builder.ConfigureTestServices(services =>
-            {
-                services.AddSingleton<TimeProvider>(new FixedTimeProvider(today));
-                var poller = services
-                    .Where(d => d.ServiceType == typeof(IHostedService)
-                                && d.ImplementationType == typeof(SettlementCloseService))
-                    .ToList();
-                if (poller.Count == 0)
-                    throw new InvalidOperationException(
-                        "SettlementCloseService hosted-service registration not found; the leaver-flip switch would do nothing.");
-                foreach (var d in poller) services.Remove(d);
-            }));
 
     // ─── S142 / TASK-14200 fixed-INSTANT harness — the seam five downstream tasks share ──────
     // Sprint 142 moves BUSINESS DATES (effective_from, a "is this in the past?" check, a stored
