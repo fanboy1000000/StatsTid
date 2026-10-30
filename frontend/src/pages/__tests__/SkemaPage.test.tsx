@@ -848,17 +848,13 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     const drawer = await screen.findByRole('dialog')
 
-    // S125: await a POST-HYDRATION element before asserting anything. This test carried the
-    // documented "Alt fordelt ✓" async-settle flake (S121 flake-watch, red in CI 2026-07-30): the
-    // dialog role appears before the panel has hydrated from the served data, so a synchronous query
-    // ran too early under load.
-    //
-    // The barrier is the visible ROW, not the "Alt fordelt ✓" text. A first fix awaited that text
-    // instead — which the close review showed is NOT a settled-state barrier at all:
-    // classifyAllocation(0, 0) is balanced, so "Alt fordelt ✓" also renders for the pre-hydration
-    // worked=0/allocated=0 state. Awaiting it could resolve vacuously and MASK missing hydration —
-    // the opposite of what a flake fix should do. The 'Udvikling' row only exists once rowPreferences
-    // have been served, so it is a real barrier.
+    // S125 / S147: await the SERVED PERIOD before asserting anything. History: this test carried
+    // the "Alt fordelt ✓" async-settle flake (S121 flake-watch, red in CI 2026-07-30) — the dialog
+    // role appears before the panel holds the day's data, so a synchronous query ran too early.
+    // Neither the "Alt fordelt ✓" text (classifyAllocation(0, 0) is balanced, so it also renders
+    // for the empty state — it could resolve vacuously) nor the 'Udvikling' row (served with the
+    // first data commit, whatever the periods) proves the periods arrived. The served 08:00 /
+    // 16:00 do: an unseeded panel has no such field and the wait would time out.
     expect(await within(drawer).findByDisplayValue('08:00')).toBeInTheDocument()
     expect(within(drawer).getByDisplayValue('16:00')).toBeInTheDocument()
     expect(await within(drawer).findByLabelText('Udvikling')).toBeInTheDocument()
@@ -880,15 +876,17 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     // work-interval state was still empty (three effects copied it a render later), so a click
     // landing in that gap seeded the panel with no periods, and nothing ever refreshed them.
     //
-    // Why this hits the gap on EVERY run, not 1 in 32 (React 18.3, jsdom): the data arrives from a
-    // fetch promise, so its setState is a DefaultLane update — rendered and committed inside ONE
-    // Scheduler task, with the passive effects (and the second render they cause) queued as a
-    // LATER Scheduler task (a MessageChannel/timer macrotask). A MutationObserver callback is a
-    // MICROTASK queued by the commit's DOM mutation, so it necessarily runs after the commit and
-    // before the next macrotask — i.e. before the effects. (Passive effects would flush
-    // synchronously only for a SyncLane/discrete-event render, which a promise-resolved setState
-    // is not.) The act environment is switched OFF around the wait, because this is not an RTL
-    // async utility: with it on, React warns about updates outside act().
+    // Why this hits the gap reliably in practice rather than 1 in 32 (React 18.3, jsdom): the data
+    // arrives from a fetch promise, so its setState is a DefaultLane update, rendered and
+    // committed in one Scheduler task; the passive effects (and the second render they cause) are
+    // queued for a LATER Scheduler task. A MutationObserver callback is a microtask queued by the
+    // commit's DOM mutation, so it runs right after the commit. This is NOT a logical
+    // guarantee: React's scheduler works in ~5 ms slices and could in principle drain the passive
+    // effects within the same slice if the render and commit were that quick. The first data commit
+    // of this page (the whole grid) takes far longer than a slice, which is why the pin is
+    // dependable: it failed 6 of 6 runs against the pre-QUAL-241 page (96cd31e6) and is green on
+    // every run of the fix. The act environment is switched OFF around the wait because this is
+    // not an RTL async utility: with it on, React warns about updates outside act().
     const globals = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
     const previousActEnv = globals.IS_REACT_ACT_ENVIRONMENT
     globals.IS_REACT_ACT_ENVIRONMENT = false
@@ -1065,7 +1063,8 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     const reopen = screen.getByRole('button', { name: 'Genåbn' })
     expect(reopen).toBeDisabled()
     fireEvent.click(reopen)
-    expect(fetchLog.some((e) => e.includes('reopen'))).toBe(false)
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)) }) // let anything queued settle
+    expect(fetchLog.some((e) => e.includes('POST') && e.includes('reopen'))).toBe(false)
     await act(async () => { release() })
   })
 
@@ -1088,10 +1087,11 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     await waitFor(() => expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument())
   })
 
-  it('F: a 422 on a newer edit reverts to the value an OLDER successful save established, not to the pre-save value', async () => {
-    // Red condition (inherited QUAL, Codex WARNING 2): save A (2 h) succeeds while a newer local
-    // edit B (4 h) exists, so the old overlap guard did not advance server truth; B's 422 then
-    // reverted to the value BEFORE A (blank) instead of A's 2.
+  it('F: saves go one at a time — a 422 on a NEWER cell edit reverts to the value the OLDER save established, and the newer POST waits for the older one', async () => {
+    // Red condition (fix-up 2 root fix; the fix-up 1 form of this pin was inherited QUAL, Codex
+    // WARNING 2 / Opus NOTE 1): against ed884d6f both POSTs leave at once, so held has length 2
+    // after the second debounce — and a newer save's 422 could be processed before the older
+    // save's success, resetting the screen to the pre-save value while the server holds A's.
     await renderLoaded()
     const held: Array<(r: unknown) => void> = []
     saveResponder = () => new Promise((resolve) => { held.push(resolve) })
@@ -1100,10 +1100,11 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     fireEvent.change(input, { target: { value: '2' } })
     await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // save A leaves
     fireEvent.change(input, { target: { value: '4' } })
-    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // save B leaves
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // save B is QUEUED
     vi.useRealTimers()
-    expect(held).toHaveLength(2)
-    await act(async () => { held[0](jsonResponse({})) }) // A ok
+    expect(held).toHaveLength(1) // B has not left: one save in flight at a time
+    await act(async () => { held[0](jsonResponse({})) }) // A ok → B leaves
+    await waitFor(() => expect(held).toHaveLength(2))
     await act(async () => {
       held[1](jsonResponse({
         error: 'absence_full_day_only', absenceType: 'CARE_DAY', date: '2026-03-03', requiredHours: 7.4, message: 'x',
@@ -1111,6 +1112,199 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     }) // B rejected
     fireEvent.blur(input)
     await waitFor(() => expect((screen.getByLabelText('Udvikling dag 3') as HTMLInputElement).value).toBe('2'))
+  })
+
+  it('F: the same for a work-time day — the newer period save waits, and its 422 reverts to the OLDER save\'s period', async () => {
+    // Red condition: against ed884d6f held has length 2 (both POSTs in flight at once).
+    await renderLoaded()
+    const held: Array<(r: unknown) => void> = []
+    saveResponder = () => new Promise((resolve) => { held.push(resolve) })
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    let drawer = await screen.findByRole('dialog')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '17:00' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // A leaves
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '18:00' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // B queued
+    vi.useRealTimers()
+    expect(held).toHaveLength(1)
+    await act(async () => { held[0](jsonResponse({})) })
+    await waitFor(() => expect(held).toHaveLength(2))
+    await act(async () => {
+      held[1](jsonResponse({ error: 'absence_full_day_only', message: 'work-time rejected' }, 422))
+    })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Luk' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
+    drawer = await screen.findByRole('dialog')
+    await waitFor(() => expect((within(drawer).getByLabelText('Til') as HTMLInputElement).value).toBe('17:00'))
+  })
+
+  it('F: two overlapping row-preference actions keep edits locked until the LAST one has finished', async () => {
+    // Red condition: against ed884d6f the lock was a boolean, released when the FIRST sequence
+    // finished while the second PUT/refetch was still pending.
+    await renderLoaded()
+    const putGates: Array<() => void> = []
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/row-preferences') && init?.method === 'PUT') {
+        await new Promise<void>((r) => { putGates.push(r) })
+      }
+      return base(url, init)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Udvikling' }))
+    await waitFor(() => expect(putGates).toHaveLength(2))
+    expect(screen.queryByLabelText('Ferie dag 5')).toBeNull() // locked
+    await act(async () => { putGates[0]() }) // the FIRST sequence finishes…
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    expect(screen.queryByLabelText('Ferie dag 5')).toBeNull() // …the second is still pending: still locked
+    await act(async () => { putGates[1]() })
+    await waitFor(() => expect(screen.getByLabelText('Ferie dag 5')).toBeInTheDocument())
+  })
+
+  it('F: approving March and then navigating before the send returns — the reload lands on APRIL and the page is not left locked', async () => {
+    // Red condition: against ed884d6f the post-send reload targeted the month the click was made
+    // in (March), superseded April's own load, and left March's data under "April 2026" with the
+    // page silently locked (no busy cue, no error).
+    await renderLoaded()
+    const marchData = monthData
+    const aprilData = makeMonthData({ month: 4, daysInMonth: 30, entries: [], absences: [], dailyNorm: [], workTime: [] })
+    const base = mockFetch.getMockImplementation()!
+    let releaseSend!: () => void
+    const sendGate = new Promise<void>((r) => { releaseSend = r })
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/skema/emp001/month')) {
+        fetchLog.push(`${init?.method ?? 'GET'} ${url}`)
+        return jsonResponse(String(url).includes('month=4') ? aprilData : marchData)
+      }
+      if (String(url).includes('/api/approval/send')) {
+        fetchLog.push(`POST ${url}`)
+        await sendGate
+        return jsonResponse({ periodId: 'per-1', status: 'EMPLOYEE_APPROVED' })
+      }
+      return base(url, init)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' }))
+    await waitFor(() => expect(fetchLog.some((e) => e.includes('/api/approval/send'))).toBe(true))
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await act(async () => { releaseSend() })
+    expect(await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('April 2026')
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull()
+  })
+
+  it('F: if a stray load leaves the wrong month under the title, the page loads the month on screen (once)', async () => {
+    // Red condition: against ed884d6f nothing recovers — March's data stays under April, locked.
+    await renderLoaded()
+    const aprilData = makeMonthData({ month: 4, daysInMonth: 30, entries: [], absences: [], dailyNorm: [], workTime: [] })
+    const marchData = monthData
+    const base = mockFetch.getMockImplementation()!
+    let aprilRequests = 0
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/skema/emp001/month') && String(url).includes('month=4')) {
+        aprilRequests += 1
+        return jsonResponse(aprilRequests === 1 ? marchData : aprilData) // the first answer is the wrong month
+      }
+      return base(url, init)
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    expect(await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })).toBeInTheDocument()
+    expect(aprilRequests).toBe(2)
+  })
+
+  it('F: approve / send lock editing for the whole flush → request → reload sequence', async () => {
+    // Red condition: against ed884d6f the grid stayed editable while the send was in flight, and
+    // the reload then overwrote whatever was typed.
+    await renderLoaded()
+    let releaseSend!: () => void
+    const sendGate = new Promise<void>((r) => { releaseSend = r })
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/approval/send')) {
+        fetchLog.push(`POST ${url}`)
+        await sendGate
+        return jsonResponse({ periodId: 'per-1', status: 'EMPLOYEE_APPROVED' })
+      }
+      return base(url, init)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' }))
+    await waitFor(() => expect(fetchLog.some((e) => e.includes('/api/approval/send'))).toBe(true))
+    expect(screen.queryByLabelText('Udvikling dag 3')).toBeNull()
+    await act(async () => { releaseSend() })
+    await waitFor(() => expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument())
+  })
+
+  it('F: leaving the page sends the pending edits instead of dropping them', async () => {
+    // Red condition: against ed884d6f the unmount cleanup only cleared the timers, so a value
+    // typed less than a second before leaving was never saved.
+    const { unmount } = await renderLoaded()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    unmount()
+    await waitFor(() => expect(saveBodies.length).toBe(1), { timeout: 500 })
+    expect(saveBodies[0].entries).toEqual([{ date: '2026-03-03', projectCode: 'UDV', hours: 2 }])
+  })
+
+  it('F: a failed SAVE shows a save alert (not "Kunne ikke indlæse skema"), and the next successful save clears it', async () => {
+    // Red condition: against ed884d6f the save failure was stored in the load-error field, so it
+    // rendered as "Kunne ikke indlæse skema: …" with no way to dismiss it.
+    await renderLoaded()
+    saveResponder = () => jsonResponse({ error: 'boom' }, 500)
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    expect(await screen.findByText(/Kunne ikke gemme:/)).toBeInTheDocument()
+    expect(screen.queryByText(/Kunne ikke indlæse skema/)).toBeNull()
+    saveResponder = null
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '3' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await waitFor(() => expect(screen.queryByText(/Kunne ikke gemme:/)).toBeNull())
+  })
+
+  it('F: a failed reopen shows its own dismissible alert in Danish', async () => {
+    monthData = makeMonthData({
+      approval: {
+        periodId: 'per-1',
+        status: 'EMPLOYEE_APPROVED',
+        employeeDeadline: null,
+        managerDeadline: null,
+        employeeApprovedAt: '2026-04-01T08:00:00Z',
+        rejectionReason: null,
+      },
+    })
+    await renderLoaded()
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/reopen')) return jsonResponse({ error: 'nej' }, 500)
+      return base(url, init)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Genåbn' }))
+    expect(await screen.findByText(/Kunne ikke genåbne måneden:/)).toBeInTheDocument()
+    expect(screen.queryByText(/Kunne ikke indlæse skema/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Luk besked' }))
+    expect(screen.queryByText(/Kunne ikke genåbne måneden:/)).toBeNull()
+  })
+
+  it('F: the status region is mounted from the start (empty), gets its text while a month loads, and sits outside the aria-busy area', async () => {
+    // Red condition: against ed884d6f the status element was inserted already filled and sat
+    // INSIDE the aria-busy region.
+    await renderLoaded()
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('')
+    const release = holdAprilFetch()
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    expect(screen.getByRole('status')).toBe(status) // same element, text set
+    expect(status).toHaveTextContent('Indlæser…')
+    const busy = document.querySelector('[aria-busy="true"]')
+    expect(busy).not.toBeNull()
+    expect(busy!.contains(status)).toBe(false)
+    serveApril()
+    await act(async () => { release() })
+    await waitFor(() => expect(status).toHaveTextContent(''))
   })
 })
 

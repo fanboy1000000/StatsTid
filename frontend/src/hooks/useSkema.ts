@@ -1,6 +1,15 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import { apiClient } from '../lib/api'
 import type { SkemaMonthData, SkemaRow, WorkTimeDay, WorkTimeInterval } from '../types'
+
+/** S147 / QUAL-241 fix-up 2 — a failed ACTION (save / approve-send / reopen), as opposed to a
+    failed month LOAD (`error`). The page words each kind in Danish and shows it in its own
+    dismissible alert; each kind clears on the next success of the same kind. */
+export type SkemaActionErrorKind = 'save' | 'approve' | 'reopen'
+export interface SkemaActionError {
+  kind: SkemaActionErrorKind
+  message: string
+}
 
 export interface QuotaError {
   absenceType: string
@@ -84,7 +93,11 @@ export type ApprovalValidationError = CoverageValidationError | AllocationValida
 interface UseSkemaResult {
   data: SkemaMonthData | null
   loading: boolean
+  /** The month LOAD failed (the only thing this field means). */
   error: string | null
+  /** The last failed save / approve / send / reopen, or null. */
+  actionError: SkemaActionError | null
+  clearActionError: () => void
   quotaError: QuotaError | null
   /** S73 R4 — the typed `absence_full_day_only` / `absence_type_not_eligible`
       422 body, surfaced as a Danish alert; null when none. */
@@ -145,34 +158,77 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const [data, setData] = useState<SkemaMonthData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<SkemaActionError | null>(null)
   const [quotaError, setQuotaError] = useState<QuotaError | null>(null)
   const [absenceRuleError, setAbsenceRuleError] = useState<AbsenceRuleError | null>(null)
   const [absenceCapError, setAbsenceCapError] = useState<AbsenceCapError | null>(null)
   const [approvalValidationError, setApprovalValidationError] = useState<ApprovalValidationError | null>(null)
 
+  const failAction = useCallback(
+    (kind: SkemaActionErrorKind, message: string) => setActionError({ kind, message }),
+    [],
+  )
+  const succeedAction = useCallback(
+    (kind: SkemaActionErrorKind) => setActionError((prev) => (prev?.kind === kind ? null : prev)),
+    [],
+  )
+  const clearActionError = useCallback(() => setActionError(null), [])
+
   const latestDataRequestId = useRef(0)
+  /** True from the moment a load is issued until the LATEST load settles (set synchronously). */
+  const loadInFlightRef = useRef(false)
+
+  // S147 / QUAL-241 fix-up 2 — a (re)load targets the identity that is CURRENT when it is
+  // called, read from a ref, never the identity captured when the callback was created. The
+  // reloads after approve / send / reopen / preference writes are issued from callbacks that
+  // were made for the month the action started in; if the person has navigated meanwhile, a
+  // captured identity would reload the OLD month, supersede the new month's own load (one
+  // request counter) and leave the old month's data under the new month's title. The ref is
+  // written in a layout effect, which runs before the passive effect that triggers the load.
+  const identityRef = useRef({ employeeId, year, month })
+  useLayoutEffect(() => {
+    identityRef.current = { employeeId, year, month }
+  }, [employeeId, year, month])
 
   const fetchData = useCallback(async () => {
     const requestId = ++latestDataRequestId.current
+    loadInFlightRef.current = true
+    const { employeeId: emp, year: y, month: m } = identityRef.current
     setLoading(true)
     setError(null)
     const result = await apiClient.get('/api/skema/{employeeId}/month', {
-      params: { path: { employeeId } },
-      query: { year, month },
+      params: { path: { employeeId: emp } },
+      query: { year: y, month: m },
     })
     // S126 / F2 — a newer request superseded this one while it was in flight; drop it.
     if (requestId !== latestDataRequestId.current) return
+    loadInFlightRef.current = false
     if (result.ok) {
       setData(result.data)
     } else {
       setError(result.error)
     }
     setLoading(false)
-  }, [employeeId, year, month])
+  }, [])
 
   useEffect(() => {
     fetchData()
-  }, [fetchData])
+  }, [fetchData, employeeId, year, month])
+
+  // Backstop: if a load has settled successfully but the data held is NOT the month asked for
+  // (a stray reload for another month), load the month that is asked for — once per month, so
+  // a server that really answers with another month cannot cause a request loop. Declared after
+  // the load effect, which has already marked a load in flight in the render right after a
+  // month change (when `loading` is still false), so that render does not double-fetch.
+  const backstopTriedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (loading || error || loadInFlightRef.current || !data) return
+    if (data.year === year && data.month === month) return
+    const key = `${employeeId}:${year}-${month}`
+    if (backstopTriedRef.current === key) return
+    backstopTriedRef.current = key
+    void fetchData()
+  }, [data, loading, error, employeeId, year, month, fetchData])
 
   const clearQuotaError = useCallback(() => setQuotaError(null), [])
   const clearAbsenceRuleError = useCallback(() => setAbsenceRuleError(null), [])
@@ -219,6 +275,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
         },
       })
       if (result.ok) {
+        succeedAction('save')
         return { status: 'ok' }
       }
       // S73 R4 — a 422 is a server REJECTION (revert-and-resolve), discriminated
@@ -260,19 +317,19 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
               maxHours: body.maxHours,
             })
           } else {
-            setError(result.error)
+            failAction('save', result.error)
           }
         } catch {
           // Non-JSON 422 — still a rejection; surface the raw text.
-          setError(result.error)
+          failAction('save', result.error)
         }
         return { status: 'rejected', httpStatus: 422 }
       }
       // Everything else (400/401/403/404/409/5xx/network) — keep local edits, retry.
-      setError(result.error)
+      failAction('save', result.error)
       return { status: 'failed', httpStatus: result.status, error: result.error }
     },
-    [employeeId, year, month]
+    [employeeId, year, month, failAction, succeedAction]
   )
 
   const employeeApprove = useCallback(
@@ -286,6 +343,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
       })
       if (result.ok) {
         setApprovalValidationError(null)
+        succeedAction('approve')
         await fetchData()
       } else {
         if (result.status === 422) {
@@ -296,11 +354,11 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
             return
           }
         }
-        setError(result.error)
+        failAction('approve', result.error)
         await fetchData()
       }
     },
-    [fetchData]
+    [fetchData, failAction, succeedAction]
   )
 
   /**
@@ -335,6 +393,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
         body: { employeeId, year, month },
       })
       if (result.ok) {
+        succeedAction('approve')
         await fetchData()
         return
       }
@@ -346,13 +405,13 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
           return
         }
       }
-      setError(result.error)
+      failAction('approve', result.error)
       // Refetch on every failure: the send is atomic, but a 409 means someone
       // else moved the month (a concurrent send, or a manager decision), so the
       // grid must re-read rather than keep showing the pre-attempt state.
       await fetchData()
     },
-    [employeeId, year, month, fetchData]
+    [employeeId, year, month, fetchData, failAction, succeedAction]
   )
 
   const reopenPeriod = useCallback(
@@ -362,15 +421,16 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
         body: { reason: reason ?? 'Genåbnet af medarbejder' },
       })
       if (result.ok) {
+        succeedAction('reopen')
         await fetchData()
       } else {
-        setError(result.error)
+        failAction('reopen', result.error)
       }
     },
-    [fetchData]
+    [fetchData, failAction, succeedAction]
   )
 
-  return { data, loading, error, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove, reopenPeriod }
+  return { data, loading, error, actionError, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove, reopenPeriod }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
