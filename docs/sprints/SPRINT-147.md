@@ -94,7 +94,7 @@ Artifacts: `.claude/reviews/PLAN-s147-{codex,reviewer}-c{1,2,3}.md`, `PLAN-s147-
 | TASK-14716 / 14716-T | 4b | payroll-integration, cross-domain / test-qa | SEC-054 step 2: retire the raw routes | planned |
 | TASK-14717 / 14717-T | — | rule-engine / test-qa | T3b as a separate task | **DROPPED** (RR-1: R1 landed before 14708's dispatch; folded into 14708) |
 | TASK-14718 | 2a → before 2b (plan-added 2026-10-30) | ux (re-routed from test-qa) | QUAL-241: a day panel opened before the page hydrates loses its periods. The "flaky" 7203-pin vitest was catching a real race. First dispatch (test-qa) diagnosed it and stopped as instructed. Re-dispatched to `ux` for the product fix plus a deterministic pin | dispatched 2026-10-30 (2nd) |
-| TASK-14719 | 2a → before 2b (plan-added 2026-10-30) | test-qa | The CI-W2 Docker failures. (A) `SenderSeparationTests`' seed passes untyped nulls. (B) and (C) two older facts whose expectations 14703 re-decided (a departed self's own read; a deactivated manager clearing their own stand-in), which the 14703-T census missed. (D) The role-grant boundary pair answered 404 because the D+1 user was found inactive. (E) A wider census | dispatched 2026-10-30 |
+| TASK-14719 | 2a → before 2b (plan-added 2026-10-30) | test-qa | The CI-W2 Docker failures. (A) `SenderSeparationTests`' seed passes untyped nulls. (B) and (C) two older facts whose expectations 14703 re-decided (a departed self's own read; a deactivated manager clearing their own stand-in), which the 14703-T census missed. (D) The role-grant boundary pair answered 404 because the D+1 user was found inactive. (E) A wider census | **merged** `f21422d6` with fix-up 1 (GATE green); Docker facts CI-pending (CI-W2b) |
 
 ### Wave 1 — the merge record (2026-10-29)
 
@@ -147,6 +147,7 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
 | 14704 + 14704-T | `44f25a71` | build 0 / 145 / CA2100 115; Unit 1622; DemoSeed 170; Regression non-Docker 130; REGEN: no drift | PASS | READY-TO-MERGE (7 N) | 0 B, 0 W, 3 N | `002787c6` |
 | 14708 + 14708-T (+ Orchestrator comment relabel) | `4f57d29f` | build 0 / 145 / CA2100 115; Unit 1669 + **1 red** → merge fix-up `4653e5ed` → 1670; DemoSeed 170; Regression non-Docker 130; REGEN: no drift | PASS | READY-TO-MERGE (1 W, 7 N) | 0 B, 0 W, 2 N (both relabelled in `4f57d29f`) | `7cc6e65e` |
 | 14705 + 14705-T (+ fix-up 1) | `c60dfd45` | build 0 / 145 / CA2100 115; Unit 1670; DemoSeed 170; Regression non-Docker 135 (+5: `ApprovalSelfGuardIsSelfTests`); REGEN: no drift | c1 PASS → c2 PASS | c1 **FIX-FIRST** (1 B: `audit_log` is the HTTP journal; 2 W; 3 N) → c2 READY-TO-MERGE (2 N) | c1 0 B, 0 W, 1 N → c2 CLEAN | `b2a65fb8` |
+| 14719 (+ fix-up 1) | `e3a719ed` | build 0 / 145 / CA2100 115; Unit 1670; DemoSeed 170; Regression non-Docker 135 | c1 PASS → c2 PASS | **Opus stand-in** (Fable limited): c1 READY-TO-MERGE (3 W, 7 N) → c2 READY-TO-MERGE (4 N) | c1 0 B, 1 W → c2 CLEAN | `f21422d6` |
 
 *In plain words (14706 + 14707):* the 11-hour rest check used to skip, silently, every day registered in Skema (hours with no clock times), so the month looked clean. Now the check lists the days it could not measure, and the employee's compliance panel and Teamoversigt's row detail show "Hviletid ikke kontrolleret for N dage". **What you will see:** under today's backend every Skema day with hours is "not checked", so the notice appears for practically every employee and month until S148 stage 0 makes the rest check read Skema's intervals (D-2 = (a)). This is the honest "not checked" chosen in OQ-4 = (b), not a regression. **Plan deviation:** 14706 merged ahead of 14703 to unblock the stacked 14707; it shares no file with 14703. **Dispositions:**
 - **14706 Fable W1.** A day with one timed entry plus hours-only entries counts as checked. It goes into QUAL-234's row and the S148 stage-0 input for D-2.
@@ -200,6 +201,19 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
 - **Codex c1 NOTE.** M4 was run and recorded.
 - **Fable c2 NOTE 1.** Stale "today" wording in `DepartedSelfElevatedRouteTests.cs` (tidy item 16).
 - **SEC-056's register row** is written at close (O-10 Block 21, "T9 merged" variant).
+
+*In plain words (14719):* CI-W2 ran the Docker tests that cannot run locally, and 8 of 2353 failed. None was a product defect:
+- **Five** were a seeding bug in 14704's test: null values sent without a type.
+- **Two** were older tests whose expectations 14703 deliberately changed: a departed person reading their own end date, and a deactivated manager clearing their own stand-in. 14703-T's census had missed them; both are now re-decided and labelled.
+- **One** was a timing fault in the test setup. The "switch off people who have left" job runs whenever a test server starts and every five minutes. It deactivated a test's seeded leaver before the request, so the route answered "not found" instead of refusing.
+
+The job is now off on the two shared test servers that seed leavers directly. **Dispositions:**
+- **Told, no question needed** (review NOTE 1). A departed HR person's still-valid login can no longer read their own end date. This reverses an S70 reviewer decision, not an owner ruling, and follows from consult R1 (reads refused, ruled intended).
+- **Recorded residual** (NOTE 3). The under-lock catch at `ReportingLineRepository.cs:888-895` has never been pinned. The self call site of the revoke fallback (`ReportingLineEndpoints.cs:2359`) is no longer pinned at route level; the shared method stays pinned through the admin route.
+- **Recorded:** the production "active but departed" window (review NOTE 5). It is now in `docs/SECURITY.md`.
+- **Added:** 14710-T's census gains the seed-then-boot facts (NOTE 4).
+- **Tidy item 18:** NOTEs 1 and 4 of cycle 2 (optional).
+- **CI-pending** until CI-W2b.
 
 *In plain words (14709):* the dead absence-code list is gone. When the server refuses an absence in Skema, the employee now reads the server's own Danish sentence, the same source that names the rows. The quota alert keeps a small table of the five entitlement names, because the server's quota message is in English. **Plan deviation:** 14709 merged ahead of 14703, against the plan's "14703 merges first", because it is frontend-only and shares no file with 14703. The residuals are tidy items 7–9.
 
@@ -257,8 +271,11 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
    - Delete the dead `ValidateAbsence` and its two facts (Fable NOTE 7).
    - Harness tidiness: dispose the derived factory, and fix the token's `agreementCode` (Fable NOTE 6).
    - For S148's S0-2 test brief (QUAL-236): name the child-code rows file that must be re-pinned (Fable NOTE 5).
-16. **From the 14705 reviews.** `DepartedSelfElevatedRouteTests.cs:117-118`, `:139`, `:161`: the Red-condition wording "today the validator admits" is stale, because those facts now go red only if both guards are absent. The header `:52-53` and the comment `:76` are stale too (Fable c2 NOTE 1).
+16. **From the 14705 reviews.** `DepartedSelfElevatedRouteTests.cs:119-120`, `:141`, `:163` (lines after TASK-14719): the Red-condition wording "today the validator admits" is stale, because those facts now go red only if both guards are absent. The header `:54-55` and the comment `:78` are stale too (Fable c2 NOTE 1).
 17. **From the 14719 review (NOTE 6, the `src/**` half).** `EmploymentDateEndpoints.cs:151-153` and `:449-451` still say "the GET above stays self-readable". Since S147 a departed self's read is refused (consult R1), so both comments need correcting. The test half is done in TASK-14719 fix-up 1.
+18. **From the 14719 cycle-2 review (optional).**
+   - On the payout fact's derived host, assert that no `SettlementCloseService` is registered (`Assert.Empty(host.Services.GetServices<IHostedService>().OfType<SettlementCloseService>())`), so CI proves the fixture switch is inherited rather than relying on reasoning.
+   - Say in `DepartedSelfElevatedRouteTests.cs`'s header "Seeding" paragraph (`:59-64`) that the host runs without the leaver job.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
