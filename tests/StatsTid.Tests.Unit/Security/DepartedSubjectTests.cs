@@ -12,7 +12,15 @@ namespace StatsTid.Tests.Unit.Security;
 /// creates. RED is proven by NAMED MUTATION at the wave gate (never by reverting):
 /// <b>M-11</b> changes <c>d &lt; today</c> to <c>d &lt;= today</c> (the last day then counts as departed);
 /// <b>M-12</b> drops the <c>!isActive</c> arm (a deactivated subject is then not departed);
-/// <b>M-14</b> (G1) makes <c>IsSelf</c> case-insensitive / treats empty ids as equal.</para>
+/// <b>M-14a</b> (G1) makes <c>IsSelf</c> compare <c>OrdinalIgnoreCase</c>;
+/// <b>M-14b</b> (G1) drops <c>IsSelf</c>'s <c>IsNullOrEmpty</c> check (empty ids then match);
+/// <b>M-14c</b> makes <c>IsSelf</c> always return false;
+/// <b>M-14d</b> makes <c>IsSelf</c> trim both ids;
+/// <b>M-20</b> appends a date to <c>DenyReason</c>;
+/// <b>M-21</b> drops the end-date arm (a past end date is then not departed);
+/// <b>M-22</b> counts a null end date as departed.
+/// Each fact names its own mutation; M-11, M-12, M-14c, M-14d, M-20, M-21 and M-22 were run in a
+/// detached worktree and their failures are quoted on the facts.</para>
 /// </summary>
 public class DepartedSubjectTests
 {
@@ -76,13 +84,13 @@ public class DepartedSubjectTests
         Assert.Equal(expected, DepartedSubject.IsDeparted(Subject(active, end), Today));
     }
 
-    /// <summary>Kind N (G1; mutation M-14: Ordinal to OrdinalIgnoreCase). Red condition: ids that
+    /// <summary>Kind N (G1; mutation M-14a: Ordinal to OrdinalIgnoreCase). Red condition: ids that
     /// differ only by case are treated as the same person.</summary>
     [Fact]
     public void IsSelf_CaseDifferentIds_DoNotMatch()
         => Assert.False(DepartedSubject.IsSelf("Mette", "mette"));
 
-    /// <summary>Kind N (G1; M-14). Red condition: a null actor id matches (e.g. a null subject).</summary>
+    /// <summary>Kind N (G1; M-14b: drop the IsNullOrEmpty check). Red condition: a null actor id matches (e.g. a null subject).</summary>
     [Fact]
     public void IsSelf_NullActor_NeverMatches()
     {
@@ -90,7 +98,7 @@ public class DepartedSubjectTests
         Assert.False(DepartedSubject.IsSelf(null, null));
     }
 
-    /// <summary>Kind N (G1; M-14 variant: drop the IsNullOrEmpty check). Red condition: two empty ids match.</summary>
+    /// <summary>Kind N (G1; M-14b: drop the IsNullOrEmpty check). Red condition: two empty ids match.</summary>
     [Fact]
     public void IsSelf_EmptyActor_NeverMatches()
     {

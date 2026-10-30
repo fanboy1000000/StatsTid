@@ -45,8 +45,8 @@ public sealed class TimeProviderRegistrationHostTests : IClassFixture<DepartedSe
     public TimeProviderRegistrationHostTests(DepartedSelfDbFixture fx) => _fx = fx;
 
     /// <summary>Kind R (regression pin - holds today; the Backend registered a TimeProvider before S147, so no
-/// S147 mutation of the Backend host is claimed to redden it beyond removing that pre-existing line).
-/// The Backend host builds the validator with a registered clock.</summary>
+    /// S147 mutation of the Backend host is claimed to redden it beyond removing that pre-existing line).
+    /// The Backend host builds the validator with a registered clock.</summary>
     [Fact]
     public async Task Backend_HostStarts_ValidatorResolves()
     {
