@@ -154,6 +154,24 @@ VACATION and SPECIAL_HOLIDAY use the **MONTHLY_ACCRUAL** model (Ferieloven *samt
 
 > **AC_RESEARCH + AC_TEACHING gap (RESOLVED S37 TASK-3701)**: previously NO entitlement rows seeded for the 2 AC variants. Per interim-expert decision 2026-05-21, AC variants now have 20 rows mirroring AC base values (5 entitlements × 2 OK × 2 variants). See SR-AC_RESEARCH-OK24-005 + SR-AC_TEACHING-OK24-005 (canonical candidate bug **#1** in `agreement-ruleset-audit.md`). Bug-with-no-past-impact per ROADMAP rule correction policy.
 
+### Absence and the norm: which absences count as worked (S147, QUAL-231)
+
+**The rule.** A day of paid absence counts with the hours the employee **should have worked** that day (the planned hours, the per-day norm). It never counts with the hours actually worked, so a whole paid absence day leaves flex unchanged. Unpaid leave lowers what the day owes instead.
+
+**The sickness rule, by agreement:**
+- **HK and PROSA.** A paid sick day and a child's sick day are credited with the day's planned hours. The source is Statens arbejdstidsaftale § 7 nr. 2 and its remark: days with a right to paid absence count with the hours that should have been worked (022-26, identical to 014-21; `sick-day-credit-and-agreement-texts-research.md` R1).
+- **AC-agreement staff.** The same rule applies by analogy, as a **labelled default**, because no central text sets it: PAV 19.3.4 is silent, and local agreements decide (owner ruling D-8b = (a)).
+- **Civil servants** (tjenestemænd) are not modelled.
+
+**As built (S147, TASK-14708; `src/SharedKernel/StatsTid.SharedKernel/Models/AbsenceClassification.cs`).** One vocabulary in the stored spellings, and one classification for all of it:
+- **Credit:** `SICK_DAY`, `CHILD_SICK_DAY`, `CHILD_SICK_DAY_2`, `CHILD_SICK_DAY_3`, `VACATION`, `SPECIAL_HOLIDAY_ALLOWANCE`, `CARE_DAY`, `SENIOR_DAY`, `PARENTAL_LEAVE`, `LEAVE_WITH_PAY`.
+- **Reduction:** `LEAVE_WITHOUT_PAY`.
+- **Neutral:** none today.
+
+The Skema save refuses any code outside the vocabulary with 422. The change moved the weekly core's replay marker once, to `weekly-timeline-v2` (ADR-016 D10).
+
+**Residual (RR-3, MEDIUM; an S148 candidate beside D-8 and ADR-043 R-7).** For a partly worked sick day the sources read the credit as max(worked, planned), and local variation is allowed under 022-26 § 3. StatsTid credits the stored sick hours as entered. That can over-credit when worked plus sick hours exceed the day's norm (QUAL-237).
+
 ## Wage Type Mappings (SLS Codes)
 
 Source: `wage_type_mappings` seed data in `init.sql`. All mappings are identical for OK24 and OK26.
@@ -244,7 +262,7 @@ Per-agreement bundle SR row references: SR-AC-OK24-037 (AC bundle, 18 mappings) 
 | TRAVEL_WORK | SLS_0820 | Travel time (working) |
 | TRAVEL_NON_WORK | SLS_0830 | Travel time (non-working) |
 
-All AC variant mappings now equal AC base. The `CHILD_SICK_DAY` rename also fixes a pre-existing pre-launch production-broken state where rule engine emitted `CHILD_SICK_DAY` per `AbsenceRule.cs:112-114` but AC variants seed only had `CHILD_SICK_1` (phantom row never consulted). See SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006 bug_correction_history.
+All AC variant mappings now equal AC base. The `CHILD_SICK_DAY` rename also fixes a pre-existing pre-launch production-broken state where rule engine emitted `CHILD_SICK_DAY` per `AbsenceRule.cs:112-114` but AC variants seed only had `CHILD_SICK_1` (phantom row never consulted). *(S147 note: that `AbsenceRule.cs` switch was deleted by TASK-14708; the stored codes and their norm effect now live in `AbsenceClassification.cs`, see "Absence and the norm" above.)* See SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006 bug_correction_history.
 
 ### Vacation Settlement Wage Types (period-end disposition — ADR-033)
 
