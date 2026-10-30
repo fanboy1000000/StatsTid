@@ -646,6 +646,8 @@ describe('SkemaPage — R11/R16 manager modal wiring', () => {
     // Since fix-up 2 saves go one at a time, so the original "B succeeded BEFORE A failed" order
     // can no longer happen; what remains is: A (2) in flight, B (3) queued behind it, A fails,
     // B then leaves — and no retry may carry the stale 2.
+    // Red condition (for the rewrite): a retry that re-queues A's CAPTURED delta instead of the
+    // live value would send {UDV, 2026-03-03, 2} after B's 3 — the assertion at the end fails.
     await renderLoaded()
     const saveBodies = (): { hours: number }[][] =>
       mockFetch.mock.calls
@@ -1066,9 +1068,12 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     const reopen = screen.getByRole('button', { name: 'Genåbn' })
     expect(reopen).toBeDisabled()
     fireEvent.click(reopen)
-    await act(async () => { await new Promise((r) => setTimeout(r, 100)) }) // let anything queued settle
-    expect(fetchLog.some((e) => e.includes('POST') && e.includes('reopen'))).toBe(false)
+    // Barrier: let the held April load complete (and hydrate), THEN count — anything the click
+    // could have queued has had every chance to go out by then.
+    serveApril()
     await act(async () => { release() })
+    await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
+    expect(fetchLog.some((e) => e.includes('POST') && e.includes('reopen'))).toBe(false)
   })
 
   it('F: edits are locked for the whole row-preference sequence (flush → PUT → refetch), so the refetch cannot overwrite them', async () => {
@@ -1333,28 +1338,116 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
   const aprilFixture = (overrides: Partial<SkemaMonthData> = {}) =>
     makeMonthData({ month: 4, daysInMonth: 30, entries: [], absences: [], dailyNorm: [], workTime: [], ...overrides })
 
-  it('F: a navigation-fired save that FAILS offline is retried under its OWN month (and the failure names that month)', async () => {
-    // Red condition: against a5a84093 the failed row was dropped when April hydrated (the epoch
-    // guard discarded the late result), so no second POST ever left; and had it been re-queued it
-    // would have gone out under April's envelope.
+  it('F: a save that FAILS after its month has left the screen is NOT resent, the alert names the month and day, and returning shows the server value', async () => {
+    // Red condition: against 0974b286 the failed row was RETAINED and replayed at the next flush
+    // (here the preference action's flush), so a second POST left — resurrecting a value the
+    // server had not accepted and overwriting what the server held for that month meanwhile.
     await renderLoaded()
+    const marchServer = monthData
+    monthAwareMock(() => marchServer, () => aprilFixture())
     let n = 0
     saveResponder = () => (++n === 1 ? jsonResponse({ error: 'offline' }, 500) : jsonResponse({}))
     fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
-    monthData = aprilFixture()
     fireEvent.click(screen.getByRole('button', { name: /Næste/ })) // fires the save (fails)
     await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
-    expect(await screen.findByText(/Kunne ikke gemme \(marts 2026\):/)).toBeInTheDocument()
+    const alert = await screen.findByText(/Kunne ikke gemme \(marts 2026\):/)
+    expect(alert).toHaveTextContent('Ændringerne er ikke gemt')
+    expect(alert).toHaveTextContent('3. marts')
     expect(saveBodies).toHaveLength(1)
-    fireEvent.click(screen.getByRole('button', { name: /Næste/ })) // any later flush point
-    await waitFor(() => expect(saveBodies.length).toBe(2), { timeout: 3000 })
-    for (const b of saveBodies) expect(b.month).toBe(3)
-    expect(saveBodies[1].entries).toEqual([{ date: '2026-03-03', projectCode: 'UDV', hours: 2 }])
+    // Return to March: the server's value (nothing saved), not the dropped edit.
+    fireEvent.click(screen.getByRole('button', { name: /Forrige/ }))
+    await waitFor(() => expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument()) // hydrated
+    const shown = () => {
+      const el = screen.getByLabelText('Udvikling dag 3') as HTMLInputElement
+      fireEvent.blur(el)
+      return (screen.getByLabelText('Udvikling dag 3') as HTMLInputElement).value
+    }
+    expect(shown()).toBe('')
+    // A later flush point (a preference action) must not replay it. Barrier: the grid unlocks
+    // again only after the whole sequence (flush → PUT → refetch) has finished.
+    fireEvent.click(screen.getByRole('button', { name: 'Administrer projekter' }))
+    await screen.findByText('Administrer rækker')
+    fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
+    await waitFor(() => expect(putBodies).toHaveLength(1))
+    await waitFor(() => expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument())
+    expect(saveBodies).toHaveLength(1)
+    expect(shown()).toBe('')
+  })
+
+  it('F: a failed-save alert for one month is NOT cleared by a success in another month — only by a success in the SAME month', async () => {
+    // Red condition: against 0974b286 any successful save cleared it, while its month's edit
+    // was still unsaved.
+    await renderLoaded()
+    const marchServer = monthData
+    monthAwareMock(() => marchServer, () => aprilFixture())
+    let n = 0
+    saveResponder = () => (++n === 1 ? jsonResponse({ error: 'offline' }, 500) : jsonResponse({}))
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
+    await screen.findByText(/Kunne ikke gemme \(marts 2026\):/)
+    // A successful save in APRIL…
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: /Forrige/ })) // fires April's save, then loads March
+    await waitFor(() => expect(saveBodies.length).toBe(2))
+    await waitFor(() => expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument()) // March hydrated: April's save has settled (loads wait for the queue)
+    expect(saveBodies[1].month).toBe(4)
+    // …leaves March's alert in place.
+    expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):/)).toBeInTheDocument()
+    // A successful save in MARCH clears it.
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '4' } })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await waitFor(() => expect(saveBodies.length).toBe(3))
+    await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
+    expect(screen.queryByText(/Kunne ikke gemme \(marts 2026\):/)).toBeNull()
+  })
+
+  it('F: a save that never answers does not hold Godkend forever — the flush gives up after the bound, releases the lock and says so', async () => {
+    // Red condition: against 0974b286 the flush awaited the hung POST with no bound, so the busy
+    // lock (and Godkend) stayed held for the life of the page.
+    await renderLoaded()
+    saveResponder = () => new Promise(() => {}) // never settles
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // the save leaves and hangs
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    expect(screen.queryByLabelText('Udvikling dag 3')).toBeNull() // locked while the flush waits
+    await act(async () => { await vi.advanceTimersByTimeAsync(16_000) })
+    vi.useRealTimers()
+    expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument() // lock released
+    expect(screen.getByRole('button', { name: 'Godkend måned' })).toBeEnabled()
+    expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):/)).toHaveTextContent('Det er uvist, om ændringerne blev gemt')
+    expect(fetchLog.some((e) => e.startsWith('POST') && e.includes('/api/approval/send'))).toBe(false)
+  })
+
+  it('F: each queue link\'s bound starts when the save AHEAD of it starts — a third save waits for the second, not for the clock', async () => {
+    // Red condition: against 0974b286 every waiting save's 15 s timer started when it was QUEUED,
+    // so after one hang the third save left at ~18 s, overlapping the still-hung second one.
+    await renderLoaded()
+    saveResponder = () => new Promise(() => {}) // every save hangs
+    vi.useFakeTimers()
+    const input = () => screen.getByLabelText('Udvikling dag 3')
+    fireEvent.change(input(), { target: { value: '1' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // t≈1.1 s: A leaves
+    fireEvent.change(input(), { target: { value: '2' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // t≈2.2 s: B queued
+    fireEvent.change(input(), { target: { value: '3' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // t≈3.3 s: C queued
+    expect(saveBodies).toHaveLength(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(16_700) }) // t≈20 s
+    expect(saveBodies).toHaveLength(2) // B left at A.start + 15 s; C still waits for B
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000) }) // t≈32 s (> B.start + 15 s)
+    expect(saveBodies).toHaveLength(3)
+    vi.useRealTimers()
   })
 
   it('F: a queued absence edit is sent as an ABSENCE even if the classification list changed before it left', async () => {
     // Red condition: against a5a84093 the cell was classified when the POST was built, i.e. after
     // April (whose absence-type list lacks VACATION) had loaded — it went out as a PROJECT entry.
+    // NOTE: this is the END-TO-END pin (it passes today partly because the April load now waits
+    // for the save queue). The classification-at-queue-time contract is isolated in
+    // hooks/__tests__/skemaSaveBatch.test.ts.
     await renderLoaded()
     const held: Array<(r: unknown) => void> = []
     saveResponder = () => new Promise((resolve) => { held.push(resolve) })
@@ -1395,7 +1488,11 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
     vi.useRealTimers()
     fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
     fireEvent.click(screen.getByRole('button', { name: /Forrige/ }))
-    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    // Back on March, whose reload is still waiting for the queued save: NO input is accepted
+    // until March has hydrated (red against 0974b286: data was March's, so the grid was editable).
+    expect(screen.queryByLabelText('Udvikling dag 3')).toBeNull()
+    const monthGets = () => fetchLog.filter((e) => e.includes('/api/skema/emp001/month')).length
+    const getsBefore = monthGets()
     await act(async () => { releaseSave() })
     // Blur first: the cell input keeps its typed draft while focused/edited, so only a committed
     // read shows what the page actually holds.
@@ -1405,7 +1502,9 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
       return (screen.getByLabelText('Udvikling dag 3') as HTMLInputElement).value
     }
     await waitFor(() => expect(shown()).toBe('2'))
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    // Barrier (instead of a sleep): the reload really went out after the save, and nothing
+    // reloads again behind our back.
+    expect(monthGets()).toBeGreaterThan(getsBefore)
     expect(shown()).toBe('2')
   })
 
@@ -1416,7 +1515,10 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
     const approve = screen.getByRole('button', { name: 'Godkend måned' })
     fireEvent.click(approve)
     fireEvent.click(approve)
-    await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
+    // Barrier: the whole sequence (flush → send → reload) has completed — the busy lock is
+    // released, i.e. the approve button is enabled again — before anything is counted.
+    await waitFor(() => expect(fetchLog.some((e) => e.includes('/api/approval/send'))).toBe(true))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Godkend måned' })).toBeEnabled())
     expect(fetchLog.filter((e) => e.startsWith('POST') && e.includes('/api/approval/send'))).toHaveLength(1)
   })
 

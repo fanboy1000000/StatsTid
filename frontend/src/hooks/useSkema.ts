@@ -12,6 +12,10 @@ export interface SkemaActionError {
   /** The month the failed action belonged to (so the page can say which month it is about). */
   year: number
   month: number
+  /** For a failed save: the days it carried (YYYY-MM-DD), so the alert can name them. */
+  dates?: string[]
+  /** True when it is unknown whether the action took effect (a request that never answered). */
+  uncertain?: boolean
 }
 
 /** A fully classified save: what to POST, and for which month. Built when the edit is QUEUED. */
@@ -109,6 +113,8 @@ interface UseSkemaResult {
   error: string | null
   /** The last failed save / approve / send / reopen, or null. */
   actionError: SkemaActionError | null
+  /** Let the page report a failure it detected itself (e.g. a save that never answered). */
+  reportActionError: (error: SkemaActionError) => void
   /** A load answered with the wrong month even after the one automatic retry (recoverable via refetch). */
   loadMismatch: boolean
   clearActionError: () => void
@@ -170,6 +176,15 @@ function parseApprovalValidationError(raw: string): ApprovalValidationError | nu
 // `SKEMA_MONTH_PATH`/`SKEMA_SAVE_PATH` route-helper pins and BOTH eslint
 // carve-out rules were DELETED — this file is on the FULL lint tier.
 
+/** The distinct days a batch carries, sorted. */
+function batchDates(batch: SaveBatch): string[] {
+  const set = new Set<string>()
+  for (const e of batch.entries ?? []) set.add(e.date)
+  for (const a of batch.absences ?? []) set.add(a.date)
+  for (const w of batch.workTime ?? []) set.add(w.date)
+  return [...set].sort()
+}
+
 export function useSkema(
   employeeId: string,
   year: number,
@@ -189,17 +204,21 @@ export function useSkema(
   const [approvalValidationError, setApprovalValidationError] = useState<ApprovalValidationError | null>(null)
 
   const failAction = useCallback(
-    (kind: SkemaActionErrorKind, message: string, y: number, m: number) =>
-      setActionError({ kind, message, year: y, month: m }),
+    (kind: SkemaActionErrorKind, message: string, y: number, m: number, dates?: string[]) =>
+      setActionError({ kind, message, year: y, month: m, dates }),
     [],
   )
+  const reportActionError = useCallback((e: SkemaActionError) => setActionError(e), [])
   const [loadMismatch, setLoadMismatch] = useState(false)
   const awaitSavesIdleRef = useRef(awaitSavesIdle)
   useLayoutEffect(() => {
     awaitSavesIdleRef.current = awaitSavesIdle
   }, [awaitSavesIdle])
+  // A failure clears only on a later success of the same kind FOR THE SAME MONTH (or when the
+  // person dismisses it): a success in another month says nothing about the month that failed.
   const succeedAction = useCallback(
-    (kind: SkemaActionErrorKind) => setActionError((prev) => (prev?.kind === kind ? null : prev)),
+    (kind: SkemaActionErrorKind, y: number, m: number) =>
+      setActionError((prev) => (prev?.kind === kind && prev.year === y && prev.month === m ? null : prev)),
     [],
   )
   const clearActionError = useCallback(() => setActionError(null), [])
@@ -301,7 +320,7 @@ export function useSkema(
         },
       })
       if (result.ok) {
-        succeedAction('save')
+        succeedAction('save', batch.year, batch.month)
         return { status: 'ok' }
       }
       // S73 R4 — a 422 is a server REJECTION (revert-and-resolve), discriminated
@@ -343,16 +362,16 @@ export function useSkema(
               maxHours: body.maxHours,
             })
           } else {
-            failAction('save', result.error, batch.year, batch.month)
+            failAction('save', result.error, batch.year, batch.month, batchDates(batch))
           }
         } catch {
           // Non-JSON 422 — still a rejection; surface the raw text.
-          failAction('save', result.error, batch.year, batch.month)
+          failAction('save', result.error, batch.year, batch.month, batchDates(batch))
         }
         return { status: 'rejected', httpStatus: 422 }
       }
       // Everything else (400/401/403/404/409/5xx/network) — keep local edits, retry.
-      failAction('save', result.error, batch.year, batch.month)
+      failAction('save', result.error, batch.year, batch.month, batchDates(batch))
       return { status: 'failed', httpStatus: result.status, error: result.error }
     },
     [employeeId, failAction, succeedAction]
@@ -395,7 +414,7 @@ export function useSkema(
       })
       if (result.ok) {
         setApprovalValidationError(null)
-        succeedAction('approve')
+        succeedAction('approve', ay, am)
         await fetchData()
       } else {
         if (result.status === 422) {
@@ -445,7 +464,7 @@ export function useSkema(
         body: { employeeId, year, month },
       })
       if (result.ok) {
-        succeedAction('approve')
+        succeedAction('approve', year, month)
         await fetchData()
         return
       }
@@ -474,7 +493,7 @@ export function useSkema(
         body: { reason: reason ?? 'Genåbnet af medarbejder' },
       })
       if (result.ok) {
-        succeedAction('reopen')
+        succeedAction('reopen', ry, rm)
         await fetchData()
       } else {
         failAction('reopen', result.error, ry, rm)
@@ -483,7 +502,7 @@ export function useSkema(
     [fetchData, failAction, succeedAction]
   )
 
-  return { data, loading, error, actionError, loadMismatch, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, saveBatch, employeeApprove, submitAndApprove, reopenPeriod }
+  return { data, loading, error, actionError, reportActionError, loadMismatch, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, saveBatch, employeeApprove, submitAndApprove, reopenPeriod }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
