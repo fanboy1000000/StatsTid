@@ -642,7 +642,10 @@ describe('SkemaPage — R11/R16 manager modal wiring', () => {
     expect(putIdx).toBeGreaterThan(lastSaveIdx)
   })
 
-  it('R16/B2 overlapping-saves (Step-7a c3): an OLDER save failing AFTER a newer one succeeded retries from LIVE state — the stale value never resurrects', async () => {
+  it('R16/B2 overlapping-saves (Step-7a c3, rewritten for the serial queue): an OLDER save that FAILS while a NEWER edit is queued behind it retries from LIVE state — the stale value never resurrects', async () => {
+    // Since fix-up 2 saves go one at a time, so the original "B succeeded BEFORE A failed" order
+    // can no longer happen; what remains is: A (2) in flight, B (3) queued behind it, A fails,
+    // B then leaves — and no retry may carry the stale 2.
     await renderLoaded()
     const saveBodies = (): { hours: number }[][] =>
       mockFetch.mock.calls
@@ -661,7 +664,7 @@ describe('SkemaPage — R11/R16 manager modal wiring', () => {
       await vi.advanceTimersByTimeAsync(1100)
     })
 
-    // 2) Save B leaves with the NEW value (3) and SUCCEEDS first.
+    // 2) Save B (the NEW value, 3) is QUEUED behind A (one save at a time) and leaves when A settles.
     saveResponder = null
     fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '3' } })
     await act(async () => {
@@ -669,7 +672,7 @@ describe('SkemaPage — R11/R16 manager modal wiring', () => {
     })
     vi.useRealTimers()
 
-    // 3) A settles as FAILURE — its retry must rebuild from LIVE state (3),
+    // 3) A settles as FAILURE (B now leaves) — its retry must rebuild from LIVE state (3),
     //    never re-queue the stale captured 2 (pre-fix it did).
     releaseAAsFailure()
     await act(async () => {
@@ -1139,9 +1142,10 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     await waitFor(() => expect((within(drawer).getByLabelText('Til') as HTMLInputElement).value).toBe('17:00'))
   })
 
-  it('F: two overlapping row-preference actions keep edits locked until the LAST one has finished', async () => {
-    // Red condition: against ed884d6f the lock was a boolean, released when the FIRST sequence
-    // finished while the second PUT/refetch was still pending.
+  it('F: two overlapping row-preference actions run one after the other and keep edits locked until the LAST one has finished', async () => {
+    // Red conditions: against ed884d6f the lock was a boolean released when the FIRST sequence
+    // finished; against a5a84093 both PUTs were on the wire at once (putGates has length 2 before
+    // anything is released), so the final row set depended on arrival order.
     await renderLoaded()
     const putGates: Array<() => void> = []
     const base = mockFetch.getMockImplementation()!
@@ -1155,11 +1159,14 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     await screen.findByText('Administrer rækker')
     fireEvent.click(screen.getByRole('button', { name: 'Fjern Drift & support' }))
     fireEvent.click(screen.getByRole('button', { name: 'Fjern Udvikling' }))
-    await waitFor(() => expect(putGates).toHaveLength(2))
+    await waitFor(() => expect(putGates.length).toBeGreaterThanOrEqual(1))
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(putGates).toHaveLength(1) // the second sequence waits for its turn
     expect(screen.queryByLabelText('Ferie dag 5')).toBeNull() // locked
-    await act(async () => { putGates[0]() }) // the FIRST sequence finishes…
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
-    expect(screen.queryByLabelText('Ferie dag 5')).toBeNull() // …the second is still pending: still locked
+    await act(async () => { putGates[0]() }) // the FIRST PUT answers…
+    // …barrier: the second PUT only leaves after the first sequence (PUT + refetch) has finished.
+    await waitFor(() => expect(putGates).toHaveLength(2))
+    expect(screen.queryByLabelText('Ferie dag 5')).toBeNull() // still locked: one sequence remains
     await act(async () => { putGates[1]() })
     await waitFor(() => expect(screen.getByLabelText('Ferie dag 5')).toBeInTheDocument())
   })
@@ -1255,17 +1262,20 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
     await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
     vi.useRealTimers()
-    expect(await screen.findByText(/Kunne ikke gemme:/)).toBeInTheDocument()
+    expect(await screen.findByText(/Kunne ikke gemme \(marts 2026\):/)).toBeInTheDocument()
     expect(screen.queryByText(/Kunne ikke indlæse skema/)).toBeNull()
     saveResponder = null
     vi.useFakeTimers()
     fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '3' } })
     await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
     vi.useRealTimers()
-    await waitFor(() => expect(screen.queryByText(/Kunne ikke gemme:/)).toBeNull())
+    await waitFor(() => expect(screen.queryByText(/Kunne ikke gemme/)).toBeNull())
   })
 
   it('F: a failed reopen shows its own dismissible alert in Danish', async () => {
+    // Red condition: against ed884d6f the reopen failure was stored in the load-error field and
+    // rendered as "Kunne ikke indlæse skema: …" (undismissible); against a5a84093 the alert lacks
+    // the month it belongs to ("(marts 2026)").
     monthData = makeMonthData({
       approval: {
         periodId: 'per-1',
@@ -1283,10 +1293,10 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
       return base(url, init)
     })
     fireEvent.click(screen.getByRole('button', { name: 'Genåbn' }))
-    expect(await screen.findByText(/Kunne ikke genåbne måneden:/)).toBeInTheDocument()
+    expect(await screen.findByText(/Kunne ikke genåbne måneden \(marts 2026\):/)).toBeInTheDocument()
     expect(screen.queryByText(/Kunne ikke indlæse skema/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Luk besked' }))
-    expect(screen.queryByText(/Kunne ikke genåbne måneden:/)).toBeNull()
+    expect(screen.queryByText(/Kunne ikke genåbne måneden/)).toBeNull()
   })
 
   it('F: the status region is mounted from the start (empty), gets its text while a month loads, and sits outside the aria-busy area', async () => {
@@ -1305,6 +1315,161 @@ describe('SkemaPage — QUAL-241: no day panel or edit starts from state not cop
     serveApril()
     await act(async () => { release() })
     await waitFor(() => expect(status).toHaveTextContent(''))
+  })
+})
+
+describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
+  /** A month-aware mock: March answers from `march` (mutable), April from `april`. */
+  function monthAwareMock(march: () => SkemaMonthData, april: () => SkemaMonthData) {
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/skema/emp001/month')) {
+        fetchLog.push(`${init?.method ?? 'GET'} ${url}`)
+        return jsonResponse(JSON.parse(JSON.stringify(String(url).includes('month=4') ? april() : march())))
+      }
+      return base(url, init)
+    })
+  }
+  const aprilFixture = (overrides: Partial<SkemaMonthData> = {}) =>
+    makeMonthData({ month: 4, daysInMonth: 30, entries: [], absences: [], dailyNorm: [], workTime: [], ...overrides })
+
+  it('F: a navigation-fired save that FAILS offline is retried under its OWN month (and the failure names that month)', async () => {
+    // Red condition: against a5a84093 the failed row was dropped when April hydrated (the epoch
+    // guard discarded the late result), so no second POST ever left; and had it been re-queued it
+    // would have gone out under April's envelope.
+    await renderLoaded()
+    let n = 0
+    saveResponder = () => (++n === 1 ? jsonResponse({ error: 'offline' }, 500) : jsonResponse({}))
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    monthData = aprilFixture()
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ })) // fires the save (fails)
+    await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
+    expect(await screen.findByText(/Kunne ikke gemme \(marts 2026\):/)).toBeInTheDocument()
+    expect(saveBodies).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ })) // any later flush point
+    await waitFor(() => expect(saveBodies.length).toBe(2), { timeout: 3000 })
+    for (const b of saveBodies) expect(b.month).toBe(3)
+    expect(saveBodies[1].entries).toEqual([{ date: '2026-03-03', projectCode: 'UDV', hours: 2 }])
+  })
+
+  it('F: a queued absence edit is sent as an ABSENCE even if the classification list changed before it left', async () => {
+    // Red condition: against a5a84093 the cell was classified when the POST was built, i.e. after
+    // April (whose absence-type list lacks VACATION) had loaded — it went out as a PROJECT entry.
+    await renderLoaded()
+    const held: Array<(r: unknown) => void> = []
+    saveResponder = () => new Promise((resolve) => { held.push(resolve) })
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // A leaves (held)
+    fireEvent.change(screen.getByLabelText('Ferie dag 5'), { target: { value: '3' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // B queued behind A
+    vi.useRealTimers()
+    monthData = aprilFixture({ absenceTypes: [] })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    await act(async () => { held[0](jsonResponse({})) }) // A ok → B leaves
+    await waitFor(() => expect(held).toHaveLength(2))
+    expect(saveBodies[1].absences).toEqual([{ date: '2026-03-05', absenceType: 'VACATION', hours: 3 }])
+    expect(saveBodies[1].entries).toBeNull()
+    await act(async () => { held[1](jsonResponse({})) })
+  })
+
+  it('F: March → April → March shows the value saved in the meantime (the load waits for the queued save)', async () => {
+    // Red condition: against a5a84093 the March reload went out while the save was still in
+    // flight, hydrated the pre-save value, and the save's later success was ignored.
+    await renderLoaded()
+    let marchServer = monthData
+    monthAwareMock(() => marchServer, () => aprilFixture())
+    let releaseSave!: () => void
+    saveResponder = () => new Promise((resolve) => {
+      releaseSave = () => {
+        marchServer = makeMonthData({
+          entries: [...monthData.entries, { date: '2026-03-03', projectCode: 'UDV', hours: 2 }],
+        })
+        resolve(jsonResponse({}))
+      }
+    })
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // the save leaves (held)
+    vi.useRealTimers()
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Forrige/ }))
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    await act(async () => { releaseSave() })
+    // Blur first: the cell input keeps its typed draft while focused/edited, so only a committed
+    // read shows what the page actually holds.
+    const shown = () => {
+      const el = screen.getByLabelText('Udvikling dag 3') as HTMLInputElement
+      fireEvent.blur(el)
+      return (screen.getByLabelText('Udvikling dag 3') as HTMLInputElement).value
+    }
+    await waitFor(() => expect(shown()).toBe('2'))
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    expect(shown()).toBe('2')
+  })
+
+  it('F: a double click on "Godkend måned" sends once', async () => {
+    // Red condition: against a5a84093 the footer was only locked for a month mismatch and
+    // `approving` was set after the flush, so a second click ran a second flush and send.
+    await renderLoaded()
+    const approve = screen.getByRole('button', { name: 'Godkend måned' })
+    fireEvent.click(approve)
+    fireEvent.click(approve)
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
+    expect(fetchLog.filter((e) => e.startsWith('POST') && e.includes('/api/approval/send'))).toHaveLength(1)
+  })
+
+  it('F: a hung save does not stall later saves forever — the next one leaves after the bound', async () => {
+    // Red condition: against a5a84093 the second save waited for the hung first one indefinitely.
+    await renderLoaded()
+    saveResponder = () => new Promise(() => {}) // never settles
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // A leaves, hangs
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '3' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // B queued
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(saveBodies).toHaveLength(1) // still inside the bound
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000) })
+    expect(saveBodies).toHaveLength(2) // the bound passed: B proceeds (A is neither aborted nor replayed)
+    expect(saveBodies[1].entries).toEqual([{ date: '2026-03-03', projectCode: 'UDV', hours: 3 }])
+    vi.useRealTimers()
+  })
+
+  it('F: a month that keeps coming back as the wrong month shows a recoverable message, and "Prøv igen" reloads it', async () => {
+    // Red condition: against a5a84093 the page stayed silently locked (no message, no action).
+    await renderLoaded()
+    const marchFixture = monthData
+    let answerRight = false
+    monthAwareMock(() => marchFixture, () => (answerRight ? aprilFixture() : marchFixture))
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    expect(await screen.findByText(/Kunne ikke indlæse den valgte måned/)).toBeInTheDocument()
+    answerRight = true
+    fireEvent.click(screen.getByRole('button', { name: 'Prøv igen' }))
+    expect(await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })).toBeInTheDocument()
+    expect(screen.queryByText(/Kunne ikke indlæse den valgte måned/)).toBeNull()
+  })
+
+  it('F: the aria-busy area is a real box (a class, not an inline display: contents)', async () => {
+    // Red condition: against a5a84093 the wrapper was `style="display: contents"`.
+    await renderLoaded()
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/skema/emp001/month') && String(url).includes('month=4')) {
+        await gate
+        return jsonResponse(aprilFixture())
+      }
+      return base(url, init)
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    const busyEl = document.querySelector('[aria-busy="true"]') as HTMLElement
+    expect(busyEl).not.toBeNull()
+    expect(busyEl.getAttribute('style') ?? '').not.toContain('contents')
+    expect(busyEl.className).toMatch(/busyRegion/)
+    await act(async () => { release() })
   })
 })
 

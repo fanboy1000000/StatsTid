@@ -9,6 +9,18 @@ export type SkemaActionErrorKind = 'save' | 'approve' | 'reopen'
 export interface SkemaActionError {
   kind: SkemaActionErrorKind
   message: string
+  /** The month the failed action belonged to (so the page can say which month it is about). */
+  year: number
+  month: number
+}
+
+/** A fully classified save: what to POST, and for which month. Built when the edit is QUEUED. */
+export interface SaveBatch {
+  year: number
+  month: number
+  entries: { date: string; projectCode: string; hours: number }[] | null
+  absences: { date: string; absenceType: string; hours: number }[] | null
+  workTime: WorkTimeDay[] | null
 }
 
 export interface QuotaError {
@@ -97,6 +109,8 @@ interface UseSkemaResult {
   error: string | null
   /** The last failed save / approve / send / reopen, or null. */
   actionError: SkemaActionError | null
+  /** A load answered with the wrong month even after the one automatic retry (recoverable via refetch). */
+  loadMismatch: boolean
   clearActionError: () => void
   quotaError: QuotaError | null
   /** S73 R4 — the typed `absence_full_day_only` / `absence_type_not_eligible`
@@ -117,6 +131,8 @@ interface UseSkemaResult {
     cells: { rowKey: string; date: string; hours: number | null }[],
     workTime?: WorkTimeDay[],
   ) => Promise<SaveMonthResult>
+  /** S147 fix-up 3 — POST an already classified batch under ITS OWN month envelope. */
+  saveBatch: (batch: SaveBatch) => Promise<SaveMonthResult>
   employeeApprove: (periodId: string) => Promise<void>
   /** S127 / TASK-12707 — ZERO arguments. `/api/approval/send` takes only
       {employeeId, year, month}; org, agreement code and OK version are all
@@ -154,7 +170,15 @@ function parseApprovalValidationError(raw: string): ApprovalValidationError | nu
 // `SKEMA_MONTH_PATH`/`SKEMA_SAVE_PATH` route-helper pins and BOTH eslint
 // carve-out rules were DELETED — this file is on the FULL lint tier.
 
-export function useSkema(employeeId: string, year: number, month: number): UseSkemaResult {
+export function useSkema(
+  employeeId: string,
+  year: number,
+  month: number,
+  /** S147 fix-up 3 — resolves when the page's queued saves have settled (bounded). Every month
+      load awaits it BEFORE its GET, so a reload can never show values older than a save the
+      person has already made (March → April → March). */
+  awaitSavesIdle?: () => Promise<void>,
+): UseSkemaResult {
   const [data, setData] = useState<SkemaMonthData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -165,9 +189,15 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const [approvalValidationError, setApprovalValidationError] = useState<ApprovalValidationError | null>(null)
 
   const failAction = useCallback(
-    (kind: SkemaActionErrorKind, message: string) => setActionError({ kind, message }),
+    (kind: SkemaActionErrorKind, message: string, y: number, m: number) =>
+      setActionError({ kind, message, year: y, month: m }),
     [],
   )
+  const [loadMismatch, setLoadMismatch] = useState(false)
+  const awaitSavesIdleRef = useRef(awaitSavesIdle)
+  useLayoutEffect(() => {
+    awaitSavesIdleRef.current = awaitSavesIdle
+  }, [awaitSavesIdle])
   const succeedAction = useCallback(
     (kind: SkemaActionErrorKind) => setActionError((prev) => (prev?.kind === kind ? null : prev)),
     [],
@@ -175,6 +205,8 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const clearActionError = useCallback(() => setActionError(null), [])
 
   const latestDataRequestId = useRef(0)
+  /** The identity the one automatic wrong-month retry has already been spent on. */
+  const backstopTriedRef = useRef<string | null>(null)
   /** True from the moment a load is issued until the LATEST load settles (set synchronously). */
   const loadInFlightRef = useRef(false)
 
@@ -193,9 +225,13 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   const fetchData = useCallback(async () => {
     const requestId = ++latestDataRequestId.current
     loadInFlightRef.current = true
-    const { employeeId: emp, year: y, month: m } = identityRef.current
     setLoading(true)
     setError(null)
+    setLoadMismatch(false)
+    // Saves the person has already made are ordered BEFORE this read.
+    if (awaitSavesIdleRef.current) await awaitSavesIdleRef.current()
+    // The identity is read AFTER the wait, so the load targets the month that is current now.
+    const { employeeId: emp, year: y, month: m } = identityRef.current
     const result = await apiClient.get('/api/skema/{employeeId}/month', {
       params: { path: { employeeId: emp } },
       query: { year: y, month: m },
@@ -205,6 +241,11 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     loadInFlightRef.current = false
     if (result.ok) {
       setData(result.data)
+      // Decided HERE, not from a later render: a fast answer can leave the state unchanged (so
+      // no render follows). A wrong-month answer after the retry has been spent is reported.
+      if ((result.data.year !== y || result.data.month !== m) && backstopTriedRef.current === `${emp}:${y}-${m}`) {
+        setLoadMismatch(true)
+      }
     } else {
       setError(result.error)
     }
@@ -220,12 +261,15 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
   // a server that really answers with another month cannot cause a request loop. Declared after
   // the load effect, which has already marked a load in flight in the render right after a
   // month change (when `loading` is still false), so that render does not double-fetch.
-  const backstopTriedRef = useRef<string | null>(null)
   useEffect(() => {
     if (loading || error || loadInFlightRef.current || !data) return
     if (data.year === year && data.month === month) return
     const key = `${employeeId}:${year}-${month}`
-    if (backstopTriedRef.current === key) return
+    if (backstopTriedRef.current === key) {
+      // The one automatic retry has already been spent: say so (the page offers "Prøv igen").
+      setLoadMismatch(true)
+      return
+    }
     backstopTriedRef.current = key
     void fetchData()
   }, [data, loading, error, employeeId, year, month, fetchData])
@@ -240,38 +284,20 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
     absenceTypesRef.current = new Set(data?.absenceTypes?.map(a => a.type) ?? [])
   }, [data])
 
-  const saveMonth = useCallback(
-    async (
-      cells: { rowKey: string; date: string; hours: number | null }[],
-      workTime?: WorkTimeDay[],
-    ): Promise<SaveMonthResult> => {
+  const saveBatch = useCallback(
+    async (batch: SaveBatch): Promise<SaveMonthResult> => {
       setQuotaError(null)
       setAbsenceRuleError(null)
       setAbsenceCapError(null)
-      const absenceTypeSet = absenceTypesRef.current
-
-      // Built via explicit narrowing loops (not filter+map) so the typed spec
-      // request's `hours: number` holds without assertions — the emitted rows,
-      // their key sets and their order are byte-identical to the legacy build.
-      const entries: { date: string; projectCode: string; hours: number }[] = []
-      const absences: { date: string; absenceType: string; hours: number }[] = []
-      for (const c of cells) {
-        if (c.hours == null || c.hours === 0) continue
-        if (absenceTypeSet.has(c.rowKey)) {
-          absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
-        } else {
-          entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
-        }
-      }
 
       const result = await apiClient.post('/api/skema/{employeeId}/save', {
         params: { path: { employeeId } },
         body: {
-          year,
-          month,
-          entries: entries.length > 0 ? entries : null,
-          absences: absences.length > 0 ? absences : null,
-          workTime: workTime && workTime.length > 0 ? workTime : null,
+          year: batch.year,
+          month: batch.month,
+          entries: batch.entries && batch.entries.length > 0 ? batch.entries : null,
+          absences: batch.absences && batch.absences.length > 0 ? batch.absences : null,
+          workTime: batch.workTime && batch.workTime.length > 0 ? batch.workTime : null,
         },
       })
       if (result.ok) {
@@ -317,23 +343,49 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
               maxHours: body.maxHours,
             })
           } else {
-            failAction('save', result.error)
+            failAction('save', result.error, batch.year, batch.month)
           }
         } catch {
           // Non-JSON 422 — still a rejection; surface the raw text.
-          failAction('save', result.error)
+          failAction('save', result.error, batch.year, batch.month)
         }
         return { status: 'rejected', httpStatus: 422 }
       }
       // Everything else (400/401/403/404/409/5xx/network) — keep local edits, retry.
-      failAction('save', result.error)
+      failAction('save', result.error, batch.year, batch.month)
       return { status: 'failed', httpStatus: result.status, error: result.error }
     },
-    [employeeId, year, month, failAction, succeedAction]
+    [employeeId, failAction, succeedAction]
+  )
+
+  const saveMonth = useCallback(
+    async (
+      cells: { rowKey: string; date: string; hours: number | null }[],
+      workTime?: WorkTimeDay[],
+    ): Promise<SaveMonthResult> => {
+      const absenceTypeSet = absenceTypesRef.current
+
+      // Built via explicit narrowing loops (not filter+map) so the typed spec
+      // request's `hours: number` holds without assertions — the emitted rows,
+      // their key sets and their order are byte-identical to the legacy build.
+      const entries: { date: string; projectCode: string; hours: number }[] = []
+      const absences: { date: string; absenceType: string; hours: number }[] = []
+      for (const c of cells) {
+        if (c.hours == null || c.hours === 0) continue
+        if (absenceTypeSet.has(c.rowKey)) {
+          absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
+        } else {
+          entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
+        }
+      }
+      return saveBatch({ year, month, entries, absences, workTime: workTime ?? null })
+    },
+    [saveBatch, year, month],
   )
 
   const employeeApprove = useCallback(
     async (periodId: string) => {
+      const { year: ay, month: am } = identityRef.current
       // S116 typed switch — NAMED REQUEST DELTA: the legacy call sent a literal
       // `{}` body; the op binds NO request DTO (the handler takes only the
       // periodId route param — verified against ApprovalEndpoints.cs:1344), so
@@ -354,7 +406,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
             return
           }
         }
-        failAction('approve', result.error)
+        failAction('approve', result.error, ay, am)
         await fetchData()
       }
     },
@@ -405,7 +457,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
           return
         }
       }
-      failAction('approve', result.error)
+      failAction('approve', result.error, year, month)
       // Refetch on every failure: the send is atomic, but a 409 means someone
       // else moved the month (a concurrent send, or a manager decision), so the
       // grid must re-read rather than keep showing the pre-attempt state.
@@ -416,6 +468,7 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
 
   const reopenPeriod = useCallback(
     async (periodId: string, reason?: string) => {
+      const { year: ry, month: rm } = identityRef.current
       const result = await apiClient.post('/api/approval/{periodId}/reopen', {
         params: { path: { periodId } },
         body: { reason: reason ?? 'Genåbnet af medarbejder' },
@@ -424,13 +477,13 @@ export function useSkema(employeeId: string, year: number, month: number): UseSk
         succeedAction('reopen')
         await fetchData()
       } else {
-        failAction('reopen', result.error)
+        failAction('reopen', result.error, ry, rm)
       }
     },
     [fetchData, failAction, succeedAction]
   )
 
-  return { data, loading, error, actionError, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, employeeApprove, submitAndApprove, reopenPeriod }
+  return { data, loading, error, actionError, loadMismatch, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, saveBatch, employeeApprove, submitAndApprove, reopenPeriod }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
