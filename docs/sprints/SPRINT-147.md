@@ -258,6 +258,7 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
    - Harness tidiness: dispose the derived factory, and fix the token's `agreementCode` (Fable NOTE 6).
    - For S148's S0-2 test brief (QUAL-236): name the child-code rows file that must be re-pinned (Fable NOTE 5).
 16. **From the 14705 reviews.** `DepartedSelfElevatedRouteTests.cs:117-118`, `:139`, `:161`: the Red-condition wording "today the validator admits" is stale, because those facts now go red only if both guards are absent. The header `:52-53` and the comment `:76` are stale too (Fable c2 NOTE 1).
+17. **From the 14719 review (NOTE 6, the `src/**` half).** `EmploymentDateEndpoints.cs:151-153` and `:449-451` still say "the GET above stays self-readable". Since S147 a departed self's read is refused (consult R1), so both comments need correcting. The test half is done in TASK-14719 fix-up 1.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
