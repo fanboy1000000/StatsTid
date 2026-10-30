@@ -93,6 +93,7 @@ Artifacts: `.claude/reviews/PLAN-s147-{codex,reviewer}-c{1,2,3}.md`, `PLAN-s147-
 | TASK-14715 / 14715-T | 4a | payroll-integration / test-qa | SEC-054 step 1: the case-3a month paid untracked | planned |
 | TASK-14716 / 14716-T | 4b | payroll-integration, cross-domain / test-qa | SEC-054 step 2: retire the raw routes | planned |
 | TASK-14717 / 14717-T | — | rule-engine / test-qa | T3b as a separate task | **DROPPED** (RR-1: R1 landed before 14708's dispatch; folded into 14708) |
+| TASK-14718 | 2a → before 2b (plan-added 2026-10-30) | test-qa | QUAL-241: the recurring Skema day-panel vitest flake (the 7203 pin) graduated at CI-W2; a test-only barrier for the worked total | dispatched 2026-10-30 |
 
 ### Wave 1 — the merge record (2026-10-29)
 
