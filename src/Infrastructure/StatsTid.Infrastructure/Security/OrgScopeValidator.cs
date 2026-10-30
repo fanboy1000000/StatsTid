@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using StatsTid.Auth;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -8,20 +9,49 @@ namespace StatsTid.Infrastructure.Security;
 /// <summary>
 /// Service-layer org-scope validator. Called explicitly from API endpoints
 /// to enforce organization-based access control using the actor's RoleScope claims.
+///
+/// <para>
+/// <b>S147 / TASK-14703 (QUAL-230 T5a; R-30) — the departed-self clause.</b> Both employee
+/// overloads (<see cref="ValidateEmployeeAccessAsync(ActorContext, string, string?, CancellationToken)"/>
+/// and <see cref="ValidateEmployeeAccessIncludingTerminatedAsync(ActorContext, string, string?, CancellationToken)"/>)
+/// refuse an actor who IS the target employee when that employee has departed
+/// (<see cref="DepartedSubject.IsDeparted(User, DateOnly)"/>: deactivated, or past their last day of
+/// employment). The check runs immediately after the target read — the validator already holds the
+/// record, so it costs no extra read — and before the terminated-inclusive overload's HR gate. It is the
+/// IDENTITY arm only: another person's access is untouched (a manager keeps reaching a leaver during
+/// the grace; HR keeps acting on leavers — OQ-2). The Employee own-data branch, the organisation
+/// overload and the accessible-organisation read do not run it (the self-service sites carry their own
+/// floor). The refusal is the standard <c>(false, reason)</c> shape with the date-free
+/// <see cref="DepartedSubject.DenyReason"/>; the WARNING log line names the clause
+/// (<see cref="DepartedSubject.ClauseName"/>).
+/// </para>
+///
+/// <para>
+/// <b>"Today"</b> is the Copenhagen business day read from the injected <see cref="TimeProvider"/>, at
+/// most once per call and only when the identity matches. The handler that called the validator may
+/// read the same provider again for its own dates; the two reads can differ only for a request that
+/// straddles Copenhagen midnight (the PAT-028 residual, recorded in the ADR-040 amendment). Every host
+/// that builds this validator must therefore register a <see cref="TimeProvider"/> (BC-6: the Backend,
+/// Payroll and Orchestrator hosts).
+/// </para>
 /// </summary>
 public sealed class OrgScopeValidator
 {
     private readonly OrganizationRepository _organizationRepository;
     private readonly UserRepository _userRepository;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<OrgScopeValidator> _logger;
 
     public OrgScopeValidator(
         OrganizationRepository organizationRepository,
         UserRepository userRepository,
+        TimeProvider timeProvider,
         ILogger<OrgScopeValidator> logger)
     {
+        ArgumentNullException.ThrowIfNull(timeProvider);
         _organizationRepository = organizationRepository;
         _userRepository = userRepository;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -78,6 +108,13 @@ public sealed class OrgScopeValidator
         if (targetUser is null)
             return Deny(actor, targetEmployeeId, "Target employee not found");
 
+        // S147 / TASK-14703 (R-30) — the departed-self clause, right after the target read. On this
+        // active-only overload a DEACTIVATED self has already answered "Target employee not found"
+        // above (as before); what this adds is the self still active but past their last day (the
+        // grace between the last day and the deactivation). Identity arm only — see the class remarks.
+        if (IsDepartedSelf(actor, targetEmployeeId, targetUser))
+            return DenyDepartedSelf(actor, targetEmployeeId);
+
         var targetOrg = await _organizationRepository.GetByIdAsync(targetUser.PrimaryOrgId, ct);
         if (targetOrg is null)
             return Deny(actor, targetEmployeeId, "Target organization not found");
@@ -121,6 +158,12 @@ public sealed class OrgScopeValidator
     /// the dedicated agreement-code endpoint — each with the ADR-040 D3 role floor as
     /// <c>roleFloor</c>, so a deactivated subject is addressable ONLY by an admitting scope that is
     /// itself LocalHR+; the general read paths stay active-only).
+    /// <b>S147 / TASK-14703 (R-30, R-34) — the departed-self clause</b> runs on this surface (and on
+    /// <see cref="ValidateEmployeeAccessAsync(ActorContext, string, string?, CancellationToken)"/>)
+    /// right after the target read and BEFORE the HR gate: a terminated-inclusive read never lets an
+    /// actor act on their OWN departed record, whatever their role (see the class remarks). The
+    /// inline routes' deny-only terminated-inclusive reads of the actor's own record, which only ever
+    /// refuse, are inventoried on <see cref="DepartedSubject"/>.
     /// Resolves the target via
     /// <see cref="UserRepository.GetByIdIncludingTerminatedAsync(string, CancellationToken)"/> so a
     /// deactivated leaver IS addressable (the S68 B2 fix), then applies the EXISTING
@@ -222,6 +265,14 @@ public sealed class OrgScopeValidator
         var targetUser = await _userRepository.GetByIdIncludingTerminatedAsync(targetEmployeeId, ct);
         if (targetUser is null)
             return Deny(actor, targetEmployeeId, "Target employee not found");
+
+        // S147 / TASK-14703 (R-30) — the departed-self clause, right after the target read and BEFORE
+        // the HR gate below. On this overload a deactivated self IS resolved, and before S147 an HR-tier
+        // self passed the gate (the S136 adjudicated residual, re-decided by the owner's OQ-2): the
+        // clause refuses both the deactivated self and the self past their last day. Identity arm only —
+        // HR acting on someone ELSE who has left still reaches the gate and the scope loop as before.
+        if (IsDepartedSelf(actor, targetEmployeeId, targetUser))
+            return DenyDepartedSelf(actor, targetEmployeeId);
 
         // R9b HROrAbove gate on terminated-employee data (fail-closed BEFORE the scope loop, so
         // a non-HR actor holding a GLOBAL scope is still refused a terminated target here).
@@ -449,6 +500,28 @@ public sealed class OrgScopeValidator
 
         // No role, no scopes — treat as Employee (least privilege)
         return actor.ActorRole is null;
+    }
+
+    /// <summary>
+    /// S147 / TASK-14703 (R-30) — the clause's test: the actor IS the target (Ordinal; a null or empty
+    /// actor id never matches) AND the target has departed as of the Copenhagen business day. "Today"
+    /// is read from the injected provider only when the identity matches, so at most once per call.
+    /// </summary>
+    private bool IsDepartedSelf(ActorContext actor, string targetEmployeeId, User targetUser) =>
+        DepartedSubject.IsSelf(actor.ActorId, targetEmployeeId)
+        && DepartedSubject.IsDeparted(targetUser, CopenhagenBusinessDate.Today(_timeProvider));
+
+    /// <summary>
+    /// The clause's refusal: the standard <c>(false, reason)</c> shape with the date-free
+    /// <see cref="DepartedSubject.DenyReason"/>, and ONE WARNING line that names the clause
+    /// (<see cref="DepartedSubject.ClauseName"/>) so the refusal is traceable to this rule.
+    /// </summary>
+    private (bool Allowed, string? Reason) DenyDepartedSelf(ActorContext actor, string target)
+    {
+        _logger.LogWarning(
+            "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Target={Target} Reason={Reason} CorrelationId={CorrelationId}",
+            DepartedSubject.ClauseName, actor.ActorId, actor.ActorRole, target, DepartedSubject.DenyReason, actor.CorrelationId);
+        return (false, DepartedSubject.DenyReason);
     }
 
     private (bool Allowed, string? Reason) Deny(ActorContext actor, string target, string reason)

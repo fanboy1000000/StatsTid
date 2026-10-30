@@ -24,6 +24,11 @@ builder.Services.AddSingleton<OrchestratorControlLoop>();
 // any task record is persisted. Pulls in the same repositories the Backend uses.
 builder.Services.AddSingleton<OrganizationRepository>();
 builder.Services.AddSingleton<UserRepository>();
+// S147 / TASK-14703 (BC-6, R-30): the validator now takes the server clock (its departed-self clause
+// compares the target's last day of employment with the Copenhagen business day), so this host must
+// register one or the validator cannot be built and the host does not start. TimeProvider.System is the
+// production clock, as in the Backend host; tests override it with a fixed provider (PAT-008).
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<OrgScopeValidator>();
 
 builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);

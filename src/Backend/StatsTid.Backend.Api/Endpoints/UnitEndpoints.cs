@@ -6,6 +6,7 @@ using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Events;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
@@ -492,6 +493,9 @@ public static class UnitEndpoints
             IAuditProjectionMapper<UserUnitChanged> userUnitMapper,
             IAuditProjectionMapper<UnitLeaderRemoved> leaderRemovedMapper,
             AuditProjectionRepository auditRepo,
+            // S147 / TASK-14703 (P-1 (b)) — the departed-self pre-check's clock and log.
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -523,6 +527,32 @@ public static class UnitEndpoints
                 {
                     await tx.RollbackAsync(ct);
                     return Results.NotFound(new { error = "Unit not found." });
+                }
+
+                // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B6, P-1 (b)) — the departed-self
+                // pre-check. Deleting a unit re-homes its direct members (users.unit_id, below), so a
+                // departed actor who is a member of THIS unit would have their own record rewritten as a
+                // side effect. Inside the transaction, after the unit-organisation lock and BEFORE the
+                // first write (ApplyUnitDeletedAsync): one SELECT of the actor's own membership and
+                // state; when the actor is a member of the unit being deleted and has departed, roll
+                // back and refuse — nothing has been written. This also covers the actor's own leader
+                // row on this unit, which the delete clears too: by the member-invariant (ADR-038 D3) a
+                // leader is a member of the unit they lead (enforced at designation, below; re-synced
+                // whenever a membership changes — the person unit PUT here, and the users PUT's
+                // transfer). The read has no is_active filter (a deactivated member is re-homed too) and
+                // is deny-only. "Today" is read once, only when the actor is a member of this unit.
+                if (!string.IsNullOrEmpty(actor.ActorId))
+                {
+                    var self = await ReadActorMembershipInTxAsync(conn, tx, actor.ActorId, ct);
+                    if (self is { } s
+                        && s.UnitId == unitId
+                        && DepartedSubject.IsDeparted(s.IsActive, s.EmploymentEndDate, CopenhagenBusinessDate.Today(timeProvider)))
+                    {
+                        await tx.RollbackAsync(ct);
+                        return DepartedSelfRefusal(
+                            loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.UnitEndpoints.UnitDelete"),
+                            actor, "DELETE /api/admin/units/{id}");
+                    }
                 }
 
                 var affected = await unitRepo.ApplyUnitDeletedAsync(conn, tx, unitId, expectedVersion, ct);
@@ -622,6 +652,10 @@ public static class UnitEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<UnitLeaderDesignated> auditMapper,
             AuditProjectionRepository auditRepo,
+            // S147 / TASK-14703 (P-1, census B18) — the departed-self guard's deny-only read, clock, log.
+            UserRepository userRepo,
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -638,6 +672,22 @@ public static class UnitEndpoints
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, existing.OrganisationId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B18, P-1) — a departed person cannot designate
+            // THEMSELVES a unit leader: the unit_leaders row is keyed on the designee (its subject key),
+            // and here the designee is the actor. This route checks the ORGANISATION, not the employee, so
+            // the validator's clause never sees it; the guard is inline, after the scope check and before
+            // the transaction. On a match the actor's record is read terminated-inclusive — a DENY-ONLY
+            // read (inventoried on DepartedSubject): it can only refuse, and a self that cannot be read is
+            // not refused here. "Today" is read once, only on a match.
+            if (DepartedSubject.IsSelf(actor.ActorId, request.UserId))
+            {
+                var self = await userRepo.GetByIdIncludingTerminatedAsync(request.UserId, ct);
+                if (self is not null && DepartedSubject.IsDeparted(self, CopenhagenBusinessDate.Today(timeProvider)))
+                    return DepartedSelfRefusal(
+                        loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.UnitEndpoints.LeaderDesignate"),
+                        actor, "POST /api/admin/units/{id}/leaders");
+            }
 
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
@@ -707,6 +757,10 @@ public static class UnitEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<UnitLeaderRemoved> auditMapper,
             AuditProjectionRepository auditRepo,
+            // S147 / TASK-14703 (P-1, census B19) — the departed-self guard's deny-only read, clock, log.
+            UserRepository userRepo,
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -721,6 +775,20 @@ public static class UnitEndpoints
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, existing.OrganisationId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B19, P-1) — a departed person cannot remove
+            // their OWN unit-leader designation (the row's subject key is the route's userId, here the
+            // actor). Same shape as the designate guard above: inline, after the scope check, before the
+            // transaction; on a match a DENY-ONLY terminated-inclusive read of the actor (inventoried on
+            // DepartedSubject). "Today" is read once, only on a match.
+            if (DepartedSubject.IsSelf(actor.ActorId, userId))
+            {
+                var self = await userRepo.GetByIdIncludingTerminatedAsync(userId, ct);
+                if (self is not null && DepartedSubject.IsDeparted(self, CopenhagenBusinessDate.Today(timeProvider)))
+                    return DepartedSelfRefusal(
+                        loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.UnitEndpoints.LeaderRemove"),
+                        actor, "DELETE /api/admin/units/{id}/leaders/{userId}");
+            }
 
             await using var conn = dbFactory.Create();
             await conn.OpenAsync(ct);
@@ -774,6 +842,9 @@ public static class UnitEndpoints
             IAuditProjectionMapper<UserUnitChanged> userUnitMapper,
             IAuditProjectionMapper<UnitLeaderRemoved> leaderRemovedMapper,
             AuditProjectionRepository auditRepo,
+            // S147 / TASK-14703 (R-31, census B4) — the departed-self guard's clock and log.
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -792,6 +863,19 @@ public static class UnitEndpoints
             var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, user.PrimaryOrgId, StatsTidRoles.LocalHR, ct);
             if (!allowed)
                 return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B4) — a departed person cannot move
+            // THEMSELVES to another unit (a person's own unit decides their own approver). This route
+            // checks the ORGANISATION, not the employee, so the validator's clause never sees it; the
+            // guard is inline, after the scope check and before the transaction. It reuses the route's
+            // active-only subject read (a DEACTIVATED self has already answered 404 above), so what it
+            // refuses is the self still active but past their last day. "Today" is read once, only when
+            // the identity matches.
+            if (DepartedSubject.IsSelf(actor.ActorId, user.UserId)
+                && DepartedSubject.IsDeparted(user, CopenhagenBusinessDate.Today(timeProvider)))
+                return DepartedSelfRefusal(
+                    loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.UnitEndpoints.UserUnitPut"),
+                    actor, "PUT /api/admin/users/{userId}/unit");
 
             long newVersion;
             await using var conn = dbFactory.Create();
@@ -986,6 +1070,46 @@ public static class UnitEndpoints
             expectedVersion,
             actualVersion,
         }, statusCode: 412);
+
+    /// <summary>
+    /// S147 / TASK-14703 (QUAL-230 T5a; R-31, P-1) — the inline departed-self refusal for the routes in
+    /// this file that can write a row keyed on the actor themselves (the person unit PUT, the unit
+    /// delete's member re-home, unit-leader designate and remove). The caller has already established
+    /// that the actor IS the subject and that the subject has departed (<see cref="DepartedSubject"/>),
+    /// BEFORE any write. One WARNING line names the clause and the route; the 403 body carries only the
+    /// date-free reason (ADR-040 D7).
+    /// </summary>
+    private static IResult DepartedSelfRefusal(ILogger logger, ActorContext actor, string route)
+    {
+        logger.LogWarning(
+            "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+            DepartedSubject.ClauseName, actor.ActorId, actor.ActorRole, route, actor.CorrelationId);
+        return Results.Json(new { error = "Access denied", reason = DepartedSubject.DenyReason }, statusCode: 403);
+    }
+
+    /// <summary>
+    /// S147 / TASK-14703 (P-1 (b), census B6) — the unit delete's pre-check read: ONE in-transaction
+    /// <c>SELECT</c> of the actor's own <c>users</c> row — its unit membership plus the two columns the
+    /// departed-self rule reads — with NO <c>is_active</c> filter, because the delete re-homes inactive
+    /// members too (<c>UnitRepository.RehomeMembersOnDeleteAsync</c>). Deny-only: the caller uses it only
+    /// to refuse. Returns <c>null</c> when the actor has no <c>users</c> row (nothing of theirs to
+    /// re-home). Takes no lock: a plain read, not a write, so it may run before the delete's first write.
+    /// </summary>
+    private static async Task<(Guid? UnitId, bool IsActive, DateOnly? EmploymentEndDate)?> ReadActorMembershipInTxAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string actorId, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "SELECT unit_id, is_active, employment_end_date FROM users WHERE user_id = @actorId",
+            conn, tx);
+        cmd.Parameters.AddWithValue("actorId", actorId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return null;
+        return (
+            reader.IsDBNull(0) ? null : reader.GetGuid(0),
+            reader.GetBoolean(1),
+            reader.IsDBNull(2) ? null : reader.GetFieldValue<DateOnly>(2));
+    }
 
     /// <summary>Enqueues <paramref name="event"/> in the caller's tx AND writes its per-event
     /// <c>audit_projection</c> row synchronously in the same tx (ADR-018 D2/D3, ADR-026/PAT-004).

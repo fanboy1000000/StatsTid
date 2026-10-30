@@ -630,18 +630,27 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
         Assert.Equal(0L, await CountTimeEntryRowsTotalAsync(employeeId));
     }
 
-    /// <summary>ACCEPTED BEHAVIOR, pinned as a decision on record (S136 Step-5a adjudication
+    /// <summary>S136 TRAIL (kept): ACCEPTED BEHAVIOR, pinned as a decision on record (S136 Step-5a adjudication
     /// (a) residual, 2026-08-26): a lifecycle-DEACTIVATED HROrAbove actor's still-valid JWT
-    /// (8h lifetime, no revocation) CAN register their OWN in-window facts → 201. This is
+    /// (8h lifetime, no revocation) CAN register their OWN in-window facts → 201. This was
     /// ADR-040 D3 applied LITERALLY — the floor reads "subject deactivated ⇒ HROrAbove", and
-    /// this actor IS HROrAbove; the deactivated-self 403 above bites Employee-role tokens only.
+    /// this actor IS HROrAbove; the deactivated-self 403 above bites Employee-role tokens only (that
+    /// sentence is now narrower than the truth: since S147 the clause also refuses an HR-tier self).
     /// Deliberately NOT closed alongside the date-PUT self-target 403, which protects a
     /// DIFFERENT asset: the employment RECORD (window boundaries — falsifiable history),
-    /// whereas this writes in-window registration FACTS the window itself still bounds. If
-    /// this pin reddens, someone re-decided the adjudication — take it back to the owner, do
-    /// not "fix" silently.</summary>
+    /// whereas this writes in-window registration FACTS the window itself still bounds.
+    ///
+    /// <para><b>S147 RE-DECISION (OQ-2 / R-30) — renamed from
+    /// <c>TimeEntry_DeactivatedHrActor_OwnInWindowFact_Is201_AdjudicatedAccepted</c>.</b> The owner re-decided
+    /// the S136 residual: the leaver's OWN access ends the day after the last day, whatever the role. The
+    /// shared organisation-scope check now refuses a departed actor acting on their OWN record, before its HR
+    /// gate (<c>DepartedSubject</c>). So the same call now answers 403 with the clause's date-free reason, and
+    /// nothing is written. This is an INTENTIONAL flip, not a regression to hide (TASK-14703-T point 7b).</para>
+    ///
+    /// <para>Kind F. Red conditions: <c>Assert 403</c> and the zero-row assert — until S147 the HR gate
+    /// admitted the deactivated HR self and the entry was written (201).</para></summary>
     [Fact]
-    public async Task TimeEntry_DeactivatedHrActor_OwnInWindowFact_Is201_AdjudicatedAccepted()
+    public async Task TimeEntry_DeactivatedHrActor_OwnInWindowFact_Is403_ReDecidedS147()
     {
         // The deactivated subject IS the actor: an HR person whose own employment ended.
         var hrActor = await SeedTerminatedEmployeeAsync();
@@ -650,8 +659,14 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
         var rsp = await PostTimeEntryAsync(
             ClientWith(HrToken(hrActor, OrgId)), hrActor, new DateOnly(2026, 3, 10));
 
-        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
-        Assert.Equal(1L, await CountTimeEntryRowsTotalAsync(hrActor));
+        // S147 OQ-2 / R-30: was Assert.Equal(HttpStatusCode.Created, ...) and a count of 1.
+        var raw = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden, $"expected 403, got {(int)rsp.StatusCode}: {raw}");
+        using (var doc = JsonDocument.Parse(raw))
+            Assert.Equal(DepartedSubject.DenyReason, doc.RootElement.GetProperty("reason").GetString());
+        // S147 OQ-2 / R-30: nothing is written.
+        Assert.Equal(0L, await CountTimeEntryRowsTotalAsync(hrActor));
+        Assert.Equal(0L, await CountEmployeeStreamOutboxTotalAsync(hrActor));
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1078,6 +1093,8 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
         return new OrgScopeValidator(
             new OrganizationRepository(factory),
             new UserRepository(factory),
+            // S147 R-30: fixed provider; the clause is pinned in DepartedSelfValidatorTests
+            new StatsTid.Tests.Regression.Hosting.FixedTimeProvider(new DateOnly(2026, 3, 16)),
             NullLogger<OrgScopeValidator>.Instance);
     }
 

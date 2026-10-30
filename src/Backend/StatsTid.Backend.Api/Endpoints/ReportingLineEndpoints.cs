@@ -911,6 +911,9 @@ public static class ReportingLineEndpoints
             DbConnectionFactory connectionFactory,
             IOutboxEnqueue outbox,
             ILoggerFactory loggerFactory,
+            // S147 / TASK-14703 (NR-1 = (a), census B5) — the departed-self guard's deny-only read + clock.
+            UserRepository userRepo,
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -961,6 +964,23 @@ public static class ReportingLineEndpoints
             // If we already have structural errors, return early.
             if (errors.Count > 0)
                 return Results.Json(new { error = "Validation failed", errors }, statusCode: 400);
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B5, NR-1 = (a)) — a departed person cannot
+            // rewrite their OWN reporting line through the bulk import. A row whose employeeId is the
+            // actor writes a reporting_lines row keyed on the actor (its subject key); a row whose
+            // managerId is the actor only names them as the HOLDER of authority over someone else, which
+            // TASK-14712's acting-user rule makes inert from the day after the last day — classified out.
+            // The import checks only the tree's ORGANISATION, so the validator's clause never sees it;
+            // the guard is inline, after the structural pass and BEFORE the batch lookup and the
+            // transaction. If ANY row names the actor as the employee, the actor is read once,
+            // terminated-inclusive — a DENY-ONLY read (inventoried on DepartedSubject) — and a departed
+            // self refuses the WHOLE import: nothing is written. "Today" is read once, only on a match.
+            if (request.Rows.Any(r => DepartedSubject.IsSelf(actor.ActorId, r.EmployeeId)))
+            {
+                var self = await userRepo.GetByIdIncludingTerminatedAsync(actor.ActorId!, ct);
+                if (self is not null && DepartedSubject.IsDeparted(self, CopenhagenBusinessDate.Today(timeProvider)))
+                    return DepartedSelfRefusal(logger, actor, "POST /api/admin/reporting-lines/import");
+            }
 
             // Batch lookup: existence + active status.
             Dictionary<string, (bool IsActive, string PrimaryOrgId)> userLookup;
@@ -1289,6 +1309,9 @@ public static class ReportingLineEndpoints
             IAuditProjectionMapper<UserUpdated> userUpdatedAuditMapper,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
+            // S147 / TASK-14703 (P-1 (a)) — the derived departed-self guard's deny-only read + log.
+            UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 — bounded drift-retry wrapper (see Endpoint 1). The 5-step closure derives the removed
@@ -1391,6 +1414,34 @@ public static class ReportingLineEndpoints
                     var incomingActingInTx = incomingEdgesInTx.Where(e => e.Relationship == "ACTING").ToList();
                     reportsReassignedCount = incomingPrimaryInTx.Count;
                     actingEdgesClosedCount = incomingActingInTx.Count;
+
+                    // S147 / TASK-14703 (QUAL-230 T5a; R-31, P-1 (a)) — the DERIVED departed-self guard.
+                    // The validator above checked the REMOVED person (a departed actor removing THEMSELVES
+                    // is refused there by its R-30 clause). But this closure also rewrites every incoming
+                    // report's OWN reporting line — Step 1 supersedes each PRIMARY report's line, Step 2
+                    // closes each ACTING edge — so a departed actor who is one of those reports would have
+                    // their own reporting_lines row rewritten by their own request. Checked on the
+                    // AUTHORITATIVE in-tx census (just read under the held lock) and BEFORE Step 1, the
+                    // transaction's first write (the advisory lock above is not a write): if any incoming
+                    // edge's employee is the actor, the actor is read in-transaction, terminated-inclusive —
+                    // a DENY-ONLY read (inventoried on DepartedSubject) — and a departed self rolls back
+                    // and answers 403; nothing has been written. A replacement in the map that names the
+                    // actor makes them the HOLDER of authority over someone else (TASK-14712 makes a
+                    // departed holder inert) — classified out, no check. Step 4's closure of the removed
+                    // person's stand-in rows, which can close the actor's own row when the removed person
+                    // is the actor's stand-in, is the P-10 consequence clause — classified out. `today` is
+                    // this closure's one date, read above.
+                    if (incomingEdgesInTx.Any(e => DepartedSubject.IsSelf(actor.ActorId, e.EmployeeId)))
+                    {
+                        var self = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, actor.ActorId!, ct);
+                        if (self is not null && DepartedSubject.IsDeparted(self, today))
+                        {
+                            await tx.RollbackAsync(ct);
+                            return DepartedSelfRefusal(
+                                loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.Remove"),
+                                actor, "POST /api/admin/reporting-lines/{employeeId}/remove");
+                        }
+                    }
 
                     // Re-validate IN-TX (under the lock): every incoming PRIMARY edge must have a
                     // supplied replacement. If a NEW unreplaced report appeared since the preflight,
@@ -1886,6 +1937,9 @@ public static class ReportingLineEndpoints
             IAuditProjectionMapper<ManagerVikarCreated> vikarCreatedAuditMapper,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
+            // S147 / TASK-14703 (P-1, census B14) — the departed-self guard's deny-only read + log.
+            UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 (BLOCKER 1) — the self-service /delegate CREATE is an employee-current-root mutator
@@ -1941,6 +1995,24 @@ public static class ReportingLineEndpoints
             // 2. Cannot delegate to self.
             if (string.Equals(actorId, request.ActingManagerId, StringComparison.Ordinal))
                 return Results.BadRequest(new { error = "Cannot delegate to yourself" });
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B14, P-1) — a departed manager cannot appoint
+            // a stand-in for THEMSELVES. The row this route writes is keyed on the actor
+            // (manager_vikar.absent_approver_id = the actor, its subject key), and the resolver honours
+            // that stand-in ahead of escalation (S74 R3a) while the deactivation never closes it — so a
+            // departed manager's live token could otherwise decide who signs their team's months after
+            // they left. The subject is the actor by construction, so the guard always applies: one
+            // terminated-inclusive read of the actor — DENY-ONLY (inventoried on DepartedSubject) — BEFORE
+            // the transaction and its tree lock; a departed self answers 403 and no row is written. A
+            // self that cannot be read is not refused here (the tree derivation below answers as before).
+            // `today` is the handler's ONE clock read: the Copenhagen day of `now`, above.
+            {
+                var self = await userRepo.GetByIdIncludingTerminatedAsync(actorId, ct);
+                if (self is not null && DepartedSubject.IsDeparted(self, effectiveFrom))
+                    return DepartedSelfRefusal(
+                        loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.DelegateCreate"),
+                        actor, "POST /api/reporting-lines/delegate");
+            }
 
             // NOTE (S76 / TASK-7601, Step-7a c1 BLOCKER): the active-vikar 409 pre-check was
             // REMOVED from here and moved IN-LOCK (after the no-reports 400 guard). The D15
@@ -2225,6 +2297,9 @@ public static class ReportingLineEndpoints
             IAuditProjectionMapper<ManagerVikarEnded> vikarEndedAuditMapper,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
+            // S147 / TASK-14703 (P-1, census B15) — the departed-self guard's deny-only read + log.
+            UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -2241,6 +2316,30 @@ public static class ReportingLineEndpoints
             var probe = await vikarRepo.GetActiveByApproverAnyDateAsync(actorId, ct);
             if (probe is null)
                 return Results.NotFound(new { error = "No active self-delegation to revoke" });
+
+            // S140 / TASK-14001 (PAT-028) — the ONE date this revoke closes the row at, off the injected
+            // TimeProvider seam; the same value reaches the row's effective_to and (via `closed`) the
+            // ManagerVikarEnded event's EffectiveTo.
+            // S142 (census row 27) — the COPENHAGEN calendar day: `effective_to` is an end-exclusive
+            // business boundary (ADR-018 D9) and must be stamped on the same calendar the create handler
+            // (row 26) opened the row on.
+            // S147 / TASK-14703 — HOISTED here from inside the transaction so the departed-self guard
+            // below and the close read the SAME single value (PAT-028: read before the connection and
+            // transaction open). A drift retry reuses it: one operation, one date.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B15, P-1) — a departed manager cannot clear
+            // their OWN stand-in row (manager_vikar.absent_approver_id = the actor — the probe above read
+            // exactly that). The subject is the actor by construction, so the guard always applies: one
+            // terminated-inclusive read of the actor — DENY-ONLY (inventoried on DepartedSubject) — after
+            // the probe and BEFORE the transaction; a departed self answers 403 and the row stays open.
+            {
+                var self = await userRepo.GetByIdIncludingTerminatedAsync(actorId, ct);
+                if (self is not null && DepartedSubject.IsDeparted(self, today))
+                    return DepartedSelfRefusal(
+                        loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.DelegateRevoke"),
+                        actor, "DELETE /api/reporting-lines/delegate");
+            }
 
             // S83 — bounded drift-retry wrapper: the in-tx body re-keys from scratch on a concurrent
             // transfer that drifts the subject's current root under the advisory.
@@ -2285,13 +2384,7 @@ public static class ReportingLineEndpoints
                         coveredCount = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct) ?? 0);
                     }
 
-                    // S140 / TASK-14001 (PAT-028) — the ONE date this revoke closes the row at, off
-                    // the injected TimeProvider seam; the same value reaches the row's effective_to
-                    // and (via `closed`) the ManagerVikarEnded event's EffectiveTo.
-                    // S142 (census row 27) — the COPENHAGEN calendar day: `effective_to` is an
-                    // end-exclusive business boundary (ADR-018 D9) and must be stamped on the same
-                    // calendar the create handler (row 26) opened the row on.
-                    var today = CopenhagenBusinessDate.Today(timeProvider);
+                    // `today` — the handler's ONE date (read above the S147 guard; see there).
                     var closed = await vikarRepo.CloseByApproverAsync(conn, tx, actorId, today, ct);
                     if (closed is null)
                     {
@@ -2416,6 +2509,8 @@ public static class ReportingLineEndpoints
             IAuditProjectionMapper<ManagerVikarCreated> vikarCreatedAuditMapper,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
+            // S147 / TASK-14703 (P-1, census B16) — the departed-self guard's log.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         // S78 R9 — bounded drift-retry wrapper (see Endpoint 1). The vikar-CREATE keys on the absent
@@ -2474,6 +2569,21 @@ public static class ReportingLineEndpoints
             var managerUser = await userRepo.GetByIdAsync(managerId, ct);
             if (managerUser is null)
                 return Results.NotFound(new { error = $"Manager '{managerId}' not found" });
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B16, P-1) — a departed HR or admin actor who is
+            // also a manager cannot appoint a stand-in for THEMSELVES through the admin path: when the
+            // route's managerId is the actor, the row written is keyed on the actor
+            // (manager_vikar.absent_approver_id, its subject key). Inline, before the transaction; it
+            // reuses the route's active-only manager read just above (a DEACTIVATED self has already
+            // answered 404), so it refuses the self still active but past their last day. A body
+            // VikarUserId naming the actor only makes them the HOLDER of authority over someone else's
+            // team (TASK-14712 makes a departed holder inert) — classified out, no check. `today` is the
+            // handler's ONE clock read: the Copenhagen day of `now`, above.
+            if (DepartedSubject.IsSelf(actor.ActorId, managerUser.UserId)
+                && DepartedSubject.IsDeparted(managerUser, effectiveFrom))
+                return DepartedSelfRefusal(
+                    loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.AdminVikarCreate"),
+                    actor, "POST /api/admin/reporting-lines/{managerId}/vikar");
 
             // (v-preflight) Fast 409 if the manager already has an active vikar (friendly upfront
             //     check; the DB partial-unique uq_manager_vikar_active is the by-construction
@@ -2687,6 +2797,9 @@ public static class ReportingLineEndpoints
             IAuditProjectionMapper<ManagerVikarEnded> vikarEndedAuditMapper,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
+            // S147 / TASK-14703 (P-1, census B17) — the departed-self guard's deny-only read + log.
+            UserRepository userRepo,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -2703,6 +2816,31 @@ public static class ReportingLineEndpoints
             var probe = await vikarRepo.GetActiveByApproverAnyDateAsync(managerId, ct);
             if (probe is null)
                 return Results.NotFound(new { error = "No active vikar to revoke for this manager" });
+
+            // S140 / TASK-14001 (PAT-028) — the ONE date this revoke closes the row at, off the injected
+            // TimeProvider seam; the same value reaches the row's effective_to and (via `closed`) the
+            // ManagerVikarEnded event's EffectiveTo.
+            // S142 (census row 29) — the COPENHAGEN calendar day, same reason as the self-service revoke
+            // (row 27).
+            // S147 / TASK-14703 — HOISTED here from inside the transaction so the departed-self guard
+            // below and the close read the SAME single value (PAT-028: read before the connection and
+            // transaction open). A drift retry reuses it: one operation, one date.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B17, P-1) — a departed HR or admin actor who is
+            // also a manager cannot clear THEIR OWN stand-in row through the admin path: when the route's
+            // managerId is the actor, the row closed is keyed on the actor (manager_vikar.absent_approver_id,
+            // its subject key). Inline, after the probe and BEFORE the transaction; on a match one
+            // terminated-inclusive read of the actor — DENY-ONLY (inventoried on DepartedSubject): it can
+            // only refuse — and a departed self answers 403 with the row still open.
+            if (DepartedSubject.IsSelf(actor.ActorId, managerId))
+            {
+                var self = await userRepo.GetByIdIncludingTerminatedAsync(managerId, ct);
+                if (self is not null && DepartedSubject.IsDeparted(self, today))
+                    return DepartedSelfRefusal(
+                        loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.ReportingLineEndpoints.AdminVikarRevoke"),
+                        actor, "DELETE /api/admin/reporting-lines/{managerId}/vikar");
+            }
 
             // S83 / ADR-027 D18→D19 — bounded drift-retry wrapper. Pre-S83 this revoke took ONLY the
             // PERSISTED-root advisory; a concurrent cross-styrelse transfer of the manager, or a key-
@@ -2757,12 +2895,7 @@ public static class ReportingLineEndpoints
 
                     // (4) Close the SAME pinned row (keyed by vikar_id, idempotent under effective_to
                     //     IS NULL). The FOR UPDATE above guarantees this is the row we authorized.
-                    // S140 / TASK-14001 (PAT-028) — the ONE date this revoke closes the row at, off
-                    // the injected TimeProvider seam; the same value reaches the row's effective_to
-                    // and (via `closed`) the ManagerVikarEnded event's EffectiveTo.
-                    // S142 (census row 29) — the COPENHAGEN calendar day, same reason as the
-                    // self-service revoke (row 27).
-                    var today = CopenhagenBusinessDate.Today(timeProvider);
+                    //     `today` — the handler's ONE date (read above the S147 guard; see there).
                     var maybeClosed = await vikarRepo.CloseAsync(conn, tx, activeVikar.VikarId, today, ct);
                     if (maybeClosed is null)
                     {
@@ -2816,6 +2949,25 @@ public static class ReportingLineEndpoints
         .Produces<AdminVikarRevokedResponse>(StatusCodes.Status200OK); // S115 / TASK-11501
 
         return app;
+    }
+
+    // ── Helper: DepartedSelfRefusal — S147 / TASK-14703 (QUAL-230 T5a; R-31, P-1) ──
+
+    /// <summary>
+    /// The inline departed-self refusal for the routes in this file that can write a row keyed on the
+    /// actor themselves (the import, the manager-removal derived check, the self-service delegate set and
+    /// clear, the admin stand-in set and clear for the actor's own manager_vikar row). The caller has
+    /// already established that the actor IS the subject and that the subject has departed
+    /// (<see cref="DepartedSubject"/>), BEFORE any write (a refusal inside a transaction rolls it back
+    /// first). One WARNING line names the clause and the route; the 403 body carries only the date-free
+    /// reason (ADR-040 D7).
+    /// </summary>
+    private static IResult DepartedSelfRefusal(ILogger logger, ActorContext actor, string route)
+    {
+        logger.LogWarning(
+            "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+            DepartedSubject.ClauseName, actor.ActorId, actor.ActorRole, route, actor.CorrelationId);
+        return Results.Json(new { error = "Access denied", reason = DepartedSubject.DenyReason }, statusCode: 403);
     }
 
     // ── Helper: MapReaderForImport — inline reader mapper for import endpoint ──

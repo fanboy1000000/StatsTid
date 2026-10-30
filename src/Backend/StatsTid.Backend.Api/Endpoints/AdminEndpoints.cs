@@ -1608,7 +1608,9 @@ public static class AdminEndpoints
             // transfer fan-out's `today` (the date it closes reporting lines and vikar rows at).
             // Both now read ONE hoisted value. The handler's ONE real-clock value is the `now` audit
             // stamp at the top of the transaction — see the BY DESIGN note there for the exact scope
-            // of that exemption and why nothing may derive a DATE from it.
+            // of that exemption and why nothing may derive a DATE from it. S147 / TASK-14703 adds a
+            // third reader of the same value: the departed-self guard (is the actor, acting on their
+            // own record, past their last day?).
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
@@ -1666,6 +1668,35 @@ public static class AdminEndpoints
                     return Results.BadRequest(new { error = "A user's primary org must be an Organisation (a MAO holds no employees)." });
             }
 
+            // ONE clock read for the whole handler (S139 / TASK-13907's "compute once" rule). Three
+            // consumers: the S147 departed-self guard right below, owner ruling OQ-6's test for whether
+            // the row that truncated an agreement write is a SCHEDULED change or ordinary history, and
+            // the cross-Organisation transfer fan-out's four dated writes far below. Reading the
+            // provider twice would not be the same instant.
+            //
+            // S147 / TASK-14703 (BC-P1) — HOISTED here from just above the transaction, unchanged, so the
+            // guard below reads the same single value; the two older consumers still read it.
+            //
+            // S142 / TASK-14202 (census row 2) — the Copenhagen calendar day, not the UTC one. Both
+            // consumers are BUSINESS dates and both were wrong for the hour or two each night when
+            // the two calendars disagree: OQ-6 would call a change the Danish admin scheduled for
+            // "tomorrow" a row starting after today when it is not (or the reverse), and the
+            // transfer fan-out would STAMP its reporting-line and stand-in close dates a day before
+            // the transfer that caused them. The `now` audit stamp below stays UTC BY DESIGN.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B1) — a departed person cannot change their
+            // own user record (agreement code, home Organisation, unit, active flag). This route checks
+            // the ORGANISATION, not the employee, so the validator's departed-self clause never sees it;
+            // the guard is inline, after both scope checks and before any write. It reuses the route's
+            // active-only subject read (a DEACTIVATED self has already answered 404 above), so what it
+            // refuses is the self still active but past their last day. The transfer arm's closure of the
+            // stand-in rows of the user being moved, when that user is the actor's own stand-in, is the
+            // P-10 consequence clause — classified out, no extra check.
+            if (DepartedSubject.IsSelf(actor.ActorId, existingUser.UserId)
+                && DepartedSubject.IsDeparted(existingUser, today))
+                return DepartedSelfRefusal(logger, actor, "PUT /api/admin/users/{userId}");
+
             // S138 / TASK-13802 — the agreement-code branch is now entered whenever the request
             // CARRIES a code, and whether it actually MUTATED anything is decided by the WRITER
             // (its `IsNoOp`, computed inside the lock against the row COVERING the requested date).
@@ -1705,19 +1736,7 @@ public static class AdminEndpoints
             if (agreementCodeSupplied && request.EffectiveFrom == default)
                 return Results.UnprocessableEntity(new { error = MissingEffectiveFromError });
 
-            // ONE clock read for the whole handler (S139 / TASK-13907's "compute once" rule). Two
-            // consumers: owner ruling OQ-6's test for whether the row that truncated an agreement
-            // write is a SCHEDULED change or ordinary history, and the cross-Organisation transfer
-            // fan-out's four dated writes far below. Reading the provider twice would not be the
-            // same instant.
-            //
-            // S142 / TASK-14202 (census row 2) — the Copenhagen calendar day, not the UTC one. Both
-            // consumers are BUSINESS dates and both were wrong for the hour or two each night when
-            // the two calendars disagree: OQ-6 would call a change the Danish admin scheduled for
-            // "tomorrow" a row starting after today when it is not (or the reverse), and the
-            // transfer fan-out would STAMP its reporting-line and stand-in close dates a day before
-            // the transfer that caused them. The `now` audit stamp below stays UTC BY DESIGN.
-            var today = CopenhagenBusinessDate.Today(timeProvider);
+            // (`today` — the handler's ONE clock read — is read above the S147 departed-self guard.)
 
             // NOTE (S138, deliberately unchanged): this endpoint stays ACTIVE-ONLY. Its
             // `is_active` / `isDeactivating` choreography is the sanctioned deactivation path, and
@@ -3093,6 +3112,9 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<RoleAssignmentGranted> auditMapper,
             AuditProjectionRepository auditRepo,
+            // S147 / TASK-14703 (R-31) — the departed-self guard's clock and log.
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -3154,6 +3176,19 @@ public static class AdminEndpoints
             var targetUser = await userRepo.GetByIdAsync(request.UserId, ct);
             if (targetUser is null)
                 return Results.NotFound(new { error = "Target user not found" });
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B2) — a departed admin cannot grant
+            // THEMSELVES a role: the token keeps its claims until it expires (SEC-003), but the
+            // role_assignments row would be a false authority record, and the record is what
+            // auditability protects. This route checks the ORGANISATION (or GLOBAL), not the employee, so
+            // the validator's clause never sees it; the guard is inline, after both scope branches and the
+            // subject read, before any write. It reuses the active-only subject read (a DEACTIVATED self
+            // has already answered 404 above). "Today" is read once, only when the identity matches.
+            if (DepartedSubject.IsSelf(actor.ActorId, targetUser.UserId)
+                && DepartedSubject.IsDeparted(targetUser, CopenhagenBusinessDate.Today(timeProvider)))
+                return DepartedSelfRefusal(
+                    loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.AdminEndpoints.RolesGrant"),
+                    actor, "POST /api/admin/roles/grant");
 
             // Validate role ID is valid
             if (!RoleHierarchy.ContainsKey(request.RoleId))
@@ -3276,6 +3311,9 @@ public static class AdminEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<RoleAssignmentRevoked> auditMapper,
             AuditProjectionRepository auditRepo,
+            // S147 / TASK-14703 (R-31, F2) — the departed-self guard's clock and log.
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -3327,6 +3365,24 @@ public static class AdminEndpoints
                 // CHECK forbids it). Refuse rather than silently admit a de-privileging operation.
                 if (!HasGlobalScope(actor))
                     return Results.Json(new { error = "Access denied", reason = "Cannot determine org scope for this assignment" }, statusCode: 403);
+            }
+
+            // S147 / TASK-14703 (QUAL-230 T5a; R-31, census B3, F2 — the Codex cycle-5 WARNING) — a
+            // departed admin cannot revoke an assignment of THEIR OWN. The request carries only the
+            // assignment id, so the subject is the assignment's user (`assignmentUserId`), compared
+            // Ordinal with the actor after the scope checks. This route reads no subject before it writes
+            // (its only user read sits after the UPDATE, for the audit's target organisation), so on a
+            // match the actor's record is read HERE, before the transaction, terminated-inclusive — a
+            // DENY-ONLY read (inventoried on DepartedSubject): it can only refuse, and a self that cannot
+            // be read at all is not refused here. A departed self (deactivated, or past their last day)
+            // answers 403 and the assignment stays active. "Today" is read once, only on a match.
+            if (DepartedSubject.IsSelf(actor.ActorId, assignmentUserId))
+            {
+                var self = await userRepo.GetByIdIncludingTerminatedAsync(assignmentUserId, ct);
+                if (self is not null && DepartedSubject.IsDeparted(self, CopenhagenBusinessDate.Today(timeProvider)))
+                    return DepartedSelfRefusal(
+                        loggerFactory.CreateLogger("StatsTid.Backend.Api.Endpoints.AdminEndpoints.RolesRevoke"),
+                        actor, "POST /api/admin/roles/revoke");
             }
 
             // Deactivate assignment + insert audit
@@ -3748,6 +3804,21 @@ public static class AdminEndpoints
     // this format later (e.g. a sequence or a name-derived slug) without an FE change.
     private static string GenerateOrgId()
         => "ORG" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+
+    /// <summary>
+    /// S147 / TASK-14703 (QUAL-230 T5a; R-31, P-1) — the inline departed-self refusal for the routes
+    /// in this file that reach a person without the validator's employee overloads (the users PUT, role
+    /// grant, role revoke). The caller has already established that the actor IS the subject and that
+    /// the subject has departed (<see cref="DepartedSubject"/>), BEFORE any write. One WARNING line names
+    /// the clause and the route; the 403 body carries only the date-free reason (ADR-040 D7).
+    /// </summary>
+    private static IResult DepartedSelfRefusal(ILogger logger, ActorContext actor, string route)
+    {
+        logger.LogWarning(
+            "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+            DepartedSubject.ClauseName, actor.ActorId, actor.ActorRole, route, actor.CorrelationId);
+        return Results.Json(new { error = "Access denied", reason = DepartedSubject.DenyReason }, statusCode: 403);
+    }
 
     private static bool HasGlobalScope(ActorContext actor)
     {
