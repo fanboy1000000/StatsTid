@@ -296,9 +296,10 @@ public sealed class SenderSeparationTests : SendCommandMatrixTestBase
         cmd.Parameters.AddWithValue("s", MarchStart);
         cmd.Parameters.AddWithValue("en", MarchEnd);
         cmd.Parameters.AddWithValue("st", status);
-        cmd.Parameters.AddWithValue("sb", (object?)submittedBy ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("eab", (object?)employeeApprovedBy ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("ab", (object?)approvedBy ?? DBNull.Value);
+        // Typed explicitly: an untyped NULL (and @eab / @ab appear in "IS NULL" tests) fails 42P08 (CI-W2).
+        cmd.Parameters.Add(new NpgsqlParameter("sb", NpgsqlTypes.NpgsqlDbType.Text) { Value = (object?)submittedBy ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter("eab", NpgsqlTypes.NpgsqlDbType.Text) { Value = (object?)employeeApprovedBy ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter("ab", NpgsqlTypes.NpgsqlDbType.Text) { Value = (object?)approvedBy ?? DBNull.Value });
         return (Guid)(await cmd.ExecuteScalarAsync())!;
     }
 

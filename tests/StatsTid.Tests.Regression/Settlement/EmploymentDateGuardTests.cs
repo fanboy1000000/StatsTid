@@ -374,7 +374,8 @@ public sealed class EmploymentDateGuardTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>An ACTIVE in-scope HR actor PUTting its OWN start date → 403, nothing mutated
-    /// (deterministic, fail-closed — actor-state-independent). The GET stays self-readable.</summary>
+    /// (deterministic, fail-closed — actor-state-independent). The GET stays self-readable while the actor is
+    /// employed; a departed self's read is refused (S147 OQ-2 / consult R1).</summary>
     [Fact]
     public async Task StartDatePut_SelfTarget_ActiveHrActor_Returns403_NothingMutated()
     {
