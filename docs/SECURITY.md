@@ -143,6 +143,25 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
 
 **Accepted characteristic (S91 Step-7a, Codex P1 ×4 — owner-accepted, documented, follow-up tracked):** the lowered tree-WRITE endpoints floor-check the PRIMARY target (the employee's org) but bind the SECONDARY principal (the assigned manager / create-approver / replacement-approver / vikar) only via `ValidateSameTreeAsync` (structural same-MINISTRY/STYRELSE tree), NOT a floored scope check against the actor's subtree. So a LocalHR scoped to a SUB-org can name a secondary principal in a SIBLING sub-org of the SAME styrelse (an intra-styrelse lateral assignment) — outside their own subtree but inside the styrelse. This is the **pre-existing LocalAdmin model** (unchanged code; S91 only admits HR to it). It is accepted because containment stays intra-styrelse and a naive tightening would break legitimate UP-TREE manager assignment (a manager is an ancestor, outside an `ORG_AND_DESCENDANTS` sub-org scope). **FOLLOW-UP:** a dedicated sprint to scope-check the secondary principal for BOTH tiers with an "ancestors + own-subtree, not lateral siblings" rule.
 
+### Segregation of duties: who may sign what (S130, S147)
+
+**Why.** A month passes payroll on two signatures: the employee's, given when the month is sent (or by HR on the employee's behalf), and the approver's. Segregation of duties means those two signatures come from two different people, and nobody decides their own case. Both state tenders analysed in 2026-10 require it (EM A1 (e), VD 35).
+
+**The rules, as built:**
+1. **Nobody approves or rejects their own month, or reopens it once approved** (SEC-009, S130). `ApprovalSelfGuard` checks this at approve, reject and reopen (`ApprovalEndpoints.cs:250`, `:518`, `:1709`), and the choke point sits in `IsEffectiveApproverOrUnitLeaderAsync`.
+2. **Whoever sent a month can neither approve nor reject it** (SEC-053, S147; owner OQ-1 = (a): strict, no exception). The sender is `employee_approved_by`, or `submitted_by` on a legacy row (`ApprovalSenderGuard.SenderOf`). The rule is checked three times:
+   - at the door, as a 403 with a structured WARNING (`ApprovalEndpoints.cs:268`, `:531`, re-checked on the conflict paths `:409`, `:624`);
+   - inside the transaction that writes the decision, as a predicate on the conditional UPDATE (`ApprovalPeriodRepository.cs:1939`, `COALESCE(employee_approved_by, submitted_by) IS DISTINCT FROM @actorId`), so a race cannot slip past the door check;
+   - at payroll, where an approval turns into money (`PayrollExportService.cs:404-444`; a null sender passes).
+
+   **Reopen is not guarded**, because it signs nothing and clears both stamps. The demo loader approves as a second identity.
+3. **A leader cannot decide their own overtime** (SEC-056; owner Q-A = (a)). This joins the section when TASK-14705 merges.
+
+**Outside these rules (recorded, not hidden):**
+- The raw GlobalAdmin exports (`/api/payroll/export`, `/export-period`) do not pass through the approval check at all. That is SEC-054, handled by TASK-14716.
+- Retroactive corrections take their own path (`RetroactiveCorrectionService.cs`).
+- Acting on someone else's record is governed by the scope rules above.
+
 ### Flat approval authority (S94 / ADR-035 slice 3)
 
 **The approval predicate is now `CanApprove(actor, emp) = IsEffectiveDesignatedApprover (edge) OR HasHrAdminScopeOverEmpOrg(actor, emp)`.** The unfloored leader-by-org-scope approval branch is RETIRED: approve / reject / the reopen LEADER arm gate the org-scope fallback through `ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct)` — HR/Admin (LocalHR/LocalAdmin/Global) scope over the employee's CURRENT Organisation. A non-designated in-scope **LEADER can no longer approve** (must hold the reporting edge); HR/Admin is the pure-OR fallback; an **orphan** employee (no manager edge) is approved by in-scope HR/Admin. The S78 in-lock edge re-eval is preserved (it keys on the now-floored `orgScopeAllowed`).

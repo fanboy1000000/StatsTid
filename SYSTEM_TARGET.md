@@ -194,6 +194,7 @@ All status transitions must be auditable (who, when, reason)
 
 Approval constraints:
 A leader may only approve periods for employees in their assigned organizational scope
+**Segregation of duties (four-eyes; owner OQ-1 = (a), S147).** A month carries two signatures from two different people. Whoever sent the month (the employee, or HR sending on the employee's behalf) can neither approve nor reject it. There is no exception path. Nobody approves or rejects their own month. Reopening is not a signature and stays allowed. The rule is enforced at the endpoint, inside the transaction that records the decision, and again at the payroll export (SEC-009, SEC-053; `docs/SECURITY.md` § "Segregation of duties")
 Payroll export endpoint must enforce the approval guard — unapproved periods are blocked
 Period approval does not affect the rule engine — it is a workflow gate before payroll export
 
