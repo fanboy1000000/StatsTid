@@ -831,6 +831,20 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
     })
     const { container } = renderPage()
     await screen.findByText('Udvikling')
+    // S147 / QUAL-241 — the 'Udvikling' row appears in the FIRST render, which is before the
+    // page's local state held the served work periods. Clicking the day trigger on that
+    // render opened a panel with no periods ("Arbejdstid i alt 1,5 t" against 9,5 t allocated
+    // → "Overfordelt"): this test's "documented flake" (S121 flake-watch, 1 in 32 under
+    // parallel load) was that product race, not test noise. The barrier below waits for the
+    // SECOND render exactly as `renderLoaded()` does: the Diff total is derived from the
+    // local cells/intervals, so it is blank until they hold the served data. It is
+    // non-vacuous because that blank → '-…' transition only happens once the served
+    // work-time is in local state. (The race itself is now closed in the page and pinned
+    // deterministically by the QUAL-241 tests below; this barrier just keeps this test
+    // reading a settled page.)
+    await waitFor(() =>
+      expect(lastCell(gridRow(container, 'Diff. fra normtid')).textContent).not.toBe(''),
+    )
     expect(gridRowOrNull(container, 'Drift & support')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
@@ -857,6 +871,71 @@ describe('SkemaPage — R7/R16 day-panel save paths', () => {
     // 2,1 visible Udvikling) = balanced. Asserted AFTER the barrier, so a balanced-looking zero
     // state cannot satisfy it.
     expect(within(drawer).getByText('Alt fordelt ✓')).toBeInTheDocument()
+  })
+})
+
+describe('SkemaPage — QUAL-241: no day panel or edit starts from state not copied from the current data', () => {
+  it('F: a day opened on the very FIRST commit that shows the grid still carries the served work periods', async () => {
+    // Red condition: against the pre-fix page the grid committed from `data` while the local
+    // work-interval state was still empty (three effects copied it a render later), so a click
+    // landing in that gap seeded the panel with no periods, and nothing ever refreshed them.
+    // A MutationObserver callback is a microtask right after the DOM commit, i.e. BEFORE the
+    // passive effects / second render — it hits the gap every run, not 1 in 32.
+    renderPage()
+    await new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        const trigger = screen.queryByRole('button', { name: 'Registrér arbejdstid 2026-03-02' })
+        if (!trigger) return
+        observer.disconnect()
+        fireEvent.click(trigger)
+        resolve()
+      })
+      observer.observe(document.body, { childList: true, subtree: true })
+    })
+    const drawer = await screen.findByRole('dialog')
+    // The served 08:00–16:00 period must be in the panel (findBy: allow the settle, but an
+    // unseeded panel never shows it, so this fails reliably before the fix).
+    expect(await within(drawer).findByDisplayValue('08:00')).toBeInTheDocument()
+    expect(within(drawer).getByDisplayValue('16:00')).toBeInTheDocument()
+    expect(within(drawer).queryByText('Overfordelt')).toBeNull()
+  })
+
+  it('F: while a NEW month is loading, the previous month\'s data is not editable and its days open no panel; once it lands the panel seeds from the new month', async () => {
+    // Red condition: pre-fix, useSkema keeps the old month's `data` (and the page its local
+    // state) on screen under the new month's day columns until the response lands, and the
+    // day triggers stayed live — a panel opened then saw no periods of the new month, and
+    // an edit was overwritten (and its save dropped) when the new data arrived.
+    await renderLoaded()
+    const april = makeMonthData({
+      month: 4,
+      daysInMonth: 30,
+      entries: [],
+      absences: [],
+      dailyNorm: [],
+      workTime: [{ date: '2026-04-01', intervals: [{ start: '09:00', end: '12:00' }], manualHours: 0 }],
+    })
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/skema/emp001/month') && String(url).includes('month=4')) {
+        await gate
+        return jsonResponse(april)
+      }
+      return base(url, init)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    // In flight: April's columns are showing over March's data — not actionable.
+    expect(await screen.findByText(/April 2026/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })).toBeNull()
+
+    await act(async () => { release(); await gate })
+    const trigger = await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
+    fireEvent.click(trigger)
+    const drawer = await screen.findByRole('dialog')
+    expect(within(drawer).getByDisplayValue('09:00')).toBeInTheDocument()
+    expect(within(drawer).getByDisplayValue('12:00')).toBeInTheDocument()
   })
 })
 

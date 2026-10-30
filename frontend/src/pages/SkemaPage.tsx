@@ -287,14 +287,11 @@ export function SkemaPage() {
   const cellSavesInFlightRef = useRef<Set<Promise<boolean>>>(new Set())
   const workTimeSavesInFlightRef = useRef<Set<Promise<boolean>>>(new Set())
 
-  // Build cell values from data
-  useEffect(() => {
-    if (!data) {
-      setLocalCells(new Map())
-      serverCellsRef.current = new Map()
-      return
-    }
+  // Build cell values from data (derived; copied into `localCells` DURING RENDER by the
+  // S147 hydration block below, not by an effect).
+  const cellsFromData = useMemo<Map<string, number>>(() => {
     const cells = new Map<string, number>()
+    if (!data) return cells
     for (const entry of data.entries) {
       if (entry.hours !== 0) {
         // S120 — `projectCode` is NULLABLE on the wire (the spec truth the
@@ -309,12 +306,16 @@ export function SkemaPage() {
         cells.set(`${absence.absenceType}:${absence.date}`, absence.hours)
       }
     }
-    setLocalCells(cells)
-    // S73 R4 — snapshot server truth for the 422 revert (a fresh Map copy so a
-    // later localCells edit never mutates the server-truth reference).
-    serverCellsRef.current = new Map(cells)
-    pendingChangesRef.current = []
+    return cells
   }, [data])
+
+  // S73 R4 — snapshot server truth for the 422 revert (a fresh Map copy so a later
+  // localCells edit never mutates the server-truth reference); drop pending cell
+  // deltas that belonged to the previous data.
+  useEffect(() => {
+    serverCellsRef.current = new Map(cellsFromData)
+    pendingChangesRef.current = []
+  }, [cellsFromData])
 
   // The R3 arithmetic/row basis (S72 Step-7a B1): the UNION of the served
   // catalogs and every key in the month's served entries/absences — NOT the
@@ -376,13 +377,22 @@ export function SkemaPage() {
   const [localWorkIntervals, setLocalWorkIntervals] = useState<WorkIntervalsMap>(new Map())
   const [localManualHours, setLocalManualHours] = useState<ManualHoursMap>(new Map())
 
-  // Rehydrate local state when backend data changes (after fetch/save/approve)
-  useEffect(() => {
+  // S147 / QUAL-241 — rehydrate ALL editable local state (cells, work intervals, manual
+  // hours) from the served data DURING RENDER ("adjust state while rendering": React
+  // discards this render and re-renders at once, before anything is committed). This used
+  // to be three effects, which left one committed render in which the grid and every day
+  // trigger were live while local state was still empty (first load) or still the previous
+  // month's (month change / refetch). A day panel opened in that gap seeded no periods and
+  // a period edit there replaced the day's stored intervals with the partial set. With the
+  // copy done in render, no committed render exists whose local state is not the current
+  // `data`, so there is nothing to gate and no delay to show.
+  const [hydratedFrom, setHydratedFrom] = useState<typeof data>(null)
+  if (data !== hydratedFrom) {
+    setHydratedFrom(data)
+    setLocalCells(cellsFromData)
     setLocalWorkIntervals(workIntervalsFromData)
-  }, [workIntervalsFromData])
-  useEffect(() => {
     setLocalManualHours(manualHoursFromData)
-  }, [manualHoursFromData])
+  }
 
   // Live refs so the debounced work-time save reads the latest local state
   const workIntervalsRef = useRef<WorkIntervalsMap>(localWorkIntervals)
@@ -555,7 +565,14 @@ export function SkemaPage() {
 
   // Approval status
   const approvalStatus = data?.approval?.status ?? 'DRAFT'
-  const isReadOnly = isPeriodLocked(approvalStatus)
+  // S147 / QUAL-241 — a month navigation keeps the PREVIOUS month's `data` on screen until
+  // the new month's response lands (useSkema never clears it). While that fetch is in
+  // flight the grid shows next month's day columns over last month's served data; an edit,
+  // a day panel or an approve then would act on state that is not the displayed month's.
+  // The edit surfaces are therefore locked for exactly that window. (Fixtures/first load:
+  // `data` is null, or `loading` is false, so this never engages outside a month change.)
+  const dataIsStale = loading && data != null && (data.year !== year || data.month !== month)
+  const isReadOnly = isPeriodLocked(approvalStatus) || dataIsStale
 
   /** S73 R4 — fire a cell save for the given changes and split the rejected-save
       policy INSIDE the failure handler:
@@ -743,12 +760,15 @@ export function SkemaPage() {
   const panelIdRef = useRef(0)
 
   const handleOpenDay = useCallback((date: string) => {
-    const intervals = workIntervalsRef.current.get(date) ?? []
+    // S147 / QUAL-241 — seed from the committed STATE (which the render-time hydration
+    // above guarantees is the current data's), not from `workIntervalsRef`, which is only
+    // mirrored by an effect after commit.
+    const intervals = localWorkIntervals.get(date) ?? []
     setPanelPeriods(
       intervals.map((iv) => ({ id: `srv-${++panelIdRef.current}`, from: iv.start, to: iv.end })),
     )
     setOpenDayDate(date)
-  }, [])
+  }, [localWorkIntervals])
 
   // Month nav drops any open day (the date belongs to the previous view); a
   // month that locks (approve) closes the panel — R5: the panel is unreachable
@@ -943,6 +963,7 @@ export function SkemaPage() {
   const [approving, setApproving] = useState(false)
 
   const handleApprove = useCallback(async () => {
+    if (dataIsStale) return // S147: never approve the previous month under the new month's title
     clearApprovalValidationError()
 
     // Flush any pending debounced saves (cells, then work-time) before approving
@@ -966,7 +987,7 @@ export function SkemaPage() {
     } finally {
       setApproving(false)
     }
-  }, [data, employeeApprove, submitAndApprove, flushCellSave, flushWorkTimeSave, clearApprovalValidationError])
+  }, [data, dataIsStale, employeeApprove, submitAndApprove, flushCellSave, flushWorkTimeSave, clearApprovalValidationError])
 
   if (loading && !data) {
     return (
