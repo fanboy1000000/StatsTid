@@ -130,8 +130,18 @@ public static class WeeklyTimelineCore
     /// this week-by-week core and the per-segment lane's supplement, on-call and absence rules,
     /// although only the timeline call returns it. Bump it whenever any of those rules' arithmetic
     /// changes, or a rule starts reading another field of an hours row.
+    ///
+    /// <para>
+    /// <b>v2 (S147 / TASK-14708, QUAL-231)</b>, replacing S145's v1 (TASK-14505, the
+    /// week-by-week core): the absence credit reads the one SharedKernel classification. A stored
+    /// <c>SICK_DAY</c> and the stored child's-sick-day codes (<c>CHILD_SICK_DAY</c>, <c>_2</c>,
+    /// <c>_3</c>) are now credited toward the norm, so the same hours give a different flex
+    /// closing (and possibly a <c>FLEX_PAYOUT</c> line) than under v1. A manifest recorded under
+    /// v1 is therefore refused on replay (<c>replay-evaluation-model-changed</c>, ADR-016 D10),
+    /// never silently re-read under the new rule.
+    /// </para>
     /// </summary>
-    public const string EvaluationModel = "weekly-timeline-v1";
+    public const string EvaluationModel = "weekly-timeline-v2";
 
     public static TimelineCoreResult Evaluate(TimelineCoreInput input)
     {

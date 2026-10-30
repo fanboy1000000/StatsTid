@@ -340,8 +340,8 @@ public class RegressionTests
     }
 
     /// <summary>
-    /// Regression 9: All 3 new absence types (SPECIAL_HOLIDAY_ALLOWANCE, CHILD_SICK_2,
-    /// CHILD_SICK_3) produce correct time types and grant norm credit.
+    /// Regression 9: All 3 new absence types (SPECIAL_HOLIDAY_ALLOWANCE, CHILD_SICK_DAY_2,
+    /// CHILD_SICK_DAY_3 — S147 T3 (QUAL-231): the stored spelling, was the numbered "CHILD_SICK_2"/"_3") produce correct time types and grant norm credit.
     /// </summary>
     [Fact]
     public void PayrollChain_AbsenceScenarios_AllNewTypesCorrect()

@@ -43,9 +43,12 @@ namespace StatsTid.Tests.Regression.Segmentation;
 ///
 /// <para>
 /// <b>The two variants.</b> The engine returns the config fingerprints and the evaluation-model
-/// marker it was constructed with (defaults <c>["stub"]</c> and <c>weekly-timeline-v1</c>). A replay
-/// PCS built with <c>new ReplayEchoRuleEngine(fingerprints: new[] { "stub-2" })</c> or
-/// <c>new ReplayEchoRuleEngine(evaluationModel: "weekly-timeline-v2")</c> is the refinement's
+/// marker it was constructed with (defaults <c>["stub"]</c> and <c>weekly-timeline-v2</c>, the live
+/// engine's marker since S147 / TASK-14708). A replay
+/// PCS built with <c>new ReplayEchoRuleEngine(fingerprints: new[] { "stub-2" })</c> answers differently
+/// at replay time; so does a RECORDING engine built with
+/// <c>new ReplayEchoRuleEngine(evaluationModel: "weekly-timeline-v1")</c> (a manifest recorded under the
+/// pre-S147 marker, replayed under today's engine) — the refinement's
 /// "synthetic config" (rev 3.4 :662): the stored record is never edited, the engine just answers
 /// differently at replay time.
 /// </para>
@@ -63,7 +66,7 @@ internal sealed class ReplayEchoRuleEngine
 
     public ReplayEchoRuleEngine(
         IReadOnlyList<string>? fingerprints = null,
-        string evaluationModel = "weekly-timeline-v1")
+        string evaluationModel = "weekly-timeline-v2") // S147 T3 (QUAL-231): v1 -> v2, today's marker
     {
         _fingerprints = fingerprints ?? new[] { "stub" };
         _evaluationModel = evaluationModel;

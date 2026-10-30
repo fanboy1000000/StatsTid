@@ -164,7 +164,7 @@ internal sealed class FlexLedgerStubEngine
                 excessForPayout = config.Payout ?? 0m,
             },
             configFingerprints = new[] { "stub" },
-            evaluationModel = "weekly-timeline-v1",
+            evaluationModel = "weekly-timeline-v2", // S147 T3 (QUAL-231): v1 -> v2, the stub stands for the live engine, whose marker moved
         };
         return new HttpResponseMessage(HttpStatusCode.OK)
         {

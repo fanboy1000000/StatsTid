@@ -370,8 +370,10 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
 
     /// <summary>
     /// <b>RP8.</b> As RP7 for the evaluation-model marker: the replay PCS's engine answers
-    /// <c>weekly-timeline-v2</c> against the recorded <c>weekly-timeline-v1</c>. Replay must be
-    /// refused with <c>replay-evaluation-model-changed</c>.
+    /// <c>weekly-timeline-v2</c> (today's marker) against the recorded <c>weekly-timeline-v1</c> (a manifest
+    /// recorded before S147 / TASK-14708 moved the marker). Replay must be
+    /// refused with <c>replay-evaluation-model-changed</c>. S147 T3 (QUAL-231), kind R (a regression pin, re-pinned):
+    /// before S147 the "changed" marker was a made-up v2; it is now the REAL pair, the v1 recording refused under v2.
     ///
     /// <para><b>Expected, derived from the spec.</b> A7 table, "Evaluation-model marker … Must match:
     /// <c>replay-evaluation-model-changed</c>". The fingerprints are left equal, so only the marker
@@ -383,8 +385,9 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
     public async Task Replay_EvaluationModelChanged_RefusesReplayEvaluationModelChanged()
     {
         var approval = new FakeApprovalReader(); // S145 R26
-        var pcs = Pcs(new ReplayEchoRuleEngine(), approval);
-        var replayPcs = Pcs(new ReplayEchoRuleEngine(evaluationModel: "weekly-timeline-v2"), approval);
+        // S147 T3 (QUAL-231): the RECORDING engine answers the old v1 marker; the replay engine is today's (default v2).
+        var pcs = Pcs(new ReplayEchoRuleEngine(evaluationModel: "weekly-timeline-v1"), approval);
+        var replayPcs = Pcs(new ReplayEchoRuleEngine(), approval);
 
         var run = await CalculateSeptemberAsync(pcs);
 

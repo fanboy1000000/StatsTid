@@ -202,11 +202,12 @@ public class AbsenceRuleTests
     }
 
     [Theory]
+    [InlineData(AbsenceTypes.SickDay)] // S147 T3 (QUAL-231): a paid sick day is credited (Statens arbejdstidsaftale § 7 nr. 2); new row
     [InlineData("VACATION")]
     [InlineData("CARE_DAY")]
-    [InlineData("CHILD_SICK_1")]
-    [InlineData("CHILD_SICK_2")]
-    [InlineData("CHILD_SICK_3")]
+    [InlineData(AbsenceTypes.ChildSick1)] // S147 T3 (QUAL-231): "CHILD_SICK_1" -> the stored spelling "CHILD_SICK_DAY"
+    [InlineData(AbsenceTypes.ChildSick2)] // S147 T3 (QUAL-231): "CHILD_SICK_2" -> "CHILD_SICK_DAY_2"
+    [InlineData(AbsenceTypes.ChildSick3)] // S147 T3 (QUAL-231): "CHILD_SICK_3" -> "CHILD_SICK_DAY_3"
     [InlineData("PARENTAL_LEAVE")]
     [InlineData("SENIOR_DAY")]
     [InlineData("SPECIAL_HOLIDAY_ALLOWANCE")]

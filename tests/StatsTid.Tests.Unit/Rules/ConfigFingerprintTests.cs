@@ -254,11 +254,17 @@ public sealed class ConfigFingerprintTests
     }
 
     [Fact]
-    public void Timeline_EvaluationModel_IsWeeklyTimelineV1()
+    public void Timeline_EvaluationModel_IsWeeklyTimelineV2()
     {
         // The marker a replay must match (`replay-evaluation-model-changed`, refinement A7). Changing
         // the arithmetic means bumping this string on purpose; changing the string by accident would
         // make every stored manifest read as "arithmetic changed".
-        Assert.Equal("weekly-timeline-v1", WeeklyTimelineCore.EvaluationModel);
+        //
+        // S147 T3 (QUAL-231): v1 -> v2 (test renamed from ..._IsWeeklyTimelineV1). Kind R (a regression pin, re-pinned).
+        // Why v2: a stored SICK_DAY and the stored child's-sick-day codes are now credited toward the norm
+        // (Statens arbejdstidsaftale § 7 nr. 2; AbsenceClassification), so the same hours give a different
+        // flex closing than under v1, and a manifest recorded under v1 must be refused on replay, never
+        // silently re-read under the new rule (ADR-016 D10).
+        Assert.Equal("weekly-timeline-v2", WeeklyTimelineCore.EvaluationModel); // S147 T3 (QUAL-231): v1 -> v2
     }
 }

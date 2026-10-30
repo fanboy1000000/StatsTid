@@ -544,7 +544,7 @@ public sealed class PeriodCalculationService
 
         /// <summary>
         /// The evaluation-model marker the Rule Engine returned for the timeline call (for example
-        /// <c>weekly-timeline-v1</c>). <c>null</c> when no call was made or the call failed.
+        /// <c>weekly-timeline-v2</c>). <c>null</c> when no call was made or the call failed.
         /// </summary>
         public string? EvaluationModel { get; init; }
 

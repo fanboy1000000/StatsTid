@@ -373,7 +373,7 @@ internal static class TestFixtures
     /// per-plan lane's one call. A COMPLETE answer, because PCS refuses an incomplete one as a failed
     /// call: exactly the three results (<c>OVERTIME_CALC</c>, <c>NORM_CHECK_37H</c>, <c>FLEX_BALANCE</c>),
     /// the full flex block with delta 0, <c>configFingerprints: ["stub"]</c> and
-    /// <c>evaluationModel: "weekly-timeline-v1"</c>. The norm result carries a <c>NORMAL_HOURS</c> line per
+    /// <c>evaluationModel: "weekly-timeline-v2"</c>. The norm result carries a <c>NORMAL_HOURS</c> line per
     /// entry dated INSIDE the month (<c>periodStart</c>..<c>periodEnd</c>) — the request also carries
     /// the opening week's context days from the previous month, which the previous month settles, so no
     /// line is emitted for them (mirrors what the old per-segment default produced).
@@ -437,7 +437,7 @@ internal static class TestFixtures
                 excessForPayout = 0m,
             },
             configFingerprints = new[] { "stub" },
-            evaluationModel = "weekly-timeline-v1",
+            evaluationModel = "weekly-timeline-v2", // S147 T3 (QUAL-231): v1 -> v2, the stub stands for the live engine, whose marker moved
         };
         var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         return new HttpResponseMessage(HttpStatusCode.OK)

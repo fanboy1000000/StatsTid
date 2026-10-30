@@ -92,7 +92,7 @@ public sealed class SplitMonthPcsTests
                 absenceNormCredits = 0m, effectiveNorm = 0m, excessForPayout = 0m,
             },
             configFingerprints = new[] { "stub" },
-            evaluationModel = "weekly-timeline-v1",
+            evaluationModel = "weekly-timeline-v2", // S147 T3 (QUAL-231): v1 -> v2, the stub stands for the live engine, whose marker moved
         };
         return Json(payload);
     }

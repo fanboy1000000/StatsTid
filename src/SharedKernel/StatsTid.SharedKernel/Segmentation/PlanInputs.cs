@@ -78,7 +78,7 @@ namespace StatsTid.SharedKernel.Segmentation;
 /// </param>
 /// <param name="EvaluationModel">
 /// The evaluation-model marker the Rule Engine returned (for example
-/// <c>weekly-timeline-v1</c>). A replay is refused when it no longer matches.
+/// <c>weekly-timeline-v2</c>). A replay is refused when it no longer matches.
 /// </param>
 public sealed record PlanInputs(
     [property: JsonRequired] IReadOnlyList<FrozenPiece> Pieces,

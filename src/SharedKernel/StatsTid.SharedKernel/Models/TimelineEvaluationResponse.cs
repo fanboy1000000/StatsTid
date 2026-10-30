@@ -11,7 +11,7 @@ namespace StatsTid.SharedKernel.Models;
 /// <c>FLEX_BALANCE</c> (the <c>FLEX_PAYOUT</c> line, or none). <see cref="Flex"/> carries the
 /// flex balances. <see cref="ConfigFingerprints"/> holds the fingerprint of the agreement
 /// configs the engine resolved for this call (one entry per call) and
-/// <see cref="EvaluationModel"/> names the arithmetic version (<c>weekly-timeline-v1</c>):
+/// <see cref="EvaluationModel"/> names the arithmetic version (<c>weekly-timeline-v2</c> since S147):
 /// payroll records both so a replay can refuse a changed config or a changed engine by name.
 /// </para>
 /// </summary>

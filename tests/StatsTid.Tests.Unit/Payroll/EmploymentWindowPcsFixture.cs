@@ -398,7 +398,7 @@ internal static class EmploymentWindowPcsFixture
         /// <summary>
         /// S145 F1: a COMPLETE timeline answer: exactly the three results (overtime, norm, flex) with
         /// no line items (this harness has no wage-type mappings), the full flex block with delta 0,
-        /// <c>configFingerprints: ["stub"]</c> and <c>evaluationModel: "weekly-timeline-v1"</c>. PCS
+        /// <c>configFingerprints: ["stub"]</c> and <c>evaluationModel: "weekly-timeline-v2"</c>. PCS
         /// refuses anything less as a failed call.
         /// </summary>
         public static HttpResponseMessage TimelineSuccess(
@@ -429,7 +429,7 @@ internal static class EmploymentWindowPcsFixture
                     excessForPayout = 0m,
                 },
                 configFingerprints = emptyFingerprints ? Array.Empty<string>() : new[] { "stub" },
-                evaluationModel = "weekly-timeline-v1",
+                evaluationModel = "weekly-timeline-v2", // S147 T3 (QUAL-231): v1 -> v2, the stub stands for the live engine, whose marker moved
             });
         }
 
