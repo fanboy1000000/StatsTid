@@ -44,12 +44,13 @@ public class AbsenceClassificationTests
             .ToArray();
 
     /// <summary>
-    /// AC-231-2 (kind N: names <c>AbsenceClassification</c>, which S147 creates). Reflection over <see cref="AbsenceTypes"/>
-    /// yields exactly the accepted set: eleven stored spellings, no more, no fewer, none repeated.
+    /// AC-231-2 (kind F: this fact names only <see cref="AbsenceTypes"/>, which existed before S147). Reflection over
+    /// <see cref="AbsenceTypes"/> yields exactly the accepted set: eleven stored spellings, no more, no fewer, none repeated.
     ///
-    /// <para><b>Red conditions (N; proven by mutation M-7 at the gate).</b> This fact itself does not name the classification
-    /// member M-7 breaks, so it is the vocabulary's own pin: it fails if a code is added, dropped or respelled (the old
-    /// <c>CHILD_SICK_1</c> spelling coming back, or <c>SICK_DAY</c> leaving).</para>
+    /// <para><b>Red condition (F, against <c>991a5890</c>).</b> The vocabulary there had ten codes, spelled
+    /// <c>CHILD_SICK_1/2/3</c> and without <c>SICK_DAY</c> (<c>AbsenceEntry.cs:15-24</c>), so both assertions fail. M-7 does not
+    /// redden this fact (it drops a classification entry, not a vocabulary code). This is the vocabulary's own pin: it
+    /// fails if a code is added, dropped or respelled. (Relabelled N → F by the Orchestrator on Codex 5a NOTE 1.)</para>
     /// </summary>
     [Fact]
     public void AbsenceTypes_ReflectionEqualsTheAcceptedStoredVocabulary()

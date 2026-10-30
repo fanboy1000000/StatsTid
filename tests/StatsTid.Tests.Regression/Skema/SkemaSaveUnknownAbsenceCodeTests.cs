@@ -19,7 +19,8 @@ namespace StatsTid.Tests.Regression.Skema;
 /// <b>The story, in plain language.</b> The save stores whatever absence code the request carries, payroll then passes
 /// it on, and a code the rule engine does not know counts as neither credit nor reduction. That silent drift is exactly
 /// what QUAL-231 was (a stored code the engine's list did not spell). So a code outside the vocabulary is now refused
-/// with <b>422</b> and a Danish message naming the CODE, before anything is looked up, locked or written. The body names
+/// with <b>422</b> and a Danish message naming the CODE, before any absence lookup, lock or write (the save's agreement and
+/// approval reads come first, <c>SkemaEndpoints.cs</c> ~:731, ~:740; Codex 5a NOTE 2). The body names
 /// no date (ADR-040 D7: the gate is about the code, not the day).
 /// </para>
 ///
