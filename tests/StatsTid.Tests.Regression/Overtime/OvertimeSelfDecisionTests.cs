@@ -117,6 +117,30 @@ public sealed class OvertimeSelfDecisionFixture : IAsyncLifetime
         return (long)(await cmd.ExecuteScalarAsync())!;
     }
 
+    /// <summary>
+    /// Counts the HTTP-journal rows (<c>audit_log</c>) one actor has with a given status and result.
+    /// Constant SQL with parameters (no interpolation, so CA2100 stays quiet). The journal middleware
+    /// appends AFTER the endpoint returns; the bounded poll (up to 5 s) is a belt-and-braces guard: it
+    /// returns as soon as the count reaches <paramref name="atLeast"/>, else the last count seen.
+    /// </summary>
+    public async Task<long> CountAuditLogAsync(string actorId, int httpStatus, string result, long atLeast = 0)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (true)
+        {
+            await using var conn = new NpgsqlConnection(ConnectionString);
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM audit_log WHERE actor_id = @a AND http_status = @s AND result = @r", conn);
+            cmd.Parameters.AddWithValue("a", actorId);
+            cmd.Parameters.AddWithValue("s", httpStatus);
+            cmd.Parameters.AddWithValue("r", result);
+            var n = (long)(await cmd.ExecuteScalarAsync())!;
+            if (n >= atLeast || DateTime.UtcNow >= deadline) return n;
+            await Task.Delay(50);
+        }
+    }
+
     public async Task<(string Status, string? ApprovedBy)> ReadPreApprovalAsync(Guid id)
     {
         await using var conn = new NpgsqlConnection(ConnectionString);
@@ -271,16 +295,21 @@ public sealed class OvertimeSelfDecisionTests : IClassFixture<OvertimeSelfDecisi
     /// <b>AC-056-2 (F) — the guard fires BEFORE the status check.</b> A leader approving, and rejecting, a
     /// pre-approval of their own that is NOT pending (APPROVED / REJECTED) gets 403, not the state-leaking
     /// 400 "already …". The denial writes a WARNING under the self-guard log category naming the actor and
-    /// the row, and writes NO <c>audit_log</c>, <c>audit_projection</c> or <c>outbox_events</c> row (the
-    /// counts are taken immediately around the denied calls; a successful decision by the other leader is
-    /// the positive control that proves the audit-projection counter can move).
-    /// <para><b>Red conditions:</b> before TASK-14705 a self approve/reject on a non-PENDING row answered
-    /// 400 ("Pre-approval is already …", the status check ran first) — the 403 assertions fail today, and
-    /// no WARNING under the category exists. (The refinement's AC-056-2 words it "403, not 409"; the route
-    /// answers 400 for a non-PENDING row today, so the pin is 403, not 400 — TASK-14705's brief, BC-P5.)</para>
+    /// the row. It writes no <c>audit_projection</c> row, no <c>outbox_events</c> row and no event (the
+    /// "nothing was decided" proof; a successful decision by the other leader is the positive control that
+    /// proves the audit-projection counter can move). The HTTP journal (<c>audit_log</c>, one row per
+    /// request via <c>AuditLoggingMiddleware</c>, 403s included) is a different thing: it records each
+    /// refused request, so the two refusals add exactly two rows for the refusing actor, each
+    /// <c>http_status = 403</c> and <c>result = 'failure'</c> (counted per actor, around the two calls).
+    /// <para><b>Red conditions</b> (against the pre-TASK-14705 baseline <c>9de1ae79</c>): there a self
+    /// approve/reject on a non-PENDING row answered 400 ("Pre-approval is already …", the status check ran
+    /// first) — the 403 assertions fail, the journal rows carry 400 so the +2 count of 403 failures does
+    /// not hold, and no WARNING under the category exists. (The refinement's AC-056-2 words it "403, not
+    /// 409"; the route answered 400 for a non-PENDING row, so the pin is 403, not 400 — TASK-14705's brief,
+    /// BC-P5.) Kind F; the AC's "no audit row" is restated here as "no audit_projection / outbox / event row".</para>
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task SelfDecision_OnNonPendingRow_Is403Not400_LogsWarning_WritesNoAuditRow()
+    public async Task SelfDecision_OnNonPendingRow_Is403Not400_LogsWarning_JournalsTwoRefusals_WritesNoDecisionTrail()
     {
         using var self = _fx.LeaderClient(OvertimeSelfDecisionFixture.Self);
         using var other = _fx.LeaderClient(OvertimeSelfDecisionFixture.Other);
@@ -300,7 +329,7 @@ public sealed class OvertimeSelfDecisionTests : IClassFixture<OvertimeSelfDecisi
         using (var ok = await PutAsync(other, $"/api/overtime/pre-approval/{rejectedRow}/reject", """{ "reason": "afvist" }"""))
             Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
 
-        var auditLogBefore = await _fx.CountAsync("audit_log");
+        var journalBefore = await _fx.CountAuditLogAsync(OvertimeSelfDecisionFixture.Self, 403, "failure");
         var projBefore = await _fx.CountAsync("audit_projection");
         var outboxBefore = await _fx.CountAsync("outbox_events");
 
@@ -309,7 +338,8 @@ public sealed class OvertimeSelfDecisionTests : IClassFixture<OvertimeSelfDecisi
         using (var denied = await PutAsync(self, $"/api/overtime/pre-approval/{rejectedRow}/reject", """{ "reason": "mig selv" }"""))
             await AssertDeniedAsync(denied, PreApprovalReason);
 
-        Assert.Equal(auditLogBefore, await _fx.CountAsync("audit_log"));
+        // The HTTP journal records the two refused requests: exactly two 403 failures for the refusing actor.
+        Assert.Equal(journalBefore + 2, await _fx.CountAuditLogAsync(OvertimeSelfDecisionFixture.Self, 403, "failure", journalBefore + 2));
         Assert.Equal(projBefore, await _fx.CountAsync("audit_projection"));
         Assert.Equal(outboxBefore, await _fx.CountAsync("outbox_events"));
         Assert.Equal("APPROVED", (await _fx.ReadPreApprovalAsync(approvedRow)).Status);
@@ -400,8 +430,11 @@ public sealed class OvertimeSelfDecisionTests : IClassFixture<OvertimeSelfDecisi
 /// <see cref="IsSelf_NullOrEmptyActor_NeverMatches"/> red; M2 "compare OrdinalIgnoreCase" turns
 /// <see cref="IsSelf_IsOrdinal_CaseDiffers_IsNotSelf"/> red; M3 "return false" turns
 /// <see cref="IsSelf_SameId_IsSelf"/> and the period-overload fact red (each run at the wave gate: M1 → 1 failed, M2 → 1 failed, M3 → 2 failed).
-/// <see cref="IsSelf_DifferentId_IsNotSelf"/> is the boundary partner of the same-id fact (a "return true"
-/// mutation would turn it red; not run).</para>
+/// <see cref="IsSelf_DifferentId_IsNotSelf"/> is the boundary partner of the same-id fact. M4 "IsSelf
+/// returns true" (the string overload's body replaced by <c>=&gt; true</c>, run in a detached worktree at
+/// fix-up 1): 4 failed, 1 passed — <see cref="IsSelf_DifferentId_IsNotSelf"/> failed with
+/// "Assert.False() Failure / Expected: False / Actual: True" (so did the null/empty, ordinal and period
+/// facts; only the same-id fact stayed green, as it should).</para>
 /// </summary>
 public sealed class ApprovalSelfGuardIsSelfTests
 {
