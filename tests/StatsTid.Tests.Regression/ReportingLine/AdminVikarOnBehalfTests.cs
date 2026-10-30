@@ -917,24 +917,31 @@ public sealed class AdminVikarOnBehalfTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// TEST 3 — ACTIVE→INACTIVE RACE: the revoke must NOT 500 when the subject is deactivated such
-    /// that the current-root derive would throw — it falls back to persisted-only and succeeds. This
-    /// is the self-DELETE arm (the absent approver = the actor), with Mgr deactivated before the call.
-    /// On the new code the defensive try/catch in AcquireRevokeTreeLocksAsync swallows the
-    /// InvalidOperationException; a NAIVE unconditional-derive variant would surface a 500.
+    /// TEST 3 — S147 OQ-2 / P-1 (census B15): re-decided. Kind F; red on <c>991a5890</c>: 200, the row
+    /// closed through the persisted-only fallback. This was the ACTIVE→INACTIVE RACE self-DELETE arm
+    /// (the absent approver = the actor, Mgr deactivated before the call), which used to answer a clean
+    /// 200 via the persisted-only fallback in AcquireRevokeTreeLocksAsync. TASK-14703's inline guard now
+    /// refuses a departed manager clearing their OWN stand-in BEFORE the transaction, so the self arm
+    /// answers 403 (<see cref="DepartedSubject.DenyReason"/>) and the stand-in stays active. The fallback's
+    /// "does not 500 for a deactivated subject" purpose lives on the unguarded admin on-behalf path:
+    /// <see cref="AdminDelete_InactiveManager_RevokeSafe_NoCurrentRootDerive_StillSucceeds"/> (TEST 1)
+    /// and <see cref="AdminDelete_RevokeSafe_WhenManagerAndVikarInactive_StillSucceeds"/>.
+    /// This is now the only pin of a deactivated self with NO end date on this route (the S147 departed-self
+    /// facts seed end-dated subjects).
     /// </summary>
     [Fact]
-    public async Task SelfDelete_SubjectDeactivated_DoesNotError_FallsBackToPersistedOnly()
+    public async Task SelfDelete_SubjectDeactivated_Refused403_StandInStaysActive()
     {
         await PlantVikarAsync(Mgr, Vik, Today().AddDays(30), TreeRootSty02);
-        await DeactivateUserAsync(Mgr); // derive of Mgr's current root will throw — must be swallowed.
+        await DeactivateUserAsync(Mgr);
 
         var client = LeaderClient(Mgr, "STY02");
         var rsp = await client.DeleteAsync("/api/reporting-lines/delegate");
 
-        // NOT a 500 — a clean 200, persisted-only.
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
-        Assert.Null(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));
+        // S147 OQ-2 / P-1 (census B15): re-decided — a departed self's own stand-in clear is refused (was 200).
+        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
+        Assert.Contains(DepartedSubject.DenyReason, await rsp.Content.ReadAsStringAsync());
+        Assert.NotNull(await _vikarRepo.GetActiveByApproverAnyDateAsync(Mgr));
     }
 
     /// <summary>

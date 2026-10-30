@@ -47,7 +47,7 @@ public sealed class SendCommandMatrixFixture : IAsyncLifetime
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
         ConnectionString = _harness.ConnectionString;
         Db = new DbConnectionFactory(ConnectionString);
-        Factory = new StatsTidWebApplicationFactory(ConnectionString);
+        Factory = new StatsTidWebApplicationFactory(ConnectionString, withoutLeaverJob: true); // S147 TASK-14719 fix-up 1: no leaver-flip job (see the factory ctor)
         _ = Factory.CreateClient(); // boot seeders (baseline org tree; init.sql already seeded STY01/02)
         Outbox = new PostgresEventStore(Db, new OutboxServiceContext("backend-api"));
         TimeEntryRepo = new TimeEntryProjectionRepository(Db);
