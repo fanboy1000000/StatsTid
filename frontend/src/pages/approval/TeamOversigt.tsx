@@ -8,6 +8,7 @@ import { ManagerSkemaGrid } from './ManagerSkemaGrid'
 import { useTeamOverview, type TeamOverviewRow } from '../../hooks/useTeamOverview'
 import { useAllocationBreakdown } from '../../hooks/useAllocationBreakdown'
 import { useCompliance } from '../../hooks/useCompliance'
+import { restNotCheckedNotice } from '../../components/ComplianceWarnings'
 import styles from './TeamOversigt.module.css'
 
 // ── Status mapping (the 4 display statuses) ──────────────────────────────────
@@ -200,6 +201,8 @@ function TeamRowDetail({
   const complianceMessages = compliance
     ? [...(compliance.warnings ?? []), ...(compliance.violations ?? [])].map(v => v.message)
     : []
+  // S147 / TASK-14707 — one month-level line for days the rest check could not measure.
+  const restNotice = restNotCheckedNotice(compliance)
 
   return (
     <td colSpan={9} className={styles.detailCell} id={id}>
@@ -323,6 +326,11 @@ function TeamRowDetail({
               <strong>Advarsel:</strong> {msg}
             </div>
           ))
+        )}
+        {!compError && !compLoading && restNotice && (
+          <div className={`${styles.detailAlert} ${styles.detailAlertWarn}`} role="status">
+            {restNotice}
+          </div>
         )}
         {/* S127 / TASK-12713 (owner ruling R7) — "Begrundelse for afvisning" USED to render here.
             It was production-dead: R1 withholds `normRegistered` for a REJECTED month and the page

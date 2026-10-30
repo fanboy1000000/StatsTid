@@ -42,6 +42,19 @@ const VIOLATION_TYPE_LABELS: Record<number, string> = {
   [COMPLIANCE_VIOLATION_TYPE.OVERTIME_UNAPPROVED]: 'Merarbejde uden forhåndsgodkendelse',
 }
 
+/**
+ * S147 / TASK-14707 (QUAL-234 interim) — the one month-level notice for days the
+ * 11-hour rest check could not measure (Skema days carry hours but no clock times).
+ * Returns null when the list is empty or absent. Shared with Teamoversigt so both
+ * screens say exactly the same thing. Retires when the rest check reads Skema's
+ * intervals (S148 stage 0).
+ */
+export function restNotCheckedNotice(result: ComplianceCheckResult | null | undefined): string | null {
+  const n = result?.restNotCheckedDays?.length ?? 0
+  if (n === 0) return null
+  return `Hviletid ikke kontrolleret for ${n} ${n === 1 ? 'dag' : 'dage'}`
+}
+
 function formatDate(dateStr: string): string {
   try {
     return new Date(dateStr).toLocaleDateString('da-DK')
@@ -72,7 +85,8 @@ export function ComplianceWarnings({ result, loading, hideTitle = false }: Compl
   if (loading || !result) return null
 
   const hasIssues = result.violations.length > 0 || result.warnings.length > 0
-  if (!hasIssues) return null
+  const notCheckedNotice = restNotCheckedNotice(result)
+  if (!hasIssues && !notCheckedNotice) return null
 
   return (
     <div className={styles.container}>
@@ -89,6 +103,13 @@ export function ComplianceWarnings({ result, loading, hideTitle = false }: Compl
           {result.warnings.map((w, i) => (
             <ViolationItem key={`w-${i}`} item={w} />
           ))}
+        </div>
+      )}
+      {notCheckedNotice && (
+        <div className={styles.section}>
+          <div className={`${styles.item} ${styles.warning}`} role="status">
+            <p className={styles.message}>{notCheckedNotice}</p>
+          </div>
         </div>
       )}
     </div>

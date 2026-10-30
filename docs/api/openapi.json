@@ -13168,6 +13168,7 @@
       "StatsTid.SharedKernel.Models.ComplianceCheckResult": {
         "required": [
           "employeeId",
+          "restNotCheckedDays",
           "ruleId",
           "success",
           "violations",
@@ -13194,6 +13195,13 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/StatsTid.SharedKernel.Models.ComplianceViolation"
+            }
+          },
+          "restNotCheckedDays": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date"
             }
           }
         },

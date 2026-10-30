@@ -111,6 +111,24 @@ Defined in `src/Infrastructure/StatsTid.Infrastructure/Security/OrgScopeValidato
 
 Service-layer enforcement called explicitly from API endpoints. Validates that the actor's `RoleScope` entries grant access to the target employee's organization unit. **S93/ADR-035 slice 2:** access is now **exact Organisation-set membership** — `CoversOrg` is GLOBAL + exact-path-equality (the `ORG_AND_DESCENDANTS` prefix branch is removed), and `GetAccessibleOrgsAsync` returns the assigned set with NO `GetDescendantsAsync` subtree expansion. The materialized path (`/MIN01/STY02/`) + `text_pattern_ops` index + `GetDescendantsAsync` are now **dormant for authority** (formal retirement with the tree machinery in S95). References: [ADR-035](knowledge-base/decisions/ADR-035-flat-authority-model.md), [ADR-008](knowledge-base/decisions/ADR-008-materialized-path-org-hierarchy.md).
 
+**The departed-self clause (S147, QUAL-230 T5a; owner OQ-2 and Q-C = (b)).** A person who has left cannot act on their own record with a login that is still valid, whatever their role. "Left" means deactivated, or past the last working day in Copenhagen; the last day itself still counts as employed. The rule is one predicate, `DepartedSubject` (`src/SharedKernel/StatsTid.SharedKernel/Security/DepartedSubject.cs`):
+- `IsDeparted` tests whether the person has left.
+- `IsSelf` compares ids Ordinal; an empty or null id never matches.
+- `DenyReason` holds no date and no id (ADR-040 D7).
+
+**Where the predicate runs:**
+- In the identity arm of both validator overloads (`OrgScopeValidator.cs:115`, `:274`). On the leader-inclusive overload it runs *before* the HR gate, so an HR-tier leaver gets this reason and not the HR one. The validator reads the date from the injected `TimeProvider` (`CopenhagenBusinessDate.Today`).
+- Through that check it covers the 32 write routes that use the shared check, in three hosts.
+- Thirteen inline guards cover the write routes the validator does not reach, plus a derived guard on `/remove`. The S147 census counts 84 write routes: 32 shared-check, 19 inline, 33 not keyed on the actor.
+
+**Scope and consequences:**
+- Acting on *other* people stays governed by the existing rules (SEC-003's accepted residual).
+- Reads through the shared validator are refused for a departed self too. This is intended, and so are the refusals of Orchestrator `/execute` and Payroll `calculate-and-export` for a departed self; neither is a regression.
+- An actor whose only role is Employee is answered by the own-data branch first, so the clause is not reached; TASK-14710's floor covers that case.
+- The Payroll and Orchestrator hosts register `TimeProvider.System` from S147. Their test hosts must override it with a fixed provider (PAT-008).
+
+**When adding a write route keyed on the caller's own id:** route it through the shared validator, or add the inline guard before the route's first write.
+
 ### The mixed-role scope-floor invariant (S76 / B1)
 
 **CRITICAL invariant:** an ADMIN scope-admission check must floor *per scope* by role — admission may only be granted by a scope whose `Role` meets the endpoint's policy floor. The original `OrgScopeValidator` methods (`ValidateOrgAccessAsync`, `ValidateEmployeeAccessAsync`, `GetAccessibleOrgsAsync`, `ValidateEmployeeAccessIncludingTerminatedAsync`) and `HasGlobalScope` admitted via ANY covering scope **regardless of that scope's role**. A mixed-role actor (e.g. `LocalAdmin@STY-A` who also holds a non-admin scope in STY-B) therefore passed an admin gate for STY-B via the *non-admin* scope → a cross-styrelse data/write leak.

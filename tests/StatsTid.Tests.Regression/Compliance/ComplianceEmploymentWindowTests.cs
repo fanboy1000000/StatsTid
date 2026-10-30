@@ -143,7 +143,8 @@ public sealed class ComplianceEmploymentWindowTests : IAsyncLifetime
         Assert.Empty(body.GetProperty("warnings").EnumerateArray());
         // The exact key set is unchanged — no new wire field (e.g. no employment date) leaked in.
         Assert.Equal(
-            new HashSet<string> { "ruleId", "employeeId", "success", "violations", "warnings" },
+            // S147 T7 (QUAL-234 interim): the served member `restNotCheckedDays` joins the key set (empty array here).
+            new HashSet<string> { "ruleId", "employeeId", "success", "violations", "warnings", "restNotCheckedDays" },
             body.EnumerateObject().Select(p => p.Name).ToHashSet());
 
         Assert.Empty(_profileRecorder.AsOfDates);

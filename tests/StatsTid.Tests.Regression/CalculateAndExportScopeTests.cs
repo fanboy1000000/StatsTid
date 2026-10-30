@@ -128,7 +128,11 @@ public sealed class CalculateAndExportScopeTests : IAsyncLifetime
         var factory = new DbConnectionFactory(_container.GetConnectionString());
         var orgs = new OrganizationRepository(factory);
         var users = new UserRepository(factory);
-        _validator = new OrgScopeValidator(orgs, users, NullLogger<OrgScopeValidator>.Instance);
+        _validator = new OrgScopeValidator(
+            orgs, users,
+            // S147 R-30: fixed provider; the clause is pinned in DepartedSelfValidatorTests
+            new StatsTid.Tests.Regression.Hosting.FixedTimeProvider(new DateOnly(2026, 3, 16)),
+            NullLogger<OrgScopeValidator>.Instance);
     }
 
     public async Task DisposeAsync()

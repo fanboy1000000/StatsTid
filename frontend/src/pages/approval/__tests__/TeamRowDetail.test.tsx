@@ -162,6 +162,7 @@ const cleanCompliance = {
   success: true,
   violations: [],
   warnings: [],
+  restNotCheckedDays: [], // S147 / TASK-14707: required since the regen
 }
 
 interface Routes {
@@ -441,6 +442,35 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     renderPage()
     await expandFirstRow(user)
     await waitFor(() => expect(screen.getByText(/For kort hviletid den 10\./)).toBeInTheDocument())
+  })
+
+  // S147 / TASK-14707 (QUAL-234 interim) — AC-234i-1, the Teamoversigt half. The N=2 fact is
+  // kind F (the panel never reads the member on master's code). Red conditions: it fails at
+  // getByText('Hviletid ikke kontrolleret for 2 dage') inside waitFor (no such line rendered).
+  // Supporting mutation: `restNotCheckedNotice` always returning null fails exactly this fact.
+  // The empty-list pin is kind B (boundary pin — holds today), anchored on the compliance read
+  // having landed (the "Advarsel:" line) so it cannot pass vacuously.
+  it('S147: two not-checked days → one "Hviletid ikke kontrolleret for 2 dage" line in the panel', async () => {
+    const user = userEvent.setup()
+    mockRoutes({ compliance: { ...cleanCompliance, restNotCheckedDays: ['2026-03-10', '2026-03-11'] } })
+    renderPage()
+    await expandFirstRow(user)
+    await waitFor(() => expect(screen.getByText('Hviletid ikke kontrolleret for 2 dage')).toBeInTheDocument())
+  })
+
+  it('S147 boundary pin — holds today: an empty list shows no notice (compliance read landed)', async () => {
+    const user = userEvent.setup()
+    mockRoutes({
+      compliance: {
+        ...cleanCompliance,
+        warnings: [{ violationType: 0, date: '2026-03-10', actualValue: 9, thresholdValue: 11, severity: 0, isVoluntaryExempt: false, message: 'For kort hviletid den 10.' }],
+        restNotCheckedDays: [],
+      },
+    })
+    renderPage()
+    await expandFirstRow(user)
+    await waitFor(() => expect(screen.getByText(/Advarsel:/)).toBeInTheDocument())
+    expect(screen.queryByText(/Hviletid ikke kontrolleret/)).not.toBeInTheDocument()
   })
 
   it('a failed compliance fetch → soft "Advarsler kunne ikke hentes"; the rest still renders', async () => {

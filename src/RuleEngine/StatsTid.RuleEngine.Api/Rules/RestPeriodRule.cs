@@ -77,13 +77,19 @@ public static class RestPeriodRule
         // 4. 48h/week ceiling (works for all entries) — period-filtered per-day rows.
         CheckWeeklyMaxHours(periodEntries, periodStart, periodEnd, config, violations, warnings);
 
+        // 5. S147 / QUAL-234 interim (OQ-4 = (b)) — name the days checks 2 and 3 could not analyse
+        //    (hours registered, no clock times), so the result never looks compliant for a day
+        //    nobody checked. Reported only; it adds no violation and does not change Success.
+        var restNotCheckedDays = FindRestNotCheckedDays(periodEntries);
+
         return new ComplianceCheckResult
         {
             RuleId = RuleId,
             EmployeeId = profile.EmployeeId,
             Success = violations.Count == 0,
             Violations = violations,
-            Warnings = warnings
+            Warnings = warnings,
+            RestNotCheckedDays = restNotCheckedDays
         };
     }
 
@@ -109,7 +115,9 @@ public static class RestPeriodRule
     /// <summary>
     /// S20 — single-check entry point for daily rest (<see cref="DailyRestRuleId"/>).
     /// Reuses the existing <see cref="CheckDailyRest"/> helper; logic is bit-identical
-    /// to the corresponding branch of <see cref="Evaluate"/>.
+    /// to the corresponding branch of <see cref="Evaluate"/>, including (S147 / QUAL-234
+    /// interim) the days it could not analyse in
+    /// <see cref="ComplianceCheckResult.RestNotCheckedDays"/>.
     /// </summary>
     public static ComplianceCheckResult EvaluateDailyRest(
         EmploymentProfile profile,
@@ -122,7 +130,8 @@ public static class RestPeriodRule
         var warnings = new List<ComplianceViolation>();
         // Raw entries + bounds — stint reconstruction happens before period relevance (BLOCKER-2).
         CheckDailyRest(entries, periodStart, periodEnd, config, violations, warnings);
-        return BuildResult(DailyRestRuleId, profile, violations, warnings);
+        var restNotCheckedDays = FindRestNotCheckedDays(NormalizeEntries(entries, periodStart, periodEnd));
+        return BuildResult(DailyRestRuleId, profile, violations, warnings, restNotCheckedDays);
     }
 
     /// <summary>
@@ -178,15 +187,50 @@ public static class RestPeriodRule
         string ruleId,
         EmploymentProfile profile,
         List<ComplianceViolation> violations,
-        List<ComplianceViolation> warnings) =>
+        List<ComplianceViolation> warnings,
+        IReadOnlyList<DateOnly>? restNotCheckedDays = null) =>
         new()
         {
             RuleId = ruleId,
             EmployeeId = profile.EmployeeId,
             Success = violations.Count == 0,
             Violations = violations,
-            Warnings = warnings
+            Warnings = warnings,
+            RestNotCheckedDays = restNotCheckedDays ?? Array.Empty<DateOnly>()
         };
+
+    /// <summary>
+    /// True when an entry carries both clock times, i.e. it can bound a rest gap. This ONE predicate
+    /// decides both which entries the rest checks analyse (<see cref="ReconstructStints"/>) and which
+    /// days are reported as not analysed (<see cref="FindRestNotCheckedDays"/>), so the two can never
+    /// drift apart.
+    /// </summary>
+    private static bool IsTimed(TimeEntry e) => e.StartTime.HasValue && e.EndTime.HasValue;
+
+    /// <summary>
+    /// S147 / QUAL-234 interim (owner ruling OQ-4 = (b); refinement T7) — the days the rest checks
+    /// could not analyse: each date of <paramref name="periodEntries"/> (already filtered to the
+    /// period) with at least one entry whose hours are above zero and no timed entry
+    /// (<see cref="IsTimed"/>). Distinct dates, ascending.
+    ///
+    /// <para>
+    /// The input is the same per-day view the hours checks read, after the compliance read's
+    /// midnight normalization (ADR-039): a crossing shift's post-midnight half is a timed row on
+    /// its own date, so that date counts as checked. Any activity type counts, as it does for the
+    /// stint reconstruction, and the voluntary-unsocial-hours flag is not consulted: a voluntary day
+    /// without clock times was not analysed either, whatever an analysis would have exempted. A day
+    /// mixing a timed entry with hours-only entries counts as checked —
+    /// the timed entry bounds the day's rest gap, though the untimed hours are not placed on the
+    /// clock; the full fix (decide-track D-2, S148) reads Skema's work intervals and retires this.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyList<DateOnly> FindRestNotCheckedDays(IReadOnlyList<TimeEntry> periodEntries) =>
+        periodEntries
+            .GroupBy(e => e.Date)
+            .Where(day => day.Any(e => e.Hours > 0m) && !day.Any(IsTimed))
+            .Select(day => day.Key)
+            .OrderBy(date => date)
+            .ToList();
 
     /// <summary>
     /// Check 1: Max daily hours. Sum hours per day, flag if exceeding MaxDailyHours.
@@ -220,9 +264,11 @@ public static class RestPeriodRule
 
     /// <summary>
     /// Check 2: Daily rest (11h minimum between the end of one working day and the start of the
-    /// next). Only entries with both StartTime and EndTime can be analyzed. Voluntary unsocial
-    /// hours skip this check (but not 48h ceiling). Derogation-allowed agreements get WARNING
-    /// instead of VIOLATION.
+    /// next). Only entries with both StartTime and EndTime can be analyzed; since S147 (QUAL-234
+    /// interim) the days this leaves unanalysed are reported in
+    /// <see cref="ComplianceCheckResult.RestNotCheckedDays"/> rather than passing silently. Voluntary
+    /// unsocial hours skip this check (but not 48h ceiling). Derogation-allowed agreements get
+    /// WARNING instead of VIOLATION.
     ///
     /// <para>
     /// ADR-039 (S132 TASK-1a + 1b-3) — the gap is computed from ABSOLUTE INSTANTS of reconstructed
@@ -442,8 +488,9 @@ public static class RestPeriodRule
     /// whose <c>EndTime ≤ StartTime</c> crosses midnight — either a RAW crossing entry that reached
     /// the rule un-normalized (the QUAL-001 case), OR the pre-half's <c>00:00</c> end-of-day
     /// sentinel — so its end instant is on the following calendar day. Only timed entries (both
-    /// StartTime and EndTime present) participate; hours-only entries have no clock and cannot bound
-    /// a rest gap (unchanged from the pre-fix checks).
+    /// StartTime and EndTime present, <see cref="IsTimed"/>) participate; hours-only entries have no
+    /// clock and cannot bound a rest gap (unchanged from the pre-fix checks — S147 reports the days
+    /// this leaves out, <see cref="FindRestNotCheckedDays"/>).
     /// </para>
     /// </summary>
     private static List<WorkStint> ReconstructStints(
@@ -454,7 +501,7 @@ public static class RestPeriodRule
 
         foreach (var e in entries)
         {
-            if (!e.StartTime.HasValue || !e.EndTime.HasValue)
+            if (!IsTimed(e))
                 continue;
 
             if (e.SourceStintId is Guid id)

@@ -4,8 +4,10 @@ using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Resilience;
 using StatsTid.Infrastructure.Security;
 using StatsTid.Integrations.Payroll.Services;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Security;
 using StatsTid.SharedKernel.Segmentation;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -179,6 +181,14 @@ builder.Services.AddHttpClient<IRuleClassificationProvider, HttpRuleClassificati
 // uses for its own scope enforcement.
 builder.Services.AddSingleton<OrganizationRepository>();
 builder.Services.AddSingleton<UserRepository>();
+// S147 / TASK-14703 (BC-6, R-30): the validator now takes the server clock (its departed-self clause
+// compares the target's last day of employment with the Copenhagen business day), so this host must
+// register one or the validator cannot be built and the host does not start. TimeProvider.System is the
+// production clock, as in the Backend host; tests override it with a fixed provider (PAT-008). The
+// /recalculate departed-self guard reads the same registration. Every other service in this container
+// whose constructor takes an OPTIONAL TimeProvider already fell back to TimeProvider.System, so they
+// now receive the same clock from the container and behave identically.
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<OrgScopeValidator>();
 
 builder.Services.AddStatsTidJwtAuth(builder.Configuration, builder.Environment);
@@ -608,6 +618,9 @@ app.MapPost("/api/payroll/recalculate", async (
     RecalculateRequest request,
     RetroactiveCorrectionService correctionService,
     IdempotencyGuard idempotencyGuard,
+    // S147 / TASK-14703 (F1): the departed-self guard's deny-only subject read and its clock.
+    UserRepository userRepo,
+    TimeProvider timeProvider,
     ILoggerFactory loggerFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
@@ -632,6 +645,30 @@ app.MapPost("/api/payroll/recalculate", async (
     // before the idempotency lookup (a database read), so nothing is read or written for a malformed period.
     if (RefusePeriodNotAMonth(request.PeriodStart, request.PeriodEnd) is { } periodRefusal)
         return periodRefusal;
+
+    // S147 / TASK-14703 (QUAL-230 T5a; F1 — the Codex cycle-5 BLOCKER): a departed person cannot correct
+    // their OWN pay. This route is GlobalAdminOnly with no org-scope check by design, so the validator's
+    // departed-self clause (R-30) never runs here; the guard is inline. When the correction names the
+    // actor (Ordinal; an id-less token never matches), the actor's record is read terminated-inclusive —
+    // a DENY-ONLY read (inventoried on DepartedSubject): it can only refuse — and a departed self
+    // (deactivated, or past their last day) answers 403 with the date-free reason. It sits after the three
+    // body refusals and BEFORE the idempotency lookup below (P-4), so a refused call reads and writes
+    // nothing else: no baseline, correction event, audit row or idempotency marker, and an already-delivered
+    // token cannot answer "Correction already processed" first. A subject that cannot be read at all is not
+    // refused here; the route's own outcome applies. "Today" is read once, only when the identity matches.
+    var guardActor = httpContext.GetActorContext();
+    if (DepartedSubject.IsSelf(guardActor.ActorId, request.Profile.EmployeeId))
+    {
+        var self = await userRepo.GetByIdIncludingTerminatedAsync(guardActor.ActorId!, ct);
+        if (self is not null && DepartedSubject.IsDeparted(self, CopenhagenBusinessDate.Today(timeProvider)))
+        {
+            loggerFactory.CreateLogger("StatsTid.Integrations.Payroll.Recalculate").LogWarning(
+                "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Route={Route} CorrelationId={CorrelationId}",
+                DepartedSubject.ClauseName, guardActor.ActorId, guardActor.ActorRole,
+                "POST /api/payroll/recalculate", guardActor.CorrelationId);
+            return Results.Json(new { error = "Access denied", reason = DepartedSubject.DenyReason }, statusCode: 403);
+        }
+    }
 
     var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
     Guid? correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var corrValues)

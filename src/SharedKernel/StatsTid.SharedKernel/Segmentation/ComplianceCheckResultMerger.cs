@@ -27,6 +27,12 @@ namespace StatsTid.SharedKernel.Segmentation;
 /// <strong>Stable ordering:</strong> first-occurrence-wins. The first segment that emitted a
 /// given dedup key contributes the <c>ComplianceViolation</c> instance kept in the merged list.
 ///
+/// <strong>Days not checked</strong> (S147 / QUAL-234 interim): both build sites carry
+/// <see cref="ComplianceCheckResult.RestNotCheckedDays"/> as the union of the segments' lists,
+/// each date once, in ascending date order. <see cref="MergeStrategyKind.RejectIfMultipleSegments"/>
+/// passes its single segment through unchanged (list included); a
+/// <see cref="MergeStrategyKind.Custom"/> delegate owns its own result.
+///
 /// Pure function: no I/O, no logging, no static mutable state.
 /// </summary>
 public static class ComplianceCheckResultMerger
@@ -112,6 +118,7 @@ public static class ComplianceCheckResultMerger
             Success = mergedSuccess,
             Violations = dedupedViolations,
             Warnings = dedupedWarnings,
+            RestNotCheckedDays = UnionRestNotCheckedDays(segments),
         };
     }
 
@@ -144,8 +151,23 @@ public static class ComplianceCheckResultMerger
             Success = mergedSuccess,
             Violations = mergedViolations,
             Warnings = mergedWarnings,
+            RestNotCheckedDays = UnionRestNotCheckedDays(segments),
         };
     }
+
+    /// <summary>
+    /// S147 / QUAL-234 interim (owner ruling OQ-4 = (b)) — the merged
+    /// <see cref="ComplianceCheckResult.RestNotCheckedDays"/>: the union of every segment's list,
+    /// each date once, ascending. The same at both build sites (UnionDedupe AND Concatenate): the
+    /// member is a set of calendar days, so a day two segments both report is still one day not
+    /// checked — "concatenate" governs findings, not this set.
+    /// </summary>
+    private static IReadOnlyList<DateOnly> UnionRestNotCheckedDays(IReadOnlyList<ComplianceCheckResult> segments) =>
+        segments
+            .SelectMany(s => s.RestNotCheckedDays)
+            .Distinct()
+            .OrderBy(date => date)
+            .ToList();
 
     /// <summary>
     /// Reject-if-multiple-segments implementation. Single-segment input passes through
