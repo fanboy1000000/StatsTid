@@ -24,6 +24,17 @@ namespace StatsTid.Tools.DemoSeed.Loading;
 /// <see cref="LoadResult.PeriodOutcomeFailures"/> so it can fail the process. A warning alone never
 /// could: warnings do not affect the exit code, so before this the loader returned 0 having failed
 /// all 374 sends.</para>
+///
+/// <para>S147 / TASK-14704 (SEC-053, owner ruling OQ-1 = (a): strict four-eyes) — a month is now
+/// signed by TWO people. The API refuses an approve or reject from whoever sent the month, so the
+/// single demo GLOBAL_ADMIN login can no longer do both. The rule the loader follows: the demo
+/// GLOBAL_ADMIN sends, and the employee's tree HR — the tree root, which holds LOCAL_HR over the
+/// whole Organisation (<see cref="DemoTree.RootEmployeeId"/>, already in the manifest) — approves or
+/// rejects. For the tree root's OWN month the roles swap: the root sends it themselves and the demo
+/// GLOBAL_ADMIN decides (the root may not decide their own month — SEC-009). Each extra identity is a
+/// separate logged-in <see cref="ApiClient"/> (<see cref="ApiClient.CreateSibling"/>), created on first
+/// use and disposed at the end of the load. Months left pending (EMPLOYEE_APPROVED) are therefore
+/// sent by the GLOBAL_ADMIN, so the HR and Leder personas can still approve them by hand in a demo.</para>
 /// </summary>
 public sealed class DemoLoader
 {
@@ -31,6 +42,10 @@ public sealed class DemoLoader
     private readonly DemoManifest _manifest;
     private readonly int _batchSize;
     private readonly Action<string> _log;
+
+    /// <summary>S147 / TASK-14704 — the extra signers' logged-in clients, keyed by user id (one login
+    /// per identity per load). Disposed at the end of <see cref="LoadAsync"/>.</summary>
+    private readonly Dictionary<string, ApiClient> _signers = new(StringComparer.Ordinal);
 
     public DemoLoader(ApiClient api, DemoManifest manifest, int batchSize, Action<string> log)
     {
@@ -120,23 +135,59 @@ public sealed class DemoLoader
         await _api.LoginAsync(_manifest.AdminUserId, _manifest.Password, ct);
         _log("Authenticated.");
 
-        await ImportTreesAsync(result, ct);
-        await GrantRolesAsync(result, ct);
+        try
+        {
+            await ImportTreesAsync(result, ct);
+            await GrantRolesAsync(result, ct);
 
-        // S114 unit-spine stages — CANONICAL order (UnitLoadPlanner.CanonicalStageOrder):
-        // (a) units parent-first → (b) home ALL members probe-first → (c) leaders LAST.
-        // Leaders must come last twice over: POST …/leaders 422s a non-member, and a later
-        // re-home would SILENTLY strip the designation again (D3).
-        await CreateUnitsAsync(result, ct);
-        await HomeMembersAsync(result, ct);
-        await AppointLeadersAsync(result, ct);
+            // S114 unit-spine stages — CANONICAL order (UnitLoadPlanner.CanonicalStageOrder):
+            // (a) units parent-first → (b) home ALL members probe-first → (c) leaders LAST.
+            // Leaders must come last twice over: POST …/leaders 422s a non-member, and a later
+            // re-home would SILENTLY strip the designation again (D3).
+            await CreateUnitsAsync(result, ct);
+            await HomeMembersAsync(result, ct);
+            await AppointLeadersAsync(result, ct);
 
-        await SetProfilesAsync(result, ct);
-        await CreateActivityAsync(result, ct);
-        await CreateVikarsAsync(result, ct);
-        await ApplyMessyCasesAsync(result, ct);
+            await SetProfilesAsync(result, ct);
+            await CreateActivityAsync(result, ct);
+            await CreateVikarsAsync(result, ct);
+            await ApplyMessyCasesAsync(result, ct);
 
-        return result;
+            return result;
+        }
+        finally
+        {
+            // S147 / TASK-14704 — the second signers' clients (the primary client is the caller's).
+            foreach (var signer in _signers.Values)
+                signer.Dispose();
+            _signers.Clear();
+        }
+    }
+
+    /// <summary>
+    /// S147 / TASK-14704 (SEC-053) — the logged-in client for <paramref name="userId"/>, created and
+    /// authenticated on first use (the shared demo password, as for the GLOBAL_ADMIN). A failed login
+    /// throws, as the primary login does: a signer the seeded world cannot log in as is a real
+    /// failure, never a skip.
+    /// </summary>
+    private async Task<ApiClient> SignerAsync(string userId, CancellationToken ct)
+    {
+        if (_signers.TryGetValue(userId, out var existing))
+            return existing;
+
+        var client = _api.CreateSibling();
+        try
+        {
+            await client.LoginAsync(userId, _manifest.Password, ct);
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+        _signers[userId] = client;
+        _log($"  authenticated second signer {userId}");
+        return client;
     }
 
     // ── Reporting trees: batched import per tree ──
@@ -550,6 +601,12 @@ public sealed class DemoLoader
             }
         }
 
+        // S147 / TASK-14704 — Organisation → its tree root (the tree's LOCAL_HR, the second signer).
+        // Every demo user sits directly on its Organisation, so an activity row's OrgId names its tree.
+        var treeRootByOrg = _manifest.Trees
+            .GroupBy(t => t.OrganisationId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => (string?)g.First().RootEmployeeId, StringComparer.Ordinal);
+
         foreach (var a in _manifest.Activity)
         {
             // 1. Save the month — absences, project allocations and self-recorded work time — but
@@ -659,6 +716,35 @@ public sealed class DemoLoader
                 continue;
             }
 
+            // S147 / TASK-14704 (SEC-053, four-eyes) — the two signers of this month. The demo
+            // GLOBAL_ADMIN sends and the employee's tree HR (the tree root, LOCAL_HR over the whole
+            // Organisation) decides; for the tree root's OWN month the two swap, because nobody
+            // decides their own month (SEC-009). Either way the decider is never the sender and never
+            // the employee. A month that needs a decision but whose Organisation has no tree in the
+            // manifest cannot be given a second signer: that is a failed outcome, never a reason to
+            // sign twice. (The extra login happens only when this month actually needs it.)
+            treeRootByOrg.TryGetValue(a.OrgId, out var treeRoot);
+            var needsDecision = plan.Steps.Any(s => s != PeriodLoadPlanner.PeriodStep.Send);
+            if (needsDecision && treeRoot is null)
+            {
+                result.PeriodOutcomeFailures++;
+                result.Warnings.Add($"period {a.EmployeeId} {a.Year}-{a.Month:00} → no tree for org {a.OrgId}; no second signer to decide it");
+                continue;
+            }
+            var employeeIsTreeRoot = treeRoot is not null
+                && string.Equals(a.EmployeeId, treeRoot, StringComparison.Ordinal);
+            var sender = _api;
+            var decider = _api;
+            if (employeeIsTreeRoot)
+            {
+                if (plan.Steps.Contains(PeriodLoadPlanner.PeriodStep.Send))
+                    sender = await SignerAsync(treeRoot!, ct);
+            }
+            else if (needsDecision)
+            {
+                decider = await SignerAsync(treeRoot!, ct);
+            }
+
             // Steps run in order; a Send supplies the period id for the acts that follow it, and a
             // plan that starts with an act targets the OBSERVED id (the resume-without-re-send path).
             var currentPeriodId = observed?.PeriodId;
@@ -666,7 +752,7 @@ public sealed class DemoLoader
             {
                 if (step == PeriodLoadPlanner.PeriodStep.Send)
                 {
-                    var (sendStatus, periodId, sendBody) = await _api.SendPeriodAsync(a.EmployeeId, a.Year, a.Month, ct);
+                    var (sendStatus, periodId, sendBody) = await sender.SendPeriodAsync(a.EmployeeId, a.Year, a.Month, ct);
 
                     if (sendStatus == HttpStatusCode.Conflict)
                     {
@@ -706,7 +792,7 @@ public sealed class DemoLoader
 
                 if (step == PeriodLoadPlanner.PeriodStep.Approve)
                 {
-                    var (apStatus, apBody) = await _api.ApprovePeriodAsync(actTarget, ct);
+                    var (apStatus, apBody) = await decider.ApprovePeriodAsync(actTarget, ct);
                     if (apStatus == HttpStatusCode.OK) result.PeriodsApproved++;
                     else
                     {
@@ -716,7 +802,7 @@ public sealed class DemoLoader
                 }
                 else // PeriodStep.Reject
                 {
-                    var (rjStatus, rjBody) = await _api.RejectPeriodAsync(actTarget, "Demo: returneret til korrektion.", ct);
+                    var (rjStatus, rjBody) = await decider.RejectPeriodAsync(actTarget, "Demo: returneret til korrektion.", ct);
                     if (rjStatus == HttpStatusCode.OK) result.PeriodsRejected++;
                     else
                     {

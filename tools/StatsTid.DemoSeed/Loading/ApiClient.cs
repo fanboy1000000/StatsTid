@@ -12,6 +12,7 @@ namespace StatsTid.Tools.DemoSeed.Loading;
 /// </summary>
 public sealed class ApiClient : IDisposable
 {
+    private readonly string _baseUrl;
     private readonly HttpClient _http;
     private string? _token;
 
@@ -19,8 +20,19 @@ public sealed class ApiClient : IDisposable
 
     public ApiClient(string baseUrl)
     {
+        _baseUrl = baseUrl;
         _http = new HttpClient { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(120) };
     }
+
+    /// <summary>
+    /// S147 / TASK-14704 (SEC-053, four-eyes) — a NEW, not-yet-authenticated client on the same API,
+    /// for a second signer. The loader used to sign a month twice under one login (send, then approve
+    /// or reject); the API now refuses the second signature from whoever made the first, so the
+    /// manager act needs its own identity, and each identity needs its own bearer token — one
+    /// <see cref="HttpClient"/> per login, because the token lives on the client's default headers.
+    /// The caller logs it in and disposes it.
+    /// </summary>
+    public ApiClient CreateSibling() => new(_baseUrl);
 
     public async Task LoginAsync(string username, string password, CancellationToken ct)
     {
