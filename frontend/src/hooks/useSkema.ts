@@ -97,7 +97,7 @@ interface UseSkemaResult {
   clearAbsenceRuleError: () => void
   clearAbsenceCapError: () => void
   clearApprovalValidationError: () => void
-  refetch: () => void
+  refetch: () => Promise<void>
   /** S73 R4 — returns the discriminated outcome so the page can split revert (422)
       vs retry (other non-2xx) inside `fireCellSave`. */
   saveMonth: (
