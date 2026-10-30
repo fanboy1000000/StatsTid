@@ -416,7 +416,9 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         var clock = new DateOnly(2026, 3, 16);
         var lastDay = await SeedAsync("ds_bd_a", OrgA, active: true, end: clock);
         var dayAfter = await SeedAsync("ds_bd_b", OrgA, active: true, end: clock.AddDays(-1));
-        using var host = _fx.Factory.WithFixedToday(clock);
+        // S147 TASK-14719: the leaver-flip poller is off here. On its first poll it would flip dayAfter
+        // (end < clock) to inactive before the request, and the active-only read would answer 404, not the guard's 403.
+        using var host = _fx.Factory.WithFixedTodayWithoutLeaverFlip(clock);
 
         using (var client = ClientFor(Admin(lastDay, OrgA), host))
             Assert.Equal(HttpStatusCode.Created, (await GrantAsync(client, lastDay)).StatusCode);

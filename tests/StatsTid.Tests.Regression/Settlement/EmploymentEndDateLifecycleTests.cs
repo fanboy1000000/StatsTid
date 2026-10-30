@@ -543,7 +543,8 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
     /// <summary>The W1 attack choreography: a lifecycle-deactivated HR actor's STILL-VALID JWT
     /// (8h lifetime, no revocation) PUTs its own <c>employmentEndDate: null</c> — pre-W1 this
     /// permanently self-reinstated via the R1(c) reactivation. Must 403; the user stays
-    /// deactivated. The GET stays self-readable (read-only).</summary>
+    /// deactivated. S147 OQ-2 / R-30 (K-13): the GET is no longer self-readable either — a departed
+    /// self's read is refused with <see cref="DepartedSubject.DenyReason"/>.</summary>
     [Fact]
     public async Task EndDatePut_TerminatedSelf_HrActor_CannotSelfReinstate_403_StaysInactive()
     {
@@ -553,9 +554,12 @@ public sealed class EmploymentEndDateLifecycleTests : IAsyncLifetime
 
         var selfClient = ClientWith(HrToken(hrActor, CoveringOrg)); // the still-valid own JWT
 
-        // GET stays self-readable (the terminated-inclusive validator admits the HR scope).
+        // S147 OQ-2 / R-30 (K-13): re-decided — a departed self's read is refused
+        // (the shared validator's departed-self clause; was: GET stays self-readable).
         var get = await selfClient.GetAsync(EndDateUrl(hrActor));
-        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, get.StatusCode);
+        var getBody = await get.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(DepartedSubject.DenyReason, getBody.GetProperty("reason").GetString());
 
         // The self-reinstatement attempt: PUT clear (null) with the current If-Match → 403.
         var put = await PutEndDateAsync(selfClient, hrActor, null, ifMatch: "\"2\"");
