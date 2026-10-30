@@ -41,14 +41,16 @@ System must handle variations in:
 Norm Time
 37 hours/week (standard)
 Part-time (pro rata)
-Irregular norm periods (e.g. 4-week norm)
+Norm period: one calendar month for HK, PROSA and AC — 7.4 h × the month's working days, pro rata for part-timers, minus public holidays (søgnehelligdage) that fall on a weekday the person would work; a local agreement may set another settlement period (§ G)
 
-> The state norm period for HK/PROSA is one calendar month (V1); AC's is not weekly (C5). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
+> *(S147, 2026-10-29: ADR-043 D1, D6; owner-approved spec update.)* In plain words: the hours a person owes are counted per calendar month, not per week, and a weekday public holiday lowers them. This is the state's own rule for HK and PROSA (§ 4 stk. 2; `docs/references/overtime-flex-model-research.md` V1); for AC it is a labelled default, because the AC agreement sets no period (`docs/references/agreement-cells-reverification-research.md` C5). Replaces "Irregular norm periods (e.g. 4-week norm)" and its S146 contradiction note. Decided; built in S148 stage 1. Until then payroll still judges each Monday–Sunday week, and no public holiday lowers the norm.
 Flex Arrangements
-Maximum saldo
+Each institution's own flex caps, set locally; there is no central flex cap
 Carryover rules
 Automatic conversion to time-off
-Automatic payout rules
+Forfeiture above a cap (recorded), a leaver's settlement, and the exceptions a local agreement allows, including 1:1 cash by agreement; no automatic payout (§ G)
+
+> *(S147, 2026-10-30: ADR-043 D6; owner-approved spec update.)* In plain words: there is no central state flex agreement (PAV 19.5.1), so the central "maximum saldo" had no source, and flex above a cap is forfeited and shown rather than paid out automatically. Replaces "Maximum saldo" and "Automatic payout rules". Decided; built in S148's config stage (the settings) and stage 1 (their pay effect). Until then pay runs on today's central caps, and flex above them is paid out.
 Merarbejde vs Overarbejde
 System must:
 Distinguish between merarbejde and overarbejde
@@ -59,10 +61,10 @@ Examples:
 AC:
 Typically merarbejde
 No traditional overtime logic
-Possible on-call obligations
+Travel time is the only special time type; no on-call *(S147, 2026-10-30: ADR-043 D11, owner D-3 = (c); owner-approved spec update. Replaces "Possible on-call obligations". Decided; built with D11's later stage, S148 stage 2 or later)*
 
 HK:
-Overtime with 50% / 100% supplement
+Overtime at a flat +50 %, only for hours a leader ordered or accepted (§ L) *(S147, 2026-10-30: ADR-043 D4, D3; owner-approved spec update. Replaces "50% / 100% supplement". Decided; built in S148 stage 1. Until then payroll pays the weekly 50 % / 100 % bands)*
 Time compensation vs payout
 
 PROSA:
@@ -78,15 +80,19 @@ Evening/night supplements
 Weekend/holiday supplements
 On-call duty (rådighedsvagt)
 Call-in work
-Travel time (working vs non-working)
+Travel time on official trips: counts in full as worked time, capped at 13 h per working døgn (the 24 hours from the start of the working day)
 Special ministry domains (e.g. defense)
+
+> *(S147, 2026-10-29: ADR-043 D11; owner-approved spec update.)* In plain words: on-call, call-ins and travel are not ordinary hours, and each counts as worked time in its own sourced way. For each type and agreement the system holds three facts: how much of the time counts as worked (a fraction), what the supplement is paid on, and whether the time counts as rest. HK and PROSA (Statens arbejdstidsaftale § 7 nr. 3–5): on-call counts 1/3 at home and 3/4 at the workplace; a call-in at under 24 hours' notice counts at least 3 h; travel counts in full up to 13 h per working døgn, never halved. AC-agreement staff: travel only, at most 13 h per døgn unless agreed locally. Replaces the "working vs non-working" travel split, which no source supports. Decided; S148 stage 0 refuses these three types (they can be neither registered nor paid), and a later stage (stage 2 or later) builds the model.
 
 Rule engine must evaluate:
 Timestamp
-Calendar context (public holidays)
+Calendar context: one date-keyed holiday calendar with three kinds of day — (1) the ten public holidays (søgnehelligdage), which lower the norm when they fall on a weekday; (2) timed supplement windows (Grundlovsdag from 12:00, 24 December from 14:00); (3) each institution's own customary days off, dated and audited: a paid day off (whole or part; given to everyone, or on request) or a closure day the employee covers with leave, time off in lieu or flex
 Employment profile
 Agreement version
 Calendar integration required.
+
+> *(S147, 2026-10-29: ADR-043 D9; owner-approved spec update.)* In plain words: not every special day is a public holiday. Grundlovsdag, 24 and 31 December and 1 May are not (`docs/references/agreement-cells-reverification-research.md` C1); without a recorded local custom they are ordinary working days. Holidays are keyed by date, not by agreement version (Store Bededag ended by law on 1 January 2024). A paid customary day is credited like a day of paid absence; it does not lower the norm. Decided; the customary-days table is built in S148's config stage, and the calendar split and its pay effect in stage 1. Until then the code keeps three separate holiday lists, and all three count Grundlovsdag as a holiday.
 
 ### D. Absence Types (State-Specific Rules)
 
@@ -162,16 +168,16 @@ Scope enforcement must be auditable — failed access attempts should be logged
 Local administrators can configure operational parameters within centrally defined constraints. Local configuration must never override centrally negotiated agreement rules.
 
 Five controlled configuration areas:
-1. **Working Time Planning** — Norm period length (1/4/8/12 weeks), planning start day, planning calendar
+1. **Working Time Planning** — settlement period (the calendar month by default; another period only by local agreement), planning start day, planning calendar
 
-> A calendar-month norm period cannot be expressed in weeks (QUAL-216). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
-2. **Flex Rules** — Maximum flex balance (within central limit), warning thresholds, payout triggers
+> *(S147, 2026-10-29: ADR-043 D1, D6; owner-approved spec update.)* In plain words: the norm period is no longer a number of weeks an institution picks. The state's rule is the calendar month; a local agreement may set another settlement period (*"medmindre andet er aftalt"*). S148 builds the one value `month`; other values are recorded for the domain expert (ADR-043 provisional item 19). Replaces "Norm period length (1/4/8/12 weeks)" and its S146 contradiction note. Decided; built in S148's config stage (the setting) and stage 1 (its effect on pay).
+2. **Flex Rules** — each institution's own, in dated local settings, with no central flex cap: the plus cap, the minus cap and the daily credit cap (each unset unless the institution sets it), the cap-test period, the action above the cap (forfeit and record by default; or a manager's exception, a transfer to the overtime account, 1:1 cash by agreement), the leaving action, the paid-absence credit basis, office hours (an optional clock window per weekday), customary days off (§ C), warning thresholds. Whether a person is on the flex scheme at all is a dated fact HR records per person. *(S147, 2026-10-29: ADR-043 D6, D2, D3, D9; owner-approved spec update. In plain words: there is no central state flex agreement (PAV 19.5.1), so the central caps had no source; "within central limit" and "payout triggers" are withdrawn, and flex above a cap is forfeited and shown, not paid. Decided; the settings are built in S148's config stage, their pay effect in stage 1. Until then pay still runs on today's central caps, and flex above them is paid out.)*
 3. **Organizational Structure** — Departments, cost centers, projects, approval chains
 4. **Local Agreements (Lokalaftaler)** — Parameterized policies within central framework agreement boundaries
 5. **Operational Configuration** — Approval flows, cutoff dates, lock periods, exemptions
 
 Constraint enforcement:
-Local values must respect central min/max boundaries (e.g. local maxFlexBalance must be <= central MaxFlexBalance)
+Local values must respect central min/max boundaries where a central agreement sets one; there is no central flex cap, so an institution's flex caps have no central bound *(S147, 2026-10-29: ADR-043 D6; owner-approved spec update)*
 Centrally negotiated rates (overtime rates, supplement rates) cannot be overridden locally
 Hierarchical resolution: Central Agreement → Employment Group (AC/HK/PROSA) → Local Institutional Configuration
 The rule engine must remain pure — local configuration is merged at the service layer, not in the rule engine
@@ -207,6 +213,8 @@ Agreement configurations are stored in PostgreSQL as the single source of truth.
 
 The rule engine remains pure: it receives `AgreementRuleConfig` as a parameter and never performs I/O. The service layer loads configs from the database and passes them to the rule engine.
 
+> *(S147, 2026-10-29: ADR-043 D12; owner-approved spec update.)* In plain words: what a GlobalAdmin publishes here, and what an institution sets in its local profile, is what payroll calculates with. For each day of a month, payroll resolves the published agreement config, the position override and the institution's local profile in force that day (central → position → local) at the service layer, and passes them to the pure rule engine in the request; every value a calculation used is frozen into its proof. Each published agreement config and position override carries an "applies from" date. A publish never changes an exported month; an exported month changes only by an explicit correction. Decided; built in S148's config stage. Until then the rule engine reads configs compiled into the code, so these editors change screens and booking but not pay, and from S148 stage 0 they say so ("affects screens and booking; does not yet affect pay").
+
 #### Versioning Lifecycle
 Each agreement config follows an immutable versioning lifecycle:
 
@@ -223,11 +231,13 @@ Publishing a DRAFT automatically archives the current ACTIVE config for the same
 #### Configurable Parameters (31 fields per agreement)
 All parameters on `AgreementRuleConfig` are configurable:
 - **Identity**: AgreementCode, OkVersion
-- **Norm & Flex**: WeeklyNormHours, NormPeriodWeeks, NormModel (WEEKLY_HOURS/ANNUAL_ACTIVITY), AnnualNormHours, MaxFlexBalance, FlexCarryoverMax
-- **Overtime & Merarbejde**: HasOvertime, HasMerarbejde, OvertimeThreshold50, OvertimeThreshold100
+- **Norm & Flex**: WeeklyNormHours, NormPeriodWeeks, NormModel (WEEKLY_HOURS/ANNUAL_ACTIVITY), AnnualNormHours, MaxFlexBalance *(retires, ADR-043 D6; S148 stage 1)*, FlexCarryoverMax *(retires, ADR-043 D6; S148 stage 1)*
+- **Overtime & Merarbejde**: HasOvertime, HasMerarbejde, OvertimeThreshold50 *(retires, ADR-043 D4; S148 stage 1)*, OvertimeThreshold100 *(retires, ADR-043 D4; S148 stage 1)*
 - **Supplements**: Evening/Night/Weekend/Holiday enabled flags, time windows (Start/End hours), and rates
-- **On-call & Call-in**: OnCallDutyEnabled, OnCallDutyRate, CallInWorkEnabled, CallInMinimumHours, CallInRate
-- **Travel**: TravelTimeEnabled, WorkingTravelRate, NonWorkingTravelRate
+- **On-call & Call-in**: OnCallDutyEnabled, OnCallDutyRate *(retires, ADR-043 D11; S148 stage 2 or later)*, CallInWorkEnabled, CallInMinimumHours, CallInRate
+
+> *(S147, 2026-10-30: ADR-043 D4, D6, D11; owner-approved spec update.)* The parameters marked "retires" stay in the code until the named stage builds their replacement: the institution's own flex caps (§ G), the flat +50 % for decided hours (§ L), and the three facts per time type above.
+- **Travel, on-call and call-in**: TravelTimeEnabled; for each time type and agreement three facts, a worked-time fraction, a supplement basis and a rest flag, in place of the working and non-working travel rates *(S147, 2026-10-29: ADR-043 D11; owner-approved spec update. Decided; built in a later stage, S148 stage 2 or later)*
 
 #### UI Requirements
 The agreement management UI must support:
@@ -241,13 +251,13 @@ The agreement management UI must support:
 
 #### Validation Rules
 - AgreementCode + OkVersion must be unique per ACTIVE config
-- OvertimeThreshold100 must be ≥ OvertimeThreshold50
+- OvertimeThreshold100 must be ≥ OvertimeThreshold50 *(retires with the thresholds, ADR-043 D4; S148 stage 1)*
 - HasOvertime and HasMerarbejde should not both be true (warn, not block — per RES-001)
 - NormModel = ANNUAL_ACTIVITY requires AnnualNormHours > 0
 - NormModel = WEEKLY_HOURS makes AnnualNormHours irrelevant (hidden in UI)
-- NormPeriodWeeks must be one of: 1, 2, 4, 8, 12
+- The settlement period is the calendar month; S148 builds the one value `month`, and other values are recorded for the domain expert
 
-> The set {1, 2, 4, 8, 12} cannot express the state default of one calendar month (QUAL-216). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
+> *(S147, 2026-10-29: ADR-043 D1, D6; owner-approved spec update.)* Replaces "NormPeriodWeeks must be one of: 1, 2, 4, 8, 12", a week set that cannot express a month (QUAL-216). Decided; built in S148's config stage and stage 1. Until then `NormPeriodWeeks` and the week set stay in code.
 - All rates and hours must be > 0 where applicable
 
 #### Future Extensions (not in first iteration)
@@ -375,23 +385,22 @@ Entitlement tracking (above) records what is *earned, used, and remaining*. **Se
 
 ### L. Overtime Governance
 
-The system currently calculates overtime correctly but lacks governance controls. For a production system, overtime must be bounded and controllable.
+In plain words: an hour worked above the month's norm is a flex hour unless a leader ordered it beforehand or accepted afterwards that it was necessary. Only those decided hours become overtime (HK, PROSA pay groups 1–2, +50 %) or count toward an AC merarbejde claim, and they leave the flex account, so one hour is never both. Governance is therefore a record of decisions about hours, not a flag on automatic overtime.
 
-> It does not: every hour above a weekly norm becomes overtime automatically, where the sources pay overtime only for ordered or necessary work and route every other surplus hour to flex (QUAL-217, QUAL-218). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
+#### Decided Hours
+- A leader may record an order, or a roster span, beforehand, naming the date and the clock span; the ordered hours are the overlap of the span with the hours actually worked
+- Work nobody ordered in advance is marked by the employee in Skema as ordered or necessary; the leader accepts or rejects the mark in month approval (Teamoversigt). A mark is decided before its month is approved, by whoever holds that month's approval authority; the month cannot be approved while a mark is undecided
+- Every record holds a date and a clock span; its kind (ordered beforehand, or accepted afterwards); a placement fact ("placement ordered or rostered", which the +25 % supplement and § 14's compensation read), kept apart from the surplus fact ("ordered or necessary"); an activity type; a creator, a decider and a status
+- Four-eyes: a leader's order is decided at creation by its creator; no one decides their own hours (403); a record awaiting a decision is decided by someone other than its creator; the authority to order or decide is the authority to approve that employee's month, not bare organisation scope
+- A decision made after the month is approved or exported lands as a dated movement in the month it is made; no exported month is reopened
+- The records reach the pure rule engine as frozen inputs, frozen by value into each calculation's proof
+- Where an institution sets office hours (§ G), a decided hour leaves flex only if it fell outside office hours and after the person's per-day norm amount (7 h 24 min for a full-timer); ordered weekend and public-holiday work stays under § 14 whatever the office hours
 
 #### Maximum Overtime
-- `MaxOvertimeHoursPerPeriod`: configurable ceiling per agreement (e.g., 10 hours/week, 40 hours/month)
-- When exceeded, the system must flag but still record (overtime may be legitimate with approval)
-- Exceeded overtime must be visible in leader dashboard and approval workflow
+- `MaxOvertimeHoursPerPeriod`: an optional warning over decided hours (per agreement or local setting); it never refuses or reclassifies an hour
+- An exceeded warning is visible to the leader in the approval workflow
 
-#### Overtime Pre-Approval
-- Some organizations require pre-approval before overtime is worked
-- `OvertimeRequiresPreApproval`: boolean per agreement or local config
-- When enabled, overtime registrations without prior approval generate a warning
-- Pre-approval is a workflow concept (not a rule engine concern) — modeled as a flag on TimeEntry or a separate approval record
-- Unapproved overtime must still be calculable (for retroactive approval) but flagged in export
-
-> Under the sources an unordered surplus hour is flex, not flagged overtime (V3, V6; QUAL-217). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
+> *(S147, 2026-10-29: ADR-043 D3, D6; owner-approved spec update.)* Replaces "The system currently calculates overtime correctly but lacks governance controls", the overtime ceiling as a flag on automatic overtime, and the `OvertimeRequiresPreApproval` switch. Every overtime hour now needs a decision, so an optional pre-approval switch has no meaning and retires, with today's budget record, which names no hours. Decided; built in S148 stage 2. Until then: through stage 0 and the config stage, the code still pays overtime on every hour above a weekly norm; from stage 1 every hour above the month's norm goes to flex, ordered or not, with no +50 % until stage 2.
 
 ### M. Compensation Model (Afspadsering vs. Udbetaling)
 
@@ -400,23 +409,33 @@ The system must explicitly model the choice between time-off compensation (afspa
 #### Compensation Types
 - **Afspadsering**: Overtime/merarbejde hours converted to time-off at the applicable rate (e.g., 1 hour overtime at 50% = 1.5 hours afspadsering)
 - **Udbetaling**: Overtime/merarbejde hours paid out as salary supplement
-- **Default model**: Configurable per agreement (`DefaultCompensationModel`: AFSPADSERING or UDBETALING)
-- **Employee choice**: Some agreements allow employee to choose per period — configurable (`EmployeeCompensationChoice`: boolean)
+- **Default model**: time off (afspadsering); pay only by the employer's recorded decision (see below) *(S147, 2026-10-30: ADR-043 D8; owner-approved spec update. Replaces "Configurable per agreement (`DefaultCompensationModel`: AFSPADSERING or UDBETALING)". Decided; built in S148 stage 2. Until then the per-agreement default is in code)*
+- **The employer chooses, time off first**: the default is time off at +50 % (6 decided hours = 9 hours off); the leader who decides may choose pay instead when time off is judged impossible or inappropriate, recorded with a reason. The employee has no general choice, and `EmployeeCompensationChoice` retires
+- **The employee's two elections**, each the employee's own act: agreeing to postpone an earning's time off by up to a year (a record both the decider and the employee sign), and choosing saved days (*opsparingsdage*) instead of pay at the deadline
 
-> For HK, PROSA and AC the employer chooses time off vs pay (V10, C7; QUAL-221). *2026-10-23 (S146): contradicted by the verified sources (`docs/references/overtime-flex-model-research.md`, `docs/references/agreement-cells-reverification-research.md`); direction ruled by the owner, OQ-3 = (b); ADR-043 PROPOSED; this text is rewritten at ADR-043's acceptance with the owner's approval.*
+> *(S147, 2026-10-29: ADR-043 D8; owner-approved spec update.)* In plain words: for HK, PROSA and AC the employer, not the employee, chooses time off or pay (PAV 19.2.7.1; `docs/references/overtime-flex-model-research.md` V10; `docs/references/agreement-cells-reverification-research.md` C7; QUAL-221), and the employee keeps two narrower choices of their own. PROSA's printed "1:1" becomes +50 %. Decided; built in S148 stage 2. Until then the seeds still let HK and PROSA employees choose.
 
-#### Overtime Balance
-- Separate from flex balance — overtime balance tracks accumulated overtime hours eligible for compensation
-- `OvertimeBalance`: running total of uncompensated overtime hours
-- Afspadsering reduces overtime balance and creates an absence entry
-- Payout reduces overtime balance and creates a payroll export line
-- Conversion rates must be agreement-aware (50% overtime = 1.5x for afspadsering, different SLS code for payout)
+#### Overtime Account
+- Separate from flex balance — the overtime account holds decided hours only: § 8 overtime, § 14 weekend compensation, and AC merarbejde from the AC claims
+- A ledger of dated movements, not a running total: *earned* (the period worked, the hours, the rate, the kind), *taken* as time off, *paid* (by a decision, or by the deadline's default), *postponed*, *converted* to saved days. Each movement is audited and frozen into the proof of the month it lands in; none edits an exported month
+- The balance and each earning's deadline are derived by the pure rule engine from the movements, never a stored total anyone adjusts
+- Every compensation draws on decided earnings, never on a bare balance; a decision about another person's account is made by whoever holds that person's month-approval authority, never on the decider's own hours
+- Each earning has a clock: § 8 overtime is due as time off within 3 months of the end of the month worked, otherwise it is paid (a 30 September deadline pays in the October pay run); § 14 weekend compensation by the end of the following norm period. A leaders' "time off due" list and the employee's account screen show each earning with its deadline
+- Afspadsering reduces the account and creates an absence entry: a Skema time-off-in-lieu day, credited as a planned day, drawing on the earning with the earliest deadline first
+- Payout reduces the account and creates a payroll export line (hours and a wage type, never kroner)
+- Conversion rates are agreement-aware (+50 % = 1.5 h off per decided hour; a different SLS code for payout)
+- A leaver's owed time off is paid, never forfeited (in the leaving month: a labelled default)
+
+#### Saved Days (Opsparingsdage)
+- StatsTid holds a saved-days balance: the employee's election screen, a Skema "saved day" absence type, and the cap as a local parameter with the dated central floor (74 h, then 111 h from 1 April 2026, OK26 § 11 stk. 2)
+- Designed; built after research on § 11 (ADR-043 R-A), in a sprint S148's refinement chooses. Until then an election is recorded as a movement, and a saved day taken is registered as paid leave
+
+> *(S147, 2026-10-29: ADR-043 D8; owner-approved spec update.)* Replaces the yearly running total (`OvertimeBalance`). Decided; the account is built in S148 stage 2. Until then the yearly balance exists in code, and nothing in production feeds it.
 
 #### Wage Type Mapping
 - OVERTIME_50_PAYOUT → SLS code (monetary)
 - OVERTIME_50_AFSPADSERING → SLS code (time-off)
-- OVERTIME_100_PAYOUT → SLS code (monetary)
-- OVERTIME_100_AFSPADSERING → SLS code (monetary)
+- ~~OVERTIME_100_PAYOUT~~, ~~OVERTIME_100_AFSPADSERING~~: retire *(S147, 2026-10-30: ADR-043 D4, D8; owner-approved spec update. Overtime is a flat +50 %, so there is no 100 % rate. Decided; the line retires in S148 stage 1, the wage types in stage 2)*
 - MERARBEJDE_PAYOUT → SLS code
 - MERARBEJDE_AFSPADSERING → SLS code
 - These must be added to the wage_type_mappings table
@@ -458,7 +477,7 @@ System must support:
 Disabling overtime calculation for specific groups
 Norm-based tracking instead of hour-based logic
 Position-based rule overrides
-On-call obligations
+Travel time as the only special time type; no on-call *(S147, 2026-10-30: ADR-043 D11; owner-approved spec update. Replaces "On-call obligations")*
 Academic/research norm systems (e.g. universities)
 Overtime logic must be configurable per job category.
 

@@ -72,3 +72,15 @@ This decision updates PAT-003 (Agreement config as in-memory dictionary). The in
 - **Payroll Integration Agent**: No changes if configs are resolved before reaching payroll services.
 - **UX Agent**: Agreement management page: overview (Active/Draft/Archived), editor with grouped fields, clone flow, publish/archive actions.
 - **Test & QA Agent**: Verify seed migration produces identical configs to current static. Verify lifecycle transitions. Verify rule engine determinism unaffected.
+
+## S147 note (2026-10-29) — ADR-043 D12 puts this decision on the pay path
+
+**In plain words.** This ADR decided that the database, not the code, holds the agreement configs, and that the rule engine receives resolved configs as data. That was built for the screens and for booking, never for pay: the Rule Engine still reads the configs compiled into the code, and refuses an agreement it holds none for (`RuleRegistry.cs:446-449`), while payroll registers the database resolver (`src/Integrations/StatsTid.Integrations.Payroll/Program.cs:147`) and never calls it (QUAL-233). ADR-043 (ACCEPTED 2026-10-29; owner ruling D-6 = (a), "Editors reach pay") confirms this ADR and implements it on the pay path. For each day of a month payroll resolves the published agreement config, the position override and the institution's local profile in force that day (central → position → local) at the service layer, and passes them to the pure engine in the request; the engine never reads a database (ADR-002).
+
+**Implementation notes** (decided; built in S148's config stage):
+- Agreement configs and position overrides gain an "applies from" date (QUAL-182). The lifecycle above records when a config was published, not from which day it applies.
+- Every value a calculation used is frozen into its manifest, replacing ADR-016 D10's fingerprint of configs as code.
+- A publish never changes an exported month. A past "applies from" date reaches an exported month only through an explicit correction (ADR-013, ADR-034).
+- `CentralAgreementConfigs` stays a seed and a defence-in-depth fallback at most.
+- Until the stage lands, the agreement editor and the local-profile editor say "affects screens and booking; does not yet affect pay" (S148 stage 0).
+- The Agent Guidance line "Payroll Integration Agent: No changes if configs are resolved before reaching payroll services" did not hold: payroll resolves the configs itself, dated per day.

@@ -251,7 +251,7 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **Role-distinction caveat**: AC chefkonsulent loses contractual merarbejde compensation right per AC overenskomst (the PROGRAM L31–32 gap). Cell value `true` is correct at agreement level but the rule engine treats all AC employees identically because `User.EmploymentCategory` is vestigial. ADR-024 D2 (S38) will introduce tri-state `MerarbejdeCompensationRight: CONTRACTUAL / DISCRETIONARY / NONE` to express this. Cross-ref: `role-dimension-audit.md` (TASK-3606). **S146 (2026-10-23), disputed: contradicted by a verified primary source.** AC merarbejde: the cited 043-19 § 4 is "Basisløn". AC merarbejde is a claim decided by the employer (ordered or necessary, larger extent over normally at least 4 weeks, +50%; AC § 14), not an automatic 1:1 payment per week. `docs/references/overtime-flex-model-research.md` V9, V12; QUAL-215, QUAL-220. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). |
+| `notes` | **Role-distinction caveat**: AC chefkonsulent loses contractual merarbejde compensation right per AC overenskomst (the PROGRAM L31–32 gap). Cell value `true` is correct at agreement level but the rule engine treats all AC employees identically because `User.EmploymentCategory` is vestigial. ADR-024 D2 (S38) will introduce tri-state `MerarbejdeCompensationRight: CONTRACTUAL / DISCRETIONARY / NONE` to express this. Cross-ref: `role-dimension-audit.md` (TASK-3606). **S146 (2026-10-23), disputed: contradicted by a verified primary source.** AC merarbejde: the cited 043-19 § 4 is "Basisløn". AC merarbejde is a claim decided by the employer (ordered or necessary, larger extent over normally at least 4 weeks, +50%; AC § 14), not an automatic 1:1 payment per week. `docs/references/overtime-flex-model-research.md` V9, V12; QUAL-215, QUAL-220. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S147 verdict (2026-10-29, ADR-043 D4, D5, ACCEPTED):** AC merarbejde is a claim the employee raises and the employer decides (ordered or a precondition for the job, of larger extent over normally at least 4 weeks, +50 %; AC § 14), judged over the period each claim states (F-6 = (a)); whether a person may raise one is the overtime regime HR records per person (CONTRACTUAL only; the AC values are ADR-024 D2's three states, provisional). Built in S148 stage 3; until then AC extra work is flex only (from stage 1). |
 
 ### SR-AC-OK24-008 — OvertimeRequiresPreApproval
 
@@ -330,8 +330,8 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `decision_date` | pending |
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
-| `disputed?` | false |
-| `notes` | **Glocal cell**: per ROADMAP glocal principle, this is a rule-delegated parameter where institutions vary via `local_configurations` (ADR-017 LocalAgreementProfile). The central seed value (150h) is the default; institutional override permitted within bounds determined by central cirkulær. Phase B should confirm the central baseline is correctly cited. |
+| `disputed?` | true |
+| `notes` | **Glocal cell**: per ROADMAP glocal principle, this is a rule-delegated parameter where institutions vary via `local_configurations` (ADR-017 LocalAgreementProfile). The central seed value (150h) is the default; institutional override permitted within bounds determined by central cirkulær. Phase B should confirm the central baseline is correctly cited. **S147 verdict (2026-10-30, ADR-043 D6, ACCEPTED):** contradicted by a verified source. There is no central state flex agreement (PAV 19.5.1), so no central flex cap exists; a flex cap is each institution's own local setting, unset unless the institution sets it. The encoded value is what the code does until S148 builds the replacement (the settings in the config stage, their pay effect in stage 1). `disputed?` set to true under the amended definition (S146 R-19). |
 
 ### SR-AC-OK24-012 — FlexCarryoverMax
 
@@ -350,8 +350,8 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `decision_date` | pending |
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
-| `disputed?` | false |
-| `notes` | Glocal cell. Co-located with SR-AC-OK24-011. Phase B should confirm whether full carryover is canonical or an institutional choice (could see a cirkulær that says "no carryover" with institutional opt-in to full carryover via local agreement). |
+| `disputed?` | true |
+| `notes` | Glocal cell. Co-located with SR-AC-OK24-011. Phase B should confirm whether full carryover is canonical or an institutional choice (could see a cirkulær that says "no carryover" with institutional opt-in to full carryover via local agreement). **S147 verdict (2026-10-30, ADR-043 D6, ACCEPTED):** contradicted by a verified source. There is no central state flex agreement (PAV 19.5.1), so no central flex cap exists; a flex cap is each institution's own local setting, unset unless the institution sets it. The encoded value is what the code does until S148 builds the replacement (the settings in the config stage, their pay effect in stage 1). `disputed?` set to true under the amended definition (S146 R-19). |
 
 ### SR-AC-OK24-013 — entitlement_configs.VACATION.annual_quota
 
@@ -511,7 +511,7 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **Schema observation**: this cell groups 3 schema fields because their values jointly encode the norm-period model — they're not independently meaningful (changing `NormModel` from `WEEKLY_HOURS` to `ANNUAL_ACTIVITY` makes `NormPeriodWeeks` irrelevant). The 15-column schema handles this via `field` accepting compound names. Phase E seed-parity tests should treat the triple atomically. Cross-ref: SR-AC_RESEARCH-OK24-XXX will document the ANNUAL_ACTIVITY variant where `NormPeriodWeeks` becomes inert. **S146 (2026-10-23), disputed: contradicted by a verified primary source.** AC norm period: the cited 043-19 § 2 is "Ansættelsesform" (civil servant or contract), not a norm period, and no primary source makes AC weekly (union guidance: quarterly for administrative AC, annual for special consultants). `docs/references/overtime-flex-model-research.md` V12; QUAL-215, QUAL-216. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S146 D4 verdict (2026-10-23):** C5: the AC agreement sets no norm period (§ 13: 37 h a week on average); extra work is reported at least quarterly; some teachers and special/chief consultants are on an annual norm. Never weekly. `docs/references/agreement-cells-reverification-research.md` C5; QUAL-216. |
+| `notes` | **Schema observation**: this cell groups 3 schema fields because their values jointly encode the norm-period model — they're not independently meaningful (changing `NormModel` from `WEEKLY_HOURS` to `ANNUAL_ACTIVITY` makes `NormPeriodWeeks` irrelevant). The 15-column schema handles this via `field` accepting compound names. Phase E seed-parity tests should treat the triple atomically. Cross-ref: SR-AC_RESEARCH-OK24-XXX will document the ANNUAL_ACTIVITY variant where `NormPeriodWeeks` becomes inert. **S146 (2026-10-23), disputed: contradicted by a verified primary source.** AC norm period: the cited 043-19 § 2 is "Ansættelsesform" (civil servant or contract), not a norm period, and no primary source makes AC weekly (union guidance: quarterly for administrative AC, annual for special consultants). `docs/references/overtime-flex-model-research.md` V12; QUAL-215, QUAL-216. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S146 D4 verdict (2026-10-23):** C5: the AC agreement sets no norm period (§ 13: 37 h a week on average); extra work is reported at least quarterly; some teachers and special/chief consultants are on an annual norm. Never weekly. `docs/references/agreement-cells-reverification-research.md` C5; QUAL-216. **S147 verdict (2026-10-29, ADR-043 D1, ACCEPTED; owner F-6 = (a)):** AC flex settles each calendar month on the same month-norm function as HK and PROSA (7.4 h a working day, pro rata), and the AC norm falls on weekday søgnehelligdage: a labelled default for the domain expert (ADR-043 provisional item 4), because the AC agreement sets no period. The annual-norm variants keep `ANNUAL_ACTIVITY`; how their flex settles is an open design gap. `NormPeriodWeeks` retires (S148 config stage and stage 1). |
 
 ### SR-AC-OK24-021 — HasOvertime
 
@@ -531,7 +531,7 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | Mutually exclusive with `HasMerarbejde` in project-internal convention. AC = (false, true); HK = (true, false); PROSA = (true, false). Renders `OvertimeThreshold50/100` cells inert for AC (see SR-AC-OK24-022 + SR-AC-OK24-023). **S146 (2026-10-23), disputed: contradicted by a verified primary source.** AC HasOvertime: the value (no overtime for AC) agrees with the sources, but the cited 043-19 § 4 is "Basisløn"; the authority is AC § 14 (merarbejde) and the state working-time agreement. `docs/references/overtime-flex-model-research.md` V9, V12; QUAL-215. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). |
+| `notes` | Mutually exclusive with `HasMerarbejde` in project-internal convention. AC = (false, true); HK = (true, false); PROSA = (true, false). Renders `OvertimeThreshold50/100` cells inert for AC (see SR-AC-OK24-022 + SR-AC-OK24-023). **S146 (2026-10-23), disputed: contradicted by a verified primary source.** AC HasOvertime: the value (no overtime for AC) agrees with the sources, but the cited 043-19 § 4 is "Basisløn"; the authority is AC § 14 (merarbejde) and the state working-time agreement. `docs/references/overtime-flex-model-research.md` V9, V12; QUAL-215. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S147 verdict (2026-10-29, ADR-043 D4, ACCEPTED):** the value stands (AC earns no overtime); whether an AC employee may raise a merarbejde claim is decided per person by the HR-recorded overtime regime (ADR-024 D2's three states, provisional), not by this agreement-level flag. |
 
 ### SR-AC-OK24-022 — OvertimeThreshold50 (inert)
 
@@ -711,7 +711,7 @@ The 20 cells below validate the 15-column schema works on real AC OK24 data, bef
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | false |
-| `notes` | Same value across AC / HK / PROSA. The split between SR-AC-OK24-029 (in-hours full rate) + SR-AC-OK24-030 (out-of-hours half rate) is the universal state-sector pattern. |
+| `notes` | Same value across AC / HK / PROSA. The split between SR-AC-OK24-029 (in-hours full rate) + SR-AC-OK24-030 (out-of-hours half rate) is the universal state-sector pattern. **S147 verdict (2026-10-30, ADR-043 D11, ACCEPTED):** the single rate retires. Each time type gets three facts per agreement instead: a worked-time fraction, a supplement basis and a rest flag. For AC-agreement staff, travel is the only special time type (owner D-3 = (c)). The value stays in code until D11's later stage (S148 stage 2 or later). Not a contradiction of the value, so `disputed?` stays false. |
 
 ### SR-AC-OK24-031 — entitlement_configs.SPECIAL_HOLIDAY.annual_quota
 
@@ -1005,7 +1005,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | Compound row covering 4 columns. Same values as AC; semantics identical (standard WEEKLY_HOURS norm). **S146 (2026-10-23), disputed: contradicted by a verified primary source.** HK norm: the row cites the AC circular's § 2 ("Ansættelsesform") for HK's norm. HK's norm period is one calendar month (state working-time agreement § 4 stk. 2), not one week. `docs/references/overtime-flex-model-research.md` V1, V12; QUAL-215, QUAL-216. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). |
+| `notes` | Compound row covering 4 columns. Same values as AC; semantics identical (standard WEEKLY_HOURS norm). **S146 (2026-10-23), disputed: contradicted by a verified primary source.** HK norm: the row cites the AC circular's § 2 ("Ansættelsesform") for HK's norm. HK's norm period is one calendar month (state working-time agreement § 4 stk. 2), not one week. `docs/references/overtime-flex-model-research.md` V1, V12; QUAL-215, QUAL-216. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S147 verdict (2026-10-29, ADR-043 D1, ACCEPTED):** the norm is the calendar month (7.4 h × the month's working days, pro rata, minus weekday søgnehelligdage); `NormPeriodWeeks` retires and the month becomes the settlement period (S148 config stage and stage 1). The 37 h week survives only as the base of the per-day amount. |
 
 ### SR-HK-OK24-002 — MaxFlexBalance (DIVERGENT from AC)
 
@@ -1024,8 +1024,8 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `decision_date` | pending |
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
-| `disputed?` | false |
-| `notes` | **DIVERGENT from AC** (SR-AC-OK24-011 = 150h). The lower ceiling reflects HK's overtime-regime: balance growth has a direct payroll-export path (OVERTIME_50/100), so a tighter cap reduces accumulation pressure. Glocal cell. |
+| `disputed?` | true |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-011 = 150h). The lower ceiling reflects HK's overtime-regime: balance growth has a direct payroll-export path (OVERTIME_50/100), so a tighter cap reduces accumulation pressure. Glocal cell. **S147 verdict (2026-10-30, ADR-043 D6, ACCEPTED):** contradicted by a verified source. There is no central state flex agreement (PAV 19.5.1), so no central flex cap exists; a flex cap is each institution's own local setting, unset unless the institution sets it. The encoded value is what the code does until S148 builds the replacement (the settings in the config stage, their pay effect in stage 1). `disputed?` set to true under the amended definition (S146 R-19). |
 
 ### SR-HK-OK24-003 — FlexCarryoverMax (DIVERGENT from AC)
 
@@ -1044,8 +1044,8 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `decision_date` | pending |
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
-| `disputed?` | false |
-| `notes` | **DIVERGENT from AC** (SR-AC-OK24-012 = 150h). Co-located with SR-HK-OK24-002. Glocal cell. |
+| `disputed?` | true |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-012 = 150h). Co-located with SR-HK-OK24-002. Glocal cell. **S147 verdict (2026-10-30, ADR-043 D6, ACCEPTED):** contradicted by a verified source. There is no central state flex agreement (PAV 19.5.1), so no central flex cap exists; a flex cap is each institution's own local setting, unset unless the institution sets it. The encoded value is what the code does until S148 builds the replacement (the settings in the config stage, their pay effect in stage 1). `disputed?` set to true under the amended definition (S146 R-19). |
 
 ### SR-HK-OK24-004 — HasOvertime (DIVERGENT from AC)
 
@@ -1105,7 +1105,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-022). Same value across HK / PROSA (both have `HasOvertime = true`). Used by OvertimeRule. **S146 (2026-10-23), disputed: contradicted by a verified primary source.** OvertimeThreshold50 = 37 h a week: never sourced, and contradicted. HK overtime under the state working-time agreement is a flat +50% for hours above the period's (monthly) norm, only for ordered or necessary work; part-timers' hours up to full time are 1:1 (§ 8). `docs/references/overtime-flex-model-research.md` V2, V4; QUAL-218. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). |
+| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-022). Same value across HK / PROSA (both have `HasOvertime = true`). Used by OvertimeRule. **S146 (2026-10-23), disputed: contradicted by a verified primary source.** OvertimeThreshold50 = 37 h a week: never sourced, and contradicted. HK overtime under the state working-time agreement is a flat +50% for hours above the period's (monthly) norm, only for ordered or necessary work; part-timers' hours up to full time are 1:1 (§ 8). `docs/references/overtime-flex-model-research.md` V2, V4; QUAL-218. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S147 verdict (2026-10-29, ADR-043 D4, ACCEPTED):** the threshold retires; HK and PROSA (pay groups 1–2) overtime is a flat +50 % on decided hours above the month's norm (weekly overtime retires in S148 stage 1; the +50 % arrives in stage 2). **The part-timer cell is not the printed § 8 stk. 2:** by owner ruling of 2026-10-29 (D-10, F-7 = (c), default (ii)), provisional pending a qualified expert and the state's text implementing the binding award of 4 February 2026, **FV2025-795** (none as of 28 October 2026), the 1:1 band is not applied, and an ordered or accepted hour above a part-timer's own norm earns +50 %, held as the dated, named variant `PartTimeBandRule` (ADR-043 provisional items 1–2; owed research R-D, R-E). Its source is that award and that ruling, not a cirkulære quote; the variant gets its own row when S148 builds it. |
 
 ### SR-HK-OK24-007 — OvertimeThreshold100 (LOAD-BEARING)
 
@@ -1125,7 +1125,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **LOAD-BEARING in HK**. Same value across HK / PROSA. **S146 (2026-10-23), disputed: contradicted by a verified primary source.** OvertimeThreshold100 = 40 h a week: never sourced, and contradicted. There is no 100% tier for general HK or PROSA; the only 50→100% ladders found are narrow daily ones (Bilag 9 laboratory technicians; HK call-in to Greenland, 023-19; 2006 municipal-reform terms). `docs/references/overtime-flex-model-research.md` V4; QUAL-218. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). |
+| `notes` | **LOAD-BEARING in HK**. Same value across HK / PROSA. **S146 (2026-10-23), disputed: contradicted by a verified primary source.** OvertimeThreshold100 = 40 h a week: never sourced, and contradicted. There is no 100% tier for general HK or PROSA; the only 50→100% ladders found are narrow daily ones (Bilag 9 laboratory technicians; HK call-in to Greenland, 023-19; 2006 municipal-reform terms). `docs/references/overtime-flex-model-research.md` V4; QUAL-218. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S147 verdict (2026-10-29, ADR-043 D4, ACCEPTED):** retires; there is no 100 % tier for general HK or PROSA. The weekly tiers retire in S148 stage 1, the 100 % wage types in stage 2. |
 
 ### SR-HK-OK24-008 — Supplement-enablement quad (compound, 4 boolean flags ON)
 
@@ -1165,7 +1165,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-024). The hour-of-day boundaries are encoded as integers; the cross-midnight night window (23–06) is handled correctly by the supplement rule. Used by EveningSupplementRule + NightSupplementRule. **S146 D4 verdict (2026-10-23):** C2: the state has ONE unsocial-hours window set, +25 % for weekdays 17:00-06:00, weekends, public holidays, Grundlovsdag after 12:00 and 24 Dec after 14:00 (§ 13); there is no separate evening/night split. `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. |
+| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-024). The hour-of-day boundaries are encoded as integers; the cross-midnight night window (23–06) is handled correctly by the supplement rule. Used by EveningSupplementRule + NightSupplementRule. **S146 D4 verdict (2026-10-23):** C2: the state has ONE unsocial-hours window set, +25 % for weekdays 17:00-06:00, weekends, public holidays, Grundlovsdag after 12:00 and 24 Dec after 14:00 (§ 13); there is no separate evening/night split. `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. **S147 verdict (2026-10-29, ADR-043 D7, D9, ACCEPTED):** one window set (17:00–06:00, weekends, søgnehelligdage, Grundlovsdag from 12:00, 24 December from 14:00), paid at +25 % only for placements that were ordered or rostered; the same in OK24 and OK26. No supplement from S148 stage 1; the new one in stage 2. |
 
 ### SR-HK-OK24-010 — EveningRate (LOAD-BEARING)
 
@@ -1185,7 +1185,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-009). Same value across HK / PROSA. **S146 D4 verdict (2026-10-23):** C2: the evening rate 1.25 matches the single +25 % supplement, but its 17:00-23:00 window does not: § 13 runs 17:00-06:00 with no night step. `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. |
+| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-009). Same value across HK / PROSA. **S146 D4 verdict (2026-10-23):** C2: the evening rate 1.25 matches the single +25 % supplement, but its 17:00-23:00 window does not: § 13 runs 17:00-06:00 with no night step. `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. **S147 verdict (2026-10-29, ADR-043 D7, ACCEPTED):** replaced by the single +25 % supplement over 17:00–06:00, for ordered or rostered placements only (no supplement from S148 stage 1; the new one in stage 2). |
 
 ### SR-HK-OK24-011 — NightRate (LOAD-BEARING)
 
@@ -1205,7 +1205,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **LOAD-BEARING in HK**. **S146 D4 verdict (2026-10-23):** C2: no 1.50 night rate exists for general HK/PROSA; § 13 pays +25 % from 17:00 to 06:00. `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. |
+| `notes` | **LOAD-BEARING in HK**. **S146 D4 verdict (2026-10-23):** C2: no 1.50 night rate exists for general HK/PROSA; § 13 pays +25 % from 17:00 to 06:00. `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. **S147 verdict (2026-10-29, ADR-043 D7, ACCEPTED):** the 1.50 rate retires; night hours fall under the single +25 % supplement, for ordered or rostered placements only (no supplement from S148 stage 1; the new one in stage 2). |
 
 ### SR-HK-OK24-012 — WeekendSaturdayRate (LOAD-BEARING)
 
@@ -1225,7 +1225,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **LOAD-BEARING in HK**. Note: the Saturday + Sunday rates are encoded as separate columns (Saturday = 1.50, Sunday = 2.0). Both emit the same wage type (SLS_0430) but the rule applies the day-specific multiplier. **S146 D4 verdict (2026-10-23):** C2: weekend work earns the § 13 +25 % supplement; ordered weekend work also gets § 14 +50 % compensation and is left out of the monthly hours count. No 1.50 Saturday rate. `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. |
+| `notes` | **LOAD-BEARING in HK**. Note: the Saturday + Sunday rates are encoded as separate columns (Saturday = 1.50, Sunday = 2.0). Both emit the same wage type (SLS_0430) but the rule applies the day-specific multiplier. **S146 D4 verdict (2026-10-23):** C2: weekend work earns the § 13 +25 % supplement; ordered weekend work also gets § 14 +50 % compensation and is left out of the monthly hours count. No 1.50 Saturday rate. `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. **S147 verdict (2026-10-29, ADR-043 D7, D8, ACCEPTED):** the 1.50 rate retires. Ordered or rostered weekend work earns § 13's +25 % and § 14's +50 % compensation (time off or pay, the employer's choice), kept out of the month's hours count and earning into the overtime account with its own clock. No lines from S148 stage 1; replaced in stage 2. |
 
 ### SR-HK-OK24-013 — WeekendSundayRate (LOAD-BEARING)
 
@@ -1245,7 +1245,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **LOAD-BEARING in HK**. The Sunday-higher-than-Saturday pattern is universal state-sector convention. **S146 D4 verdict (2026-10-23):** C2: no 2.0 Sunday rate for general HK/PROSA; Saturday and Sunday are treated alike (§ 13 +25 %; § 14 +50 % for ordered work). The only 100 % is HK Bilag 9 (laboratory technicians at sea/fieldwork). `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. |
+| `notes` | **LOAD-BEARING in HK**. The Sunday-higher-than-Saturday pattern is universal state-sector convention. **S146 D4 verdict (2026-10-23):** C2: no 2.0 Sunday rate for general HK/PROSA; Saturday and Sunday are treated alike (§ 13 +25 %; § 14 +50 % for ordered work). The only 100 % is HK Bilag 9 (laboratory technicians at sea/fieldwork). `docs/references/agreement-cells-reverification-research.md` C2; QUAL-227. **S147 verdict (2026-10-29, ADR-043 D7, D8, ACCEPTED):** the 2.0 rate retires; Sunday is treated as Saturday (§ 13's +25 % and § 14's +50 % for ordered or rostered work). No lines from S148 stage 1; replaced in stage 2. |
 
 ### SR-HK-OK24-014 — HolidayRate (LOAD-BEARING)
 
@@ -1265,7 +1265,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **LOAD-BEARING in HK**. Public-holiday list is project-internal (Danish public holidays — påske, pinse, jul, nytår, etc.); Phase B should confirm the public-holiday set is comprehensive. **S146 D4 verdict (2026-10-23):** C2: public-holiday work earns § 13 +25 % and, if ordered, § 14 +50 %; no 2.0 holiday rate. Grundlovsdag and 24 Dec are not public holidays (+25 % from 12:00 and 14:00 only), yet `SupplementRule.cs:54-66` pays 5 June at 2.0 today. `docs/references/agreement-cells-reverification-research.md` C1, C2; QUAL-227. |
+| `notes` | **LOAD-BEARING in HK**. Public-holiday list is project-internal (Danish public holidays — påske, pinse, jul, nytår, etc.); Phase B should confirm the public-holiday set is comprehensive. **S146 D4 verdict (2026-10-23):** C2: public-holiday work earns § 13 +25 % and, if ordered, § 14 +50 %; no 2.0 holiday rate. Grundlovsdag and 24 Dec are not public holidays (+25 % from 12:00 and 14:00 only), yet `SupplementRule.cs:54-66` pays 5 June at 2.0 today. `docs/references/agreement-cells-reverification-research.md` C1, C2; QUAL-227. **S147 verdict (2026-10-29, ADR-043 D7, D9, ACCEPTED):** the 2.0 rate retires; ordered or rostered work on a søgnehelligdag earns § 13's +25 % and § 14's +50 %. One date-keyed calendar: Grundlovsdag and 24 December are not public holidays, and keep only their +25 % windows from 12:00 and 14:00. No lines from S148 stage 1; replaced in stage 2. |
 
 ### SR-HK-OK24-015 — OnCallDutyEnabled (DIVERGENT from AC)
 
@@ -1305,7 +1305,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | false |
-| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-026). |
+| `notes` | **LOAD-BEARING in HK** (inert in AC per SR-AC-OK24-026). **S147 verdict (2026-10-30, ADR-043 D11, ACCEPTED):** the single rate retires. Each time type gets three facts per agreement instead: a worked-time fraction, a supplement basis and a rest flag. For AC-agreement staff, travel is the only special time type (owner D-3 = (c)). The value stays in code until D11's later stage (S148 stage 2 or later). Not a contradiction of the value, so `disputed?` stays false. |
 
 ### SR-HK-OK24-017 — CallInWorkEnabled + CallInMinimumHours + CallInRate (compound, LOAD-BEARING)
 
@@ -1345,7 +1345,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | false |
-| `notes` | Same values + load-bearing semantics as AC. Compound row collapses the 3 cells because there's no divergence from AC. |
+| `notes` | Same values + load-bearing semantics as AC. Compound row collapses the 3 cells because there's no divergence from AC. **S147 verdict (2026-10-30, ADR-043 D11, ACCEPTED):** the single rate retires. Each time type gets three facts per agreement instead: a worked-time fraction, a supplement basis and a rest flag. For AC-agreement staff, travel is the only special time type (owner D-3 = (c)). The value stays in code until D11's later stage (S148 stage 2 or later). Not a contradiction of the value, so `disputed?` stays false. |
 
 ### SR-HK-OK24-019 — RestPeriodDerogationAllowed (DIVERGENT from AC)
 
@@ -1385,7 +1385,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
 | `disputed?` | true |
-| `notes` | **DIVERGENT from AC** (SR-AC-OK24-006 = false). Used by S17 OvertimeGovernanceRule + payroll compensation-model mapping. The Overtime D-test `Overtime_PastPeriodBalance_UsesPeriodEffectiveAgreementCode_NotLive` (S35 TASK-3508) discriminates on this field's HK=true vs AC=false. **S146 (2026-10-23), disputed: contradicted by a verified primary source.** EmployeeCompensationChoice = true: contradicted. For HK, time off vs pay is the employer's choice (PAV 19.2.7.1); the employee's only choices are agreeing to defer time off and choosing saved days over cash after the deadline (§ 10). `docs/references/overtime-flex-model-research.md` V10; QUAL-221. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S146 D4 verdict (2026-10-23):** C7: the employer chooses time off vs pay (PAV 19.2.7.1); the employee may only agree to postpone time off and convert to saved days at the deadline (022-26, remark to § 10). Encode `false`. OK26 circular 024-26 abolished the separate save-time-off agreement from 1 April 2026. `docs/references/agreement-cells-reverification-research.md` C7; QUAL-221. |
+| `notes` | **DIVERGENT from AC** (SR-AC-OK24-006 = false). Used by S17 OvertimeGovernanceRule + payroll compensation-model mapping. The Overtime D-test `Overtime_PastPeriodBalance_UsesPeriodEffectiveAgreementCode_NotLive` (S35 TASK-3508) discriminates on this field's HK=true vs AC=false. **S146 (2026-10-23), disputed: contradicted by a verified primary source.** EmployeeCompensationChoice = true: contradicted. For HK, time off vs pay is the employer's choice (PAV 19.2.7.1); the employee's only choices are agreeing to defer time off and choosing saved days over cash after the deadline (§ 10). `docs/references/overtime-flex-model-research.md` V10; QUAL-221. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S146 D4 verdict (2026-10-23):** C7: the employer chooses time off vs pay (PAV 19.2.7.1); the employee may only agree to postpone time off and convert to saved days at the deadline (022-26, remark to § 10). Encode `false`. OK26 circular 024-26 abolished the separate save-time-off agreement from 1 April 2026. `docs/references/agreement-cells-reverification-research.md` C7; QUAL-221. **S147 verdict (2026-10-29, ADR-043 D8, ACCEPTED):** the field and its routes retire; the employer chooses, time off first, and the employee keeps two elections of their own (agreeing to postpone an earning's time off; choosing saved days at the deadline). Built in S148 stage 2. |
 
 ### SR-HK-OK24-021 — DefaultCompensationModel
 
@@ -1425,7 +1425,7 @@ HK = Handels- og Kontorfunktionærer i Staten. Distinct cirkulær from AC; subst
 | `supersession_history` | (none) |
 | `bug_correction_history` | `[{date: 2026-05-21, from_value: "false (with no decision)", to_value: "false (with decision recorded; flip gated on ADR-024 D7)", source: "S37 TASK-3704 + Bug #4 split routing", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: PENDING_S40, action: "decision-recorded-fix-deferred"}]` |
 | `disputed?` | false |
-| `notes` | **Split routing per S37 interim-expert decision**: S37 records direction (Path A) + new ADR-024 D7 added to S38 backlog ("Overtime authorization model — pre-approval + post-hoc necessity-acknowledgment"); S40 implements workflow extension + seed flip lands together. This is the FIRST instance of "decision recorded but fix deferred" in the bug_correction_history convention — previous bug corrections shipped seed change in the same commit as the decision. The split is necessary because the workflow extension is a separate scope from the seed flip; flipping the seed without the workflow would create an intermediate-state regression. |
+| `notes` | **Split routing per S37 interim-expert decision**: S37 records direction (Path A) + new ADR-024 D7 added to S38 backlog ("Overtime authorization model — pre-approval + post-hoc necessity-acknowledgment"); S40 implements workflow extension + seed flip lands together. This is the FIRST instance of "decision recorded but fix deferred" in the bug_correction_history convention — previous bug corrections shipped seed change in the same commit as the decision. The split is necessary because the workflow extension is a separate scope from the seed flip; flipping the seed without the workflow would create an intermediate-state regression. **S147 verdict (2026-10-30, ADR-043 D3, ACCEPTED):** the seed flip resolves by retirement. Every overtime hour now needs a leader's decision, so `OvertimeRequiresPreApproval` retires and nothing is left to flip; ADR-024 D7's successor (orders and acknowledgements naming clock spans) is built in S148 stage 2. See ADR-024's S147 note. |
 
 ### SR-HK-OK24-023 — EU-derived compliance cluster (compound, 4 columns)
 
@@ -1725,7 +1725,7 @@ PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration;
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none — but inherits HK's OvertimeRequiresPreApproval candidate bug; see SR-PROSA-OK24-007) |
 | `disputed?` | true |
-| `notes` | **Compact "mirrors HK" bundle pattern** — new documentation convention introduced this task. The bundle covers every non-divergent cell with a single row + cross-references to the per-cell HK rows for source / value / load-bearing-status. Phase B verification cycles can address PROSA cells via the bundle (confirm "yes PROSA = HK on this cell") or via individual rows if divergence surfaces during expert review. **Cells excluded from this bundle** (per separate rows for explicit traceability): SR-PROSA-OK24-002 + 003 (divergent flex caps), SR-PROSA-OK24-007 (inherited candidate bug warranting Phase B attention). **S146 (2026-10-23), disputed: contradicted by a verified primary source.** PROSA "mirrors HK" bundle: inherits the HK contradictions (the 37/40 h tiers, the compensation choice). PROSA pay groups 1-2 get overtime under the state agreement at +50%; groups 3-4 get merarbejde when they meet its conditions (079-25 § 12 stk. 2). The PROSA "1:1" in `danish-agreements.md` is contradicted (§ 8: +50%). `docs/references/overtime-flex-model-research.md` V5, V10; QUAL-218, QUAL-221. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S146 D4 verdict (2026-10-23):** C2, C7: the bundle inherits HK's verdicts: the supplement table is contradicted (one +25 % set, § 13; § 14 +50 % for ordered weekend/holiday work) and the compensation choice is the employer's. PROSA's OK26 organisation agreement is 019-26 (replacing 079-25, same text in the relevant clauses). `docs/references/agreement-cells-reverification-research.md` C2, C7. |
+| `notes` | **Compact "mirrors HK" bundle pattern** — new documentation convention introduced this task. The bundle covers every non-divergent cell with a single row + cross-references to the per-cell HK rows for source / value / load-bearing-status. Phase B verification cycles can address PROSA cells via the bundle (confirm "yes PROSA = HK on this cell") or via individual rows if divergence surfaces during expert review. **Cells excluded from this bundle** (per separate rows for explicit traceability): SR-PROSA-OK24-002 + 003 (divergent flex caps), SR-PROSA-OK24-007 (inherited candidate bug warranting Phase B attention). **S146 (2026-10-23), disputed: contradicted by a verified primary source.** PROSA "mirrors HK" bundle: inherits the HK contradictions (the 37/40 h tiers, the compensation choice). PROSA pay groups 1-2 get overtime under the state agreement at +50%; groups 3-4 get merarbejde when they meet its conditions (079-25 § 12 stk. 2). The PROSA "1:1" in `danish-agreements.md` is contradicted (§ 8: +50%). `docs/references/overtime-flex-model-research.md` V5, V10; QUAL-218, QUAL-221. `confidence_level` is left for S146 D4's verdict (D4 overwrites both fields when it lands). **S146 D4 verdict (2026-10-23):** C2, C7: the bundle inherits HK's verdicts: the supplement table is contradicted (one +25 % set, § 13; § 14 +50 % for ordered weekend/holiday work) and the compensation choice is the employer's. PROSA's OK26 organisation agreement is 019-26 (replacing 079-25, same text in the relevant clauses). `docs/references/agreement-cells-reverification-research.md` C2, C7. **S147 verdict (2026-10-29, ADR-043 D4, D7, D8, ACCEPTED):** the bundle follows the HK verdicts above. PROSA pay groups 1–2 earn overtime at +50 % and groups 3–4 merarbejde, as the overtime regime HR records per person decides (whether groups 3–4 who do not literally meet § 8 stk. 3 fall back to overtime is an expert question, ADR-043 provisional item 17); PROSA's printed "1:1" becomes +50 %. |
 
 ### SR-PROSA-OK24-002 — MaxFlexBalance (DIVERGENT from HK)
 
@@ -1744,8 +1744,8 @@ PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration;
 | `decision_date` | pending |
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
-| `disputed?` | false |
-| `notes` | **DIVERGENT from HK** (SR-HK-OK24-002 = 100h) and from AC (SR-AC-OK24-011 = 150h). The 100 / 120 / 150 progression across HK / PROSA / AC matches established convention. Glocal cell. |
+| `disputed?` | true |
+| `notes` | **DIVERGENT from HK** (SR-HK-OK24-002 = 100h) and from AC (SR-AC-OK24-011 = 150h). The 100 / 120 / 150 progression across HK / PROSA / AC matches established convention. Glocal cell. **S147 verdict (2026-10-30, ADR-043 D6, ACCEPTED):** contradicted by a verified source. There is no central state flex agreement (PAV 19.5.1), so no central flex cap exists; a flex cap is each institution's own local setting, unset unless the institution sets it. The encoded value is what the code does until S148 builds the replacement (the settings in the config stage, their pay effect in stage 1). `disputed?` set to true under the amended definition (S146 R-19). |
 
 ### SR-PROSA-OK24-003 — FlexCarryoverMax (DIVERGENT from HK)
 
@@ -1764,8 +1764,8 @@ PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration;
 | `decision_date` | pending |
 | `supersession_history` | (none) |
 | `bug_correction_history` | (none) |
-| `disputed?` | false |
-| `notes` | **DIVERGENT from HK** (SR-HK-OK24-003 = 100h). Co-located with SR-PROSA-OK24-002. Glocal cell. |
+| `disputed?` | true |
+| `notes` | **DIVERGENT from HK** (SR-HK-OK24-003 = 100h). Co-located with SR-PROSA-OK24-002. Glocal cell. **S147 verdict (2026-10-30, ADR-043 D6, ACCEPTED):** contradicted by a verified source. There is no central state flex agreement (PAV 19.5.1), so no central flex cap exists; a flex cap is each institution's own local setting, unset unless the institution sets it. The encoded value is what the code does until S148 builds the replacement (the settings in the config stage, their pay effect in stage 1). `disputed?` set to true under the amended definition (S146 R-19). |
 
 ### SR-PROSA-OK24-004 — entitlement_configs.VACATION + SPECIAL_HOLIDAY + CARE_DAY (compound, matches HK)
 
@@ -1845,7 +1845,7 @@ PROSA cirkulær source: PROSA + Personalestyrelsen / Medst joint administration;
 | `supersession_history` | (none) |
 | `bug_correction_history` | `[{date: 2026-05-21, from_value: "false (with no decision)", to_value: "false (with decision recorded; flip gated on ADR-024 D7; joint with HK)", source: "S37 TASK-3704 + Bug #4 split routing", commit: "<this S37 commit>", classifier: "Orchestrator (interim, user-confirmed)", was_agreed: NO, materially_wrong: PENDING_S40, action: "decision-recorded-fix-deferred"}]` |
 | `disputed?` | false |
-| `notes` | Resolution uniform with HK SR-HK-OK24-022. Same split routing (S37 records, S38 designs ADR-024 D7, S40 implements + flips). |
+| `notes` | Resolution uniform with HK SR-HK-OK24-022. Same split routing (S37 records, S38 designs ADR-024 D7, S40 implements + flips). **S147 verdict (2026-10-30, ADR-043 D3, ACCEPTED):** the seed flip resolves by retirement. Every overtime hour now needs a leader's decision, so `OvertimeRequiresPreApproval` retires and nothing is left to flip; ADR-024 D7's successor (orders and acknowledgements naming clock spans) is built in S148 stage 2. See ADR-024's S147 note. |
 
 ### SR-PROSA-OK24-008 — wage_type_mappings PROSA OK24 bundle (compound, matches HK)
 

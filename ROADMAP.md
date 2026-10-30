@@ -42,13 +42,20 @@ Not commitments or dates — direction.
 4. **Domain completeness** — the pre-launch agreement-correctness program: real domain-expert
    engagement (Phase B) for the ~80 still-unsourced agreement cells
    ([phase-b-handoff-package](docs/references/phase-b-handoff-package.md)).
-   **Next: the overtime/flex model program, opening in S147** (owner direction S146 OQ-3 = (b), 2026-10-23).
+   **The overtime/flex model program: ADR-043 ACCEPTED 2026-10-29 (S147); S148 opens on its stage map.**
    Two verified research dossiers (`docs/references/overtime-flex-model-research.md`,
-   `docs/references/agreement-cells-reverification-research.md`) showed the overtime model wrong in kind:
-   a weekly norm and automatic overtime where the state sources give a calendar-month norm, overtime only for
-   ordered work at a flat +50 % and surplus hours to flex. **ADR-043 (PROPOSED)** sets the direction; S147's model
-   refinement puts its forks F-1..F-9 to the owner, then accepts and builds it. Closes QUAL-189, QUAL-216..222,
-   QUAL-226 and QUAL-227; retires S145's weekly settlement machinery (frozen by OQ-2, with QUAL-209/210/212/213).
+   `docs/references/agreement-cells-reverification-research.md`) showed the overtime model wrong in kind; in S147 the
+   owner decided all nine of ADR-043's forks and three tender findings (QUAL-232..234), each on the recommended
+   option. In plain words: an hour above the month's norm is flex unless a leader ordered or accepted it; only those
+   hours become overtime (+50 %) or an AC claim, and they leave flex. It is built in self-contained stages, each with
+   its own evaluation-model marker: **stage 0** stops paying what is wrong today (on-call, call-ins and travel refused;
+   the child's-sick-day quotas fixed; the rest check reads Skema's clock times); the **config stage** makes the
+   editors' values reach pay, dated and frozen; **stage 1** brings the monthly norm and flex by default, the holiday
+   calendar split and recorded forfeiture; **stage 2** decided hours, +50 % overtime, the +25 % supplement and § 14,
+   and the overtime account; **stage 3** AC extra-work claims. S148's refinement starts from the build input
+   (`.claude/plans/s147/S148-BUILD-INPUT.md`) and decides how many stages S148 carries; a stage it cannot carry is
+   pointed to here. Closes QUAL-189, QUAL-216..222, QUAL-226, QUAL-227, QUAL-232..234 and QUAL-237 when built;
+   retires S145's weekly settlement machinery (frozen by OQ-2, with QUAL-209/210/212/213).
    The source register's unreliable citations (QUAL-215) make the Phase-B engagement above more urgent.
 5. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.

@@ -407,3 +407,14 @@ For each open question that produced a closed decision, the rejected options:
 - [src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs](../../../src/Infrastructure/StatsTid.Infrastructure/ConfigResolutionService.cs) — current resolution chain (lines 69-129); `ProtectedKeys` set (lines 24-47); informational-keys log-and-skip (lines 255-258).
 - [src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryDetector.cs](../../../src/SharedKernel/StatsTid.SharedKernel/Segmentation/BoundaryDetector.cs) — `OrderedCauses` (extended by D9b).
 - [src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs](../../../src/Integrations/StatsTid.Integrations.Payroll/Services/PeriodCalculationService.cs) — `BuildPlanForLegacyCallers` (extended by D9c).
+
+## S147 note (2026-10-29) — ADR-043 amends this ADR
+
+**In plain words.** The local profile becomes the home of each institution's own flex rules, and it will change pay. ADR-043 (ACCEPTED 2026-10-29) decides, for S148 to build:
+- **Typed, dated, audited flex columns on the profile** (ADR-043 D6): the settlement period, the cap-test period, the plus, minus and daily credit caps, the action above the cap, the leaving action, office hours (a clock window per weekday) and the paid-absence credit basis, resolved for each day and frozen into the calculation's manifest. Not `local_configurations`, which this ADR retired, and not a third table. The dormant `flex_carryover_max` retires or becomes the cap-test period's form. (The S148 build input proposes that the legacy `max_flex_balance` column and its resolver branch retire when the new plus-cap column is mapped; S148's refinement decides.)
+- **A customary-days table beside the profile** (ADR-043 D9): an institution's paid days off and closure days, dated and audited, because they are a list of days, not a value.
+- **`overtime_requires_pre_approval` retires** (ADR-043 D3): every overtime hour now needs a decision, so an optional switch has no meaning. `max_overtime_hours_per_period` survives only as an optional warning over decided hours.
+- **The `weekly_norm_hours` override and D9a's Monday alignment rule lose their premise** under ADR-043 D1's monthly norm, since no sampled agreement changes the norm's hours. Retiring them is an expert question (ADR-043 provisional item 18), not decided here.
+- **A local profile changes pay** (QUAL-204, answered by ADR-043 D12): payroll reads the profile in force on each day, not the current one.
+
+Built in S148's config stage (the columns, the table, the editor) and stage 1 (their pay effect).

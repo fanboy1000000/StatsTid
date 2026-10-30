@@ -58,7 +58,7 @@ Cross-cutting types shared by all services. No business logic, no I/O.
 - **Interfaces/** -- Repository and service contracts
 - **Security/** -- `StatsTidRoles`, `RoleScope`, role hierarchy constants
 - **Calendar/** -- Danish holiday calendar, work-day calculations ([DEP-001](knowledge-base/dependencies/DEP-001-rule-engine-depends-on-sharedkernel-calendar.md))
-- **Config/** -- `CentralAgreementConfigs` (static source of truth), `PositionOverrideConfigs`
+- **Config/** -- `CentralAgreementConfigs`, `PositionOverrideConfigs`: the static configs that seed the database. Today the Rule Engine also reads them directly for every calculation (QUAL-233). Decided (ADR-043 D12, 2026-10-29): payroll passes the database configs in the engine's request, and the static configs stay a seed and a defence-in-depth fallback at most; built in S148's config stage
 - **Audit/** -- Audit-projection contracts: `AuditProjectionRowData`, `IAuditProjectionMapper<T>`, visibility-scope types (ADR-026)
 - **Segmentation/** -- Temporal period segmentation planner + manifest value types (ADR-016)
 - **Normalization/** -- `MidnightCrossingNormalizer` — calc/compliance input-boundary day-attribution normalizer (ADR-039)
@@ -83,7 +83,7 @@ Pure auth primitives shared by all API services. No DB dependency. Extracted fro
 Pure deterministic rule evaluation. Zero I/O, zero database access ([ADR-002](knowledge-base/decisions/ADR-002-pure-function-rule-engine.md)). Project references SharedKernel + Auth only — Infrastructure is structurally unreachable.
 
 - **Rules/** -- `NormCheckRule`, `SupplementRule`, `OvertimeRule`, `AbsenceRule`, `FlexBalanceRule`, `OnCallDutyRule`, `CallInWorkRule`, `TravelTimeRule`, and `RuleRegistry` (the rule-classification registry)
-- **Config/** -- `AgreementConfigProvider` (delegates to `CentralAgreementConfigs`)
+- **Config/** -- `AgreementConfigProvider` (delegates to `CentralAgreementConfigs`; today every rule evaluation takes its config from here. Decided, ADR-043 D12: the engine takes the configs payroll resolved and passed in the request; built in S148's config stage)
 - **Contracts/** -- rule request/response DTOs (QUAL-080: the doc previously named a nonexistent `Services/` folder here)
 - OK version resolved by entry date, not current date ([ADR-003](knowledge-base/decisions/ADR-003-ok-version-resolved-by-entry-date.md))
 - All endpoints return `CalculationResult`-compatible responses ([PAT-006](knowledge-base/patterns/PAT-006-unified-rule-endpoint-response-format.md))
@@ -123,6 +123,7 @@ Payroll export pipeline, isolated from the rule engine.
 - **PayrollMappingService** -- Maps rule outputs to SLS wage type codes (position-aware precedence)
 - **SlsExportFormatter** -- Pipe-delimited SLS file output (`InvariantCulture` for determinism)
 - **RetroactiveCorrectionService** -- OK version split recalculation, correction export with HC|/C|/TC| prefixes ([ADR-013](knowledge-base/decisions/ADR-013-retroactive-corrections-single-period-no-cascade.md))
+- **ProjectionHoursReader** -- the one Payroll type allowed to name the Backend-owned hours repositories: payroll reads `time_entries_projection` and `absences_projection` read-only and never writes them (ADR-016 D10's read-only cross-context contract, on the ADR-034 D4 precedent). Decided (ADR-043 D10, D3, 2026-10-29): the contract grows to a third table, Skema's work intervals (`work_time_projection`), and then to the records of decided hours, each frozen by value into the calculation's manifest, with `ProjectionHoursReader` staying the one Payroll type that names the Backend repositories; built in S148 stage 2
 
 ### Integrations/External (`src/Integrations/StatsTid.Integrations.External/`)
 
@@ -153,6 +154,8 @@ Types (SharedKernel)
                  └── Runtime (Backend API, Orchestrator)
                       └── UI (Frontend)
 ```
+
+*Note (S147, 2026-10-29).* The Config layer holds the static seed configs. Today it is also what the Rule Engine reads for every calculation (QUAL-233). Under ADR-043 D12 (decided; built in S148's config stage), payroll resolves the database configs for each day and passes them in the engine's request, so the static configs become seed data and a defence-in-depth fallback at most.
 
 **Hard rules:**
 
@@ -192,7 +195,7 @@ Central config (DB, with static fallback)
 ```
 
 - Central configs are DB-backed with lifecycle: `DRAFT -> ACTIVE -> ARCHIVED` ([ADR-014](knowledge-base/decisions/ADR-014-agreement-configs-database-backed.md))
-- Static `CentralAgreementConfigs` used as seed data and defense-in-depth fallback
+- Static `CentralAgreementConfigs` seed the database. **Today the Rule Engine still reads them directly for every calculation, so the database configs reach screens and booking but not pay (QUAL-233).** Decided (ADR-043 D12, 2026-10-29; ADR-014 on the pay path): for each day of a month, payroll resolves the published agreement config, the position override and the institution's local profile in force that day, passes them to the pure engine in the request, and freezes every value it used into the calculation's manifest; the static configs remain a seed and a defence-in-depth fallback at most. Built in S148's config stage
 - Config merging happens at the service layer (`ConfigResolutionService`), never inside the rule engine
 
 **Period approval flow** ([ADR-012](knowledge-base/decisions/ADR-012-two-step-approval-flow.md)):
