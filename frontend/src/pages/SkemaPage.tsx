@@ -224,7 +224,7 @@ function formatActionError(e: SkemaActionError): string {
     case 'save': {
       const days = e.dates && e.dates.length > 0 ? ` Dage: ${e.dates.slice(0, 5).map(formatShortDate).join(', ')}${e.dates.length > 5 ? ' m.fl.' : ''}.` : ''
       const outcome = e.uncertain ? ' Det er uvist, om ændringerne blev gemt.' : ' Ændringerne er ikke gemt.'
-      return `Kunne ikke gemme (${monthText}): ${e.message}.${outcome}${days}`
+      return `Kunne ikke gemme (${monthText}): ${e.message.replace(/\.\s*$/, '')}.${outcome}${days}`
     }
     case 'approve':
       return `Kunne ikke godkende måneden (${monthText}): ${e.message}`
@@ -257,25 +257,26 @@ interface MonthEnv { year: number; month: number }
     replayed (its outcome is unknown), it just stops holding up everything behind it. */
 const SAVE_QUEUE_WAIT_MS = 15_000
 
-/** Awaits in-flight saves for at most `ms`. `timedOut` means at least one never answered; the
-    request is neither aborted nor replayed (its outcome is unknown). */
-function allSettledWithin(ps: Promise<boolean>[], ms: number): Promise<{ ok: boolean; timedOut: boolean }> {
+/** Runs `work` for at most `ms`. `timedOut` means the whole of it did not finish in time; the
+    work is neither aborted nor replayed (the caller marks it abandoned so it does nothing more).
+    A work that throws counts as a failed (false) result, not a timeout. */
+function runBounded(work: Promise<boolean>, ms: number): Promise<{ timedOut: boolean; ok: boolean }> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ms)
-    Promise.all(ps).then(
-      (rs) => { clearTimeout(timer); resolve({ ok: rs.every(Boolean), timedOut: false }) },
-      () => { clearTimeout(timer); resolve({ ok: false, timedOut: false }) },
+    const timer = setTimeout(() => resolve({ timedOut: true, ok: false }), ms)
+    work.then(
+      (ok) => { clearTimeout(timer); resolve({ timedOut: false, ok }) },
+      () => { clearTimeout(timer); resolve({ timedOut: false, ok: false }) },
     )
   })
 }
 
-/** Resolves when `p` settles (either way) or after `ms`, whichever is first. */
-function waitBounded(p: Promise<unknown>, ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms)
+/** Resolves `true` when `p` settles (either way) or `false` when `ms` passes first (timed out). */
+function waitBounded(p: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms)
     const done = () => {
       clearTimeout(timer)
-      resolve()
+      resolve(true)
     }
     p.then(done, done)
   })
@@ -320,7 +321,7 @@ export function SkemaPage() {
   // Every month load awaits the page's save queue first (set below, once the queue exists).
   const savesIdleRef = useRef<() => Promise<void>>(() => Promise.resolve())
   const awaitSavesIdle = useCallback(() => savesIdleRef.current(), [])
-  const { data, loading, error, actionError, reportActionError, loadMismatch, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch, saveBatch, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month, awaitSavesIdle)
+  const { data, loading, error, actionError, droppedSaves, dismissDroppedSave, reportActionError, loadMismatch, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch, saveBatch, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month, awaitSavesIdle)
   // S127 / TASK-12707 — the `useAuth()` read here is gone with the send body it
   // fed: `orgId`/`agreementCode` were only ever arguments to the retired
   // `/api/approval/submit` payload. (`ApprovalFooter` keeps its own `useAuth()`
@@ -359,8 +360,10 @@ export function SkemaPage() {
   // (the local edits still hold the values), so a later flush retries them and
   // returns false only while persistence genuinely failed — no silent loss, no
   // forgotten-failure window.
-  const cellSavesInFlightRef = useRef<Set<Promise<boolean>>>(new Set())
-  const workTimeSavesInFlightRef = useRef<Set<Promise<boolean>>>(new Set())
+  // Each in-flight save is keyed with the month it belongs to, so a timeout notice can name the
+  // month of the save that hung.
+  const cellSavesInFlightRef = useRef<Map<Promise<boolean>, MonthEnv>>(new Map())
+  const workTimeSavesInFlightRef = useRef<Map<Promise<boolean>, MonthEnv>>(new Map())
 
   // Build cell values from data (derived; copied into `localCells` DURING RENDER by the
   // S147 hydration block below, not by an effect).
@@ -517,7 +520,7 @@ export function SkemaPage() {
   // S147 / QUAL-241 fix-up 1 — the edit surfaces are locked while the displayed month and
   // the held `data` disagree. useSkema keeps the PREVIOUS month's data on screen while the
   // next month loads, and on a FAILED fetch it keeps it for good (loading drops to false),
-  // so the test is month IDENTITY, never `loading`: otherwise a failed fetch would unlock
+  // so the test is month IDENTITY, never `loading` alone: otherwise a failed fetch would unlock
   // the old month's data under the new month's day columns. `busyCount` is the second
   // lock: the row-preference sequence and approve/send (flush → request → reload of the SAME
   // month) re-hydrate local state from the reloaded response, which would overwrite anything
@@ -555,18 +558,29 @@ export function SkemaPage() {
       server strictly one at a time in send order. A request that outlives the bound is neither
       aborted nor replayed (its outcome is unknown) and may still land after later saves. */
   const saveTailRef = useRef<Promise<unknown>>(Promise.resolve())
+  /** Saves whose queue bound passed while they were still unanswered (oldest first), keyed by an
+      identity token; removed when the save finally settles or once a notice has named it. */
+  const hungSavesRef = useRef<Map<object, MonthEnv>>(new Map())
   const saveSerial = useCallback(
     (batch: SaveBatch) => {
       const prev = saveTailRef.current
       const run = prev.then(() => saveBatch(batch))
-      saveTailRef.current = prev.then(() => waitBounded(run, SAVE_QUEUE_WAIT_MS))
+      const token = {}
+      saveTailRef.current = prev
+        .then(() => waitBounded(run, SAVE_QUEUE_WAIT_MS))
+        .then((answered) => {
+          if (!answered) hungSavesRef.current.set(token, { year: batch.year, month: batch.month })
+        })
+      const forget = () => { hungSavesRef.current.delete(token) }
+      run.then(forget, forget)
       return run
     },
     [saveBatch],
   )
-  /** A flush gave up waiting for a save that never answered: tell the person (month-labelled). */
-  const reportUnanswered = useCallback(() => {
-    const env = dataMonthRef.current
+  /** Tell the person a save never answered: "uvist", month-labelled with the month of the save
+      that hung when known (else the month on screen). One notice, in the single action slot. */
+  const reportUnanswered = useCallback((hung: MonthEnv | null) => {
+    const env = hung ?? dataMonthRef.current
     if (!env) return
     reportActionError({
       kind: 'save',
@@ -577,10 +591,20 @@ export function SkemaPage() {
     })
   }, [reportActionError])
 
-  // A month load is ordered after every queued save (bounded the same way).
+  // A month load is ordered after every queued save (bounded the same way). When that wait gives
+  // up because a save never answered, the reloaded month may not show the latest save: say so.
   useLayoutEffect(() => {
-    savesIdleRef.current = () => waitBounded(saveTailRef.current, SAVE_QUEUE_WAIT_MS)
-  }, [])
+    savesIdleRef.current = async () => {
+      const answered = await waitBounded(saveTailRef.current, SAVE_QUEUE_WAIT_MS)
+      const [hung] = [...hungSavesRef.current.values()]
+      hungSavesRef.current.clear() // named once, not at every later load
+      if (hung) reportUnanswered(hung)
+      else if (!answered) {
+        const [live] = [...cellSavesInFlightRef.current.values(), ...workTimeSavesInFlightRef.current.values()]
+        reportUnanswered(live ?? null)
+      }
+    }
+  }, [reportUnanswered])
 
   /** Send work-time rows under their own month (the month on screen when they were queued). On
       FAILURE: while that month is still the data on screen the dates go back to the dirty set
@@ -666,7 +690,7 @@ export function SkemaPage() {
       for (const d of dates) workTimeDirtyRef.current.add(d)
       return false
     })
-    workTimeSavesInFlightRef.current.add(save)
+    workTimeSavesInFlightRef.current.set(save, env)
     void save.finally(() => {
       workTimeSavesInFlightRef.current.delete(save)
     })
@@ -681,32 +705,62 @@ export function SkemaPage() {
     return sendWorkTime(env, buildWorkTimePayload(dates, workIntervalsRef.current, manualHoursRef.current))
   }, [sendWorkTime])
 
+  /** Bound a WHOLE flush (the in-flight saves it awaits AND the saves it fires itself). On timeout
+      the flush is abandoned (it fires nothing more), the saves still unanswered are released from
+      the in-flight set, the "uvist" notice names the month of the first of them, and the flush
+      counts as failed. Nothing is aborted or replayed. */
+  const flushBounded = useCallback(
+    async (
+      inFlightRef: { current: Map<Promise<boolean>, MonthEnv> },
+      body: (tracked: Map<Promise<boolean>, MonthEnv>, isAbandoned: () => boolean) => Promise<boolean>,
+    ): Promise<boolean> => {
+      const tracked = new Map(inFlightRef.current)
+      let abandoned = false
+      const outcome = await runBounded(body(tracked, () => abandoned), SAVE_QUEUE_WAIT_MS)
+      if (!outcome.timedOut) return outcome.ok
+      abandoned = true
+      const hung: MonthEnv[] = []
+      for (const [pr, env] of tracked) {
+        if (!inFlightRef.current.has(pr)) continue // it did answer
+        hung.push(env)
+        inFlightRef.current.delete(pr)
+      }
+      reportUnanswered(hung[0] ?? null)
+      return false
+    },
+    [reportUnanswered],
+  )
+
   /** Flush pending debounced WORK-TIME saves (B2: fires any pending debounce immediately AND
       awaits the in-flight POSTs). Returns false when any involved save failed — callers must not
-      refetch over unsaved state. The wait is BOUNDED: a POST that never answers counts as a
-      failed flush (alert shown, in-flight set released, the request neither aborted nor
-      replayed), so a hung request cannot hold Godkend or a preference action forever. */
+      refetch over unsaved state. The WHOLE flush is bounded (see flushBounded): a POST that never
+      answers — one already in flight or one this flush fires — counts as a failed flush, so a
+      hung request cannot hold Godkend or a preference action forever. */
   const flushWorkTimeSave = useCallback(async (): Promise<boolean> => {
     if (workTimeSaveTimerRef.current) {
       clearTimeout(workTimeSaveTimerRef.current)
       workTimeSaveTimerRef.current = null
     }
-    // Await every POST that already left (B2: sets, so no save is evicted) —
-    // their outcomes count toward the flush result; failures re-queue, so the
-    // retry below picks them up in the same flush.
-    const inFlight = [...workTimeSavesInFlightRef.current]
-    const settled = await allSettledWithin(inFlight, SAVE_QUEUE_WAIT_MS)
-    if (settled.timedOut) {
-      for (const pr of inFlight) workTimeSavesInFlightRef.current.delete(pr)
-      reportUnanswered()
-      return false
-    }
-    if (workTimeDirtyRef.current.size === 0) return settled.ok
-    const dates = [...workTimeDirtyRef.current]
-    workTimeDirtyRef.current = new Set()
-    const ok = await fireWorkTimeSave(dates)
-    return settled.ok && ok
-  }, [fireWorkTimeSave, reportUnanswered])
+    return flushBounded(workTimeSavesInFlightRef, async (tracked, isAbandoned) => {
+      // Await every POST that already left (B2: sets, so no save is evicted) —
+      // their outcomes count toward the flush result; failures re-queue, so the
+      // retry below picks them up in the same flush.
+      let settledOk: boolean
+      try {
+        settledOk = (await Promise.all([...tracked.keys()])).every(Boolean)
+      } catch {
+        settledOk = false
+      }
+      if (isAbandoned()) return false
+      if (workTimeDirtyRef.current.size === 0) return settledOk
+      const dates = [...workTimeDirtyRef.current]
+      workTimeDirtyRef.current = new Set()
+      const before = new Set(workTimeSavesInFlightRef.current.keys())
+      const fired = fireWorkTimeSave(dates)
+      for (const [pr, env] of workTimeSavesInFlightRef.current) if (!before.has(pr)) tracked.set(pr, env)
+      return settledOk && (await fired)
+    })
+  }, [fireWorkTimeSave, flushBounded])
 
   const scheduleWorkTimeSave = useCallback((date: string) => {
     workTimeDirtyRef.current.add(date)
@@ -845,7 +899,7 @@ export function SkemaPage() {
       }
       return false
     })
-    cellSavesInFlightRef.current.add(save)
+    cellSavesInFlightRef.current.set(save, env)
     void save.finally(() => {
       cellSavesInFlightRef.current.delete(save)
     })
@@ -915,21 +969,25 @@ export function SkemaPage() {
       saveTimerRef.current = null
     }
     // Await every POST that already left (B2: sets, so no save is evicted) —
-    // failures re-queue, so the retry below picks them up in the same flush. BOUNDED (see
-    // flushWorkTimeSave): a POST that never answers is a failed flush, not a permanent wait.
-    const inFlight = [...cellSavesInFlightRef.current]
-    const settled = await allSettledWithin(inFlight, SAVE_QUEUE_WAIT_MS)
-    if (settled.timedOut) {
-      for (const pr of inFlight) cellSavesInFlightRef.current.delete(pr)
-      reportUnanswered()
-      return false
-    }
-    const pending = [...pendingChangesRef.current]
-    pendingChangesRef.current = []
-    if (pending.length === 0) return settled.ok
-    const ok = await fireCellSave(pending)
-    return settled.ok && ok
-  }, [fireCellSave, reportUnanswered])
+    // failures re-queue, so the retry below picks them up in the same flush. BOUNDED as a whole
+    // (see flushWorkTimeSave): a POST that never answers is a failed flush, not a permanent wait.
+    return flushBounded(cellSavesInFlightRef, async (tracked, isAbandoned) => {
+      let settledOk: boolean
+      try {
+        settledOk = (await Promise.all([...tracked.keys()])).every(Boolean)
+      } catch {
+        settledOk = false
+      }
+      if (isAbandoned()) return false
+      const pending = [...pendingChangesRef.current]
+      pendingChangesRef.current = []
+      if (pending.length === 0) return settledOk
+      const before = new Set(cellSavesInFlightRef.current.keys())
+      const fired = fireCellSave(pending)
+      for (const [pr, env] of cellSavesInFlightRef.current) if (!before.has(pr)) tracked.set(pr, env)
+      return settledOk && (await fired)
+    })
+  }, [fireCellSave, flushBounded])
 
   // On unmount (leaving the page) the pending debounced saves are SENT, not dropped — the
   // person typed them. `firePendingNow` also clears both timers. (It is defined below, so it
@@ -1287,12 +1345,20 @@ export function SkemaPage() {
       )}
       {/* S147 fix-up 2 — a failed save / approve / send / reopen: its own dismissible alert,
           worded for the action, showing the server's message. Cleared by the next success of
-          the same kind (in the hook) or by the person. */}
+          the same kind AND month (in the hook) or by the person. */}
       {actionError && (
         <Alert variant="error" onDismiss={clearActionError}>
           {formatActionError(actionError)}
         </Alert>
       )}
+      {/* S147 TASK-14720 — saves dropped after their month left the screen: one persistent notice
+          per month (days merged). Not the retryable slot above; cleared only by dismissal or by a
+          later successful save of that month covering every listed day (in the hook). */}
+      {droppedSaves.map((n) => (
+        <Alert key={`${n.year}-${n.month}`} variant="error" onDismiss={() => dismissDroppedSave(n.year, n.month)}>
+          {formatActionError({ kind: 'save', message: n.message, year: n.year, month: n.month, dates: n.dates })}
+        </Alert>
+      ))}
       {/* S147 fix-up 3 — the load came back with the wrong month even after the one automatic
           retry: say so and let the person retry (never a silent lock). */}
       {loadMismatch && !loading && !error && (

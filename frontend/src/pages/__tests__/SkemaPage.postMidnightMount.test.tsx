@@ -81,6 +81,8 @@ const stable = vi.hoisted(() => {
       error: null,
       quotaError: null,
       approvalValidationError: null,
+      droppedSaves: [],
+      dismissDroppedSave: () => {},
       clearQuotaError: () => {},
       clearApprovalValidationError: () => {},
       refetch: () => {},
