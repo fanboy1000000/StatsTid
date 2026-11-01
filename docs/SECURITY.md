@@ -119,17 +119,36 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
 **Where the predicate runs:**
 - In the identity arm of both validator overloads (`OrgScopeValidator.cs:115`, `:274`). On the leader-inclusive overload it runs *before* the HR gate, so an HR-tier leaver gets this reason and not the HR one. The validator reads the date from the injected `TimeProvider` (`CopenhagenBusinessDate.Today`).
 - Through that check it covers the 32 write routes that use the shared check, in three hosts.
-- Thirteen inline guards cover the write routes the validator does not reach, plus a derived guard on `/remove`. The S147 census counts 84 write routes: 32 shared-check, 19 inline, 33 not keyed on the actor.
+- Thirteen inline guards cover the write routes the validator does not reach, plus a derived guard on `/remove`. The S147 census counted 84 write routes: 32 shared-check, 19 inline, 33 not keyed on the actor. TASK-14710 later retired the two project selection routes (`POST`/`DELETE /api/projects/{orgId}/select/{projectId}`), so the inventory is two smaller.
+- **The self-service write floor (TASK-14710; `Endpoints/Helpers/DepartedSubjectWriteFloor.cs`).** It covers the own-record writes an Employee-role token reaches through the validator's own-data branch, where the identity clause is never consulted. It refuses when the subject has left AND (the actor is the subject OR the actor is below LocalHR). It runs at seven sites:
+  - Skema save, advisory and in-lock;
+  - time entry, advisory and in-lock;
+  - send / employee-approve;
+  - reopen's Employee arm;
+  - row-preferences;
+  - compensation-choice.
+
+  One message per clause. The departed-self clause answers with `DepartedSubject.DenyReason`, the same as the validator. A below-LocalHR actor on another departed subject gets ADR-040 D3's "Writes for a deactivated employee require LocalHR or above". When both apply, the self message wins. The log names the clause.
 
 **Scope and consequences:**
-- Acting on *other* people stays governed by the existing rules (SEC-003's accepted residual).
-- Reads through the shared validator are refused for a departed self too. This is intended, and so are the refusals of Orchestrator `/execute` and Payroll `calculate-and-export` for a departed self; neither is a regression.
-- An actor whose only role is Employee is answered by the own-data branch first, so the clause is not reached; TASK-14710's floor covers that case.
+- Acting on *other* people stays governed by the existing rules, SEC-003's accepted residual. A departed person's edge-based approver authority ends on day 1 (TASK-14712). Their org-scope authority during the grace is SEC-057.
+- Reads through the shared validator are refused for a departed self too. This is intended, and neither refusal below is a regression:
+  - Payroll `calculate-and-export` is refused for a departed self.
+  - Orchestrator `/execute` is refused for a departed self holding a non-Employee role. An Employee-only leaver's token still reaches `/execute` through the own-data branch. That is acceptable: it computes, and changes nothing on the person's own record.
+- An actor whose only role is Employee is answered by the own-data branch first, so the identity clause is not reached. The self-service write floor covers that case.
 - The Payroll and Orchestrator hosts register `TimeProvider.System` from S147. Their test hosts must override it with a fixed provider (PAT-008).
 
-**The active-but-departed window (recorded 2026-10-30, TASK-14719 review NOTE 5).** A leaver is switched to inactive only by the leaver job (`SettlementCloseService`, polling every 5 minutes, and once at host start). So from Copenhagen midnight after the last working day until the job's next successful poll, the person is still `is_active` but already departed. The window is nominally 5 minutes or less. It is longer if the Backend is down or a switch-off fails and retries, and from TASK-14710 it is D+1 to D+5 by design (the manager's grace), plus that lag. Login checks only `is_active`, so during the window a fresh login still succeeds. **The departed-self clause above is then the only control on the person's own record.** That is why it tests the end date and not only the active flag.
+**The active-but-departed window (recorded 2026-10-30, TASK-14719 review NOTE 5; updated after TASK-14710).** A leaver is switched to inactive only by the leaver job (`SettlementCloseService`, polling every 5 minutes, and once at host start).
+- **From TASK-14710 the switch-off fires on day 6** (`ManagerGraceCalendarDays = 5`). So from Copenhagen midnight after the last working day until then, the person is still `is_active` but already departed. That is D+1 to D+5 by design (the manager's grace), plus any poll lag.
+- **Login is refused from day 1** under database auth: the end date has passed, so the same generic 401 as a wrong password, logged `employment_ended`.
+- **The remaining exposure** is a token minted on the last working day, valid for at most its 480-minute lifetime (SEC-003).
+- **What that token can do on the person's own record:**
+  - writes are refused by the identity clause and the self-service write floor;
+  - reads through the shared validator are refused;
+  - an Employee-only token's own-data reads are allowed (K-13).
+- **The controls on the person's own record** are the identity clause, the floor and the login refusal together. That is why each tests the end date and not only the active flag.
 
-**When adding a write route keyed on the caller's own id:** route it through the shared validator, or add the inline guard before the route's first write.
+**When adding a write route keyed on the caller's own id:** route it through the shared validator, or add the inline guard before the route's first write. If an Employee-role token can reach it through the own-data branch, also call `DepartedSubjectWriteFloor`.
 
 ### The mixed-role scope-floor invariant (S76 / B1)
 
