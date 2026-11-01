@@ -1468,6 +1468,8 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
     // when the in-flight save had failed, so the flush returned at once: no "uvist", and the
     // hung retry's tracking was never released (the first assertion after Godkend's wait fails:
     // the grid is already unlocked and the alert says "Ændringerne er ikke gemt").
+    // Red condition (fix-up 2): against cb05d2dc `reportActionError` overwrote the slot, so the
+    // "uvist" notice replaced S1's "ikke gemt" and the two-notice assertion fails.
     await renderLoaded()
     const held: Array<(r: unknown) => void> = []
     let n = 0
