@@ -70,7 +70,10 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     {
         _harness = await TestFixtures.DockerHarness.StartAsync();
         await StatsTidWebApplicationFactory.ApplyFullSchemaAsync(_harness.ConnectionString);
-        _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString);
+        // S147 TASK-14712-T fix-up 1 (W-1): no leaver-flip job (TASK-14719's reason) — otherwise the job, which
+        // polls at host start and every 5 minutes, could deactivate a grace-state subject mid-fact and the
+        // facts would test the deactivated case instead (passing on 3dbc42da: a weak Red condition).
+        _factory = new StatsTidWebApplicationFactory(_harness.ConnectionString, withoutLeaverJob: true);
         _dbFactory = new DbConnectionFactory(_harness.ConnectionString);
         // PAT-008 boot order: the FIXED host boots (and runs the seeders) BEFORE any fixture is seeded.
         _host = _factory.WithFixedToday(F);
@@ -220,7 +223,7 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     /// still counts).</b> With her end date = today, Mette still approves through the edge (R) and through the
     /// unit-leader row (R4): 200 and 200. Together with the two facts above this proves the 403 is about the
     /// departure and not about some other fixture gap.
-    /// <para><b>Red conditions:</b> a "&lt;=" off-by-one in any of the five reads makes one of these 403.</para>
+    /// <para><b>Red conditions:</b> a "&lt;=" off-by-one in the reads approve reaches (the role floor, read 1, and the resolver's activity check, read 3) makes one of these 403.</para>
     /// </summary>
     [Fact]
     public async Task Manager_OnHerLastDay_StillApproves_200_EdgeAndUnitLeader()
@@ -316,22 +319,23 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// <b>Kind F — the drift guard for the walk's hand-copied SQL form of the rule (security consult, residual 7),
-    /// with the three-valued-logic case.</b> For every (actor, report) pair over {Gudrun, Mette, Nils} x {R, R2, R3}
-    /// at D+1: the actor appears in the pending list EXACTLY when the live authorizer admits her AND exactly when
-    /// the resolver names her. R3 reports to Nils, whose end date is NULL: a NULL end date must NOT make the walk
-    /// descend (Gudrun must not see R3). Explicit expectations: Gudrun {R, R2}, Mette {}, Nils {R3}.
+    /// <b>Kind F — the drift guard for the walk's hand-copied SQL form of the rule (security consult, residual 7).</b>
+    /// For every (actor, subject) pair over {Gudrun, Mette, Nils} x {R, R2, R3, Mette, Gudrun, Nils} at D+1 —
+    /// the actor = subject pairs included (RES-003: nobody sees or acts on her own month) — the actor appears in
+    /// the pending list EXACTLY when the live authorizer admits her AND exactly when the resolver names her.
+    /// Explicit expectations: Gudrun {Mette, Nils, R, R2} (Mette's and Nils's own months go to their manager,
+    /// R and R2 escalate past the departed Mette), Mette {}, Nils {R3}.
     /// <para><b>Red conditions:</b> the explicit sets (Gudrun lacks R/R2 today) and the equality of list inclusion
-    /// with the authorizer's verdict. <b>Note:</b> the pending list's stage-b filter runs the authorizer, so an
-    /// OVER-inclusive walk (e.g. NULL descending) is masked in the list itself; the guard against UNDER-inclusion
-    /// (the walk missing a departed manager) is what this fact can fail on. The over-inclusion direction is covered
-    /// by the authorizer/resolver facts, not by the list.</para>
+    /// with the authorizer's verdict. <b>Limit:</b> the pending list's stage-b filter runs the authorizer, so an
+    /// OVER-inclusive walk (including a SQL NULL-end-date bug that made the walk descend) is masked in the list;
+    /// this fact guards UNDER-inclusion (the walk missing a departed manager). It does NOT pin the SQL NULL case.</para>
     /// </summary>
     [Fact]
-    public async Task SeeEqualsAct_ForEveryActorReportPair_AndNullEndDateDoesNotDescend()
+    public async Task SeeEqualsAct_ForEveryActorSubjectPair_IncludingSelfPairs()
     {
         await SetEndDateAsync(Mette, Yesterday);
-        foreach (var r in new[] { R, R2, R3 })
+        var subjects = new[] { R, R2, R3, Mette, Gudrun, Nils };
+        foreach (var r in subjects)
             await InsertPeriodAsync(r, "EMPLOYEE_APPROVED");
 
         var lists = new Dictionary<string, HashSet<string>>
@@ -341,7 +345,9 @@ public sealed class DepartedApproverTests : IAsyncLifetime
             [Nils] = await PendingEmployeesAsync(Nils),
         };
 
-        Assert.Equal(new[] { R, R2 }, lists[Gudrun].OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            new[] { Mette, Nils, R, R2 }.OrderBy(x => x, StringComparer.Ordinal).ToArray(),
+            lists[Gudrun].OrderBy(x => x, StringComparer.Ordinal).ToArray());
         Assert.Empty(lists[Mette]);
         Assert.Equal(new[] { R3 }, lists[Nils].ToArray());
 
@@ -349,7 +355,7 @@ public sealed class DepartedApproverTests : IAsyncLifetime
         var repo = new ReportingLineRepository(_dbFactory);
         foreach (var actor in lists.Keys)
         {
-            foreach (var report in new[] { R, R2, R3 })
+            foreach (var report in subjects)
             {
                 var listed = lists[actor].Contains(report);
                 var acts = await authorizer.IsEffectiveApproverOrUnitLeaderAsync(actor, report, asOf: F);
@@ -369,9 +375,10 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     /// A stand-in Mette appointed for herself BEFORE she left (via <c>POST /api/reporting-lines/delegate</c>,
     /// covering today) keeps approving R's month on D+1 (her last day was yesterday): 200. Outcome recorded
     /// in the report: the stand-in survives the manager's departure until its end date or HR's revocation.
-    /// <para><b>Red conditions:</b> any change that closes or ignores a departed manager's outgoing stand-in
-    /// (a delegator-side rule on the resolver's vikar consult, the unit-leader stand-in reads or the pending-list
-    /// stand-in legs) turns this into 403.</para>
+    /// <para><b>Red conditions:</b> approving R exercises the resolver's vikar consult (read 3's stand-in leg) and
+    /// the role floor for the holder; a delegator-side rule there (skipping a stand-in whose absent approver has
+    /// left) turns this into 403. It does NOT exercise the unit-leader stand-in reads or the pending-list
+    /// stand-in legs; <see cref="StandInOfDepartedUnitLeader_StillApprovesUnitMember_200"/> covers the former.</para>
     /// </summary>
     [Fact]
     public async Task StandInOfDepartedManager_SelfAppointed_StillApproves_200()
@@ -392,7 +399,7 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     /// <b>Kind B — boundary pin — holds today; owner Q-B = (c) (ruled, not provisional). Do NOT "fix".</b>
     /// A stand-in HR appointed for Mette (via <c>POST /api/admin/reporting-lines/{managerId}/vikar</c>, covering
     /// today) keeps approving R's month on D+1: 200.
-    /// <para><b>Red conditions:</b> as for the self-appointed fact.</para>
+    /// <para><b>Red conditions:</b> as for the self-appointed fact (the resolver's vikar consult only).</para>
     /// </summary>
     [Fact]
     public async Task StandInOfDepartedManager_HrAppointed_StillApproves_200()
@@ -407,6 +414,63 @@ public sealed class DepartedApproverTests : IAsyncLifetime
         var rsp = await Client(Vikar).PostAsync($"/api/approval/{period}/approve", null);
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadColumnAsync(period, "status"));
+    }
+
+    /// <summary>
+    /// <b>Kind B — boundary pin — holds today; owner Q-B = (c) (the unit-leader half). Do NOT "fix".</b> Mette
+    /// (designated unit leader of R4's unit, no edge to R4) appoints Vikar as her stand-in while still employed,
+    /// then leaves (last day yesterday). Vikar's approve of R4's month on D+1 is 200 through the unit-leader
+    /// stand-in route (<c>GetUnitLeaderKind</c>'s vikar leg), which T5c deliberately does not touch.
+    /// <para><b>Red conditions:</b> any rule that ignores a stand-in for a departed unit leader makes this 403.</para>
+    /// </summary>
+    [Fact]
+    public async Task StandInOfDepartedUnitLeader_StillApprovesUnitMember_200()
+    {
+        var create = await Client(Mette).PostAsJsonAsync("/api/reporting-lines/delegate",
+            new { actingManagerId = Vikar, effectiveTo = F.AddDays(20).ToString("yyyy-MM-dd") });
+        Assert.Equal(HttpStatusCode.OK, create.StatusCode);
+        await SetEndDateAsync(Mette, Yesterday);
+
+        var period = await InsertPeriodAsync(R4, "EMPLOYEE_APPROVED");
+        var rsp = await Client(Vikar).PostAsync($"/api/approval/{period}/approve", null);
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadColumnAsync(period, "status"));
+    }
+
+    /// <summary>
+    /// <b>Kind F (security 5a B-1; P-1's holder rule).</b> A stand-in who has LEFT herself grants nothing, and the
+    /// month goes back to the absent manager. Mette (no end date) delegates to Vikar, covering today; then Vikar's
+    /// last day is yesterday. Vikar's approve of R is 403; the resolver returns Mette for R; Mette's approve is 200;
+    /// R is on Mette's pending list and not on Vikar's.
+    /// <para><b>Red conditions (on 3dbc42da):</b> <c>Assert.Equal(Mette, resolved.ManagerId)</c> — the resolver
+    /// returns Vikar (the holder's own state was not checked beyond is_active) — and Vikar's 403 — she gets 200.
+    /// A regression that also dropped the fall-through would leave the month stuck (Mette, Vikar and Gudrun all
+    /// refused): the 200 for Mette and her pending-list entry catch that.</para>
+    /// </summary>
+    [Fact]
+    public async Task DepartedStandIn_GrantsNothing_MonthReturnsToTheAbsentManager()
+    {
+        var create = await Client(Mette).PostAsJsonAsync("/api/reporting-lines/delegate",
+            new { actingManagerId = Vikar, effectiveTo = F.AddDays(20).ToString("yyyy-MM-dd") });
+        Assert.Equal(HttpStatusCode.OK, create.StatusCode);
+        await SetEndDateAsync(Vikar, Yesterday);
+
+        var period = await InsertPeriodAsync(R, "EMPLOYEE_APPROVED");
+
+        var vikarRsp = await Client(Vikar).PostAsync($"/api/approval/{period}/approve", null);
+        Assert.Equal(HttpStatusCode.Forbidden, vikarRsp.StatusCode);
+        Assert.Equal("EMPLOYEE_APPROVED", await ReadColumnAsync(period, "status"));
+
+        var repo = new ReportingLineRepository(_dbFactory);
+        Assert.Equal(Mette, (await repo.ResolveDesignatedApproverAsync(R, default, asOf: F)).ManagerId);
+
+        Assert.Contains(R, await PendingEmployeesAsync(Mette));
+        Assert.DoesNotContain(R, await PendingEmployeesAsync(Vikar));
+
+        var metteRsp = await Client(Mette).PostAsync($"/api/approval/{period}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, metteRsp.StatusCode);
         Assert.Equal("APPROVED", await ReadColumnAsync(period, "status"));
     }
 
@@ -437,13 +501,18 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>Kind F (differential).</b> The live and the prefetched forms of the role floor, the resolver and the
+    /// <b>Kind N (differential; calls <c>IsActingLeaderOrAboveAsync</c> and the date-taking resolver, created this
+    /// sprint, so it cannot compile on 3dbc42da — a compile error is not RED).</b> The live and the prefetched forms of the role floor, the resolver and the
     /// combined verdict agree, and both DENY a still-active-but-departed leader (Mette, last day yesterday) and a
     /// DEACTIVATED leader (Dora, <c>is_active = FALSE</c>; the prefetched floor now also returns deactivated
     /// leaders and relies on the C# rule to deny them — implementation deviation 4). Explicit values are
     /// asserted (Mette false, Dora false, Gudrun true on both floors; R and R5 resolve to Gudrun on both), so the
     /// comparison cannot pass vacuously. Self-pairs are included.
-    /// <para><b>Red conditions:</b> <c>Assert.False(floor(Mette))</c> on both forms (today both admit her);
+    /// <para><b>Named mutations (argued — Docker-only; run in a detached worktree at CI):</b> (M1) drop the
+    /// end-date check in <c>PrefetchedAuthorityFacts.IsActingLeaderOrAboveAsync</c>, keeping the API: the prefetched
+    /// floor admits Mette, so <c>Assert.Equal(false, prefetched floor(Mette))</c> fails and the live-vs-prefetched
+    /// verdict for (Mette, R) diverges. (M2) drop the <c>is_active</c> half there: the prefetched floor admits Dora.</para>
+    /// <para><b>Red conditions:</b> <c>Assert.False(floor(Mette))</c> on both forms;
     /// <c>Assert.False(prefetchedFloor(Dora))</c> if the prefetched rule ever stops denying deactivated leaders;
     /// any divergence between the forms for any (candidate, employee) pair.</para>
     /// </summary>
