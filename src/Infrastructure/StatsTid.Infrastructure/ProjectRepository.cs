@@ -109,93 +109,12 @@ public sealed class ProjectRepository
         return await ReadProjectsAsync(cmd, ct);
     }
 
-    /// <summary>
-    /// Adds a single project selection — the R14-ALIGNED legacy write (S72 / TASK-7201).
-    /// One transaction: (0) acquire the per-employee advisory lock (Step-5a B4 — see
-    /// <see cref="AcquireEmployeeLockAsync"/>); (1) initialize the R4
-    /// <c>user_skema_preferences</c> container on first write (<c>ON CONFLICT DO NOTHING</c>
-    /// preserves an existing <c>initialized_at</c>); (2) INSERT the row APPENDED AT THE END
-    /// (<c>MAX(sort_order)+1</c>, so it lands last after the reindex); (3) dense reindex to
-    /// 0..n-1 in the R4 deterministic order (<c>sort_order, project_code</c>). Idempotent:
-    /// re-adding an already-selected project is a no-op INSERT (the reindex still runs,
-    /// harmlessly densifying). Plain un-evented rows per the R4 precedent. Because the lock
-    /// precedes every read in this tx, the <c>MAX(sort_order)</c> subquery and the reindex
-    /// re-read the LATEST committed state once a competing preference writer releases.
-    /// </summary>
-    public async Task AddSelectionAsync(string employeeId, Guid projectId, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
-        try
-        {
-            await AcquireEmployeeLockAsync(conn, tx, employeeId, ct);
-            await EnsureContainerAsync(conn, tx, employeeId, ct);
-
-            await using (var cmd = new NpgsqlCommand(
-                """
-                INSERT INTO user_project_selections (employee_id, project_id, sort_order)
-                VALUES (@employeeId, @projectId,
-                        (SELECT COALESCE(MAX(sort_order), -1) + 1
-                         FROM user_project_selections
-                         WHERE employee_id = @employeeId))
-                ON CONFLICT DO NOTHING
-                """, conn, tx))
-            {
-                cmd.Parameters.AddWithValue("employeeId", employeeId);
-                cmd.Parameters.AddWithValue("projectId", projectId);
-                await cmd.ExecuteNonQueryAsync(ct);
-            }
-
-            await ReindexSelectionsAsync(conn, tx, employeeId, ct);
-            await tx.CommitAsync(ct);
-        }
-        catch
-        {
-            await tx.RollbackAsync(ct);
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// Removes a single project selection — the R14-ALIGNED legacy write (S72 / TASK-7201).
-    /// One transaction: per-employee advisory lock FIRST (Step-5a B4 — see
-    /// <see cref="AcquireEmployeeLockAsync"/>) + container init (a remove IS a preference
-    /// write — post-S72 it transitions the employee to the R4 configured state, so removing
-    /// the LAST selection deliberately yields ZERO visible rows rather than the legacy
-    /// all-projects fallback) + DELETE + dense 0..n-1 reindex of the remaining rows. The
-    /// HTTP response contract (204) is unchanged. Plain un-evented rows per the R4 precedent.
-    /// </summary>
-    public async Task RemoveSelectionAsync(string employeeId, Guid projectId, CancellationToken ct = default)
-    {
-        await using var conn = _connectionFactory.Create();
-        await conn.OpenAsync(ct);
-        await using var tx = await conn.BeginTransactionAsync(ct);
-        try
-        {
-            await AcquireEmployeeLockAsync(conn, tx, employeeId, ct);
-            await EnsureContainerAsync(conn, tx, employeeId, ct);
-
-            await using (var cmd = new NpgsqlCommand(
-                """
-                DELETE FROM user_project_selections
-                WHERE employee_id = @employeeId AND project_id = @projectId
-                """, conn, tx))
-            {
-                cmd.Parameters.AddWithValue("employeeId", employeeId);
-                cmd.Parameters.AddWithValue("projectId", projectId);
-                await cmd.ExecuteNonQueryAsync(ct);
-            }
-
-            await ReindexSelectionsAsync(conn, tx, employeeId, ct);
-            await tx.CommitAsync(ct);
-        }
-        catch
-        {
-            await tx.RollbackAsync(ct);
-            throw;
-        }
-    }
+    // S147 / TASK-14710 (QUAL-230 T5a; rulings R-23, R-33) — AddSelectionAsync and
+    // RemoveSelectionAsync, the S72 R14-aligned single-row legacy writes behind the deprecated
+    // POST / DELETE /api/projects/{orgId}/select/{projectId}, were RETIRED with those routes: no
+    // screen had called them since the S72 R9 sweep, and they keyed on the caller with no subject
+    // row, so the leaver's self-service write floor had nothing to read. The one selection writer
+    // is PUT /api/skema/{employeeId}/row-preferences (SkemaRowPreferenceRepository.ReplaceAsync).
 
     /// <summary>
     /// S72 / Step-5a B4 — per-employee serialization for EVERY preference mutation: the

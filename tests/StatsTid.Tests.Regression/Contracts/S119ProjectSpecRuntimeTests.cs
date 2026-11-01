@@ -15,9 +15,8 @@ namespace StatsTid.Tests.Regression.Contracts;
 /// S119 / TASK-11902 — the per-route spec≡runtime gate for the PROJECTS family drained in
 /// retrofit Pass 6 (TASK-11900): list GET + create POST 201 (the SAME 4-member
 /// <c>ProjectResponse</c> at BOTH sites — the S112 sibling-record rule, pinned live),
-/// available GET (the 5-member <c>+selected</c> shape and its flip after select), select POST
-/// (200, the 2-member echo, NO request body — the declared-bodyless member) and deselect
-/// DELETE (204 + EMPTY body), project PUT (the 2-member <c>{projectId, updated}</c>) and
+/// available GET (the 5-member <c>+selected</c> shape and its flip after select; S147: the select POST and
+/// deselect DELETE, deprecated since S72, are RETIRED — see <c>ProjectSelectionRetiredTests</c>), project PUT (the 2-member <c>{projectId, updated}</c>) and
 /// project DELETE (204 + empty).
 ///
 /// <para><b>The PRECONDITION-FREE family pin (Step-0b Reviewer N1 — pinned, not observed):</b>
@@ -55,9 +54,6 @@ public sealed class S119ProjectSpecRuntimeTests : IAsyncLifetime
 
     /// <summary>The EXACT 5 members of <c>AvailableProjectResponse</c> (<c>+selected</c>).</summary>
     private static readonly string[] AvailableKeys = { "projectId", "projectCode", "projectName", "sortOrder", "selected" };
-
-    /// <summary>The EXACT 2 members of <c>ProjectSelectionResponse</c>.</summary>
-    private static readonly string[] SelectionKeys = { "projectId", "selected" };
 
     /// <summary>The EXACT 2 members of <c>ProjectUpdateResponse</c>.</summary>
     private static readonly string[] UpdateKeys = { "projectId", "updated" };
@@ -163,7 +159,7 @@ public sealed class S119ProjectSpecRuntimeTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>The 5-member available shape BOTH sides of the flip: before select
-    /// <c>selected: false</c>, after the REAL select POST <c>selected: true</c> — the matcher
+    /// <c>selected: false</c>, after the select (S147 R-23: the row-preferences PUT, the select POST being retired) <c>selected: true</c> — the matcher
     /// walks both reads, proving the boolean is live per-employee state, not a constant.</summary>
     [Fact]
     public async Task Available_Get200_FiveMemberRows_SelectedFlipsAfterSelect()
@@ -180,7 +176,9 @@ public sealed class S119ProjectSpecRuntimeTests : IAsyncLifetime
         S118ContractAssert.AssertExactKeySet(beforeRow, AvailableKeys, "available row (pre-select)");
         Assert.False(beforeRow.GetProperty("selected").GetBoolean());
 
-        await SelectAsync(employee, projectId); // the REAL select POST
+        // S147 R-23: the select POST is deleted; the project is selected through the S72 replacement write
+        // (PUT row-preferences). The assertions around it are unchanged.
+        await SelectViaRowPreferencesAsync(employee, projectId);
 
         var after = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
             _spec, employee,
@@ -193,64 +191,11 @@ public sealed class S119ProjectSpecRuntimeTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
-    //  Op 4 — POST .../select/{projectId} — declared-BODYLESS; EmployeeOrAbove WRITE.
+    //  Op 4 / Op 5 — RETIRED (S147 / TASK-14710, R-23, R-33). POST and DELETE .../select/{projectId} are
+    //  deleted; their two facts (Select_Post200_TwoMemberEcho_NoRequestBody_EmployeeWriteSucceeds and
+    //  Deselect_Delete204_EmptyBody_EmployeeWriteSucceeds) are retired pins. The retirement itself (both
+    //  paths answer 404) is pinned in Contracts/ProjectSelectionRetiredTests.cs.
     // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>The declared-bodyless member (openapi-bodyless-declared.txt, 8→9): the POST is
-    /// sent with NO request body and succeeds — 200 through the matcher with the EXACT
-    /// 2-member <c>{projectId, selected: true}</c> echo. Driven by the EMPLOYEE client: the
-    /// self-service write floor (EmployeeOrAbove BY DESIGN) pinned POSITIVELY.</summary>
-    [Fact]
-    public async Task Select_Post200_TwoMemberEcho_NoRequestBody_EmployeeWriteSucceeds()
-    {
-        using var admin = AdminClient();
-        using var employee = EmployeeClient();
-        var projectId = await CreateProjectAsync(admin, "S119_SEL", "S119 Valgprojekt", 1);
-
-        using var response = await employee.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Post, $"/api/projects/{Org}/select/{projectId}")); // NO body — declared bodyless
-        var body = await response.Content.ReadAsStringAsync();
-
-        Assert.Equal(200, (int)response.StatusCode);
-        S119ContractAssert.AssertNoEtag(response, "select POST 200");
-
-        var truth = SpecRuntimeMatcher.ResolveSuccessContract(
-            _spec, "/api/projects/{orgId}/select/{projectId}", "post");
-        SpecRuntimeMatcher.AssertSuccessMatches(_spec, truth, 200, body, "POST .../select/{projectId} (200)");
-
-        var root = JsonDocument.Parse(body).RootElement;
-        S118ContractAssert.AssertExactKeySet(root, SelectionKeys, "select POST 200");
-        Assert.Equal(projectId, root.GetProperty("projectId").GetGuid());
-        Assert.True(root.GetProperty("selected").GetBoolean());
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    //  Op 5 — DELETE .../select/{projectId} — 204 + EMPTY body; EmployeeOrAbove WRITE.
-    // ════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>Select (real POST) → deselect: the declared 204 = status + EMPTY body, both
-    /// matcher-asserted, at the Employee floor (the second by-design self-service write). The
-    /// available re-read proves the deselect landed (<c>selected</c> back to false).</summary>
-    [Fact]
-    public async Task Deselect_Delete204_EmptyBody_EmployeeWriteSucceeds()
-    {
-        using var admin = AdminClient();
-        using var employee = EmployeeClient();
-        var projectId = await CreateProjectAsync(admin, "S119_DSL", "S119 Fravalgsprojekt", 1);
-        await SelectAsync(employee, projectId);
-
-        await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
-            _spec, employee,
-            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Delete, $"/api/projects/{Org}/select/{projectId}"),
-            "/api/projects/{orgId}/select/{projectId}", "delete");
-
-        var after = await SpecRuntimeTestSupport.AssertOperationMatchesRuntimeAsync(
-            _spec, employee,
-            SpecRuntimeTestSupport.JsonRequest(HttpMethod.Get, $"/api/projects/{Org}/available"),
-            "/api/projects/{orgId}/available", "get");
-        var row = FindByCode(JsonDocument.Parse(after).RootElement, "S119_DSL");
-        Assert.False(row.GetProperty("selected").GetBoolean()); // the deselect landed
-    }
 
     // ════════════════════════════════════════════════════════════════════════════════
     //  Op 6 — PUT /api/projects/{orgId}/{projectId} — 2-member; PRECONDITION-FREE.
@@ -324,7 +269,7 @@ public sealed class S119ProjectSpecRuntimeTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>The per-op policy map's other half: create/update/delete are
-    /// <c>LocalAdminOrAbove</c> — the SAME employee identity that SUCCEEDS on select/deselect
+    /// <c>LocalAdminOrAbove</c> — the SAME employee identity that SUCCEEDS on the self-service row-preferences write (S147: select/deselect retired)
     /// is 403 on all three admin mutations (per-op pins, not a generalization).</summary>
     [Fact]
     public async Task AdminMutations_403_ForTheEmployeeActor_PolicyFloorPins()
@@ -394,7 +339,7 @@ public sealed class S119ProjectSpecRuntimeTests : IAsyncLifetime
         => SpecRuntimeTestSupport.CreateGlobalAdminClient(_factory, AdminActorId, Org);
 
     /// <summary>The REAL seeded employee's client (ORG_ONLY Employee scope over the S119 org) —
-    /// the self-service select/deselect actor AND the 403 actor for the admin writes. Mirrors
+    /// the self-service row-preferences actor (S147: select/deselect retired) AND the 403 actor for the admin writes. Mirrors
     /// the Support helper's JWT minting (Support consumed AS-IS).</summary>
     private HttpClient EmployeeClient()
     {
@@ -427,14 +372,18 @@ public sealed class S119ProjectSpecRuntimeTests : IAsyncLifetime
         return JsonDocument.Parse(body).RootElement.GetProperty("projectId").GetGuid();
     }
 
-    /// <summary>Select through the REAL bodyless POST; throws with the body on any non-200.</summary>
-    private static async Task SelectAsync(HttpClient employee, Guid projectId)
+    /// <summary>S147 R-23: marks the project as selected through the ONE remaining selection writer,
+    /// <c>PUT /api/skema/{employeeId}/row-preferences</c> (the S72 full-replacement write; it fills the same
+    /// <c>user_project_selections</c> table the available GET reads). Replaces the deleted select POST.
+    /// Throws with the body on any non-200.</summary>
+    private static async Task SelectViaRowPreferencesAsync(HttpClient employee, Guid projectId)
     {
         using var response = await employee.SendAsync(SpecRuntimeTestSupport.JsonRequest(
-            HttpMethod.Post, $"/api/projects/{Org}/select/{projectId}"));
+            HttpMethod.Put, $"/api/skema/{EmployeeId}/row-preferences",
+            $$"""{ "projects": [ { "projectId": "{{projectId}}", "sortOrder": 0 } ], "absenceTypes": [] }"""));
         var body = await response.Content.ReadAsStringAsync();
         if ((int)response.StatusCode != 200)
-            throw new XunitException($"Project select for {projectId} returned {(int)response.StatusCode}: {body}");
+            throw new XunitException($"Row-preferences select for {projectId} returned {(int)response.StatusCode}: {body}");
     }
 
     private static JsonElement FindByCode(JsonElement array, string projectCode)

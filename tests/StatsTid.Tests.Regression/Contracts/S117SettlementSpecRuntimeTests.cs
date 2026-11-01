@@ -69,8 +69,10 @@ public sealed class S117SettlementSpecRuntimeTests : IAsyncLifetime
     private const string VacationType = "VACATION";
 
     // The S71 anchor set (SettlementReversalEndpointTests / TerminationPayoutRequestEndpointTests):
-    // fixed clock 2026-03-05; end date 2026-02-28 ⇒ ferieår 2025, crystallized 12.5 (whole-month).
-    private static readonly DateOnly Clock = new(2026, 3, 5);
+    // fixed clock 2026-03-06 (S147 OQ-2: moved from 2026-03-05 so the end date is D+6 — the first day the end-date PUT
+    // deactivates the leaver in the same transaction, which this recipe needs); end date 2026-02-28 ⇒ ferieår 2025,
+    // crystallized 12.5 (whole-month).
+    private static readonly DateOnly Clock = new(2026, 3, 6);
     private static readonly DateOnly EndDate = new(2026, 2, 28);
     private const int EndDateFerieaar = 2025;
     private static readonly DateOnly GoLive = new(2025, 1, 1);

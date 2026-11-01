@@ -727,6 +727,10 @@ public static class OvertimeEndpoints
             UserRepository userRepo,
             UserAgreementCodeRepository userAgreementCodeRepo,
             OrgScopeValidator scopeValidator,
+            // S147 / TASK-14710 (QUAL-230 T5a point 3; R-22) — the departed-subject write floor's
+            // date seam (read once below, PAT-028) and its refusal log.
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -743,6 +747,20 @@ public static class OvertimeEndpoints
             var user = await userRepo.GetByIdAsync(employeeId, ct);
             if (user is null)
                 return Results.NotFound(new { error = "Employee not found" });
+
+            // S147 / TASK-14710 (QUAL-230 T5a point 3; R-22; OQ-2) — the departed-subject write floor,
+            // after the self check and the subject read. This PUT sets the year's payout-or-time-off
+            // model on overtime_balances, which matters for pay, and it is self-only, so the floor
+            // reduces to "has the actor left?": from the day after their last working day a leaver's
+            // still-valid token cannot change it, whatever their role. The subject read above stays
+            // active-only: no HR path needs this route, the leaver is still active during the grace
+            // (D+1 .. D+5), and after D+6 no leaver token can exist. `today` is the handler's single
+            // business-date read.
+            var today = StatsTid.SharedKernel.Calendar.CopenhagenBusinessDate.Today(timeProvider);
+            var floorClause = DepartedSubjectWriteFloor.RefusingClause(user, actor, today);
+            if (floorClause is not null)
+                return DepartedSubjectWriteFloor.Refusal(
+                    loggerFactory, actor, user.UserId, floorClause, "PUT /api/overtime/{employeeId}/compensation-choice");
 
             // S34 / TASK-3412 — ADR-023 D2 binding cutover for agreement_code on past-period
             // compensation-choice config rule evaluation + new balance row creation. The

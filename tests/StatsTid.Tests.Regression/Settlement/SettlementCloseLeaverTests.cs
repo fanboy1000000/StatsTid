@@ -68,10 +68,10 @@ public sealed class SettlementCloseLeaverTests : IAsyncLifetime
     private const string Termination = "TERMINATION";
     private const string StepAActor = "system:settlement-close:DEACTIVATION";
 
-    /// <summary>Fixed poll clock: UTC 2026-03-05 ⇒ Copenhagen 2026-03-05. End date 2026-02-28
+    /// <summary>Fixed poll clock: UTC 2026-03-06 ⇒ Copenhagen 2026-03-06 (S147 OQ-2: moved from 03-05 so the standard end date 2026-02-28 is D+6, the first day Step A flips; it was D+5 and flip-due under the old day-1 rule). End date 2026-02-28
     /// (R6 ferieår 2025) has passed; ferieår 2024's §21/§24 boundary (31 Dec 2025) has passed;
     /// ferieår 2025's boundary (31 Dec 2026) has NOT.</summary>
-    private static readonly DateOnly Clock = new(2026, 3, 5);
+    private static readonly DateOnly Clock = new(2026, 3, 6);
 
     /// <summary>The standard leaver end date — ferieår 2025 (month 2 &lt; 9 ⇒ 2026 − 1, R6).</summary>
     private static readonly DateOnly EndDate = new(2026, 2, 28);
@@ -112,7 +112,7 @@ public sealed class SettlementCloseLeaverTests : IAsyncLifetime
     public async Task R2_DormantGate_PassedEndDate_StillDeactivates_SettlesNothing()
     {
         var employeeId = await SeedEmployeeAsync();
-        await SetEndDateAsync(employeeId, EndDate); // active user, end date passed at Clock
+        await SetEndDateAsync(employeeId, EndDate); // S147 OQ-2: active user, end date D+6 at Clock (the flip is due; Clock moved 03-05 to 03-06)
 
         BootFixedClockHost(Clock, goLiveDate: null); // DORMANT — Step B skipped, Step A UNGATED
 
@@ -175,15 +175,21 @@ public sealed class SettlementCloseLeaverTests : IAsyncLifetime
         var noEndDate = await SeedEmployeeAsync();        // active, end date NULL
         var boundaryDay = await SeedEmployeeAsync();      // active, end date == Clock (last employed day)
         await SetEndDateAsync(boundaryDay, Clock);
-        var dayAfter = await SeedEmployeeAsync();         // active, end date == Clock − 1 ⇒ DUE
-        await SetEndDateAsync(dayAfter, Clock.AddDays(-1));
+        // S147 OQ-2: the flip moved from D+1 to D+6. Both the first day after (Clock − 1) and the last grace
+        // day (Clock − 5) are still inside the manager grace ⇒ NOT flipped; Clock − 6 is the first DUE day.
+        var graceFirst = await SeedEmployeeAsync();       // active, end date == Clock − 1 ⇒ grace, not due
+        await SetEndDateAsync(graceFirst, Clock.AddDays(-1));
+        var graceLast = await SeedEmployeeAsync();        // active, end date == Clock − 5 ⇒ last grace day, not due
+        await SetEndDateAsync(graceLast, Clock.AddDays(-5));
+        var dayAfter = await SeedEmployeeAsync();         // active, end date == Clock − 6 ⇒ DUE
+        await SetEndDateAsync(dayAfter, Clock.AddDays(-6));
 
         BootFixedClockHost(Clock, BroadGoLive);
 
         // The due flip is the poll witness: once dayAfter is flipped, Step A's candidate loop has
         // processed its whole (single-entry) due set — the others were never candidates.
         Assert.True(await WaitForUserInactiveAsync(dayAfter, TimeSpan.FromSeconds(30)),
-            "end date == today − 1 (first following business day) must flip.");
+            "end date == today − 6 (the first day past the manager grace) must flip (S147 OQ-2: was today − 1).");
         var flipped = await ReadUserTupleAsync(dayAfter);
         Assert.True(flipped.EndDateDeactivated);
         Assert.Equal(2L, flipped.Version);
@@ -210,6 +216,16 @@ public sealed class SettlementCloseLeaverTests : IAsyncLifetime
         Assert.False(boundary.EndDateDeactivated);
         Assert.Equal(1L, boundary.Version);
         Assert.Equal(0L, await CountOutboxByTypeAsync(boundaryDay, "EmployeeEndDateDeactivationApplied"));
+
+        // S147 OQ-2 (AC-230-3, the poll, kind F): the grace days stay active — no flip, no provenance, no event.
+        foreach (var graced in new[] { graceFirst, graceLast })
+        {
+            var g = await ReadUserTupleAsync(graced);
+            Assert.True(g.IsActive, "D+1 and D+5 are inside the manager grace — Step A must not flip them.");
+            Assert.False(g.EndDateDeactivated);
+            Assert.Equal(1L, g.Version);
+            Assert.Equal(0L, await CountOutboxByTypeAsync(graced, "EmployeeEndDateDeactivationApplied"));
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -333,7 +349,7 @@ public sealed class SettlementCloseLeaverTests : IAsyncLifetime
         var leaver = await SeedEmployeeAsync();
         var report = await SeedEmployeeAsync();
         await SeedReportingLineAsync(employeeId: report, managerId: leaver);
-        await SetEndDateAsync(leaver, EndDate); // ferieår 2025; passed at Clock
+        await SetEndDateAsync(leaver, EndDate); // S147 OQ-2: ferieår 2025; D+6 at Clock (the flip is due)
 
         BootFixedClockHost(Clock, NarrowGoLive);
 
@@ -493,7 +509,7 @@ public sealed class SettlementCloseLeaverTests : IAsyncLifetime
     [Fact]
     public async Task B1_CorrectToFutureSameFerieaar_VsTermination_NotDue_NoRow_UserStaysReactivated()
     {
-        var service = BootFixedClockService(Clock); // Copenhagen today = 2026-03-05
+        var service = BootFixedClockService(Clock); // Copenhagen today = 2026-03-06 (S147 OQ-2: was 03-05)
         var employeeId = await SeedEmployeeAsync();
         await MarkLeaverAsync(employeeId, EndDate); // flipped leaver, end date 2026-02-28, ferieår 2025
         // SAME ferieår (2025 = Sep 2025 .. Aug 2026), FUTURE at the fixed clock.

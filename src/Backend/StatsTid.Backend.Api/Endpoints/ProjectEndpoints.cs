@@ -101,75 +101,16 @@ public static class ProjectEndpoints
         }).RequireAuthorization("EmployeeOrAbove")
         .Produces<IEnumerable<AvailableProjectResponse>>(StatusCodes.Status200OK); // S119 / TASK-11900 — BARE array
 
-        // ── POST /api/projects/{orgId}/select/{projectId} — Add project to employee selection ──
+        // ── POST / DELETE /api/projects/{orgId}/select/{projectId} — RETIRED (S147) ──
         //
-        // DEPRECATED-BUT-LIVE (S72 / TASK-7201, SPRINT-72 R14): superseded by
-        // PUT /api/skema/{employeeId}/row-preferences (the R4 full-replacement write).
-        // S119 comment correction: ProjectPicker (the component this was kept for) was
-        // RETIRED at the S72 TASK-7205 R9 sweep and is absent from the tree — the op has NO
-        // FE consumer today. It stays live (SkemaLegacySelectionAlignmentTests exercises its
-        // semantics); retirement remains a recorded future Orchestrator small-task, NOT the
-        // S119 pass (typed under the S117 zero-caller precedent).
-        // R14-ALIGNED to the R4 model: ProjectRepository.AddSelectionAsync now initializes
-        // the user_skema_preferences container on first write and maintains DENSE sort_order
-        // (append-at-end). The HTTP response contract below is byte-identical to pre-S72.
-
-        app.MapPost("/api/projects/{orgId}/select/{projectId:guid}", async (
-            string orgId,
-            Guid projectId,
-            ProjectRepository projectRepo,
-            OrgScopeValidator scopeValidator,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            // Validate the project belongs to this org
-            var projects = await projectRepo.GetByOrgAsync(orgId, ct);
-            if (!projects.Any(p => p.ProjectId == projectId))
-                return Results.NotFound(new { error = "Project not found in this organization" });
-
-            await projectRepo.AddSelectionAsync(actor.ActorId!, projectId, ct);
-
-            return Results.Ok(new ProjectSelectionResponse(ProjectId: projectId, Selected: true));
-        }).RequireAuthorization("EmployeeOrAbove")
-        .Produces<ProjectSelectionResponse>(StatusCodes.Status200OK); // S119 / TASK-11900 — declared body-less POST (openapi-bodyless-declared.txt); EmployeeOrAbove write BY DESIGN (self-service)
-
-        // ── DELETE /api/projects/{orgId}/select/{projectId} — Remove project from employee selection ──
-        //
-        // DEPRECATED-BUT-LIVE (S72 / TASK-7201, SPRINT-72 R14): superseded by
-        // PUT /api/skema/{employeeId}/row-preferences. S119 comment correction: ProjectPicker
-        // (the component this was kept for) was RETIRED at the S72 TASK-7205 R9 sweep and is
-        // absent from the tree — no FE consumer today; kept live (the legacy-selection
-        // alignment tests exercise it), removal recorded as a future small-task. R14-ALIGNED:
-        // ProjectRepository.RemoveSelectionAsync now initializes the container (a remove IS
-        // a preference write — removing the LAST selection deliberately yields ZERO visible
-        // rows under R4, not the legacy all-projects fallback) and dense-reindexes the
-        // remaining rows. The 204 response contract is byte-identical to pre-S72.
-
-        app.MapDelete("/api/projects/{orgId}/select/{projectId:guid}", async (
-            string orgId,
-            Guid projectId,
-            ProjectRepository projectRepo,
-            OrgScopeValidator scopeValidator,
-            HttpContext context,
-            CancellationToken ct) =>
-        {
-            var actor = context.GetActorContext();
-
-            var (allowed, reason) = await scopeValidator.ValidateOrgAccessAsync(actor, orgId, ct);
-            if (!allowed)
-                return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
-
-            await projectRepo.RemoveSelectionAsync(actor.ActorId!, projectId, ct);
-
-            return Results.NoContent();
-        }).RequireAuthorization("EmployeeOrAbove")
-        .Produces(StatusCodes.Status204NoContent); // S119 / TASK-11900 — declared-204 body-less; EmployeeOrAbove write BY DESIGN (self-service)
+        // S147 / TASK-14710 (QUAL-230 T5a; rulings R-23, R-33). The two deprecated single-row
+        // project-selection routes (deprecated since S72 / TASK-7201, R14; no screen had used them
+        // since the S72 R9 sweep retired ProjectPicker) are DELETED, with their repository methods
+        // and ProjectSelectionResponse. Why now: the leaver rule (OQ-2) refuses every own-record write
+        // a departed employee's still-valid token could make, and these routes keyed on the caller
+        // (actor.ActorId) with no subject read, so the write floor had nothing to check. Both paths
+        // now answer 404. The one selection writer is PUT /api/skema/{employeeId}/row-preferences,
+        // which carries the floor.
 
         // ── PUT /api/projects/{orgId}/{projectId} — Update project ──
 

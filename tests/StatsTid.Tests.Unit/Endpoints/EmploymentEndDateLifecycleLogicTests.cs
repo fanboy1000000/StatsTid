@@ -28,9 +28,9 @@ public class EmploymentEndDateLifecycleLogicTests
         Assert.True(provenance);
     }
 
-    /// <summary>Boundary: <c>employment_end_date</c> is the LAST day employed — the flip
-    /// requires today STRICTLY after it. endDate == today ⇒ still employed, no flip (R1(b)
-    /// side of the boundary); endDate == yesterday ⇒ flip (R1(a)).</summary>
+    /// <summary>Boundary: <c>employment_end_date</c> is the LAST day employed. S147 OQ-2: the flip
+    /// moved from day 1 to day 6 — endDate == today ⇒ no flip; yesterday and today − 5 (the last
+    /// grace day) ⇒ no flip; today − 6 ⇒ flip (R1(a)).</summary>
     [Fact]
     public void R1_Boundary_EndDateToday_NoFlip_EndDateYesterday_Flips()
     {
@@ -39,8 +39,17 @@ public class EmploymentEndDateLifecycleLogicTests
         Assert.True(onBoundary.IsActive);
         Assert.False(onBoundary.EndDateDeactivated);
 
+        // S147 OQ-2: was Today.AddDays(-1) (D+1); the flip is now due on D+6.
+        foreach (var graceDays in new[] { 1, 5 })
+        {
+            var inGrace = EmploymentDateEndpoints.ComputeEndDateLifecycle(
+                Today.AddDays(-graceDays), oldIsActive: true, oldEndDateDeactivated: false, copenhagenToday: Today);
+            Assert.True(inGrace.IsActive);
+            Assert.False(inGrace.EndDateDeactivated);
+        }
+
         var pastBoundary = EmploymentDateEndpoints.ComputeEndDateLifecycle(
-            Today.AddDays(-1), oldIsActive: true, oldEndDateDeactivated: false, copenhagenToday: Today);
+            Today.AddDays(-6), oldIsActive: true, oldEndDateDeactivated: false, copenhagenToday: Today);
         Assert.False(pastBoundary.IsActive);
         Assert.True(pastBoundary.EndDateDeactivated);
     }

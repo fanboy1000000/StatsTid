@@ -253,8 +253,17 @@ public sealed class UserRepository
     // FOR-UPDATE read + the SetEmploymentStartDateIncludingTerminatedAsync write below).
     // Rationale: per D3, role — not is_active — governs who may edit a deactivated
     // leaver's employment record, and the ADR-040 D1 re-hire guard's target case (a
-    // CLOSED spell) implies the Step-A poller already flipped is_active=FALSE, so the
-    // guard was UNREACHABLE through the active-only trio. Both extensions keep the R9c
+    // CLOSED spell) can be a row the Step-A poller has already flipped is_active=FALSE, so the
+    // guard was UNREACHABLE through the active-only trio.
+    // S147 / TASK-14710 (QUAL-230 T5a, OQ-2) — "a closed spell implies the poller flipped" now
+    // holds ONLY from D+6: the leaver's manager keeps a 5-calendar-day grace
+    // (EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays), so for D+1 .. D+5 a closed
+    // spell's subject is still is_active=TRUE. In that window the leaver's own writes are
+    // refused by the end-date-keyed rules — the self-service write floor
+    // (DepartedSubjectWriteFloor) and the OrgScopeValidator departed-self clause
+    // (DepartedSubject) — not by this flag; HR and the manager reach the row through the
+    // ordinary active-only reads. From D+6 the row is deactivated and only these
+    // terminated-inclusive reads address it. Both extensions keep the R9c
     // shape: HROrAbove policy + LocalHR per-scope floor; Employee-role actors stay denied
     // (for the registration writers: except their own ACTIVE-subject data, unchanged).
     // ═══════════════════════════════════════════════════════════════════════════

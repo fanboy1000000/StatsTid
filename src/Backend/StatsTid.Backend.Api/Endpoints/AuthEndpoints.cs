@@ -1,6 +1,7 @@
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Backend.Api.Endpoints;
@@ -19,6 +20,9 @@ public static class AuthEndpoints
             UserRepository userRepository,
             RoleAssignmentRepository roleAssignmentRepository,
             UserAgreementCodeRepository userAgreementCodeRepo,
+            // S147 / TASK-14710 (QUAL-230 T5a point 2) — the Copenhagen business date for the
+            // leaver check below (PAT-028: read once, from the injected seam, never the wall clock).
+            TimeProvider timeProvider,
             CancellationToken ct) =>
         {
             // SEC-040 (S132 ← QUAL-063) — failed logins must be OBSERVABLE. Before this,
@@ -35,7 +39,8 @@ public static class AuthEndpoints
             //     attacker-supplied newline cannot forge an extra log line at a plain-text/
             //     console sink (log-forging, CWE-117). The placeholder alone does NOT escape
             //     the value — the sanitizer is what closes the CR/LF vector (Step-5a Codex P2);
-            //   • a failure-reason CLASS (unknown_user vs invalid_password) so the two are
+            //   • a failure-reason CLASS (unknown_user vs invalid_password, and since S147
+            //     employment_ended for a leaver after their last day) so they are
             //     distinguishable server-side;
             //   • the source IP;
             //   • the request CorrelationId, which JOINS this line to the audit_log 401 row.
@@ -64,6 +69,31 @@ public static class AuthEndpoints
                 if (!BCrypt.Net.BCrypt.Verify(request.Password, dbUser.PasswordHash))
                 {
                     LogFailedLogin("invalid_password");
+                    return Results.Unauthorized();
+                }
+
+                // ── S147 / TASK-14710 (QUAL-230 T5a point 2; owner ruling OQ-2) — a leaver cannot
+                // log in from the day after their last working day. ──────────────────────────────────
+                // Until S147 the Step-A poller deactivated a leaver on D+1, and the is_active filter in
+                // GetByUsernameAsync above refused their login from then on. The owner's grace keeps a
+                // leaver ACTIVE until D+6 so their manager can still approve the final month, so that
+                // filter no longer ends the leaver's own access in time. This check does, keyed on
+                // the end date itself: employment_end_date is the LAST day employed (inclusive), so
+                // the login is refused when it lies BEFORE today — D still logs in, D+1 does not (the
+                // same `<` as DepartedSubject.IsDeparted). A NULL end date is open-ended employment
+                // (ADR-040 D2) and logs in exactly as before.
+                //
+                // Placed AFTER the password check, so only the right password learns anything, and it
+                // answers the SAME generic 401 as every other failure (no enumeration oracle, no
+                // employment date in the body — ADR-040 D7). The reason class `employment_ended` lives
+                // only in the server log. The in-memory branch below has no employment dates and is
+                // unchanged. A token issued on D still lives up to 480 minutes (SEC-003); the
+                // self-service write floor and the validator's departed-self clause refuse its
+                // own-record writes from D+1.
+                var loginToday = CopenhagenBusinessDate.Today(timeProvider);
+                if (dbUser.EmploymentEndDate is { } lastDayEmployed && lastDayEmployed < loginToday)
+                {
+                    LogFailedLogin("employment_ended");
                     return Results.Unauthorized();
                 }
 

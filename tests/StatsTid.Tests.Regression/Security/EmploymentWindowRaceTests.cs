@@ -1,7 +1,9 @@
 using System.Data;
 using System.Net;
 using Npgsql;
+using StatsTid.Auth;
 using StatsTid.Backend.Api.Services;
+using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Approval;
 using Xunit;
 
@@ -89,7 +91,10 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
 
         // Fire the REAL registration — its pre-lock reads (the terminated-inclusive subject
         // read) see the pre-edit row (MVCC), so only the in-lock gate can catch the edit.
-        var teClient = EmployeeClient(emp);
+        // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first.
+        // Pinned to the narrowed last day (2026-03-10): not yet departed, so the in-lock window gate answers (422).
+        using var pinnedHost = Fx.Factory.WithFixedToday(NarrowedEnd);
+        var teClient = ClientFor(pinnedHost, emp, StatsTidRoles.Employee, Org, new RoleScope(StatsTidRoles.Employee, Org, "ORG_ONLY"));
         var timeEntry = Task.Run(() => PostTimeEntryAsync(teClient, emp, RegistrationDay, 7.4m));
 
         // Prove genuine contention: the POST is QUEUED on our advisory key…
@@ -126,7 +131,9 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
         await EmployeeConsumptionLock.AcquireAsync(blockerConn, blockerTx, emp);
         await NarrowEndDateInTxAsync(blockerConn, blockerTx, emp, NarrowedEnd);
 
-        var skClient = EmployeeClient(emp);
+        // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first.
+        using var pinnedHost = Fx.Factory.WithFixedToday(NarrowedEnd);
+        var skClient = ClientFor(pinnedHost, emp, StatsTidRoles.Employee, Org, new RoleScope(StatsTidRoles.Employee, Org, "ORG_ONLY"));
         var save = Task.Run(() => PostSkemaWorkTimeSaveAsync(skClient, emp, RegistrationDay, "08:00", "16:00"));
 
         await WaitForWaitersAsync(classId, objId, expected: 1);
@@ -192,7 +199,11 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
         var body = await BodyAsync(rsp);
         Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden,
             $"expected the in-lock D3-floor 403, got {(int)rsp.StatusCode}: {body}");
-        Assert.Contains("deactivated employee", body); // the pre-check's exact refusal shape
+        // S147 OQ-2 (fix-up 1 ruling): re-decided — the self body. This Employee acts on their OWN record, so both floor
+        // arms hold and the departed-self clause answers (TASK-14703's date-free sentence), not ADR-040 D3's
+        // role sentence; it was "deactivated employee" before S147. The in-lock authority being pinned is unchanged.
+        Assert.Contains(DepartedSubject.DenyReason, body);
+        Assert.DoesNotContain("deactivated employee", body);
 
         // THE invariant: no registration committed for the just-deactivated subject.
         Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, RegistrationDay));
@@ -225,7 +236,10 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
         var body = await BodyAsync(rsp);
         Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden,
             $"expected the in-lock D3-floor 403, got {(int)rsp.StatusCode}: {body}");
-        Assert.Contains("deactivated employee", body);
+        // S147 OQ-2 (fix-up 1 ruling): re-decided — the self body (see the time-entry fact above): an Employee acting
+        // on their own record gets the departed-self sentence, not the role sentence.
+        Assert.Contains(DepartedSubject.DenyReason, body);
+        Assert.DoesNotContain("deactivated employee", body);
 
         Assert.Equal(0L, await CountWorkTimeRowsAsync(emp, RegistrationDay));
     }

@@ -2024,64 +2024,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{orgId}/select/{projectId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    orgId: string;
-                    projectId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.ProjectSelectionResponse"];
-                    };
-                };
-            };
-        };
-        delete: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    orgId: string;
-                    projectId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description No Content */
-                204: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/projects/{orgId}/{projectId}": {
         parameters: {
             query?: never;
@@ -6410,11 +6352,6 @@ export interface components {
             projectName: string;
             /** Format: int32 */
             sortOrder: number;
-        };
-        "StatsTid.Backend.Api.Contracts.ProjectSelectionResponse": {
-            /** Format: uuid */
-            projectId: string;
-            selected: boolean;
         };
         "StatsTid.Backend.Api.Contracts.ProjectUpdateResponse": {
             /** Format: uuid */

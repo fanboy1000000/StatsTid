@@ -36,16 +36,6 @@ public sealed record AvailableProjectResponse(
     bool Selected);
 
 /// <summary>
-/// The POST /api/projects/{orgId}/select/{projectId} 200 echo (2 members). <c>selected</c> is
-/// always true on the success path (carried for shape fidelity with the prior anonymous
-/// object). The op binds NO request DTO — declared in tools/openapi-bodyless-declared.txt
-/// (the S116 rule). The deselect DELETE returns 204 body-less (no record).
-/// </summary>
-public sealed record ProjectSelectionResponse(
-    Guid ProjectId,
-    bool Selected);
-
-/// <summary>
 /// The PUT /api/projects/{orgId}/{projectId} 200 echo (2 members). <c>updated</c> is always
 /// true on the success path (shape fidelity).
 /// </summary>

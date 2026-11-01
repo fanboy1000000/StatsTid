@@ -1,5 +1,6 @@
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
+using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Backend.Api.Validation;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
@@ -35,10 +36,17 @@ public static class TimeEndpoints
             UserRepository userRepo,
             IEmploymentWindowResolverInTx employmentWindowResolver,
             OrgScopeValidator scopeValidator,
+            // S147 / TASK-14710 (QUAL-230 T5a point 3) — the departed-subject write floor's date,
+            // read ONCE below (PAT-028).
+            TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+
+            // S147 / TASK-14710 (PAT-028) — THE single business-date read for this request; both
+            // DepartedSubjectWriteFloor checks below (advisory and in-lock) use it.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             if (actor.ActorRole == StatsTidRoles.Employee && request.EmployeeId != actor.ActorId)
                 return Results.Forbid();
@@ -119,15 +127,19 @@ public static class TimeEndpoints
             // and outside EmployeeConsumptionLock, so a deactivation that commits while this
             // request waits on the lock is invisible to it. The AUTHORITATIVE D3 floor is the
             // in-lock subject-state re-check inside the transaction below.
-            if (!subject.IsActive &&
-                (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
-            {
-                return Results.Json(new
-                {
-                    error = "Access denied",
-                    reason = "Writes for a deactivated employee require LocalHR or above"
-                }, statusCode: 403);
-            }
+            //
+            // S147 / TASK-14710 (QUAL-230 T5a point 3; R-21, R-24; OQ-2) — the D3 test
+            // (`!IsActive && below LocalHR`) is REPLACED by the shared DepartedSubjectWriteFloor:
+            // refuse when the subject has DEPARTED (deactivated, OR their last day employed lies
+            // before today) AND (the actor IS the subject OR the actor is below LocalHR). Under the
+            // owner's 5-day manager grace a leaver stays is_active until D+6; their own access must
+            // still end on D+1, whatever their role. HR registering for someone else who has left is
+            // unchanged. The date-free 403 body follows the clause that fired (S147 fix-up 1):
+            // departed-self → DepartedSubject.DenyReason; the role arm → D3's sentence, unchanged.
+            var advisoryFloorClause = DepartedSubjectWriteFloor.RefusingClause(subject, actor, today);
+            if (advisoryFloorClause is not null)
+                return DepartedSubjectWriteFloor.Refusal(
+                    loggerFactory, actor, subject.UserId, advisoryFloorClause, "POST /api/time-entries");
 
             // OK version MUST be resolved server-side from the entry date (ADR-003).
             // The caller-supplied value is advisory only; mismatches are logged but not rejected.
@@ -235,17 +247,17 @@ public static class TimeEndpoints
                         await tx.RollbackAsync(ct);
                         return Results.NotFound(new { error = "Employee not found" });
                     }
-                    if (!lockedSubject.IsActive &&
-                        (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
+                    // S147 / TASK-14710 — the SAME DepartedSubjectWriteFloor as the pre-check, on the
+                    // in-lock row and the handler's single `today`.
+                    var lockedFloorClause = DepartedSubjectWriteFloor.RefusingClause(lockedSubject, actor, today);
+                    if (lockedFloorClause is not null)
                     {
                         // No write has been issued yet; rollback explicitly and refuse with the
                         // pre-check's exact 403 shape (one contract, whichever check fires).
                         await tx.RollbackAsync(ct);
-                        return Results.Json(new
-                        {
-                            error = "Access denied",
-                            reason = "Writes for a deactivated employee require LocalHR or above"
-                        }, statusCode: 403);
+                        return DepartedSubjectWriteFloor.Refusal(
+                            loggerFactory, actor, lockedSubject.UserId, lockedFloorClause,
+                            "POST /api/time-entries (in-lock)");
                     }
 
                     // ── S136 / TASK-13603 — THE EMPLOYMENT-WINDOW GATE (ADR-040 D1–D3), IN-LOCK ────
