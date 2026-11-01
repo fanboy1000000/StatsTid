@@ -1,4 +1,5 @@
 using Npgsql;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Infrastructure;
 
@@ -15,11 +16,22 @@ namespace StatsTid.Infrastructure;
 /// </summary>
 public interface IAuthorityFactsSource
 {
-    /// <summary>Active user holding ≥1 active, non-expired role assignment with
+    /// <summary>
+    /// <b>Acting</b> user at <paramref name="asOf"/> holding ≥1 active, non-expired role assignment with
     /// <c>hierarchy_level &lt;= 4</c>. Deliberately NOT constrained by the assignment's org or scope —
     /// that absence is the current contract (the cross-org bound is enforced separately by the
-    /// same-Organisation check), and a prefetched source must preserve it rather than tidy it up.</summary>
-    Task<bool> IsActiveLeaderOrAboveAsync(string userId, CancellationToken ct);
+    /// same-Organisation check), and a prefetched source must preserve it rather than tidy it up.
+    ///
+    /// <para><b>S147 / TASK-14712 (QUAL-230 T5c; NR-10).</b> Was <c>IsActiveLeaderOrAboveAsync</c>, whose
+    /// user half was <c>is_active</c> alone. "Acting" adds "not past their recorded last day of
+    /// employment at <paramref name="asOf"/>" — the rule is
+    /// <see cref="StatsTid.SharedKernel.Security.DepartedSubject.IsDeparted(bool, DateOnly?, DateOnly)"/>,
+    /// negated. Under the owner's 5-day grace (OQ-2) a departed manager stays <c>is_active</c> until
+    /// D+6 so that THEIR manager can sign their final month; this floor makes sure the grace does not
+    /// also keep them in charge of their own reports. <paramref name="asOf"/> is the authorizer's own
+    /// authority date, never a second clock read (PAT-028).</para>
+    /// </summary>
+    Task<bool> IsActingLeaderOrAboveAsync(string userId, DateOnly asOf, CancellationToken ct);
 
     /// <summary>The user's home <c>primary_org_id</c>, or <b>null</b> when the user is missing, is
     /// inactive, or their home Organisation is inactive. Null means DENY — absence must never read as
@@ -48,8 +60,8 @@ public sealed class SqlAuthorityFactsSource : IAuthorityFactsSource
         _asOf = asOf;
     }
 
-    public Task<bool> IsActiveLeaderOrAboveAsync(string userId, CancellationToken ct)
-        => DesignatedApproverAuthorizer.QueryActiveLeaderOrAboveAsync(_conn, _tx, userId, ct);
+    public Task<bool> IsActingLeaderOrAboveAsync(string userId, DateOnly asOf, CancellationToken ct)
+        => DesignatedApproverAuthorizer.QueryActingLeaderOrAboveAsync(_conn, _tx, userId, asOf, ct);
 
     public Task<string?> GetActiveHomeOrgAsync(string userId, CancellationToken ct)
         => ReportingLineRepository.QueryActiveHomeOrgAsync(_conn, _tx, userId, ct);
@@ -86,7 +98,10 @@ public sealed class SqlAuthorityFactsSource : IAuthorityFactsSource
 /// </summary>
 public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
 {
-    private readonly HashSet<string> _leaderOrAbove;
+    // S147 / TASK-14712 (T5c) — the users holding a LeaderOrAbove assignment, each with the two columns
+    // the acting-user rule reads. Absent = no such assignment = NOT a leader (the deny answer, as before).
+    // The user half is decided per call by DepartedSubject.IsDeparted, the same call the live form makes.
+    private readonly Dictionary<string, (bool IsActive, DateOnly? EmploymentEndDate)> _leaderOrAbove;
     private readonly Dictionary<string, string> _activeHomeOrg;
     private readonly Dictionary<string, Guid> _unitOfUser;
     private readonly Dictionary<Guid, HashSet<string>> _leadersOfUnit;
@@ -94,7 +109,7 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
     private readonly Dictionary<string, HashSet<string>> _coversLeaders;
 
     private PrefetchedAuthorityFacts(
-        HashSet<string> leaderOrAbove,
+        Dictionary<string, (bool IsActive, DateOnly? EmploymentEndDate)> leaderOrAbove,
         Dictionary<string, string> activeHomeOrg,
         Dictionary<string, Guid> unitOfUser,
         Dictionary<Guid, HashSet<string>> leadersOfUnit,
@@ -115,18 +130,24 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
         CancellationToken ct)
     {
         // (1) The role floor — the SAME predicate as the per-user query, evaluated for the whole
-        //     Organisation at once. Membership of the returned set IS the answer; nothing is
-        //     re-derived in C#.
-        var leaderOrAbove = new HashSet<string>(StringComparer.Ordinal);
+        //     Organisation at once. Its ROLE half (an active, non-expired LeaderOrAbove assignment) is
+        //     decided here in SQL: membership of the returned rows IS that answer.
+        //     S147 / TASK-14712 (T5c) — its USER half is no longer `u.is_active = TRUE` in the WHERE.
+        //     The two columns the acting-user rule reads come back instead, and IsActingLeaderOrAboveAsync
+        //     applies DepartedSubject.IsDeparted to them at the authorizer's date — exactly what the
+        //     per-user query (DesignatedApproverAuthorizer.QueryActingLeaderOrAboveAsync) does with
+        //     ITS row, so the two forms read the same columns and decide through the same call.
+        //     (is_active and employment_end_date are columns of `users`, so DISTINCT stays one row
+        //     per user however many qualifying assignments they hold.)
+        var leaderOrAbove = new Dictionary<string, (bool IsActive, DateOnly? EmploymentEndDate)>(StringComparer.Ordinal);
         await using (var cmd = new NpgsqlCommand(
             """
-            SELECT DISTINCT u.user_id
+            SELECT DISTINCT u.user_id, u.is_active, u.employment_end_date
             FROM users u
             JOIN role_assignments ra ON ra.user_id = u.user_id
             JOIN roles r ON r.role_id = ra.role_id
             JOIN organizations o ON o.org_id = u.primary_org_id
-            WHERE u.is_active = TRUE
-              AND ra.is_active = TRUE
+            WHERE ra.is_active = TRUE
               AND (ra.expires_at IS NULL OR ra.expires_at > NOW())
               AND r.hierarchy_level <= 4
               AND o.materialized_path LIKE @pathPrefix ESCAPE '\'
@@ -135,7 +156,11 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
             cmd.Parameters.AddWithValue("pathPrefix", escapedPathPrefixParam);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
-                leaderOrAbove.Add(reader.GetString(0));
+            {
+                leaderOrAbove[reader.GetString(0)] = (
+                    reader.GetBoolean(1),
+                    reader.IsDBNull(2) ? null : reader.GetFieldValue<DateOnly>(2));
+            }
         }
 
         // (2) Home Organisation for ACTIVE users whose home Organisation is itself ACTIVE — the same
@@ -225,8 +250,13 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
             leaderOrAbove, activeHomeOrg, unitOfUser, leadersOfUnit, coversLeaders);
     }
 
-    public Task<bool> IsActiveLeaderOrAboveAsync(string userId, CancellationToken ct)
-        => Task.FromResult(_leaderOrAbove.Contains(userId));
+    /// <summary>S147 / TASK-14712 (T5c) — absent from the role set → not a leader (deny, as before);
+    /// present → acting at <paramref name="asOf"/> by the same rule and the same call as the live form
+    /// (<see cref="DesignatedApproverAuthorizer.QueryActingLeaderOrAboveAsync"/>).</summary>
+    public Task<bool> IsActingLeaderOrAboveAsync(string userId, DateOnly asOf, CancellationToken ct)
+        => Task.FromResult(
+            _leaderOrAbove.TryGetValue(userId, out var state)
+            && !DepartedSubject.IsDeparted(state.IsActive, state.EmploymentEndDate, asOf));
 
     public Task<string?> GetActiveHomeOrgAsync(string userId, CancellationToken ct)
         => Task.FromResult(_activeHomeOrg.TryGetValue(userId, out var org) ? org : null);

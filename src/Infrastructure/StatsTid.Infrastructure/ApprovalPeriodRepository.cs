@@ -343,8 +343,9 @@ public sealed class ApprovalPeriodRepository
     /// ACTIVE <c>manager_vikar</c> covering <c>@today</c> — the actor stands in for that
     /// absent manager, so that manager's report set is the actor's too. From each seed S the
     /// recursion collects S's direct reports (PRIMARY or ACTING edge with <c>manager_id = S</c>),
-    /// and continues DOWN into a report X's own reports ONLY when X is an INACTIVE user
-    /// (inactive-escalation only — never a grandchild whose intermediate manager is active).
+    /// and continues DOWN into a report X's own reports ONLY when X is not an ACTING user —
+    /// deactivated, or (S147 / TASK-14712, T5c) past their last day of employment at <c>@today</c>
+    /// (inactive-escalation only — never a grandchild whose intermediate manager is acting).
     /// The walk stays within the reporting graph (intra-tree by the assign-time same-tree
     /// invariant), so it is tree-root bounded; <c>depth &lt; 10</c> mirrors the resolver's bound
     /// and stops any pre-existing cycle.
@@ -384,15 +385,21 @@ public sealed class ApprovalPeriodRepository
             WHERE rl.effective_to IS NULL
               AND rl.relationship IN ('PRIMARY', 'ACTING')
             UNION
-            -- Descend into report X's reports ONLY when X is an INACTIVE user
+            -- Descend into report X's reports ONLY when X is NOT an ACTING user
             -- (the inactive-manager escalation walk — X's reports escalate up past X).
+            -- S147 / TASK-14712 (QUAL-230 T5c; NR-10): "not acting" = deactivated OR past their last
+            -- day of employment at @today. This is the SQL form of DepartedSubject.IsDeparted
+            -- (`!isActive || (end is d && d < today)`; a NULL end date compares NULL, i.e. not
+            -- departed), the same rule the resolver's IsActingUserAsync applies, so a manager who has
+            -- left is walked past from D+1 here exactly as the resolver escalates past them: the
+            -- escalated manager SEES the month they may ACT on (see == act), during the 5-day grace too.
             SELECT rl2.employee_id, cw.depth + 1
             FROM reporting_lines rl2
             JOIN candidate_walk cw ON rl2.manager_id = cw.employee_id
             JOIN users ux ON ux.user_id = cw.employee_id
             WHERE rl2.effective_to IS NULL
               AND rl2.relationship = 'PRIMARY'
-              AND ux.is_active = FALSE
+              AND (ux.is_active = FALSE OR ux.employment_end_date < @today)
               AND cw.depth < 10
         ),
         unit_led_members AS (

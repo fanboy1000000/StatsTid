@@ -88,7 +88,7 @@ Artifacts: `.claude/reviews/PLAN-s147-{codex,reviewer}-c{1,2,3}.md`, `PLAN-s147-
 | TASK-14708 / 14708-T | 2a | rule-engine, cross-domain / test-qa | QUAL-231, one vocabulary; sick days credited (T3a + T3b) | **merged** `7cc6e65e` + merge fix-up `4653e5ed` (GATE green; REGEN no drift; marker `weekly-timeline-v2`); Docker facts CI-pending (CI-W2) |
 | TASK-14709 | 2a | ux | QUAL-231, the dead frontend copy (+ addendum A-1, the alert vocabulary) | **merged** `9de1ae79` (with fix-up 1); frontend GATE green (vitest 81 files / 1013 tests) |
 | TASK-14710 / 14710-T, TASK-14711 | 2b | backend-infrastructure, cross-domain / test-qa; ux (stacked) | QUAL-230 T5a: the 5-day grace, login, own-write floor, project-route retirement | **dispatched 2026-11-01** (14710 first; 14710-T on its branch when it returns; then REGEN and 14711) |
-| TASK-14712 / 14712-T | 2b | backend-infrastructure / test-qa | QUAL-230 T5c: a departed approver | **dispatched 2026-11-01** (14712 first; the security consult and 14712-T on its branch when it returns) |
+| TASK-14712 / 14712-T | 2b | backend-infrastructure / test-qa | QUAL-230 T5c: a departed approver | **merged** `52ab15c8` (GATE green; REGEN no drift); 16 Docker facts CI-pending (CI-W3) |
 | TASK-14713 / 14713-T, TASK-14714 | 3 | backend-infrastructure, cross-domain / test-qa; ux (stacked) | QUAL-230 T5b: HR only from day 6 | planned |
 | TASK-14715 / 14715-T | 4a | payroll-integration / test-qa | SEC-054 step 1: the case-3a month paid untracked | planned |
 | TASK-14716 / 14716-T | 4b | payroll-integration, cross-domain / test-qa | SEC-054 step 2: retire the raw routes | planned |
@@ -151,6 +151,7 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
 | 14719 (+ fix-up 1) | `e3a719ed` | build 0 / 145 / CA2100 115; Unit 1670; DemoSeed 170; Regression non-Docker 135 | c1 PASS → c2 PASS | **Opus stand-in** (Fable limited): c1 READY-TO-MERGE (3 W, 7 N) → c2 READY-TO-MERGE (4 N) | c1 0 B, 1 W → c2 CLEAN | `f21422d6` |
 | 14718 (+ fix-ups 1–4) | `38ac5f56` | frontend: tsc / lint / typecheck:e2e / build exit 0; vitest 82 files / 1049 tests; `gen:api` no content drift | c1 PASS · c2 PASS · c3 1 violation (a Red condition) → c4 PASS · c5 PASS | **Opus stand-in from c2** (Fable limited; c1 was Fable): c1 Fable FIX-FIRST (1 B) · c2 READY · c3 READY · c4 READY · c5 READY | c1 2 B · c2 1 B · c3 0 B / 5 W · c4 0 B / 5 W · c5 **1 B** (a Godkend-fired hung save) → owner ruling at the cap | `782e2285` |
 | 14720 (+ fix-ups 1–2, + Orchestrator comment) | `48a393b6` | frontend: tsc / lint / typecheck:e2e / build exit 0; vitest 82 files / 1060 tests | c1 PASS · c2 PASS · c3 PASS (1 comment gap, closed in `48a393b6`) | **Opus stand-in** (Fable 429 on c1 retry): c1 READY (1 W) · c2 READY · c3 READY | c1 0 B / 2 W · c2 0 B / 1 W · c3 0 B / 0 W | `3ee2a8c9` |
+| 14712 + 14712-T (+ fix-up 1, + Orchestrator nits) | `0a924465` | build 0 / 145 / CA2100 115; Unit 1670; DemoSeed 170; Regression non-Docker 135; REGEN: no drift. Security consult: 3 gaps (all pinned), 8 residual candidates | c1 PASS → c2 PASS | **Opus stand-in**: c1 **FIX-FIRST** (1 B: the departed stand-in unpinned; 3 W) → c2 READY (4 N, applied in `0a924465`) | c1 0 B / 1 W → c2 0 B / 0 W / 1 N | `52ab15c8` |
 
 *In plain words (14706 + 14707):* the 11-hour rest check used to skip, silently, every day registered in Skema (hours with no clock times), so the month looked clean. Now the check lists the days it could not measure, and the employee's compliance panel and Teamoversigt's row detail show "Hviletid ikke kontrolleret for N dage". **What you will see:** under today's backend every Skema day with hours is "not checked", so the notice appears for practically every employee and month until S148 stage 0 makes the rest check read Skema's intervals (D-2 = (a)). This is the honest "not checked" chosen in OQ-4 = (b), not a regression. **Plan deviation:** 14706 merged ahead of 14703 to unblock the stacked 14707; it shares no file with 14703. **Dispositions:**
 - **14706 Fable W1.** A day with one timed entry plus hours-only entries counts as checked. It goes into QUAL-234's row and the S148 stage-0 input for D-2.
@@ -204,6 +205,15 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
 - **Codex c1 NOTE.** M4 was run and recorded.
 - **Fable c2 NOTE 1.** Stale "today" wording in `DepartedSelfElevatedRouteTests.cs` (tidy item 16).
 - **SEC-056's register row** is written at close (O-10 Block 21, "T9 merged" variant).
+
+*In plain words (14712):* the 5-day grace keeps a leaver switched on so that their own manager can sign their final month. Without this task it also kept a departed manager in charge of *their* reports. Now, from the day after the last working day, a departed manager no longer counts as an approver anywhere: approve, reject, reopen, the pending list and the organisation tiles. Their reports' months go to the next manager up. As the owner ruled (Q-B = (c)), a stand-in appointed before the manager left keeps approving until the stand-in period ends or HR revokes it. A stand-in who has herself left grants nothing (P-1), and the month goes back to the manager she covered. **Dispositions:**
+- **Brief point 4 is superseded.** The holder's own state check in the stand-in block changed (`ReportingLineRepository.cs:1220`), as Contract 1 and P-1 require; it is now pinned.
+- **`EnsureContextDateMatches`** (a guard on the date-keyed authority cache) is accepted.
+- **Consult residuals 1–2:** registered as **SEC-057**, Low. A departed HR or admin user's org-scope authority over others, and overtime decisions via org scope, are not departure-checked in the grace. That is bounded by TASK-14710's day-1 login refusal and the 480-minute token (the SEC-003 class), and pinned as a deliberate non-change.
+- **Residual 3:** the stand-in for a departed manager is the owner's ruling, recorded as "revisit" via SEC-057's row and the B pins.
+- **Residual 5:** `HrFollowUpApprovalReadRepository.cs:397` counts a grace-period manager as live; tidy item 21.
+- **Residuals 6–8 and the uncovered consult items** (in-transaction recheck, route-level reject/reopen, tiles, compliance/Skema gates, outside-user fallback) are recorded as residual: same predicate, or covered by the differential fact.
+- **O-6** states the holder rule in the ADR-040 amendment.
 
 *In plain words (14718):* a test that looked flaky since S121 was catching a real fault in Skema. A day panel opened in the moment before the page had copied the month's data into its editable state started with no work periods. An edit there could then overwrite the day's stored times, because a period save replaces the whole day. Five review rounds widened the fix to every path with the same harm:
 - the page now copies the data during render, so no screen ever shows un-copied state;
@@ -304,6 +314,9 @@ The job is now off on the two shared test servers that seed leavers directly. **
    - A settlement reversal whose end-date correction lands inside the grace reactivates the leaver. Its re-settle step then refuses (`SupersedeNotEligible`) and the reversal rolls back. The operator must bare-reverse or wait until day 6.
    - During the grace, a departed manager can still be imported as a manager (`ReportingLineEndpoints.cs:1030`, `:1042`). TASK-14712's rule then gives that manager no authority from day 1.
 
+21. **From the 14712 consult and reviews.**
+   - `HrFollowUpApprovalReadRepository.cs:388-410` (a display read) counts a grace-period manager as live, so an employee whose manager has left reads as "covered" for D+1 to D+5. Apply the acting-user rule there.
+   - Stale comment mentions of the old method names: `DesignatedApproverAuthorityTests.cs:1080`, `S116ApprovalSpecRuntimeTests.cs:637`.
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
