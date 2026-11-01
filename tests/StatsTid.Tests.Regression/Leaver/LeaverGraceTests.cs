@@ -203,27 +203,36 @@ public sealed class LeaverGraceTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// AC-230-14, K-3. Kind F. With the settlement gates ENABLED (go-live 2020-01-01 and the SPECIAL_HOLIDAY
-    /// flag), an ordinary active employee is enumerated by the særlige feriedage pass (the control: it proves the
-    /// pass ran and the gates are open), but a leaver in the grace — still <c>is_active</c> with an end date 3 days
-    /// back — is NOT: she has left, so her year must not be settled as a plain year-end. Red conditions:
-    /// <c>Assert.Equal(0L, leaverSpecialHolidayRows)</c> — today the pass filters only <c>is_active = TRUE</c> and
-    /// enumerates the grace leaver (she is also not yet flipped). The leaver also has no VACATION settlement at
-    /// all (the VACATION active branch already excluded a passed end date: boundary pin, holds today).
+    /// AC-230-14, K-3. Kind B — boundary pin, holds today: a grace leaver gets no SPECIAL_HOLIDAY settlement row.
+    /// It holds today through the in-lock leaver guard (<c>VacationSettlementService</c> (3b): a SPECIAL_HOLIDAY tuple
+    /// whose subject has a passed end date is refused <c>NotDueUnderLock</c>), so this fact does NOT by itself prove the
+    /// K-3 SQL filter: with only that filter reverted the pass picks the leaver up, the guard refuses, and the fact stays
+    /// green. What the K-3 filter adds is tidiness (the leaver is never picked up, no lock taken, no NotDue churn); the
+    /// selection step cannot be observed from a test without touching src, so that part is not pinned here. The fact
+    /// guards the OUTCOME against any future change that removes both layers.
+    ///
+    /// <para>Seeding: the settlement gates are ENABLED (go-live 2020-01-01 and the SPECIAL_HOLIDAY flag). Two ordinary
+    /// active employees bracket the leaver in <c>user_id</c> order (the pass enumerates by <c>ORDER BY user_id</c>): an
+    /// "a" control that sorts before and a "z" control that sorts after. Waiting for the LATER control's row means the
+    /// pass has reached past the leaver's position, so the zero count is read after the leaver was passed over, not before
+    /// the pass got to it. The leaver is a grace leaver (end date 3 days back, still <c>is_active</c>). It also has no
+    /// VACATION settlement (the VACATION active branch excludes a passed end date: also a boundary pin).</para>
     /// </summary>
     [Fact]
-    public async Task K3_GraceLeaver_IsNotEnumeratedBySpecialHolidayActivePass()
+    public async Task K3_GraceLeaver_GetsNoSpecialHolidaySettlementRow()
     {
         var today = new DateOnly(2026, 6, 1);
-        var control = await SeedEmployeeAsync("lg_k3_control");
-        var leaver = await SeedEmployeeAsync("lg_k3_leaver");
+        var control = await SeedEmployeeAsync("lg_k3_a_control");   // sorts before the leaver
+        var leaver = await SeedEmployeeAsync("lg_k3_m_leaver");
+        var lateControl = await SeedEmployeeAsync("lg_k3_z_control"); // sorts after the leaver
         await SetEndDateAsync(leaver, today.AddDays(-3)); // D+3, active
 
         BootFixedHost(today, goLive: new DateOnly(2020, 1, 1), specialHolidayEnabled: true);
 
         Assert.True(await WaitForSettlementAsync(control, "SPECIAL_HOLIDAY"),
             "the control employee must be settled by the særlige feriedage pass (the gates are open, the pass ran).");
-        // The pass enumerates every candidate in one query, so once the control has a row the leaver's would exist too.
+        Assert.True(await WaitForSettlementAsync(lateControl, "SPECIAL_HOLIDAY"),
+            "the later control must be settled too: the pass has then gone past the leaver in user_id order.");
         Assert.Equal(0L, await CountSettlementsAsync(leaver, "SPECIAL_HOLIDAY"));
         Assert.Equal(0L, await CountSettlementsAsync(leaver));
         Assert.True((await ReadUserAsync(leaver)).IsActive);

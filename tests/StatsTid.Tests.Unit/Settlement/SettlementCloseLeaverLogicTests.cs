@@ -33,9 +33,10 @@ public class SettlementCloseLeaverLogicTests
 
     /// <summary>S147 OQ-2: the R1 boundary moved from day 1 to day 6. The end date is the LAST day
     /// employed. endDate == today ⇒ not due; today − 5 (D+5, the last grace day) ⇒ not due;
-    /// today − 6 (D+6) ⇒ due. Kind N (M-8: names <c>EmploymentEndDateLifecycleWriter.IsPastGrace</c>,
-    /// created by this sprint) — Red condition: any mutation of the grace length or of the
-    /// strictness (see the report's M-8 mutation).</summary>
+    /// today − 6 (D+6) ⇒ due. Kind N (names <c>EmploymentEndDateLifecycleWriter.IsPastGrace</c>, created by this sprint).
+    /// Red conditions, both run at the TASK-14710-T gate in a detached worktree: <b>M-8a</b> (<c>ManagerGraceCalendarDays</c> 5 changed
+    /// to 4) — 11 of 81 failed across the three grace suites, this fact among them; <b>M-8b</b> (<c>endDate &lt; cutoff</c> changed to
+    /// <c>&lt;=</c>) — 6 of 81 failed, this fact among them ("Assert.False() Failure  Expected: False  Actual: True" on the D+5 row).</summary>
     [Fact]
     public void IsDeactivationDue_BoundaryDay_NotDue_FirstFollowingDay_Due()
     {
@@ -46,9 +47,9 @@ public class SettlementCloseLeaverLogicTests
         Assert.True(SettlementCloseService.IsDeactivationDue(Today.AddDays(-6), isActive: true, copenhagenToday: Today));
     }
 
-    /// <summary>AC-230-3, due predicate. Kind N (M-8). D+5 is the last day the manager's grace
-    /// holds: an active leaver is NOT due; D+6 IS due. Red condition: with the constant 5 → 4 or
-    /// the comparison relaxed to &lt;=, the D+5 row fails (M-8 mutation, see report).</summary>
+    /// <summary>AC-230-3, due predicate. Kind N. D+5 is the last day the manager's grace
+    /// holds: an active leaver is NOT due; D+6 IS due. Red conditions (run at the gate): <b>M-8a</b> (constant 5 to 4) and <b>M-8b</b>
+    /// (<c>&lt;</c> relaxed to <c>&lt;=</c>) each fail the D+5 row — this fact is in both failure lists (11 and 6 of 81).</summary>
     [Fact]
     public void IsDeactivationDue_LastGraceDay_NotDue()
     {

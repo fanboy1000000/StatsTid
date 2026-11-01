@@ -72,11 +72,12 @@ public class EndDateLifecycleWriterParityTests
             new DateOnly(2026, 2, 27), oldIsActive: true, oldEndDateDeactivated: false, Today));
     }
 
-    /// <summary>AC-230-3, the writer. Kind N (M-8; names <c>IsPastGrace</c>). An end date entered 1..5
+    /// <summary>AC-230-3, the writer. Kind N (names <c>IsPastGrace</c>). An end date entered 1..5
     /// days back stores only (active, no provenance); 6 days back deactivates with provenance; a
     /// correction of a lifecycle-deactivated row INTO the grace reactivates and resets provenance.
-    /// Red condition: grace length or strictness mutated, or the reactivation branch left on the
-    /// old day-1 rule.</summary>
+    /// Red conditions, run at the gate: <b>M-8a</b> (constant 5 to 4) and <b>M-8b</b> (<c>&lt;</c> to <c>&lt;=</c>) each fail the
+    /// <c>daysBack: 5</c> rows of <c>WriterWithinGrace_StoresOnly_ActiveNoProvenance</c> and
+    /// <c>WriterCorrectionIntoGrace_ReactivatesLifecycleDeactivatedRow</c> (also named in the 11 and 6 failures of 81).</summary>
     [Theory]
     [InlineData(1)]
     [InlineData(5)]

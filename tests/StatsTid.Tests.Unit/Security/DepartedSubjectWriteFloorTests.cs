@@ -71,8 +71,11 @@ public class DepartedSubjectWriteFloorTests
     // ───────── (departed, HR, not self) -> allow ─────────
 
     /// <summary>Kind N. HR and admins on someone else's departed record: the routine final-month
-    /// correction. Red condition: a mutation that refuses regardless of role (M-9e: always refuse when
-    /// departed) makes these return a clause.</summary>
+    /// correction. Red condition: M-9e (the role arm refuses every non-self actor, HR included:
+    /// <c>if (actorRole is null || actorRole.Length >= 0)</c>) — RED captured at the fix-up-2 gate in a detached worktree:
+    /// 4 of 23 failed (the three <c>Departed_ActorAtLeastHr_NotSelf_Allowed</c> rows and
+    /// <c>SelfIsOrdinal_CaseDifferentIdIsAnotherPerson</c>), "Assert.Null() Failure: Value is not null  Expected: null
+    /// Actual: "departed-subject-below-local-hr"".</summary>
     [Theory]
     [InlineData(StatsTidRoles.LocalHR)]
     [InlineData(StatsTidRoles.LocalAdmin)]
@@ -118,8 +121,11 @@ public class DepartedSubjectWriteFloorTests
 
     // ───────── (not departed, any) -> allow ─────────
 
-    /// <summary>Kind N. Red condition: a mutation that ignores departed-ness (M-9f: refuse whenever the
-    /// actor is self or below HR) refuses an ordinary active employee.</summary>
+    /// <summary>Kind N. Red condition: M-9f (departed-ness ignored: the opening
+    /// <c>if (!IsDeparted) return null</c> deleted, so the floor refuses whenever the actor is self or below HR) — RED captured at
+    /// the fix-up-2 gate: 5 of 23 failed (four <c>NotDeparted_AnyActor_Allowed</c> rows and
+    /// <c>LastDayEmployed_Allowed_DayAfter_Refused</c>), "Assert.Null() Failure: Value is not null  Expected: null
+    /// Actual: "departed-subject-below-local-hr"".</summary>
     [Theory]
     [InlineData(StatsTidRoles.Employee, Mette)]
     [InlineData(StatsTidRoles.Employee, Other)]
@@ -139,7 +145,10 @@ public class DepartedSubjectWriteFloorTests
     // ───────── (deactivated, no end date, below HR) -> refuse (ADR-040 D3 kept) ─────────
 
     /// <summary>Kind N. A manually deactivated subject (no end date) is departed: D3's original floor
-    /// is kept. Red condition: M-9g (the departed test keys on the end date only) returns null.</summary>
+    /// is kept. Red condition: M-9g (the departed test keys on the end date only) — RED captured at the fix-up-2
+    /// gate: 3 of 23 failed (both <c>DeactivatedNoEndDate_ActorBelowHr_Refused</c> rows and
+    /// <c>Departed_EmployeeActingOnSelf_BothArmsHold_SelfClauseWins</c>), "Expected: "departed-subject-below-local-hr"
+    /// Actual: null".</summary>
     [Theory]
     [InlineData(StatsTidRoles.Employee)]
     [InlineData(StatsTidRoles.LocalLeader)]

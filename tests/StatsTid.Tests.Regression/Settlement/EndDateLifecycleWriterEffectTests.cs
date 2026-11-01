@@ -251,7 +251,7 @@ public sealed class EndDateLifecycleWriterEffectTests : IAsyncLifetime
         Assert.False(user.EndDateDeactivated);
         Assert.Equal(2L, user.Version);
         Assert.Equal(0L, await CountAsync(
-            "outbox_events", "stream_id =  AND event_type = 'ReportingLineManagerDeactivated'",
+            "outbox_events", "stream_id = @s AND event_type = 'ReportingLineManagerDeactivated'",
             ("s", $"reporting-line-{report}")));
     }
 
