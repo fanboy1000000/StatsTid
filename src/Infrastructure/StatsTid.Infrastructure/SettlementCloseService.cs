@@ -913,9 +913,11 @@ public sealed class SettlementCloseService : BackgroundService
                   -- employee here, the same predicate shape as the VACATION pass's ACTIVE branch.
                   -- Under the manager grace a leaver stays is_active=TRUE for D+1 .. D+5, and this
                   -- pass would otherwise enumerate someone who has already left as an ordinary
-                  -- active employee and settle their year as a plain YEAR_END. (Before S147 the
-                  -- same gap existed only between Copenhagen midnight and Step A's poll, or for a
-                  -- flip-failed leaver.)
+                  -- active employee. The in-lock leaver guard (VacationSettlementService) would then
+                  -- refuse to settle them (NotDueUnderLock), so no YEAR_END row results either way;
+                  -- this filter is tidiness: no lock taken and no NotDue churn for a grace leaver.
+                  -- (Corrected at the S147 TASK-14710 review: an earlier wording said the pass would
+                  -- settle their year as a plain YEAR_END.)
                   AND NOT (u.employment_end_date IS NOT NULL AND u.employment_end_date < @today)
                   -- TYPE-SCOPED anti-join (R6 / 8001 Step-5a) — a tuple is not-due when it holds a
                   -- non-REVERSED SPECIAL_HOLIDAY settlement row (or a bare-reversal not-due marker;
