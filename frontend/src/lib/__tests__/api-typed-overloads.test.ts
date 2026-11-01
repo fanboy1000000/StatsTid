@@ -381,6 +381,9 @@ describe('S112 typed derivation — real committed spec', () => {
     // visibility 200), +2 PUTs (the local-agreement-profile PUT, JSON 200 —
     // the If-Match/If-None-Match:* flexible-precondition op; project update,
     // JSON 200) and +2 DELETEs (project delete 204; project deselect 204).
+    // S147 / TASK-14711 — the two deprecated project selection routes (POST and
+    // DELETE under /api/projects/{orgId}/select/) were retired server-side: -1 POST
+    // and -1 DELETE; the project select / deselect pins above are retired.
     // S120 / TASK-12001 — Pass 7 bucket C (TASK-12000) drained the final
     // employee-facing surface: +3 POSTs (time-entries create, JSON 201 receipt;
     // skema save, JSON 200 {saved}; overtime compensate, JSON 200 — the
@@ -432,7 +435,6 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/entitlement-configs/{configId}'
       | '/api/agreement-configs/{configId}/entitlements/{entitlementConfigId}'
       | '/api/projects/{orgId}/{projectId}'
-      | '/api/projects/{orgId}/select/{projectId}'
     >()
     expectTypeOf<TypedPathIn<paths, 'post'>>().toEqualTypeOf<
       | '/api/admin/organizations'
@@ -475,7 +477,6 @@ describe('S112 typed derivation — real committed spec', () => {
       | '/api/admin/entitlement-configs'
       | '/api/agreement-configs/{configId}/entitlements'
       | '/api/projects/{orgId}'
-      | '/api/projects/{orgId}/select/{projectId}'
       | '/api/config/{orgId}/absence-types/visibility'
       | '/api/time-entries'
       | '/api/skema/{employeeId}/save'
