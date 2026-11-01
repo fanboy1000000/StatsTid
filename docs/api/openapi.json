@@ -1884,73 +1884,6 @@
         }
       }
     },
-    "/api/projects/{orgId}/select/{projectId}": {
-      "post": {
-        "tags": [
-          "StatsTid.Backend.Api"
-        ],
-        "parameters": [
-          {
-            "name": "orgId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "projectId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.ProjectSelectionResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "StatsTid.Backend.Api"
-        ],
-        "parameters": [
-          {
-            "name": "orgId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "projectId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "No Content"
-          }
-        }
-      }
-    },
     "/api/projects/{orgId}/{projectId}": {
       "put": {
         "tags": [
@@ -9131,23 +9064,6 @@
           "sortOrder": {
             "type": "integer",
             "format": "int32"
-          }
-        },
-        "additionalProperties": false
-      },
-      "StatsTid.Backend.Api.Contracts.ProjectSelectionResponse": {
-        "required": [
-          "projectId",
-          "selected"
-        ],
-        "type": "object",
-        "properties": {
-          "projectId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "selected": {
-            "type": "boolean"
           }
         },
         "additionalProperties": false
