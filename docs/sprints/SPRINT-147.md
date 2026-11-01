@@ -93,8 +93,9 @@ Artifacts: `.claude/reviews/PLAN-s147-{codex,reviewer}-c{1,2,3}.md`, `PLAN-s147-
 | TASK-14715 / 14715-T | 4a | payroll-integration / test-qa | SEC-054 step 1: the case-3a month paid untracked | planned |
 | TASK-14716 / 14716-T | 4b | payroll-integration, cross-domain / test-qa | SEC-054 step 2: retire the raw routes | planned |
 | TASK-14717 / 14717-T | — | rule-engine / test-qa | T3b as a separate task | **DROPPED** (RR-1: R1 landed before 14708's dispatch; folded into 14708) |
-| TASK-14718 | 2a → before 2b (plan-added 2026-10-30) | ux (re-routed from test-qa) | QUAL-241: a day panel opened before the page hydrates loses its periods. The "flaky" 7203-pin vitest was catching a real race. First dispatch (test-qa) diagnosed it and stopped as instructed. Re-dispatched to `ux` for the product fix plus a deterministic pin | dispatched 2026-10-30 (2nd) |
+| TASK-14718 | 2a → before 2b (plan-added 2026-10-30) | ux (re-routed from test-qa) | QUAL-241: a day panel opened before the page hydrates loses its periods. The "flaky" 7203-pin vitest was catching a real race. First dispatch (test-qa) diagnosed it and stopped as instructed. Re-dispatched to `ux` for the product fix plus a deterministic pin | **merged** `782e2285` with fix-ups 1–4 (frontend gate green, vitest 82 files / 1049); owner ruling at the five-cycle cap (2026-11-01): "Merge + small follow-up" → TASK-14720 |
 | TASK-14719 | 2a → before 2b (plan-added 2026-10-30) | test-qa | The CI-W2 Docker failures. (A) `SenderSeparationTests`' seed passes untyped nulls. (B) and (C) two older facts whose expectations 14703 re-decided (a departed self's own read; a deactivated manager clearing their own stand-in), which the 14703-T census missed. (D) The role-grant boundary pair answered 404 because the D+1 user was found inactive. (E) A wider census | **merged** `f21422d6` with fix-up 1 (GATE green); Docker facts CI-pending (CI-W2b) |
+| TASK-14720 | before 2b (plan-added 2026-11-01, owner ruling at TASK-14718's cap) | ux | QUAL-241's last items. (1) Bound the whole flush, including the saves Godkend fires itself (Codex c5 BLOCKER: a hung save fired by Godkend locks the page with no time limit). (2) A "uvist" notice when a month load gives up waiting past the bound (Opus c5 W2). (3) Per-month dropped-save notices that only a dismissal or a same-month success covering the days clears (Opus c5 W1). Plus the cycle-5 label and comment notes | to dispatch |
 
 ### Wave 1 — the merge record (2026-10-29)
 
@@ -148,6 +149,7 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
 | 14708 + 14708-T (+ Orchestrator comment relabel) | `4f57d29f` | build 0 / 145 / CA2100 115; Unit 1669 + **1 red** → merge fix-up `4653e5ed` → 1670; DemoSeed 170; Regression non-Docker 130; REGEN: no drift | PASS | READY-TO-MERGE (1 W, 7 N) | 0 B, 0 W, 2 N (both relabelled in `4f57d29f`) | `7cc6e65e` |
 | 14705 + 14705-T (+ fix-up 1) | `c60dfd45` | build 0 / 145 / CA2100 115; Unit 1670; DemoSeed 170; Regression non-Docker 135 (+5: `ApprovalSelfGuardIsSelfTests`); REGEN: no drift | c1 PASS → c2 PASS | c1 **FIX-FIRST** (1 B: `audit_log` is the HTTP journal; 2 W; 3 N) → c2 READY-TO-MERGE (2 N) | c1 0 B, 0 W, 1 N → c2 CLEAN | `b2a65fb8` |
 | 14719 (+ fix-up 1) | `e3a719ed` | build 0 / 145 / CA2100 115; Unit 1670; DemoSeed 170; Regression non-Docker 135 | c1 PASS → c2 PASS | **Opus stand-in** (Fable limited): c1 READY-TO-MERGE (3 W, 7 N) → c2 READY-TO-MERGE (4 N) | c1 0 B, 1 W → c2 CLEAN | `f21422d6` |
+| 14718 (+ fix-ups 1–4) | `38ac5f56` | frontend: tsc / lint / typecheck:e2e / build exit 0; vitest 82 files / 1049 tests; `gen:api` no content drift | c1 PASS · c2 PASS · c3 1 violation (a Red condition) → c4 PASS · c5 PASS | **Opus stand-in from c2** (Fable limited; c1 was Fable): c1 Fable FIX-FIRST (1 B) · c2 READY · c3 READY · c4 READY · c5 READY | c1 2 B · c2 1 B · c3 0 B / 5 W · c4 0 B / 5 W · c5 **1 B** (a Godkend-fired hung save) → owner ruling at the cap | `782e2285` |
 
 *In plain words (14706 + 14707):* the 11-hour rest check used to skip, silently, every day registered in Skema (hours with no clock times), so the month looked clean. Now the check lists the days it could not measure, and the employee's compliance panel and Teamoversigt's row detail show "Hviletid ikke kontrolleret for N dage". **What you will see:** under today's backend every Skema day with hours is "not checked", so the notice appears for practically every employee and month until S148 stage 0 makes the rest check read Skema's intervals (D-2 = (a)). This is the honest "not checked" chosen in OQ-4 = (b), not a regression. **Plan deviation:** 14706 merged ahead of 14703 to unblock the stacked 14707; it shares no file with 14703. **Dispositions:**
 - **14706 Fable W1.** A day with one timed entry plus hours-only entries counts as checked. It goes into QUAL-234's row and the S148 stage-0 input for D-2.
@@ -201,6 +203,20 @@ After 14701 the build had 147 warnings and 117 CA2100 warnings, two over the cap
 - **Codex c1 NOTE.** M4 was run and recorded.
 - **Fable c2 NOTE 1.** Stale "today" wording in `DepartedSelfElevatedRouteTests.cs` (tidy item 16).
 - **SEC-056's register row** is written at close (O-10 Block 21, "T9 merged" variant).
+
+*In plain words (14718):* a test that looked flaky since S121 was catching a real fault in Skema. A day panel opened in the moment before the page had copied the month's data into its editable state started with no work periods. An edit there could then overwrite the day's stored times, because a period save replaces the whole day. Five review rounds widened the fix to every path with the same harm:
+- the page now copies the data during render, so no screen ever shows un-copied state;
+- editing, approve, send and reopen are locked whenever the data shown belongs to another month or a load is pending;
+- pending saves go out on navigation and when leaving the page, one at a time, each sealed with its own month and kind;
+- a save that fails after its month has left the screen is dropped with a month-labelled "Ændringerne er ikke gemt" alert. Fix-up 3's keep-and-replay store was removed in fix-up 4, because both reviewers showed a replay could overwrite newer data;
+- hung saves are bounded at 15 s;
+- load errors and action errors are separate, and a wrong-month load offers "Prøv igen".
+
+**Owner ruling at the five-cycle cap (2026-11-01).** Codex's fifth cycle still found one blocker: a save that Godkend fires itself, if it hangs, locks the page with no time limit. Nothing is lost or overwritten, and a similar hang existed before. The owner chose **"Merge + small follow-up"**. 14718 merged; TASK-14720 takes that blocker and the stand-in's two cycle-5 warnings, with a fresh review. **Dispositions:**
+- QUAL-241 is "fixed in code" and closes when CI-W2b runs the frontend job green.
+- QUAL-242 gains the cycle-5 residuals that 14720 does not take.
+- QUAL-214 is largely closed by this task (pending saves sent on navigation; the work-time queue cleared on load). That is cross-referenced at close; its Danish-text half stays open.
+- Model note: the internal lens ran on Fable at c1 and on the Opus stand-in from c2 (Fable's usage limit).
 
 *In plain words (14719):* CI-W2 ran the Docker tests that cannot run locally, and 8 of 2353 failed. None was a product defect:
 - **Five** were a seeding bug in 14704's test: null values sent without a type.
