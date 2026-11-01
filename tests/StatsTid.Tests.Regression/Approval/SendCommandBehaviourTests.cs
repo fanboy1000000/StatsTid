@@ -401,7 +401,19 @@ public sealed class SendCommandBehaviourTests : SendCommandMatrixTestBase
         await SetEmploymentWindowAsync(emp, start: null, end: new DateOnly(2026, 2, 28));
         var periodId = await SeedApprovalRowAsync(emp, "DRAFT", MarchStart, MarchEnd);
 
-        using var client = EmployeeClient(emp);
+        // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first.
+        // Pinned to the last day employed (2026-02-28): the Employee is not departed yet, so the window gate answers (422).
+        using var pinnedHost = Fx.Factory.WithFixedToday(new DateOnly(2026, 2, 28));
+        using var client = pinnedHost.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer",
+            new StatsTid.Auth.JwtTokenService(new StatsTid.SharedKernel.Security.JwtSettings
+            {
+                Issuer = "statstid", Audience = "statstid", SigningKey = DevFallbackSigningKey, ExpirationMinutes = 60,
+            }).GenerateToken(
+                employeeId: emp, name: emp, role: StatsTid.SharedKernel.Security.StatsTidRoles.Employee,
+                agreementCode: "HK", orgId: Org,
+                scopes: new[] { new StatsTid.SharedKernel.Security.RoleScope(StatsTid.SharedKernel.Security.StatsTidRoles.Employee, Org, "ORG_ONLY") }));
         var rsp = await PostEmployeeApproveAsync(client, periodId);
 
         await AssertEmploymentWindow422Async(rsp);

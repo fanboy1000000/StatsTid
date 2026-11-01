@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Npgsql;
+using StatsTid.Auth;
+using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Approval;
 using Xunit;
 
@@ -38,9 +40,33 @@ namespace StatsTid.Tests.Regression.Security;
 /// </summary>
 [Trait("Category", "Docker")]
 [Collection("SendCommandMatrix")]
-public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTestBase
+public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTestBase, IDisposable
 {
     public EmploymentWindowRegistrationGateTests(SendCommandMatrixFixture fx) : base(fx) { }
+
+    private Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program>? _pinnedHost;
+
+    public void Dispose() => _pinnedHost?.Dispose();
+
+    /// <summary>S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first.
+    /// Every fact that gives the employee an END date runs on a host whose clock is the window's last day
+    /// (<see cref="WindowEnd"/>, 2026-03-20): the person has not departed yet (the last day is still employed), so the
+    /// employment-window gate is what answers, exactly as these facts have always pinned. Without the pin, the real
+    /// clock is long past the end date and an Employee on their own record is refused 403 by the floor first. The
+    /// actor stays an Employee; no assertion changed.</summary>
+    private HttpClient PinnedEmployeeClient(string employeeId, string orgId = Org)
+    {
+        _pinnedHost ??= Fx.Factory.WithFixedToday(WindowEnd);
+        var client = _pinnedHost.CreateClient();
+        var token = new JwtTokenService(new JwtSettings
+        {
+            Issuer = "statstid", Audience = "statstid", SigningKey = DevFallbackSigningKey, ExpirationMinutes = 60,
+        }).GenerateToken(
+            employeeId: employeeId, name: employeeId, role: StatsTidRoles.Employee,
+            agreementCode: "HK", orgId: orgId, scopes: new[] { new RoleScope(StatsTidRoles.Employee, orgId, "ORG_ONLY") });
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
 
     // 2026-03: 03-01 is a Sunday. WindowStart 03-05 (Thu) / WindowEnd 03-20 (Fri) are weekdays,
     // as are the probes 03-04 (Wed), 03-06 (Fri), 03-09 (Mon), 03-10 (Tue) and 03-23 (Mon) —
@@ -142,7 +168,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
         var emp = UniqueEmp("bnd");
         await SeedEmployeeAsync(emp);
         await SetEmploymentWindowAsync(emp, WindowStart, WindowEnd);
-        var client = EmployeeClient(emp);
+        var client = PinnedEmployeeClient(emp); // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
 
         var onStart = await PostTimeEntryAsync(client, emp, WindowStart);
         Assert.Equal(HttpStatusCode.Created, onStart.StatusCode);
@@ -165,7 +191,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
         var emp = UniqueEmp("nst");
         await SeedEmployeeAsync(emp);
         await SetEmploymentWindowAsync(emp, start: null, end: WindowEnd);
-        var client = EmployeeClient(emp);
+        var client = PinnedEmployeeClient(emp); // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
 
         var pastRsp = await PostTimeEntryAsync(client, emp, new DateOnly(2026, 3, 2)); // no start to violate
         Assert.Equal(HttpStatusCode.Created, pastRsp.StatusCode);
@@ -221,7 +247,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
         await SeedEmployeeAsync(emp);
         await SetEmploymentWindowAsync(emp, WindowStart, WindowEnd);
 
-        var rsp = await EmployeeClient(emp).PostAsJsonAsync($"/api/skema/{emp}/save", new
+        var rsp = await PinnedEmployeeClient(emp).PostAsJsonAsync($"/api/skema/{emp}/save", new // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
         {
             year = 2026,
             month = 3,
@@ -237,7 +263,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
 
         // Cross-writer byte-identity: the SAME employee's time-entry refusal is the same body.
         var teBody = await AssertWindow422DateFreeAsync(
-            await PostTimeEntryAsync(EmployeeClient(emp), emp, DayBeforeStart));
+            await PostTimeEntryAsync(PinnedEmployeeClient(emp), emp, DayBeforeStart)); // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
         Assert.Equal(teBody, skemaBody);
     }
 
@@ -252,7 +278,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
         await SeedEmployeeAsync(emp);
         await SetEmploymentWindowAsync(emp, WindowStart, WindowEnd);
 
-        var rsp = await EmployeeClient(emp).PostAsJsonAsync($"/api/skema/{emp}/save", new
+        var rsp = await PinnedEmployeeClient(emp).PostAsJsonAsync($"/api/skema/{emp}/save", new // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
         {
             year = 2026,
             month = 3,
@@ -276,7 +302,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
         await SeedEmployeeAsync(emp);
         await SetEmploymentWindowAsync(emp, WindowStart, WindowEnd);
 
-        var rsp = await EmployeeClient(emp).PostAsJsonAsync($"/api/skema/{emp}/save", new
+        var rsp = await PinnedEmployeeClient(emp).PostAsJsonAsync($"/api/skema/{emp}/save", new // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
         {
             year = 2026,
             month = 3,
@@ -300,7 +326,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
         await SeedEmployeeAsync(emp);
         await SetEmploymentWindowAsync(emp, WindowStart, WindowEnd);
 
-        var rsp = await EmployeeClient(emp).PostAsJsonAsync($"/api/skema/{emp}/save", new
+        var rsp = await PinnedEmployeeClient(emp).PostAsJsonAsync($"/api/skema/{emp}/save", new // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
         {
             year = 2026,
             month = 3,
