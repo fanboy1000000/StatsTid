@@ -377,8 +377,9 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     /// in the report: the stand-in survives the manager's departure until its end date or HR's revocation.
     /// <para><b>Red conditions:</b> approving R exercises the resolver's vikar consult (read 3's stand-in leg) and
     /// the role floor for the holder; a delegator-side rule there (skipping a stand-in whose absent approver has
-    /// left) turns this into 403. It does NOT exercise the unit-leader stand-in reads or the pending-list
-    /// stand-in legs; <see cref="StandInOfDepartedUnitLeader_StillApprovesUnitMember_200"/> covers the former.</para>
+    /// left) turns this into 403. It also asserts the month is on the stand-in's pending list (the pending-list
+    /// stand-in leg for an edge stand-in). It does NOT exercise the unit-leader stand-in reads;
+    /// <see cref="StandInOfDepartedUnitLeader_StillApprovesUnitMember_200"/> covers those.</para>
     /// </summary>
     [Fact]
     public async Task StandInOfDepartedManager_SelfAppointed_StillApproves_200()
@@ -389,6 +390,8 @@ public sealed class DepartedApproverTests : IAsyncLifetime
         await SetEndDateAsync(Mette, Yesterday);            // she has now left: D+1
 
         var period = await InsertPeriodAsync(R, "EMPLOYEE_APPROVED");
+        // The pending-list stand-in leg too: the month shows on the stand-in's list (Opus 5a c2 N-4).
+        Assert.Contains(R, await PendingEmployeesAsync(Vikar));
         var rsp = await Client(Vikar).PostAsync($"/api/approval/{period}/approve", null);
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
@@ -399,7 +402,8 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     /// <b>Kind B — boundary pin — holds today; owner Q-B = (c) (ruled, not provisional). Do NOT "fix".</b>
     /// A stand-in HR appointed for Mette (via <c>POST /api/admin/reporting-lines/{managerId}/vikar</c>, covering
     /// today) keeps approving R's month on D+1: 200.
-    /// <para><b>Red conditions:</b> as for the self-appointed fact (the resolver's vikar consult only).</para>
+    /// <para><b>Red conditions:</b> as for the self-appointed fact (the resolver's vikar consult and the holder's role
+    /// floor).</para>
     /// </summary>
     [Fact]
     public async Task StandInOfDepartedManager_HrAppointed_StillApproves_200()
@@ -501,8 +505,8 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>Kind N (differential; calls <c>IsActingLeaderOrAboveAsync</c> and the date-taking resolver, created this
-    /// sprint, so it cannot compile on 3dbc42da — a compile error is not RED).</b> The live and the prefetched forms of the role floor, the resolver and the
+    /// <b>Kind N (differential; calls <c>IsActingLeaderOrAboveAsync</c>, created this sprint, so it cannot compile on
+    /// 3dbc42da — a compile error is not RED).</b> The live and the prefetched forms of the role floor, the resolver and the
     /// combined verdict agree, and both DENY a still-active-but-departed leader (Mette, last day yesterday) and a
     /// DEACTIVATED leader (Dora, <c>is_active = FALSE</c>; the prefetched floor now also returns deactivated
     /// leaders and relies on the C# rule to deny them — implementation deviation 4). Explicit values are
@@ -511,7 +515,8 @@ public sealed class DepartedApproverTests : IAsyncLifetime
     /// <para><b>Named mutations (argued — Docker-only; run in a detached worktree at CI):</b> (M1) drop the
     /// end-date check in <c>PrefetchedAuthorityFacts.IsActingLeaderOrAboveAsync</c>, keeping the API: the prefetched
     /// floor admits Mette, so <c>Assert.Equal(false, prefetched floor(Mette))</c> fails and the live-vs-prefetched
-    /// verdict for (Mette, R) diverges. (M2) drop the <c>is_active</c> half there: the prefetched floor admits Dora.</para>
+    /// verdict for (Mette, R4) diverges through the direct unit-leader leg ((Mette, R) does not: R still
+    /// escalates to Gudrun). (M2) drop the <c>is_active</c> half there: the prefetched floor admits Dora.</para>
     /// <para><b>Red conditions:</b> <c>Assert.False(floor(Mette))</c> on both forms;
     /// <c>Assert.False(prefetchedFloor(Dora))</c> if the prefetched rule ever stops denying deactivated leaders;
     /// any divergence between the forms for any (candidate, employee) pair.</para>
