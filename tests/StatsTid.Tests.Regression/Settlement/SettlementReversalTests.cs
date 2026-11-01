@@ -60,8 +60,10 @@ public sealed class SettlementReversalTests : IAsyncLifetime
     private const string OperatorId = "hr_s71_reversal_op";
     private const string OperatorRole = "LocalHR";
 
-    /// <summary>Fixed clock: Copenhagen 2026-03-05 (the S70 settlement-test convention).</summary>
-    private static readonly DateOnly Clock = new(2026, 3, 5);
+    /// <summary>Fixed clock: Copenhagen 2026-03-06. S147 OQ-2: moved from 2026-03-05 (the S70 settlement-test
+    /// convention) so the standard end date 2026-02-28 is D+6 — the first day Step A flips an active leaver
+    /// (it was D+5, flip-due on the old day-1 rule). The whole-month accrual at end 2026-02-28 is unchanged.</summary>
+    private static readonly DateOnly Clock = new(2026, 3, 6);
 
     /// <summary>The standard leaver end date — R6 ferieår 2025 (month 2 &lt; 9 ⇒ 2026 − 1).</summary>
     private static readonly DateOnly EndDate = new(2026, 2, 28);
@@ -602,7 +604,7 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ("e", employeeId), ("a", OperatorId)));
     }
 
-    /// <summary>Widening correction (2026-02-28 → 2026-03-04, still passed at the 2026-03-05
+    /// <summary>Widening correction (2026-02-28 → 2026-03-04, still passed at the S147 2026-03-10
     /// clock ⇒ same ferieår, TERMINATION stays eligible) with a registration outside the OLD
     /// window AND the corrected one (2026-04-10) → the reversal PROCEEDS (successor at
     /// sequence 3, corrected end persisted). Pins the NARROWING-ONLY predicate falsifiably: an
@@ -612,7 +614,11 @@ public sealed class SettlementReversalTests : IAsyncLifetime
     [Fact]
     public async Task ReverseSupersede_WideningCorrection_OutOfOldWindowData_Proceeds()
     {
-        var (settle, reversal) = BootFixedClockServices(Clock);
+        // S147 OQ-2: this fact pins "the corrected date has PASSED, so the row stays deactivated". Under the
+        // 5-day grace 2026-03-04 has passed only from 2026-03-10 (D+6), so the fact runs on that clock; at the
+        // suite Clock (03-06, D+2) the correction would land inside the grace and REACTIVATE the leaver (the
+        // writer's reactivation branch), which is a different, separately ruled behaviour (report: K-14).
+        var (settle, reversal) = BootFixedClockServices(new DateOnly(2026, 3, 10));
         var employeeId = await SeedEmployeeAsync();
         await MarkLeaverAsync(employeeId, EndDate); // recorded end 2026-02-28
         await SettleInOwnTxAsync(settle, employeeId, EndDateFerieaar, Termination);

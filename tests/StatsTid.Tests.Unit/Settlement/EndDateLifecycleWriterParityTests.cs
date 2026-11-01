@@ -61,12 +61,50 @@ public class EndDateLifecycleWriterParityTests
 
     // ─────────────── canonical R1 spot-pins (anchor the parity to the pinned semantics) ───────────────
 
-    /// <summary>R1(a) — set already-passed on an active row ⇒ same-tx deactivate with provenance.</summary>
+    /// <summary>R1(a) — set past-the-grace on an active row ⇒ same-tx deactivate with provenance.
+    /// S147 OQ-2: moved from D+1 (4 Mar) to D+6 (27 Feb); within the grace the writer only stores
+    /// (kind R, intentionally re-dated; its D+5 companions are below).</summary>
     [Fact]
     public void SetPassed_ActiveRow_DeactivatesWithProvenance()
     {
+        // S147 OQ-2: was new DateOnly(2026, 3, 4) (D+1); the same-tx flip now lands on D+6.
         Assert.Equal((false, true), EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle(
-            new DateOnly(2026, 3, 4), oldIsActive: true, oldEndDateDeactivated: false, Today));
+            new DateOnly(2026, 2, 27), oldIsActive: true, oldEndDateDeactivated: false, Today));
+    }
+
+    /// <summary>AC-230-3, the writer. Kind N (M-8; names <c>IsPastGrace</c>). An end date entered 1..5
+    /// days back stores only (active, no provenance); 6 days back deactivates with provenance; a
+    /// correction of a lifecycle-deactivated row INTO the grace reactivates and resets provenance.
+    /// Red condition: grace length or strictness mutated, or the reactivation branch left on the
+    /// old day-1 rule.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    public void WriterWithinGrace_StoresOnly_ActiveNoProvenance(int daysBack)
+    {
+        Assert.Equal((true, false), EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle(
+            Today.AddDays(-daysBack), oldIsActive: true, oldEndDateDeactivated: false, Today));
+    }
+
+    [Theory]
+    [InlineData(6)]
+    [InlineData(30)]
+    public void WriterPastGrace_Deactivates_WithProvenance(int daysBack)
+    {
+        Assert.Equal((false, true), EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle(
+            Today.AddDays(-daysBack), oldIsActive: true, oldEndDateDeactivated: false, Today));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    public void WriterCorrectionIntoGrace_ReactivatesLifecycleDeactivatedRow(int daysBack)
+    {
+        Assert.Equal((true, false), EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle(
+            Today.AddDays(-daysBack), oldIsActive: false, oldEndDateDeactivated: true, Today));
+        // the same correction on a manually-deactivated row never reactivates
+        Assert.Equal((false, false), EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle(
+            Today.AddDays(-daysBack), oldIsActive: false, oldEndDateDeactivated: false, Today));
     }
 
     /// <summary>R1(b) — future-dated (incl. == today, still the last EMPLOYED day) ⇒ no flip.</summary>

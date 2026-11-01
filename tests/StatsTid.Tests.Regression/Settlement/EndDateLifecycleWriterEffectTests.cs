@@ -47,9 +47,12 @@ public sealed class EndDateLifecycleWriterEffectTests : IAsyncLifetime
 
     /// <summary>The Copenhagen business date passed to ApplyAsync (PAT-008: the writer takes
     /// the resolved date — no TimeProvider seam needed at this level).</summary>
-    private static readonly DateOnly Clock = new(2026, 3, 5);
+    /// <remarks>S147 OQ-2: moved from 2026-03-05 to 2026-03-06 so <see cref="PassedEndDate"/> (2026-02-28) is
+    /// D+6 — the first day the writer deactivates in the same transaction (it was D+5, deactivating on the
+    /// old day-1 rule).</remarks>
+    private static readonly DateOnly Clock = new(2026, 3, 6);
 
-    /// <summary>Already passed at <see cref="Clock"/> ⇒ the R1(a) deactivating flip.</summary>
+    /// <summary>Past the 5-day manager grace at <see cref="Clock"/> (D+6) ⇒ the R1(a) deactivating flip.</summary>
     private static readonly DateOnly PassedEndDate = new(2026, 2, 28);
 
     /// <summary>Future at <see cref="Clock"/> ⇒ R1(b) store-only, no flip.</summary>
@@ -214,6 +217,65 @@ public sealed class EndDateLifecycleWriterEffectTests : IAsyncLifetime
         Assert.Equal("UPDATED", audit.Action);
         Assert.Equal(1L, audit.VersionBefore);
         Assert.Equal(2L, audit.VersionAfter);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // S147 OQ-2 / AC-230-3 — the writer follows the manager grace: an end date entered 1..5 days back
+    // stores only; a correction of a lifecycle-deactivated row INTO the grace reactivates it.
+    // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>S147 OQ-2 (AC-230-3, the writer). Kind F — Red condition: <c>Assert.True(result.NewIsActive)</c>
+    /// and <c>Assert.True(user.IsActive)</c>; today's writer deactivates in the same transaction on D+1 (D+5 too), so
+    /// both fail. An end date entered 1 and 5 days back leaves the person active with no provenance claim and no
+    /// reporting-line emission; the version pair, event and audit row still land (a store-only write).</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    public async Task EndDateWithinGrace_StoresOnly_PersonStaysActive_NoDeactivationEffects(int daysBack)
+    {
+        var leaver = await SeedEmployeeAsync();
+        var report = await SeedEmployeeAsync();
+        await SeedReportingLineAsync(employeeId: report, managerId: leaver);
+        var graceEnd = Clock.AddDays(-daysBack);
+
+        var result = await ApplyInOwnTxAsync(leaver, graceEnd, expectedUserVersion: 1);
+
+        Assert.Equal(1L, result.VersionBefore);
+        Assert.Equal(2L, result.VersionAfter);
+        Assert.True(result.NewIsActive);
+        Assert.False(result.NewEndDateDeactivated);
+
+        var user = await ReadUserTupleAsync(leaver);
+        Assert.Equal(graceEnd, user.EndDate);
+        Assert.True(user.IsActive);
+        Assert.False(user.EndDateDeactivated);
+        Assert.Equal(2L, user.Version);
+        Assert.Equal(0L, await CountAsync(
+            "outbox_events", "stream_id =  AND event_type = 'ReportingLineManagerDeactivated'",
+            ("s", $"reporting-line-{report}")));
+    }
+
+    /// <summary>S147 OQ-2 (AC-230-3, the reactivation branch). Kind F — Red condition: <c>Assert.True(second.NewIsActive)</c>;
+    /// today a correction to a date that has passed (D+1 or D+5) leaves a lifecycle-deactivated row deactivated.
+    /// A leaver deactivated on D+6 whose end date is corrected into the grace is reactivated and its provenance reset.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    public async Task CorrectionIntoGrace_ReactivatesLifecycleDeactivatedRow(int daysBack)
+    {
+        var leaver = await SeedEmployeeAsync();
+        var first = await ApplyInOwnTxAsync(leaver, PassedEndDate, expectedUserVersion: 1);
+        Assert.False(first.NewIsActive); // D+6: deactivated with provenance
+        Assert.True(first.NewEndDateDeactivated);
+
+        var second = await ApplyInOwnTxAsync(leaver, Clock.AddDays(-daysBack), expectedUserVersion: 2);
+
+        Assert.True(second.NewIsActive);
+        Assert.False(second.NewEndDateDeactivated);
+        var user = await ReadUserTupleAsync(leaver);
+        Assert.True(user.IsActive);
+        Assert.False(user.EndDateDeactivated);
+        Assert.Equal(3L, user.Version);
     }
 
     // ─────────────────────────────── drive ───────────────────────────────

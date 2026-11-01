@@ -2,6 +2,7 @@ using System.Data;
 using System.Net;
 using Npgsql;
 using StatsTid.Backend.Api.Services;
+using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Approval;
 using Xunit;
 
@@ -192,7 +193,11 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
         var body = await BodyAsync(rsp);
         Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden,
             $"expected the in-lock D3-floor 403, got {(int)rsp.StatusCode}: {body}");
-        Assert.Contains("deactivated employee", body); // the pre-check's exact refusal shape
+        // S147 OQ-2 (fix-up 1 ruling): re-decided — the self body. This Employee acts on their OWN record, so both floor
+        // arms hold and the departed-self clause answers (TASK-14703's date-free sentence), not ADR-040 D3's
+        // role sentence; it was "deactivated employee" before S147. The in-lock authority being pinned is unchanged.
+        Assert.Contains(DepartedSubject.DenyReason, body);
+        Assert.DoesNotContain("deactivated employee", body);
 
         // THE invariant: no registration committed for the just-deactivated subject.
         Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, RegistrationDay));
@@ -225,7 +230,10 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
         var body = await BodyAsync(rsp);
         Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden,
             $"expected the in-lock D3-floor 403, got {(int)rsp.StatusCode}: {body}");
-        Assert.Contains("deactivated employee", body);
+        // S147 OQ-2 (fix-up 1 ruling): re-decided — the self body (see the time-entry fact above): an Employee acting
+        // on their own record gets the departed-self sentence, not the role sentence.
+        Assert.Contains(DepartedSubject.DenyReason, body);
+        Assert.DoesNotContain("deactivated employee", body);
 
         Assert.Equal(0L, await CountWorkTimeRowsAsync(emp, RegistrationDay));
     }

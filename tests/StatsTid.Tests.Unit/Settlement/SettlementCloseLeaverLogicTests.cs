@@ -19,21 +19,66 @@ public class SettlementCloseLeaverLogicTests
 
     // ────────────────────────── IsDeactivationDue (Step A, R2/R1) ──────────────────────────
 
+    /// <summary>S147 OQ-2: moved from D+5 (28 Feb vs 5 Mar, due under the old day-1 rule) to D+6
+    /// (27 Feb) — the switch-off now waits out the 5-day manager grace. Kind R (the old fact,
+    /// intentionally re-dated). Red condition: the day-1 rule makes the D+5 companion below
+    /// (<see cref="IsDeactivationDue_LastGraceDay_NotDue"/>) fail.</summary>
     [Fact]
     public void IsDeactivationDue_PassedEndDate_ActiveUser_IsDue()
     {
+        // S147 OQ-2: was new DateOnly(2026, 2, 28) (D+5, due on the old day-1 rule); D+6 is now the first due day.
         Assert.True(SettlementCloseService.IsDeactivationDue(
-            employmentEndDate: new DateOnly(2026, 2, 28), isActive: true, copenhagenToday: Today));
+            employmentEndDate: new DateOnly(2026, 2, 27), isActive: true, copenhagenToday: Today));
     }
 
-    /// <summary>The R1 boundary: the end date is the LAST day employed — due requires today
-    /// STRICTLY after it. endDate == today ⇒ still employed (no flip); endDate == today − 1 ⇒
-    /// flip due (the first following Copenhagen business day).</summary>
+    /// <summary>S147 OQ-2: the R1 boundary moved from day 1 to day 6. The end date is the LAST day
+    /// employed. endDate == today ⇒ not due; today − 5 (D+5, the last grace day) ⇒ not due;
+    /// today − 6 (D+6) ⇒ due. Kind N (M-8: names <c>EmploymentEndDateLifecycleWriter.IsPastGrace</c>,
+    /// created by this sprint) — Red condition: any mutation of the grace length or of the
+    /// strictness (see the report's M-8 mutation).</summary>
     [Fact]
     public void IsDeactivationDue_BoundaryDay_NotDue_FirstFollowingDay_Due()
     {
         Assert.False(SettlementCloseService.IsDeactivationDue(Today, isActive: true, copenhagenToday: Today));
-        Assert.True(SettlementCloseService.IsDeactivationDue(Today.AddDays(-1), isActive: true, copenhagenToday: Today));
+        // S147 OQ-2: the old pin was "today − 1 is due"; that day is now inside the grace.
+        Assert.False(SettlementCloseService.IsDeactivationDue(Today.AddDays(-1), isActive: true, copenhagenToday: Today));
+        Assert.False(SettlementCloseService.IsDeactivationDue(Today.AddDays(-5), isActive: true, copenhagenToday: Today));
+        Assert.True(SettlementCloseService.IsDeactivationDue(Today.AddDays(-6), isActive: true, copenhagenToday: Today));
+    }
+
+    /// <summary>AC-230-3, due predicate. Kind N (M-8). D+5 is the last day the manager's grace
+    /// holds: an active leaver is NOT due; D+6 IS due. Red condition: with the constant 5 → 4 or
+    /// the comparison relaxed to &lt;=, the D+5 row fails (M-8 mutation, see report).</summary>
+    [Fact]
+    public void IsDeactivationDue_LastGraceDay_NotDue()
+    {
+        Assert.False(SettlementCloseService.IsDeactivationDue(
+            Today.AddDays(-5), isActive: true, copenhagenToday: Today));
+        Assert.True(SettlementCloseService.IsDeactivationDue(
+            Today.AddDays(-6), isActive: true, copenhagenToday: Today));
+    }
+
+    /// <summary>AC-230-3: the poller's predicate and the writer's immediate path read ONE constant
+    /// and one helper (no second copy of the number). Kind N (names
+    /// <c>ManagerGraceCalendarDays</c> / <c>IsPastGrace</c>). Red condition: a literal copy of the
+    /// grace in either path that disagrees with the constant breaks the equality over the grid.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(40)]
+    public void IsDeactivationDue_AgreesWithTheWritersHelper_AndTheConstantIsFive(int daysBack)
+    {
+        var end = Today.AddDays(-daysBack);
+        Assert.Equal(5, EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays);
+        Assert.Equal(daysBack > 5, EmploymentEndDateLifecycleWriter.IsPastGrace(end, Today));
+        Assert.Equal(EmploymentEndDateLifecycleWriter.IsPastGrace(end, Today),
+            SettlementCloseService.IsDeactivationDue(end, isActive: true, copenhagenToday: Today));
+        Assert.Equal(EmploymentEndDateLifecycleWriter.IsPastGrace(end, Today),
+            EmploymentEndDateLifecycleWriter.ComputeEndDateLifecycle(
+                end, oldIsActive: true, oldEndDateDeactivated: false, Today).IsActive == false);
     }
 
     [Fact]
@@ -57,8 +102,10 @@ public class SettlementCloseLeaverLogicTests
     [Fact]
     public void IsDeactivationDue_AlreadyInactive_NotDue()
     {
+        // S147 OQ-2: the end date moved from 28 Feb (D+5, now inside the grace and so "not due" for
+        // the wrong reason) to 20 Feb (D+13) so the inactive flag is the only thing that says no.
         Assert.False(SettlementCloseService.IsDeactivationDue(
-            new DateOnly(2026, 2, 28), isActive: false, copenhagenToday: Today));
+            new DateOnly(2026, 2, 20), isActive: false, copenhagenToday: Today));
     }
 
     // ────────────────────────── ResolveLeaverFerieaar (R6) ──────────────────────────

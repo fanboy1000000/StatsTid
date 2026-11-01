@@ -65,7 +65,10 @@ public sealed class StatsTidWebApplicationFactory : WebApplicationFactory<Progra
     /// <param name="withoutLeaverJob">S147 / TASK-14719 fix-up 1 — when true this host (and every host
     /// derived from it, <c>WithFixedToday</c> included) does NOT run <c>SettlementCloseService</c>. That job
     /// runs its leaver-deactivation step at boot and every 5 minutes, flipping every still-active user whose
-    /// end date has passed to inactive. A fact that seeds an ACTIVE departed-by-end-date self would then race
+    /// end date lies more than five calendar days in the past (D+6; S147 OQ-2 — the manager grace — moved it from D+1;
+    /// the grace days D+1 .. D+5 stay active) to inactive. A fact that seeds an active subject within the grace therefore
+    /// no longer races this flip on a host whose clock is pinned there, but any fact whose end date is D+6 or older still
+    /// does. A fact that seeds an ACTIVE departed-by-end-date self would then race
     /// the flip: when it wins, active-only routes answer 404 before the guard under test runs. Use it for
     /// fixtures whose facts seed that grace state; do NOT use it where a fact relies on the job.</param>
     public StatsTidWebApplicationFactory(string connectionString, bool withoutLeaverJob = false)
