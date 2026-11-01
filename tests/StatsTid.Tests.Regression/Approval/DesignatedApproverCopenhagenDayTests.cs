@@ -264,7 +264,7 @@ public sealed class DesignatedApproverCopenhagenDayTests
             });
         }
 
-        public Task<bool> IsUserActiveAsync(string userId, CancellationToken ct) => Task.FromResult(true);
+        public Task<bool> IsActingUserAsync(string userId, DateOnly asOf, CancellationToken ct) => Task.FromResult(true);
     }
 
     /// <summary>
@@ -279,7 +279,7 @@ public sealed class DesignatedApproverCopenhagenDayTests
 
         public StubAuthorityFacts(string organisation) => _organisation = organisation;
 
-        public Task<bool> IsActiveLeaderOrAboveAsync(string userId, CancellationToken ct) => Task.FromResult(true);
+        public Task<bool> IsActingLeaderOrAboveAsync(string userId, DateOnly asOf, CancellationToken ct) => Task.FromResult(true);
 
         public Task<string?> GetActiveHomeOrgAsync(string userId, CancellationToken ct)
             => Task.FromResult<string?>(_organisation);
