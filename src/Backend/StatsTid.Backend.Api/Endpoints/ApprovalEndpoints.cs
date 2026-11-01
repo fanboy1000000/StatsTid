@@ -1707,13 +1707,17 @@ public static class ApprovalEndpoints
                 // could do so for five more days. The subject read is AFTER the gate and ACTIVE-ONLY
                 // by design: during the grace (D+1 .. D+5) the leaver is still active and the floor's
                 // end-date arm refuses them; after D+6 no leaver token exists (login is refused from
-                // D+1, a token lives 480 minutes). A null read means the subject is not active, which
-                // the floor's role arm refuses for an Employee anyway, so it is refused here with the
-                // same body (fail-closed; this also covers a manual deactivation with no end date).
-                // The leader arm below is unchanged (R-32: TASK-14703's validator clause covers it).
+                // D+1, a token lives 480 minutes). A null read means the subject is not active, i.e.
+                // departed, so it is refused (fail-closed; this also covers a manual deactivation with
+                // no end date) under the clause the floor itself would pick for a departed subject:
+                // the departed-self clause when the actor is the subject (the identity arm wins — S147
+                // fix-up 1), else the role arm, since an Employee is below LocalHR. The body follows
+                // that clause. The leader arm below is unchanged (R-32: TASK-14703's validator clause).
                 var reopenSubject = await userRepo.GetByIdAsync(period.EmployeeId, ct);
                 var reopenFloorClause = reopenSubject is null
-                    ? DepartedSubjectWriteFloor.BelowLocalHrClause
+                    ? (DepartedSubject.IsSelf(actor.ActorId, period.EmployeeId)
+                        ? DepartedSubjectWriteFloor.SelfClause
+                        : DepartedSubjectWriteFloor.BelowLocalHrClause)
                     : DepartedSubjectWriteFloor.RefusingClause(reopenSubject, actor, today);
                 if (reopenFloorClause is not null)
                     return DepartedSubjectWriteFloor.Refusal(
@@ -2151,18 +2155,18 @@ public static class ApprovalEndpoints
         // S147 / TASK-14710 (QUAL-230 T5a point 3; R-21, R-24; OQ-2) — the D3 test
         // (`!IsActive && below LocalHR`) is REPLACED by the shared DepartedSubjectWriteFloor: refuse
         // when the subject has DEPARTED (deactivated, OR their last day employed lies before
-        // `today`) AND (the actor is below LocalHR OR the actor IS the subject). Under the owner's
+        // `today`) AND (the actor IS the subject OR the actor is below LocalHR). Under the owner's
         // 5-day manager grace a leaver stays is_active until D+6, so the old test would let a token
         // issued on D send (or employee-approve) the leaver's own month; their own access must end on
         // D+1, whatever their role. HR sending a leaver's month for them is unchanged.
         var floorClause = DepartedSubjectWriteFloor.RefusingClause(user, actor, today);
         if (floorClause is not null)
         {
-            // Nothing has been written; the disposed tx rolls back. The reason string is the
-            // writers' exact D3 contract (TimeEndpoints.cs / SkemaEndpoints.cs) — one string across
-            // every write surface, whichever check fires (DepartedSubjectWriteFloor.DenyReason). It
-            // names termination STATUS, never a date (the S136 Reviewer-N1 "status oracle" residual,
-            // accepted as bounded); the server log names the arm that fired.
+            // Nothing has been written; the disposed tx rolls back. The body follows the clause that
+            // fired, the same on every write surface (S147 fix-up 1): departed-self → TASK-14703's
+            // DepartedSubject.DenyReason; the role arm → the writers' D3 sentence, unchanged. Both
+            // name STATUS, never a date (the S136 Reviewer-N1 "status oracle" residual, accepted as
+            // bounded); the server log names the clause that fired.
             return DepartedSubjectWriteFloor.Refusal(
                 svc.LoggerFactory, actor, user.UserId, floorClause, "send command (POST /api/approval/send, employee-approve)");
         }

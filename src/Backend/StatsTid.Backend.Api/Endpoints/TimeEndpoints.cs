@@ -131,10 +131,11 @@ public static class TimeEndpoints
             // S147 / TASK-14710 (QUAL-230 T5a point 3; R-21, R-24; OQ-2) — the D3 test
             // (`!IsActive && below LocalHR`) is REPLACED by the shared DepartedSubjectWriteFloor:
             // refuse when the subject has DEPARTED (deactivated, OR their last day employed lies
-            // before today) AND (the actor is below LocalHR OR the actor IS the subject). Under the
+            // before today) AND (the actor IS the subject OR the actor is below LocalHR). Under the
             // owner's 5-day manager grace a leaver stays is_active until D+6; their own access must
             // still end on D+1, whatever their role. HR registering for someone else who has left is
-            // unchanged. Same 403 body as before; the log names the arm that fired.
+            // unchanged. The date-free 403 body follows the clause that fired (S147 fix-up 1):
+            // departed-self → DepartedSubject.DenyReason; the role arm → D3's sentence, unchanged.
             var advisoryFloorClause = DepartedSubjectWriteFloor.RefusingClause(subject, actor, today);
             if (advisoryFloorClause is not null)
                 return DepartedSubjectWriteFloor.Refusal(

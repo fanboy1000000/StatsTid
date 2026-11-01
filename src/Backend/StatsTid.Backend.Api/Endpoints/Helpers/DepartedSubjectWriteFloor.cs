@@ -22,12 +22,16 @@ namespace StatsTid.Backend.Api.Endpoints.Helpers;
 /// the subject has departed (<see cref="DepartedSubject.IsDeparted(User, DateOnly)"/>: deactivated, or
 /// the last day employed lies before <c>today</c>) <b>AND</b> either</para>
 /// <list type="bullet">
-///   <item><description>the actor's primary role is below LocalHR — ADR-040 D3's existing role arm,
-///   now also covering the grace (log clause <see cref="BelowLocalHrClause"/>); or</description></item>
 ///   <item><description>the actor IS the subject (<see cref="DepartedSubject.IsSelf"/>, Ordinal) — the
 ///   identity arm (R-21): an HR, admin or leader who has left has no role to fall back on for their
-///   OWN record (log clause <see cref="SelfClause"/>).</description></item>
+///   OWN record (clause <see cref="SelfClause"/>); or</description></item>
+///   <item><description>the actor's primary role is below LocalHR — ADR-040 D3's existing role arm,
+///   now also covering the grace (clause <see cref="BelowLocalHrClause"/>).</description></item>
 /// </list>
+/// <para><b>Precedence (S147 fix-up 1, Orchestrator ruling).</b> Where both arms hold — an Employee
+/// acting on themselves — the identity arm is the one reported: the person is acting on their own
+/// record, so that is the true reason, and it is the reason TASK-14703's validator clause gives for the
+/// same rule on the elevated routes.</para>
 /// <para>HR and admins acting on <i>someone else</i> who has left are untouched (the routine
 /// final-month correction), and a subject who has not departed is never refused here.</para>
 ///
@@ -39,16 +43,25 @@ namespace StatsTid.Backend.Api.Endpoints.Helpers;
 /// a person's own record only through org scope, where TASK-14703's departed-self clause in
 /// <c>OrgScopeValidator</c> applies. The two retired project-selection routes are gone (R-23).</para>
 ///
-/// <para><b>The response.</b> 403 with ADR-040 D3's existing, date-free reason
-/// (<see cref="DenyReason"/>), whichever arm fired — one contract across every write surface — so the
-/// refusal cannot leak an employment date or be probed for one (ADR-040 D3, D7). The server log names
-/// the arm that fired.</para>
+/// <para><b>The response — the body follows the clause that fired</b> (S147 fix-up 1, Orchestrator
+/// ruling), so a given rule says the same thing on every route (<see cref="ReasonFor"/>):</para>
+/// <list type="bullet">
+///   <item><description><see cref="SelfClause"/> → 403 <c>{ error = "Access denied", reason =
+///   <see cref="DepartedSubject.DenyReason"/> }</c> ("A departed employee cannot act on their own
+///   record") — exactly what TASK-14703's validator clause and inline guards return;</description></item>
+///   <item><description><see cref="BelowLocalHrClause"/> → 403 with ADR-040 D3's existing sentence,
+///   <see cref="DenyReason"/>, unchanged.</description></item>
+/// </list>
+/// <para>Both are date-free, so the refusal cannot leak an employment date or be probed for one
+/// (ADR-040 D3, D7). The server log names the clause that fired.</para>
 /// </summary>
 public static class DepartedSubjectWriteFloor
 {
     /// <summary>
     /// ADR-040 D3's write-floor sentence, byte-identical to the string the registration writers and the
-    /// send command carried before S147. Date-free; never extend it with a date (ADR-040 D7).
+    /// send command carried before S147 — the body of the ROLE arm (<see cref="BelowLocalHrClause"/>).
+    /// The identity arm answers with <see cref="DepartedSubject.DenyReason"/> instead
+    /// (<see cref="ReasonFor"/>). Date-free; never extend it with a date (ADR-040 D7).
     /// </summary>
     public const string DenyReason = "Writes for a deactivated employee require LocalHR or above";
 
@@ -69,8 +82,9 @@ public static class DepartedSubjectWriteFloor
 
     /// <summary>
     /// The pure decision. Returns <c>null</c> when the write may proceed, else the name of the arm that
-    /// refuses it (<see cref="BelowLocalHrClause"/> is checked first, then <see cref="SelfClause"/>, so an
-    /// Employee acting on themselves logs the role arm — the one that has always refused them).
+    /// refuses it. <see cref="SelfClause"/> is checked FIRST, then <see cref="BelowLocalHrClause"/>, so an
+    /// Employee acting on themselves gets the departed-self clause and its body (S147 fix-up 1: where
+    /// both arms hold, the identity arm is the true reason).
     /// </summary>
     /// <param name="subject">The subject's record, as the handler read it.</param>
     /// <param name="actorId">The acting user's id (token subject).</param>
@@ -84,11 +98,13 @@ public static class DepartedSubjectWriteFloor
         if (!DepartedSubject.IsDeparted(subject, today))
             return null;
 
-        if (actorRole is null || !StatsTidRoles.IsAtLeast(actorRole, StatsTidRoles.LocalHR))
-            return BelowLocalHrClause;
-
+        // Identity arm first: where both arms hold (an Employee acting on themselves), the person is
+        // acting on their own record, and that is the reason reported (S147 fix-up 1).
         if (DepartedSubject.IsSelf(actorId, subject.UserId))
             return SelfClause;
+
+        if (actorRole is null || !StatsTidRoles.IsAtLeast(actorRole, StatsTidRoles.LocalHR))
+            return BelowLocalHrClause;
 
         return null;
     }
@@ -105,9 +121,26 @@ public static class DepartedSubjectWriteFloor
         RefusingClause(subject, actorId, actorRole, today) is not null;
 
     /// <summary>
-    /// Builds the refusal: one WARNING under <see cref="LogCategory"/> naming the arm that fired, the
-    /// route, the actor and the subject; and the 403 with the date-free <see cref="DenyReason"/>. The
-    /// caller has already decided to refuse and has issued no write.
+    /// The date-free 403 reason for a clause — the body follows the clause that fired (S147 fix-up 1):
+    /// <see cref="SelfClause"/> → <see cref="DepartedSubject.DenyReason"/> (TASK-14703's sentence);
+    /// <see cref="BelowLocalHrClause"/> → <see cref="DenyReason"/> (ADR-040 D3's sentence, unchanged).
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="clause"/> is neither clause
+    /// (a caller bug: the only values in circulation are the two constants above).</exception>
+    public static string ReasonFor(string clause) => clause switch
+    {
+        SelfClause => DepartedSubject.DenyReason,
+        BelowLocalHrClause => DenyReason,
+        _ => throw new ArgumentOutOfRangeException(nameof(clause), clause,
+            "Not a DepartedSubjectWriteFloor clause."),
+    };
+
+    /// <summary>
+    /// Builds the refusal: one WARNING under <see cref="LogCategory"/> naming the clause that fired,
+    /// the route, the actor and the subject; and the 403
+    /// <c>{ error = "Access denied", reason = <see cref="ReasonFor"/>(clause) }</c> — for the
+    /// departed-self clause the same shape TASK-14703's validator and inline guards return. The caller
+    /// has already decided to refuse and has issued no write.
     /// </summary>
     public static IResult Refusal(
         ILoggerFactory loggerFactory, ActorContext actor, string subjectId, string clause, string route)
@@ -115,10 +148,12 @@ public static class DepartedSubjectWriteFloor
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(actor);
 
+        var reason = ReasonFor(clause);
+
         loggerFactory.CreateLogger(LogCategory).LogWarning(
             "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Subject={SubjectId} Route={Route} CorrelationId={CorrelationId}",
             clause, actor.ActorId, actor.ActorRole, subjectId, route, actor.CorrelationId);
 
-        return Results.Json(new { error = "Access denied", reason = DenyReason }, statusCode: 403);
+        return Results.Json(new { error = "Access denied", reason }, statusCode: 403);
     }
 }

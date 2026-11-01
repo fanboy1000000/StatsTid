@@ -708,11 +708,12 @@ public static class SkemaEndpoints
             // S147 / TASK-14710 (QUAL-230 T5a point 3; R-21, R-24; OQ-2) — the D3 test
             // (`!IsActive && below LocalHR`) is REPLACED by the shared DepartedSubjectWriteFloor:
             // refuse when the subject has DEPARTED (deactivated, OR their last day employed lies
-            // before today) AND (the actor is below LocalHR OR the actor IS the subject). Why: under
+            // before today) AND (the actor IS the subject OR the actor is below LocalHR). Why: under
             // the owner's 5-day manager grace a leaver stays is_active until D+6, so the old test
             // would let a token issued on D keep saving the leaver's own month; their own access must
             // end on D+1, whatever their role. HR saving for someone else who has left is unchanged.
-            // Same 403 body as before (D3's date-free sentence); the log names the arm that fired.
+            // The date-free 403 body follows the clause that fired (S147 fix-up 1): departed-self →
+            // DepartedSubject.DenyReason; the role arm → D3's sentence, unchanged. The log names it.
             var advisoryFloorClause = DepartedSubjectWriteFloor.RefusingClause(user, actor, today);
             if (advisoryFloorClause is not null)
                 return DepartedSubjectWriteFloor.Refusal(
@@ -1810,7 +1811,7 @@ public static class SkemaEndpoints
                         return Results.NotFound(new { error = "Employee not found" });
                     }
                     // S147 / TASK-14710 — the SAME DepartedSubjectWriteFloor as the pre-check
-                    // (departed subject AND (below LocalHR OR self)), on the in-lock row and the
+                    // (departed subject AND (self OR below LocalHR)), on the in-lock row and the
                     // handler's single `today`. The deactivation can still land while we wait on the
                     // lock (a manual deactivation, a past-grace end date entered by HR, Step A on D+6);
                     // the end-date arm needs no lock — it is a date already on the row.
