@@ -36,12 +36,12 @@
 //         the legacy add-row wiring (onWorkIntervalsChange/onManualHoursChange
 //         grid plumbing for the deleted "Tilføj periode"/"Tilføj timer" rows)
 //         removed from the page side.
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useCalendarToday } from '../contexts/CalendarContext'
 import { useSkema, buildWorkTimePayload, deriveSkemaRowBasis, periodHours } from '../hooks/useSkema'
-import type { QuotaError, AbsenceRuleError, AbsenceCapError, ApprovalValidationError, SkemaRowBasis } from '../hooks/useSkema'
+import type { QuotaError, AbsenceRuleError, AbsenceCapError, ApprovalValidationError, SkemaRowBasis, SaveBatch, SkemaActionError } from '../hooks/useSkema'
 import {
   SkemaGrid,
   type WorkInterval,
@@ -216,6 +216,71 @@ function workTimeDayEquals(
   return true
 }
 
+/** Danish framing for a failed action: names the month it belongs to (the person may have moved
+    on since), then the server's message. */
+function formatActionError(e: SkemaActionError): string {
+  const monthText = formatMonthLabel(e.year, e.month).toLowerCase()
+  switch (e.kind) {
+    case 'save': {
+      const days = e.dates && e.dates.length > 0 ? ` Dage: ${e.dates.slice(0, 5).map(formatShortDate).join(', ')}${e.dates.length > 5 ? ' m.fl.' : ''}.` : ''
+      const outcome = e.uncertain ? ' Det er uvist, om ændringerne blev gemt.' : ' Ændringerne er ikke gemt.'
+      return `Kunne ikke gemme (${monthText}): ${e.message}.${outcome}${days}`
+    }
+    case 'approve':
+      return `Kunne ikke godkende måneden (${monthText}): ${e.message}`
+    case 'reopen':
+      return `Kunne ikke genåbne måneden (${monthText}): ${e.message}`
+  }
+}
+
+/** "3. marts" from "2026-03-03". */
+function formatShortDate(dateStr: string): string {
+  const day = Number(dateStr.slice(8, 10))
+  const month = Number(dateStr.slice(5, 7))
+  return `${day}. ${formatMonthLabel(Number(dateStr.slice(0, 4)), month).split(' ')[0].toLowerCase()}`
+}
+
+/** A queued cell edit with everything needed to send it LATER, correctly: its own month
+    envelope and its classification (absence vs project row), both fixed when it was QUEUED. */
+interface PendingCell {
+  rowKey: string
+  date: string
+  hours: number | null
+  year: number
+  month: number
+  isAbsence: boolean
+}
+interface MonthEnv { year: number; month: number }
+
+/** How long a save waits for the previous one to settle before it proceeds anyway. Ordering is
+    only guaranteed while requests settle within this bound; a hung request is NOT aborted or
+    replayed (its outcome is unknown), it just stops holding up everything behind it. */
+const SAVE_QUEUE_WAIT_MS = 15_000
+
+/** Awaits in-flight saves for at most `ms`. `timedOut` means at least one never answered; the
+    request is neither aborted nor replayed (its outcome is unknown). */
+function allSettledWithin(ps: Promise<boolean>[], ms: number): Promise<{ ok: boolean; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ ok: false, timedOut: true }), ms)
+    Promise.all(ps).then(
+      (rs) => { clearTimeout(timer); resolve({ ok: rs.every(Boolean), timedOut: false }) },
+      () => { clearTimeout(timer); resolve({ ok: false, timedOut: false }) },
+    )
+  })
+}
+
+/** Resolves when `p` settles (either way) or after `ms`, whichever is first. */
+function waitBounded(p: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    const done = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    p.then(done, done)
+  })
+}
+
 export function SkemaPage() {
   const { user } = useAuth()
   const employeeId = user?.employeeId ?? ''
@@ -252,7 +317,10 @@ export function SkemaPage() {
       : todayMonth,
   )
 
-  const { data, loading, error, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch, saveMonth, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month)
+  // Every month load awaits the page's save queue first (set below, once the queue exists).
+  const savesIdleRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  const awaitSavesIdle = useCallback(() => savesIdleRef.current(), [])
+  const { data, loading, error, actionError, reportActionError, loadMismatch, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch, saveBatch, employeeApprove, submitAndApprove, reopenPeriod } = useSkema(employeeId, year, month, awaitSavesIdle)
   // S127 / TASK-12707 — the `useAuth()` read here is gone with the send body it
   // fed: `orgId`/`agreementCode` were only ever arguments to the retired
   // `/api/approval/submit` payload. (`ApprovalFooter` keeps its own `useAuth()`
@@ -272,7 +340,14 @@ export function SkemaPage() {
   // rejection reverts the affected cells to THIS value. Built the same way as the
   // initial localCells, kept in a ref so the memoized fireCellSave reads it fresh.
   const serverCellsRef = useRef<Map<string, number>>(new Map())
-  const pendingChangesRef = useRef<{ rowKey: string; date: string; hours: number | null }[]>([])
+  const pendingChangesRef = useRef<PendingCell[]>([])
+  // There is deliberately NO store of failed saves beyond the month they belong to: a save that
+  // fails while its month is on screen is re-queued from the local state (which still holds the
+  // typed value); one that fails after its month has left the screen is DROPPED and the person
+  // is told (a persistent, month-labelled alert from the hook). Replaying old values later could
+  // resurrect or overwrite what the server has meanwhile.
+  /** The month of the data now held (set in the hydration layout effect). */
+  const dataMonthRef = useRef<MonthEnv | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // S72 Step-7a B2 (+ the c2 settled-failure fix) — in-flight save promises
   // (cells / workTime): the debounce callbacks clear their pending state BEFORE
@@ -287,14 +362,11 @@ export function SkemaPage() {
   const cellSavesInFlightRef = useRef<Set<Promise<boolean>>>(new Set())
   const workTimeSavesInFlightRef = useRef<Set<Promise<boolean>>>(new Set())
 
-  // Build cell values from data
-  useEffect(() => {
-    if (!data) {
-      setLocalCells(new Map())
-      serverCellsRef.current = new Map()
-      return
-    }
+  // Build cell values from data (derived; copied into `localCells` DURING RENDER by the
+  // S147 hydration block below, not by an effect).
+  const cellsFromData = useMemo<Map<string, number>>(() => {
     const cells = new Map<string, number>()
+    if (!data) return cells
     for (const entry of data.entries) {
       if (entry.hours !== 0) {
         // S120 — `projectCode` is NULLABLE on the wire (the spec truth the
@@ -309,11 +381,7 @@ export function SkemaPage() {
         cells.set(`${absence.absenceType}:${absence.date}`, absence.hours)
       }
     }
-    setLocalCells(cells)
-    // S73 R4 — snapshot server truth for the 422 revert (a fresh Map copy so a
-    // later localCells edit never mutates the server-truth reference).
-    serverCellsRef.current = new Map(cells)
-    pendingChangesRef.current = []
+    return cells
   }, [data])
 
   // The R3 arithmetic/row basis (S72 Step-7a B1): the UNION of the served
@@ -376,14 +444,6 @@ export function SkemaPage() {
   const [localWorkIntervals, setLocalWorkIntervals] = useState<WorkIntervalsMap>(new Map())
   const [localManualHours, setLocalManualHours] = useState<ManualHoursMap>(new Map())
 
-  // Rehydrate local state when backend data changes (after fetch/save/approve)
-  useEffect(() => {
-    setLocalWorkIntervals(workIntervalsFromData)
-  }, [workIntervalsFromData])
-  useEffect(() => {
-    setLocalManualHours(manualHoursFromData)
-  }, [manualHoursFromData])
-
   // Live refs so the debounced work-time save reads the latest local state
   const workIntervalsRef = useRef<WorkIntervalsMap>(localWorkIntervals)
   const manualHoursRef = useRef<ManualHoursMap>(localManualHours)
@@ -396,45 +456,157 @@ export function SkemaPage() {
   // memoized fireWorkTimeSave reads them fresh without re-binding.
   const serverWorkIntervalsRef = useRef<WorkIntervalsMap>(new Map())
   const serverManualHoursRef = useRef<ManualHoursMap>(new Map())
-  useEffect(() => { serverWorkIntervalsRef.current = workIntervalsFromData }, [workIntervalsFromData])
-  useEffect(() => { serverManualHoursRef.current = manualHoursFromData }, [manualHoursFromData])
+
+  // Send-order protection for the 422-revert truth: a per-key sequence number is taken
+  // when a save is SENT; a successful save advances server truth for a key only when its
+  // number is newer than the one that last advanced it, so an older save completing after
+  // a newer one can never move truth backwards. `hydrationEpochRef` bumps whenever fresh
+  // data is hydrated: a save result that returns from an earlier epoch (another month, or
+  // before a refetch) must not touch the current data's local or server state.
+  const saveSeqRef = useRef(0)
+  const cellAdvancedSeqRef = useRef<Map<string, number>>(new Map())
+  const workTimeAdvancedSeqRef = useRef<Map<string, number>>(new Map())
+  const hydrationEpochRef = useRef(0)
+
+  const workTimeDirtyRef = useRef<Set<string>>(new Set())
+  const workTimeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // S147 / QUAL-241 — rehydrate ALL editable local state (cells, work intervals, manual
+  // hours) from the served data DURING RENDER ("adjust state while rendering": React
+  // discards this render and re-renders at once, before anything is committed). This used
+  // to be three effects, which left one committed render in which the grid and every day
+  // trigger were live while local state was still empty (first load) or still the previous
+  // month's (month change / refetch). A day panel opened in that gap seeded no periods and
+  // a period edit there replaced the day's stored intervals with the partial set. With the
+  // copy done in render, no committed render exists whose local state is not the current
+  // `data`, so there is nothing to gate and no delay to show.
+  const [hydratedFrom, setHydratedFrom] = useState<typeof data>(null)
+  if (data !== hydratedFrom) {
+    setHydratedFrom(data)
+    setLocalCells(cellsFromData)
+    setLocalWorkIntervals(workIntervalsFromData)
+    setLocalManualHours(manualHoursFromData)
+  }
+
+  // The ref-side of hydration (server truth for the 422 revert, the pending-save queues, the
+  // send-order bookkeeping, the epoch) belongs to the data it came from too, but a ref write is
+  // a side effect and must not happen in render. A layout effect runs synchronously inside the
+  // commit of the hydrated render — before the browser can paint and before any event handler
+  // or passive effect can run — so nothing can observe the new state with the old refs. This
+  // holds for THIS tree; it would not if a child focused an element (autoFocus / focus() in its
+  // own layout phase) and an event handler ran from that, since child layout effects run before
+  // this one. (The state copy above must stay in render; that is what removes the un-hydrated
+  // commit. Fresh Map copies, so a later save-success mutation never aliases the memoized
+  // "from data" maps.)
+  //
+  // Pending (not yet sent) edits are cleared with the rest: navigation sends every pending edit
+  // BEFORE the month changes, so what is still pending here is a save that failed and was
+  // re-queued — it is dropped (the person was told by the failure alert), never carried over.
+  useLayoutEffect(() => {
+    dataMonthRef.current = data ? { year: data.year, month: data.month } : null
+    serverCellsRef.current = new Map(cellsFromData)
+    serverWorkIntervalsRef.current = new Map(workIntervalsFromData)
+    serverManualHoursRef.current = new Map(manualHoursFromData)
+    pendingChangesRef.current = []
+    workTimeDirtyRef.current = new Set()
+    cellAdvancedSeqRef.current = new Map()
+    workTimeAdvancedSeqRef.current = new Map()
+    hydrationEpochRef.current += 1
+  }, [data, hydratedFrom, cellsFromData, workIntervalsFromData, manualHoursFromData])
+
+  // S147 / QUAL-241 fix-up 1 — the edit surfaces are locked while the displayed month and
+  // the held `data` disagree. useSkema keeps the PREVIOUS month's data on screen while the
+  // next month loads, and on a FAILED fetch it keeps it for good (loading drops to false),
+  // so the test is month IDENTITY, never `loading`: otherwise a failed fetch would unlock
+  // the old month's data under the new month's day columns. `busyCount` is the second
+  // lock: the row-preference sequence and approve/send (flush → request → reload of the SAME
+  // month) re-hydrate local state from the reloaded response, which would overwrite anything
+  // typed while they were in flight — we lock rather than merge, because the flush before the
+  // request has just persisted everything, so nothing is lost and there is no merge logic to
+  // get wrong. It is a COUNTER, not a flag: overlapping sequences (two modal actions in a row)
+  // must keep the lock until the LAST one has finished.
+  const monthMismatch = data != null && (data.year !== year || data.month !== month)
+  const [busyCount, setBusyCount] = useState(0)
+  const busy = busyCount > 0
+  // Any month load in flight locks editing too (a reload — including one that first waits for
+  // queued saves — will replace local state when it lands, so nothing typed meanwhile may count).
+  const loadPending = loading && data != null
+  const editLocked = monthMismatch || busy || loadPending
+  const withBusy = useCallback(async <T,>(work: () => Promise<T>): Promise<T> => {
+    setBusyCount((c) => c + 1)
+    try {
+      return await work()
+    } finally {
+      setBusyCount((c) => c - 1)
+    }
+  }, [])
+
 
   // Debounced work-time save (intervals + the preserved manual hours). The
   // payload ALWAYS builds through the hook's buildWorkTimePayload — the single
   // R16/R7 owner (manualHours carry-forward is enforced and tested THERE).
-  const workTimeDirtyRef = useRef<Set<string>>(new Set())
-  const workTimeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  /** Flush pending debounced WORK-TIME saves (B2: fires any pending debounce
-      immediately AND awaits the in-flight POST). Returns false when any
-      involved save failed — callers must not refetch over unsaved state. */
-  /** Fire a workTime save for the given dirty dates; on FAILURE the dates are
-      re-queued (the local refs still hold the edits) so a later flush retries
-      instead of forgetting (the c2 settled-failure fix). */
-  const fireWorkTimeSave = useCallback((dates: string[]): Promise<boolean> => {
-    const payload: WorkTimeDay[] = buildWorkTimePayload(
-      dates,
-      workIntervalsRef.current,
-      manualHoursRef.current,
-    )
+  /** Serial save queue. Every save carries its own fully classified payload and month (fixed when
+      it was queued), so a save made in March still goes to March, classified as it was then. A
+      rejected or failed save never blocks the queue.
+      ORDERING GUARANTEE, exactly: a save starts when the save ahead of it has settled, OR
+      SAVE_QUEUE_WAIT_MS after that save started — whichever comes first (each link's bound starts
+      when the link ahead STARTS). While every request settles within the bound, saves reach the
+      server strictly one at a time in send order. A request that outlives the bound is neither
+      aborted nor replayed (its outcome is unknown) and may still land after later saves. */
+  const saveTailRef = useRef<Promise<unknown>>(Promise.resolve())
+  const saveSerial = useCallback(
+    (batch: SaveBatch) => {
+      const prev = saveTailRef.current
+      const run = prev.then(() => saveBatch(batch))
+      saveTailRef.current = prev.then(() => waitBounded(run, SAVE_QUEUE_WAIT_MS))
+      return run
+    },
+    [saveBatch],
+  )
+  /** A flush gave up waiting for a save that never answered: tell the person (month-labelled). */
+  const reportUnanswered = useCallback(() => {
+    const env = dataMonthRef.current
+    if (!env) return
+    reportActionError({
+      kind: 'save',
+      message: 'Serveren svarede ikke inden for 15 sekunder',
+      year: env.year,
+      month: env.month,
+      uncertain: true,
+    })
+  }, [reportActionError])
+
+  // A month load is ordered after every queued save (bounded the same way).
+  useLayoutEffect(() => {
+    savesIdleRef.current = () => waitBounded(saveTailRef.current, SAVE_QUEUE_WAIT_MS)
+  }, [])
+
+  /** Send work-time rows under their own month (the month on screen when they were queued). On
+      FAILURE: while that month is still the data on screen the dates go back to the dirty set
+      (the local refs still hold the edits, so a retry rebuilds from live state); once it has
+      left the screen the save is DROPPED (the hook's persistent, month-labelled alert tells the
+      person) — it is never replayed. */
+  const sendWorkTime = useCallback((env: MonthEnv, payload: WorkTimeDay[]): Promise<boolean> => {
     if (payload.length === 0) return Promise.resolve(true)
-    // S73 Step-7a B2 — capture what each date SENDS (a frozen copy of the day's
-    // intervals + manualHours), so a 422 revert can be overlap-guarded: revert a
-    // day ONLY when its CURRENT local work-time still equals what this save sent
-    // (a newer edit owns the day otherwise — the mirror of fireCellSave's guard).
-    const sentByDate = new Map(
-      dates.map((d) => [
-        d,
-        {
-          intervals: workIntervalsRef.current.get(d) ?? [],
-          manualHours: manualHoursRef.current.get(d) ?? 0,
-        },
-      ]),
-    )
-    const save = saveMonth([], payload).then((result) => {
+    const dates = payload.map((r) => r.date)
+    const epoch = hydrationEpochRef.current
+    const seq = ++saveSeqRef.current
+    // What each date SENDS (the frozen rows), so a 422 revert can be overlap-guarded: revert a
+    // day ONLY when its CURRENT local work-time still equals what this save sent.
+    const sentByDate = new Map(payload.map((r) => [r.date, { intervals: r.intervals, manualHours: r.manualHours }]))
+    const save = saveSerial({ year: env.year, month: env.month, entries: null, absences: null, workTime: payload }).then((result) => {
+      const current = dataMonthRef.current
+      const here =
+        current != null && current.year === env.year && current.month === env.month && epoch === hydrationEpochRef.current
+      if (!here) {
+        // Not the data now held (month navigation, refetch): never touch the current local or
+        // server-truth state with it. A failure is DROPPED (the alert comes from the hook).
+        return result.status !== 'failed'
+      }
       if (result.status === 'rejected') {
         // 422 — REVERT each affected day's work-time to server truth (mirror of
-        // fireCellSave). The alert is already surfaced by saveMonth; the revert
+        // fireCellSave). The alert is already surfaced by the hook; the revert
         // is what makes "422 resolved" honest (the rejected edit no longer lingers
         // for a later preference flush / refetch to silently discard). Counts
         // RESOLVED (the day reverted → nothing stale).
@@ -472,22 +644,14 @@ export function SkemaPage() {
         return true // resolved: reverted to server truth.
       }
       if (result.status === 'ok') {
-        // S73 Step-7a cycle-2 B2 — ADVANCE server truth on a SUCCESSFUL save.
-        // serverWorkIntervalsRef/serverManualHoursRef are otherwise snapshotted
-        // only on LOAD/refetch (workIntervalsFromData/manualHoursFromData), so a
-        // 422 AFTER a good save would revert to the STALE original-fetched value
-        // and clobber the save. Merge each just-saved day's SENT values in (the
-        // overlap-guarded frozen copy), so a later 422 reverts to the last
-        // KNOWN-GOOD server state, not the original. Overlap-guarded: only adopt
-        // a day whose CURRENT local still equals what THIS save sent (a newer
-        // edit owns it otherwise — that edit's own save will advance truth).
+        // S73 Step-7a cycle-2 B2 — ADVANCE server truth on a SUCCESSFUL save, so a later 422
+        // reverts to the last KNOWN-GOOD server state, not the originally loaded one. Saves
+        // settle strictly in send order (the serial queue); the per-day send-order number is a
+        // belt-and-braces guard.
         for (const d of dates) {
           const sent = sentByDate.get(d)!
-          if (!workTimeDayEquals(
-            sent.intervals, sent.manualHours,
-            workIntervalsRef.current.get(d) ?? [],
-            manualHoursRef.current.get(d) ?? 0,
-          )) continue
+          if ((workTimeAdvancedSeqRef.current.get(d) ?? 0) > seq) continue
+          workTimeAdvancedSeqRef.current.set(d, seq)
           if (sent.intervals.length > 0)
             serverWorkIntervalsRef.current.set(d, sent.intervals.map((iv) => ({ ...iv })))
           else serverWorkIntervalsRef.current.delete(d)
@@ -507,8 +671,21 @@ export function SkemaPage() {
       workTimeSavesInFlightRef.current.delete(save)
     })
     return save
-  }, [saveMonth])
+  }, [saveSerial])
 
+  /** Fire a workTime save for the given dirty dates (the month on screen; the payload is built
+      from the live refs NOW). */
+  const fireWorkTimeSave = useCallback((dates: string[]): Promise<boolean> => {
+    const env = dataMonthRef.current
+    if (!env) return Promise.resolve(true)
+    return sendWorkTime(env, buildWorkTimePayload(dates, workIntervalsRef.current, manualHoursRef.current))
+  }, [sendWorkTime])
+
+  /** Flush pending debounced WORK-TIME saves (B2: fires any pending debounce immediately AND
+      awaits the in-flight POSTs). Returns false when any involved save failed — callers must not
+      refetch over unsaved state. The wait is BOUNDED: a POST that never answers counts as a
+      failed flush (alert shown, in-flight set released, the request neither aborted nor
+      replayed), so a hung request cannot hold Godkend or a preference action forever. */
   const flushWorkTimeSave = useCallback(async (): Promise<boolean> => {
     if (workTimeSaveTimerRef.current) {
       clearTimeout(workTimeSaveTimerRef.current)
@@ -518,13 +695,18 @@ export function SkemaPage() {
     // their outcomes count toward the flush result; failures re-queue, so the
     // retry below picks them up in the same flush.
     const inFlight = [...workTimeSavesInFlightRef.current]
-    const inFlightOk = (await Promise.all(inFlight)).every(Boolean)
-    if (workTimeDirtyRef.current.size === 0) return inFlightOk
+    const settled = await allSettledWithin(inFlight, SAVE_QUEUE_WAIT_MS)
+    if (settled.timedOut) {
+      for (const pr of inFlight) workTimeSavesInFlightRef.current.delete(pr)
+      reportUnanswered()
+      return false
+    }
+    if (workTimeDirtyRef.current.size === 0) return settled.ok
     const dates = [...workTimeDirtyRef.current]
     workTimeDirtyRef.current = new Set()
     const ok = await fireWorkTimeSave(dates)
-    return inFlightOk && ok
-  }, [fireWorkTimeSave])
+    return settled.ok && ok
+  }, [fireWorkTimeSave, reportUnanswered])
 
   const scheduleWorkTimeSave = useCallback((date: string) => {
     workTimeDirtyRef.current.add(date)
@@ -539,6 +721,7 @@ export function SkemaPage() {
 
   const handleWorkIntervalsChange = useCallback(
     (date: string, intervals: WorkInterval[]) => {
+      if (editLocked) return
       setLocalWorkIntervals(prev => {
         const next = new Map(prev)
         if (intervals.length === 0) {
@@ -550,12 +733,17 @@ export function SkemaPage() {
       })
       scheduleWorkTimeSave(date)
     },
-    [scheduleWorkTimeSave]
+    [scheduleWorkTimeSave, editLocked]
   )
 
   // Approval status
   const approvalStatus = data?.approval?.status ?? 'DRAFT'
-  const isReadOnly = isPeriodLocked(approvalStatus)
+  // The approved/submitted-month lock (the S147 month-identity / prefs locks are `editLocked`).
+  const isPeriodReadOnly = isPeriodLocked(approvalStatus)
+  const isReadOnly = isPeriodReadOnly || editLocked
+  // The day panel closes only for the two "wrong data" reasons, not for a prefs sequence
+  // (the manager modal opens FROM the panel; closing it per action would lose the context).
+  const panelBlocked = isPeriodReadOnly || monthMismatch
 
   /** S73 R4 — fire a cell save for the given changes and split the rejected-save
       policy INSIDE the failure handler:
@@ -567,28 +755,46 @@ export function SkemaPage() {
         by the S72-c3 overlap shape: a cell reverts ONLY when its CURRENT local
         value still equals the value the rejected save SENT (and no newer pending
         edit owns it) — a newer edit keeps the cell.
-      • status 'failed'    (400/401/403/404/409/5xx/network) → KEEP the local
-        edits + the B2 re-queue/retry posture (returns false). 401/403 are
-        credential-shaped — a mid-edit session expiry must never discard typed
-        cells. The re-queue rebuilds FROM LIVE LOCAL STATE (Step-7a c2/c3), never
-        the stale captured delta, and never over a NEWER pending entry; a cleared
-        cell (live undefined) is not re-queued (the R17 inherited limitation). */
-  const fireCellSave = useCallback((changes: { rowKey: string; date: string; hours: number | null }[]): Promise<boolean> => {
-    const save = saveMonth(changes).then((result) => {
+      • status 'failed'    (400/401/403/404/409/5xx/network) → KEEP the edits + the B2
+        re-queue/retry posture (returns false). 401/403 are credential-shaped — a
+        mid-edit session expiry must never discard typed cells. For the month still on
+        screen the re-queue rebuilds FROM LIVE LOCAL STATE (Step-7a c2/c3), never the
+        stale captured delta, and never over a NEWER pending entry (a cleared cell, live
+        undefined, is not re-queued — the R17 inherited limitation). For any other month
+        (the person navigated on) the save is DROPPED and the hook's alert says so.
+
+      A change set is split by month; each group is one POST under its own envelope, with
+      the classification (absence vs project) fixed when the edit was queued. */
+  const fireCellGroup = useCallback((changes: PendingCell[]): Promise<boolean> => {
+    const env: MonthEnv = { year: changes[0].year, month: changes[0].month }
+    const epoch = hydrationEpochRef.current
+    const seq = ++saveSeqRef.current
+    const entries: NonNullable<SaveBatch['entries']> = []
+    const absences: NonNullable<SaveBatch['absences']> = []
+    for (const c of changes) {
+      if (c.hours == null || c.hours === 0) continue
+      if (c.isAbsence) absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
+      else entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
+    }
+    const save = saveSerial({ year: env.year, month: env.month, entries, absences, workTime: null }).then((result) => {
+      const current = dataMonthRef.current
+      const here =
+        current != null && current.year === env.year && current.month === env.month && epoch === hydrationEpochRef.current
+      if (!here) {
+        // Not the data now held: never touch the current local or server-truth state with it.
+        // A failure is DROPPED (the alert comes from the hook), never replayed.
+        return result.status !== 'failed'
+      }
       if (result.status === 'ok') {
-        // S73 Step-7a cycle-2 B2 — ADVANCE server truth on a SUCCESSFUL cell save
-        // (symmetric to the work-time fix). serverCellsRef is otherwise snapshotted
-        // only on LOAD/refetch (the `data` effect), so a 422 AFTER a good save would
-        // revert to the STALE original-fetched value and clobber the save. Adopt each
-        // just-saved cell's SENT value as the new server truth, overlap-guarded: only
-        // when the cell's CURRENT live value still equals what THIS save sent (a newer
-        // edit owns it otherwise — that edit's own save advances truth). A clear
+        // S73 Step-7a cycle-2 B2 — ADVANCE server truth on a SUCCESSFUL cell save (symmetric
+        // to the work-time fix), even when a newer local edit exists. Saves settle in send
+        // order (the serial queue); the per-cell number is a belt-and-braces guard. A clear
         // (null/0) sets server truth to absent.
         for (const c of changes) {
           const cellKey = `${c.rowKey}:${c.date}`
-          const live = localCellsRef.current.get(cellKey)
           const sent = c.hours === null || c.hours === 0 ? undefined : c.hours
-          if (live !== sent) continue
+          if ((cellAdvancedSeqRef.current.get(cellKey) ?? 0) > seq) continue
+          cellAdvancedSeqRef.current.set(cellKey, seq)
           if (sent === undefined) serverCellsRef.current.delete(cellKey)
           else serverCellsRef.current.set(cellKey, sent)
         }
@@ -626,7 +832,8 @@ export function SkemaPage() {
         // Resolved: the rejected deltas dropped + reverted → nothing stale.
         return true
       }
-      // status 'failed' — re-queue FROM LIVE LOCAL STATE (B2), retryable.
+      // status 'failed' — re-queue FROM LIVE LOCAL STATE (B2), retryable, keeping the row's
+      // own envelope and classification.
       for (const c of changes) {
         const hasNewer = pendingChangesRef.current.some(
           (p) => p.rowKey === c.rowKey && p.date === c.date,
@@ -634,7 +841,7 @@ export function SkemaPage() {
         if (hasNewer) continue
         const live = localCellsRef.current.get(`${c.rowKey}:${c.date}`)
         if (live === undefined) continue
-        pendingChangesRef.current.push({ rowKey: c.rowKey, date: c.date, hours: live })
+        pendingChangesRef.current.push({ ...c, hours: live })
       }
       return false
     })
@@ -643,11 +850,26 @@ export function SkemaPage() {
       cellSavesInFlightRef.current.delete(save)
     })
     return save
-  }, [saveMonth])
+  }, [saveSerial])
+
+  const fireCellSave = useCallback((changes: PendingCell[]): Promise<boolean> => {
+    const groups = new Map<string, PendingCell[]>()
+    for (const c of changes) {
+      const k = `${c.year}-${c.month}`
+      const g = groups.get(k)
+      if (g) g.push(c)
+      else groups.set(k, [c])
+    }
+    return Promise.all([...groups.values()].map(fireCellGroup)).then((rs) => rs.every(Boolean))
+  }, [fireCellGroup])
+
+  /** The absence-type keys of the data held — how a cell is classified when it is QUEUED. */
+  const absenceTypeSet = useMemo(() => new Set((data?.absenceTypes ?? []).map((a) => a.type)), [data])
 
   // Debounced cell save (grid inline edits + the panel's step-2 allocations)
   const handleCellChange = useCallback(
     (rowKey: string, date: string, hours: number | null) => {
+      if (editLocked) return
       setLocalCells((prev) => {
         const next = new Map(prev)
         if (hours === null) {
@@ -658,14 +880,15 @@ export function SkemaPage() {
         return next
       })
 
-      // Track pending change
+      // Track pending change — with its own envelope and classification, fixed NOW.
+      const row: PendingCell = { rowKey, date, hours, year, month, isAbsence: absenceTypeSet.has(rowKey) }
       const idx = pendingChangesRef.current.findIndex(
         (c) => c.rowKey === rowKey && c.date === date
       )
       if (idx >= 0) {
-        pendingChangesRef.current[idx] = { rowKey, date, hours }
+        pendingChangesRef.current[idx] = row
       } else {
-        pendingChangesRef.current.push({ rowKey, date, hours })
+        pendingChangesRef.current.push(row)
       }
 
       // Debounce save
@@ -680,7 +903,7 @@ export function SkemaPage() {
         void fireCellSave(changes)
       }, 1000)
     },
-    [fireCellSave]
+    [fireCellSave, editLocked, year, month, absenceTypeSet]
   )
 
   /** Flush any pending debounced CELL saves (used before approve and before
@@ -692,48 +915,82 @@ export function SkemaPage() {
       saveTimerRef.current = null
     }
     // Await every POST that already left (B2: sets, so no save is evicted) —
-    // failures re-queue, so the retry below picks them up in the same flush.
+    // failures re-queue, so the retry below picks them up in the same flush. BOUNDED (see
+    // flushWorkTimeSave): a POST that never answers is a failed flush, not a permanent wait.
     const inFlight = [...cellSavesInFlightRef.current]
-    const inFlightOk = (await Promise.all(inFlight)).every(Boolean)
+    const settled = await allSettledWithin(inFlight, SAVE_QUEUE_WAIT_MS)
+    if (settled.timedOut) {
+      for (const pr of inFlight) cellSavesInFlightRef.current.delete(pr)
+      reportUnanswered()
+      return false
+    }
     const pending = [...pendingChangesRef.current]
     pendingChangesRef.current = []
-    if (pending.length === 0) return inFlightOk
+    if (pending.length === 0) return settled.ok
     const ok = await fireCellSave(pending)
-    return inFlightOk && ok
-  }, [fireCellSave])
+    return settled.ok && ok
+  }, [fireCellSave, reportUnanswered])
 
-  // Cleanup save timers on unmount
+  // On unmount (leaving the page) the pending debounced saves are SENT, not dropped — the
+  // person typed them. `firePendingNow` also clears both timers. (It is defined below, so it
+  // is reached through a ref that is kept current each render.)
+  const firePendingNowRef = useRef<() => void>(() => {})
   useEffect(() => {
     return () => {
-      if (saveTimerRef.current) {
-        clearTimeout(saveTimerRef.current)
-      }
-      if (workTimeSaveTimerRef.current) {
-        clearTimeout(workTimeSaveTimerRef.current)
-      }
+      firePendingNowRef.current()
     }
   }, [])
 
-  // Month navigation
+  /** S147 / QUAL-241 fix-up 1 — fire every pending debounced save NOW, synchronously, from
+      the refs as they are at this instant, each under the month on screen (its envelope and
+      classification). Month navigation and unmount call it BEFORE the month changes: the
+      debounce timers would otherwise fire after the next month hydrated, build the old day's
+      payload from refs that no longer hold it and send {intervals: [], manualHours: 0} — the
+      whole-day replace would wipe the stored times. (Unlike the flushes this does not first
+      await the in-flight POSTs: the awaits are what let the month change slip in before the
+      read.) */
+  const firePendingNow = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    const changes = [...pendingChangesRef.current]
+    pendingChangesRef.current = []
+    if (changes.length > 0) void fireCellSave(changes)
+    if (workTimeSaveTimerRef.current) {
+      clearTimeout(workTimeSaveTimerRef.current)
+      workTimeSaveTimerRef.current = null
+    }
+    const dates = [...workTimeDirtyRef.current]
+    workTimeDirtyRef.current = new Set()
+    if (dates.length > 0) void fireWorkTimeSave(dates)
+  }, [fireCellSave, fireWorkTimeSave])
+
+  useEffect(() => {
+    firePendingNowRef.current = firePendingNow
+  })
+
+  // Month navigation. The next year/month are computed OUTSIDE any state updater (an updater
+  // that calls another setter is impure and double-invokes under StrictMode).
   const goToPrevMonth = useCallback(() => {
-    setMonth((prev) => {
-      if (prev === 1) {
-        setYear((y) => y - 1)
-        return 12
-      }
-      return prev - 1
-    })
-  }, [])
+    firePendingNow()
+    if (month === 1) {
+      setYear(year - 1)
+      setMonth(12)
+    } else {
+      setMonth(month - 1)
+    }
+  }, [firePendingNow, month, year])
 
   const goToNextMonth = useCallback(() => {
-    setMonth((prev) => {
-      if (prev === 12) {
-        setYear((y) => y + 1)
-        return 1
-      }
-      return prev + 1
-    })
-  }, [])
+    firePendingNow()
+    if (month === 12) {
+      setYear(year + 1)
+      setMonth(1)
+    } else {
+      setMonth(month + 1)
+    }
+  }, [firePendingNow, month, year])
 
   // ── Day panel (7203) — page-controlled (R16): the page owns the open day's
   // period rows (raw text) and translates VALID rows into the existing debounced
@@ -743,21 +1000,25 @@ export function SkemaPage() {
   const panelIdRef = useRef(0)
 
   const handleOpenDay = useCallback((date: string) => {
-    const intervals = workIntervalsRef.current.get(date) ?? []
+    // S147 / QUAL-241 — seed from the committed STATE (which the render-time hydration
+    // above guarantees is the current data's), not from `workIntervalsRef`, which is only
+    // mirrored by an effect after commit.
+    const intervals = localWorkIntervals.get(date) ?? []
     setPanelPeriods(
       intervals.map((iv) => ({ id: `srv-${++panelIdRef.current}`, from: iv.start, to: iv.end })),
     )
     setOpenDayDate(date)
-  }, [])
+  }, [localWorkIntervals])
 
   // Month nav drops any open day (the date belongs to the previous view); a
   // month that locks (approve) closes the panel — R5: the panel is unreachable
   // on locked months (the grid renders no triggers either).
   useEffect(() => { setOpenDayDate(null) }, [year, month])
-  useEffect(() => { if (isReadOnly) setOpenDayDate(null) }, [isReadOnly])
+  useEffect(() => { if (panelBlocked) setOpenDayDate(null) }, [panelBlocked])
 
   const handlePanelPeriodsChange = useCallback(
     (date: string, periods: DayPanelPeriod[]) => {
+      if (editLocked) return
       setPanelPeriods(periods)
       // Persist only VALID periods (invalid/mid-typing rows render "ugyldig" in
       // the panel and are excluded; the work-time save is a latest-wins whole-day
@@ -773,7 +1034,7 @@ export function SkemaPage() {
       }
       handleWorkIntervalsChange(date, intervals)
     },
-    [handleWorkIntervalsChange],
+    [handleWorkIntervalsChange, editLocked],
   )
 
   const handlePanelAllocationChange = useCallback(
@@ -825,7 +1086,7 @@ export function SkemaPage() {
     [data],
   )
 
-  const persistRowPreferences = useCallback(
+  const runPrefsSequence = useCallback(
     async (next: SkemaRowPreferences) => {
       setRowPrefsError(null)
       setPrefsSaveError(null)
@@ -836,6 +1097,8 @@ export function SkemaPage() {
       //     before the PUT when a flush save failed (no silent loss, and no
       //     refetch to clobber the unsaved local edits);
       // (2) ONE PUT; (3) refetch the month (the grid updates from server truth).
+      // The whole sequence runs under the busy lock (edits locked until the refetched
+      // month has hydrated).
       const cellsFlushed = await flushCellSave()
       const workTimeFlushed = await flushWorkTimeSave()
       if (!cellsFlushed || !workTimeFlushed) {
@@ -858,9 +1121,31 @@ export function SkemaPage() {
         }
         return
       }
-      refetch()
+      await refetch()
     },
     [employeeId, flushCellSave, flushWorkTimeSave, refetch],
+  )
+
+  // Preference sequences run ONE AT A TIME (flush → PUT → refetch), in click order, so the final
+  // server row set is the last action's and never depends on which PUT arrived last. The
+  // optimistic overlay is set at once (the modal updates live); the whole thing runs under the
+  // busy lock, which is a counter.
+  const prefsTailRef = useRef<Promise<unknown>>(Promise.resolve())
+  const persistRowPreferences = useCallback(
+    (next: SkemaRowPreferences) =>
+      withBusy(async () => {
+        setOptimisticPrefs(next)
+        const turn = prefsTailRef.current
+        let finish!: () => void
+        prefsTailRef.current = new Promise<void>((r) => { finish = r })
+        try {
+          await turn
+          await runPrefsSequence(next)
+        } finally {
+          finish()
+        }
+      }),
+    [withBusy, runPrefsSequence],
   )
 
   const handleProjectsChange = useCallback(
@@ -942,31 +1227,36 @@ export function SkemaPage() {
 
   const [approving, setApproving] = useState(false)
 
-  const handleApprove = useCallback(async () => {
-    clearApprovalValidationError()
+  const handleApprove = useCallback(
+    () =>
+      withBusy(async () => {
+        if (monthMismatch) return // S147: never approve the previous month under the new month's title
+        clearApprovalValidationError()
 
-    // Flush any pending debounced saves (cells, then work-time) before approving
-    const cellsSaved = await flushCellSave()
-    if (!cellsSaved) return
-    const workTimeSaved = await flushWorkTimeSave()
-    if (!workTimeSaved) return
+        // Flush any pending debounced saves (cells, then work-time) before approving
+        const cellsSaved = await flushCellSave()
+        if (!cellsSaved) return
+        const workTimeSaved = await flushWorkTimeSave()
+        if (!workTimeSaved) return
 
-    setApproving(true)
-    try {
-      if (data?.approval?.periodId) {
-        await employeeApprove(data.approval.periodId)
-      } else {
-        // S127 / TASK-12707 — the `orgId && agreementCode` guard is GONE with the
-        // arguments it guarded. `/api/approval/send` resolves org, agreement code
-        // and OK version server-side, so those two auth-context values are no
-        // longer inputs — and the guard had become a silent dead end: a missing
-        // agreementCode made "Godkend måned" do nothing at all, with no error.
-        await submitAndApprove()
-      }
-    } finally {
-      setApproving(false)
-    }
-  }, [data, employeeApprove, submitAndApprove, flushCellSave, flushWorkTimeSave, clearApprovalValidationError])
+        setApproving(true)
+        try {
+          if (data?.approval?.periodId) {
+            await employeeApprove(data.approval.periodId)
+          } else {
+            // S127 / TASK-12707 — the `orgId && agreementCode` guard is GONE with the
+            // arguments it guarded. `/api/approval/send` resolves org, agreement code
+            // and OK version server-side, so those two auth-context values are no
+            // longer inputs — and the guard had become a silent dead end: a missing
+            // agreementCode made "Godkend måned" do nothing at all, with no error.
+            await submitAndApprove()
+          }
+        } finally {
+          setApproving(false)
+        }
+      }),
+    [data, monthMismatch, employeeApprove, submitAndApprove, flushCellSave, flushWorkTimeSave, clearApprovalValidationError, withBusy],
+  )
 
   if (loading && !data) {
     return (
@@ -987,6 +1277,32 @@ export function SkemaPage() {
 
   return (
     <div className={styles.page}>
+      {/* S147 fix-up 1 — a failed month LOAD keeps the previous month's data on screen
+          (locked by monthMismatch); say so instead of leaving a silently read-only grid.
+          `error` means a failed load and nothing else (action failures are `actionError`). */}
+      {error && data && (
+        <Alert variant="error">
+          Kunne ikke indlæse skema: {error}
+        </Alert>
+      )}
+      {/* S147 fix-up 2 — a failed save / approve / send / reopen: its own dismissible alert,
+          worded for the action, showing the server's message. Cleared by the next success of
+          the same kind (in the hook) or by the person. */}
+      {actionError && (
+        <Alert variant="error" onDismiss={clearActionError}>
+          {formatActionError(actionError)}
+        </Alert>
+      )}
+      {/* S147 fix-up 3 — the load came back with the wrong month even after the one automatic
+          retry: say so and let the person retry (never a silent lock). */}
+      {loadMismatch && !loading && !error && (
+        <Alert variant="error">
+          Kunne ikke indlæse den valgte måned.{' '}
+          <Button variant="ghost" size="sm" onClick={() => void refetch()}>
+            Prøv igen
+          </Button>
+        </Alert>
+      )}
       {/* Header row: month nav (ghost buttons) left, Administrer projekter right */}
       <div className={styles.header}>
         <div className={styles.monthNav}>
@@ -994,6 +1310,12 @@ export function SkemaPage() {
             &larr; Forrige
           </Button>
           <h2 className={styles.monthTitle}>{formatMonthLabel(year, month)}</h2>
+          {/* A live region that is ALWAYS mounted (one inserted with its text already in it is
+              often not announced); its text is set only while a month loads or a save sequence
+              runs. It sits outside the aria-busy wrapper below, which assistive tech may mute. */}
+          <span role="status" className={styles.monthLoading}>
+            {loadPending ? 'Indlæser…' : busy ? 'Gemmer…' : ''}
+          </span>
           <Button variant="ghost" size="sm" onClick={goToNextMonth}>
             Næste &rarr;
           </Button>
@@ -1063,7 +1385,10 @@ export function SkemaPage() {
         </Alert>
       )}
 
-      {/* Skema grid (self-bordered per the handoff — no Card wrapper) */}
+      {/* Skema grid (self-bordered per the handoff — no Card wrapper). aria-busy covers the
+          grid and the footer only, on a wrapper that generates a real box (display: contents is
+          dropped from the accessibility tree by some browsers). */}
+      <div aria-busy={loadPending || busy} className={styles.busyRegion}>
       <SkemaGrid
         year={year}
         month={month}
@@ -1085,13 +1410,15 @@ export function SkemaPage() {
         <ApprovalFooter
           approval={data?.approval ?? null}
           onApprove={handleApprove}
-          onReopen={reopenPeriod}
+          onReopen={monthMismatch ? async () => {} : reopenPeriod}
           approving={approving}
+          locked={editLocked}
         />
+      </div>
       </div>
 
       {/* Day panel drawer (R5: unreachable on locked months) */}
-      {openDayDate !== null && !isReadOnly && (
+      {openDayDate !== null && !panelBlocked && (
         <SkemaDayPanel
           open
           date={openDayDate}
@@ -1136,14 +1463,17 @@ interface ApprovalFooterProps {
   onApprove: () => void
   onReopen: (periodId: string, reason?: string) => Promise<void>
   approving?: boolean
+  /** S147 fix-up 1 — the held data is for another month than the one shown: approve, send
+      and reopen are DISABLED (not enabled-but-ignored) until the right month is in. */
+  locked?: boolean
 }
 
-function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFooterProps) {
+function ApprovalFooter({ approval, onApprove, onReopen, approving, locked = false }: ApprovalFooterProps) {
   const [reopening, setReopening] = useState(false)
   const { role } = useAuth()
 
   const handleReopen = useCallback(async () => {
-    if (!approval?.periodId) return
+    if (locked || !approval?.periodId) return
     setReopening(true)
     try {
       const reason = approval.status === 'APPROVED' ? 'Genåbnet af leder' : undefined
@@ -1151,7 +1481,7 @@ function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFo
     } finally {
       setReopening(false)
     }
-  }, [approval?.periodId, approval?.status, onReopen])
+  }, [approval?.periodId, approval?.status, onReopen, locked])
 
   // S127 / TASK-12707 — REJECTED keeps its own branch and must be tested FIRST:
   // it is unlocked (so it is sendable) but it also owes the employee the
@@ -1162,7 +1492,7 @@ function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFo
         <Alert variant="error">
           Afvist: {approval.rejectionReason ?? 'Ingen begrundelse'}
         </Alert>
-        <Button variant="primary" onClick={onApprove} disabled={approving}>
+        <Button variant="primary" onClick={onApprove} disabled={approving || locked}>
           {approving ? 'Godkender...' : 'Godkend måned'}
         </Button>
       </div>
@@ -1183,7 +1513,7 @@ function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFo
             Frist: {formatDeadline(approval.employeeDeadline)}
           </span>
         )}
-        <Button variant="primary" onClick={onApprove} disabled={approving}>
+        <Button variant="primary" onClick={onApprove} disabled={approving || locked}>
           {approving ? 'Godkender...' : 'Godkend måned'}
         </Button>
       </div>
@@ -1200,7 +1530,7 @@ function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFo
             Lederfrist: {formatDeadline(approval.managerDeadline)}
           </span>
         )}
-        <Button variant="secondary" onClick={handleReopen} disabled={reopening}>
+        <Button variant="secondary" onClick={handleReopen} disabled={reopening || locked}>
           {reopening ? 'Genåbner...' : 'Genåbn'}
         </Button>
       </div>
@@ -1213,7 +1543,7 @@ function ApprovalFooter({ approval, onApprove, onReopen, approving }: ApprovalFo
       <div className={styles.footerContent}>
         <Badge variant="success">Godkendt</Badge>
         {canReopen && (
-          <Button variant="secondary" onClick={handleReopen} disabled={reopening}>
+          <Button variant="secondary" onClick={handleReopen} disabled={reopening || locked}>
             {reopening ? 'Genåbner...' : 'Genåbn'}
           </Button>
         )}

@@ -18,6 +18,13 @@
   );
 }
 
+/* Wraps the grid and the footer so aria-busy sits on a real box; same stacking as .page. */
+.busyRegion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
 .validationList {
   margin: 0;
   padding-left: var(--space-4);
@@ -40,6 +47,7 @@
 }
 
 .monthNav {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -52,6 +60,17 @@
   margin: 0;
   min-width: 180px;
   text-align: center;
+}
+
+/* S147 fix-up 1 — quiet "loading the next month" cue; absolutely placed so the nav never jumps. */
+.monthLoading {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--color-gray-500);
+  white-space: nowrap;
 }
 
 .footer {
