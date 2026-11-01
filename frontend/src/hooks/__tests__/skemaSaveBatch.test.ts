@@ -61,9 +61,10 @@ describe('useSkema.saveBatch — what was queued is what is sent', () => {
   it('B: a batch classified as an ABSENCE is posted as an absence, in ITS month, after the hook\'s absence-type list changed and the hook moved to another month', async () => {
     // Kind B (behaviour pin; it ALSO passes against 0974b286, by design — it isolates the hook
     // half of "classified and enveloped when queued", which the page pin cannot isolate because
-    // the April load waits for the save queue). Mutation that turns it red (N): make saveBatch
-    // classify its rows from absenceTypesRef, or take year/month from the hook's closure — the
-    // absence then goes out as a project entry / under April.
+    // the April load waits for the save queue).
+    // Red conditions (mutation, NOT run — a hypothesis, not evidence): make saveBatch classify
+    // its rows from absenceTypesRef, or take year/month from the hook's closure; the absence
+    // would then go out as a project entry / under April.
     const { result, rerender } = renderHook(({ y, m }) => useSkema('emp001', y, m), {
       initialProps: { y: 2026, m: 3 },
     })
@@ -89,6 +90,8 @@ describe('useSkema.saveBatch — what was queued is what is sent', () => {
   })
 
   it('contrast: saveMonth classifies at call time with the list it holds then', async () => {
+    // Kind B (a contrast pin: it documents the legacy entry point, and passes against every
+    // earlier commit; it has no Red condition of its own).
     const { result } = renderHook(() => useSkema('emp001', 2026, 3))
     await waitFor(() => expect(result.current.data?.month).toBe(3))
     await act(async () => {
@@ -129,6 +132,95 @@ describe('useSkema.saveBatch — what was queued is what is sent', () => {
         year: 2026, month: 3, entries: [{ date: '2026-03-03', projectCode: 'UDV', hours: 2 }], absences: null, workTime: null,
       })
     })
+    expect(result.current.actionError).toBeNull()
+  })
+})
+
+describe('useSkema — dropped-save notices persist (S147 TASK-14720)', () => {
+  const batch = (month: number, ...days: number[]) => ({
+    year: 2026,
+    month,
+    entries: days.map((d) => ({ date: `2026-0${month}-${String(d).padStart(2, '0')}`, projectCode: 'UDV', hours: 1 })),
+    absences: null,
+    workTime: null,
+  })
+  const failNextPost = (message = 'boom') =>
+    mockFetch.mockImplementationOnce(async () => ({
+      ok: false,
+      status: 500,
+      headers: new Headers(),
+      json: async () => ({ error: message }),
+      text: async () => message,
+    }))
+
+  it('F: March\'s dropped save stays through a later April failure AND an April success; days merge into one notice; only a covering March success or dismissal clears it', async () => {
+    // Kind F. Red condition: against 782e2285 the hook has no `droppedSaves` (the assertions on
+    // it fail), and the one action-error slot is overwritten by April's failure and cleared by
+    // April's success. Mutation (not run): put the dropped notice back into the shared slot.
+    const { result, rerender } = renderHook(({ m }) => useSkema('emp001', 2026, m), { initialProps: { m: 3 } })
+    await waitFor(() => expect(result.current.data?.month).toBe(3))
+    served = monthBody(2026, 4, ['VACATION'])
+    rerender({ m: 4 })
+    await waitFor(() => expect(result.current.data?.month).toBe(4))
+
+    // March's save fails AFTER the person moved to April: dropped, one notice per month.
+    failNextPost('offline')
+    await act(async () => { await result.current.saveBatch(batch(3, 3)) })
+    failNextPost('offline')
+    await act(async () => { await result.current.saveBatch(batch(3, 5)) })
+    expect(result.current.droppedSaves).toEqual([
+      { year: 2026, month: 3, dates: ['2026-03-03', '2026-03-05'], message: 'offline' },
+    ])
+    expect(result.current.actionError).toBeNull()
+
+    // An April failure takes the retryable slot, not March's notice; an April success clears
+    // the slot only.
+    failNextPost('april down')
+    await act(async () => { await result.current.saveBatch(batch(4, 2)) })
+    expect(result.current.actionError).toMatchObject({ kind: 'save', month: 4 })
+    expect(result.current.droppedSaves).toHaveLength(1)
+    await act(async () => { await result.current.saveBatch(batch(4, 2)) })
+    expect(result.current.actionError).toBeNull()
+    expect(result.current.droppedSaves).toHaveLength(1)
+    // A timeout report does not touch it either.
+    act(() => result.current.reportActionError({ kind: 'save', message: 'x', year: 2026, month: 4, uncertain: true }))
+    expect(result.current.droppedSaves).toHaveLength(1)
+
+    // A March success covering only SOME of the days keeps it…
+    await act(async () => { await result.current.saveBatch(batch(3, 3)) })
+    expect(result.current.droppedSaves).toHaveLength(1)
+    // …one covering EVERY listed day clears it.
+    await act(async () => { await result.current.saveBatch(batch(3, 3, 5, 9)) })
+    expect(result.current.droppedSaves).toEqual([])
+  })
+
+  it('F: dismissing a dropped-save notice removes exactly that month\'s notice', async () => {
+    // Kind F. Red condition: against 782e2285 `dismissDroppedSave` does not exist.
+    const { result, rerender } = renderHook(({ m }) => useSkema('emp001', 2026, m), { initialProps: { m: 3 } })
+    await waitFor(() => expect(result.current.data?.month).toBe(3))
+    served = monthBody(2026, 5, [])
+    rerender({ m: 5 })
+    await waitFor(() => expect(result.current.data?.month).toBe(5))
+    failNextPost()
+    await act(async () => { await result.current.saveBatch(batch(3, 3)) })
+    failNextPost()
+    await act(async () => { await result.current.saveBatch(batch(4, 3)) })
+    expect(result.current.droppedSaves.map((n) => n.month)).toEqual([3, 4])
+    act(() => result.current.dismissDroppedSave(2026, 3))
+    expect(result.current.droppedSaves.map((n) => n.month)).toEqual([4])
+  })
+
+  it('F: a retryable save failure becomes a persistent notice once the person has moved to another month', async () => {
+    // Kind F. Red condition: against 782e2285 it stays in the one slot, where the next failure
+    // (any month) overwrites it, while its pending edits are dropped on the other month's load.
+    const { result, rerender } = renderHook(({ m }) => useSkema('emp001', 2026, m), { initialProps: { m: 3 } })
+    await waitFor(() => expect(result.current.data?.month).toBe(3))
+    failNextPost()
+    await act(async () => { await result.current.saveBatch(batch(3, 3)) })
+    expect(result.current.actionError).toMatchObject({ kind: 'save', month: 3 }) // on screen: retryable
+    served = monthBody(2026, 4, [])
+    rerender({ m: 4 })
+    await waitFor(() => expect(result.current.droppedSaves).toHaveLength(1))
     expect(result.current.actionError).toBeNull()
   })
 })

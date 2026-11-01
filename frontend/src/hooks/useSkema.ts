@@ -18,6 +18,19 @@ export interface SkemaActionError {
   uncertain?: boolean
 }
 
+/** S147 TASK-14720 / QUAL-241 — a save that was DROPPED (its month had left the screen when it
+    failed, so it is never resent). One notice per month, with every dropped day merged into it.
+    Kept apart from the single retryable `actionError` slot: nothing replaces it, and it is cleared
+    only by dismissal or by a later successful save of the SAME month that covers every listed day. */
+export interface DroppedSaveNotice {
+  year: number
+  month: number
+  /** Every day (YYYY-MM-DD) whose changes were dropped, merged and sorted. */
+  dates: string[]
+  /** The server's message for the latest dropped failure. */
+  message: string
+}
+
 /** A fully classified save: what to POST, and for which month. Built when the edit is QUEUED. */
 export interface SaveBatch {
   year: number
@@ -25,6 +38,10 @@ export interface SaveBatch {
   entries: { date: string; projectCode: string; hours: number }[] | null
   absences: { date: string; absenceType: string; hours: number }[] | null
   workTime: WorkTimeDay[] | null
+  /** Asked when the save FAILS: true when the page has meanwhile dropped this save's edits (the
+      data it was sent under has been replaced), so the failure gets a persistent notice instead of
+      the clearable slot. Absent = not dropped. */
+  isDropped?: () => boolean
 }
 
 export interface QuotaError {
@@ -113,6 +130,9 @@ interface UseSkemaResult {
   error: string | null
   /** The last failed save / approve / send / reopen, or null. */
   actionError: SkemaActionError | null
+  /** Saves dropped after their month left the screen — one persistent notice per month. */
+  droppedSaves: DroppedSaveNotice[]
+  dismissDroppedSave: (year: number, month: number) => void
   /** Let the page report a failure it detected itself (e.g. a save that never answered). */
   reportActionError: (error: SkemaActionError) => void
   /** A load answered with the wrong month even after the one automatic retry (recoverable via refetch). */
@@ -203,12 +223,61 @@ export function useSkema(
   const [absenceCapError, setAbsenceCapError] = useState<AbsenceCapError | null>(null)
   const [approvalValidationError, setApprovalValidationError] = useState<ApprovalValidationError | null>(null)
 
-  const failAction = useCallback(
-    (kind: SkemaActionErrorKind, message: string, y: number, m: number, dates?: string[]) =>
-      setActionError({ kind, message, year: y, month: m, dates }),
+  const [droppedSaves, setDroppedSaves] = useState<DroppedSaveNotice[]>([])
+  // The identity of the month on screen NOW, read from a ref (written in a layout effect, which
+  // runs before any passive effect or event handler).
+  const identityRef = useRef({ employeeId, year, month })
+  useLayoutEffect(() => {
+    identityRef.current = { employeeId, year, month }
+  }, [employeeId, year, month])
+
+  /** Merge a dropped save into its month's notice (one per month, days unioned). */
+  const addDroppedSave = useCallback((y: number, m: number, dates: string[], message: string) => {
+    setDroppedSaves((prev) => {
+      const existing = prev.find((n) => n.year === y && n.month === m)
+      if (!existing) return [...prev, { year: y, month: m, dates: [...new Set(dates)].sort(), message }]
+      return prev.map((n) =>
+        n === existing ? { ...n, dates: [...new Set([...n.dates, ...dates])].sort(), message } : n,
+      )
+    })
+  }, [])
+  const dismissDroppedSave = useCallback(
+    (y: number, m: number) => setDroppedSaves((prev) => prev.filter((n) => !(n.year === y && n.month === m))),
     [],
   )
-  const reportActionError = useCallback((e: SkemaActionError) => setActionError(e), [])
+
+  const failAction = useCallback(
+    (kind: SkemaActionErrorKind, message: string, y: number, m: number, dates?: string[], dropped?: boolean) => {
+      const here = identityRef.current
+      // A save the page has DROPPED (the data it was sent under has since been replaced, or its
+      // month has left the screen) is never resent: it gets a persistent notice of its own
+      // instead of the one clearable slot.
+      if (kind === 'save' && dates && dates.length > 0 && (dropped || here.year !== y || here.month !== m)) {
+        addDroppedSave(y, m, dates, message)
+        return
+      }
+      setActionError({ kind, message, year: y, month: m, dates })
+    },
+    [addDroppedSave],
+  )
+  const actionErrorRef = useRef(actionError)
+  useLayoutEffect(() => {
+    actionErrorRef.current = actionError
+  }, [actionError])
+  // The "uvist" report overwrites the one slot. ALWAYS move a days-carrying save warning out of it
+  // first (rather than only when its edits are certain to be dropped): the next hydration drops
+  // re-queued edits anyway, and a notice kept a little longer (until a covering success or
+  // dismissal) costs less than a lost-save warning that silently vanished.
+  const reportActionError = useCallback(
+    (e: SkemaActionError) => {
+      const prev = actionErrorRef.current
+      if (e.uncertain && prev?.kind === 'save' && !prev.uncertain && prev.dates && prev.dates.length > 0) {
+        addDroppedSave(prev.year, prev.month, prev.dates, prev.message)
+      }
+      setActionError(e)
+    },
+    [addDroppedSave],
+  )
   const [loadMismatch, setLoadMismatch] = useState(false)
   const awaitSavesIdleRef = useRef(awaitSavesIdle)
   useLayoutEffect(() => {
@@ -217,10 +286,42 @@ export function useSkema(
   // A failure clears only on a later success of the same kind FOR THE SAME MONTH (or when the
   // person dismisses it): a success in another month says nothing about the month that failed.
   const succeedAction = useCallback(
-    (kind: SkemaActionErrorKind, y: number, m: number) =>
-      setActionError((prev) => (prev?.kind === kind && prev.year === y && prev.month === m ? null : prev)),
+    (kind: SkemaActionErrorKind, y: number, m: number, coveredDates?: string[]) => {
+      setActionError((prev) => (prev?.kind === kind && prev.year === y && prev.month === m ? null : prev))
+      if (kind === 'save' && coveredDates) {
+        // A dropped-save notice goes only when this success covers EVERY day it lists.
+        const covered = new Set(coveredDates)
+        setDroppedSaves((prev) =>
+          prev.filter((n) => !(n.year === y && n.month === m && n.dates.every((d) => covered.has(d)))),
+        )
+      }
+    },
     [],
   )
+  // A retryable save failure whose month the person has since left is DROPPED by the page (its
+  // pending edits are cleared when the other month hydrates): move it to the persistent notices
+  // instead of leaving it in the one slot any later failure would overwrite.
+  useEffect(() => {
+    if (
+      actionError?.kind === 'save' && !actionError.uncertain && actionError.dates && actionError.dates.length > 0 &&
+      (actionError.year !== year || actionError.month !== month)
+    ) {
+      addDroppedSave(actionError.year, actionError.month, actionError.dates, actionError.message)
+      const moved = actionError
+      setActionError((p) => (p === moved ? null : p)) // clear only the error acted on
+    }
+  }, [actionError, year, month, addDroppedSave])
+  // Every month load that lands re-hydrates the page, which drops the edits a failed save had
+  // re-queued. So a save-failure warning that carries days (one the person could still act on, not
+  // an "uvist" one) must not stay in the clearable slot across a hydration, even for the SAME month
+  // (March → April → March while the save was still in flight): it becomes a persistent notice then.
+  useEffect(() => {
+    const e = actionErrorRef.current
+    if (data && e?.kind === 'save' && !e.uncertain && e.dates && e.dates.length > 0) {
+      addDroppedSave(e.year, e.month, e.dates, e.message)
+      setActionError((p) => (p === e ? null : p)) // clear only the error acted on
+    }
+  }, [data, addDroppedSave])
   const clearActionError = useCallback(() => setActionError(null), [])
 
   const latestDataRequestId = useRef(0)
@@ -236,11 +337,6 @@ export function useSkema(
   // captured identity would reload the OLD month, supersede the new month's own load (one
   // request counter) and leave the old month's data under the new month's title. The ref is
   // written in a layout effect, which runs before the passive effect that triggers the load.
-  const identityRef = useRef({ employeeId, year, month })
-  useLayoutEffect(() => {
-    identityRef.current = { employeeId, year, month }
-  }, [employeeId, year, month])
-
   const fetchData = useCallback(async () => {
     const requestId = ++latestDataRequestId.current
     loadInFlightRef.current = true
@@ -320,7 +416,7 @@ export function useSkema(
         },
       })
       if (result.ok) {
-        succeedAction('save', batch.year, batch.month)
+        succeedAction('save', batch.year, batch.month, batchDates(batch))
         return { status: 'ok' }
       }
       // S73 R4 — a 422 is a server REJECTION (revert-and-resolve), discriminated
@@ -362,16 +458,16 @@ export function useSkema(
               maxHours: body.maxHours,
             })
           } else {
-            failAction('save', result.error, batch.year, batch.month, batchDates(batch))
+            failAction('save', result.error, batch.year, batch.month, batchDates(batch), batch.isDropped?.())
           }
         } catch {
           // Non-JSON 422 — still a rejection; surface the raw text.
-          failAction('save', result.error, batch.year, batch.month, batchDates(batch))
+          failAction('save', result.error, batch.year, batch.month, batchDates(batch), batch.isDropped?.())
         }
         return { status: 'rejected', httpStatus: 422 }
       }
       // Everything else (400/401/403/404/409/5xx/network) — keep local edits, retry.
-      failAction('save', result.error, batch.year, batch.month, batchDates(batch))
+      failAction('save', result.error, batch.year, batch.month, batchDates(batch), batch.isDropped?.())
       return { status: 'failed', httpStatus: result.status, error: result.error }
     },
     [employeeId, failAction, succeedAction]
@@ -502,7 +598,7 @@ export function useSkema(
     [fetchData, failAction, succeedAction]
   )
 
-  return { data, loading, error, actionError, reportActionError, loadMismatch, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, saveBatch, employeeApprove, submitAndApprove, reopenPeriod }
+  return { data, loading, error, actionError, droppedSaves, dismissDroppedSave, reportActionError, loadMismatch, clearActionError, quotaError, absenceRuleError, absenceCapError, approvalValidationError, clearQuotaError, clearAbsenceRuleError, clearAbsenceCapError, clearApprovalValidationError, refetch: fetchData, saveMonth, saveBatch, employeeApprove, submitAndApprove, reopenPeriod }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
