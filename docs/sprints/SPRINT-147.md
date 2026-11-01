@@ -294,6 +294,15 @@ The job is now off on the two shared test servers that seed leavers directly. **
    - On the payout fact's derived host, assert that no `SettlementCloseService` is registered (`Assert.Empty(host.Services.GetServices<IHostedService>().OfType<SettlementCloseService>())`), so CI proves the fixture switch is inherited rather than relying on reasoning.
    - Say in `DepartedSelfElevatedRouteTests.cs`'s header "Seeding" paragraph (`:59-64`) that the host runs without the leaver job.
 19. **From the 14720 review (cycle 3 NOTE 6).** Stale comments that still say the not-saved notice only covers saves dropped "after their month left the screen": `useSkema.ts:21-24`, `:133`; `SkemaPage.tsx:1364-1366`. The notice now also holds same-month drops and warnings moved on "uvist".
+20. **From the 14710 report.**
+   - Remove the dead helpers `ProjectRepository.EnsureContainerAsync` and `ReindexSelectionsAsync`, which lost their callers with the retired selection routes.
+   - Fix the stale comments at `AcquireEmployeeLockAsync`'s doc and `SkemaRowPreferenceRepository.cs:84`.
+   - Reword the stale "closed spell means already flipped" text, which is true only from day 6: `EmploymentDateEndpoints.cs:107-109`, `UserRepository.cs:~490`, `User.cs:50-53`.
+   - Pre-existing: the 422 near `TerminationPayoutRequestEndpoints.cs:251` echoes `employmentEndDate` on an HR route.
+
+   **Residuals for O-6's ADR-040 amendment (K-list):**
+   - A settlement reversal whose end-date correction lands inside the grace reactivates the leaver. Its re-settle step then refuses (`SupersedeNotEligible`) and the reversal rolls back. The operator must bare-reverse or wait until day 6.
+   - During the grace, a departed manager can still be imported as a manager (`ReportingLineEndpoints.cs:1030`, `:1042`). TASK-14712's rule then gives that manager no authority from day 1.
 
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
