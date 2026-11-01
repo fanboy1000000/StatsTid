@@ -1174,14 +1174,24 @@ public sealed class ReportingLineRepository
         bool IsSubject(string candidateId) =>
             string.Equals(candidateId, employeeId, StringComparison.Ordinal);
 
+        // S147 / TASK-14712 (QUAL-230 T5c; NR-10) — "ACTIVE" in the three legs below means an ACTING
+        // user at effectiveAsOf: is_active AND not past their last day of employment
+        // (IReportingLineDataSource.IsActingUserAsync; the rule is DepartedSubject.IsDeparted, negated).
+        // Every one of the three asks about a HOLDER of authority over someone else, never about the
+        // subject, so a departed holder is skipped from the day after their last day — during the
+        // owner's 5-day grace (OQ-2) too — exactly as a deactivated one always was. This only ever
+        // REMOVES a candidate; the walk then escalates as before. What is deliberately NOT changed
+        // (owner Q-B = (c), Step 0b P-2): the vikar consult at 2b still looks up the PRIMARY manager's
+        // stand-in whatever that manager's own state, so a stand-in appointed before the manager left
+        // keeps approving until its end date or HR's revocation (S74 R3a).
         while (depth < 10)
         {
             // 1. Check ACTING line — admin-assigned ACTING takes precedence over everything.
             var actingLine = await source.GetActiveLineAsync(currentEmployeeId, "ACTING", ct);
             if (actingLine is not null && !IsSubject(actingLine.ManagerId))
             {
-                var isActive = await source.IsUserActiveAsync(actingLine.ManagerId, ct);
-                if (isActive)
+                var isActing = await source.IsActingUserAsync(actingLine.ManagerId, effectiveAsOf, ct);
+                if (isActing)
                     return (actingLine.ManagerId, "ACTING_MANAGER", depth);
             }
 
@@ -1206,21 +1216,23 @@ public sealed class ReportingLineRepository
             var vikar = await source.GetActiveVikarByApproverAsync(primaryManagerId, effectiveAsOf, ct);
             if (vikar is not null && !IsSubject(vikar.VikarUserId))
             {
-                var vikarUserActive = await source.IsUserActiveAsync(vikar.VikarUserId, ct);
-                if (vikarUserActive)
+                // The stand-in HOLDER's own state (S147 T5c): a departed stand-in grants nothing.
+                var vikarUserActing = await source.IsActingUserAsync(vikar.VikarUserId, effectiveAsOf, ct);
+                if (vikarUserActing)
                     return (vikar.VikarUserId, "ACTING_MANAGER", depth);
-                // else: R3b — inactive stand-in, skip the vikar; fall through.
+                // else: R3b — inactive (or departed) stand-in, skip the vikar; fall through.
             }
 
-            // 3. M if active — unless M IS the subject (FAIL-004). An active M who is the subject
+            // 3. M if acting — unless M IS the subject (FAIL-004). An acting M who is the subject
             //    does NOT resolve; per ruling (a) the walk continues THROUGH them (step 4), which is
-            //    what lets a valid approver further along still win.
-            var primaryManagerActive = await source.IsUserActiveAsync(primaryManagerId, ct);
-            if (primaryManagerActive && !IsSubject(primaryManagerId))
+            //    what lets a valid approver further along still win. S147 T5c: a departed M (still
+            //    is_active under the grace, but past their last day) does not resolve either.
+            var primaryManagerActing = await source.IsActingUserAsync(primaryManagerId, effectiveAsOf, ct);
+            if (primaryManagerActing && !IsSubject(primaryManagerId))
                 return (primaryManagerId, "DESIGNATED_MANAGER", depth);
 
-            // 4. Manager is inactive (or is the subject, FAIL-004) and held no usable vikar — walk
-            //    up the chain.
+            // 4. Manager is inactive or departed (or is the subject, FAIL-004) and held no usable
+            //    vikar — walk up the chain.
             currentEmployeeId = primaryManagerId;
             depth++;
         }
@@ -1248,15 +1260,26 @@ public sealed class ReportingLineRepository
         return await reader.ReadAsync(ct) ? MapReader(reader) : null;
     }
 
-    /// <summary>The live-SQL form of <see cref="IReportingLineDataSource.IsUserActiveAsync"/>.</summary>
-    internal static async Task<bool> QueryUserActiveAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
+    /// <summary>
+    /// The live-SQL form of <see cref="IReportingLineDataSource.IsActingUserAsync"/>. Reads the two
+    /// columns the acting-user rule needs and decides through
+    /// <see cref="StatsTid.SharedKernel.Security.DepartedSubject.IsDeparted(bool, DateOnly?, DateOnly)"/>, so this, the prefetched form
+    /// (<see cref="PrefetchedReportingLineDataSource"/>) and TASK-14703's departed-self rule share ONE
+    /// text of "has left" rather than a second, SQL-only copy. An unknown user is not acting (no row →
+    /// <c>false</c>, fail-closed, as before).
+    /// </summary>
+    internal static async Task<bool> QueryUserActingAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, DateOnly asOf, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
-            "SELECT is_active FROM users WHERE user_id = @userId", conn, tx);
+            "SELECT is_active, employment_end_date FROM users WHERE user_id = @userId", conn, tx);
         cmd.Parameters.AddWithValue("userId", userId);
-        var result = await cmd.ExecuteScalarAsync(ct);
-        return result is true;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return false;
+        var isActive = reader.GetBoolean(0);
+        DateOnly? employmentEndDate = reader.IsDBNull(1) ? null : reader.GetFieldValue<DateOnly>(1);
+        return !StatsTid.SharedKernel.Security.DepartedSubject.IsDeparted(isActive, employmentEndDate, asOf);
     }
 
     // ──────────────────────────────────────────────────────────────────────

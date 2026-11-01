@@ -1,5 +1,6 @@
 using Npgsql;
 using StatsTid.SharedKernel.Calendar;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Infrastructure;
 
@@ -19,7 +20,8 @@ namespace StatsTid.Infrastructure;
 ///
 /// <para>
 /// <b>Semantics.</b> <c>IsEffectiveDesignatedApproverAsync(actorId, employeeId, asOf)</c>
-/// is <c>true</c> ⟺ the actor is <b>active</b> AND holds a <b>LeaderOrAbove</b> role
+/// is <c>true</c> ⟺ the actor is <b>acting</b> at <c>asOf</c> (active AND not past their last day of
+/// employment — S147 / TASK-14712, QUAL-230 T5c) AND holds a <b>LeaderOrAbove</b> role
 /// AND is the <b>single resolved effective approver</b> of <paramref name="employeeId"/>
 /// at <c>asOf</c> per the R3 precedence (admin-assigned ACTING → the resolved PRIMARY
 /// manager M's active approver-owned vikar → M-if-active → inactive-manager escalation),
@@ -176,13 +178,18 @@ public sealed class DesignatedApproverAuthorizer
         // caller passes an explicit asOf today, so this tail changes no live decision, but it must
         // not be the one place from which the retired UTC calendar can creep back in.
         var effectiveAsOf = asOf ?? ctx?.AsOf ?? CopenhagenBusinessDate.Today(_timeProvider);
+        EnsureContextDateMatches(ctx, effectiveAsOf);
 
-        // (1) The actor must be an active LeaderOrAbove. The resolver only returns ACTIVE
-        //     approvers, so "active" is implied when the resolved id == actor; but the role
+        // (1) The actor must be an ACTING LeaderOrAbove at effectiveAsOf. The resolver only returns
+        //     ACTING approvers, so "acting" is implied when the resolved id == actor; but the role
         //     gate is NOT enforced by the resolver (a vikar could be an Employee-role user),
         //     so we check it explicitly here — defense-in-depth and the load-bearing gate
         //     when the actor is reached purely as a vikar stand-in.
-        if (!await RoleFloorAsync(conn, tx, ctx, facts, actorId, ct))
+        //     S147 / TASK-14712 (QUAL-230 T5c; NR-10): "acting" = is_active AND not past their last
+        //     day of employment at effectiveAsOf. A manager who has left stays is_active through the
+        //     owner's 5-day grace (OQ-2) so that THEIR manager can sign their final month; this floor
+        //     is what stops the grace keeping them in charge of their own reports from D+1.
+        if (!await RoleFloorAsync(conn, tx, ctx, facts, actorId, effectiveAsOf, ct))
             return false;
 
         // (2) Resolve the SINGLE effective approver at asOf (vikar-aware, R3 precedence).
@@ -364,10 +371,13 @@ public sealed class DesignatedApproverAuthorizer
         // S140 / TASK-14001 — same injected-clock fallback tail as the edge predicate above.
         // S142 / TASK-14203 — and the same COPENHAGEN calendar day.
         var effectiveAsOf = asOf ?? ctx?.AsOf ?? CopenhagenBusinessDate.Today(_timeProvider);
+        EnsureContextDateMatches(ctx, effectiveAsOf);
 
-        // (1) The actor must be an active LeaderOrAbove — the SAME role floor the edge path applies
+        // (1) The actor must be an ACTING LeaderOrAbove — the SAME role floor the edge path applies
         //     (a unit_leaders row for an Employee-role / inactive user grants nothing; D3 role-coupling).
-        if (!await RoleFloorAsync(conn, tx, ctx, facts, actorId, ct))
+        //     S147 / TASK-14712 (T5c): nor for a departed one, from the day after their last day — a
+        //     designated unit leader who has left loses this path on D+1 exactly as the edge path.
+        if (!await RoleFloorAsync(conn, tx, ctx, facts, actorId, effectiveAsOf, ct))
             return UnitLeaderApprovalKind.None;
 
         // (2) The SINGLE-TABLE membership/vikar lookup over the employee's OWN unit's leaders
@@ -451,14 +461,21 @@ public sealed class DesignatedApproverAuthorizer
     /// <summary>Role floor, memoized per USER. It is a fact about the candidate alone, yet was asked
     /// once per (candidate, employee) pair — and twice per pair for a unit-leader candidate, once in
     /// each leg. Across a projection the candidate set is small and highly repeated, so this
-    /// amortises to near zero.</summary>
+    /// amortises to near zero.
+    ///
+    /// <para><b>S147 / TASK-14712 (T5c) — the floor now depends on <paramref name="asOf"/></b> (an
+    /// acting user is one not past their last day AT that date). The memo key stays the user alone,
+    /// which is sound for the same reason the edge memo has always been keyed on the employee alone:
+    /// a context carries ONE authority date (<see cref="ApprovalAuthorityContext.AsOf"/>, invariant 7),
+    /// and every call that brings a context resolves its date from it or matches it — which
+    /// <see cref="EnsureContextDateMatches"/> now enforces rather than assumes.</para></summary>
     private Task<bool> RoleFloorAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
-        IAuthorityFactsSource? facts, string userId, CancellationToken ct)
+        IAuthorityFactsSource? facts, string userId, DateOnly asOf, CancellationToken ct)
     {
         Task<bool> Query() => facts is null
-            ? IsActiveLeaderOrAboveAsync(conn, tx, userId, ct)
-            : facts.IsActiveLeaderOrAboveAsync(userId, ct);
+            ? IsActingLeaderOrAboveAsync(conn, tx, userId, asOf, ct)
+            : facts.IsActingLeaderOrAboveAsync(userId, asOf, ct);
 
         return ctx is null ? Query() : ctx.RoleFloorAsync(userId, Query);
     }
@@ -531,6 +548,29 @@ public sealed class DesignatedApproverAuthorizer
         ctx.BindTo(conn);
     }
 
+    /// <summary>
+    /// S147 / TASK-14712 (T5c) — the memo's other precondition, enforced rather than assumed. A context
+    /// memoizes the resolved edge per EMPLOYEE and the role floor per USER without the date in the key,
+    /// because it carries ONE authority date (<see cref="ApprovalAuthorityContext.AsOf"/>, invariant 7).
+    /// That was always true of the edge (its resolution depends on the date's vikar coverage); since
+    /// T5c it is true of the role floor too (a departed user is acting up to and including their last
+    /// day and not after). A call that brings a context but asks about a DIFFERENT date would read a
+    /// memo filled for another day — so it fails loudly here instead. Every caller today passes the
+    /// context's own date (the period-status projection: <c>new ApprovalAuthorityContext(today)</c> with
+    /// <c>asOf: today</c>), so this changes no live decision.
+    /// </summary>
+    private static void EnsureContextDateMatches(ApprovalAuthorityContext? ctx, DateOnly effectiveAsOf)
+    {
+        if (ctx is null || ctx.AsOf == effectiveAsOf) return;
+
+        throw new InvalidOperationException(
+            $"An ApprovalAuthorityContext for {ctx.AsOf:yyyy-MM-dd} was used to answer an authority " +
+            $"question at {effectiveAsOf:yyyy-MM-dd}. Its memoized answers (the resolved edge, the " +
+            "role floor) are keyed without the date because a context carries exactly one; asking it " +
+            "about another day would serve answers decided for the wrong day. Pass the context's own " +
+            "date, or pass ctx: null.");
+    }
+
     private Task<bool> SameOrganisationAsync(
         NpgsqlConnection conn, NpgsqlTransaction? tx, ApprovalAuthorityContext? ctx,
         IAuthorityFactsSource? facts, string employeeId, string actorId, CancellationToken ct)
@@ -576,41 +616,56 @@ public sealed class DesignatedApproverAuthorizer
     }
 
     /// <summary>
-    /// Returns <c>true</c> iff <paramref name="userId"/> is an active user holding at least
-    /// one active role assignment with <c>hierarchy_level &lt;= 4</c> (LOCAL_LEADER or above).
-    /// Single query against <c>users</c> + <c>role_assignments</c> + <c>roles</c>; mirrors the
+    /// Returns <c>true</c> iff <paramref name="userId"/> is an ACTING user at <paramref name="asOf"/>
+    /// holding at least one active role assignment with <c>hierarchy_level &lt;= 4</c> (LOCAL_LEADER or
+    /// above). Single query against <c>users</c> + <c>role_assignments</c> + <c>roles</c>; mirrors the
     /// <c>RoleAssignmentRepository</c> active-assignment predicate (is_active + non-expired).
+    ///
+    /// <para><b>S147 / TASK-14712 (QUAL-230 T5c; NR-10).</b> The ROLE half (a qualifying assignment)
+    /// stays in SQL. The USER half was <c>u.is_active = TRUE</c>; it is now "acting": is_active AND not
+    /// past the recorded last day of employment at <paramref name="asOf"/>, decided by
+    /// <see cref="DepartedSubject.IsDeparted(bool, DateOnly?, DateOnly)"/> (negated) over the row's two
+    /// columns — TASK-14703's rule, reused rather than restated in SQL, and the same call the
+    /// prefetched form (<see cref="PrefetchedAuthorityFacts"/>) makes. No qualifying assignment → no row
+    /// → <c>false</c> (fail-closed, as before).</para>
     /// </summary>
-    /// <summary>Live-SQL form behind <see cref="IAuthorityFactsSource.IsActiveLeaderOrAboveAsync"/>.</summary>
-    internal static Task<bool> QueryActiveLeaderOrAboveAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
-        => IsActiveLeaderOrAboveAsync(conn, tx, userId, ct);
+    /// <summary>Live-SQL form behind <see cref="IAuthorityFactsSource.IsActingLeaderOrAboveAsync"/>.</summary>
+    internal static Task<bool> QueryActingLeaderOrAboveAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, DateOnly asOf, CancellationToken ct)
+        => IsActingLeaderOrAboveAsync(conn, tx, userId, asOf, ct);
 
-    private static async Task<bool> IsActiveLeaderOrAboveAsync(
-        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, CancellationToken ct)
+    private static async Task<bool> IsActingLeaderOrAboveAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, DateOnly asOf, CancellationToken ct)
     {
         // BY DESIGN: `ra.expires_at > NOW()` stays on the DATABASE clock (S140 / TASK-14001). This
         // is a role-assignment AUTHORIZATION-EXPIRY compare against a stored TIMESTAMP, not a
         // business date — and the expiries it is compared against are seeded as real timestamps
         // (SQL/`NOW()`-relative) by the suites, so a fixed provider here would judge live rows
         // against a frozen instant and invent grants or denials. PAT-028 keeps maintenance/expiry
-        // INSTANTS on the database clock; only business DATES move to the injected seam.
+        // INSTANTS on the database clock; only business DATES move to the injected seam — which is
+        // why the end-date half below is judged against the caller's `asOf`, never CURRENT_DATE.
+        //
+        // is_active and employment_end_date are columns of `users`, so every qualifying assignment row
+        // carries the same pair and LIMIT 1 picks an equivalent one.
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT 1
+            SELECT u.is_active, u.employment_end_date
             FROM users u
             JOIN role_assignments ra ON ra.user_id = u.user_id
             JOIN roles r ON r.role_id = ra.role_id
             WHERE u.user_id = @userId
-              AND u.is_active = TRUE
               AND ra.is_active = TRUE
               AND (ra.expires_at IS NULL OR ra.expires_at > NOW())
               AND r.hierarchy_level <= 4
             LIMIT 1
             """, conn, tx);
         cmd.Parameters.AddWithValue("userId", userId);
-        var result = await cmd.ExecuteScalarAsync(ct);
-        return result is not null && result is not DBNull;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return false;
+        var isActive = reader.GetBoolean(0);
+        DateOnly? employmentEndDate = reader.IsDBNull(1) ? null : reader.GetFieldValue<DateOnly>(1);
+        return !DepartedSubject.IsDeparted(isActive, employmentEndDate, asOf);
     }
 }
 
