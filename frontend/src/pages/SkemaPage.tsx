@@ -601,13 +601,14 @@ export function SkemaPage() {
   // up because a save never answered, the reloaded month may not show the latest save: say so.
   useLayoutEffect(() => {
     savesIdleRef.current = async () => {
+      const queuedUpTo = saveSerialNoRef.current // the saves this wait covers (not ones queued during it)
       const answered = await waitBounded(saveTailRef.current, SAVE_QUEUE_WAIT_MS)
       const [hung] = [...hungSavesRef.current.values()]
       hungSavesRef.current.clear() // named once, not at every later load
       if (hung) reportUnanswered(hung)
       else if (!answered) {
         const [live] = [...cellSavesInFlightRef.current.values(), ...workTimeSavesInFlightRef.current.values()]
-        reportedUpToRef.current = saveSerialNoRef.current // every save queued so far is now reported
+        reportedUpToRef.current = queuedUpTo // every save queued before this wait is now reported
         reportUnanswered(live ?? null)
       }
     }
@@ -626,7 +627,7 @@ export function SkemaPage() {
     // What each date SENDS (the frozen rows), so a 422 revert can be overlap-guarded: revert a
     // day ONLY when its CURRENT local work-time still equals what this save sent.
     const sentByDate = new Map(payload.map((r) => [r.date, { intervals: r.intervals, manualHours: r.manualHours }]))
-    const save = saveSerial({ year: env.year, month: env.month, entries: null, absences: null, workTime: payload }).then((result) => {
+    const save = saveSerial({ year: env.year, month: env.month, entries: null, absences: null, workTime: payload, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
       const current = dataMonthRef.current
       const here =
         current != null && current.year === env.year && current.month === env.month && epoch === hydrationEpochRef.current
@@ -838,7 +839,7 @@ export function SkemaPage() {
       if (c.isAbsence) absences.push({ date: c.date, absenceType: c.rowKey, hours: c.hours })
       else entries.push({ date: c.date, projectCode: c.rowKey, hours: c.hours })
     }
-    const save = saveSerial({ year: env.year, month: env.month, entries, absences, workTime: null }).then((result) => {
+    const save = saveSerial({ year: env.year, month: env.month, entries, absences, workTime: null, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
       const current = dataMonthRef.current
       const here =
         current != null && current.year === env.year && current.month === env.month && epoch === hydrationEpochRef.current

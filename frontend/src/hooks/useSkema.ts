@@ -38,6 +38,10 @@ export interface SaveBatch {
   entries: { date: string; projectCode: string; hours: number }[] | null
   absences: { date: string; absenceType: string; hours: number }[] | null
   workTime: WorkTimeDay[] | null
+  /** Asked when the save FAILS: true when the page has meanwhile dropped this save's edits (the
+      data it was sent under has been replaced), so the failure gets a persistent notice instead of
+      the clearable slot. Absent = not dropped. */
+  isDropped?: () => boolean
 }
 
 export interface QuotaError {
@@ -243,11 +247,12 @@ export function useSkema(
   )
 
   const failAction = useCallback(
-    (kind: SkemaActionErrorKind, message: string, y: number, m: number, dates?: string[]) => {
+    (kind: SkemaActionErrorKind, message: string, y: number, m: number, dates?: string[], dropped?: boolean) => {
       const here = identityRef.current
-      // A save that fails once its month has left the screen is never resent (the page drops it):
-      // it gets a persistent notice of its own instead of the one retryable slot.
-      if (kind === 'save' && dates && dates.length > 0 && (here.year !== y || here.month !== m)) {
+      // A save the page has DROPPED (the data it was sent under has since been replaced, or its
+      // month has left the screen) is never resent: it gets a persistent notice of its own
+      // instead of the one clearable slot.
+      if (kind === 'save' && dates && dates.length > 0 && (dropped || here.year !== y || here.month !== m)) {
         addDroppedSave(y, m, dates, message)
         return
       }
@@ -255,7 +260,24 @@ export function useSkema(
     },
     [addDroppedSave],
   )
-  const reportActionError = useCallback((e: SkemaActionError) => setActionError(e), [])
+  const actionErrorRef = useRef(actionError)
+  useLayoutEffect(() => {
+    actionErrorRef.current = actionError
+  }, [actionError])
+  // The "uvist" report overwrites the one slot. ALWAYS move a days-carrying save warning out of it
+  // first (rather than only when its edits are certain to be dropped): the next hydration drops
+  // re-queued edits anyway, and a notice kept a little longer (until a covering success or
+  // dismissal) costs less than a lost-save warning that silently vanished.
+  const reportActionError = useCallback(
+    (e: SkemaActionError) => {
+      const prev = actionErrorRef.current
+      if (e.uncertain && prev?.kind === 'save' && !prev.uncertain && prev.dates && prev.dates.length > 0) {
+        addDroppedSave(prev.year, prev.month, prev.dates, prev.message)
+      }
+      setActionError(e)
+    },
+    [addDroppedSave],
+  )
   const [loadMismatch, setLoadMismatch] = useState(false)
   const awaitSavesIdleRef = useRef(awaitSavesIdle)
   useLayoutEffect(() => {
@@ -285,22 +307,19 @@ export function useSkema(
       (actionError.year !== year || actionError.month !== month)
     ) {
       addDroppedSave(actionError.year, actionError.month, actionError.dates, actionError.message)
-      setActionError(null)
+      const moved = actionError
+      setActionError((p) => (p === moved ? null : p)) // clear only the error acted on
     }
   }, [actionError, year, month, addDroppedSave])
   // Every month load that lands re-hydrates the page, which drops the edits a failed save had
-  // re-queued. So a retryable save warning (one with days, not an "uvist" one) must not stay in the
-  // clearable slot across a hydration, even for the SAME month (March → April → March while the save
-  // was still in flight): it becomes a persistent notice then.
-  const actionErrorRef = useRef(actionError)
-  useLayoutEffect(() => {
-    actionErrorRef.current = actionError
-  }, [actionError])
+  // re-queued. So a save-failure warning that carries days (one the person could still act on, not
+  // an "uvist" one) must not stay in the clearable slot across a hydration, even for the SAME month
+  // (March → April → March while the save was still in flight): it becomes a persistent notice then.
   useEffect(() => {
     const e = actionErrorRef.current
     if (data && e?.kind === 'save' && !e.uncertain && e.dates && e.dates.length > 0) {
       addDroppedSave(e.year, e.month, e.dates, e.message)
-      setActionError(null)
+      setActionError((p) => (p === e ? null : p)) // clear only the error acted on
     }
   }, [data, addDroppedSave])
   const clearActionError = useCallback(() => setActionError(null), [])
@@ -439,16 +458,16 @@ export function useSkema(
               maxHours: body.maxHours,
             })
           } else {
-            failAction('save', result.error, batch.year, batch.month, batchDates(batch))
+            failAction('save', result.error, batch.year, batch.month, batchDates(batch), batch.isDropped?.())
           }
         } catch {
           // Non-JSON 422 — still a rejection; surface the raw text.
-          failAction('save', result.error, batch.year, batch.month, batchDates(batch))
+          failAction('save', result.error, batch.year, batch.month, batchDates(batch), batch.isDropped?.())
         }
         return { status: 'rejected', httpStatus: 422 }
       }
       // Everything else (400/401/403/404/409/5xx/network) — keep local edits, retry.
-      failAction('save', result.error, batch.year, batch.month, batchDates(batch))
+      failAction('save', result.error, batch.year, batch.month, batchDates(batch), batch.isDropped?.())
       return { status: 'failed', httpStatus: result.status, error: result.error }
     },
     [employeeId, failAction, succeedAction]

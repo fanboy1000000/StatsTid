@@ -1484,7 +1484,11 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(16_000) })
     vi.useRealTimers()
     expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument()
-    expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):/)).toHaveTextContent('Det er uvist, om ændringerne blev gemt')
+    // Two notices: "uvist" (the hung retry) and S1's own "ikke gemt", which the "uvist" report
+    // moved out of the single slot instead of overwriting it.
+    const texts = screen.getAllByText(/Kunne ikke gemme \(marts 2026\):/).map((el) => el.textContent ?? '')
+    expect(texts.some((t) => t.includes('Det er uvist, om ændringerne blev gemt'))).toBe(true)
+    expect(texts.some((t) => t.includes('Ændringerne er ikke gemt'))).toBe(true)
     expect(fetchLog.some((e) => e.startsWith('POST') && e.includes('/api/approval/send'))).toBe(false)
   })
 
@@ -1535,6 +1539,35 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
     vi.useRealTimers()
     expect(saveBodies).toHaveLength(2)
     expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):/)).toHaveTextContent('3. marts')
+  })
+
+  it('F: a save that fails LATE — after March was reloaded without waiting for it — leaves a persistent notice, not a clearable one', async () => {
+    // Red condition: against cb05d2dc the failure was filed by which month was on screen (March,
+    // again), so it sat in the one clearable slot after the hydration-time move had already run;
+    // the later save of another March day cleared it (the final assertion fails).
+    await renderLoaded()
+    const marchServer = monthData
+    monthAwareMock(() => marchServer, () => aprilFixture())
+    const held: Array<(r: unknown) => void> = []
+    let n = 0
+    saveResponder = () => (++n === 1 ? new Promise((resolve) => { held.push(resolve) }) : jsonResponse({}))
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ })) // S1 leaves (held)
+    await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+    fireEvent.click(screen.getByRole('button', { name: /Forrige/ })) // back to March
+    await act(async () => { await vi.advanceTimersByTimeAsync(16_000) }) // the bound expires; March reloads without S1
+    vi.useRealTimers()
+    await waitFor(() => expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument()) // March hydrated
+    expect(held).toHaveLength(1)
+    await act(async () => { held[0](jsonResponse({ error: 'late failure' }, 500)) }) // S1 fails now
+    expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):.*late failure/)).toHaveTextContent('Ændringerne er ikke gemt')
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 4'), { target: { value: '1' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // a save of ANOTHER March day succeeds
+    vi.useRealTimers()
+    expect(saveBodies).toHaveLength(2)
+    expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):.*late failure/)).toHaveTextContent('3. marts')
   })
 
   it('B: the "uvist" notice names the month of the save that HUNG, not the month on screen', async () => {
