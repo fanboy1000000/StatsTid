@@ -1,5 +1,6 @@
 using Npgsql;
 using StatsTid.SharedKernel.Models;
+using StatsTid.SharedKernel.Security;
 
 namespace StatsTid.Infrastructure;
 
@@ -37,7 +38,10 @@ public sealed class PrefetchedReportingLineDataSource : IReportingLineDataSource
     // (employeeId, relationship) → the single active line. The DB's partial-unique indexes
     // (uq_reporting_line_active_primary / _acting) guarantee at most one, so a dictionary is faithful.
     private readonly Dictionary<(string EmployeeId, string Relationship), ReportingLine> _lines;
-    private readonly Dictionary<string, bool> _userActive;
+    // S147 / TASK-14712 (T5c) — the two columns the acting-user rule reads, per user. Kept as raw facts
+    // (not a pre-decided bool) so IsActingUserAsync applies the ONE rule, DepartedSubject.IsDeparted,
+    // at the date it is asked about — the same call the live form makes, so the two cannot disagree.
+    private readonly Dictionary<string, (bool IsActive, DateOnly? EmploymentEndDate)> _userState;
     // absent_approver_id → their single active vikar (uq_manager_vikar_active guarantees at most one).
     private readonly Dictionary<string, ManagerVikar> _vikarByApprover;
 
@@ -70,13 +74,13 @@ public sealed class PrefetchedReportingLineDataSource : IReportingLineDataSource
 
     private PrefetchedReportingLineDataSource(
         Dictionary<(string, string), ReportingLine> lines,
-        Dictionary<string, bool> userActive,
+        Dictionary<string, (bool IsActive, DateOnly? EmploymentEndDate)> userState,
         Dictionary<string, ManagerVikar> vikarByApprover,
         HashSet<string> covered,
         IReportingLineDataSource fallback)
     {
         _lines = lines;
-        _userActive = userActive;
+        _userState = userState;
         _vikarByApprover = vikarByApprover;
         _covered = covered;
         _fallback = fallback;
@@ -127,11 +131,14 @@ public sealed class PrefetchedReportingLineDataSource : IReportingLineDataSource
         }
 
         // (2) Activity for every user in the Organisation. Deliberately NOT filtered to is_active —
-        //     the resolver asks "is this user active?" and must be able to hear "no".
-        var userActive = new Dictionary<string, bool>(StringComparer.Ordinal);
+        //     the resolver asks "is this user acting?" and must be able to hear "no".
+        //     S147 / TASK-14712 (T5c) — with the end date as well: a leaver past their last day is
+        //     still is_active during the 5-day grace, and must be heard as "not acting" (the same
+        //     two columns QueryUserActingAsync reads, decided by the same DepartedSubject rule).
+        var userState = new Dictionary<string, (bool IsActive, DateOnly? EmploymentEndDate)>(StringComparer.Ordinal);
         await using (var cmd = new NpgsqlCommand(
             """
-            SELECT u.user_id, u.is_active FROM users u
+            SELECT u.user_id, u.is_active, u.employment_end_date FROM users u
             JOIN organizations o ON o.org_id = u.primary_org_id
             WHERE o.materialized_path LIKE @pathPrefix ESCAPE '\'
             """, conn, tx))
@@ -139,7 +146,11 @@ public sealed class PrefetchedReportingLineDataSource : IReportingLineDataSource
             cmd.Parameters.AddWithValue("pathPrefix", pathParam);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
-                userActive[reader.GetString(0)] = reader.GetBoolean(1);
+            {
+                userState[reader.GetString(0)] = (
+                    reader.GetBoolean(1),
+                    reader.IsDBNull(2) ? null : reader.GetFieldValue<DateOnly>(2));
+            }
         }
 
         // (3) Active vikars covering asOf. The coverage predicate is the SAME one the per-question
@@ -168,8 +179,8 @@ public sealed class PrefetchedReportingLineDataSource : IReportingLineDataSource
 
         // Everything the activity query returned is, by construction, exactly the Organisation's
         // membership — which is the same scope the line and vikar queries used.
-        var covered = new HashSet<string>(userActive.Keys, StringComparer.Ordinal);
-        return new PrefetchedReportingLineDataSource(lines, userActive, vikarByApprover, covered, fallback);
+        var covered = new HashSet<string>(userState.Keys, StringComparer.Ordinal);
+        return new PrefetchedReportingLineDataSource(lines, userState, vikarByApprover, covered, fallback);
     }
 
     public Task<ReportingLine?> GetActiveLineAsync(string employeeId, string relationship, CancellationToken ct)
@@ -189,8 +200,20 @@ public sealed class PrefetchedReportingLineDataSource : IReportingLineDataSource
             _vikarByApprover.TryGetValue(approverId, out var vikar) ? vikar : null);
     }
 
-    public Task<bool> IsUserActiveAsync(string userId, CancellationToken ct)
-        => _covered.Contains(userId)
-            ? Task.FromResult(_userActive[userId])
-            : _fallback.IsUserActiveAsync(userId, ct);
+    /// <summary>
+    /// S147 / TASK-14712 (T5c) — the acting-user answer for a covered user, decided at
+    /// <paramref name="asOf"/> (the date the resolver hands in, not the build date) by
+    /// <see cref="DepartedSubject.IsDeparted(bool, DateOnly?, DateOnly)"/>, negated: the SAME call the
+    /// live form (<see cref="ReportingLineRepository.QueryUserActingAsync"/>) makes over the SAME two
+    /// columns, so the prefetched and live answers agree by construction for any date. Outside the
+    /// covered Organisation the question goes to live SQL, as before.
+    /// </summary>
+    public Task<bool> IsActingUserAsync(string userId, DateOnly asOf, CancellationToken ct)
+    {
+        if (!_covered.Contains(userId))
+            return _fallback.IsActingUserAsync(userId, asOf, ct);
+
+        var (isActive, employmentEndDate) = _userState[userId];
+        return Task.FromResult(!DepartedSubject.IsDeparted(isActive, employmentEndDate, asOf));
+    }
 }

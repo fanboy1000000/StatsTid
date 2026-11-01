@@ -34,9 +34,23 @@ public interface IReportingLineDataSource
     /// <c>effective_to IS NULL AND until_date &gt;= asOf</c> — INCLUSIVE ("til og med").</summary>
     Task<ManagerVikar?> GetActiveVikarByApproverAsync(string approverId, DateOnly asOf, CancellationToken ct);
 
-    /// <summary><c>users.is_active</c> for this user. False for an unknown user — the resolver treats
-    /// "not active" and "not present" identically, which is the fail-closed behaviour.</summary>
-    Task<bool> IsUserActiveAsync(string userId, CancellationToken ct);
+    /// <summary>
+    /// Whether this user is an <b>acting user</b> at <paramref name="asOf"/>: <c>users.is_active</c>
+    /// AND not past their recorded last day of employment, i.e. NOT
+    /// <see cref="StatsTid.SharedKernel.Security.DepartedSubject.IsDeparted(bool, DateOnly?, DateOnly)"/>.
+    /// False for an unknown user — the resolver treats "not acting" and "not present" identically,
+    /// which is the fail-closed behaviour.
+    ///
+    /// <para><b>S147 / TASK-14712 (QUAL-230 T5c; NR-10).</b> Was <c>IsUserActiveAsync</c>, which read
+    /// <c>is_active</c> alone. Under the owner's 5-day grace (OQ-2) a leaver stays <c>is_active</c>
+    /// until D+6 so that THEIR manager can still sign their final month; the grace is not meant to keep
+    /// the leaver in charge of anyone else. Every resolver leg that asks this question is a HOLDER of
+    /// authority over someone (an ACTING manager, a stand-in, a PRIMARY manager), so from the day after
+    /// their last day the departed holder is skipped exactly as a deactivated one always was, and
+    /// routing escalates. <paramref name="asOf"/> is the resolver's own <c>effectiveAsOf</c>, never a
+    /// second clock read (PAT-028).</para>
+    /// </summary>
+    Task<bool> IsActingUserAsync(string userId, DateOnly asOf, CancellationToken ct);
 }
 
 /// <summary>
@@ -63,6 +77,6 @@ public sealed class SqlReportingLineDataSource : IReportingLineDataSource
     public Task<ManagerVikar?> GetActiveVikarByApproverAsync(string approverId, DateOnly asOf, CancellationToken ct)
         => _vikarRepo.GetActiveByApproverAsync(_conn, approverId, asOf, _tx, ct);
 
-    public Task<bool> IsUserActiveAsync(string userId, CancellationToken ct)
-        => ReportingLineRepository.QueryUserActiveAsync(_conn, _tx, userId, ct);
+    public Task<bool> IsActingUserAsync(string userId, DateOnly asOf, CancellationToken ct)
+        => ReportingLineRepository.QueryUserActingAsync(_conn, _tx, userId, asOf, ct);
 }
