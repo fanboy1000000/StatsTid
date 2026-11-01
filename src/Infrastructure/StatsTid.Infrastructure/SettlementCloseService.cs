@@ -63,8 +63,10 @@ namespace StatsTid.Infrastructure;
 /// into two steps per the SPRINT-70 pinned contract:
 /// <list type="bullet">
 ///   <item><description><b>Step A (UNGATED leaver deactivation flip, R2/R12):</b> runs BEFORE the
-///   D13 gate check. Per leaver whose <c>employment_end_date</c> has PASSED on the Copenhagen
-///   business date (<c>end date &lt; today</c>; the end date is the LAST day employed, R1) and who
+///   D13 gate check. Per leaver whose <c>employment_end_date</c> lies more than the manager grace
+///   in the past on the Copenhagen business date (S147 / TASK-14710, OQ-2: due on <b>D+6</b>,
+///   <c>end date &lt; today − 5</c>, via <see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/>;
+///   it was D+1 before S147; the end date is the LAST day employed, R1) and who
 ///   is still <c>is_active = TRUE</c>: under the employee advisory lock, ONE predicate-guarded
 ///   UPDATE flips <c>is_active=false</c> + <c>end_date_deactivated=true</c> (provenance) AND bumps
 ///   <c>users.version</c> (ADR-018 D7), with the R1(e) <c>ReportingLineManagerDeactivated</c> side
@@ -433,7 +435,9 @@ public sealed class SettlementCloseService : BackgroundService
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Per leaver whose <c>employment_end_date</c> has PASSED on the Copenhagen business date and who
+    /// Per leaver whose <c>employment_end_date</c> is past the manager grace on the Copenhagen
+    /// business date (S147 / TASK-14710, OQ-2: on <b>D+6</b>, not D+1 — see
+    /// <see cref="IsDeactivationDue"/>) and who
     /// is still <c>is_active = TRUE</c>: under that leaver's R12 employee advisory lock, ONE
     /// predicate-guarded UPDATE (the FULL predicate re-evaluated in the UPDATE's WHERE) flips
     /// <c>is_active=false</c>, <c>end_date_deactivated=true</c> (lifecycle provenance) AND increments
@@ -453,6 +457,12 @@ public sealed class SettlementCloseService : BackgroundService
     /// </summary>
     private async Task ApplyDueDeactivationFlipsAsync(DateOnly copenhagenToday, CancellationToken ct)
     {
+        // S147 / TASK-14710 (QUAL-230 T5a point 1; OQ-2) — the flip is due on D+6, not D+1: the
+        // leaver's manager keeps a 5-calendar-day grace. Both SQL copies of the due predicate below
+        // bind this ONE cutoff (today − ManagerGraceCalendarDays) instead of computing a second date
+        // in SQL, and the in-lock re-check calls IsDeactivationDue, which reads the same helper.
+        var graceCutoff = EmploymentEndDateLifecycleWriter.GraceDeactivationCutoff(copenhagenToday);
+
         // Candidate list — a simple snapshot read; NOT a set-based bulk UPDATE (the per-employee
         // advisory lock + per-employee event payload force the per-leaver loop, R2).
         var dueLeavers = new List<string>();
@@ -463,11 +473,11 @@ public sealed class SettlementCloseService : BackgroundService
                 """
                 SELECT user_id FROM users
                 WHERE employment_end_date IS NOT NULL
-                  AND employment_end_date < @today
+                  AND employment_end_date < @graceCutoff
                   AND is_active = TRUE
                 ORDER BY user_id
                 """, enumConn);
-            cmd.Parameters.AddWithValue("today", copenhagenToday);
+            cmd.Parameters.AddWithValue("graceCutoff", graceCutoff);
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
                 dueLeavers.Add(reader.GetString(0));
@@ -521,13 +531,13 @@ public sealed class SettlementCloseService : BackgroundService
                            updated_at = NOW()
                      WHERE user_id = @id
                        AND employment_end_date IS NOT NULL
-                       AND employment_end_date < @today
+                       AND employment_end_date < @graceCutoff
                        AND is_active = TRUE
                     RETURNING version
                     """, conn, tx))
                 {
                     updateCmd.Parameters.AddWithValue("id", employeeId);
-                    updateCmd.Parameters.AddWithValue("today", copenhagenToday);
+                    updateCmd.Parameters.AddWithValue("graceCutoff", graceCutoff);
                     var result = await updateCmd.ExecuteScalarAsync(ct);
                     if (result is not long updatedVersion)
                     {
@@ -542,6 +552,13 @@ public sealed class SettlementCloseService : BackgroundService
                 // (4) R1(e) — the existing user-deactivation side-effect path, SAME tx: emit
                 // ReportingLineManagerDeactivated for each active line MANAGED by the leaver
                 // (mirrors the TASK-7002 endpoint / the S52 AdminEndpoints precedent).
+                //
+                // S147 / TASK-14710 (K-4; R-29 N-4) — this event and the flip event at (5) now
+                // fire on D+6, when the row really is deactivated; emitting "deactivated" for a row
+                // still active during the grace would be false. Ending a departed manager's
+                // AUTHORITY from D+1 is not this event's job: that is T5c's rule at the authority
+                // reads (TASK-14712, "is_active AND the end date has not passed"), reconstructable
+                // from EmployeeEmploymentEndDateSet plus that rule.
                 var managedLines = await _reportingLineRepo.GetDirectReportsAsync(conn, tx, employeeId, ct);
                 foreach (var line in managedLines)
                 {
@@ -560,6 +577,7 @@ public sealed class SettlementCloseService : BackgroundService
                 // (5) The flip event on employee-{id} (version-before/after; system actor) + the
                 // ADR-026 audit-projection row, SAME tx (mirrors the TASK-7002 endpoint pattern;
                 // the BackgroundService dispatch site resolves employee → primary_org_id itself).
+                // S147 / TASK-14710 (K-4): emitted on D+6, the day the flip lands (see (4)).
                 var flipEvent = new EmployeeEndDateDeactivationApplied
                 {
                     EmployeeId = employeeId,
@@ -744,11 +762,18 @@ public sealed class SettlementCloseService : BackgroundService
                         -- ACTIVE branch (R4 pin (a): a passed-end-date leaver — e.g. a flip-failed
                         -- one still is_active=TRUE — is EXCLUDED; it belongs to Step-A retry + the
                         -- leaver branch exclusively).
+                        -- S147 / TASK-14710 (K-2, OQ-2): the same exclusion now also covers the
+                        -- manager grace (D+1 .. D+5), when the leaver is still is_active=TRUE by
+                        -- design. A grace leaver is in NEITHER branch; Step A flips them on D+6 and
+                        -- termination settlement then runs through the LEAVER branch, so it is due
+                        -- from D+6 (it was D+1). No predicate change was needed here.
                         (u.is_active = TRUE
                          AND NOT (u.employment_end_date IS NOT NULL AND u.employment_end_date < @today))
                         OR
                         -- LEAVER branch (R3: keyed on the end date, never bare is_active=FALSE;
                         -- future-dated and manually-inactive-without-end-date users excluded).
+                        -- S147 (K-2): a lifecycle leaver reaches this branch from D+6 (Step A's
+                        -- grace flip); a manual deactivation can still end the grace early (K-6).
                         (u.is_active = FALSE
                          AND u.employment_end_date IS NOT NULL
                          AND u.employment_end_date < @today)
@@ -838,6 +863,9 @@ public sealed class SettlementCloseService : BackgroundService
     /// <list type="bullet">
     ///   <item><description><b>Active employees only</b> — særlige feriedage have no leaver/termination
     ///   settlement flow in this slice (the §26-termination interaction is a recorded non-goal, R12).
+    ///   S147 / TASK-14710 (K-3): "active" also excludes a passed end date, the VACATION ACTIVE
+    ///   branch's predicate shape — a leaver in the manager grace is still <c>is_active</c> but has
+    ///   left.
     ///   Candidate years run from the CALENDAR year of <c>employment_start_date</c> (floor
     ///   <see cref="CandidateYearFloor"/>) up to today's year. <b>DELIBERATELY NOT the S141 /
     ///   QUAL-168 ferieår mapping the VACATION pass uses</b> — særlige feriedage accrue over the
@@ -881,6 +909,14 @@ public sealed class SettlementCloseService : BackgroundService
                     @upper
                 ) AS gs(yr)
                 WHERE u.is_active = TRUE
+                  -- S147 / TASK-14710 (K-3, OQ-2) — a passed-end-date leaver is NOT an active
+                  -- employee here, the same predicate shape as the VACATION pass's ACTIVE branch.
+                  -- Under the manager grace a leaver stays is_active=TRUE for D+1 .. D+5, and this
+                  -- pass would otherwise enumerate someone who has already left as an ordinary
+                  -- active employee and settle their year as a plain YEAR_END. (Before S147 the
+                  -- same gap existed only between Copenhagen midnight and Step A's poll, or for a
+                  -- flip-failed leaver.)
+                  AND NOT (u.employment_end_date IS NOT NULL AND u.employment_end_date < @today)
                   -- TYPE-SCOPED anti-join (R6 / 8001 Step-5a) — a tuple is not-due when it holds a
                   -- non-REVERSED SPECIAL_HOLIDAY settlement row (or a bare-reversal not-due marker;
                   -- terminal). Scoped to SPECIAL_HOLIDAY so it neither suppresses nor is suppressed by
@@ -897,6 +933,7 @@ public sealed class SettlementCloseService : BackgroundService
             cmd.Parameters.AddWithValue("floor", CandidateYearFloor);
             cmd.Parameters.AddWithValue("upper", candidateUpperYear);
             cmd.Parameters.AddWithValue("type", SpecialHolidayType);
+            cmd.Parameters.AddWithValue("today", copenhagenToday); // S147 K-3 — the passed-end-date exclusion.
 
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
@@ -996,13 +1033,23 @@ public sealed class SettlementCloseService : BackgroundService
 
     /// <summary>
     /// The Step-A flip due-predicate (SPRINT-70 R2; R1 semantics): a deactivation flip is due iff the
-    /// user is still active AND <paramref name="employmentEndDate"/> (the LAST day employed) has
-    /// PASSED on the Copenhagen business date — <c>employment_end_date &lt; today</c>, so
-    /// end date == today ⇒ still employed (no flip), end date == today − 1 ⇒ due. A null end date is
-    /// never due (a manually-deactivated user with no end date is never lifecycle-flipped).
+    /// user is still active AND the manager grace after <paramref name="employmentEndDate"/> (the
+    /// LAST day employed) has passed on the Copenhagen business date.
+    ///
+    /// <para><b>S147 / TASK-14710 (QUAL-230 T5a point 1; owner ruling OQ-2).</b> The flip moved from
+    /// D+1 to <b>D+6</b>: the leaver's manager keeps
+    /// <see cref="EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays"/> (5) calendar days to
+    /// act on the final month, and HR takes over from day 6. So end date == today − 5 ⇒ not yet due
+    /// (the last grace day); end date == today − 6 ⇒ due. The decision is
+    /// <see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/> — the SAME helper the writer's
+    /// same-transaction path calls, so the two deactivation paths cannot disagree. The leaver's OWN
+    /// access still ends on D+1 — by the login check and the self-service write floor, which key on
+    /// the end date, not on this flag. A null end date is never due (a manually-deactivated user with
+    /// no end date is never lifecycle-flipped).</para>
     /// </summary>
     public static bool IsDeactivationDue(DateOnly? employmentEndDate, bool isActive, DateOnly copenhagenToday) =>
-        isActive && employmentEndDate is { } endDate && endDate < copenhagenToday;
+        isActive && employmentEndDate is { } endDate
+        && EmploymentEndDateLifecycleWriter.IsPastGrace(endDate, copenhagenToday);
 
     /// <summary>
     /// R6 ferieår resolution — the VACATION entitlement year containing <paramref name="endDate"/>

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Backend.Api.Contracts;
+using StatsTid.Backend.Api.Endpoints.Helpers;
 using StatsTid.Infrastructure;
 using StatsTid.Infrastructure.Outbox;
 using StatsTid.Infrastructure.Security;
@@ -615,10 +616,19 @@ public static class SkemaEndpoints
             // and drives the guard delta. Composes DailyNormCalculator (shared norm seam).
             StatsTid.Backend.Api.Services.ConsumptionCalculator consumptionCalculator,
             OrgScopeValidator scopeValidator,
+            // S147 / TASK-14710 (QUAL-230 T5a point 3) — the departed-subject write floor's date
+            // (read ONCE below, PAT-028) and its refusal log.
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
             var actor = context.GetActorContext();
+
+            // S147 / TASK-14710 (PAT-028) — THE single business-date read for this save; both
+            // DepartedSubjectWriteFloor checks below (the advisory pre-check and the in-lock
+            // re-check) use it.
+            var today = CopenhagenBusinessDate.Today(timeProvider);
 
             // Employee can only save own data
             if (actor.ActorRole == StatsTidRoles.Employee && employeeId != actor.ActorId)
@@ -694,15 +704,19 @@ public static class SkemaEndpoints
             // outside EmployeeConsumptionLock, so a deactivation that commits while this request
             // waits on the lock is invisible to it. The AUTHORITATIVE D3 floor is the in-lock
             // subject-state re-check inside the transaction below.
-            if (!user.IsActive &&
-                (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
-            {
-                return Results.Json(new
-                {
-                    error = "Access denied",
-                    reason = "Writes for a deactivated employee require LocalHR or above"
-                }, statusCode: 403);
-            }
+            //
+            // S147 / TASK-14710 (QUAL-230 T5a point 3; R-21, R-24; OQ-2) — the D3 test
+            // (`!IsActive && below LocalHR`) is REPLACED by the shared DepartedSubjectWriteFloor:
+            // refuse when the subject has DEPARTED (deactivated, OR their last day employed lies
+            // before today) AND (the actor is below LocalHR OR the actor IS the subject). Why: under
+            // the owner's 5-day manager grace a leaver stays is_active until D+6, so the old test
+            // would let a token issued on D keep saving the leaver's own month; their own access must
+            // end on D+1, whatever their role. HR saving for someone else who has left is unchanged.
+            // Same 403 body as before (D3's date-free sentence); the log names the arm that fired.
+            var advisoryFloorClause = DepartedSubjectWriteFloor.RefusingClause(user, actor, today);
+            if (advisoryFloorClause is not null)
+                return DepartedSubjectWriteFloor.Refusal(
+                    loggerFactory, actor, user.UserId, advisoryFloorClause, "POST /api/skema/{employeeId}/save");
 
             // Check approval period status
             var daysInMonth = DateTime.DaysInMonth(request.Year, request.Month);
@@ -1782,9 +1796,10 @@ public static class SkemaEndpoints
                     // the acquire above; without this re-read a still-live Employee token would
                     // write for a just-deactivated subject. Re-read is_active on THIS (conn, tx) —
                     // under the lock, seeing the winner's commit via the ReadCommitted pin — and
-                    // re-enforce the SAME D3 floor, same 403 shape as the pre-check. Only IsActive
-                    // is consulted here: the pre-tx `user` snapshot keeps feeding the agreement /
-                    // norm inputs exactly as before (this fix is access-control only).
+                    // re-enforce the SAME D3 floor, same 403 shape as the pre-check. Only the
+                    // subject's state is consulted here (IsActive, and since S147 / TASK-14710 the
+                    // end date the departed-subject floor reads): the pre-tx `user` snapshot keeps
+                    // feeding the agreement / norm inputs exactly as before (access-control only).
                     var lockedSubject = await userRepo.GetByIdIncludingTerminatedAsync(
                         conn, tx, employeeId, ct);
                     if (lockedSubject is null)
@@ -1794,17 +1809,20 @@ public static class SkemaEndpoints
                         await tx.RollbackAsync(ct);
                         return Results.NotFound(new { error = "Employee not found" });
                     }
-                    if (!lockedSubject.IsActive &&
-                        (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
+                    // S147 / TASK-14710 — the SAME DepartedSubjectWriteFloor as the pre-check
+                    // (departed subject AND (below LocalHR OR self)), on the in-lock row and the
+                    // handler's single `today`. The deactivation can still land while we wait on the
+                    // lock (a manual deactivation, a past-grace end date entered by HR, Step A on D+6);
+                    // the end-date arm needs no lock — it is a date already on the row.
+                    var lockedFloorClause = DepartedSubjectWriteFloor.RefusingClause(lockedSubject, actor, today);
+                    if (lockedFloorClause is not null)
                     {
                         // No write has been issued yet; rollback explicitly and refuse with the
                         // pre-check's exact 403 shape (one contract, whichever check fires).
                         await tx.RollbackAsync(ct);
-                        return Results.Json(new
-                        {
-                            error = "Access denied",
-                            reason = "Writes for a deactivated employee require LocalHR or above"
-                        }, statusCode: 403);
+                        return DepartedSubjectWriteFloor.Refusal(
+                            loggerFactory, actor, lockedSubject.UserId, lockedFloorClause,
+                            "POST /api/skema/{employeeId}/save (in-lock)");
                     }
 
                     // ── S136 / TASK-13603 — THE EMPLOYMENT-WINDOW GATE (ADR-040 D1–D3), IN-LOCK ────
@@ -2349,6 +2367,8 @@ public static class SkemaEndpoints
             EmployeeEntitlementEligibilityRepository eligibilityRepo,
             EntitlementConfigRepository entitlementConfigRepo,
             TimeProvider timeProvider,
+            // S147 / TASK-14710 — the departed-subject write floor's refusal log.
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -2391,6 +2411,19 @@ public static class SkemaEndpoints
             // dated, so on the boundary day the two calendars can pick different catalogs to
             // validate against.
             var today = CopenhagenBusinessDate.Today(timeProvider);
+
+            // S147 / TASK-14710 (QUAL-230 T5a point 3; R-24; OQ-2) — the departed-subject write
+            // floor, after the self check and the subject read, on the handler's single `today`
+            // (the read above). This route is self-only, so the floor reduces to "has the actor
+            // left?": a leaver's still-valid token cannot change their own preferences from the day
+            // after their last working day, whatever their role. The subject read above stays
+            // active-only: during the grace (D+1 .. D+5) the leaver is still active and reaches this
+            // floor; a deactivated self already answers 404 there, as before.
+            var floorClause = DepartedSubjectWriteFloor.RefusingClause(user, actor, today);
+            if (floorClause is not null)
+                return DepartedSubjectWriteFloor.Refusal(
+                    loggerFactory, actor, user.UserId, floorClause, "PUT /api/skema/{employeeId}/row-preferences");
+
             var prefAgreementCode = await userAgreementCodeRepo.GetByUserIdAtAsync(employeeId, today, ct)
                 ?? user.AgreementCode;
 

@@ -169,6 +169,10 @@ public static class ApprovalEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PeriodEmployeeApproved> auditMapper,
             AuditProjectionRepository auditRepo,
+            // S147 / TASK-14710 — the send command's departed-subject write floor: its date seam
+            // (read once inside the command, PAT-028) and its refusal log.
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -189,7 +193,8 @@ public static class ApprovalEndpoints
                 context.GetActorContext(), request.EmployeeId, monthStart, monthEnd,
                 new SendCommandServices(
                     approvalRepo, userRepo, userAgreementCodeRepo, scopeValidator, connectionFactory,
-                    timeEntryRepo, absenceRepo, workTimeRepo, outbox, auditMapper, auditRepo),
+                    timeEntryRepo, absenceRepo, workTimeRepo, outbox, auditMapper, auditRepo,
+                    timeProvider, loggerFactory),
                 ct);
         }).RequireAuthorization("EmployeeOrAbove")
         .Produces<PeriodActionResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
@@ -1580,6 +1585,9 @@ public static class ApprovalEndpoints
             IOutboxEnqueue outbox,
             IAuditProjectionMapper<PeriodEmployeeApproved> auditMapper,
             AuditProjectionRepository auditRepo,
+            // S147 / TASK-14710 — see the /send adapter: the command's departed-subject floor.
+            TimeProvider timeProvider,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -1627,7 +1635,8 @@ public static class ApprovalEndpoints
                 context.GetActorContext(), period.EmployeeId, period.PeriodStart, period.PeriodEnd,
                 new SendCommandServices(
                     approvalRepo, userRepo, userAgreementCodeRepo, scopeValidator, connectionFactory,
-                    timeEntryRepo, absenceRepo, workTimeRepo, outbox, auditMapper, auditRepo),
+                    timeEntryRepo, absenceRepo, workTimeRepo, outbox, auditMapper, auditRepo,
+                    timeProvider, loggerFactory),
                 ct);
         }).RequireAuthorization("EmployeeOrAbove")
         .Produces<PeriodActionResponse>(StatusCodes.Status200OK); // S116 / TASK-11600
@@ -1664,8 +1673,9 @@ public static class ApprovalEndpoints
 
             // S140 / TASK-14001 (PAT-028) — THE single business-date read for this reopen. Declared
             // at handler scope because BOTH of the Leader arm's authority checks need it (the pre-tx
-            // admission gate and the in-lock re-evaluation, which sit in different blocks); the
-            // Employee arm never consults a date. It was two separate clock reads before.
+            // admission gate and the in-lock re-evaluation, which sit in different blocks), and since
+            // S147 / TASK-14710 the Employee arm's departed-subject write floor reads it too. It was
+            // two separate clock reads before.
             // S142 / TASK-14203 — the COPENHAGEN calendar day, for the reason spelled out on approve.
             var today = CopenhagenBusinessDate.Today(timeProvider);
 
@@ -1688,6 +1698,27 @@ public static class ApprovalEndpoints
                 var (allowed2, reason2) = await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, ct);
                 if (!allowed2)
                     return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
+
+                // ── S147 / TASK-14710 (QUAL-230 T5a point 3; R-24; OQ-2) — the departed-subject
+                // write floor, AFTER the gate above and BEFORE the status check (access before state,
+                // the house order). The gate admits an Employee through the validator's own-data
+                // branch, which reads no subject, so until now a leaver's still-valid token could
+                // reopen their own month; under the 5-day manager grace (deactivation on D+6) it
+                // could do so for five more days. The subject read is AFTER the gate and ACTIVE-ONLY
+                // by design: during the grace (D+1 .. D+5) the leaver is still active and the floor's
+                // end-date arm refuses them; after D+6 no leaver token exists (login is refused from
+                // D+1, a token lives 480 minutes). A null read means the subject is not active, which
+                // the floor's role arm refuses for an Employee anyway, so it is refused here with the
+                // same body (fail-closed; this also covers a manual deactivation with no end date).
+                // The leader arm below is unchanged (R-32: TASK-14703's validator clause covers it).
+                var reopenSubject = await userRepo.GetByIdAsync(period.EmployeeId, ct);
+                var reopenFloorClause = reopenSubject is null
+                    ? DepartedSubjectWriteFloor.BelowLocalHrClause
+                    : DepartedSubjectWriteFloor.RefusingClause(reopenSubject, actor, today);
+                if (reopenFloorClause is not null)
+                    return DepartedSubjectWriteFloor.Refusal(
+                        loggerFactory, actor, period.EmployeeId, reopenFloorClause,
+                        "POST /api/approval/{periodId}/reopen (employee arm)");
 
                 if (period.Status != "EMPLOYEE_APPROVED")
                     return Results.Json(new { error = "Access denied", reason = "Employee can only reopen EMPLOYEE_APPROVED periods" }, statusCode: 403);
@@ -1940,7 +1971,11 @@ public static class ApprovalEndpoints
         WorkTimeProjectionRepository WorkTimeRepo,
         IOutboxEnqueue Outbox,
         IAuditProjectionMapper<PeriodEmployeeApproved> AuditMapper,
-        AuditProjectionRepository AuditRepo);
+        AuditProjectionRepository AuditRepo,
+        // S147 / TASK-14710 — the departed-subject write floor at (5a′): the command reads the
+        // Copenhagen date ONCE from this seam (PAT-028) and logs a refusal under the floor's category.
+        TimeProvider TimeProvider,
+        ILoggerFactory LoggerFactory);
 
     /// <summary>
     /// S127 / TASK-12703 — THE send command. Both routes end here: <c>POST /api/approval/send</c>
@@ -1974,6 +2009,11 @@ public static class ApprovalEndpoints
         SendCommandServices svc,
         CancellationToken ct)
     {
+        // S147 / TASK-14710 (PAT-028) — THE single business-date read for this send, before the
+        // transaction opens; the departed-subject write floor at (5a′) is its one consumer. Read here,
+        // in the command both adapters share, so send and employee-approve cannot differ.
+        var today = CopenhagenBusinessDate.Today(svc.TimeProvider);
+
         // ── (2) THE TRANSACTION — ISOLATION PINNED EXPLICITLY, NOT THE DEFAULT OVERLOAD ──────────
         //
         // READ COMMITTED (not RepeatableRead) is load-bearing, and the whole concurrency argument
@@ -2108,18 +2148,23 @@ public static class ApprovalEndpoints
         if (user is null)
             return Results.NotFound(new { error = "Employee not found" });
 
-        if (!user.IsActive &&
-            (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
+        // S147 / TASK-14710 (QUAL-230 T5a point 3; R-21, R-24; OQ-2) — the D3 test
+        // (`!IsActive && below LocalHR`) is REPLACED by the shared DepartedSubjectWriteFloor: refuse
+        // when the subject has DEPARTED (deactivated, OR their last day employed lies before
+        // `today`) AND (the actor is below LocalHR OR the actor IS the subject). Under the owner's
+        // 5-day manager grace a leaver stays is_active until D+6, so the old test would let a token
+        // issued on D send (or employee-approve) the leaver's own month; their own access must end on
+        // D+1, whatever their role. HR sending a leaver's month for them is unchanged.
+        var floorClause = DepartedSubjectWriteFloor.RefusingClause(user, actor, today);
+        if (floorClause is not null)
         {
             // Nothing has been written; the disposed tx rolls back. The reason string is the
             // writers' exact D3 contract (TimeEndpoints.cs / SkemaEndpoints.cs) — one string across
-            // every write surface, whichever check fires. It names termination STATUS, never a
-            // date (the S136 Reviewer-N1 "status oracle" residual, accepted as bounded).
-            return Results.Json(new
-            {
-                error = "Access denied",
-                reason = "Writes for a deactivated employee require LocalHR or above"
-            }, statusCode: 403);
+            // every write surface, whichever check fires (DepartedSubjectWriteFloor.DenyReason). It
+            // names termination STATUS, never a date (the S136 Reviewer-N1 "status oracle" residual,
+            // accepted as bounded); the server log names the arm that fired.
+            return DepartedSubjectWriteFloor.Refusal(
+                svc.LoggerFactory, actor, user.UserId, floorClause, "send command (POST /api/approval/send, employee-approve)");
         }
 
         // ── (5b) THE SOURCE-STATE GATE ───────────────────────────────────────────────────────────

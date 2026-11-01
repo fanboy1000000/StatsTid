@@ -54,6 +54,59 @@ namespace StatsTid.Infrastructure;
 /// </summary>
 public sealed class EmploymentEndDateLifecycleWriter
 {
+    /// <summary>
+    /// S147 / TASK-14710 (QUAL-230 T5a point 1; owner ruling OQ-2) — the leaver's MANAGER GRACE, in
+    /// <b>calendar</b> days (owner-confirmed): for this many days after a leaver's last working day the
+    /// leaver stays <c>is_active</c>, so their manager can still approve, reject or reopen the final
+    /// month as on any other day. The automatic switch-off (<c>is_active = FALSE</c>) therefore lands
+    /// on day 6, not day 1.
+    ///
+    /// <para><b>The three dates of a leaver's final month</b> (refinement R-27), with D = the last day
+    /// employed (<c>employment_end_date</c>, inclusive):</para>
+    /// <list type="bullet">
+    ///   <item><description><b>D+1</b> — the leaver's OWN access ends, whatever their role: login is
+    ///   refused (<c>AuthEndpoints</c>) and every own-record write is refused
+    ///   (<c>DepartedSubjectWriteFloor</c>, the <c>OrgScopeValidator</c> departed-self clause). Neither
+    ///   reads this constant: they key on "the end date has passed"
+    ///   (<see cref="StatsTid.SharedKernel.Security.DepartedSubject"/>).</description></item>
+    ///   <item><description><b>D+1 .. D+5</b> — the grace: still active, the manager acts as
+    ///   usual.</description></item>
+    ///   <item><description><b>D+6</b> — deactivated, by whichever path runs first: the Step-A poller
+    ///   (<c>SettlementCloseService.IsDeactivationDue</c> and its two SQL copies) or this writer's
+    ///   same-transaction path (<see cref="ComputeEndDateLifecycle"/>). Both read THIS constant through
+    ///   <see cref="IsPastGrace"/> / <see cref="GraceDeactivationCutoff"/>; there is no second copy of
+    ///   the number.</description></item>
+    /// </list>
+    ///
+    /// <para>Nothing stored moves with it: the month's deadline and the payroll export cutoff stay
+    /// month-end + 5 (<c>InstitutionalDeadlines</c>), the same for every employee.</para>
+    /// </summary>
+    public const int ManagerGraceCalendarDays = 5;
+
+    /// <summary>
+    /// S147 / TASK-14710 — the ONE pure deactivation-due test both deactivation paths call:
+    /// <c>true</c> iff <paramref name="today"/> (the Copenhagen business date, read once by the
+    /// caller — PAT-028) is past the manager grace that follows <paramref name="endDate"/> (the LAST
+    /// day employed). False on D .. D+5, true from D+6.
+    /// </summary>
+    /// <remarks>
+    /// Written as <c>endDate &lt; GraceDeactivationCutoff(today)</c>, which is the same day arithmetic
+    /// as <c>endDate.AddDays(ManagerGraceCalendarDays) &lt; today</c> but subtracts from
+    /// <paramref name="today"/> rather than adding to a stored date, so a far-future end date can never
+    /// overflow <see cref="DateOnly.MaxValue"/>. The SQL copies bind the same cutoff as a parameter, so
+    /// C# and SQL share one calculation.
+    /// </remarks>
+    public static bool IsPastGrace(DateOnly endDate, DateOnly today) =>
+        endDate < GraceDeactivationCutoff(today);
+
+    /// <summary>
+    /// S147 / TASK-14710 — the cutoff the SQL copies of <see cref="IsPastGrace"/> bind as a parameter
+    /// (<c>employment_end_date &lt; @cutoff</c>): <paramref name="today"/> minus
+    /// <see cref="ManagerGraceCalendarDays"/>. An end date strictly before it is past the grace.
+    /// </summary>
+    public static DateOnly GraceDeactivationCutoff(DateOnly today) =>
+        today.AddDays(-ManagerGraceCalendarDays);
+
     private readonly UserRepository _userRepo;
     private readonly ReportingLineRepository _reportingLineRepo;
     private readonly Outbox.IOutboxEnqueue _outbox;
@@ -89,8 +142,9 @@ public sealed class EmploymentEndDateLifecycleWriter
     /// <param name="actorRole">The operator's role.</param>
     /// <param name="actorOrgId">The operator's primary org (the audit-projection actor context).</param>
     /// <param name="correlationId">The request correlation id threaded onto the events.</param>
-    /// <param name="copenhagenToday">The Copenhagen business date (the R1 "passed" comparison
-    /// authority — the caller resolves it from its injected TimeProvider; PAT-008).</param>
+    /// <param name="copenhagenToday">The Copenhagen business date (the R1 grace comparison
+    /// authority, <see cref="IsPastGrace"/> — the caller resolves it from its injected TimeProvider;
+    /// PAT-008).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The version pair + the lifecycle outcome (old/new tuple).</returns>
     /// <exception cref="KeyNotFoundException">No <c>users</c> row exists at all (caller maps 404).</exception>
@@ -231,16 +285,20 @@ public sealed class EmploymentEndDateLifecycleWriter
     /// which TASK-7102 will refactor to delegate to this writer — the unit parity test pins the
     /// two equal over the full input grid during the transitional window). Returns the
     /// (<c>is_active</c>, <c>end_date_deactivated</c>) tuple to persist. <c>employment_end_date</c>
-    /// is the LAST day employed, so "passed" means <paramref name="copenhagenToday"/> is STRICTLY
-    /// after it. The R1(a)–(d) mapping:
-    /// (a) set, already-passed, active row → deactivate with provenance;
-    /// (b) set, future-dated (incl. == today) → store only, no flip (the Step-A poller flips);
+    /// is the LAST day employed. <b>S147 / TASK-14710 (OQ-2):</b> the flip is due only once the
+    /// manager grace has passed — <see cref="IsPastGrace"/>, true from D+6 (more than
+    /// <see cref="ManagerGraceCalendarDays"/> calendar days after the end date), the SAME helper the
+    /// Step-A poller calls. Before S147 it was due from D+1. The R1(a)–(d) mapping:
+    /// (a) set, past the grace, active row → deactivate with provenance in the same transaction;
+    /// (b) set, future-dated, == today, or within the grace (D+1 .. D+5) → store only, no flip (the
+    ///     Step-A poller flips on D+6);
     /// (c) clear → reactivate ONLY on lifecycle provenance (then reset it); a manually-deactivated
     ///     user keeps <c>is_active=false</c>; provenance always resets;
     /// (d) set on a manually-inactive row → record the date, claim NO provenance;
     /// correction on a lifecycle-deactivated row re-evaluates the SAME rule deterministically
-    /// (still-passed → stays deactivated; unpassed → reactivate + reset — the S70 TASK-7002
-    /// accepted deviation).
+    /// (still past the grace → stays deactivated; not past it — future, today, or a correction INTO
+    /// the grace → reactivate + reset, and the poller re-flips on the new D+6; the S70 TASK-7002
+    /// accepted deviation, now on the grace rule).
     /// </summary>
     public static (bool IsActive, bool EndDateDeactivated) ComputeEndDateLifecycle(
         DateOnly? newEndDate, bool oldIsActive, bool oldEndDateDeactivated, DateOnly copenhagenToday)
@@ -253,21 +311,24 @@ public sealed class EmploymentEndDateLifecycleWriter
             return oldEndDateDeactivated ? (true, false) : (oldIsActive, false);
         }
 
-        var passed = copenhagenToday > newEndDate.Value;
+        // S147 / TASK-14710 — the one grace helper (D+6), shared with Step A's IsDeactivationDue.
+        var pastGrace = IsPastGrace(newEndDate.Value, copenhagenToday);
 
         if (oldIsActive)
         {
-            // R1(a) already-passed → same-tx deactivate with provenance;
-            // R1(b) future-dated (incl. endDate == today: still the last EMPLOYED day) → no flip.
-            return passed ? (false, true) : (true, false);
+            // R1(a) past the grace → same-tx deactivate with provenance;
+            // R1(b) future-dated, endDate == today (still the last EMPLOYED day), or within the
+            // manager grace (D+1 .. D+5) → store only; the Step-A poller flips on D+6.
+            return pastGrace ? (false, true) : (true, false);
         }
 
         if (oldEndDateDeactivated)
         {
             // Correction on a lifecycle-deactivated row: deterministic re-evaluation of the
-            // SAME rule. Still-passed → stays deactivated (provenance kept); unpassed → the
-            // lifecycle basis is gone → reactivate + reset (the Step-A poller re-flips later).
-            return passed ? (false, true) : (true, false);
+            // SAME rule. Still past the grace → stays deactivated (provenance kept); otherwise
+            // (a future date, today, or a correction INTO the grace) the lifecycle basis is gone
+            // → reactivate + reset (the Step-A poller re-flips on the corrected D+6).
+            return pastGrace ? (false, true) : (true, false);
         }
 
         // R1(d) manually-inactive: record the date, claim NO provenance, leave is_active alone.
