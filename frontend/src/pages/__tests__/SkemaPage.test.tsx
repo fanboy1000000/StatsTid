@@ -1444,7 +1444,7 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
     expect(saveBodies).toHaveLength(1) // nothing replayed
   })
 
-  it('F: a month load that gives up waiting for a hung save says "uvist" and names the month of that save', async () => {
+  it('F: a month load that gives up waiting for a hung save says "uvist" (here the hung save\'s month and the month on screen coincide, so the naming itself is pinned by the flush test below)', async () => {
     // Red condition: against 782e2285 the load's wait gave up silently: April simply appeared and
     // nothing told the person that March's last save may not be on the server (no alert at all).
     await renderLoaded()
@@ -1461,6 +1461,107 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
     const alert = screen.getByText(/Kunne ikke gemme \(marts 2026\):/)
     expect(alert).toHaveTextContent('Serveren svarede ikke inden for 15 sekunder')
     expect(alert).toHaveTextContent('Det er uvist, om ændringerne blev gemt')
+  })
+
+  it('F: a retry that HANGS after an in-flight save failed is bounded too — "uvist" after the bound, the lock released', async () => {
+    // Red condition: against c51a2012 `settledOk && (await fired)` skipped awaiting the retry
+    // when the in-flight save had failed, so the flush returned at once: no "uvist", and the
+    // hung retry's tracking was never released (the first assertion after Godkend's wait fails:
+    // the grid is already unlocked and the alert says "Ændringerne er ikke gemt").
+    await renderLoaded()
+    const held: Array<(r: unknown) => void> = []
+    let n = 0
+    saveResponder = () => (++n === 1 ? new Promise((resolve) => { held.push(resolve) }) : new Promise(() => {}))
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // S1 leaves (held)
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' })) // flush waits for S1
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    await act(async () => { held[0](jsonResponse({ error: 'offline' }, 500)) }) // S1 fails → the flush retries; the retry hangs
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    expect(saveBodies).toHaveLength(2)
+    expect(screen.queryByLabelText('Udvikling dag 3')).toBeNull() // still locked, waiting for the retry
+    await act(async () => { await vi.advanceTimersByTimeAsync(16_000) })
+    vi.useRealTimers()
+    expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument()
+    expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):/)).toHaveTextContent('Det er uvist, om ændringerne blev gemt')
+    expect(fetchLog.some((e) => e.startsWith('POST') && e.includes('/api/approval/send'))).toBe(false)
+  })
+
+  it('F: a hung save is reported by the FIRST month load only — a second load, even after dismissal, does not report it again', async () => {
+    // Red condition: against c51a2012 the load's own bound lapsed before the queue's, the notice
+    // was given without marking the save, and the queue then registered it as hung — so the NEXT
+    // load reported the same save again (the final assertion fails).
+    await renderLoaded()
+    const marchServer = monthData
+    monthAwareMock(() => marchServer, () => aprilFixture())
+    saveResponder = () => new Promise(() => {}) // never answers
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ })) // sends the pending edit now; April's load waits
+    await act(async () => { await vi.advanceTimersByTimeAsync(16_000) })
+    vi.useRealTimers()
+    await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
+    const alert = screen.getByText(/Kunne ikke gemme \(marts 2026\):/)
+    expect(alert).toHaveTextContent('Det er uvist, om ændringerne blev gemt')
+    fireEvent.click(within(alert.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Luk besked' }))
+    expect(screen.queryByText(/Kunne ikke gemme \(marts 2026\):/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Forrige/ })) // a second load
+    await waitFor(() => expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument()) // March loaded
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    expect(screen.queryByText(/Kunne ikke gemme \(marts 2026\):/)).toBeNull()
+  })
+
+  it('F: a save that fails with its month back on screen (March → April → March before it answered) leaves a PERSISTENT notice — a later save of another March day does not clear it', async () => {
+    // Red condition: against c51a2012 the failure sat in the one clearable slot (March was on
+    // screen when it failed); the March reload dropped its re-queued edit, and the later save of
+    // another day cleared the warning, so the dropped day was lost without a trace.
+    await renderLoaded()
+    const marchServer = monthData
+    monthAwareMock(() => marchServer, () => aprilFixture())
+    const held: Array<(r: unknown) => void> = []
+    let n = 0
+    saveResponder = () => (++n === 1 ? new Promise((resolve) => { held.push(resolve) }) : jsonResponse({}))
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ })) // S1 leaves (held)
+    fireEvent.click(screen.getByRole('button', { name: /Forrige/ })) // back to March before S1 answers
+    await waitFor(() => expect(held).toHaveLength(1))
+    await act(async () => { held[0](jsonResponse({ error: 'offline' }, 500)) })
+    await waitFor(() => expect(screen.getByLabelText('Udvikling dag 3')).toBeInTheDocument()) // March reloaded
+    expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):/)).toHaveTextContent('3. marts')
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 4'), { target: { value: '1' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // a save of ANOTHER March day succeeds
+    vi.useRealTimers()
+    expect(saveBodies).toHaveLength(2)
+    expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):/)).toHaveTextContent('3. marts')
+  })
+
+  it('B: the "uvist" notice names the month of the save that HUNG, not the month on screen', async () => {
+    // Kind B (it passes against c51a2012 too; it pins the naming that the load pin cannot).
+    // Red conditions (mutation, run in S147 fix-up 1): reportUnanswered(null) in flushBounded
+    // makes the alert say "april 2026" and this test fails.
+    await renderLoaded()
+    const marchServer = monthData
+    monthAwareMock(() => marchServer, () => aprilFixture())
+    let n = 0
+    saveResponder = () => (++n === 1 ? new Promise(() => {}) : jsonResponse({})) // March's save hangs; April's answers
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '2' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // March's save leaves and hangs
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(16_000) }) // April loads; the load reported March
+    vi.useRealTimers()
+    await screen.findByRole('button', { name: 'Registrér arbejdstid 2026-04-01' })
+    fireEvent.click(within(screen.getByText(/Kunne ikke gemme \(marts 2026\):/).closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Luk besked' }))
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Udvikling dag 3'), { target: { value: '1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Godkend måned' })) // the flush still waits for March's hung save
+    await act(async () => { await vi.advanceTimersByTimeAsync(16_000) })
+    vi.useRealTimers()
+    const alert = screen.getByText(/Kunne ikke gemme \(marts 2026\):/)
+    expect(alert).toHaveTextContent('Det er uvist, om ændringerne blev gemt')
+    expect(screen.queryByText(/Kunne ikke gemme \(april 2026\):/)).toBeNull()
   })
 
   it('F: March\'s dropped-save notice survives a later April failure and an April success (the reviewer\'s reproduction)', async () => {
@@ -1489,7 +1590,7 @@ describe('SkemaPage — QUAL-241 fix-up 3: envelopes, ordering, locks', () => {
     expect(screen.getByText(/Kunne ikke gemme \(marts 2026\):/)).toBeInTheDocument()
     // Dismissing removes it.
     const marchAlert = screen.getByText(/Kunne ikke gemme \(marts 2026\):/).closest('[role="alert"]') as HTMLElement
-    fireEvent.click(within(marchAlert).getByRole('button'))
+    fireEvent.click(within(marchAlert).getByRole('button', { name: 'Luk besked' }))
     expect(screen.queryByText(/Kunne ikke gemme \(marts 2026\):/)).toBeNull()
   })
 

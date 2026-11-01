@@ -288,6 +288,21 @@ export function useSkema(
       setActionError(null)
     }
   }, [actionError, year, month, addDroppedSave])
+  // Every month load that lands re-hydrates the page, which drops the edits a failed save had
+  // re-queued. So a retryable save warning (one with days, not an "uvist" one) must not stay in the
+  // clearable slot across a hydration, even for the SAME month (March → April → March while the save
+  // was still in flight): it becomes a persistent notice then.
+  const actionErrorRef = useRef(actionError)
+  useLayoutEffect(() => {
+    actionErrorRef.current = actionError
+  }, [actionError])
+  useEffect(() => {
+    const e = actionErrorRef.current
+    if (data && e?.kind === 'save' && !e.uncertain && e.dates && e.dates.length > 0) {
+      addDroppedSave(e.year, e.month, e.dates, e.message)
+      setActionError(null)
+    }
+  }, [data, addDroppedSave])
   const clearActionError = useCallback(() => setActionError(null), [])
 
   const latestDataRequestId = useRef(0)

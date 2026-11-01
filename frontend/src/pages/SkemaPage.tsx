@@ -561,15 +561,21 @@ export function SkemaPage() {
   /** Saves whose queue bound passed while they were still unanswered (oldest first), keyed by an
       identity token; removed when the save finally settles or once a notice has named it. */
   const hungSavesRef = useRef<Map<object, MonthEnv>>(new Map())
+  /** Serial number of the latest queued save, and the highest one a load notice has already
+      covered: a save queued up to that point is never reported again by a later load, even when
+      its own queue bound lapses after the notice was given. */
+  const saveSerialNoRef = useRef(0)
+  const reportedUpToRef = useRef(0)
   const saveSerial = useCallback(
     (batch: SaveBatch) => {
+      const serial = ++saveSerialNoRef.current
       const prev = saveTailRef.current
       const run = prev.then(() => saveBatch(batch))
       const token = {}
       saveTailRef.current = prev
         .then(() => waitBounded(run, SAVE_QUEUE_WAIT_MS))
         .then((answered) => {
-          if (!answered) hungSavesRef.current.set(token, { year: batch.year, month: batch.month })
+          if (!answered && serial > reportedUpToRef.current) hungSavesRef.current.set(token, { year: batch.year, month: batch.month })
         })
       const forget = () => { hungSavesRef.current.delete(token) }
       run.then(forget, forget)
@@ -601,6 +607,7 @@ export function SkemaPage() {
       if (hung) reportUnanswered(hung)
       else if (!answered) {
         const [live] = [...cellSavesInFlightRef.current.values(), ...workTimeSavesInFlightRef.current.values()]
+        reportedUpToRef.current = saveSerialNoRef.current // every save queued so far is now reported
         reportUnanswered(live ?? null)
       }
     }
@@ -758,7 +765,8 @@ export function SkemaPage() {
       const before = new Set(workTimeSavesInFlightRef.current.keys())
       const fired = fireWorkTimeSave(dates)
       for (const [pr, env] of workTimeSavesInFlightRef.current) if (!before.has(pr)) tracked.set(pr, env)
-      return settledOk && (await fired)
+      const firedOk = await fired // always awaited (never short-circuited): a hung retry stays bounded
+      return settledOk && firedOk
     })
   }, [fireWorkTimeSave, flushBounded])
 
@@ -985,7 +993,8 @@ export function SkemaPage() {
       const before = new Set(cellSavesInFlightRef.current.keys())
       const fired = fireCellSave(pending)
       for (const [pr, env] of cellSavesInFlightRef.current) if (!before.has(pr)) tracked.set(pr, env)
-      return settledOk && (await fired)
+      const firedOk = await fired // always awaited (never short-circuited): a hung retry stays bounded
+      return settledOk && firedOk
     })
   }, [fireCellSave, flushBounded])
 
