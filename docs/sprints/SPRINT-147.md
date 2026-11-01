@@ -87,8 +87,8 @@ Artifacts: `.claude/reviews/PLAN-s147-{codex,reviewer}-c{1,2,3}.md`, `PLAN-s147-
 | TASK-14706 / 14706-T, TASK-14707 | 2a | rule-engine, cross-domain / test-qa; ux (stacked) | QUAL-234 interim, "not checked" (T7) | **merged**: 14706 `48a1ba25` (GATE green), REGEN `93698d1f`, 14707 `615f3ee5` (with fix-up 1; frontend GATE green); Docker facts CI-pending (CI-W2) |
 | TASK-14708 / 14708-T | 2a | rule-engine, cross-domain / test-qa | QUAL-231, one vocabulary; sick days credited (T3a + T3b) | **merged** `7cc6e65e` + merge fix-up `4653e5ed` (GATE green; REGEN no drift; marker `weekly-timeline-v2`); Docker facts CI-pending (CI-W2) |
 | TASK-14709 | 2a | ux | QUAL-231, the dead frontend copy (+ addendum A-1, the alert vocabulary) | **merged** `9de1ae79` (with fix-up 1); frontend GATE green (vitest 81 files / 1013 tests) |
-| TASK-14710 / 14710-T, TASK-14711 | 2b | backend-infrastructure, cross-domain / test-qa; ux (stacked) | QUAL-230 T5a: the 5-day grace, login, own-write floor, project-route retirement | planned |
-| TASK-14712 / 14712-T | 2b | backend-infrastructure / test-qa | QUAL-230 T5c: a departed approver | planned |
+| TASK-14710 / 14710-T, TASK-14711 | 2b | backend-infrastructure, cross-domain / test-qa; ux (stacked) | QUAL-230 T5a: the 5-day grace, login, own-write floor, project-route retirement | **dispatched 2026-11-01** (14710 first; 14710-T on its branch when it returns; then REGEN and 14711) |
+| TASK-14712 / 14712-T | 2b | backend-infrastructure / test-qa | QUAL-230 T5c: a departed approver | **dispatched 2026-11-01** (14712 first; the security consult and 14712-T on its branch when it returns) |
 | TASK-14713 / 14713-T, TASK-14714 | 3 | backend-infrastructure, cross-domain / test-qa; ux (stacked) | QUAL-230 T5b: HR only from day 6 | planned |
 | TASK-14715 / 14715-T | 4a | payroll-integration / test-qa | SEC-054 step 1: the case-3a month paid untracked | planned |
 | TASK-14716 / 14716-T | 4b | payroll-integration, cross-domain / test-qa | SEC-054 step 2: retire the raw routes | planned |
