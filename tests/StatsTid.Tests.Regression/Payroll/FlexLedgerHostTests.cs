@@ -507,18 +507,25 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // AC-C3 (b) — a first export before the ledger start is refused
+    // AC-C3 (b) — a first export before the ledger start is paid, flex not tracked (S147 OQ-3 (i))
     // ═════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// AC-C3 (b) (kind F, Docker). The ledger starts in June; an export of the UNRECORDED month April is refused 409
-    /// <c>payroll-export-out-of-order</c> naming the ledger start (<c>2026-06</c>), with a fixed sentence (no employee id), and
-    /// nothing was calculated, written or exported: one record only (June's), no manifest, no rule-engine call.
+    /// AC-C3 (b) (kind F, Docker). The ledger starts in June; an export of the UNRECORDED month April (approved, no recorded hours,
+    /// so no lines) is no longer refused. // S147 OQ-3 (i): re-pinned from S146's 409 <c>payroll-export-out-of-order</c> by the
+    /// owner's ruling (SEC-054 step 1): it answers 200 with the "flex not tracked" note naming the ledger start (<c>2026-06</c>),
+    /// UNTRACKED with null balances, and, having no lines, writes nothing: one record only (June's), no event.
+    /// (The case with lines, the re-run and the zero-line follow-ups are pinned in <c>FlexLedgerCase3aHostTests</c>.)
     ///
-    /// <para><b>Red conditions.</b> Pre-S146 April simply exported (200, a second record): the status assertion fails.</para>
+    /// <para>R pin (fix-up 1, R-F2; "holds today"): the calculation's proof is stored even though the export writes nothing:
+    /// exactly one <c>segment_manifests</c> row, and the engine saw exactly one timeline call (the calculation's manifest is
+    /// persisted before the export, ADR-016 D10's QUAL-205 footnote).</para>
+    ///
+    /// <para><b>Red conditions.</b> On <c>1185624f</c> April is refused 409 <c>payroll-export-out-of-order</c>: the status
+    /// assertion fails. A fix that wrote an empty April record trips the record-count assertion.</para>
     /// </summary>
     [Fact]
-    public async Task Export_UnrecordedMonthBeforeLedgerStart_Returns409_OutOfOrder_NamingTheStart()
+    public async Task Export_UnrecordedMonthBeforeLedgerStart_Returns200Untracked_NamingTheStart_WritesNothing()
     {
         var employeeId = await NewEmployeeAsync("C3B");
         await _fx.SeedLedgerRecordAsync(employeeId, Jun, closing: 1m);
@@ -527,10 +534,18 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
 
         var response = await _fx.CalculateAndExportMonthAsync(employeeId, Apr);
 
-        AssertRefusal(response, HttpStatusCode.Conflict, "payroll-export-out-of-order", employeeId, month: "2026-06");
+        AssertStatus(HttpStatusCode.OK, response);
+        var result = ReadResult(response.Json);
+        Assert.Equal("UNTRACKED", result.FlexProvenance);
+        Assert.Null(result.OpeningFlexBalance);
+        Assert.Null(result.ClosingFlexBalance);
+        using (var doc = JsonDocument.Parse(response.Json))
+            Assert.Equal("flex not tracked: the month precedes the ledger start 2026-06", Str(doc.RootElement, "flexNote"));
         Assert.Equal(1, await _fx.CountRecordsAsync(employeeId));
-        Assert.Equal(0, await _fx.CountManifestsAsync(employeeId));
-        Assert.Equal(0, _fx.Engine.CallCountFor(employeeId));
+        Assert.Null(await _fx.ReadRecordAsync(employeeId, Apr));
+        Assert.Equal(0, await _fx.CountExportEventsAsync(employeeId));
+        Assert.Equal(1, await _fx.CountManifestsAsync(employeeId));
+        Assert.Single(_fx.Engine.TimelineCalls, c => c.EmployeeId == employeeId);
     }
 
     // ═════════════════════════════════════════════════════════════════════

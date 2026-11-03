@@ -769,8 +769,8 @@ public sealed class PeriodCalculationService
     /// registered);</item>
     /// <item>the <b>opening flex balance</b> (S146 / TASK-14605, R-14): derived from the recorded ledger by
     /// <see cref="FlexLedgerOpening.Derive"/> for a month holding an EMPLOYED day →
-    /// <see cref="FlexLedgerRefusalException"/>, a 409 (<c>payroll-export-out-of-order</c> or
-    /// <c>payroll-prior-month-not-recorded</c>), or <see cref="InvalidOperationException"/> when no
+    /// <see cref="FlexLedgerRefusalException"/>, a 409 (<c>payroll-prior-month-not-recorded</c> or
+    /// <c>payroll-prior-month-stale</c>), or <see cref="InvalidOperationException"/> when no
     /// <see cref="IFlexLedgerReader"/> is registered;</item>
     /// <item>the <b>hours read</b> (<see cref="IRecordedHoursReader.ReadCurrentAsync"/>).</item>
     /// </list>
@@ -885,8 +885,9 @@ public sealed class PeriodCalculationService
     /// EMPLOYED (R-37). <see cref="FlexLedgerOpening.Derive(DateOnly, IReadOnlyList{FlexLedgerRecord}, IReadOnlyList{EmploymentWindow})"/>
     /// walks the recorded chain from S to P before it derives M (S147 TASK-14700, R-2), so this is where both
     /// calculating routes, and every re-run or correction of a later month, refuse a month whose chain is stale. A
-    /// refusal throws <see cref="FlexLedgerRefusalException"/> (<c>payroll-export-out-of-order</c>,
-    /// <c>payroll-prior-month-not-recorded</c> or <c>payroll-prior-month-stale</c>) before any rule call; a missing
+    /// refusal throws <see cref="FlexLedgerRefusalException"/> (<c>payroll-prior-month-not-recorded</c> or
+    /// <c>payroll-prior-month-stale</c>) before any rule call; a month before the ledger start is not refused but
+    /// opens <c>UNTRACKED</c> (S147 TASK-14715, case 3a as well as 3b); a missing
     /// reader throws <see cref="InvalidOperationException"/> (<see cref="RequireFlexLedgerReader"/>). M is the
     /// calendar month of the period start, the month the export record is keyed by.
     /// </summary>

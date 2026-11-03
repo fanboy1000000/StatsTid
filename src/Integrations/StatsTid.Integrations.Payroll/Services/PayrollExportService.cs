@@ -115,7 +115,12 @@ public sealed class PayrollExportService
     /// <see cref="FlexLedgerWrite"/>, so a month with an EMPLOYED day but no lines still writes its record (lines
     /// empty, balances set, corrections-only from then on). The empty line set hashes like any other line set through
     /// <see cref="PayrollExportManifest.ComputeContentHash"/> (the canonical JSON <c>[]</c>), defined once there. Nothing
-    /// is delivered for it (no lines).</description></item>
+    /// is delivered for it (no lines). The exception (S147 TASK-14715, R-17): an <c>UNTRACKED</c> month with no lines
+    /// and no record hands off neither lines nor a closing, so no record is written (ADR-034 D3). It still runs every
+    /// check above in the same transaction (the ledger lock, the recheck, the previous month's <c>FOR SHARE</c>, the
+    /// APPROVED <c>FOR UPDATE</c> re-assert with the four-eyes checkpoint), and only then, finding no record under the
+    /// lock, skips the insert, the event, the audit row and the delivery; the transaction commits having written
+    /// nothing, and the result is <c>Success = true</c> with no export id.</description></item>
     /// <item><description><b>The same-hash no-op</b> (R-16) additionally compares the derived (opening,
     /// provenance) and the computed closing with the recorded triple; any difference is the existing
     /// <see cref="PayrollExportConflictException"/> ("the balance changed; use a correction"). <c>UNTRACKED</c>
@@ -153,9 +158,11 @@ public sealed class PayrollExportService
             .ToList();
 
         // S146 TASK-14605 (R-3): the calculating route's record identity. Every line it sends belongs to that one
-        // (employee, year, month); a month with an EMPLOYED day but no lines still gets its record (an empty group).
+        // (employee, year, month); a month with an EMPLOYED day but no lines still gets its record (an empty group),
+        // except a record-less UNTRACKED one (S147 TASK-14715, below).
         var flex = context.FlexLedger;
         ExportGroupKey? flexKey = null;
+        var untrackedZeroLine = false;
         if (flex is not null)
         {
             var key = new ExportGroupKey(flex.EmployeeId, flex.Year, flex.Month);
@@ -177,7 +184,16 @@ public sealed class PayrollExportService
                     "a recorded closing must link the calculation that produced it (ADR-016 D10). Nothing was written.");
             }
             if (groups.Count == 0)
+            {
                 groups.Add((key, Array.Empty<PayrollExportLine>()));
+
+                // S147 TASK-14715 (SEC-054 step 1; owner OQ-3 remedy (i), R-17; fix-up 1, R-F1) — a month before the
+                // ledger start with no lines (UNTRACKED) hands payroll nothing: no lines, and no closing for the next
+                // month, because its flex is not tracked. When it also has no record, ADR-034 D3's own rule applies:
+                // nothing handed off, no record. That is decided INSIDE the transaction below, after the same checks
+                // every calculating export runs, so only the write is skipped (see the record-less branch in the loop).
+                untrackedZeroLine = flex.IsUntracked;
+            }
             flexKey = key;
         }
 
@@ -240,6 +256,21 @@ public sealed class PayrollExportService
                 if (context.PeriodId is { } periodId)
                 {
                     await AssertPeriodApprovedForUpdateAsync(conn, tx, periodId, key, ct);
+                }
+
+                // S147 TASK-14715 (R-17; fix-up 1, R-F1) — the record-less UNTRACKED zero-line month. It has passed every
+                // check above that any calculating export runs, in the same order and with the same refusals: the ledger
+                // lock, the under-lock recheck, the previous month's FOR SHARE recheck, and this month's APPROVED
+                // FOR UPDATE re-assert with the four-eyes checkpoint. Only the write is skipped: when the month has no
+                // record, nothing is handed off (ADR-034 D3), so no record, event, audit row or envelope. The month stays
+                // reopenable, a re-export writes nothing again and /recalculate refuses it as never exported. The read
+                // runs under the ledger lock that every writer of payroll_export_records takes first, so it sees every
+                // record committed before the lock was granted and none can appear until this transaction ends. A month
+                // that already HAS a record (case 3b, a re-run) goes on as before: the insert meets the record and the
+                // content compare answers 409 "use a correction" when the recorded lines differ.
+                if (untrackedZeroLine && key == flexKey && !await MonthHasRecordAsync(conn, tx, key, ct))
+                {
+                    continue;
                 }
 
                 var contentHash = PayrollExportManifest.ComputeContentHash(groupLines);
@@ -335,13 +366,19 @@ public sealed class PayrollExportService
 
         // The lock is now committed (OQ-1). Pick a representative export id for the legacy
         // single-id ExportResult (callers that need per-group ids read the records table).
-        var primaryExportId = perGroup.Count == 1
-            ? perGroup[0].ExportId.ToString()
-            : Guid.NewGuid().ToString();
+        // S147 TASK-14715: no group at all is the record-less UNTRACKED zero-line month (the raw routes refuse an
+        // empty line list before calling here); it wrote no record, so it names no export id.
+        var primaryExportId = perGroup.Count switch
+        {
+            1 => perGroup[0].ExportId.ToString(),
+            0 => string.Empty,
+            _ => Guid.NewGuid().ToString(),
+        };
         var anyNew = perGroup.Exists(g => g.IsNew);
 
         // ── POST-COMMIT delivery (best-effort, UNCHANGED): the lock does NOT depend on this. ──
-        // An idempotent no-op (no new record) must not re-deliver to payroll either.
+        // An idempotent no-op (no new record) must not re-deliver to payroll either, and a month that wrote no record
+        // (S147 TASK-14715) has nothing to deliver: no envelope, no POST, Success = true.
         if (!anyNew)
         {
             return new ExportResult { ExportId = primaryExportId, Success = true, MessageId = Guid.Empty };
@@ -588,6 +625,27 @@ public sealed class PayrollExportService
             reader.IsDBNull(2) ? null : reader.GetDecimal(2),
             reader.IsDBNull(3) ? null : reader.GetDecimal(3),
             reader.IsDBNull(4) ? null : reader.GetString(4));
+    }
+
+    /// <summary>
+    /// S147 / TASK-14715 (R-17; fix-up 1, R-F1) — whether the month already has a record, read inside the export
+    /// transaction after the ledger lock and the approval checks. Asked only for an <c>UNTRACKED</c> month with no
+    /// lines. Every writer of <c>payroll_export_records</c> takes the employee's ledger lock first, so this read sees
+    /// every record committed before the lock was granted, and none can appear until the transaction ends.
+    /// </summary>
+    private static async Task<bool> MonthHasRecordAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, ExportGroupKey key, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM payroll_export_records
+                WHERE employee_id = @employeeId AND year = @year AND month = @month)
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("employeeId", key.EmployeeId);
+        cmd.Parameters.AddWithValue("year", key.Year);
+        cmd.Parameters.AddWithValue("month", key.Month);
+        return await cmd.ExecuteScalarAsync(ct) is true;
     }
 
     /// <summary>

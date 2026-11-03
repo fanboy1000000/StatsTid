@@ -21,7 +21,9 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <para>
 /// <b>Terms</b> (refinement rev 3.2, C2). A <i>record</i> is any <c>payroll_export_records</c> row. A <i>ledger
 /// record</i> is one with <c>opening_balance IS NOT NULL</c> (written or filled by a calculating route; the three
-/// balance columns are all-null or all-set, a CHECK). <c>S</c> is the employee's earliest ledger month (the ledger
+/// balance columns are all-null or all-set, a CHECK). A <i>raw record</i> is one without balances: written by a raw
+/// export route or before the ledger existed, or, since S147 TASK-14715, by a calculating route's export of a month
+/// before the ledger start (case 3a, flex not tracked). <c>S</c> is the employee's earliest ledger month (the ledger
 /// start); <c>P</c> is M−1. <c>EmployedIn(X)</c> is true when any day of calendar month X is an EMPLOYED day of the
 /// windows (<see cref="EmployedIn"/>); it never consults the F1 machinery (<c>PriorMonthRequiringApproval</c>,
 /// <c>EmployedContextDays</c>), which returns no predecessor for a month opening on a Monday.
@@ -35,7 +37,7 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// 1. M ∈ Ledger and Ledger[M].provenance = LEDGER_START → (Ledger[M].opening, LEDGER_START)
 /// 2. Ledger is empty                                    → (0, LEDGER_START)
 /// 3. M &lt; S
-///    3a. M ∉ Records                                    → REFUSE payroll-export-out-of-order, naming S
+///    3a. M ∉ Records (a first export)                   → (0, UNTRACKED)   never stored
 ///    3b. otherwise (a raw record: re-run or correction) → (0, UNTRACKED)   never stored
 /// 4. M &gt; S   (M = S is always case 1)
 ///    4a. EmployedIn(P) and P ∈ Ledger                   → (Ledger[P].closing, CHAINED)
@@ -46,6 +48,16 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// R-28: there is no <c>route</c> input. On the correction route M is always in Records at admission (the
 /// correction's pre-check refuses an unrecorded month before the calculation is called), so "route = export and
 /// M ∉ Records" collapses to "M ∉ Records".
+/// </para>
+///
+/// <para>
+/// <b>Case 3a since S147</b> (TASK-14715; SEC-054 step 1, owner OQ-3 remedy (i), rulings R-16, R-17). Until S147 a
+/// first export of a month before S was refused, and the raw export routes were its only way in. It is now paid
+/// through the calculating route with its flex not tracked, exactly as case 3b: no balance is stored and no
+/// <c>FLEX_PAYOUT</c> is paid. With lines, the export writes a raw record (null balances, locked, corrections only);
+/// with no lines nothing is handed off, so no record is written (ADR-034 D3) and the month stays reopenable. The
+/// cost is that the month's flex is not carried forward. Either way M stays before S for good: case 3 never stores a
+/// balance, case 2 applies only to an empty ledger, and no code deletes a record, so S never moves.
 /// </para>
 ///
 /// <para>
@@ -90,8 +102,9 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <para>
 /// <b>Consequences, stated rather than rediscovered</b> (C2). Within a stretch of consecutive employed months,
 /// months are paid in order from the ledger start; a stretch that begins after a month with no employed day
-/// starts at 0 (REHIRE). A leaving month left unrecorded does not block a rehire month: it has no record, so the
-/// walk does not compare it, and the rehire month's own link reads only its own P, which holds no employed day.
+/// starts at 0 (REHIRE). A month before the ledger start is paid with its flex not tracked (case 3, above). A
+/// leaving month left unrecorded does not block a rehire month: it has no record, so the walk does not compare it,
+/// and the rehire month's own link reads only its own P, which holds no employed day.
 /// </para>
 /// </summary>
 public static class FlexLedgerOpening
@@ -106,9 +119,9 @@ public static class FlexLedgerOpening
     public const string Rehire = "REHIRE";
 
     /// <summary>
-    /// A raw-recorded month before the ledger start: flex is not tracked (R-14 case 3b). Allowed on a result and
-    /// on a correction event; NEVER stored on a record (the CHECK refuses it): the balances stay null and any
-    /// <c>FLEX_PAYOUT</c> line is dropped.
+    /// A month before the ledger start: flex is not tracked (R-14 case 3b, and since S147 TASK-14715 case 3a, a
+    /// first export). Allowed on a result and on a correction event; NEVER stored on a record (the CHECK refuses
+    /// it): the balances stay null and any <c>FLEX_PAYOUT</c> line is dropped.
     /// </summary>
     public const string Untracked = "UNTRACKED";
 
@@ -200,7 +213,7 @@ public static class FlexLedgerOpening
     /// <paramref name="records"/> are ALL of the employee's export records, ledger and raw alike (at most one per
     /// month: the table's UNIQUE key); <paramref name="windows"/> are the employee's employment windows read over
     /// <see cref="WindowsReadRange(DateOnly, DateOnly?)"/> with the S of these records (<c>null</c> when no window
-    /// resolver is wired). Returns the opening, or a refusal: the link's own (3a, 4b) or the walk's
+    /// resolver is wired). Returns the opening, or a refusal: the link's own (4b) or the walk's
     /// <see cref="FlexLedgerRefusalException.PriorMonthStale"/>. Throws <see cref="InvalidOperationException"/> only on
     /// input that the schema makes impossible (two records for one month; a ledger record without a closing; a
     /// ledger-start month that is not <see cref="LedgerStart"/>).
@@ -319,21 +332,14 @@ public static class FlexLedgerOpening
         if (index.LedgerStart is not { } s)
             return FlexLedgerDecision.Open(new FlexOpening(0m, LedgerStart, m));
 
-        // 3. M precedes the ledger start.
+        // 3. M precedes the ledger start: flex is not tracked, never stored. Both sub-cases give the same opening.
+        //    3a. No record of M (a first export). Since S147 TASK-14715 (SEC-054 step 1; OQ-3 remedy (i), R-16, R-17)
+        //        it is paid through the calculating route instead of being refused: with lines, a raw record (null
+        //        balances, no FLEX_PAYOUT); with none, no record at all (ADR-034 D3).
+        //    3b. A raw record of M (a re-run or a correction).
+        //    M stays before S for good: neither sub-case stores a balance, so S never moves.
         if (m < s)
-        {
-            // 3a. No record of M: a first export of a month before the start is out of order.
-            if (recordM is null)
-            {
-                return FlexLedgerDecision.Refuse(new FlexLedgerRefusal(
-                    FlexLedgerRefusalException.ExportOutOfOrder, s, ExportOutOfOrderSentence,
-                    $"The month {Format(m)} has no export record and precedes the employee's flex ledger start " +
-                    $"{Format(s)} (R-14 case 3a)."));
-            }
-
-            // 3b. A raw record of M (a re-run or a correction): flex is not tracked, never stored.
             return FlexLedgerDecision.Open(new FlexOpening(0m, Untracked, s));
-        }
 
         // 4. M follows the ledger start (M = S is always case 1).
         if (m > s)
@@ -371,12 +377,6 @@ public static class FlexLedgerOpening
             $"'{recordM?.Provenance ?? "(none)"}', not {LedgerStart}. The ledger is damaged; nothing is derived from it.");
     }
 
-    /// <summary>The fixed body sentence of <see cref="FlexLedgerRefusalException.ExportOutOfOrder"/>.</summary>
-    public const string ExportOutOfOrderSentence =
-        "This month cannot be exported: it has no export record and comes before the first month of this " +
-        "employee's flex ledger, named by month. Months are paid in order from the ledger start; a month before it " +
-        "can only enter as a raw export, and its flex is then not tracked. Nothing was calculated, written or exported.";
-
     /// <summary>The fixed body sentence of <see cref="FlexLedgerRefusalException.PriorMonthNotRecorded"/> when P has no record.</summary>
     public const string PriorMonthUnrecordedSentence =
         "This month cannot be calculated: it opens at the recorded closing flex balance of the previous month, " +
@@ -411,8 +411,8 @@ public static class FlexLedgerOpening
         "or written.";
 
     /// <summary>
-    /// The "flex not tracked" statement R-14 case 3b requires on the response and the correction result:
-    /// <c>flex not tracked: the month precedes the ledger start S</c>.
+    /// The "flex not tracked" statement R-14 case 3b (and, since S147 TASK-14715, case 3a) requires on the response
+    /// and the correction result: <c>flex not tracked: the month precedes the ledger start S</c>.
     /// </summary>
     public static string UntrackedNote(DateOnly ledgerStart) =>
         $"flex not tracked: the month precedes the ledger start {Format(ledgerStart)}";
