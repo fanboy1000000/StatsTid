@@ -115,7 +115,8 @@ public sealed class PayrollExportService
     /// <see cref="FlexLedgerWrite"/>, so a month with an EMPLOYED day but no lines still writes its record (lines
     /// empty, balances set, corrections-only from then on). The empty line set hashes like any other line set through
     /// <see cref="PayrollExportManifest.ComputeContentHash"/> (the canonical JSON <c>[]</c>), defined once there. Nothing
-    /// is delivered for it (no lines).</description></item>
+    /// is delivered for it (no lines). The exception (S147 TASK-14715, R-17): an <c>UNTRACKED</c> month with no lines
+    /// and no record hands off neither lines nor a closing, so no record is written (ADR-034 D3).</description></item>
     /// <item><description><b>The same-hash no-op</b> (R-16) additionally compares the derived (opening,
     /// provenance) and the computed closing with the recorded triple; any difference is the existing
     /// <see cref="PayrollExportConflictException"/> ("the balance changed; use a correction"). <c>UNTRACKED</c>
@@ -177,7 +178,19 @@ public sealed class PayrollExportService
                     "a recorded closing must link the calculation that produced it (ADR-016 D10). Nothing was written.");
             }
             if (groups.Count == 0)
+            {
+                // S147 TASK-14715 (SEC-054 step 1; owner OQ-3 remedy (i), R-17) — a month before the ledger start with no
+                // lines (UNTRACKED) hands payroll nothing: no lines, and no closing for the next month, because its flex
+                // is not tracked. So ADR-034 D3's own rule applies: nothing handed off, no record. The month stays
+                // reopenable, a re-export writes nothing again and /recalculate refuses it as never exported. Nothing is
+                // opened, locked or written (no record, event, audit row or envelope). The under-lock recheck has no
+                // write to guard, and a month before S derives UNTRACKED whatever is recorded meanwhile (S never moves).
+                // A month that already HAS a record (case 3b, a re-run) still gets its empty group, so the content
+                // compare below runs as before: 409 "use a correction" when the recorded lines differ.
+                if (flex.IsUntracked && !await MonthHasRecordAsync(key, ct))
+                    return new ExportResult { ExportId = string.Empty, Success = true, MessageId = Guid.Empty };
                 groups.Add((key, Array.Empty<PayrollExportLine>()));
+            }
             flexKey = key;
         }
 
@@ -588,6 +601,28 @@ public sealed class PayrollExportService
             reader.IsDBNull(2) ? null : reader.GetDecimal(2),
             reader.IsDBNull(3) ? null : reader.GetDecimal(3),
             reader.IsDBNull(4) ? null : reader.GetString(4));
+    }
+
+    /// <summary>
+    /// S147 / TASK-14715 (R-17) — whether the month already has a record, read on its own connection outside any
+    /// transaction or lock. Asked only for an <c>UNTRACKED</c> month with no lines. "No record" ends the export with
+    /// nothing written, which is right in any order with a concurrent writer (that writer's record simply comes
+    /// after). "A record" is permanent (no code deletes one), so the conflict compare that follows still meets it.
+    /// </summary>
+    private async Task<bool> MonthHasRecordAsync(ExportGroupKey key, CancellationToken ct)
+    {
+        await using var conn = _connectionFactory.Create();
+        await conn.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM payroll_export_records
+                WHERE employee_id = @employeeId AND year = @year AND month = @month)
+            """, conn);
+        cmd.Parameters.AddWithValue("employeeId", key.EmployeeId);
+        cmd.Parameters.AddWithValue("year", key.Year);
+        cmd.Parameters.AddWithValue("month", key.Month);
+        return await cmd.ExecuteScalarAsync(ct) is true;
     }
 
     /// <summary>

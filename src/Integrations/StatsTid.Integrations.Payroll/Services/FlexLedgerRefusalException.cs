@@ -9,16 +9,16 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <para>
 /// <b>Plain language.</b> Each paid month's export record holds the flex balance it opened and closed at.
 /// The next month opens at the previous month's recorded closing (<see cref="FlexLedgerOpening"/>). When that
-/// chain cannot be followed (the previous month was never recorded, or the month lies before the employee's
-/// first recorded month) the system refuses and names the month the operator must deal with, because
-/// guessing an opening is exactly the defect this sprint removes. A refusal leaves nothing behind.
+/// chain cannot be followed (the previous month was never recorded, or an earlier recorded month is out of date)
+/// the system refuses and names the month the operator must deal with, because guessing an opening is exactly the
+/// defect this sprint removes. A refusal leaves nothing behind.
 /// </para>
 ///
 /// <para>
-/// <b>The four kinds.</b>
+/// <b>The three kinds.</b> (S147 TASK-14715, SEC-054 step 1, owner OQ-3 remedy (i): S146's fourth kind, the
+/// out-of-order refusal, is gone. Its only source was R-14 case 3a, a first export of a month before the ledger
+/// start, which is now paid with its flex not tracked instead of being refused.)
 /// <list type="bullet">
-/// <item><see cref="ExportOutOfOrder"/> (<c>payroll-export-out-of-order</c>) — admission: a month with no
-/// export record that precedes the ledger start S; <see cref="Month"/> is S (R-14 case 3a).</item>
 /// <item><see cref="PriorMonthNotRecorded"/> (<c>payroll-prior-month-not-recorded</c>) — admission: the
 /// previous month P was employed but has no ledger record; <see cref="Month"/> is P, and the sentence says
 /// "export it first", or "correct it first" when P has a raw export record (R-14 case 4b).</item>
@@ -40,9 +40,6 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// </summary>
 public sealed class FlexLedgerRefusalException : Exception
 {
-    /// <summary>R-14 case 3a: an unrecorded month earlier than the ledger start S. Names S.</summary>
-    public const string ExportOutOfOrder = "payroll-export-out-of-order";
-
     /// <summary>R-14 case 4b: the previous month P is employed but has no ledger record. Names P.</summary>
     public const string PriorMonthNotRecorded = "payroll-prior-month-not-recorded";
 
@@ -71,7 +68,7 @@ public sealed class FlexLedgerRefusalException : Exception
     /// <summary>The refusal's discriminator, one of the constants on this type.</summary>
     public string Kind { get; }
 
-    /// <summary>The first day of the month the refusal names (S, P, the earliest stale month, or the month whose write was refused).</summary>
+    /// <summary>The first day of the month the refusal names (P, the earliest stale month, or the month whose write was refused).</summary>
     public DateOnly Month { get; }
 
     /// <summary>The named month as the host's 409 body carries it (<c>yyyy-MM</c>).</summary>

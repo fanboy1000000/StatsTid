@@ -488,9 +488,10 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     catch (FlexLedgerRefusalException ex)
     {
         // S146 TASK-14605 (QUAL-188; R-14): the month's opening flex balance cannot be derived from the recorded
-        // ledger — an unrecorded month before the ledger start (payroll-export-out-of-order, naming the start) or
-        // an employed previous month with no ledger record (payroll-prior-month-not-recorded, naming it). Raised by
-        // admission after the prior-month check and before any rule call, so nothing was calculated or written.
+        // ledger — an employed previous month with no ledger record (payroll-prior-month-not-recorded, naming it), or
+        // (S147 TASK-14700) an earlier recorded month that is out of date (payroll-prior-month-stale, naming it). A
+        // month before the ledger start is no longer refused (S147 TASK-14715): it is paid with flex not tracked. Raised
+        // by admission after the prior-month check and before any rule call, so nothing was calculated or written.
         return FlexLedgerRefused(flexLedgerLogger, ex, "calculate-and-export admission");
     }
     catch (RuleClassificationsUnavailableException)
@@ -527,7 +528,9 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // opening and provenance, the engine's closing, and the under-lock recheck. Null exactly when the month holds
     // no EMPLOYED day: then no flex is settled, the calculation produced no line, and no record is written (ADR-034
     // D3). Otherwise the record is written even when there are no lines (an employed zero-line month: lines empty,
-    // balances set, corrections-only from then on) — the export used to be skipped for an empty line list.
+    // balances set, corrections-only from then on) — the export used to be skipped for an empty line list. The one
+    // exception (S147 TASK-14715, R-17): a month before the ledger start with no lines and no record has its flex not
+    // tracked, so it hands off nothing and the export writes no record (ADR-034 D3).
     var flexWrite = calculator.FlexLedgerWriteFor(outcome);
     if (flexWrite is null && result.ExportLines.Count > 0)
     {
@@ -619,8 +622,10 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         }
     }
 
-    // S146 TASK-14605 (R-14 case 3b): a raw-recorded month before the ledger start ran UNTRACKED — its balances
-    // stay null and no FLEX_PAYOUT was paid. The response says so in plain words beside the result.
+    // S146 TASK-14605 (R-14 case 3b), and since S147 TASK-14715 (SEC-054 step 1; OQ-3 remedy (i)) case 3a: a month
+    // before the ledger start ran UNTRACKED, whether it was already recorded (3b) or this is its first export (3a).
+    // Its balances stay null and no FLEX_PAYOUT was paid; with no lines and no record nothing was written. The
+    // response says so in plain words beside the result.
     if (outcome.FlexOpening is { IsUntracked: true } untrackedOpening)
         return OkWithFlexNote(httpContext, result, FlexLedgerOpening.UntrackedNote(untrackedOpening.LedgerStart));
 
@@ -1073,8 +1078,8 @@ static IResult FlexLedgerRefused(ILogger logger, FlexLedgerRefusalException ex, 
     }, statusCode: 409);
 }
 
-// S146 TASK-14605 (R-14 case 3b) — the success body of /calculate-and-export with the "flex not tracked" statement
-// beside the result: the result exactly as Results.Ok(result) would serialize it (the host's own JSON options), plus
+// S146 TASK-14605 (R-14 case 3b; case 3a since S147 TASK-14715) — the success body of /calculate-and-export with
+// the "flex not tracked" statement beside the result: the result exactly as Results.Ok(result) would serialize it (the host's own JSON options), plus
 // one member, flexNote. Built from the serialized result rather than a hand-listed copy of its members, so a member
 // added to PeriodCalculationResult later can never be left out of this body.
 static IResult OkWithFlexNote(HttpContext httpContext, PeriodCalculationResult result, string flexNote)

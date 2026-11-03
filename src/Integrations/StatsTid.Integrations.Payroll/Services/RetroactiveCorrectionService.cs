@@ -400,9 +400,10 @@ public sealed class RetroactiveCorrectionService
             // stay in the new effective baseline: nothing reversed them, so they are still what payroll holds
             // (current_effective_lines = the original plus every correction line, wage type by wage type).
             // This is correct only because M < S is permanent: no month before the ledger start can ever become a
-            // ledger record (case 3a refuses a first export, case 3b never stores, case 2 applies only to an empty
-            // ledger, and no code deletes a record), so every later correction of M is UNTRACKED again and never diffs
-            // a tracked FLEX_PAYOUT against the set-aside one.
+            // ledger record (case 3a pays a first export untracked and never stores: a record without balances when it
+            // has lines, none when it has no lines (S147 TASK-14715); case 3b never stores; case 2 applies only to an
+            // empty ledger; and no code deletes a record), so every later correction of M is UNTRACKED again and never
+            // diffs a tracked FLEX_PAYOUT against the set-aside one.
             var diffBaseline = lockedBaseline;
             var diffNew = newResult.ExportLines;
             var newEffectiveLines = newResult.ExportLines;
