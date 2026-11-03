@@ -311,7 +311,8 @@ public static class HrFollowUpApprovalEndpoints
         new DateOnly(today.Year, today.Month, 1)
             .AddMonths(-HrFollowUpApprovalReadRepository.LookbackMonths);
 
-    /// <summary>Storage row → wire item. A pure rename; no derivation happens here.</summary>
+    /// <summary>Storage row → wire item. A pure rename; no derivation happens here (the manager
+    /// window, S147 / TASK-14713 R-27, is derived in the read and only copied across).</summary>
     private static HrFollowUpMonthItem ToMonthItem(HrApprovalMonthItem row) =>
         new(
             EmployeeId: row.EmployeeId,
@@ -323,5 +324,7 @@ public static class HrFollowUpApprovalEndpoints
             PeriodId: row.PeriodId,
             AgeAnchor: row.AgeAnchor,
             DaysPastAnchor: row.DaysPastAnchor,
-            DeadlineSource: row.DeadlineSource);
+            DeadlineSource: row.DeadlineSource,
+            LastManagerDay: row.LastManagerDay,
+            FirstHrOnlyDay: row.FirstHrOnlyDay);
 }

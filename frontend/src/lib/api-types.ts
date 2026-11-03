@@ -5986,6 +5986,10 @@ export interface components {
             daysPastAnchor: number;
             /** @enum {string} */
             deadlineSource: "stored" | "computed";
+            /** Format: date */
+            lastManagerDay: string | null;
+            /** Format: date */
+            firstHrOnlyDay: string | null;
         };
         "StatsTid.Backend.Api.Contracts.HrLeaverFinalMonthResponse": {
             /** Format: date */

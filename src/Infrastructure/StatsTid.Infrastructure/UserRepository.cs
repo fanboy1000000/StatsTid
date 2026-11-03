@@ -266,6 +266,30 @@ public sealed class UserRepository
     // terminated-inclusive reads address it. Both extensions keep the R9c
     // shape: HROrAbove policy + LocalHR per-scope floor; Employee-role actors stay denied
     // (for the registration writers: except their own ACTIVE-subject data, unchanged).
+    //
+    // S147 / TASK-14713 (QUAL-230 T5b; owner OQ-2: HR only from D+6) — THIRD extension, the
+    // surfaces that FINISH a switched-off leaver's final month. Each admits a deactivated
+    // subject only through the terminated-inclusive validator at its floor, and only for a
+    // month that holds an employed day (the employed-month bound, AFTER the gate, ADR-040 D3's
+    // date-free 422):
+    //   • POST /api/approval/{periodId}/approve, /reject and /reopen (leader arm) — validator at
+    //     LocalHR; the bound's pre-transaction subject read (GetByIdIncludingTerminatedAsync by
+    //     id); the in-transaction AUDIT read of the audit's target organisation
+    //     (GetByIdIncludingTerminatedAsync on (conn, tx)); and the tree lock's terminated-
+    //     inclusive overload (ReportingLineRepository.AcquireTreeLockForEmployeeIncludingTerminatedAsync,
+    //     these three callers only — the shared AcquireTreeLockForEmployeeAsync and its six
+    //     reporting-line callers stay active-only). The designated-approver edge is unchanged and
+    //     fails closed for a deactivated subject, so the leaver's manager is refused from D+6.
+    //   • GET /api/skema/{employeeId}/month — its subject read, admitting a deactivated subject
+    //     only when the view's terminated-inclusive tier method
+    //     (ApprovalReadTier.ClassifyMonthViewTierIncludingTerminatedAsync, this view only) says the
+    //     HR check admitted the actor; the shared IsLeaderTierReadAsync and the three other reads
+    //     that use it (breakdown, balance, compliance) stay active-only.
+    //   • POST /api/payroll/calculate-and-export (Payroll host) — validator at LocalAdmin, and the
+    //     bound's subject read.
+    // On every one of them the validator's departed-self identity clause (DepartedSubject,
+    // TASK-14703) runs before the HR gate, so no one reaches their OWN departed record through
+    // this extension.
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -283,7 +307,10 @@ public sealed class UserRepository
     /// in-tx subject read after the advisory lock IS the authoritative D3 check — a departed employee's FINAL
     /// month is exactly the one payroll needs certified) — <b>and, since S138 / TASK-13802, the employee-profile
     /// PUT's subject read</b> (HR correcting a departed employee's last months is the ordinary backdating case;
-    /// that endpoint has no <c>is_active</c> switch, so admitting a leaver cannot become a reactivation path):
+    /// that endpoint has no <c>is_active</c> switch, so admitting a leaver cannot become a reactivation path)
+    /// — <b>and, since S147 / TASK-14713, the employed-month bound's subject read on approve, reject, the leader arm
+    /// of reopen and payroll's <c>/calculate-and-export</c>, and the Skema month view's subject read</b> (HR finishing
+    /// a switched-off leaver's final month from D+6; the banner above lists the gates):
     /// their explicit D3 role floor needs the deactivated subject's row RESOLVED, not hidden
     /// as a 404 (see the section banner above for the ruling). The general read paths stay
     /// active-only — a deactivated user must remain unaddressable everywhere else (B2/S68
@@ -325,8 +352,10 @@ public sealed class UserRepository
     /// whose locked read must resolve a departed subject; the GENERAL users PUT stays active-only so it can never
     /// reactivate a leaver)
     /// under <c>EmployeeConsumptionLock</c> to re-enforce the ADR-040 D3 floor against a
-    /// deactivation that committed while they waited on the lock. General in-tx reads stay on
-    /// the filtered overload.
+    /// deactivation that committed while they waited on the lock. <b>S147 / TASK-14713 added the in-transaction
+    /// AUDIT read of approve, reject and reopen</b> (the audit's target organisation is the subject's — a
+    /// switched-off leaver's Organisation must resolve when HR decides their month from D+6). General in-tx reads
+    /// stay on the filtered overload.
     /// </para>
     /// </summary>
     public async Task<User?> GetByIdIncludingTerminatedAsync(

@@ -757,6 +757,80 @@ public sealed class ReportingLineRepository
     }
 
     /// <summary>
+    /// S147 / TASK-14713 (QUAL-230 T5b; refinement R-7) — the TERMINATED-INCLUSIVE twin of
+    /// <see cref="AcquireTreeLockForEmployeeAsync"/>. Same three steps, same advisory key, same drift
+    /// check; the ONE difference is that the employee's own <c>is_active</c> flag is not a reason to
+    /// refuse, so a leaver whom the leaver job has already switched off still resolves to their
+    /// Organisation.
+    ///
+    /// <para><b>Why it exists, in plain terms.</b> From the sixth day after a leaver's last working
+    /// day only HR may approve, reject or reopen their final month (owner ruling OQ-2). Those three
+    /// handlers take this lock before they change the month, and the shared helper above throws for a
+    /// switched-off employee, so HR's approval would have failed with a server error even after the
+    /// door let them in. The shared helper is deliberately left as it is: its six reporting-line call
+    /// sites must keep refusing a switched-off employee, because they move reporting lines and no one
+    /// should rearrange a leaver's reporting.</para>
+    ///
+    /// <para><b>Allowlist-restricted (R9c).</b> Exactly three callers, all in
+    /// <c>ApprovalEndpoints</c>: approve, reject and the leader arm of reopen. Each has already passed
+    /// the terminated-inclusive org-scope check at the LocalHR floor (or the designated-approver edge,
+    /// which fails closed for a switched-off employee), so reaching this lock for a switched-off
+    /// employee already means HR is acting. Do not call it from anywhere else without an explicit
+    /// allowlist ruling.</para>
+    ///
+    /// <para>The home Organisation must still be active, as in the shared helper: an inactive
+    /// Organisation is a data fault, not a leaver.</para>
+    /// </summary>
+    /// <exception cref="TreeRootDriftException">If the root drifted under the advisory (caller retries).</exception>
+    /// <exception cref="InvalidOperationException">If the employee is missing, or their home
+    /// Organisation is missing or inactive.</exception>
+    public async Task<string> AcquireTreeLockForEmployeeIncludingTerminatedAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct = default)
+    {
+        // (1) derive the current tree root (UNLOCKED), switched-off employees included.
+        var preAcquireRoot = await DeriveEmployeeTreeRootIncludingTerminatedInTxAsync(conn, tx, employeeId, ct);
+
+        // (2) acquire the SAME reporting-tree advisory the shared helper takes, so this caller
+        //     serializes against every reporting-line mutator exactly as before.
+        await AcquireTreeLockAsync(conn, tx, preAcquireRoot, ct);
+
+        // (3) RE-DERIVE under the held advisory — the same drift check as the shared helper. A
+        //     transfer that committed between (1) and (2) means the key we hold is stale → retry.
+        var postAcquireRoot = await DeriveEmployeeTreeRootIncludingTerminatedInTxAsync(conn, tx, employeeId, ct);
+        if (!string.Equals(preAcquireRoot, postAcquireRoot, StringComparison.Ordinal))
+            throw new TreeRootDriftException(employeeId, preAcquireRoot, postAcquireRoot);
+
+        return postAcquireRoot;
+    }
+
+    /// <summary>
+    /// S147 / TASK-14713 — the terminated-inclusive derivation behind
+    /// <see cref="AcquireTreeLockForEmployeeIncludingTerminatedAsync"/>. Identical to
+    /// <see cref="DeriveEmployeeTreeRootInTxAsync"/> minus the employee's <c>is_active</c> filter; a
+    /// separate literal statement (not a flag on the shared one) so the shared derivation's text and
+    /// behaviour stay untouched.
+    /// </summary>
+    private static async Task<string> DeriveEmployeeTreeRootIncludingTerminatedInTxAsync(
+        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
+    {
+        string? primaryOrgId;
+        await using (var cmd = new NpgsqlCommand(
+            """
+            SELECT u.primary_org_id FROM users u
+            JOIN organizations o ON o.org_id = u.primary_org_id AND o.is_active = TRUE
+            WHERE u.user_id = @userId
+            """, conn, tx))
+        {
+            cmd.Parameters.AddWithValue("userId", employeeId);
+            primaryOrgId = (string?)await cmd.ExecuteScalarAsync(ct);
+        }
+        if (primaryOrgId is null)
+            throw new InvalidOperationException($"Employee user_id='{employeeId}' not found, or home Organisation inactive.");
+
+        return primaryOrgId;
+    }
+
+    /// <summary>
     /// S78 R9 (R3) — the TRANSFER variant of the drift-guarded acquire. A cross-styrelse transfer
     /// (<c>PUT /api/admin/users/{userId}</c> moving <c>primary_org_id</c> from one styrelse tree to
     /// another) must hold the <c>reporting-tree</c> advisory for BOTH the OLD (current) and the NEW

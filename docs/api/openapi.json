@@ -7717,6 +7717,8 @@
           "deadlineSource",
           "displayName",
           "employeeId",
+          "firstHrOnlyDay",
+          "lastManagerDay",
           "month",
           "orgId",
           "periodId",
@@ -7772,6 +7774,16 @@
               "computed"
             ],
             "type": "string"
+          },
+          "lastManagerDay": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "firstHrOnlyDay": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
           }
         },
         "additionalProperties": false

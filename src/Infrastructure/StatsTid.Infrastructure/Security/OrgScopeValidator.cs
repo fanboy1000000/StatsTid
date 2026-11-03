@@ -158,6 +158,18 @@ public sealed class OrgScopeValidator
     /// the dedicated agreement-code endpoint — each with the ADR-040 D3 role floor as
     /// <c>roleFloor</c>, so a deactivated subject is addressable ONLY by an admitting scope that is
     /// itself LocalHR+; the general read paths stay active-only).
+    /// <b>S147 / TASK-14713 (QUAL-230 T5b; owner OQ-2: HR only from the sixth day after a leaver's last
+    /// working day)</b> adds the surfaces that FINISH a switched-off leaver's final month: approve, reject
+    /// and the leader arm of reopen (<c>roleFloor</c> LocalHR; the designated-approver edge beside them is
+    /// unchanged and fails closed for a deactivated subject, so the leaver's manager is refused from that
+    /// day); the Skema month view's HR tier, through <c>ApprovalReadTier.ClassifyMonthViewTierIncludingTerminatedAsync</c>
+    /// (that view only; the shared <c>IsLeaderTierReadAsync</c> stays on the active-only overload); and the
+    /// Payroll host's <c>/calculate-and-export</c> (<c>roleFloor</c> LocalAdmin). Each is bounded AFTER this
+    /// gate to a month that holds an employed day (ADR-040 D3's date-free refusal), and the three decision
+    /// endpoints take the terminated-inclusive tree-lock overload
+    /// (<c>ReportingLineRepository.AcquireTreeLockForEmployeeIncludingTerminatedAsync</c>) and read the audit's
+    /// target organisation terminated-inclusive. On all of them the departed-self identity clause below runs
+    /// first, so nobody reaches their OWN departed record through this widening.
     /// <b>S147 / TASK-14703 (R-30, R-34) — the departed-self clause</b> runs on this surface (and on
     /// <see cref="ValidateEmployeeAccessAsync(ActorContext, string, string?, CancellationToken)"/>)
     /// right after the target read and BEFORE the HR gate: a terminated-inclusive read never lets an

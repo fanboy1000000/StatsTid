@@ -19,6 +19,11 @@ namespace StatsTid.Backend.Api.Contracts;
 //
 // NO EMPLOYMENT DATES CROSS THIS BOUNDARY (ADR-040 D7). A leaver item names the YEAR and MONTH its
 // final month falls in — the process's subject — never the employment end date itself.
+//
+// ONE RULED EXCEPTION (S147 / TASK-14713, refinement R-27): a leaver item on the leaver-final-month
+// list carries the manager's window, `lastManagerDay` (D+5) and `firstHrOnlyDay` (D+6), derived from
+// the end date and the 5-day manager grace. The list is HR-scoped (HROrAbove, LocalHR floor), which is
+// why D7 permits it; the two members are null on the past-deadline and approved-not-exported lists.
 
 /// <summary>
 /// One (employee × month) item shared by the past-deadline, leaver-final-month and
@@ -48,6 +53,18 @@ namespace StatsTid.Backend.Api.Contracts;
 /// provisional institutional default (month-end + 2 / + 5) because no row exists or the row's
 /// column is NULL.
 /// </param>
+/// <param name="LastManagerDay">
+/// S147 / TASK-14713 (R-27) — leaver-final-month items only; <c>null</c> on the other two lists. The
+/// last day the leaver's manager may still approve, reject or reopen the month: the leaver's last day
+/// employed plus the 5-day manager grace (D+5). The row reads "manager until <c>lastManagerDay</c>, HR
+/// only from <c>firstHrOnlyDay</c>". Nothing stored changes: <paramref name="AgeAnchor"/> stays the
+/// month's manager deadline.
+/// </param>
+/// <param name="FirstHrOnlyDay">
+/// S147 / TASK-14713 (R-27) — leaver-final-month items only; <c>null</c> on the other two lists. The
+/// first day only HR may act on the month (D+6): the day the leaver is switched off, after which their
+/// manager is refused. Always <paramref name="LastManagerDay"/> + 1 day.
+/// </param>
 public sealed record HrFollowUpMonthItem(
     string EmployeeId,
     string DisplayName,
@@ -58,7 +75,9 @@ public sealed record HrFollowUpMonthItem(
     Guid? PeriodId,
     DateOnly AgeAnchor,
     int DaysPastAnchor,
-    [property: AllowedValues("stored", "computed")] string DeadlineSource);
+    [property: AllowedValues("stored", "computed")] string DeadlineSource,
+    DateOnly? LastManagerDay,
+    DateOnly? FirstHrOnlyDay);
 
 /// <summary>
 /// HRP-012 — months PAST DEADLINE, with the employee's court and the leader's court counted

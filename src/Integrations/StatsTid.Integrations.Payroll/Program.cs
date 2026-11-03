@@ -337,6 +337,10 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     PayrollExportService export,
     ApprovalPeriodRepository approvalRepo,
     OrgScopeValidator scopeValidator,
+    // S147 / TASK-14713 (QUAL-230 T5b; R-15) — the employed-month bound for a switched-off subject:
+    // the terminated-inclusive subject read and the window read.
+    UserRepository userRepo,
+    IEmploymentWindowResolver windowResolver,
     ILoggerFactory loggerFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
@@ -354,8 +358,15 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // (SECURITY.md, "The mixed-role scope-floor invariant (S76 / B1)"): a scope only admits
     // the target if it also clears LocalAdmin, so a LocalHR scope over the target's org
     // no longer admits an actor who is LocalAdmin elsewhere.
+    // S147 / TASK-14713 (QUAL-230 T5b; owner OQ-2) — the TERMINATED-INCLUSIVE validator, same
+    // LocalAdmin floor (an R9c entry). From day 6 after a leaver's last working day the leaver job
+    // switches them off; the active-only call then answered "Target employee not found" to every
+    // caller, so the leaver's final month could not be paid. For an ACTIVE employee this call is
+    // behaviour-identical under the floor. For a switched-off employee it admits only through a scope
+    // that is itself LocalHR or above AND clears the LocalAdmin floor — so a LocalAdmin-or-above in
+    // scope, never a leader scope. TASK-14703's departed-self clause runs inside it, as before.
     var actor = httpContext.GetActorContext();
-    var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessAsync(
+    var (allowed, reason) = await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(
         actor, request.Profile.EmployeeId, StatsTid.SharedKernel.Security.StatsTidRoles.LocalAdmin, ct);
     if (!allowed)
     {
@@ -386,6 +397,16 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // before the approval read, so nothing is read for a malformed period (a legacy WEEKLY APPROVED row answers 400).
     if (RefusePeriodNotAMonth(request.PeriodStart, request.PeriodEnd) is { } periodRefusal)
         return periodRefusal;
+
+    // S147 / TASK-14713 (QUAL-230 T5b; R-15) — the employed-month bound, after the scope check. A
+    // switched-off subject is paid only for a month that holds an employed day; any other month answers
+    // ADR-040 D3's date-free 422. It sits after the three request-shape refusals above (which read
+    // nothing, by their own ruling N1, and which guarantee a whole, well-ordered month for the window
+    // read) and before the approval read. An actor the scope check refused got its 403 for every month.
+    if (await RefuseMonthWithoutEmployedDayAsync(
+            userRepo, windowResolver, loggerFactory, actor,
+            request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd, ct) is { } employedMonthRefusal)
+        return employedMonthRefusal;
 
     // Approval guard: period must be APPROVED before payroll export
     var approval = await approvalRepo.GetByEmployeeAndPeriodAsync(
@@ -986,6 +1007,47 @@ static IResult? RefusePeriodNotAMonth(DateOnly periodStart, DateOnly periodEnd) 
             error = "The period must be one whole calendar month: periodStart the first day and periodEnd the last day of the same month. Payroll records, locks and corrects a calendar month, and the flex ledger chains from the month's closing balance, so a partial period cannot be calculated and exported or corrected. Nothing was calculated, written or exported.",
             kind = "payroll-period-not-a-month"
         }, statusCode: 400);
+
+// S147 / TASK-14713 (QUAL-230 T5b; refinement R-15) — the employed-month bound on /calculate-and-export, the
+// Payroll host's copy of the Backend's ApprovalEndpoints.EmployedMonthBoundAsync (this host cannot reference that
+// assembly). WHY: from day 6 after a leaver's last working day the leaver job switches them off, and the scope check
+// above now reaches a switched-off employee (an R9c widening, LocalAdmin-floored). The widening is bounded to months
+// in which that person was actually employed. Returns null when the request may proceed: the subject is active (a
+// leaver in the manager's 5-day grace included — unchanged), or the month holds an employed day (the window's end date
+// inclusive, a NULL side unbounded — ADR-040 D1/D2). Otherwise ADR-040 D3's date-free answer: a 422 with the same key,
+// kind and message as the Backend's, plus the success member every sibling body here carries — no date, no employee id,
+// no window field (the binary-search oracle D3 closes). The server log names the clause and the requested month. A
+// missing users row cannot reach here (the scope check answered "not found"); it is left to the flow, unchanged.
+static async Task<IResult?> RefuseMonthWithoutEmployedDayAsync(
+    UserRepository userRepo,
+    IEmploymentWindowResolver windowResolver,
+    ILoggerFactory loggerFactory,
+    ActorContext actor,
+    string employeeId,
+    DateOnly periodStart,
+    DateOnly periodEnd,
+    CancellationToken ct)
+{
+    var subject = await userRepo.GetByIdIncludingTerminatedAsync(employeeId, ct);
+    if (subject is null || subject.IsActive)
+        return null;
+
+    var windows = await windowResolver.GetWindowsAsync(employeeId, periodStart, periodEnd, ct);
+    if (windows.Count > 0)
+        return null;
+
+    loggerFactory.CreateLogger("StatsTid.Integrations.Payroll.EmployedMonthBound").LogWarning(
+        "Refused ({Clause}): actor {ActorId} asked for {PeriodStart:yyyy-MM} of deactivated employee {EmployeeId}, " +
+        "which holds no employed day (POST /api/payroll/calculate-and-export)",
+        "employed-month-bound", actor.ActorId, periodStart, employeeId);
+    return Results.Json(new
+    {
+        success = false,
+        error = "month_outside_employment_period",
+        kind = "employment-window",
+        message = "Måneden ligger uden for ansættelsesperioden.",
+    }, statusCode: 422);
+}
 
 // S146 TASK-14605 (QUAL-188; R-14) — the ONE response for a flex-ledger refusal. 409 because the month itself is
 // fine but the ledger is in a state the operator can fix (export or correct the named month first) or that a retry
