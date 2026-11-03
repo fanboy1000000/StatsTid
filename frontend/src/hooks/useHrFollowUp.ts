@@ -98,18 +98,10 @@ export function useHrFollowUp() {
 
 // S147 / TASK-14714 (HRP-011) - the leaver row's actions. From day 6 only HR can finish a
 // leaver's final month (TASK-14713). Each action rides an EXISTING typed endpoint; nothing here
-// decides anything. Every call returns the ApiResult untouched (status + raw body), so the
-// list words a refusal itself.
-export type SkemaMonthData = Schemas['StatsTid.Backend.Api.Contracts.SkemaMonthResponse']
-
+// decides anything. A failure comes back as the client produces it: { ok: false, status, error }
+// where `error` is the RAW response text (the client sets no parsed `body` on this path), so the
+// list parses `error` itself to word a refusal.
 export function useLeaverMonthActions() {
-  const openMonth = useCallback((employeeId: string, year: number, month: number) => {
-    return apiClient.get('/api/skema/{employeeId}/month', {
-      params: { path: { employeeId } },
-      query: { year, month },
-    })
-  }, [])
-
   const sendMonth = useCallback((employeeId: string, year: number, month: number) => {
     return apiClient.post('/api/approval/send', { body: { employeeId, year, month } })
   }, [])
@@ -125,5 +117,5 @@ export function useLeaverMonthActions() {
     })
   }, [])
 
-  return { openMonth, sendMonth, approvePeriod, rejectPeriod }
+  return { sendMonth, approvePeriod, rejectPeriod }
 }

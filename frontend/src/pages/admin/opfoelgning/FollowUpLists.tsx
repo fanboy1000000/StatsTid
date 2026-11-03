@@ -18,6 +18,7 @@ import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { Alert, Badge, Button, Spinner, Table, Textarea } from '../../../components/ui'
 import { useLeaverMonthActions } from '../../../hooks/useHrFollowUp'
+import { ManagerSkemaGrid } from '../../approval/ManagerSkemaGrid'
 import { formatMonthLabel } from '../../../lib/locale'
 import { daysLabel, formatDaDate, formatDaLongDate } from './followUpFormat'
 import type {
@@ -31,7 +32,6 @@ import type {
   VacationTransferAgreementNeededListResponse,
   PayoutPendingListResponse,
   HrFollowUpMonthItem,
-  SkemaMonthData,
 } from '../../../hooks/useHrFollowUp'
 import styles from './FollowUpLists.module.css'
 
@@ -172,12 +172,19 @@ export function PastDeadlineList({
 
 // ── Leaver's final month: the row's actions (S147 / TASK-14714, HRP-011) ─────
 
-/** A refusal in Danish. The server's 403 for the four-eyes rule carries an English `reason`
-    (`ApprovalSenderGuard.DenialReason`); the 422 for a month outside the employment period
-    carries a Danish `message` already. Anything else gets a plain Danish sentence — the raw
-    body is never shown. */
-export function leaverRefusalText(status: number, body: unknown): string {
-  const b = (body ?? {}) as { reason?: unknown; message?: unknown }
+/** A refusal in Danish. `apiClient` hands a failure back as { status, error } where `error` is
+    the RAW response text, so it is parsed here (never rendered raw). The four-eyes 403 carries an
+    English `reason` (`ApprovalSenderGuard.DenialReason`); the 422 `month_outside_employment_period`
+    carries a Danish `message`; the send's coverage 422 carries `missingDays`; a 409 names the
+    month's status in its `error` sentence. Anything else gets a plain Danish sentence. */
+export function leaverRefusalText(status: number, rawError: string | undefined): string {
+  let b: { error?: unknown; reason?: unknown; message?: unknown; missingDays?: unknown } = {}
+  try {
+    const parsed: unknown = JSON.parse(rawError ?? '')
+    if (parsed && typeof parsed === 'object') b = parsed as typeof b
+  } catch {
+    // not JSON - fall through to the generic sentences
+  }
   if (status === 403) {
     const reason = typeof b.reason === 'string' ? b.reason : ''
     if (reason.includes('four-eyes')) {
@@ -187,9 +194,19 @@ export function leaverRefusalText(status: number, body: unknown): string {
   }
   if (status === 422) {
     if (typeof b.message === 'string' && b.message) return b.message
+    if (Array.isArray(b.missingDays) && b.missingDays.length > 0) {
+      const days = (b.missingDays as unknown[]).filter((d): d is string => typeof d === 'string').map(formatDaDate).join(', ')
+      return `Måneden kan ikke sendes endnu: der mangler registreringer for ${days}.`
+    }
     return 'Måneden kan ikke sendes endnu: der mangler registreringer eller fordeling. Åbn måneden for at se detaljerne.'
   }
-  if (status === 409) return 'Månedens status er ændret af en anden. Genindlæs listen.'
+  if (status === 409) {
+    const m = typeof b.error === 'string' ? /status (\w+)/.exec(b.error) : null
+    const label = m ? PERIOD_STATUS_LABEL[m[1] as HrFollowUpMonthItem['periodStatus']] : undefined
+    return label
+      ? `Måneden er allerede i status "${label}". Genindlæs listen.`
+      : 'Måneden har en anden status, end listen viser. Genindlæs listen.'
+  }
   return 'Handlingen mislykkedes. Prøv igen.'
 }
 
@@ -209,21 +226,12 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
   const [status, setStatus] = useState(item.periodStatus)
   const [busy, setBusy] = useState(false)
   const [outcome, setOutcome] = useState<RowOutcome>(null)
-  const [monthView, setMonthView] = useState<SkemaMonthData | null>(null)
+  const [monthOpen, setMonthOpen] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [reason, setReason] = useState('')
 
-  const refuse = (r: { status: number; body?: unknown }) =>
-    setOutcome({ kind: 'error', text: leaverRefusalText(r.status, r.body) })
-
-  const open = async () => {
-    setBusy(true)
-    setOutcome(null)
-    const r = await actions.openMonth(item.employeeId, item.year, item.month)
-    setBusy(false)
-    if (r.ok) setMonthView(r.data)
-    else refuse(r)
-  }
+  const refuse = (r: { status: number; error: string }) =>
+    setOutcome({ kind: 'error', text: leaverRefusalText(r.status, r.error) })
 
   const send = async () => {
     setBusy(true)
@@ -264,9 +272,11 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
   }
 
   const turn = leaverTurnText(item)
-  const hours = monthView ? monthView.entries.reduce((sum, e) => sum + e.hours, 0) : 0
+  const canSend = periodId === null || status === 'NONE' || status === 'DRAFT' || status === 'REJECTED'
+  const canDecide = periodId !== null && (status === 'SUBMITTED' || status === 'EMPLOYEE_APPROVED')
 
   return (
+    <>
     <tr data-testid={`${testId}-row-${key}`}>
       <td>{item.displayName}</td>
       <td>{formatMonthLabel(item.year, item.month)}</td>
@@ -284,13 +294,22 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
       <td data-testid={`${testId}-turn-${key}`}>{turn ?? '—'}</td>
       <td>
         <div className={styles.rowActions}>
-          <Button size="sm" variant="secondary" disabled={busy} onClick={open} data-testid={`${testId}-open-${key}`}>
-            Åbn måned
+          <Button
+            size="sm"
+            variant="secondary"
+            aria-expanded={monthOpen}
+            aria-controls={`${testId}-grid-${key}`}
+            onClick={() => setMonthOpen((v) => !v)}
+            data-testid={`${testId}-open-${key}`}
+          >
+            {monthOpen ? 'Skjul måned' : 'Åbn måned'}
           </Button>
-          <Button size="sm" disabled={busy} onClick={send} data-testid={`${testId}-send-${key}`}>
-            Send måned
-          </Button>
-          {periodId && (
+          {canSend && (
+            <Button size="sm" disabled={busy} onClick={send} data-testid={`${testId}-send-${key}`}>
+              Send måned
+            </Button>
+          )}
+          {canDecide && (
             <>
               <Button size="sm" disabled={busy} onClick={approve} data-testid={`${testId}-approve-${key}`}>
                 Godkend
@@ -299,7 +318,13 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
                 size="sm"
                 variant="danger"
                 disabled={busy}
-                onClick={() => setRejecting((v) => !v)}
+                aria-expanded={rejecting}
+                aria-controls={`${testId}-reason-${key}`}
+                onClick={() => {
+                  const next = !rejecting
+                  setRejecting(next)
+                  if (next) setTimeout(() => document.getElementById(`${testId}-reason-${key}`)?.focus(), 0)
+                }}
                 data-testid={`${testId}-reject-${key}`}
               >
                 Afvis
@@ -307,7 +332,7 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
             </>
           )}
         </div>
-        {rejecting && periodId && (
+        {rejecting && canDecide && (
           <div className={styles.rejectBox}>
             <Textarea
               id={`${testId}-reason-${key}`}
@@ -322,13 +347,6 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
             </Button>
           </div>
         )}
-        {monthView && (
-          <p className={styles.caveat} data-testid={`${testId}-month-${key}`}>
-            {formatMonthLabel(monthView.year, monthView.month)}: {new Set(monthView.entries.map((e) => e.date)).size} dage med
-            registreringer, {hours.toLocaleString('da-DK')} timer
-            {monthView.approval ? `, status ${PERIOD_STATUS_LABEL[monthView.approval.status]}` : ', ingen periode oprettet'}.
-          </p>
-        )}
         {outcome && (
           <div data-testid={`${testId}-outcome-${key}`}>
             <Alert variant={outcome.kind === 'success' ? 'success' : 'error'}>{outcome.text}</Alert>
@@ -336,6 +354,14 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
         )}
       </td>
     </tr>
+    {monthOpen && (
+      <tr>
+        <td colSpan={7} id={`${testId}-grid-${key}`} data-testid={`${testId}-grid-${key}`}>
+          <ManagerSkemaGrid employeeId={item.employeeId} year={item.year} month={item.month} />
+        </td>
+      </tr>
+    )}
+    </>
   )
 }
 
