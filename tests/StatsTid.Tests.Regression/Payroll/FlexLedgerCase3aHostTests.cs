@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Npgsql;
 using static StatsTid.Tests.Regression.Payroll.FlexLedgerHostFixture;
 
 namespace StatsTid.Tests.Regression.Payroll;
@@ -166,6 +167,11 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
     /// stored). The export answers 200 with the note naming 2026-06, UNTRACKED, null balances and EMPTY lines, and writes
     /// NOTHING: no April record (June's remains the only one), no <c>PayrollExportGenerated</c> event, no audit row.
     ///
+    /// <para>R pin (fix-up 1, R-F2; "holds today"): the calculation's proof is still stored. Exactly one
+    /// <c>segment_manifests</c> row exists and the engine saw exactly one timeline call, because the calculation's manifest is
+    /// persisted BEFORE the export is attempted (<c>Program.cs</c>, ADR-016 D10's QUAL-205 footnote), whatever the export then
+    /// writes. A change that skipped the calculation, or lost its manifest, trips these.</para>
+    ///
     /// <para><b>Red conditions.</b> On <c>1185624f</c> the month answers 409 out-of-order: the status assertion fails. A fix
     /// that still adds the empty group (writing an empty April record with null balances) trips the "no record" and the record
     /// count assertions.</para>
@@ -184,6 +190,8 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
         Assert.Equal(1, await _fx.CountRecordsAsync(employeeId));
         Assert.Equal(0, await _fx.CountExportEventsAsync(employeeId));
         Assert.Equal(0, await _fx.CountAuditRowsAsync(employeeId, "PayrollExportGenerated"));
+        Assert.Equal(1, await _fx.CountManifestsAsync(employeeId));
+        Assert.Single(_fx.Engine.TimelineCalls, c => c.EmployeeId == employeeId);
     }
 
     /// <summary>
@@ -194,6 +202,10 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
     /// (the Backend host is not in this fixture, so the reopen route itself is not driven); (3) <c>/recalculate</c> refuses the
     /// never-exported month with 422 <c>payroll-not-exported</c> (the route's own kind, <c>Payroll/Program.cs</c>), nothing
     /// written.
+    ///
+    /// <para>R pin (fix-up 1, R-F2): each export request is its own calculation with its own manifest id, so a re-export adds
+    /// a SECOND <c>segment_manifests</c> row (the count is the number of calculations, not of records) while the record count
+    /// stays 0.</para>
     ///
     /// <para><b>Red conditions.</b> On <c>1185624f</c> the first export 409s (setup assertion). After the fix, a path that wrote
     /// an empty record on the second call would trip the "no record" assertion and lock the month; a /recalculate that treated
@@ -214,6 +226,7 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
             "SELECT COUNT(*) FROM payroll_export_records WHERE employee_id = @e AND year = 2026 AND month = 4",
             ("e", employeeId)));
         Assert.Equal(0, await _fx.CountExportEventsAsync(employeeId));
+        Assert.Equal(2, await _fx.CountManifestsAsync(employeeId));
 
         var recalc = await _fx.RecalculateMonthAsync(employeeId, Apr);
 
@@ -224,6 +237,97 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
         Assert.Equal(0, await _fx.CountCorrectionEventsAsync(employeeId));
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    // Four-eyes — the record-less zero-line month runs the same in-transaction checks (fix-up 1, R-F1)
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// <summary>Seeds an APPROVED month whose approver is the same person who sent it (TASK-14704's seeding, as in
+    /// <c>PayrollSenderSeparationHostTests</c>: submitted_by, employee_approved_by and approved_by all the same actor).</summary>
+    private async Task SeedSelfApprovedMonthAsync(string employeeId, DateOnly month)
+    {
+        await using var conn = _fx.Db.Create();
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO approval_periods
+                (period_id, employee_id, org_id, period_start, period_end, period_type, status, agreement_code, ok_version,
+                 submitted_by, employee_approved_by, approved_by, approved_at)
+            VALUES
+                (gen_random_uuid(), @emp, @org, @start, @end, 'MONTHLY', 'APPROVED', @agreement, @ok,
+                 'hr-self', 'hr-self', 'hr-self', NOW())
+            """, conn);
+        cmd.Parameters.AddWithValue("emp", employeeId);
+        cmd.Parameters.AddWithValue("org", FlexLedgerHostFixture.OrgId);
+        cmd.Parameters.AddWithValue("start", FlexLedgerHostFixture.MonthStart(month));
+        cmd.Parameters.AddWithValue("end", FlexLedgerHostFixture.MonthEnd(month));
+        cmd.Parameters.AddWithValue("agreement", FlexLedgerHostFixture.Agreement);
+        cmd.Parameters.AddWithValue("ok", FlexLedgerHostFixture.Ok);
+        Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+    }
+
+    private static string FourEyesError(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("payroll-export-conflict", Str(doc.RootElement, "kind"));
+        Assert.False(doc.RootElement.GetProperty("success").GetBoolean());
+        var error = Str(doc.RootElement, "error")!;
+        Assert.Contains("approved by the person who sent it (four-eyes)", error);
+        return error;
+    }
+
+    /// <summary>
+    /// Four-eyes on a record-less pre-ledger zero-line month (kind F, Docker; TASK-14715 fix-up 1, R-F1, Fable 5a WARNING).
+    /// April has no record, no hours (zero lines) and comes before the June ledger start, but its approval was stamped by the
+    /// same person who sent it. It must meet the same refusal every other month meets: 409 <c>payroll-export-conflict</c>
+    /// whose error says the month "was approved by the person who sent it (four-eyes)", and nothing is written (no record,
+    /// no event). A tracked month in the same situation (June with no ledger yet) answers the same status, kind and
+    /// four-eyes sentence, shown by the mirror fact below; only the period id inside the sentence differs.
+    ///
+    /// <para><b>Red conditions.</b> At <c>2ffbd482</c> the record-less zero-line month returned before the transaction, so it
+    /// skipped the four-eyes checkpoint and answered 200: the 409 status assertion fails (<c>expected 409, got 200</c>). A
+    /// fix that ran the checkpoint but still wrote an empty record would trip the no-record assertion.</para>
+    /// </summary>
+    [Fact]
+    public async Task Case3a_ZeroLines_SelfApprovedMonth_Returns409FourEyes_NothingWritten()
+    {
+        var employeeId = $"EMP-S147-C3A-SELF";
+        await _fx.SeedEmployeeAsync(employeeId);
+        await _fx.SeedLedgerRecordAsync(employeeId, Jun, closing: 1m);
+        await _fx.SeedApprovedMonthAsync(employeeId, Mar);
+        await SeedSelfApprovedMonthAsync(employeeId, Apr);
+
+        var response = await _fx.CalculateAndExportMonthAsync(employeeId, Apr);
+
+        AssertStatus(HttpStatusCode.Conflict, response);
+        FourEyesError(response.Json);
+        Assert.Null(await _fx.ReadRecordAsync(employeeId, Apr));
+        Assert.Equal(1, await _fx.CountRecordsAsync(employeeId));
+        Assert.Equal(0, await _fx.CountExportEventsAsync(employeeId));
+        Assert.Equal(0, await _fx.CountAuditRowsAsync(employeeId, "PayrollExportGenerated"));
+    }
+
+    /// <summary>
+    /// Four-eyes mirror on a normal tracked month (kind R, "regression pin — holds today"). June with NO ledger yet (so it is
+    /// the ledger start, tracked), self-approved: the same 409, kind and four-eyes sentence as the pre-ledger zero-line
+    /// month, and nothing written. It shows that the record-less zero-line month is refused exactly as a normal month is.
+    ///
+    /// <para><b>Red conditions.</b> Holds today and must keep holding: a calculating export that skipped the four-eyes
+    /// check would answer 200 and fail the status assertion.</para>
+    /// </summary>
+    [Fact]
+    public async Task TrackedMonth_SelfApproved_Returns409FourEyes_NothingWritten()
+    {
+        var employeeId = "EMP-S147-C3A-SELF-TRACKED";
+        await _fx.SeedEmployeeAsync(employeeId);
+        await SeedSelfApprovedMonthAsync(employeeId, Jun);
+
+        var response = await _fx.CalculateAndExportMonthAsync(employeeId, Jun);
+
+        AssertStatus(HttpStatusCode.Conflict, response);
+        FourEyesError(response.Json);
+        Assert.Equal(0, await _fx.CountRecordsAsync(employeeId));
+        Assert.Equal(0, await _fx.CountExportEventsAsync(employeeId));
+    }
     // ═════════════════════════════════════════════════════════════════════
     // D1 — the zero-line skip is guarded by "no record"
     // ═════════════════════════════════════════════════════════════════════

@@ -517,6 +517,10 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
     /// UNTRACKED with null balances, and, having no lines, writes nothing: one record only (June's), no event.
     /// (The case with lines, the re-run and the zero-line follow-ups are pinned in <c>FlexLedgerCase3aHostTests</c>.)
     ///
+    /// <para>R pin (fix-up 1, R-F2; "holds today"): the calculation's proof is stored even though the export writes nothing:
+    /// exactly one <c>segment_manifests</c> row, and the engine saw exactly one timeline call (the calculation's manifest is
+    /// persisted before the export, ADR-016 D10's QUAL-205 footnote).</para>
+    ///
     /// <para><b>Red conditions.</b> On <c>1185624f</c> April is refused 409 <c>payroll-export-out-of-order</c>: the status
     /// assertion fails. A fix that wrote an empty April record trips the record-count assertion.</para>
     /// </summary>
@@ -540,6 +544,8 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
         Assert.Equal(1, await _fx.CountRecordsAsync(employeeId));
         Assert.Null(await _fx.ReadRecordAsync(employeeId, Apr));
         Assert.Equal(0, await _fx.CountExportEventsAsync(employeeId));
+        Assert.Equal(1, await _fx.CountManifestsAsync(employeeId));
+        Assert.Single(_fx.Engine.TimelineCalls, c => c.EmployeeId == employeeId);
     }
 
     // ═════════════════════════════════════════════════════════════════════
