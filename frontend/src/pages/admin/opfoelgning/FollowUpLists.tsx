@@ -195,7 +195,11 @@ export function leaverRefusalText(status: number, rawError: string | undefined):
   if (status === 422) {
     if (typeof b.message === 'string' && b.message) return b.message
     if (Array.isArray(b.missingDays) && b.missingDays.length > 0) {
-      const days = (b.missingDays as unknown[]).filter((d): d is string => typeof d === 'string').map(formatDaDate).join(', ')
+      // Date-only strings formatted in UTC, as formatDaLongDate does: a viewer west of UTC must not see the day before.
+      const days = (b.missingDays as unknown[])
+        .filter((d): d is string => typeof d === 'string')
+        .map((d) => new Date(`${d}T00:00:00Z`).toLocaleDateString('da-DK', { timeZone: 'UTC' }))
+        .join(', ')
       return `Måneden kan ikke sendes endnu: der mangler registreringer for ${days}.`
     }
     return 'Måneden kan ikke sendes endnu: der mangler registreringer eller fordeling. Åbn måneden for at se detaljerne.'
@@ -272,6 +276,8 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
   }
 
   const turn = leaverTurnText(item)
+  // The server also accepts a send from SUBMITTED (AllowedSendSourceStates); it is deliberately not offered here,
+  // because a SUBMITTED row already offers Godkend/Afvis and a second send adds nothing.
   const canSend = periodId === null || status === 'NONE' || status === 'DRAFT' || status === 'REJECTED'
   const canDecide = periodId !== null && (status === 'SUBMITTED' || status === 'EMPLOYEE_APPROVED')
 
