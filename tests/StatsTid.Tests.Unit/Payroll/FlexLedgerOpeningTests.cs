@@ -81,21 +81,25 @@ public class FlexLedgerOpeningTests
     // ---- case 3 -------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Case 3a — M precedes the ledger start S and has no record at all: a first export of an earlier month is refused
-    /// 409 payroll-export-out-of-order, naming S (June here). There is no route input (R-28). Kind N. Red conditions: Opening is
-    /// null; Refusal.Kind is the out-of-order kind and Month is S; a core that opens it (LEDGER_START or UNTRACKED) or names
-    /// M instead of S trips it.
+    /// Case 3a - M precedes the ledger start S and has no record at all: a first export of an earlier month opens at 0,
+    /// UNTRACKED, naming S (June here), never stored; no refusal. There is no route input (R-28).
+    /// // S147 OQ-3 (i): re-pinned from the S146 refusal (409 payroll-export-out-of-order) by the owner's ruling (SEC-054 step 1).
+    /// Kind F. Red conditions: Refusal is null; Balance 0, provenance UNTRACKED, <c>IsUntracked</c>, LedgerStart = S. On
+    /// <c>1185624f</c> the core refuses (Opening null, Kind out-of-order), so the Refusal-null assertion fails; a core that
+    /// opens it as LEDGER_START or CHAINED, or names M instead of S, trips the rest.
     /// </summary>
     [Fact]
-    public void Case3a_UnrecordedMonthBeforeLedgerStart_RefusesOutOfOrderNamingS()
+    public void Case3a_UnrecordedMonthBeforeLedgerStart_IsUntrackedZero()
     {
         var records = new[] { Ledger(Jun, 0m, 1m, FlexLedgerOpening.LedgerStart) };
 
         var decision = FlexLedgerOpening.Derive(Apr, records, Continuous);
 
-        Assert.Null(decision.Opening);
-        Assert.Equal("payroll-export-out-of-order", decision.Refusal!.Kind);
-        Assert.Equal(Jun, decision.Refusal.Month);
+        Assert.Null(decision.Refusal);
+        Assert.Equal(0m, decision.Opening!.Balance);
+        Assert.Equal("UNTRACKED", decision.Opening.Provenance);
+        Assert.True(decision.Opening.IsUntracked);
+        Assert.Equal(Jun, decision.Opening.LedgerStart);
     }
 
     /// <summary>

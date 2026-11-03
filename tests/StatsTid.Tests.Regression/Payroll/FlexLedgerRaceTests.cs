@@ -301,14 +301,18 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
     /// AC-C4 (ii), the LATER month first (kind F, Docker; R-14's ruled consequence, stated, not a defect). The same two requests,
     /// July queued first: July wins and becomes <c>LEDGER_START</c> (0 -> 20). June's recheck now finds an unrecorded month BEFORE
     /// the ledger start, a refusal rather than an opening: June is 409 <c>payroll-ledger-changed</c> (<c>2026-06</c>). On RETRY June
-    /// is refused for good, 409 <c>payroll-export-out-of-order</c> naming the ledger start (<c>2026-07</c>): an earlier month can
-    /// enter only as a raw export (and then run UNTRACKED). The ruling is that the system never re-opens the ledger backwards.
+    /// is paid with its flex NOT TRACKED: 200 with the note naming the ledger start (<c>2026-07</c>), UNTRACKED, and (June holds
+    /// no hours, so no lines) no record written. // S147 OQ-3 (i): re-pinned from S146's refusal on retry (409
+    /// <c>payroll-export-out-of-order</c>) by the owner's ruling (SEC-054 step 1); an earlier month enters untracked, and the
+    /// system still never re-opens the ledger backwards (June's flex is not carried).
     ///
     /// <para><b>Red conditions (argued).</b> Pre-S146 June exports after July without complaint (both 200): the first 409
-    /// assertion fails. A recheck that ignores refusals (compares only openings it can compute) would let June through: same.</para>
+    /// assertion fails. A recheck that ignores refusals (compares only openings it can compute) would let June through: same.
+    /// The retry leg is F against <c>1185624f</c>: it answered 409 <c>payroll-export-out-of-order</c>, so the 200 and the
+    /// note assertions fail there.</para>
     /// </summary>
     [Fact]
-    public async Task TwoFirstExports_LaterMonthFirst_EarlierGetsLedgerChanged_ThenOutOfOrderOnRetry()
+    public async Task TwoFirstExports_LaterMonthFirst_EarlierGetsLedgerChanged_ThenUntrackedOnRetry()
     {
         const string employeeId = "EMP-S146-RACE-II-B";
         await _fx.SeedEmployeeAsync(employeeId);
@@ -335,11 +339,11 @@ public sealed class FlexLedgerRaceTests : IClassFixture<FlexLedgerHostFixture>
 
         var retry = await _fx.CalculateAndExportMonthAsync(employeeId, Jun);
 
-        Assert.True(retry.Status == HttpStatusCode.Conflict, $"retry of June: {retry.Status} {retry.Json}");
+        Assert.True(retry.Status == HttpStatusCode.OK, $"retry of June: {retry.Status} {retry.Json}");
         using (var doc = JsonDocument.Parse(retry.Json))
         {
-            Assert.Equal("payroll-export-out-of-order", Str(doc.RootElement, "kind"));
-            Assert.Equal("2026-07", Str(doc.RootElement, "month"));
+            Assert.Equal("flex not tracked: the month precedes the ledger start 2026-07", Str(doc.RootElement, "flexNote"));
+            Assert.Equal("UNTRACKED", Str(doc.RootElement, "flexProvenance"));
         }
         Assert.Null(await _fx.ReadRecordAsync(employeeId, Jun));
     }

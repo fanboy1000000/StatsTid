@@ -127,20 +127,22 @@ public class FlexLedgerChainWalkTests
     }
 
     /// <summary>
-    /// <c>DeriveLink</c> case 3a — M precedes S and has no record: 409 <c>payroll-export-out-of-order</c> naming S (June). Kind
-    /// N. Red conditions: Opening null, Kind out-of-order, Month = S, and the same refusal from <c>Derive</c>; mutation M-9
-    /// (3a names M instead of S, or opens it) trips it.
+    /// <c>DeriveLink</c> case 3a - M precedes S and has no record: 0, UNTRACKED, LedgerStart = S (June); no refusal.
+    /// // S147 OQ-3 (i): re-pinned from the S146 refusal (409 payroll-export-out-of-order naming S) by the owner's ruling.
+    /// Kind F. Red conditions: Refusal null, (0, UNTRACKED, June), <c>IsUntracked</c>, and the same decision from
+    /// <c>Derive</c>. On <c>1185624f</c> the link refuses (Opening null), so the Refusal-null assertion fails; mutation M-9
+    /// (3a refuses, or names M instead of S) trips it.
     /// </summary>
     [Fact]
-    public void DeriveLink_Case3a_UnrecordedMonthBeforeLedgerStart_RefusesNamingS()
+    public void DeriveLink_Case3a_UnrecordedMonthBeforeLedgerStart_IsUntrackedZero()
     {
         var records = new[] { Ledger(Jun, 0m, 1m, LS) };
 
         var link = FlexLedgerOpening.DeriveLink(Apr, FlexLedgerOpening.BuildIndex(records), Continuous);
 
-        Assert.Null(link.Opening);
-        Assert.Equal("payroll-export-out-of-order", link.Refusal!.Kind);
-        Assert.Equal(Jun, link.Refusal.Month);
+        Assert.Null(link.Refusal);
+        AssertOpens(link, 0m, "UNTRACKED", Jun);
+        Assert.True(link.Opening!.IsUntracked);
         Assert.Equal(FlexLedgerOpening.Derive(Apr, records, Continuous), link);
     }
 
