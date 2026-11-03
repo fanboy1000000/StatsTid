@@ -95,3 +95,35 @@ export function useHrFollowUp() {
     fetchPayoutPending,
   }
 }
+
+// S147 / TASK-14714 (HRP-011) - the leaver row's actions. From day 6 only HR can finish a
+// leaver's final month (TASK-14713). Each action rides an EXISTING typed endpoint; nothing here
+// decides anything. Every call returns the ApiResult untouched (status + raw body), so the
+// list words a refusal itself.
+export type SkemaMonthData = Schemas['StatsTid.Backend.Api.Contracts.SkemaMonthResponse']
+
+export function useLeaverMonthActions() {
+  const openMonth = useCallback((employeeId: string, year: number, month: number) => {
+    return apiClient.get('/api/skema/{employeeId}/month', {
+      params: { path: { employeeId } },
+      query: { year, month },
+    })
+  }, [])
+
+  const sendMonth = useCallback((employeeId: string, year: number, month: number) => {
+    return apiClient.post('/api/approval/send', { body: { employeeId, year, month } })
+  }, [])
+
+  const approvePeriod = useCallback((periodId: string) => {
+    return apiClient.post('/api/approval/{periodId}/approve', { params: { path: { periodId } } })
+  }, [])
+
+  const rejectPeriod = useCallback((periodId: string, reason: string) => {
+    return apiClient.post('/api/approval/{periodId}/reject', {
+      params: { path: { periodId } },
+      body: { reason },
+    })
+  }, [])
+
+  return { openMonth, sendMonth, approvePeriod, rejectPeriod }
+}

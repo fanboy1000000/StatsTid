@@ -14,9 +14,10 @@
 // reject/reopen in Teamoversigt; assign an approver or renew delegation cover
 // on the merged admin page) point there instead of inventing a duplicate
 // control here.
-import { type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { Alert, Badge, Spinner, Table } from '../../../components/ui'
+import { Alert, Badge, Button, Spinner, Table, Textarea } from '../../../components/ui'
+import { useLeaverMonthActions } from '../../../hooks/useHrFollowUp'
 import { formatMonthLabel } from '../../../lib/locale'
 import { daysLabel, formatDaDate, formatDaLongDate } from './followUpFormat'
 import type {
@@ -30,6 +31,7 @@ import type {
   VacationTransferAgreementNeededListResponse,
   PayoutPendingListResponse,
   HrFollowUpMonthItem,
+  SkemaMonthData,
 } from '../../../hooks/useHrFollowUp'
 import styles from './FollowUpLists.module.css'
 
@@ -168,6 +170,185 @@ export function PastDeadlineList({
   )
 }
 
+// ── Leaver's final month: the row's actions (S147 / TASK-14714, HRP-011) ─────
+
+/** A refusal in Danish. The server's 403 for the four-eyes rule carries an English `reason`
+    (`ApprovalSenderGuard.DenialReason`); the 422 for a month outside the employment period
+    carries a Danish `message` already. Anything else gets a plain Danish sentence — the raw
+    body is never shown. */
+export function leaverRefusalText(status: number, body: unknown): string {
+  const b = (body ?? {}) as { reason?: unknown; message?: unknown }
+  if (status === 403) {
+    const reason = typeof b.reason === 'string' ? b.reason : ''
+    if (reason.includes('four-eyes')) {
+      return 'Du har selv sendt denne måned, så en anden HR-medarbejder skal godkende eller afvise den (fire-øjne-princippet).'
+    }
+    return 'Du har ikke adgang til at udføre handlingen på denne måned.'
+  }
+  if (status === 422) {
+    if (typeof b.message === 'string' && b.message) return b.message
+    return 'Måneden kan ikke sendes endnu: der mangler registreringer eller fordeling. Åbn måneden for at se detaljerne.'
+  }
+  if (status === 409) return 'Månedens status er ændret af en anden. Genindlæs listen.'
+  return 'Handlingen mislykkedes. Prøv igen.'
+}
+
+/** "Leder til og med 18. marts 2026, kun HR fra 19. marts 2026". A row the server did not
+    date says nothing rather than guess. */
+export function leaverTurnText(item: HrFollowUpMonthItem): string | null {
+  if (!item.lastManagerDay || !item.firstHrOnlyDay) return null
+  return `Leder til og med ${formatDaLongDate(item.lastManagerDay)}, kun HR fra ${formatDaLongDate(item.firstHrOnlyDay)}`
+}
+
+type RowOutcome = { kind: 'success' | 'error'; text: string } | null
+
+function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: string }) {
+  const actions = useLeaverMonthActions()
+  const key = `${item.employeeId}-${item.year}-${item.month}`
+  const [periodId, setPeriodId] = useState<string | null>(item.periodId)
+  const [status, setStatus] = useState(item.periodStatus)
+  const [busy, setBusy] = useState(false)
+  const [outcome, setOutcome] = useState<RowOutcome>(null)
+  const [monthView, setMonthView] = useState<SkemaMonthData | null>(null)
+  const [rejecting, setRejecting] = useState(false)
+  const [reason, setReason] = useState('')
+
+  const refuse = (r: { status: number; body?: unknown }) =>
+    setOutcome({ kind: 'error', text: leaverRefusalText(r.status, r.body) })
+
+  const open = async () => {
+    setBusy(true)
+    setOutcome(null)
+    const r = await actions.openMonth(item.employeeId, item.year, item.month)
+    setBusy(false)
+    if (r.ok) setMonthView(r.data)
+    else refuse(r)
+  }
+
+  const send = async () => {
+    setBusy(true)
+    setOutcome(null)
+    const r = await actions.sendMonth(item.employeeId, item.year, item.month)
+    setBusy(false)
+    if (r.ok) {
+      setPeriodId(r.data.periodId)
+      setStatus(r.data.status)
+      setOutcome({ kind: 'success', text: `${item.displayName}: måneden er sendt.` })
+    } else refuse(r)
+  }
+
+  const approve = async () => {
+    if (!periodId) return
+    setBusy(true)
+    setOutcome(null)
+    const r = await actions.approvePeriod(periodId)
+    setBusy(false)
+    if (r.ok) {
+      setStatus('APPROVED')
+      setOutcome({ kind: 'success', text: `${item.displayName}: måneden er godkendt.` })
+    } else refuse(r)
+  }
+
+  const reject = async () => {
+    if (!periodId) return
+    setBusy(true)
+    setOutcome(null)
+    const r = await actions.rejectPeriod(periodId, reason.trim())
+    setBusy(false)
+    if (r.ok) {
+      setStatus('REJECTED')
+      setRejecting(false)
+      setReason('')
+      setOutcome({ kind: 'success', text: `${item.displayName}: måneden er afvist.` })
+    } else refuse(r)
+  }
+
+  const turn = leaverTurnText(item)
+  const hours = monthView ? monthView.entries.reduce((sum, e) => sum + e.hours, 0) : 0
+
+  return (
+    <tr data-testid={`${testId}-row-${key}`}>
+      <td>{item.displayName}</td>
+      <td>{formatMonthLabel(item.year, item.month)}</td>
+      <td data-testid={`${testId}-status-${key}`}>{PERIOD_STATUS_LABEL[status]}</td>
+      <td>{item.daysPastAnchor > 0 ? daysLabel(item.daysPastAnchor) : '—'}</td>
+      <td>
+        {item.deadlineSource === 'computed' ? (
+          <span className={styles.computedBadge} data-testid={`${testId}-computed-${key}`}>
+            beregnet (ingen gemt frist)
+          </span>
+        ) : (
+          'gemt'
+        )}
+      </td>
+      <td data-testid={`${testId}-turn-${key}`}>{turn ?? '—'}</td>
+      <td>
+        <div className={styles.rowActions}>
+          <Button size="sm" variant="secondary" disabled={busy} onClick={open} data-testid={`${testId}-open-${key}`}>
+            Åbn måned
+          </Button>
+          <Button size="sm" disabled={busy} onClick={send} data-testid={`${testId}-send-${key}`}>
+            Send måned
+          </Button>
+          {periodId && (
+            <>
+              <Button size="sm" disabled={busy} onClick={approve} data-testid={`${testId}-approve-${key}`}>
+                Godkend
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                disabled={busy}
+                onClick={() => setRejecting((v) => !v)}
+                data-testid={`${testId}-reject-${key}`}
+              >
+                Afvis
+              </Button>
+            </>
+          )}
+        </div>
+        {rejecting && periodId && (
+          <div className={styles.rejectBox}>
+            <Textarea
+              id={`${testId}-reason-${key}`}
+              rows={2}
+              placeholder="Begrundelse (valgfri)"
+              aria-label={`Begrundelse for afvisning af ${item.displayName}`}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            />
+            <Button size="sm" variant="danger" disabled={busy} onClick={reject} data-testid={`${testId}-reject-confirm-${key}`}>
+              Bekræft afvisning
+            </Button>
+          </div>
+        )}
+        {monthView && (
+          <p className={styles.caveat} data-testid={`${testId}-month-${key}`}>
+            {formatMonthLabel(monthView.year, monthView.month)}: {new Set(monthView.entries.map((e) => e.date)).size} dage med
+            registreringer, {hours.toLocaleString('da-DK')} timer
+            {monthView.approval ? `, status ${PERIOD_STATUS_LABEL[monthView.approval.status]}` : ', ingen periode oprettet'}.
+          </p>
+        )}
+        {outcome && (
+          <div data-testid={`${testId}-outcome-${key}`}>
+            <Alert variant={outcome.kind === 'success' ? 'success' : 'error'}>{outcome.text}</Alert>
+          </div>
+        )}
+      </td>
+    </tr>
+  )
+}
+
+function LeaverMonthsTable({ items, testId }: { items: HrFollowUpMonthItem[]; testId: string }) {
+  return (
+    <Table headers={['Medarbejder', 'Måned', 'Status', 'Frist overskredet med', 'Fristkilde', 'Hvis tur', 'Handlinger']}>
+      {items.map((item) => (
+        <LeaverMonthRow key={`${item.employeeId}-${item.year}-${item.month}`} item={item} testId={testId} />
+      ))}
+    </Table>
+  )
+}
+
 // ── Leaver's final month (HRP-011) ──────────────────────────────────────────
 
 export function LeaverFinalMonthList({
@@ -184,13 +365,9 @@ export function LeaverFinalMonthList({
       isEmpty={items.length === 0}
       emptyText="Ingen fratrådte med en åben sidste måned."
       floorNote={data ? `Ser 12 måneder tilbage (fra ${data.lookbackFloor}).` : undefined}
-      actionNote={
-        <>
-          Indsend eller godkend måneden som enhver anden i <Link to="/godkend/oversigt">Teamoversigt</Link>.
-        </>
-      }
+      actionNote="Fra dag 6 efter fratrædelsen er det kun HR, der kan godkende, afvise eller genåbne måneden. Handlingerne ligger på hver række."
     >
-      <MonthItemsTable items={items} testId="list-leaver-final-month" />
+      <LeaverMonthsTable items={items} testId="list-leaver-final-month" />
       <p className={styles.caveat} data-testid="list-leaver-final-month-caveat">
         En fratrådt medarbejders sidste måned kan optræde her OG under "Forbi frist" — de to lister
         hører til forskellige roller, og tallene må ikke lægges sammen.
