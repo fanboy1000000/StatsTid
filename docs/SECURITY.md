@@ -117,7 +117,7 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
 - `DenyReason` holds no date and no id (ADR-040 D7).
 
 **Where the predicate runs:**
-- In the identity arm of both validator overloads (`OrgScopeValidator.cs:115`, `:274`). On the leader-inclusive overload it runs *before* the HR gate, so an HR-tier leaver gets this reason and not the HR one. The validator reads the date from the injected `TimeProvider` (`CopenhagenBusinessDate.Today`).
+- In the identity arm of both validator overloads (`OrgScopeValidator.cs:115`, `:286`). On the leader-inclusive overload it runs *before* the HR gate, so an HR-tier leaver gets this reason and not the HR one. The validator reads the date from the injected `TimeProvider` (`CopenhagenBusinessDate.Today`).
 - Through that check it covers the 32 write routes that use the shared check, in three hosts.
 - Thirteen inline guards cover the write routes the validator does not reach, plus a derived guard on `/remove`. The S147 census counted 84 write routes: 32 shared-check, 19 inline, 33 not keyed on the actor. TASK-14710 later retired the two project selection routes (`POST`/`DELETE /api/projects/{orgId}/select/{projectId}`), so the inventory is two smaller.
 - **The self-service write floor (TASK-14710; `Endpoints/Helpers/DepartedSubjectWriteFloor.cs`).** It covers the own-record writes an Employee-role token reaches through the validator's own-data branch, where the identity clause is never consulted. It refuses when the subject has left AND (the actor is the subject OR the actor is below LocalHR). It runs at seven sites:
@@ -132,6 +132,12 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
 
 **Scope and consequences:**
 - Acting on *other* people stays governed by the existing rules, SEC-003's accepted residual. A departed person's edge-based approver authority ends on day 1 (TASK-14712). Their org-scope authority during the grace is SEC-057.
+- **HR only from day 6 (TASK-14713, QUAL-230 T5b).** Once Step A has switched the leaver off on day 6, five surfaces admit the switched-off subject through the terminated-inclusive validator (`ValidateEmployeeAccessIncludingTerminatedAsync`):
+  - approve, reject and reopen's leader arm, at the LocalHR floor;
+  - the Skema month view, HR tier only (the person's own read still answers 404);
+  - payroll `/calculate-and-export`, at the LocalAdmin floor.
+
+  The manager's own edge and any leader-scope token are refused. On every one of these surfaces an **employed-month bound runs after the gate**. A month without one employed day gets a date-free 422 (`month_outside_employment_period`), so a refused actor sees the same refusal for every month and no date leaks. Approve, reject and reopen lock through a terminated-inclusive tree-lock overload that takes the same key as the shared helper, and they audit against the subject's own organisation. A below-HR actor on a switched-off subject now reads "Terminated-employee access requires LocalHR or above", as S138's send does. That reveals the person has left, but not when.
 - Reads through the shared validator are refused for a departed self too. This is intended, and neither refusal below is a regression:
   - Payroll `calculate-and-export` is refused for a departed self.
   - Orchestrator `/execute` is refused for a departed self holding a non-Employee role. An Employee-only leaver's token still reaches `/execute` through the own-data branch. That is acceptable: it computes, and changes nothing on the person's own record.
@@ -169,9 +175,9 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
 **Why.** A month passes payroll on two signatures: the employee's, given when the month is sent (or by HR on the employee's behalf), and the approver's. Segregation of duties means those two signatures come from two different people, and nobody decides their own case. Both state tenders analysed in 2026-10 require it (EM A1 (e), VD 35).
 
 **The rules, as built:**
-1. **Nobody approves or rejects their own month, or reopens it once approved** (SEC-009, S130). `ApprovalSelfGuard` checks this at approve, reject and reopen (`ApprovalEndpoints.cs:250`, `:518`, `:1709`), and the choke point sits in `IsEffectiveApproverOrUnitLeaderAsync`.
+1. **Nobody approves or rejects their own month, or reopens it once approved** (SEC-009, S130). `ApprovalSelfGuard` checks this at approve, reject and reopen (`ApprovalEndpoints.cs:357`, `:653`, `:1891`), and the choke point sits in `IsEffectiveApproverOrUnitLeaderAsync`.
 2. **Whoever sent a month can neither approve nor reject it** (SEC-053, S147; owner OQ-1 = (a): strict, no exception). The sender is `employee_approved_by`, or `submitted_by` on a legacy row (`ApprovalSenderGuard.SenderOf`). The rule is checked three times:
-   - at the door, as a 403 with a structured WARNING (`ApprovalEndpoints.cs:268`, `:531`, re-checked on the conflict paths `:409`, `:624`);
+   - at the door, as a 403 with a structured WARNING (`ApprovalEndpoints.cs:375`, `:666`, re-checked on the conflict paths `:538`, `:771`);
    - inside the transaction that writes the decision, as a predicate on the conditional UPDATE (`ApprovalPeriodRepository.cs:1939`, `COALESCE(employee_approved_by, submitted_by) IS DISTINCT FROM @actorId`), so a race cannot slip past the door check;
    - at payroll, where an approval turns into money (`PayrollExportService.cs:404-444`; a null sender passes).
 
