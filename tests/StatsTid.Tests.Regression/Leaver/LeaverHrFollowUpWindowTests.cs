@@ -46,7 +46,7 @@ public sealed class LeaverHrFollowUpWindowTests : LeaverHrOnlyTestBase
     /// <summary>
     /// AC-230-9, the month view. Kind <b>F</b>. On D+6 an in-scope LocalHR opens the switched-off Mette's Skema March: 200, her March, the 31 days,
     /// and the ten absences she was registered for (the view served her data, not an empty shell). A switched-off person reading her OWN month is
-    /// still refused (404 today; a refusal is the contract) and the body carries none of her data: the widening is HR-only. (That second half is
+    /// still refused with 404 and the body carries none of her data: the widening is HR-only. (That second half is
     /// a boundary pin, holds today.)
     ///
     /// <para><b>Red conditions.</b> Today HR falls into the leader tier for a switched-off employee and is refused 403: <c>Assert.True(status == OK)</c>
@@ -74,8 +74,8 @@ public sealed class LeaverHrFollowUpWindowTests : LeaverHrOnlyTestBase
         using var self = ClientAt(Day(6), RoleToken(mette, StatsTidRoles.Employee));
         var own = await SkemaMonthAsync(self, mette, 3);
         var ownRaw = await own.Content.ReadAsStringAsync();
-        Assert.True(own.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden,
-            $"a switched-off person reading her own month must be refused, got {(int)own.StatusCode}: {ownRaw}");
+        Assert.True(own.StatusCode == HttpStatusCode.NotFound,
+            $"a switched-off person reading her own month must get 404 (SkemaEndpoints.cs:263-264), got {(int)own.StatusCode}: {ownRaw}");
         Assert.DoesNotContain("absences", ownRaw);
     }
 

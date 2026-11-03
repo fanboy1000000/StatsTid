@@ -42,9 +42,9 @@ public sealed class LeaverRecalculateGuardTests : LeaverHrOnlyTestBase
         var periodId = await SeedPeriodAsync(Cs, leaver, "EMPLOYEE_APPROVED");
         using (var mgr = LeaderAt(Day(3), manager))
             await AssertStatusAsync(await ApproveAsync(mgr, periodId), HttpStatusCode.OK, "the manager's approve on D+3");
-        await DeactivateAsync(Cs, leaver);
         var export = await ExportAsync(LocalAdminToken(NewId("rg_admin")), leaver);
         Assert.True(export.Status == HttpStatusCode.OK, $"precondition: the month must be exported, got {(int)export.Status}: {export.Body}");
+        await DeactivateAsync(Cs, leaver); // day 6: switched off AFTER the export, so the setup holds on code that predates the widening
 
         Fx.Engine.Configure(leaver, new DateOnly(2026, 3, 1), closing: 4.0m);
         var (status, body) = await RecalculateAsync(

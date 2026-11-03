@@ -72,7 +72,7 @@ public sealed class StepAFixture : IAsyncLifetime
 /// 200, a LocalAdmin's export 200 with the flex-ledger record. The manager's refusal reason, and the approving HR's recorded
 /// identity, are pinned too.</para>
 ///
-/// <para>Docker-gated: <b>CI-pending</b> (first seen green at CI-W3b), never locally green.</para>
+/// <para>Docker-gated: <b>CI-pending</b>, never locally green.</para>
 /// </summary>
 [Trait("Category", "Docker")]
 public sealed class LeaverHrOnlyTests : IClassFixture<StepAFixture>
