@@ -453,8 +453,14 @@ governing model is **ADR-040 "Employee timeline & as-of resolution"** (owner-rat
 - **Enforcement**: registration (time/absence/skema) outside the window is refused with date-free
   errors; window edits that would strand existing registered data are refused; approval keeps
   whole-month geometry with content window-clean by construction; access for departed employees is
-  role-gated (HR corrections via the terminated-inclusive paths), with `is_active` governing
-  login/session only.
+  role-gated (HR corrections via the terminated-inclusive paths).
+- **A leaver's last days**: the leaver's own access ends the day after their last working day,
+  whatever their role: login is refused and nothing of their own can be changed. Their manager keeps
+  5 calendar days after that day to approve, reject or reopen the final month; from day 6 only HR may
+  act, and payroll pays the month. The month's deadline and payroll cutoff do not move. A departed
+  manager's authority over others ends the day after their own last day; a stand-in appointed before
+  they left keeps signing until its end date or until HR revokes it. *(S147, `2026-11-03`: ADR-040
+  amendment 2026-11-03; owner rulings OQ-2 and Q-B = (c); owner-approved spec update)*
 - **As-of resolution**: what was true on date X — position, part-time fraction, agreement code,
   OK-version (a pure function of the date, ADR-003), employment category, and (model decided,
   implementation a named follow-up) org/unit membership — resolves from the dated history, never

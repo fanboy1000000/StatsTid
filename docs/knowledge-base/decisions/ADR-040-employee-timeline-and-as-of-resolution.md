@@ -71,6 +71,9 @@ Three gates, each with exactly one job:
   is what selects the role floor above (writes for a deactivated leaver require HROrAbove) — and
   the existing self-write exemption (`writeFloor = null` when subject == actor) **yields to it**:
   a deactivated self is not exempt. This is the precise closure of SEC-046.
+  *(Amended S147, 2026-11-03 — see "Amendment 2026-11-03" below: login also ends the day after the
+  last day employed; the floors read "departed" (deactivated, or past the last day), not the flag
+  alone; and a departed self is refused whatever their role.)*
 
 **The window-edit strand guard.** Setting, narrowing, or backdating an employment date validates
 against the subject's EXISTING registered data: if time entries, absences, or approved months
@@ -337,3 +340,168 @@ Enforced by `BackdateWorklistDerivation.SettledYearThreatened` (the composition)
 `CorrectionReachesSettlementBoundary` (half a) and `SettledYearIntersects` (half b);
 pinned in `tests/StatsTid.Tests.Unit/Worklist/BackdateWorklistDerivationTests.cs`, including the
 boundary-day case.
+
+## Amendment 2026-11-03 — S147: a leaver's last days (QUAL-230; owner rulings OQ-2, Q-B = (c), Q-C = (b))
+
+**Why this exists, in plain words.** Until S147 the system switched a leaver off the day after their last working
+day, and from that moment nobody could approve, reject, reopen or pay their final month: not the manager, not HR,
+not payroll (QUAL-230). The owner ruled (S147 OQ-2, 2026-10-27) that the leaver's own manager keeps **5 calendar
+days** after the last day to finish the month as usual, that from **day 6 only HR** may act, and that the leaver's
+**own** access still ends the day after the last day, whatever their role. Building that changed three statements
+of D3, so this amendment records the rule as built: TASK-14703, the TASK-14710 stack, TASK-14712 and the
+TASK-14713 stack, all merged, their Docker facts green in CI-W2b (run `41310143330`), CI-W3 (run `41335270197`)
+and CI-W3b (run `41641201066`). D1, D2, D6 and D7 stand; D7 gains one precision below.
+
+**The three dates of a leaver's final month.** D is the last day employed (`employment_end_date`, inclusive, D1).
+
+| | The leaver, acting | The leaver's record | Their manager | HR and payroll |
+|---|---|---|---|---|
+| **D** | as any employee | active | as before | as before |
+| **D+1 … D+5** | cannot log in; a session opened earlier cannot change anything of their own, whatever their role; their authority as an approver over others has ended | still `is_active`, by design | approves, rejects or reopens from Teamoversigt, as before | as before |
+| **D+6 on** | no access | switched off by Step A (the leaver job's switch-off step) | refused | HR approves, rejects, reopens and views the month; payroll's LocalAdmin pays it |
+
+Example: last day Friday 13 March 2026 → login refused from 14 March; the manager acts until 18 March; HR only
+from 19 March. **The month's own deadline and payroll export cutoff do not move:** month-end + 5 (here 5 April),
+owner-ratified and the same for every employee (`InstitutionalDeadlines`). For a month-end leaver the manager's
+last day coincides with that deadline; for a mid-month leaver it falls earlier, and the month's deadline stays.
+Nothing new is stored: the hand-over dates are derived from the end date and one constant (K-11).
+
+**What changed in D3.**
+1. **"`is_active` governs login/session only for the ACTOR" no longer holds.** Login also refuses a person whose
+   last day has passed (`AuthEndpoints.cs:93-98`: the same generic 401 as a wrong password, logged
+   `employment_ended`). The floors read **"departed"**: deactivated, OR the last day lies before today's
+   Copenhagen date (`DepartedSubject.IsDeparted`, `src/SharedKernel/StatsTid.SharedKernel/Security/DepartedSubject.cs:101-116`).
+   The last day itself still counts as employed. `is_active` still decides which reads see a person (active-only,
+   or the R9c terminated-inclusive reads: the allowlist of surfaces that may address a switched-off person) and,
+   from D+6, who may act for them.
+2. **A departed self has no role to fall back on.** D3 said a deactivated self "is not exempt" from the role
+   floor. Under that letter, S136's Step 5a accepted that a deactivated HR-tier actor could still register and
+   send their own facts (adjudicated behaviour (a), `SPRINT-136.md:89-90`). **That residual is superseded**
+   (S147 Step 0b P-12, under OQ-2's "whatever the role"): when the actor is the subject there is no role fallback;
+   the HR floor exists for HR acting on others. The two S136 pins now expect 403 and are renamed
+   `…_Is403_ReDecidedS147` (`SendCommandTerminatedSubjectTests.cs:309`; `TerminatedEmployeeAccessTests.cs:653`).
+3. **D3's role floor covers the grace.** At the self-service sites the floor refuses when the subject has departed
+   AND (the actor is the subject OR the actor is below LocalHR) (`Endpoints/Helpers/DepartedSubjectWriteFloor.cs:94-110`).
+   So during D+1 … D+5 the manager decides the month (approve, reject, reopen) but cannot write the leaver's hours,
+   exactly as from D+1 before S147. HR may still correct them.
+
+**Where the departed-self rule runs (owner Q-C = (b), 2026-10-28: door by door).**
+- **Inside the org-scope validator,** in both employee overloads, right after the target read and before the
+  terminated-inclusive overload's HR gate (`OrgScopeValidator.cs:115`, `:286`; the test at `:522-524`). It is the
+  identity arm only, so a manager still reaches a leaver during the grace and HR still acts on leavers. **It
+  refuses reads too:** a departed self is refused on every org-scoped route, reads included (R-30; ruled intended
+  at the TASK-14703 security consult, R1). Self-reads that do not pass through the validator stay as before (the
+  Employee own-data branch; K-13).
+- **Inline at 13 write routes the validator does not reach:** the users PUT, roles grant and revoke, the unit PUT,
+  unit delete, unit leaders add and remove, the reporting-line import, the delegate set and clear, the admin
+  stand-in set and clear when the manager is the actor, and Payroll `/recalculate` (`Payroll/Program.cs:670-690`).
+  Plus a derived guard on `/remove` for an actor among the removed person's reports
+  (`ReportingLineEndpoints.cs:1434-1437`). Each answers 403 before its first write.
+- **At the seven self-service sites** an Employee token reaches through the validator's own-data branch (the floor
+  in point 3 above; `docs/SECURITY.md` lists the sites).
+- **The census (P-1, the subject-key rule).** A route is guarded when the departed person's own id is the subject
+  key of a row it writes (`users.user_id`, `role_assignments.user_id`, `unit_leaders.user_id`,
+  `reporting_lines.employee_id`, `manager_vikar.absent_approver_id`). An id that only holds authority over someone
+  else is left to the acting-user rule below. Of the 84 write routes in the three hosts, 32 close through the
+  validator; 19 are guarded another way (13 inline, 2 by the self-service floor, 4 by retirement: the two project
+  selection routes, retired by TASK-14710, and Payroll `/export` and `/export-period`, which TASK-14716 retires);
+  33 are classified out.
+- **Alternative declined (Q-C = (b)).** One check at each service's front door, refusing every write by a departed
+  actor. It would have covered other people's data as well, but it is a new cross-cutting gate the owner chose not
+  to build. So a departed HR, admin or leader's last token can still act on *other people* until it expires:
+  SEC-003's residual, and SEC-057 for the grace.
+
+**One message per clause.** The departed-self refusal carries `DepartedSubject.DenyReason`, "A departed employee
+cannot act on their own record" (`DepartedSubject.cs:76`), from the validator, the inline guards and the floor. A
+below-LocalHR actor on *another* departed subject at a self-service site gets D3's sentence, "Writes for a
+deactivated employee require LocalHR or above" (`DepartedSubjectWriteFloor.cs:66`). Where both apply, the self
+message wins (`:103-104`). From D+6 a below-HR actor on a switched-off subject at the five surfaces below reads the
+validator's "Terminated-employee access requires LocalHR or above" (`OrgScopeValidator.cs:293-297`) where it used
+to read "Target employee not found". That reveals the person has left, never when, as S138's send already did.
+Every body stays date-free (D3, D7); the server log names the clause.
+
+**HR only from D+6: an R9c allowlist extension (TASK-14713).** From D+6 five surfaces admit a switched-off subject
+through `ValidateEmployeeAccessIncludingTerminatedAsync`:
+- approve, reject and reopen's leader arm, at the LocalHR floor (`ApprovalEndpoints.cs:409-410`, `:689-690`,
+  `:1913-1914`);
+- the Skema month view, HR tier only (`SkemaEndpoints.cs:224`, `:262`);
+- Payroll `/calculate-and-export`, at the LocalAdmin floor (`Payroll/Program.cs:369-370`).
+
+The manager's edge fails closed for a switched-off subject, so the manager is refused from D+6. **An
+employed-month bound runs after the gate** (R-15): a switched-off subject is admitted only for a month that holds
+an employed day, otherwise D3's date-free 422 `month_outside_employment_period` (`ApprovalEndpoints.cs:61-85`,
+`:117-123`). Because it runs after the gate, an actor the gate refuses sees the same 403 for every month, so the
+bound cannot be used to probe employment dates. This is D6 unchanged: a month with any employed day is approved
+and paid as a whole. The three decision endpoints lock through a terminated-inclusive tree-lock overload with the
+same key (`ReportingLineRepository.cs:787`; the shared helper at `:741` and its six reporting-line callers stay
+active-only) and audit against the subject's own organisation. Four-eyes holds across the grace (OQ-1): whoever
+sent the month cannot also approve it (SEC-053), so if HR sends after D+5, a second HR-tier person approves. The R9c
+inventory is `UserRepository.cs:270-292`.
+
+**D7 precision.** The HRP-011 leaver row is the one HR-scoped read that now carries derived dates, "manager until
+D+5, HR only from D+6" (`HrFollowUpApprovalReadRepository.cs:733-737`; refinement R-27). The end date itself still
+crosses no boundary, and no employee-facing body carries either date.
+
+**A departed approver (TASK-14712).** The grace would otherwise have kept a departed *manager* in charge of their
+reports for 5 days. From D+1 an approver counts only while "acting": `is_active` AND the last day has not passed.
+That is checked at five reads: the role floor and its prefetch (`DesignatedApproverAuthorizer.cs:633-668`;
+`IAuthorityFactsSource.cs:256-259`), the resolver's activity check and its prefetch
+(`ReportingLineRepository.cs:1345-1357`; `PrefetchedReportingLineDataSource.cs:211-218`), and the pending-list
+walk (`ApprovalPeriodRepository.cs:388-403`). A departed manager is skipped and the month goes up the chain; whoever
+may act on a month also sees it (see = act). The rule only removes authority.
+- **Stand-ins (owner Q-B = (c), 2026-10-28; Step 0b P-2).** A leaver's active stand-in survives the leaver's
+  deactivation until its end date; HR revokes it (`DELETE /api/admin/reporting-lines/{managerId}/vikar`) or
+  reassigns the team with `/remove`, which closes it (`ReportingLineEndpoints.cs:1640-1647`). The resolver still
+  consults the primary manager's stand-in whatever that manager's own state (`ReportingLineRepository.cs:1255-1260`,
+  `:1290`). That is S74 R3a's behaviour; nothing was built for it. A stand-in a departed manager tries to appoint
+  after leaving is refused by the departed-self rule.
+- **The holder rule (P-1).** A stand-in who has herself left grants nothing; the month goes back to the manager she
+  covered, or further up if that manager has left too (`ReportingLineRepository.cs:1293-1297`, `:1304-1306`).
+- **Audit (K-4).** `ReportingLineManagerDeactivated` and the switch-off event `EmployeeEndDateDeactivationApplied`
+  still fire when the row is switched off, on D+6 (`SettlementCloseService.cs:565`, `:581`): emitting
+  "deactivated" on D+1 for a row that is still active would be false. The D+1 routing is reconstructable from
+  `EmployeeEmploymentEndDateSet` plus this rule.
+- **Not checked for departure (SEC-057).** The HR/Admin org-scope fallback on approve, reject and reopen, and the
+  overtime decisions, trust the token's scopes. A departed HR or admin user's last token, minted on D at the
+  latest, can still act on others until it expires (480 minutes).
+
+**The switch-off (TASK-14710).** One constant, `ManagerGraceCalendarDays = 5`
+(`EmploymentEndDateLifecycleWriter.cs:84`), read through one helper (`IsPastGrace` and
+`GraceDeactivationCutoff`, `:99-108`) by both deactivation paths: Step A's `IsDeactivationDue`
+(`SettlementCloseService.cs:1052-1054`), whose two SQL copies bind the same cutoff (`:464`, `:476`, `:534`), and
+the writer's same-transaction `ComputeEndDateLifecycle` (`EmploymentEndDateLifecycleWriter.cs:303`). Step A and its
+events fire on D+6 (K-4). Termination settlement runs from D+6 (`SettlementCloseService.cs:765-776`; K-2), so the
+§26 payout request, which needs a SETTLED termination settlement, also opens from D+6
+(`TerminationPayoutRequestEndpoints.cs:194-210`, `:245`; K-12). The special-holiday active pass excludes a passed
+end date (`SettlementCloseService.cs:912-938`; K-3). `/remove` still deactivates at once, which ends the grace early
+(`ReportingLineEndpoints.cs:1677-1686`; K-6, accepted).
+
+**Residuals recorded, not fixed.**
+- **Two reads of "today" (PAT-028, compute today once per operation; TASK-14703 consult R6).** The validator reads
+  the Copenhagen date from its own `TimeProvider` once per call (`OrgScopeValidator.cs:524`); the handler reads it
+  again for its own dates. The two can differ only for a request that straddles Copenhagen midnight, and the
+  self-service sites re-check in-lock. **And (consult R4):** the clear routes reuse one date across a retry, so a
+  lock wait that crosses midnight acts on the day the request arrived (the delegate clear reads it at
+  `ReportingLineEndpoints.cs:2329`, before its retry at `:2346`; the admin stand-in clear at `:2828`, before
+  `:2851`). The create routes re-read the clock per attempt.
+- **A reversal corrected into the grace (K-14).** A settlement reversal whose corrected end date lands inside the
+  grace reactivates the leaver (the writer's rule: a correction into the grace reactivates), so its re-settle finds
+  nothing due, refuses `SupersedeNotEligible`, and the whole reversal rolls back
+  (`SettlementReversalService.cs:381-391`). The operator bare-reverses, or retries from day 6.
+- **The import.** During the grace a departed manager can still be named as a manager in the bulk reporting-line
+  import, which checks only `is_active` (`ReportingLineEndpoints.cs:1042-1046`). The acting-user rule gives that
+  manager no authority from D+1.
+
+**What was given up, and why.** A front-door gate (declined, Q-C = (b)). Moving the month's deadline with the
+grace (rejected: the deadline and cutoff are owner-ratified and the same for every employee; K-11). Storing a
+hand-over date (not needed: it is derived). Emitting "manager deactivated" on D+1 (it would be false; the D+1
+routing is reconstructable instead).
+
+**Not built here:** telling the manager that the window is open or closing — the ROADMAP item "Notify the manager
+to give a leaver's final month its last approval".
+
+**Enforced by** `DepartedSubject`, `DepartedSubjectWriteFloor`, the validator clause and
+`EmploymentEndDateLifecycleWriter.IsPastGrace`. **Pinned by** the Unit facts `DepartedSubjectTests`,
+`DepartedSubjectWriteFloorTests`, `EndDateLifecycleWriterParityTests` and `SettlementCloseLeaverLogicTests`; the
+Docker facts in `tests/StatsTid.Tests.Regression/Leaver/`, `Security/DepartedSelf*Tests.cs`, `LeaverLoginTests`,
+`DepartedApproverTests` and `RecalculateDepartedSelfTests`; and the screen's `FollowUpLists.leaverActions.test.tsx`.

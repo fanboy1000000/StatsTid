@@ -119,7 +119,13 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
 **Where the predicate runs:**
 - In the identity arm of both validator overloads (`OrgScopeValidator.cs:115`, `:286`). On the leader-inclusive overload it runs *before* the HR gate, so an HR-tier leaver gets this reason and not the HR one. The validator reads the date from the injected `TimeProvider` (`CopenhagenBusinessDate.Today`).
 - Through that check it covers the 32 write routes that use the shared check, in three hosts.
-- Thirteen inline guards cover the write routes the validator does not reach, plus a derived guard on `/remove`. The S147 census counted 84 write routes: 32 shared-check, 19 inline, 33 not keyed on the actor. TASK-14710 later retired the two project selection routes (`POST`/`DELETE /api/projects/{orgId}/select/{projectId}`), so the inventory is two smaller.
+- Thirteen inline guards cover the write routes the validator does not reach, plus a derived guard on `/remove`.
+- **The S147 census (TASK-14703; Step 0b P-1, the subject-key rule).** A write route is guarded when the departed person's own id is the *subject key* of a row it inserts, updates or closes: `users.user_id`, `role_assignments.user_id`, `unit_leaders.user_id`, `reporting_lines.employee_id` or `manager_vikar.absent_approver_id`. An id that only *holds* authority over someone else (a manager, an acting manager, a stand-in, `/remove`'s replacement) is left to TASK-14712's acting-user rule, which makes a departed holder inert from day 1. Of the 84 write routes in the three hosts:
+  - **32** reach the employee through the shared check;
+  - **19** are guarded another way: 13 inline guards, 2 by the self-service floor below (row-preferences, compensation-choice), and 4 by retirement;
+  - **33** are classified out: 31 with no employee subject, 1 that cannot address an existing person, and the anonymous login.
+
+  Of the four retirements, TASK-14710 retired the two project selection routes (`POST`/`DELETE /api/projects/{orgId}/select/{projectId}`). The other two are the raw Payroll `/export` and `/export-period`, which TASK-14716 retires (SEC-054); until it merges they are `GlobalAdminOnly` routes with no departed-self check. The owner kept this door-by-door design rather than one check at each service's front door (Q-C = (b)).
 - **The self-service write floor (TASK-14710; `Endpoints/Helpers/DepartedSubjectWriteFloor.cs`).** It covers the own-record writes an Employee-role token reaches through the validator's own-data branch, where the identity clause is never consulted. It refuses when the subject has left AND (the actor is the subject OR the actor is below LocalHR). It runs at seven sites:
   - Skema save, advisory and in-lock;
   - time entry, advisory and in-lock;
@@ -131,7 +137,7 @@ Service-layer enforcement called explicitly from API endpoints. Validates that t
   One message per clause. The departed-self clause answers with `DepartedSubject.DenyReason`, the same as the validator. A below-LocalHR actor on another departed subject gets ADR-040 D3's "Writes for a deactivated employee require LocalHR or above". When both apply, the self message wins. The log names the clause.
 
 **Scope and consequences:**
-- Acting on *other* people stays governed by the existing rules, SEC-003's accepted residual. A departed person's edge-based approver authority ends on day 1 (TASK-14712). Their org-scope authority during the grace is SEC-057.
+- Acting on *other* people stays governed by the existing rules, SEC-003's accepted residual. A departed person's edge-based approver authority ends on day 1 (TASK-14712). Their org-scope authority during the grace is SEC-057. A stand-in appointed before the manager left keeps approving until its end date, or until HR revokes it or removes the manager (owner Q-B = (c)); a stand-in who has herself left grants nothing, and the month goes back to the manager she covered (`ReportingLineRepository.cs:1290-1306`).
 - **HR only from day 6 (TASK-14713, QUAL-230 T5b).** Once Step A has switched the leaver off on day 6, five surfaces admit the switched-off subject through the terminated-inclusive validator (`ValidateEmployeeAccessIncludingTerminatedAsync`):
   - approve, reject and reopen's leader arm, at the LocalHR floor;
   - the Skema month view, HR tier only (the person's own read still answers 404);
