@@ -12,6 +12,7 @@ using StatsTid.Infrastructure.Security;
 using StatsTid.SharedKernel.Audit;
 using StatsTid.SharedKernel.Config;
 using StatsTid.SharedKernel.Events;
+using StatsTid.SharedKernel.Interfaces;
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 
@@ -22,6 +23,104 @@ public static class ApprovalEndpoints
     // RES-003 / SEC-009 — the log category the manager-decision endpoints stamp their segregation-of-
     // duties self-denial WARNING under, so the denied-attempt signal is greppable in one place.
     private const string SelfGuardLogCategory = "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.SelfGuard";
+
+    // ── S147 / TASK-14713 (QUAL-230 T5b; refinement R-15) — THE EMPLOYED-MONTH BOUND ──────────────────
+    //
+    // WHY, in plain terms. From the sixth day after a leaver's last working day the leaver job switches
+    // them off, and from then on only HR may finish their final month (owner ruling OQ-2). Letting HR
+    // address a switched-off employee at all is a deliberate widening (the R9c allowlist), so it is
+    // bounded: HR may act only on a month in which that person was actually employed. A month wholly
+    // after (or before) the employment is refused with ADR-040 D3's date-free answer.
+    //
+    // ORDER (R-15): the bound runs AFTER the access gate. An actor the gate refuses therefore gets the
+    // same 403 for every month, employed or not — the bound is never reachable as a probe that would
+    // let someone without access learn which months a person was employed in.
+    //
+    // SCOPE: switched-off (is_active = FALSE) subjects only. An active subject — including a leaver in
+    // the manager's 5-day grace — is unaffected, exactly as before.
+    //
+    // One construction site for the five surfaces that apply it: approve, reject and the leader arm of
+    // reopen (below) and the Skema month view (SkemaEndpoints). The Payroll host's /calculate-and-export
+    // carries its own copy of the same body (it cannot reference this assembly).
+
+    /// <summary>The log category the employed-month bound's refusal WARNING is written under.</summary>
+    private const string EmployedMonthBoundLogCategory =
+        "StatsTid.Backend.Api.Endpoints.ApprovalEndpoints.EmployedMonthBound";
+
+    /// <summary>The clause name the bound's refusal log line carries (one per clause, the S147 house rule).</summary>
+    internal const string EmployedMonthBoundClause = "employed-month-bound";
+
+    /// <summary>
+    /// S147 / TASK-14713 (R-15) — the employed-month bound for a subject the caller has ALREADY read
+    /// (the Skema month view). Returns <c>null</c> when the request may proceed: the subject is active,
+    /// or the month <c>[periodStart, periodEnd]</c> holds at least one employed day
+    /// (<see cref="IEmploymentWindowResolver.GetWindowsAsync"/>: end date inclusive, a NULL side
+    /// unbounded — ADR-040 D1/D2). Otherwise returns the date-free 422 and logs the clause. Callers run
+    /// it only after their access gate admitted the actor.
+    /// </summary>
+    internal static async Task<IResult?> EmployedMonthBoundAsync(
+        User subject,
+        IEmploymentWindowResolver windowResolver,
+        ILoggerFactory loggerFactory,
+        ActorContext actor,
+        DateOnly periodStart,
+        DateOnly periodEnd,
+        string surface,
+        CancellationToken ct)
+    {
+        if (subject.IsActive)
+            return null;
+
+        var windows = await windowResolver.GetWindowsAsync(subject.UserId, periodStart, periodEnd, ct);
+        if (windows.Count > 0)
+            return null;
+
+        // The server log names the clause and the requested month; the response names neither a date
+        // nor the employee (ADR-040 D3/D7).
+        loggerFactory.CreateLogger(EmployedMonthBoundLogCategory).LogWarning(
+            "Refused ({Clause}): actor {ActorId} asked for {PeriodStart:yyyy-MM} of deactivated employee {EmployeeId}, " +
+            "which holds no employed day ({Surface})",
+            EmployedMonthBoundClause, actor.ActorId, periodStart, subject.UserId, surface);
+        return MonthOutsideEmploymentPeriod();
+    }
+
+    /// <summary>
+    /// S147 / TASK-14713 (R-15) — the same bound for the three decision endpoints, which hold only the
+    /// period row: reads the subject terminated-inclusive (an R9c read — a switched-off subject must be
+    /// RESOLVED here, not hidden) and applies <see cref="EmployedMonthBoundAsync(User, IEmploymentWindowResolver, ILoggerFactory, ActorContext, DateOnly, DateOnly, string, CancellationToken)"/>.
+    /// A missing users row is left to the handler's own downstream reads, unchanged.
+    /// </summary>
+    private static async Task<IResult?> EmployedMonthBoundAsync(
+        UserRepository userRepo,
+        IEmploymentWindowResolver windowResolver,
+        ILoggerFactory loggerFactory,
+        ActorContext actor,
+        ApprovalPeriod period,
+        string surface,
+        CancellationToken ct)
+    {
+        var subject = await userRepo.GetByIdIncludingTerminatedAsync(period.EmployeeId, ct);
+        if (subject is null)
+            return null;
+        return await EmployedMonthBoundAsync(
+            subject, windowResolver, loggerFactory, actor, period.PeriodStart, period.PeriodEnd, surface, ct);
+    }
+
+    /// <summary>
+    /// S147 / TASK-14713 — THE single construction site for the bound's refusal in this host: ADR-040
+    /// D3's date-free answer, at month granularity. Same key, kind and wording family as the send
+    /// command's vacuous-month 422 (<c>month_outside_employment_period</c>), with a message that does
+    /// not presume the action. Uniform for a month wholly before the start and wholly after the end, and
+    /// it carries no date, no employee id and no window field — do not add one (the binary-search
+    /// oracle D3 closes).
+    /// </summary>
+    internal static IResult MonthOutsideEmploymentPeriod()
+        => Results.Json(new
+        {
+            error = "month_outside_employment_period",
+            kind = "employment-window",
+            message = "Måneden ligger uden for ansættelsesperioden.",
+        }, statusCode: 422);
 
     // S127 / TASK-12705 — the allocation-reconciliation tolerance and the per-day predicate that
     // used to live here as a private const plus three hand-copied inline expressions now live in
@@ -213,13 +312,16 @@ public static class ApprovalEndpoints
             IAuditProjectionMapper<PeriodApproved> auditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
+            // S147 / TASK-14713 (R-15) — the employed-month bound's window read.
+            IEmploymentWindowResolver windowResolver,
             ILoggerFactory loggerFactory,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
             HttpContext context,
             CancellationToken ct) =>
-        // S78 R1 — wrap the whole body in the bounded drift-retry loop: if AcquireTreeLockForEmployeeAsync
-        // (taken in-tx as the first lock-bearing statement) detects a concurrent cross-styrelse transfer
+        // S78 R1 — wrap the whole body in the bounded drift-retry loop: if the in-tx tree lock (since
+        // S147 / TASK-14713 the terminated-inclusive AcquireTreeLockForEmployeeIncludingTerminatedAsync;
+        // taken as the first lock-bearing statement) detects a concurrent cross-styrelse transfer
         // drifted the employee's tree-root advisory key, the attempt rolls back (no side effects — the
         // drift check precedes the conditional UPDATE and every mutation) and re-runs on a fresh tx.
         await TreeRootDriftRetry.RunAsync(async () =>
@@ -294,8 +396,18 @@ public static class ApprovalEndpoints
             // now hold the edge. S78 R1: orgScopeAllowed is hoisted so the in-tx re-eval knows whether
             // the actor was admitted by the HR/Admin fallback (JWT-/scope-based, not re-checked in-tx)
             // or purely by the edge.
+            //
+            // S147 / TASK-14713 (QUAL-230 T5b; owner OQ-2: HR only from day 6) — the org-scope arm is
+            // the TERMINATED-INCLUSIVE validator (S138's send-command swap, the same floor). For an
+            // ACTIVE subject it is behaviour-identical to the active-only call it replaces. For a
+            // subject the leader job has switched off it admits ONLY through a scope that is itself
+            // LocalHR or above, where the active-only call answered "not found" to everyone, HR
+            // included, so a leaver's final month could never be approved. TASK-14703's departed-self
+            // clause runs inside it. The edge arm below is unchanged: it fails closed for a
+            // switched-off employee (the same-Organisation re-check reads active users only), so the
+            // leaver's manager is refused from day 6 — the end of their 5-day grace.
             var (orgScopeAllowed, orgScopeReason) =
-                await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
+                await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
                 // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path (incl. a unit
@@ -306,6 +418,13 @@ public static class ApprovalEndpoints
                 if (!hasEdgeOrUnit)
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
+
+            // S147 / TASK-14713 (R-15) — the employed-month bound, AFTER the gate and before the
+            // transaction (see EmployedMonthBoundAsync). Only a switched-off subject is bounded.
+            if (await EmployedMonthBoundAsync(
+                    userRepo, windowResolver, loggerFactory, actor, period,
+                    "POST /api/approval/{periodId}/approve", ct) is { } approveBoundRefusal)
+                return approveBoundRefusal;
 
             // Resolve designated approver for audit trail (ADR-027 D5). PRE-tx FAST PATH (the in-tx
             // re-derivation under the advisory is the AUTHORITATIVE one — S78 BLOCKER 2). S140 /
@@ -345,7 +464,12 @@ public static class ApprovalEndpoints
             // its pre-tx check remains the gate). If the actor passed the pre-tx check PURELY via the edge /
             // unit-leader path (org-scope denied), a revoke that committed before we got the lock now flips
             // the re-eval to DENY → 403.
-            var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+            //
+            // S147 / TASK-14713 (R-7) — the TERMINATED-INCLUSIVE overload: the same advisory key and the
+            // same drift check, but a switched-off employee still resolves to their Organisation, so HR's
+            // day-6 approval does not end in a 500. The shared helper and its reporting-line callers are
+            // unchanged.
+            var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeIncludingTerminatedAsync(conn, tx, period.EmployeeId, ct);
 
             // S105 / ADR-038 D4/D8 (BLOCKER fix) — ALSO acquire the employee's current `unit-org-`
             // advisory (keyed on the employee's current Organisation = the verified tree root above), in
@@ -461,7 +585,11 @@ public static class ApprovalEndpoints
             // S44 TASK-4413: capture outbox_id for audit_projection insert
             var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
 
-            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
+            // S147 / TASK-14713 (QUAL-230 T5b) — the audit's target organisation is the SUBJECT's, read
+            // TERMINATED-INCLUSIVE (an R9c read): HR approving a switched-off leaver's month must record
+            // the leaver's Organisation, where the active-only read returned null and threw. A missing
+            // users row is still a data fault and still throws (the transaction rolls back).
+            var auditUser = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, @event.EmployeeId, ct);
             var auditCtx = new AuditProjectionContext(
                 ActorId: actor.ActorId,
                 ActorPrimaryOrgId: actor.OrgId,
@@ -469,7 +597,7 @@ public static class ApprovalEndpoints
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
                 ResolvedTargetOrgId: auditUser?.PrimaryOrgId
                         ?? throw new InvalidOperationException(
-                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
+                            $"Audit projection: employee {@event.EmployeeId} not found."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
@@ -495,6 +623,8 @@ public static class ApprovalEndpoints
             IAuditProjectionMapper<PeriodRejected> auditMapper,
             AuditProjectionRepository auditRepo,
             UserRepository userRepo,
+            // S147 / TASK-14713 (R-15) — the employed-month bound's window read.
+            IEmploymentWindowResolver windowResolver,
             ILoggerFactory loggerFactory,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
@@ -552,8 +682,12 @@ public static class ApprovalEndpoints
             // ValidateEmployeeAccessAsync) OR the effective designated-approver edge at today (S74 /
             // ADR-027 D4 A3). The unfloored leader-by-org-scope branch is RETIRED. S78 R1: orgScopeAllowed
             // hoisted for the in-tx edge re-eval (same as approve).
+            //
+            // S147 / TASK-14713 (QUAL-230 T5b; OQ-2) — the TERMINATED-INCLUSIVE validator at the same
+            // LocalHR floor, for the reason spelled out on approve: HR may reject a switched-off leaver's
+            // month from day 6; the edge arm, unchanged, refuses their manager from day 6.
             var (orgScopeAllowed, orgScopeReason) =
-                await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
+                await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
             {
                 // S105 / ADR-038 D4 — the edge OR the NEW secondary-unit-leader path, centralized
@@ -563,6 +697,13 @@ public static class ApprovalEndpoints
                 if (!hasEdgeOrUnit)
                     return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
             }
+
+            // S147 / TASK-14713 (R-15) — the employed-month bound, AFTER the gate and before the
+            // transaction (same as approve).
+            if (await EmployedMonthBoundAsync(
+                    userRepo, windowResolver, loggerFactory, actor, period,
+                    "POST /api/approval/{periodId}/reject", ct) is { } rejectBoundRefusal)
+                return rejectBoundRefusal;
 
             // Resolve designated approver for audit trail (ADR-027 D5). PRE-tx FAST PATH; the in-tx
             // re-derivation under the advisory is the AUTHORITATIVE one (S78 BLOCKER 2). S140 /
@@ -586,7 +727,8 @@ public static class ApprovalEndpoints
             // pre-tx-only gate. S105 / ADR-038 D4/D8 — ALSO acquire the employee's current `unit-org-`
             // advisory (D8 order `reporting-org-` → `unit-org-` → row FOR UPDATE) so a concurrent
             // `UnitLeaderRemoved`/member-move serializes against this reject.
-            var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+            // S147 / TASK-14713 (R-7) — the terminated-inclusive overload (same key, same drift check).
+            var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeIncludingTerminatedAsync(conn, tx, period.EmployeeId, ct);
             await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
             // The in-lock re-evaluation reuses the request's single date (`today`, read at the top —
             // PAT-028); it was a second clock read before (S140 / TASK-14001).
@@ -676,7 +818,9 @@ public static class ApprovalEndpoints
             // S44 TASK-4413: capture outbox_id for audit_projection insert
             var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
 
-            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
+            // S147 / TASK-14713 — the audit's target organisation is the subject's, read terminated-
+            // inclusive (an R9c read), for the reason spelled out on approve.
+            var auditUser = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, @event.EmployeeId, ct);
             var auditCtx = new AuditProjectionContext(
                 ActorId: actor.ActorId,
                 ActorPrimaryOrgId: actor.OrgId,
@@ -684,7 +828,7 @@ public static class ApprovalEndpoints
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
                 ResolvedTargetOrgId: auditUser?.PrimaryOrgId
                         ?? throw new InvalidOperationException(
-                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
+                            $"Audit projection: employee {@event.EmployeeId} not found."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
@@ -1657,6 +1801,8 @@ public static class ApprovalEndpoints
             UserRepository userRepo,
             // S145 / TASK-14509 (R5(c)) — the reopen hook that flags an exported next month.
             HrBackdateWorklistRepository worklistRepo,
+            // S147 / TASK-14713 (R-15) — the leader arm's employed-month bound reads the window.
+            IEmploymentWindowResolver windowResolver,
             ILoggerFactory loggerFactory,
             // S140 / TASK-14001 — the server-"today" seam (TimeProvider.System in production).
             TimeProvider timeProvider,
@@ -1664,7 +1810,8 @@ public static class ApprovalEndpoints
             CancellationToken ct) =>
         // S78 R1 — bounded drift-retry wrapper. The LEADER arm takes the advisory + in-tx edge re-eval;
         // the EMPLOYEE arm takes NO advisory (it carries no designated-edge authority — a self-action),
-        // but BOTH arms get the R2 conditional UPDATE. AcquireTreeLockForEmployeeAsync only runs on the
+        // but BOTH arms get the R2 conditional UPDATE. The tree lock (since S147 / TASK-14713 the
+        // terminated-inclusive AcquireTreeLockForEmployeeIncludingTerminatedAsync) only runs on the
         // Leader arm, so the drift-retry only ever fires for the Leader arm.
         await TreeRootDriftRetry.RunAsync(async () =>
         {
@@ -1756,8 +1903,15 @@ public static class ApprovalEndpoints
                 // employee's CURRENT Organisation via ValidateEmployeeAccessAsync) OR the effective
                 // designated-approver edge at today (S74 / ADR-027 D4 A3). The unfloored
                 // leader-by-org-scope branch is RETIRED. This OR-branch lives ONLY in the Leader+ arm.
+                //
+                // S147 / TASK-14713 (QUAL-230 T5b; OQ-2) — the TERMINATED-INCLUSIVE validator at the
+                // same LocalHR floor, for the reason spelled out on approve: from day 6 HR may reopen a
+                // switched-off leaver's month (until it is sent to payroll — the export lock below is
+                // unchanged); the edge arm, unchanged, refuses their manager from day 6. TASK-14703's
+                // departed-self clause runs inside this overload, so a departed HR-tier self reopening
+                // their own month is refused there, before the HR gate, as on the active-only call.
                 var (allowed2, reason2) =
-                    await scopeValidator.ValidateEmployeeAccessAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
+                    await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
                 orgScopeAdmittedLeaderArm = allowed2;
                 orgScopeReason = reason2;
                 if (!allowed2)
@@ -1769,6 +1923,13 @@ public static class ApprovalEndpoints
                     if (!hasEdgeOrUnit)
                         return Results.Json(new { error = "Access denied", reason = reason2 }, statusCode: 403);
                 }
+
+                // S147 / TASK-14713 (R-15) — the employed-month bound, AFTER the leader arm's gate and
+                // before the status check and the transaction (see EmployedMonthBoundAsync).
+                if (await EmployedMonthBoundAsync(
+                        userRepo, windowResolver, loggerFactory, actor, period,
+                        "POST /api/approval/{periodId}/reopen (leader arm)", ct) is { } reopenBoundRefusal)
+                    return reopenBoundRefusal;
 
                 if (period.Status is not ("EMPLOYEE_APPROVED" or "APPROVED"))
                     return Results.Conflict(new { error = $"Cannot reopen period with status {period.Status}. Only EMPLOYEE_APPROVED or APPROVED periods can be reopened." });
@@ -1790,7 +1951,8 @@ public static class ApprovalEndpoints
                 // S105 / ADR-038 D4/D8 — advisory order `reporting-org-` → `unit-org-` → row FOR UPDATE
                 // (the payroll-export FOR UPDATE below). The NEW `unit-org-` advisory serializes the
                 // reopen against a concurrent `UnitLeaderRemoved`/member-move on the employee's unit tree.
-                var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeAsync(conn, tx, period.EmployeeId, ct);
+                // S147 / TASK-14713 (R-7) — the terminated-inclusive overload (same key, same drift check).
+                var empCurrentOrg = await reportingLineRepo.AcquireTreeLockForEmployeeIncludingTerminatedAsync(conn, tx, period.EmployeeId, ct);
                 await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
                 if (!orgScopeAdmittedLeaderArm)
                 {
@@ -1891,7 +2053,11 @@ public static class ApprovalEndpoints
             // S44 TASK-4413: capture outbox_id for audit_projection insert
             var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
 
-            var auditUser = await userRepo.GetByIdAsync(conn, tx, @event.EmployeeId, ct);
+            // S147 / TASK-14713 — the audit's target organisation is the subject's, read terminated-
+            // inclusive (an R9c read), for the reason spelled out on approve. Both arms share this read;
+            // the Employee arm only ever reaches it for an active subject (its write floor above refuses
+            // a departed one), so the swap changes nothing there.
+            var auditUser = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, @event.EmployeeId, ct);
             var auditCtx = new AuditProjectionContext(
                 ActorId: actor.ActorId,
                 ActorPrimaryOrgId: actor.OrgId,
@@ -1899,7 +2065,7 @@ public static class ApprovalEndpoints
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
                 ResolvedTargetOrgId: auditUser?.PrimaryOrgId
                         ?? throw new InvalidOperationException(
-                            $"Audit projection: employee {@event.EmployeeId} not found or inactive."));
+                            $"Audit projection: employee {@event.EmployeeId} not found."));
             var auditRow = auditMapper.Map(@event, auditCtx);
             await auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 

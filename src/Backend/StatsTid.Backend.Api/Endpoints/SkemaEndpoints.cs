@@ -189,6 +189,10 @@ public static class SkemaEndpoints
             // backs the leader-tier authority `asOf` below. Every other date this handler serves is
             // derived from the requested (year, month), not from "today".
             TimeProvider timeProvider,
+            // S147 / TASK-14713 (QUAL-230 T5b; R-15) — the employed-month bound for a switched-off
+            // subject HR opens from day 6: the window read and the refusal's log.
+            IEmploymentWindowResolver windowResolver,
+            ILoggerFactory loggerFactory,
             HttpContext context,
             CancellationToken ct) =>
         {
@@ -209,7 +213,15 @@ public static class SkemaEndpoints
             // through the SAME member instead of hand-copying this block. Same checks, same order,
             // same scopeValidator calls: the behavior diff here is EMPTY. The tier rationale
             // (TASK-12403/12404 and the Step-7a Codex BLOCKER) lives on ApprovalReadTier.
-            var leaderTierRead = await ApprovalReadTier.IsLeaderTierReadAsync(
+            //
+            // S147 / TASK-14713 (QUAL-230 T5b; BC-P15; owner OQ-2: HR only from day 6) — THIS view
+            // classifies through the TERMINATED-INCLUSIVE twin, used by no other read (an R9c entry),
+            // so HR can open a switched-off leaver's final month. For an active employee it gives the
+            // same tiers as the shared IsLeaderTierReadAsync (unchanged, and still used by the
+            // breakdown, balance and compliance reads). It also says whether the HR check itself
+            // admitted the actor (hrTierRead), which is the only tier allowed to resolve a
+            // switched-off employee at the subject read below.
+            var (leaderTierRead, hrTierRead) = await ApprovalReadTier.ClassifyMonthViewTierIncludingTerminatedAsync(
                 scopeValidator, actor, employeeId, ct);
 
             if (leaderTierRead)
@@ -238,14 +250,31 @@ public static class SkemaEndpoints
                 }
             }
 
-            // Get employee profile
-            var user = await userRepo.GetByIdAsync(employeeId, ct);
-            if (user is null)
+            // Get employee profile.
+            //
+            // S147 / TASK-14713 (QUAL-230 T5b) — read TERMINATED-INCLUSIVE (an R9c read) so HR can open a
+            // switched-off leaver's month. Who may see a switched-off employee here is decided by the
+            // tier above, not by this read: only an actor the HR check admitted (hrTierRead). Everyone
+            // else who reaches this line for a switched-off employee — the person themselves (the self
+            // short-circuit never consults a validator) — gets exactly the 404 the active-only read
+            // gave them before. (The leader tier never reaches it for a switched-off employee: its
+            // access check above answers 403.)
+            var user = await userRepo.GetByIdIncludingTerminatedAsync(employeeId, ct);
+            if (user is null || (!user.IsActive && !hrTierRead))
                 return Results.NotFound(new { error = "Employee not found" });
 
             var daysInMonth = DateTime.DaysInMonth(year, month);
             var monthStart = new DateOnly(year, month, 1);
             var monthEnd = new DateOnly(year, month, daysInMonth);
+
+            // S147 / TASK-14713 (R-15) — the employed-month bound, AFTER the tier-and-access block and
+            // beside the subject read: a switched-off employee is shown to HR only for a month that holds
+            // an employed day; any other month answers ADR-040 D3's date-free 422. An active employee is
+            // unaffected (the shared bound returns null for them).
+            if (await ApprovalEndpoints.EmployedMonthBoundAsync(
+                    user, windowResolver, loggerFactory, actor, monthStart, monthEnd,
+                    "GET /api/skema/{employeeId}/month", ct) is { } monthBoundRefusal)
+                return monthBoundRefusal;
 
             // S34 / TASK-3411 — ADR-023 D2 binding cutover for agreement_code on past-month
             // queries. The absence-types list shown for a past month must reflect the

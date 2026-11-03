@@ -105,9 +105,13 @@ public static class HrDeadlineSources
 /// One (employee × month) item of the shared enumeration — the row shape HRP-011, HRP-012 and
 /// HRP-022 all return.
 ///
-/// <para>Deliberately carries NO employment date (ADR-040 D7). A leaver row names the YEAR and
-/// MONTH its final month falls in, which is the process's subject; the end date itself never
-/// crosses this boundary.</para>
+/// <para>Carries no employment date (ADR-040 D7), with ONE ruled exception: since S147 / TASK-14713
+/// (refinement R-27) an HRP-011 leaver row carries the manager's window — the last day the leaver's
+/// manager may still act and the first day only HR may. Both are derived here from the employment
+/// end date plus the ONE grace constant
+/// (<see cref="EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays"/>), so they reveal that date
+/// to the HR-scoped list the ruling names and to nothing else: on HRP-012 and HRP-022 rows both are
+/// <c>null</c>, and the end date itself still never crosses this boundary.</para>
 /// </summary>
 /// <param name="PeriodStatus">The persisted status, or <c>NONE</c> when no period row exists at all
 /// — "never sent" has no row (the send flow is the sole production writer), so it cannot be found
@@ -121,6 +125,17 @@ public static class HrDeadlineSources
 /// a not-yet-due item legitimately carries zero or a negative value.
 /// </param>
 /// <param name="DeadlineSource">One of <see cref="HrDeadlineSources"/>.</param>
+/// <param name="LastManagerDay">
+/// HRP-011 leaver rows only (R-27): the last day the leaver's manager may still approve, reject or
+/// reopen the month — the employment end date plus
+/// <see cref="EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays"/> (D+5). <c>null</c> on every
+/// other list. Nothing stored: the month's deadline and the aging anchor are unchanged.
+/// </param>
+/// <param name="FirstHrOnlyDay">
+/// HRP-011 leaver rows only (R-27): the first day only HR may act (D+6) — the first day
+/// <see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/> holds, i.e. the day the leaver job
+/// switches the leaver off. Always <see cref="LastManagerDay"/> + 1. <c>null</c> on every other list.
+/// </param>
 public sealed record HrApprovalMonthItem(
     string EmployeeId,
     string DisplayName,
@@ -131,7 +146,9 @@ public sealed record HrApprovalMonthItem(
     Guid? PeriodId,
     DateOnly AgeAnchor,
     int DaysPastAnchor,
-    string DeadlineSource);
+    string DeadlineSource,
+    DateOnly? LastManagerDay,
+    DateOnly? FirstHrOnlyDay);
 
 /// <summary>
 /// One orphan employee (HRP-013) — nobody structurally approves them, so nobody CAN approve their
@@ -331,7 +348,12 @@ public sealed class HrFollowUpApprovalReadRepository
                CASE WHEN @kind = 'EMPLOYEE_LATE'
                     THEN r.eff_employee_deadline ELSE r.eff_manager_deadline END        AS age_anchor,
                CASE WHEN @kind = 'EMPLOYEE_LATE'
-                    THEN r.employee_deadline_source ELSE r.manager_deadline_source END  AS deadline_source
+                    THEN r.employee_deadline_source ELSE r.manager_deadline_source END  AS deadline_source,
+               -- S147 / TASK-14713 (R-27): the end date leaves this statement ONLY on HRP-011 rows,
+               -- where the reader turns it into the manager's window and drops it. NULL on every
+               -- other list, so no other list can carry an employment-derived date (ADR-040 D7).
+               CASE WHEN @kind = 'LEAVER_FINAL'
+                    THEN r.employment_end_date END                                       AS leaver_end_date
         FROM resolved r
         WHERE
               -- HRP-012, employee late. DRAFT exists only after a reopen and REJECTED means the ball
@@ -673,9 +695,14 @@ public sealed class HrFollowUpApprovalReadRepository
         var statusOrd = reader.GetOrdinal("period_status");
         var anchorOrd = reader.GetOrdinal("age_anchor");
         var sourceOrd = reader.GetOrdinal("deadline_source");
+        var leaverEndOrd = reader.GetOrdinal("leaver_end_date");
         while (await reader.ReadAsync(ct))
         {
             var anchor = reader.GetFieldValue<DateOnly>(anchorOrd);
+            // S147 / TASK-14713 (R-27): present on HRP-011 rows only (the SELECT nulls it elsewhere).
+            var managerWindow = reader.IsDBNull(leaverEndOrd)
+                ? ((DateOnly LastManagerDay, DateOnly FirstHrOnlyDay)?)null
+                : ManagerWindowOf(reader.GetFieldValue<DateOnly>(leaverEndOrd));
             items.Add(new HrApprovalMonthItem(
                 EmployeeId: reader.GetString(employeeOrd),
                 DisplayName: reader.GetString(nameOrd),
@@ -686,9 +713,27 @@ public sealed class HrFollowUpApprovalReadRepository
                 PeriodId: reader.IsDBNull(periodOrd) ? null : reader.GetGuid(periodOrd),
                 AgeAnchor: anchor,
                 DaysPastAnchor: today.DayNumber - anchor.DayNumber,
-                DeadlineSource: reader.GetString(sourceOrd)));
+                DeadlineSource: reader.GetString(sourceOrd),
+                LastManagerDay: managerWindow?.LastManagerDay,
+                FirstHrOnlyDay: managerWindow?.FirstHrOnlyDay));
         }
         return items;
+    }
+
+    /// <summary>
+    /// S147 / TASK-14713 (refinement R-27; K-11) — a leaver's manager window, in plain terms "manager
+    /// until D+5, HR only from D+6", where D is the last day employed (<c>employment_end_date</c>,
+    /// inclusive). Derived from the ONE grace constant the two deactivation paths read
+    /// (<see cref="EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays"/>), so this display cannot
+    /// drift from the day the leaver job actually switches the leaver off:
+    /// <see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/> is false on <c>LastManagerDay</c> and
+    /// true from <c>FirstHrOnlyDay</c>. Not a second "past the grace" rule — it decides nothing; it only
+    /// names the two days for HR. No overflow: an HRP-011 end date has already passed (<c>&lt;= today</c>).
+    /// </summary>
+    private static (DateOnly LastManagerDay, DateOnly FirstHrOnlyDay) ManagerWindowOf(DateOnly employmentEndDate)
+    {
+        var lastManagerDay = employmentEndDate.AddDays(EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays);
+        return (lastManagerDay, lastManagerDay.AddDays(1));
     }
 
     /// <summary>HRP-013 — the cross-organisation orphan roll-up (see <see cref="SelectOrphanEmployeesSql"/>).</summary>
