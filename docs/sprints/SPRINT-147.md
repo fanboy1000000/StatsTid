@@ -343,6 +343,11 @@ The job is now off on the two shared test servers that seed leavers directly. **
    - Add "or retry from day 6" to the settlement-reversal failure text (K-14).
    - `docs/FRONTEND.md:114`, `:292` still list ProjectPicker, which was retired in S72. This is pre-existing.
    - Tidy item 20's dead helpers (`ProjectRepository.cs:150`, `:169`) and the "closed spell" wording remain.
+23. **From the 14713 stack reviews (Fable c2 N-3, N-5; c1 N-4).**
+   - `npm run lint` checks a fixed file list that includes none of 14714's files, so "lint green" covered nothing there. Extend the list, or lint `src/**` with the no-`as` rule scoped as it is today.
+   - HR's leaver list does not refetch after an action: the rows update themselves, but the landing tile counts go stale until reload. Give `LeaverFinalMonthList` an `onResolved` like `WorklistList`.
+   - `Endpoints/Helpers/TreeRootDriftRetry.cs:13` still names only the shared tree-lock helper.
+   - Pre-existing: a missing users row in the bound's handler overload (`ApprovalEndpoints.cs:93-105`) reaches the lock and throws 500.
 ## Handoff block (written at every gate — the state lives here, not in the conversation)
 
 | | |
