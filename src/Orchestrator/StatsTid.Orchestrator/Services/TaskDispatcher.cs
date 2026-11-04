@@ -16,7 +16,6 @@ public sealed class TaskDispatcher
         _serviceRoutes = new Dictionary<string, string>
         {
             ["rule-evaluation"] = configuration["ServiceUrls:RuleEngine"] ?? "http://rule-engine:8080",
-            ["payroll-export"] = configuration["ServiceUrls:Payroll"] ?? "http://payroll:8080",
             ["external-integration"] = configuration["ServiceUrls:External"] ?? "http://external:8080",
         };
     }
@@ -43,7 +42,6 @@ public sealed class TaskDispatcher
         var endpoint = taskType switch
         {
             "rule-evaluation" => "/api/rules/evaluate",
-            "payroll-export" => "/api/payroll/export",
             "external-integration" => "/api/external/send",
             _ => throw new InvalidOperationException($"Unknown task type: {taskType}")
         };
