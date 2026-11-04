@@ -18,10 +18,10 @@ namespace StatsTid.Infrastructure;
 /// </para>
 ///
 /// <para>
-/// <b>Table ownership split (R13).</b> <see cref="ProjectRepository"/> keeps owning
-/// <c>user_project_selections</c>' existing single-row methods (the R14-aligned legacy
-/// add/remove); THIS repository owns the container, the absence selections, and the
-/// one-transaction full-replacement write that spans all three tables.
+/// <b>Table ownership split (R13).</b> <see cref="ProjectRepository"/> only reads
+/// <c>user_project_selections</c> (its legacy single-row add/remove left with the retired
+/// selection routes, S147 TASK-14710); THIS repository owns the container, the absence
+/// selections, and the one-transaction full-replacement write that spans all three tables.
 /// </para>
 /// </summary>
 public sealed class SkemaRowPreferenceRepository
