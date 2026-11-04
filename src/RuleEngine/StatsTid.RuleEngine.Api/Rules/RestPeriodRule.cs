@@ -173,6 +173,13 @@ public static class RestPeriodRule
         return BuildResult(Weekly48HCeilingRuleId, profile, violations, warnings);
     }
 
+    /// <summary>
+    /// Keeps the entries dated from <paramref name="periodStart"/> to <paramref name="periodEnd"/>
+    /// (both inclusive), sorted by date then start time. It does NOT split an entry that crosses
+    /// midnight. The Backend splits those before the call (<c>MidnightCrossingNormalizer</c>,
+    /// <c>ComplianceEndpoints.cs:208</c>), so a caller passing raw entries would see an overnight
+    /// shift only on its start date.
+    /// </summary>
     private static IReadOnlyList<TimeEntry> NormalizeEntries(
         IReadOnlyList<TimeEntry> entries,
         DateOnly periodStart,

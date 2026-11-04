@@ -29,14 +29,15 @@ public sealed class PayrollExportGeneratedAuditMapper : IAuditProjectionMapper<P
             exportedAt = @event.ExportedAt,
             periodId = @event.PeriodId,
             // S146 TASK-14605 (C1, AC-C7): the month's recorded flex balances — what it opened and closed at and
-            // where the opening came from. Null on the raw exports and every pre-S146 event, and then omitted
+            // where the opening came from. Null on an untracked export (a month before the ledger start, S147
+            // TASK-14715), on events the retired raw routes wrote, and on every pre-S146 event, and then omitted
             // (AuditMapperJsonOptions writes no nulls), so those details are byte-identical to before.
             openingFlexBalance = @event.OpeningFlexBalance,
             closingFlexBalance = @event.ClosingFlexBalance,
             flexProvenance = @event.FlexProvenance,
             // S146 Step 7a (R-54; TASK-14610): the manifest of the calculation whose figures this export stores, so a
-            // record with no lines (the employed zero-line month) still names it. Null on the raw exports and every
-            // pre-fix event, and then omitted like the flex keys above. Appended LAST so every existing golden is unchanged.
+            // record with no lines (the employed zero-line month) still names it. Null on events the retired raw routes
+            // wrote and on every pre-fix event, and then omitted like the flex keys above. Appended LAST so every existing golden is unchanged.
             manifestId = @event.ManifestId,
         };
         return new AuditProjectionRowData(

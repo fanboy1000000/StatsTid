@@ -3,15 +3,19 @@ using StatsTid.Infrastructure;
 namespace StatsTid.Backend.Api.Endpoints.Helpers;
 
 /// <summary>
-/// S78 R9 — the BOUNDED drift-retry wrapper shared by every employee-current-root tree-keyed mutator
-/// (reporting-line assign / remove / acting + admin-vikar create in <c>ReportingLineEndpoints</c>, and the
-/// cross-styrelse transfer <c>PUT /api/admin/users/{userId}</c> in <c>AdminEndpoints</c>).
+/// S78 R9 — the BOUNDED drift-retry wrapper shared by every employee-current-root tree-keyed mutator:
+/// in <c>ReportingLineEndpoints</c> the reporting-line assign / remove / acting create, the manager
+/// removal, the delegate create / delete and the admin-vikar create / delete; the cross-styrelse
+/// transfer <c>PUT /api/admin/users/{userId}</c> in <c>AdminEndpoints</c>; and, since S78 R1, the
+/// approval approve / reject / reopen in <c>ApprovalEndpoints</c>.
 ///
 /// <para>
 /// The advisory key those mutators take derives from the mutable <c>users.primary_org_id</c> via an
 /// unlocked read, so a concurrent cross-styrelse transfer can leave a mutator holding a STALE key.
-/// <see cref="ReportingLineRepository.AcquireTreeLockForEmployeeAsync"/> (and the transfer variant
-/// <see cref="ReportingLineRepository.AcquireTreeLocksForTransferAsync"/>) detect this by re-deriving the
+/// <see cref="ReportingLineRepository.AcquireTreeLockForEmployeeAsync"/>, its terminated-inclusive twin
+/// <see cref="ReportingLineRepository.AcquireTreeLockForEmployeeIncludingTerminatedAsync"/> (S147
+/// TASK-14713, for the leaver's HR-only routes) and the transfer variant
+/// <see cref="ReportingLineRepository.AcquireTreeLocksForTransferAsync"/> detect this by re-deriving the
 /// root UNDER the held advisory and throwing <see cref="TreeRootDriftException"/>. Because
 /// <c>pg_advisory_xact_lock</c> releases ONLY at tx end, the sound recovery is to ROLL BACK the whole
 /// transaction (the drift check runs BEFORE any user-row <c>FOR UPDATE</c> or mutation, so a drifted

@@ -54,8 +54,10 @@ public sealed record RecordedFlexClosing(int Year, int Month, decimal OpeningBal
 ///   <item>A <i>ledger record</i> is a row with <c>opening_balance IS NOT NULL</c>. A CHECK
 ///   (<c>payroll_export_records_balances_paired</c>) makes the three balance columns all-null or
 ///   all-set, so <c>closing_balance</c> is set on every ledger record.</item>
-///   <item>A <i>raw</i> record (written by the raw export routes, or before the ledger existed)
-///   carries no balances and is ignored, even when it is the employee's newest month.</item>
+///   <item>A <i>raw</i> record (written by the raw export routes before S147 retired them, before
+///   the ledger existed, or, since S147 TASK-14715, by a calculating export of a month before the
+///   ledger start, flex not tracked) carries no balances and is ignored, even when it is the
+///   employee's newest month.</item>
 ///   <item>The latest one is the ledger record with the greatest <c>(year, month)</c>. The key
 ///   <c>UNIQUE (employee_id, year, month)</c> makes that order total, so the pick is deterministic.
 ///   Its index narrows the read to the requested employees, but it is ascending while the query
@@ -73,8 +75,8 @@ public sealed record RecordedFlexClosing(int Year, int Month, decimal OpeningBal
 /// <b>What kind of figure it is.</b> Two Payroll routes put balances on a record. The calculating
 /// export writes them only for a month it re-asserts APPROVED under the approval row's lock
 /// (ADR-034 D4). The correction route (GlobalAdmin only, no approval read) recomputes a month
-/// already sent to payroll, and may fill the balances on a month the raw export routes recorded —
-/// those bypass approval by design and are GlobalAdmin only too. Either way the figure is a
+/// already sent to payroll, and may fill the balances on a month the raw export routes recorded
+/// before S147 retired them (they bypassed approval and were GlobalAdmin only). Either way the figure is a
 /// payroll fact fixed when that route committed, for a month already sent to payroll (which the
 /// reopen refuses from then on, ADR-034 D5), not a running total of what the employee is typing.
 /// Who may read whose figure is decided by the existing scope-checked handlers that call this,
