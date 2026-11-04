@@ -36,9 +36,10 @@ builder.Services.AddHostedService<OutboxPublisher>();
 
 builder.Services.AddHttpClient();
 // S29 TASK-2907: WageTypeMappingRepository is now an optional dependency of
-// PayrollMappingService for the dated-read path (ADR-020 D1 / Implications §7).
-// MapCalculationResultAsync stays current-row (no asOfDate); only the planner-driven
-// per-segment export in PCS.MapSegmentToExportLinesAsync passes asOfDate = segmentStart.
+// PayrollMappingService for the dated-read path (ADR-020 D1 / Implications §7): the planner-driven
+// per-segment export in PCS.MapSegmentToExportLinesAsync passes asOfDate = segmentStart. (The
+// per-line mapper that used the current-row lookup served only the raw export routes and was deleted
+// with them in S147 TASK-14716.)
 builder.Services.AddSingleton<WageTypeMappingRepository>();
 // S69 TASK-6904 + S71 TASK-7105 (ADR-033 D4; SPRINT-71 R6/R7/R9): the settlement-export
 // consumer + its data-access seam. SettlementExportEmitter is ONE BackgroundService with a

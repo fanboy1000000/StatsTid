@@ -143,8 +143,10 @@ public sealed class RetroactiveCorrectionService
     /// derivation on in-transaction reads and requires the (opening, provenance) its OWN calculation used
     /// (<c>payroll-ledger-changed</c> otherwise). It records the month's corrected balances beside
     /// <c>current_effective_lines</c>; the event and the result carry the opening used and the closing before and
-    /// after; and the next month is named when the closing changed (C4), Sunday or not. Under <c>UNTRACKED</c> (a raw
-    /// month before the ledger start) <c>FLEX_PAYOUT</c> is excluded from both sides of the diff and the flex delta is
+    /// after; and the next month is named when the closing changed (C4), Sunday or not. Under <c>UNTRACKED</c> (a month
+    /// before the ledger start, whose record holds no balance: a case-3a calculating export since S147 TASK-14715, or
+    /// a month the raw export routes recorded before S147 TASK-14716 retired them) <c>FLEX_PAYOUT</c> is excluded from
+    /// both sides of the diff and the flex delta is
     /// null, so no flex correction line is emitted and a payout already made is never clawed back; the balances stay
     /// null. A month that lost every EMPLOYED day (a windows edit) derives no opening (the function's precondition):
     /// its line diff is corrected, its recorded balances stay unchanged, and its event says so (no opening used,

@@ -152,10 +152,10 @@ public sealed class PayrollExportRecordRepository
 
     /// <summary>
     /// S146 / TASK-14605 (R-15; refinement C3) — the per-employee ledger lock. Every writer of
-    /// <c>payroll_export_records</c> (<c>/export</c>, <c>/export-period</c>, <c>/calculate-and-export</c> through
+    /// <c>payroll_export_records</c> (<c>/calculate-and-export</c> through
     /// <see cref="PayrollExportService.ExportAsync"/>, and <c>/recalculate</c> through
-    /// <see cref="RetroactiveCorrectionService"/>) calls this as the FIRST statement of its writing transaction,
-    /// before any row lock. Transaction-scoped (<c>pg_advisory_xact_lock</c>): held to commit or rollback.
+    /// <see cref="RetroactiveCorrectionService"/>; the raw export routes were writers too until S147 TASK-14716
+    /// retired them) calls this as the FIRST statement of its writing transaction, before any row lock. Transaction-scoped (<c>pg_advisory_xact_lock</c>): held to commit or rollback.
     ///
     /// <para>
     /// <b>One statement for several employees, ordered by the KEY</b> (reviewer c3 N2). <c>ExportAsync</c> writes

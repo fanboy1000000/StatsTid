@@ -88,8 +88,9 @@ public sealed class PayrollExportService
     /// <see cref="PriorMonthNotApprovedException"/>;</description></item>
     /// <item><description>(B2) re-asserts <c>status='APPROVED'</c> on that period under
     /// <c>SELECT … FOR UPDATE</c>, with the four-eyes checkpoint (S147 TASK-14704), for every group — always since
-    /// S147 TASK-14716, when the period became required — and a period not APPROVED at export time aborts the WHOLE
-    /// tx;</description></item>
+    /// S147 TASK-14716, when the period became required — after checking that the locked period is that group's own
+    /// approval (the same employee, both dates in the group's month; TASK-14716 fix-up 1, R-G2); a period that is
+    /// not, or is not APPROVED at export time, aborts the WHOLE tx;</description></item>
     /// <item><description>computes a deterministic <c>content_hash</c> over the group's lines;</description></item>
     /// <item><description>INSERTs <c>payroll_export_records</c> — idempotent on
     /// <c>UNIQUE(employee_id, year, month)</c>: same hash → NO-OP (returns the existing
@@ -459,6 +460,16 @@ public sealed class PayrollExportService
     /// committing until this export tx commits, closing the export↔reopen TOCTOU window. A period
     /// that is missing or not APPROVED at this point aborts the whole export tx.
     ///
+    /// <para><b>S147 / TASK-14716 fix-up 1 (ruling R-G2) — the period must be the exported month.</b> Since the
+    /// period became required, it is what makes every export "an approved month with two signers"; so the locked
+    /// row must be the approval of THIS group: its <c>employee_id</c> equals the group's employee (Ordinal), and its
+    /// <c>period_start</c> and <c>period_end</c> both fall in the group's calendar month. Otherwise the export throws
+    /// the existing conflict (→ 409, <see cref="PeriodNotTheExportedMonthMessage"/>) and rolls back. The check runs
+    /// right after the not-found check and before the status and four-eyes checks: a different month's approval says
+    /// nothing about this month, whatever its status. On <c>/calculate-and-export</c> it always holds by construction
+    /// (the period is read by the request's employee and exact whole-month dates, and every line belongs to that
+    /// employee and month); it guards any other caller of <see cref="ExportAsync"/>.</para>
+    ///
     /// <para><b>S147 / TASK-14704 (SEC-053, owner ruling OQ-1 = (a)) — the payroll checkpoint of
     /// four-eyes.</b> Payroll is where an approval turns into money, so it re-checks the two
     /// segregation-of-duties rules on the locked row rather than trusting that every path that wrote
@@ -473,7 +484,8 @@ public sealed class PayrollExportService
     {
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT status, approved_by, COALESCE(employee_approved_by, submitted_by) AS sender, employee_id
+            SELECT status, approved_by, COALESCE(employee_approved_by, submitted_by) AS sender, employee_id,
+                   period_start, period_end
               FROM approval_periods
              WHERE period_id = @periodId
                FOR UPDATE
@@ -484,6 +496,8 @@ public sealed class PayrollExportService
         string? approvedBy = null;
         string? sender = null;
         string? employeeId = null;
+        var periodStart = default(DateOnly);
+        var periodEnd = default(DateOnly);
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
             if (await reader.ReadAsync(ct))
@@ -492,6 +506,8 @@ public sealed class PayrollExportService
                 approvedBy = reader.IsDBNull(1) ? null : reader.GetString(1);
                 sender = reader.IsDBNull(2) ? null : reader.GetString(2);
                 employeeId = reader.GetString(3);
+                periodStart = reader.GetFieldValue<DateOnly>(4);
+                periodEnd = reader.GetFieldValue<DateOnly>(5);
             }
         }
 
@@ -499,6 +515,15 @@ public sealed class PayrollExportService
         {
             throw new PayrollExportConflictException(
                 $"Approval period '{periodId}' (employee '{key.EmployeeId}', {key.Year}-{key.Month:D2}) not found at export time.");
+        }
+        // S147 TASK-14716 fix-up 1 (R-G2): the locked period must be this group's own approval — the same employee,
+        // and both of its dates inside the group's calendar month — before its status or approver means anything.
+        if (!string.Equals(employeeId, key.EmployeeId, StringComparison.Ordinal)
+            || !InGroupMonth(periodStart)
+            || !InGroupMonth(periodEnd))
+        {
+            throw new PayrollExportConflictException(PeriodNotTheExportedMonthMessage(
+                periodId, employeeId!, periodStart, periodEnd, key.EmployeeId, key.Year, key.Month));
         }
         if (!string.Equals(status, "APPROVED", StringComparison.Ordinal))
         {
@@ -519,7 +544,27 @@ public sealed class PayrollExportService
         // Ordinal, and a null or empty id never matches (the Backend guards' rule).
         static bool SameActor(string? a, string? b) =>
             !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b) && string.Equals(a, b, StringComparison.Ordinal);
+
+        bool InGroupMonth(DateOnly day) => day.Year == key.Year && day.Month == key.Month;
     }
+
+    /// <summary>
+    /// S147 / TASK-14716 fix-up 1 (ruling R-G2) — the message of the <see cref="PayrollExportConflictException"/>
+    /// (→ 409 <c>payroll-export-conflict</c>) thrown when the export's approval period is not the approval of the
+    /// month being exported: another employee's, or dated outside that calendar month. It names the period id, the
+    /// period's employee and dates, and the exported employee and month. Public so a test can assert it exactly.
+    /// Unreachable through <c>/calculate-and-export</c>, which reads the period by the request's own employee and
+    /// month; it is a programming-error guard for any other caller of <see cref="ExportAsync"/>.
+    /// </summary>
+    public static string PeriodNotTheExportedMonthMessage(
+        Guid periodId, string periodEmployeeId, DateOnly periodStart, DateOnly periodEnd,
+        string exportEmployeeId, int year, int month) =>
+        $"Approval period '{periodId}' belongs to employee '{periodEmployeeId}', " +
+        $"{periodStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}.." +
+        $"{periodEnd.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}, but the export is for employee " +
+        $"'{exportEmployeeId}', {year.ToString("D4", CultureInfo.InvariantCulture)}-" +
+        $"{month.ToString("D2", CultureInfo.InvariantCulture)}: the period is not the exported month's own approval " +
+        "(an export must come from that month's approval); payroll export aborted.";
 
     /// <summary>
     /// S145 / TASK-14512 Do 7 — closes the reopen-vs-export race on the PREVIOUS month (adjudicator R-4 on
