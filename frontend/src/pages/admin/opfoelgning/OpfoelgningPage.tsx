@@ -20,8 +20,10 @@
 // spec calls these out specifically as "the two enumeration reads" — an
 // (employee x month) scan the full item list is comparatively expensive to
 // produce just to render a tile count, so the initial paint asks for
-// `?summary=true` and the full list is fetched lazily, once, the first time
-// that tile is opened (`useLazyFollowUpLoad`). The other seven reads are not
+// `?summary=true` and the full list is fetched lazily, the first time
+// that tile is opened, and kept (`useLazyFollowUpLoad`): a fetch that landed is not repeated on a
+// leave-and-return, but the cache can be marked stale (`invalidate`, after a leaver-month write) and a
+// fetch cancelled before it landed is retried on the next activation. The other seven reads are not
 // enumerations; the task spec does not ask for summary mode on them, so they
 // are fetched once, in full, on the first paint, and reused as both the tile
 // count source and the list content.
@@ -54,8 +56,8 @@ const IDLE = <T,>(): LoadState<T> => ({ loading: true, error: null, data: null }
 /** Fetches once on mount and exposes `{ loading, error, data, reload }`.
     `fetcher` is expected to be a stable callback (every `useHrFollowUp`
     fetcher is a `useCallback` with an empty dep array). `reload` lets the
-    worklist tile refresh its count after `WorklistList`'s one write
-    (Resolve) — the only mutation this page's tiles ever need to react to. */
+    tiles refresh their counts after a list's write: `WorklistList`'s Resolve,
+    and (S147 tidy item 23b) the leaver list's send / approve / reject. */
 function useFollowUpLoad<T>(fetcher: () => Promise<ApiResult<T>>): Loaded<T> {
   const [state, setState] = useState<LoadState<T>>(IDLE<T>)
   const load = useCallback(() => {
@@ -72,28 +74,45 @@ function useFollowUpLoad<T>(fetcher: () => Promise<ApiResult<T>>): Loaded<T> {
   return { ...state, reload: load }
 }
 
-/** Fetches exactly once, the first time `active` becomes true, and caches
-    the result thereafter — the lazy "full list" fetch behind past-deadline
-    and leaver-final-month's summary-first tiles. */
-function useLazyFollowUpLoad<T>(active: boolean, fetcher: () => Promise<ApiResult<T>>): LoadState<T> {
+/** Fetches the first time `active` becomes true and keeps the result — the lazy "full list" fetch
+    behind past-deadline and leaver-final-month's summary-first tiles. A fetch that LANDED is not
+    repeated on a leave-and-return; `invalidate()` marks the cache stale so the NEXT activation
+    refetches (an open list is never reloaded in place); a fetch cancelled before it landed (leaving
+    the tile mid-fetch, StrictMode's mount-cleanup-mount) is retried on the next activation. */
+function useLazyFollowUpLoad<T>(
+  active: boolean,
+  fetcher: () => Promise<ApiResult<T>>,
+): LoadState<T> & { invalidate: () => void } {
   const [state, setState] = useState<LoadState<T>>({ loading: false, error: null, data: null })
-  const startedRef = useRef(false)
+  // S147 TIDY-4 fix-up 1 + 2: true while the list still owes a fetch. It starts true, `invalidate` sets
+  // it (the next ACTIVATION refetches; an open list is never reloaded in place, because the effect only
+  // runs when `active` changes), and a fetch that is cancelled before it lands sets it back (cleanup:
+  // leaving the tile mid-fetch, or React.StrictMode's mount, cleanup, mount in dev), so the next
+  // activation fetches again instead of leaving the list on "loading". A fetch that landed is never
+  // repeated: the cleanup after a landing leaves the flag false, so a normal click fetches once.
+  const needsFetchRef = useRef(true)
+  const invalidate = useCallback(() => {
+    needsFetchRef.current = true
+  }, [])
   useEffect(() => {
-    if (!active || startedRef.current) return
-    startedRef.current = true
+    if (!active || !needsFetchRef.current) return
+    needsFetchRef.current = false
     let cancelled = false
+    let landed = false
     setState((s) => ({ ...s, loading: true }))
     void fetcher().then((result) => {
       if (cancelled) return
+      landed = true
       if (result.ok) setState({ loading: false, error: null, data: result.data })
       else setState({ loading: false, error: result.error, data: null })
     })
     return () => {
       cancelled = true
+      if (!landed) needsFetchRef.current = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])
-  return state
+  return { ...state, invalidate }
 }
 
 const TILE_KEYS = [
@@ -155,6 +174,26 @@ export function OpfoelgningPage() {
     useCallback(() => fetchLeaverFinalMonth(false), [fetchLeaverFinalMonth]),
   )
   const approvedNotExported = useFollowUpLoad(fetchApprovedNotExported)
+  // S147 tidy item 23b — a leaver-month send/approve/reject changes more than one tile: the leaver
+  // summary (HRP-011), approved-not-exported (an approve moves the month there, HRP-022) and the
+  // past-deadline summary (the same month can be listed there too). Reload all three.
+  const reloadLeaverSummary = leaverSummary.reload
+  const reloadApprovedNotExported = approvedNotExported.reload
+  const reloadPastDeadlineSummary = pastDeadlineSummary.reload
+  // The two lazily cached FULL lists would otherwise come back from the cache with the old status
+  // (an approved month still "Indsendt", still offering Godkend). Mark them stale: the next time
+  // the tile is opened they refetch. The open list is NOT reloaded (that would remount its rows and
+  // lose the row's outcome sentence). approvedNotExported's list is not lazy: it is the same load
+  // as its tile, reloaded above.
+  const invalidateLeaverFull = leaverFull.invalidate
+  const invalidatePastDeadlineFull = pastDeadlineFull.invalidate
+  const onLeaverMonthResolved = useCallback(() => {
+    reloadLeaverSummary()
+    reloadApprovedNotExported()
+    reloadPastDeadlineSummary()
+    invalidateLeaverFull()
+    invalidatePastDeadlineFull()
+  }, [reloadLeaverSummary, reloadApprovedNotExported, reloadPastDeadlineSummary, invalidateLeaverFull, invalidatePastDeadlineFull])
   const uncoveredApprovers = useFollowUpLoad(fetchUncoveredApprovers)
   const cannotRegister = useFollowUpLoad(fetchCannotRegister)
   const settlementReviews = useFollowUpLoad(fetchSettlementReviews)
@@ -370,7 +409,12 @@ export function OpfoelgningPage() {
             <PastDeadlineList data={pastDeadlineFull.data} loading={pastDeadlineFull.loading} error={pastDeadlineFull.error} />
           )}
           {activeTile === 'leaver-final-month' && (
-            <LeaverFinalMonthList data={leaverFull.data} loading={leaverFull.loading} error={leaverFull.error} />
+            <LeaverFinalMonthList
+              data={leaverFull.data}
+              loading={leaverFull.loading}
+              error={leaverFull.error}
+              onResolved={onLeaverMonthResolved}
+            />
           )}
           {activeTile === 'approved-not-exported' && (
             <ApprovedNotExportedList data={approvedNotExported.data} loading={approvedNotExported.loading} error={approvedNotExported.error} />

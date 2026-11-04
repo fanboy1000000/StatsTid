@@ -14,7 +14,15 @@
 //  - the rolling lookback floor renders on the three history tiles;
 //  - the eventual-consistency lag note renders on the two event-backed lists;
 //  - the §21 list surfaces `cannotCompute` and `projectionNote`.
+// S147 TIDY-4 (lazy full-list cache, `useLazyFollowUpLoad`):
+//  - a leaver-month approve reloads the leaver and past-deadline summaries and the approved-not-exported list (F) and, after leaving the tile and coming
+//    back, the leaver list refetches instead of showing the stale row (F; `invalidate`);
+//  - a lazy fetch cancelled before it landed is retried on the next activation (F, the Codex
+//    sequence), including under React.StrictMode on a direct load (F against 94bd32be);
+//  - a normal click fetches the full list once (B), and a list that LANDED is not fetched again on a
+//    leave-and-return (B).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { StrictMode } from 'react'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -166,16 +174,17 @@ function installFetchMock(
   })
 }
 
-function renderPage(initialTile?: string) {
+function renderPage(initialTile?: string, strict = false) {
   const path = initialTile ? `/admin/opfoelgning/${initialTile}` : '/admin/opfoelgning'
-  return render(
+  const tree = (
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/admin/opfoelgning" element={<OpfoelgningPage />} />
         <Route path="/admin/opfoelgning/:tile" element={<OpfoelgningPage />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree)
 }
 
 const READY_TILE_TESTIDS = ['tile-past-deadline', 'tile-leaver-final-month', 'tile-approved-not-exported', 'tile-transfer-agreements']
@@ -322,6 +331,170 @@ describe('OpfoelgningPage — each tile opens its list', () => {
     installFetchMock(transferAgreementsOpen)
     renderPage('transfer-agreements')
     await waitFor(() => expect(screen.getByTestId('list-transfer-agreements')).toBeInTheDocument())
+  })
+})
+
+// S147 TIDY-4 item 23b + fix-up 1 (Fable W1, N6). The leaver list's send / approve / reject must
+// refresh the landing tiles AND leave no stale cached full list behind.
+describe('OpfoelgningPage — a resolved leaver month refreshes the tiles and the cached lists', () => {
+  const PERIOD = 'p-leaver'
+  const submittedLeaver = {
+    ...leaverFullResponse,
+    items: [{ employeeId: 'e3', displayName: 'Carl Christ', orgId: 'org1', year: 2025, month: 8, periodStatus: 'SUBMITTED', periodId: PERIOD, ageAnchor: '2025-08-20', daysPastAnchor: 20, deadlineSource: 'stored', lastManagerDay: '2025-08-18', firstHrOnlyDay: '2025-08-19' }],
+  }
+  const approvedLeaver = {
+    ...submittedLeaver,
+    items: [{ ...submittedLeaver.items[0], periodStatus: 'APPROVED' }],
+  }
+  const calls = (needle: string, summary: boolean | null = null) =>
+    mockFetch.mock.calls
+      .map(([url]) => String(url))
+      .filter((u) => u.includes(needle) && (summary === null || u.includes('summary=true') === summary))
+
+  function installLeaverMock(approvedRef: { done: boolean }) {
+    installFetchMock(transferAgreementsOpen, { leaverFull: submittedLeaver })
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes('/api/approval/') && url.endsWith('/approve')) {
+        approvedRef.done = true
+        return jsonResponse({ periodId: PERIOD, status: 'APPROVED' })
+      }
+      if (approvedRef.done && url.includes('/api/hr/follow-up/leaver-final-month') && !url.includes('summary=true')) {
+        return jsonResponse(approvedLeaver)
+      }
+      return base(url)
+    })
+  }
+
+  // N6, kind F against 94bd32be. Red conditions: before the change the leaver list had no onResolved,
+  // so after an approve each of the three summaries was fetched exactly once (on mount); the
+  // second-call assertions below fail with a count of 1.
+  it('an approve reloads the leaver, approved-not-exported and past-deadline summaries', async () => {
+    installLeaverMock({ done: false })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-leaver-final-month'))
+    await user.click(await screen.findByTestId('list-leaver-final-month-approve-e3-2025-8'))
+    await waitFor(() => expect(calls('/api/hr/follow-up/leaver-final-month', true).length).toBe(2))
+    await waitFor(() => expect(calls('/api/hr/follow-up/approved-not-exported').length).toBe(2))
+    await waitFor(() => expect(calls('/api/hr/follow-up/past-deadline', true).length).toBe(2))
+  })
+
+  // W1, kind F against 94bd32be. Red conditions: before the fix the full list stayed cached, so
+  // coming back to the tile showed the old SUBMITTED row (status "Indsendt", Godkend offered) and
+  // no second non-summary leaver fetch happened. The approved row's outcome sentence must survive
+  // while the list is on screen (no reload of an open list).
+  it('after an approve, leaving the tile and coming back refetches the list (no stale "Indsendt" row)', async () => {
+    installLeaverMock({ done: false })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-leaver-final-month'))
+    await user.click(await screen.findByTestId('list-leaver-final-month-approve-e3-2025-8'))
+    await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
+    // The open list was not reloaded: the row's own outcome sentence is still there.
+    expect(screen.getByTestId('list-leaver-final-month-outcome-e3-2025-8')).toBeInTheDocument()
+    expect(calls('/api/hr/follow-up/leaver-final-month', false).length).toBe(1)
+
+    await user.click(screen.getByTestId('tile-approved-not-exported'))
+    await user.click(await screen.findByTestId('tile-leaver-final-month'))
+    await waitFor(() => expect(calls('/api/hr/follow-up/leaver-final-month', false).length).toBe(2))
+    await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
+    expect(screen.queryByTestId('list-leaver-final-month-approve-e3-2025-8')).not.toBeInTheDocument()
+  })
+})
+
+// S147 TIDY-4 fix-up 2 (Codex c2 W, Fable c2 N1): a lazy full-list fetch that is cancelled before it
+// lands must not leave the list stuck on "loading".
+describe('OpfoelgningPage — a cancelled lazy fetch is retried on the next activation', () => {
+  // Kind F against f1af775b (the Codex sequence). Red conditions: after approve the cache is stale;
+  // opening the tile starts refetch #2, leaving mid-fetch cancels it, and f1af775b had already consumed
+  // the stale flag, so the third activation fetched nothing: the third non-summary leaver call never
+  // happens and the list stays "loading" (waitFor on the third call times out).
+  it('approve, leave, return, leave before the refetch lands, return: the list fetches again', async () => {
+    installFetchMock(transferAgreementsOpen, {
+      leaverFull: {
+        ...leaverFullResponse,
+        items: [{ employeeId: 'e3', displayName: 'Carl Christ', orgId: 'org1', year: 2025, month: 8, periodStatus: 'SUBMITTED', periodId: 'p-leaver', ageAnchor: '2025-08-20', daysPastAnchor: 20, deadlineSource: 'stored', lastManagerDay: '2025-08-18', firstHrOnlyDay: '2025-08-19' }],
+      },
+    })
+    const base = mockFetch.getMockImplementation()!
+    let approved = false
+    let hold: Promise<void> | null = null
+    const fullCalls = () => mockFetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/hr/follow-up/leaver-final-month') && !u.includes('summary=true')).length
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes('/api/approval/') && url.endsWith('/approve')) {
+        approved = true
+        return jsonResponse({ periodId: 'p-leaver', status: 'APPROVED' })
+      }
+      if (url.includes('/api/hr/follow-up/leaver-final-month') && !url.includes('summary=true')) {
+        if (hold) await hold
+        if (approved) {
+          const r = await base(url)
+          const body = await r.json()
+          return jsonResponse({ ...body, items: body.items.map((i: object) => ({ ...i, periodStatus: 'APPROVED' })) })
+        }
+      }
+      return base(url)
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-leaver-final-month'))
+    await user.click(await screen.findByTestId('list-leaver-final-month-approve-e3-2025-8'))
+    await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
+    await user.click(screen.getByTestId('tile-approved-not-exported'))
+
+    // Refetch #2 is held, and the person leaves before it lands.
+    let release: () => void = () => {}
+    hold = new Promise<void>((r) => { release = r })
+    await user.click(screen.getByTestId('tile-leaver-final-month'))
+    await waitFor(() => expect(fullCalls()).toBe(2))
+    await user.click(screen.getByTestId('tile-approved-not-exported'))
+
+    // Back again, nothing held: the cancelled fetch must be retried.
+    hold = null
+    await user.click(screen.getByTestId('tile-leaver-final-month'))
+    await waitFor(() => expect(fullCalls()).toBe(3))
+    await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
+    release()
+  })
+
+  // Kind F against 94bd32be (pre-existing since S140, dev only). Red conditions: under React.StrictMode
+  // the mount effect runs, cleans up and runs again; the first run set the started flag and its fetch
+  // was cancelled by the cleanup, so the second run returned early and the list never left "loading".
+  it('under StrictMode a direct load of a lazy tile does not stay on "loading"', async () => {
+    installFetchMock(transferAgreementsOpen)
+    renderPage('past-deadline', true)
+    await waitFor(() => expect(screen.getByTestId('list-past-deadline')).toBeInTheDocument())
+    expect(within(screen.getByTestId('list-past-deadline')).getByText('Anna And')).toBeInTheDocument()
+  })
+
+  // Kind B, boundary pin - holds today: a list that LANDED is not fetched again on a leave-and-return.
+  // Mutations that turn it red: delete `landed = true`, or drop the `if (!landed)` condition in the
+  // cleanup; either re-arms every cancelled-or-finished fetch, so the second count below is 2.
+  it('a list that finished loading is not fetched again on a leave-and-return', async () => {
+    installFetchMock(transferAgreementsOpen)
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-past-deadline'))
+    await waitFor(() => expect(within(screen.getByTestId('list-past-deadline')).getByText('Anna And')).toBeInTheDocument())
+    const fullCount = () =>
+      mockFetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/hr/follow-up/past-deadline') && !u.includes('summary=true')).length
+    expect(fullCount()).toBe(1)
+    await user.click(screen.getByTestId('tile-approved-not-exported'))
+    await user.click(screen.getByTestId('tile-past-deadline'))
+    await waitFor(() => expect(within(screen.getByTestId('list-past-deadline')).getByText('Anna And')).toBeInTheDocument())
+    expect(fullCount()).toBe(1)
+  })
+
+  // Boundary pin - holds today: a normal tile click fetches the full list exactly once.
+  it('a normal tile click fetches the full list once (no double fetch)', async () => {
+    installFetchMock(transferAgreementsOpen)
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-past-deadline'))
+    await waitFor(() => expect(screen.getByTestId('list-past-deadline')).toBeInTheDocument())
+    const full = mockFetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/hr/follow-up/past-deadline') && !u.includes('summary=true'))
+    expect(full.length).toBe(1)
   })
 })
 

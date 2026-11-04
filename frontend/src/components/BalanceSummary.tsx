@@ -19,6 +19,7 @@
 import type { BalanceSummary as BalanceSummaryData } from '../hooks/useBalanceSummary'
 import type { MonthAbsenceUsage } from '../hooks/useBalanceSummary'
 import { DANISH_MONTHS, NO_SETTLED_MONTH, formatDanishNumber, formatYearMonthWord } from '../lib/locale'
+import { BALANCE_LABELS } from '../lib/entitlementConstants'
 import styles from './BalanceSummary.module.css'
 
 interface BalanceSummaryProps {
@@ -190,21 +191,21 @@ export function BalanceSummary({
 
       {/* 2–4 — the D-A hours-first day cards */}
       <DayCard
-        label="Ferie"
+        label={BALANCE_LABELS.VACATION}
         remainingDays={remainingFor('VACATION')}
         norm={fullDayNormAtMonthEnd}
         usage={monthAbsenceUsage.get('VACATION') ?? NO_USAGE}
         monthName={monthName}
       />
       <DayCard
-        label="Særlige feriedage"
+        label={BALANCE_LABELS.SPECIAL_HOLIDAY}
         remainingDays={remainingFor('SPECIAL_HOLIDAY')}
         norm={fullDayNormAtMonthEnd}
         usage={monthAbsenceUsage.get('SPECIAL_HOLIDAY') ?? NO_USAGE}
         monthName={monthName}
       />
       <DayCard
-        label="Omsorgsdage"
+        label={BALANCE_LABELS.CARE_DAY}
         remainingDays={remainingFor('CARE_DAY')}
         norm={fullDayNormAtMonthEnd}
         usage={monthAbsenceUsage.get('CARE_DAY') ?? NO_USAGE}

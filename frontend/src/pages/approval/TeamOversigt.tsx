@@ -9,6 +9,7 @@ import { useTeamOverview, type TeamOverviewRow } from '../../hooks/useTeamOvervi
 import { useAllocationBreakdown } from '../../hooks/useAllocationBreakdown'
 import { useCompliance } from '../../hooks/useCompliance'
 import { restNotCheckedNotice } from '../../components/ComplianceWarnings'
+import { BALANCE_LABELS } from '../../lib/entitlementConstants'
 import styles from './TeamOversigt.module.css'
 
 // ── Status mapping (the 4 display statuses) ──────────────────────────────────
@@ -229,7 +230,7 @@ function TeamRowDetail({
                 {flex.month && <div className={styles.saldiCellLabel}>{flex.month}</div>}
               </div>
               <div className={styles.saldiCell}>
-                <div className={styles.saldiCellLabel}>Ferie</div>
+                <div className={styles.saldiCellLabel}>{BALANCE_LABELS.VACATION}</div>
                 <div className={styles.saldiCellValue}>
                   {daNumOrWithheld(row.ferieUsed, 0)} / {daNum(row.ferieTotal, 0)} dage
                 </div>
@@ -832,7 +833,7 @@ export function TeamOversigt() {
                 <th className={styles.sortable} onClick={() => sortBy('status')}>Status{arrow('status')}</th>
                 <th className={styles.sortable} onClick={() => sortBy('norm')}>Norm / registreret{arrow('norm')}</th>
                 <th className={`${styles.sortable} ${styles.right}`} onClick={() => sortBy('flex')}>Flex{arrow('flex')}</th>
-                <th>Ferie</th>
+                <th>{BALANCE_LABELS.VACATION}</th>
                 <th>Advarsler</th>
                 <th className={styles.handlingHead}>Handling</th>
               </tr>

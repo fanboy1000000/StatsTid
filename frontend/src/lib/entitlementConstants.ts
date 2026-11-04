@@ -10,12 +10,25 @@ export type EntitlementType =
 
 export type AccrualModel = 'IMMEDIATE' | 'MONTHLY_ACCRUAL'
 
+// S147 C-1 (owner ruling 2026-11-04, option a): ONE wording per context. TYPE_LABELS are the SINGULAR
+// type names for admin pickers and editors; BALANCE_LABELS (below) are the PLURAL balance names for
+// balance and quota surfaces. The child's sick day is "Barns sygedag" in both (never "Barnets").
 export const TYPE_LABELS: Record<EntitlementType, string> = {
   VACATION: 'Ferie',
   SPECIAL_HOLIDAY: 'Særlig feriedag',
   CARE_DAY: 'Omsorgsdag',
-  CHILD_SICK: 'Barnets sygedag',
+  CHILD_SICK: 'Barns sygedag',
   SENIOR_DAY: 'Seniordag',
+}
+
+// The balance names the server serves (BalanceEndpoints.DanishLabels). Used by the Skema quota alert
+// and the Årsoversigt tiles: one map, so the two screens cannot drift apart.
+export const BALANCE_LABELS: Record<EntitlementType, string> = {
+  VACATION: 'Ferie',
+  SPECIAL_HOLIDAY: 'Særlige feriedage',
+  CARE_DAY: 'Omsorgsdage',
+  CHILD_SICK: 'Barns sygedag',
+  SENIOR_DAY: 'Seniordage',
 }
 
 export const TYPE_OPTIONS: EntitlementType[] = [
@@ -49,6 +62,10 @@ export function isAccrualModel(value: string): value is AccrualModel {
 
 export function entitlementTypeLabel(value: string): string {
   return isEntitlementType(value) ? TYPE_LABELS[value] : value
+}
+
+export function entitlementBalanceLabel(value: string): string {
+  return isEntitlementType(value) ? BALANCE_LABELS[value] : value
 }
 
 export function accrualModelLabel(value: string): string {

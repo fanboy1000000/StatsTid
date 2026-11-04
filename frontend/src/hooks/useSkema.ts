@@ -18,8 +18,10 @@ export interface SkemaActionError {
   uncertain?: boolean
 }
 
-/** S147 TASK-14720 / QUAL-241 — a save that was DROPPED (its month had left the screen when it
-    failed, so it is never resent). One notice per month, with every dropped day merged into it.
+/** S147 TASK-14720 / QUAL-241 — a save warning kept out of the clearable slot: a save that was DROPPED
+    (its month had left the screen, or the data it was sent under was replaced, also in the same month,
+    so it is never resent) or a warning moved out of the slot by an "uvist" report or a reload.
+    One notice per month, with every dropped day merged into it.
     Kept apart from the single retryable `actionError` slot: nothing replaces it, and it is cleared
     only by dismissal or by a later successful save of the SAME month that covers every listed day. */
 export interface DroppedSaveNotice {
@@ -130,7 +132,9 @@ interface UseSkemaResult {
   error: string | null
   /** The last failed save / approve / send / reopen, or null. */
   actionError: SkemaActionError | null
-  /** Saves dropped after their month left the screen — one persistent notice per month. */
+  /** Save warnings kept out of the clearable slot: saves that were DROPPED and are never resent (their
+      month left the screen, or the data they were sent under was replaced, also in the same month), and
+      warnings moved out of the slot by an "uvist" report or a reload. One persistent notice per month. */
   droppedSaves: DroppedSaveNotice[]
   dismissDroppedSave: (year: number, month: number) => void
   /** Let the page report a failure it detected itself (e.g. a save that never answered). */

@@ -178,6 +178,16 @@ describe('TeamOversigt — render + status mapping', () => {
     expect(calls.length).toBeGreaterThanOrEqual(1)
   })
 
+  // S147 C-1 fix-up, kind R (regression pin, holds today): this pins the header WORD, "Ferie", which
+  // is what BALANCE_LABELS.VACATION says; it does not prove the header is wired to the map. Red
+  // conditions: the header word changes.
+  it('the vacation column header says "Ferie"', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    expect(screen.getByRole('columnheader', { name: 'Ferie' })).toBeInTheDocument()
+  })
+
   it('maps the 5 backend statuses to the 4 display badges', async () => {
     mockOverview()
     renderPage()

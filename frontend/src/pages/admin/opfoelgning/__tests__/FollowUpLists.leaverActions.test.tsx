@@ -23,6 +23,12 @@
 //  8 F  "Åbn måned" toggles the real month grid and flips its label. Red: 7d53bd53 shows a
 //       one-line summary, never the grid.
 //  9 B  boundary pin - holds today: the aging column and the window text are unchanged.
+// S147 tidy item 23b (TIDY-4, against 94bd32be; vitest does not type-check, so the old component
+// simply ignores the new prop):
+// 10 F  `onResolved` is called once after a successful send and once after a successful approve.
+//       Red: the prop is ignored, 0 calls.
+// 11 F  `onResolved` is called once after a successful reject. Red: 0 calls.
+// 12 B  boundary pin - holds today: a refused action (409) never calls `onResolved`.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
@@ -62,12 +68,12 @@ function item(over: Partial<HrFollowUpMonthItem> = {}): HrFollowUpMonthItem {
   }
 }
 
-function renderList(items: HrFollowUpMonthItem[]) {
+function renderList(items: HrFollowUpMonthItem[], onResolved: () => void = () => {}) {
   const data = { today: '2026-04-14', lookbackFloor: '2025-04-14', count: items.length, items } as unknown as HrLeaverFinalMonthResponse
   return renderWithCalendar(
     '2026-04-14',
     <MemoryRouter>
-      <LeaverFinalMonthList data={data} loading={false} error={null} />
+      <LeaverFinalMonthList data={data} loading={false} error={null} onResolved={onResolved} />
     </MemoryRouter>,
   )
 }
@@ -170,6 +176,43 @@ describe('LeaverFinalMonthList row actions', () => {
     })
   })
 
+  // S147 tidy item 23b, kind F. Red conditions: before the change LeaverFinalMonthList ignored an
+  // `onResolved` prop, so every toHaveBeenCalledTimes below failed with 0 calls (vitest does not
+  // type-check, so passing the prop to the old component is legal). Each success calls it once; a
+  // refusal calls it never (the row's own error sentence is the only reaction).
+  it('onResolved is called once after each successful send, approve and reject', async () => {
+    const onResolved = vi.fn()
+    api.post.mockResolvedValueOnce({ ok: true, data: { periodId: PID, status: 'EMPLOYEE_APPROVED' } })
+    api.post.mockResolvedValueOnce({ ok: true, data: { periodId: PID, status: 'APPROVED' } })
+    renderList([item({ periodId: null, periodStatus: 'NONE' })], onResolved)
+    fireEvent.click(screen.getByTestId(id('send')))
+    const approve = await screen.findByTestId(id('approve'))
+    expect(onResolved).toHaveBeenCalledTimes(1)
+    fireEvent.click(approve)
+    await waitFor(() => expect(screen.getByTestId(id('status'))).toHaveTextContent('Godkendt'))
+    expect(onResolved).toHaveBeenCalledTimes(2)
+  })
+
+  it('onResolved is called once after a successful reject', async () => {
+    const onResolved = vi.fn()
+    api.post.mockResolvedValue({ ok: true, data: { periodId: PID, status: 'REJECTED' } })
+    renderList([item()], onResolved)
+    fireEvent.click(screen.getByTestId(id('reject')))
+    fireEvent.change(screen.getByLabelText('Begrundelse for afvisning af Mette Leaver'), { target: { value: 'mangler dage' } })
+    fireEvent.click(screen.getByTestId(id('reject-confirm')))
+    await waitFor(() => expect(screen.getByTestId(id('status'))).toHaveTextContent('Afvist'))
+    expect(onResolved).toHaveBeenCalledTimes(1)
+  })
+
+  it('onResolved is NOT called when the server refuses (boundary pin - holds today)', async () => {
+    const onResolved = vi.fn()
+    api.post.mockResolvedValue(refusal(409, { error: 'Cannot approve period with status APPROVED.' }))
+    renderList([item()], onResolved)
+    fireEvent.click(screen.getByTestId(id('approve')))
+    await waitFor(() => expect(screen.getByTestId(id('outcome'))).toBeInTheDocument())
+    expect(onResolved).not.toHaveBeenCalled()
+  })
+
   it('"Åbn måned" toggles the real month grid and flips its label', () => {
     renderList([item()])
     const toggle = screen.getByTestId(id('open'))
@@ -186,7 +229,7 @@ describe('LeaverFinalMonthList row actions', () => {
 
   it('boundary pin - holds today: the aging column and the window text are unchanged', () => {
     renderList([item()])
-    expect(screen.getByTestId(id('row'.replace('row', 'turn')))).toHaveTextContent(
+    expect(screen.getByTestId(id('turn'))).toHaveTextContent(
       'Leder til og med 18. marts 2026, kun HR fra 19. marts 2026',
     )
     expect(screen.getByTestId(`${T}-row-${K}`)).toHaveTextContent('4 dage')
