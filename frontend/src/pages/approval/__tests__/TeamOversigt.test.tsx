@@ -178,6 +178,15 @@ describe('TeamOversigt — render + status mapping', () => {
     expect(calls.length).toBeGreaterThanOrEqual(1)
   })
 
+  // S147 C-1 fix-up, kind R (regression pin, holds today): the vacation column header is the shared
+  // balance label. Red conditions: the header text changes if BALANCE_LABELS.VACATION drifts.
+  it('the vacation column header reads the shared balance label', async () => {
+    mockOverview()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Anna Berg')).toBeInTheDocument())
+    expect(screen.getByRole('columnheader', { name: 'Ferie' })).toBeInTheDocument()
+  })
+
   it('maps the 5 backend statuses to the 4 display badges', async () => {
     mockOverview()
     renderPage()
