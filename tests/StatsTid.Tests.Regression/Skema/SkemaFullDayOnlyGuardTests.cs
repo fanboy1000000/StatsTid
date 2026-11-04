@@ -159,10 +159,12 @@ public sealed class SkemaFullDayOnlyGuardTests : IAsyncLifetime
 
     /// <summary>
     /// S147 TIDY-3-T (row 8a) - kind F, Docker, CI-pending. The 422's Danish <c>message</c> writes the required hours
-    /// with a decimal comma whatever the host culture: "(7,4 timer)", and the date as dd-MM-yyyy.
+    /// with a decimal comma and keeps the number's scale: "(7,40 timer)" (the served requiredHours is 7.40m: NUMERIC(4,3) fraction 1.000 x 37.00 / 5 rounded to 2 dp), and the date as dd-MM-yyyy.
     ///
-    /// <para><b>Red conditions (F).</b> The <c>Assert.Equal</c> on the message fails on master: the sentence was
-    /// interpolated under the container's thread culture (no <c>LANG</c> set), so the body said "(7.4 timer)".</para>
+    /// <para><b>Red conditions (F).</b> The <c>Assert.EndsWith</c> fails on master, whose body said "(7.40 timer)": the
+    /// sentence was interpolated under the current culture. The host runs in-process under <c>WebApplicationFactory</c>,
+    /// so the culture at stake is the CI runner's (invariant or en-US), not a container's. Caveat: on a da-DK machine
+    /// this fact would pass on master.</para>
     /// </summary>
     [Fact]
     public async Task FullDay_Rejection422_MessageWritesHoursWithDecimalComma()
@@ -176,7 +178,7 @@ public sealed class SkemaFullDayOnlyGuardTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         var message = body.GetProperty("message").GetString();
-        Assert.EndsWith(" kan kun registreres som hel dag (7,4 timer) den 06-01-2025.", message);
+        Assert.EndsWith(" kan kun registreres som hel dag (7,40 timer) den 06-01-2025.", message);
         Assert.DoesNotContain("7.4", message);
     }
 

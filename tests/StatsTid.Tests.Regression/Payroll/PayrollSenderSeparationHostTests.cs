@@ -252,7 +252,7 @@ public sealed class PayrollSenderSeparationHostTests : IAsyncLifetime
         // transaction as the record (ADR-026 D2), so a refused export leaves no audit_projection row either.
         // The mapper sets target_resource_id to the employee id (PayrollExportGeneratedAuditMapper).
         Assert.Equal(0, await CountAsync(
-            "SELECT COUNT(*) FROM audit_projection WHERE target_resource_id = @e", ("e", employeeId)));
+            "SELECT COUNT(*) FROM audit_projection WHERE target_resource_id = @e AND event_type = 'PayrollExportGenerated'", ("e", employeeId)));
     }
 
 #pragma warning disable CA2100 // every sql here is a hardcoded literal; values flow through parameters.

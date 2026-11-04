@@ -8,31 +8,43 @@ namespace StatsTid.Tests.Unit.Endpoints;
 ///
 /// <para>
 /// <b>In plain language.</b> When someone books half a care day, the screen says "Omsorgsdag kan kun registreres som hel
-/// dag (7,4 timer) den 03-03-2026." A Danish reader expects a decimal comma. The server container sets no language, so
-/// before S147 the number was written with the machine's default and read "7.4". The sentence now always uses the Danish
-/// number format, whatever the machine's language is. The expected text below is written out from that spec.
+/// dag (7,40 timer) den 03-03-2026." A Danish reader expects a decimal comma. Before S147 the number was written with the
+/// machine's default format, so on a machine not set to Danish it read "7.40". The sentence now always uses the Danish
+/// number format, whatever the machine's language is, and keeps the number's scale (7,40 stays 7,40; 6,00 stays 6,00).
+/// The expected texts below are written out from that spec.
 /// </para>
 /// </summary>
 public class AbsenceTypeLabelsFullDayOnlyMessageTests
 {
     /// <summary>
-    /// Kind N (names <c>FullDayOnlyMessage</c>, which S147 creates). The exact da-DK sentence, asserted while the current
-    /// culture is en-US, whose decimal mark is a point, so the fact cannot pass by accident.
+    /// Kind N (names <c>FullDayOnlyMessage</c>, which S147 creates). The exact da-DK sentence, asserted under en-US,
+    /// invariant and da-DK current cultures, for scales 7.4, 7.40 and 6.00 (the last two pin scale preservation).
     ///
     /// <para><b>Red conditions (N).</b> Mutation: <c>FullDayOnlyMessage</c> interpolates under the current culture
-    /// instead of da-DK. Under en-US the text reads "(7.4 timer)" and the <c>Assert.Equal</c> fails.</para>
+    /// instead of da-DK. Under en-US and invariant the text reads "(7.40 timer)" and the <c>Assert.Equal</c> fails. A
+    /// scale-dropping change fails the 7.40 and 6.00 rows. The da-DK rows hold under the mutation, so the
+    /// en-US and invariant rows are the discriminating ones.</para>
     /// </summary>
-    [Fact]
-    public void FullDayOnlyMessage_WritesDecimalComma_EvenUnderEnUsCurrentCulture()
+    [Theory]
+    [InlineData("en-US", "7.4", "Omsorgsdag kan kun registreres som hel dag (7,4 timer) den 03-03-2026.")]
+    [InlineData("en-US", "7.40", "Omsorgsdag kan kun registreres som hel dag (7,40 timer) den 03-03-2026.")]
+    [InlineData("en-US", "6.00", "Omsorgsdag kan kun registreres som hel dag (6,00 timer) den 03-03-2026.")]
+    [InlineData("", "7.40", "Omsorgsdag kan kun registreres som hel dag (7,40 timer) den 03-03-2026.")]
+    [InlineData("", "6.00", "Omsorgsdag kan kun registreres som hel dag (6,00 timer) den 03-03-2026.")]
+    [InlineData("da-DK", "7.40", "Omsorgsdag kan kun registreres som hel dag (7,40 timer) den 03-03-2026.")]
+    public void FullDayOnlyMessage_WritesDecimalComma_AndKeepsScale_UnderAnyCurrentCulture(
+        string currentCulture, string hours, string expected)
     {
         var saved = CultureInfo.CurrentCulture;
         try
         {
-            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("en-US");
+            // "" is the invariant culture.
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(currentCulture);
 
-            var message = AbsenceTypeLabels.FullDayOnlyMessage("CARE_DAY", 7.4m, new DateOnly(2026, 3, 3));
+            var message = AbsenceTypeLabels.FullDayOnlyMessage(
+                "CARE_DAY", decimal.Parse(hours, CultureInfo.InvariantCulture), new DateOnly(2026, 3, 3));
 
-            Assert.Equal("Omsorgsdag kan kun registreres som hel dag (7,4 timer) den 03-03-2026.", message);
+            Assert.Equal(expected, message);
         }
         finally
         {

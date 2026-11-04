@@ -278,6 +278,7 @@ public sealed class TerminationPayoutRequestEndpointTests : IAsyncLifetime
         var body = JsonDocument.Parse(raw).RootElement;
         Assert.DoesNotContain(body.EnumerateObject(),
             p => p.Name.Equals("employmentEndDate", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("not passed", body.GetProperty("error").GetString());
         Assert.DoesNotContain("2026-12-31", raw);
         Assert.DoesNotContain("31-12-2026", raw);
     }

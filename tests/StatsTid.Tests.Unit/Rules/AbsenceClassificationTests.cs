@@ -211,6 +211,20 @@ public class AbsenceClassificationTests
             () => Assert.Equal(1.0m, line.Rate),
             () => Assert.Equal(Monday, line.Date));
     }
+
+    /// <summary>
+    /// S147 TIDY-3-T (row 15a) - kind F. The enum's zero value is <c>Neutral</c>: "moves nothing". A default-initialised
+    /// <see cref="AbsenceNormEffect"/> (what <c>TryGetEffect</c> hands back for an unknown code) must therefore never read
+    /// as <c>Credit</c> (a paid absence), which would silently credit hours to flex.
+    ///
+    /// <para><b>Red conditions (F).</b> <c>Assert.Equal(Neutral, default)</c> fails on master: <c>Credit</c> was numbered
+    /// 0, so the failure reads "Expected: Neutral, Actual: Credit".</para>
+    /// </summary>
+    [Fact]
+    public void DefaultAbsenceNormEffect_IsNeutral_NotCredit()
+    {
+        Assert.Equal(AbsenceNormEffect.Neutral, default(AbsenceNormEffect));
+    }
 }
 
 /// <summary>
@@ -365,19 +379,5 @@ public class SickCodeCreditThroughEngineTests
         var flex = Run("HK", opening: 0m, entries, absences).Flex;
 
         Assert.Equal(0.00m, flex.Delta);
-    }
-
-    /// <summary>
-    /// S147 TIDY-3-T (row 15a) - kind F. The enum's zero value is <c>Neutral</c>: "moves nothing". A default-initialised
-    /// <see cref="AbsenceNormEffect"/> (what <c>TryGetEffect</c> hands back for an unknown code) must therefore never read
-    /// as <c>Credit</c> (a paid absence), which would silently credit hours to flex.
-    ///
-    /// <para><b>Red conditions (F).</b> <c>Assert.Equal(Neutral, default)</c> fails on master: <c>Credit</c> was numbered
-    /// 0, so the failure reads "Expected: Neutral, Actual: Credit".</para>
-    /// </summary>
-    [Fact]
-    public void DefaultAbsenceNormEffect_IsNeutral_NotCredit()
-    {
-        Assert.Equal(AbsenceNormEffect.Neutral, default(AbsenceNormEffect));
     }
 }
