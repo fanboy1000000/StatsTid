@@ -509,8 +509,8 @@ public sealed class SettlementReversalTests : IAsyncLifetime
     /// transaction, termination settlement (day 6 onward) finds nothing due, and the supersession refuses.
     ///
     /// <para><b>Red conditions (F).</b> <c>Assert.Contains("retry from day 6", ...)</c> fails on master, whose
-    /// SupersedeNotEligible text carried no grace remedy. The failure code assertion holds today and pins that the refusal
-    /// is the in-grace one.</para>
+    /// SupersedeNotEligible text carried no grace remedy. The failure code assertion holds today; it tells this refusal
+    /// apart from the span, strand and version refusals, while the in-grace character comes from the chosen date.</para>
     /// </summary>
     [Fact]
     public async Task ReverseSupersede_CorrectionIntoGrace_Refused_FailureText_NamesRetryFromDaySix()

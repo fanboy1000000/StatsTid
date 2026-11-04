@@ -22,7 +22,7 @@ public class AbsenceTypeLabelsFullDayOnlyMessageTests
     ///
     /// <para><b>Red conditions (N).</b> Mutation: <c>FullDayOnlyMessage</c> interpolates under the current culture
     /// instead of da-DK. Under en-US and invariant the text reads "(7.40 timer)" and the <c>Assert.Equal</c> fails. A
-    /// scale-dropping change fails the 7.40 and 6.00 rows. The da-DK rows hold under the mutation, so the
+    /// scale-dropping change fails the 7.40 and 6.00 rows. The da-DK row holds under the mutation, so the
     /// en-US and invariant rows are the discriminating ones.</para>
     /// </summary>
     [Theory]
