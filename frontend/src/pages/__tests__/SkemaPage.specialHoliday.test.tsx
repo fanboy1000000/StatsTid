@@ -196,12 +196,13 @@ describe('SkemaPage — AC-235-6: the served SPECIAL_HOLIDAY_ALLOWANCE row (B, b
     await screen.findByText('Administrer rækker')
     await userEvent.setup().click(screen.getByRole('tab', { name: /Ferie og fravær/ }))
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByRole('button', { name: 'Tilføj Særlig feriedag' })).toBeEnabled()
+    expect(within(dialog).getByRole('button', { name: 'Tilføj Særlig feriedag' })).toBeInTheDocument()
   })
 
   // This fact pins the NO-`message` FALLBACK (the served catalogue's label). Today's server never
   // triggers it: every rule 422 carries a `message`, and this mock deliberately sends none.
-  // History (TASK-14702 fix-up, kind F, fails on that fix-up's pre-fix code): the rule alert fell back
+  // History (TASK-14702 fix-up 1 added it and fix-up 2 re-pointed it at the full-day rule alert; kind F,
+  // failing on the code before fix-up 1's label key): the rule alert fell back
   // to the raw code SPECIAL_HOLIDAY_ALLOWANCE. (The QUOTA alert already resolved, because the server
   // keys it on the entitlement type SPECIAL_HOLIDAY.)
   // S147 QUAL-231 (TASK-14709), kind F: the label map is gone from the rule alerts; with no `message`

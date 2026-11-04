@@ -1882,9 +1882,35 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     // S147 QUAL-231: kind F. Fails on the pre-change formatAbsenceRuleError, which ignored `message`
     // and rendered a label-table sentence ("Omsorgsdage skal registreres som en hel dag (7,4 t). ...").
     // Red conditions: the getByText below finds nothing (that sentence is rendered instead). Was
-    // /Omsorgsdage skal registreres som en hel dag/.
+    // /Omsorgsdage skal registreres som en hel dag/. The mock's decimal comma is the da-DK target of
+    // tidy item 8; the container renders 7.4 until then.
     expect(
       screen.getByText('Omsorgsdag kan kun registreres som hel dag (7,4 timer) den 03-03-2026. Registreringen blev derfor sat tilbage.'),
+    ).toBeInTheDocument()
+  })
+
+  // S147 C-1 (owner ruling 2026-11-04, option a), kind R (regression pin, boundary - holds today): the
+  // quota alert names the entitlement with the PLURAL balance name the server serves, now read from
+  // the one shared map (entitlementBalanceLabel). Red conditions: the alert text below changes if the
+  // map drifts from BalanceEndpoints.DanishLabels (e.g. the singular "Omsorgsdag") or if the page
+  // goes back to a private table that disagrees.
+  it('C-1: a quota 422 names the entitlement with the plural balance name', async () => {
+    await renderLoaded()
+    saveResponder = () =>
+      jsonResponse(
+        { error: 'Quota exceeded', absenceType: 'CARE_DAY', remaining: 1, requested: 3, message: 'Quota exceeded for CARE_DAY' },
+        422,
+      )
+    vi.useFakeTimers()
+    const careInput = screen.getByLabelText('Omsorgsdage dag 3')
+    fireEvent.change(careInput, { target: { value: '3' } })
+    fireEvent.blur(careInput)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100)
+    })
+    vi.useRealTimers()
+    expect(
+      await screen.findByText('Du har overskredet din kvote for Omsorgsdage. Du har 1,0 dage tilbage, men forsøgte at registrere 3,0 dage.'),
     ).toBeInTheDocument()
   })
 

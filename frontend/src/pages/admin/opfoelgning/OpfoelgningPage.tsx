@@ -54,8 +54,8 @@ const IDLE = <T,>(): LoadState<T> => ({ loading: true, error: null, data: null }
 /** Fetches once on mount and exposes `{ loading, error, data, reload }`.
     `fetcher` is expected to be a stable callback (every `useHrFollowUp`
     fetcher is a `useCallback` with an empty dep array). `reload` lets the
-    worklist tile refresh its count after `WorklistList`'s one write
-    (Resolve) — the only mutation this page's tiles ever need to react to. */
+    tiles refresh their counts after a list's write: `WorklistList`'s Resolve,
+    and (S147 tidy item 23b) the leaver list's send / approve / reject. */
 function useFollowUpLoad<T>(fetcher: () => Promise<ApiResult<T>>): Loaded<T> {
   const [state, setState] = useState<LoadState<T>>(IDLE<T>)
   const load = useCallback(() => {
@@ -155,6 +155,17 @@ export function OpfoelgningPage() {
     useCallback(() => fetchLeaverFinalMonth(false), [fetchLeaverFinalMonth]),
   )
   const approvedNotExported = useFollowUpLoad(fetchApprovedNotExported)
+  // S147 tidy item 23b — a leaver-month send/approve/reject changes more than one tile: the leaver
+  // summary (HRP-011), approved-not-exported (an approve moves the month there, HRP-022) and the
+  // past-deadline summary (the same month can be listed there too). Reload all three.
+  const reloadLeaverSummary = leaverSummary.reload
+  const reloadApprovedNotExported = approvedNotExported.reload
+  const reloadPastDeadlineSummary = pastDeadlineSummary.reload
+  const onLeaverMonthResolved = useCallback(() => {
+    reloadLeaverSummary()
+    reloadApprovedNotExported()
+    reloadPastDeadlineSummary()
+  }, [reloadLeaverSummary, reloadApprovedNotExported, reloadPastDeadlineSummary])
   const uncoveredApprovers = useFollowUpLoad(fetchUncoveredApprovers)
   const cannotRegister = useFollowUpLoad(fetchCannotRegister)
   const settlementReviews = useFollowUpLoad(fetchSettlementReviews)
@@ -370,7 +381,12 @@ export function OpfoelgningPage() {
             <PastDeadlineList data={pastDeadlineFull.data} loading={pastDeadlineFull.loading} error={pastDeadlineFull.error} />
           )}
           {activeTile === 'leaver-final-month' && (
-            <LeaverFinalMonthList data={leaverFull.data} loading={leaverFull.loading} error={leaverFull.error} />
+            <LeaverFinalMonthList
+              data={leaverFull.data}
+              loading={leaverFull.loading}
+              error={leaverFull.error}
+              onResolved={onLeaverMonthResolved}
+            />
           )}
           {activeTile === 'approved-not-exported' && (
             <ApprovedNotExportedList data={approvedNotExported.data} loading={approvedNotExported.loading} error={approvedNotExported.error} />

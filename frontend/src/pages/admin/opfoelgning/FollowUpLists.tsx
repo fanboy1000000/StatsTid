@@ -223,7 +223,7 @@ export function leaverTurnText(item: HrFollowUpMonthItem): string | null {
 
 type RowOutcome = { kind: 'success' | 'error'; text: string } | null
 
-function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: string }) {
+function LeaverMonthRow({ item, testId, onResolved }: { item: HrFollowUpMonthItem; testId: string; onResolved: () => void }) {
   const actions = useLeaverMonthActions()
   const key = `${item.employeeId}-${item.year}-${item.month}`
   const [periodId, setPeriodId] = useState<string | null>(item.periodId)
@@ -246,6 +246,7 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
       setPeriodId(r.data.periodId)
       setStatus(r.data.status)
       setOutcome({ kind: 'success', text: `${item.displayName}: måneden er sendt.` })
+      onResolved()
     } else refuse(r)
   }
 
@@ -258,6 +259,7 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
     if (r.ok) {
       setStatus('APPROVED')
       setOutcome({ kind: 'success', text: `${item.displayName}: måneden er godkendt.` })
+      onResolved()
     } else refuse(r)
   }
 
@@ -272,6 +274,7 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
       setRejecting(false)
       setReason('')
       setOutcome({ kind: 'success', text: `${item.displayName}: måneden er afvist.` })
+      onResolved()
     } else refuse(r)
   }
 
@@ -371,11 +374,11 @@ function LeaverMonthRow({ item, testId }: { item: HrFollowUpMonthItem; testId: s
   )
 }
 
-function LeaverMonthsTable({ items, testId }: { items: HrFollowUpMonthItem[]; testId: string }) {
+function LeaverMonthsTable({ items, testId, onResolved }: { items: HrFollowUpMonthItem[]; testId: string; onResolved: () => void }) {
   return (
     <Table headers={['Medarbejder', 'Måned', 'Status', 'Frist overskredet med', 'Fristkilde', 'Hvis tur', 'Handlinger']}>
       {items.map((item) => (
-        <LeaverMonthRow key={`${item.employeeId}-${item.year}-${item.month}`} item={item} testId={testId} />
+        <LeaverMonthRow key={`${item.employeeId}-${item.year}-${item.month}`} item={item} testId={testId} onResolved={onResolved} />
       ))}
     </Table>
   )
@@ -383,9 +386,11 @@ function LeaverMonthsTable({ items, testId }: { items: HrFollowUpMonthItem[]; te
 
 // ── Leaver's final month (HRP-011) ──────────────────────────────────────────
 
+/** `onResolved` runs after each successful send, approve or reject, so the landing tiles can refresh
+    their counts (S147 tidy item 23b; mirrors `WorklistList`'s prop). */
 export function LeaverFinalMonthList({
-  data, loading, error,
-}: { data: HrLeaverFinalMonthResponse | null; loading: boolean; error: string | null }) {
+  data, loading, error, onResolved,
+}: { data: HrLeaverFinalMonthResponse | null; loading: boolean; error: string | null; onResolved: () => void }) {
   const items = data?.items ?? []
   return (
     <ListShell
@@ -399,7 +404,7 @@ export function LeaverFinalMonthList({
       floorNote={data ? `Ser 12 måneder tilbage (fra ${data.lookbackFloor}).` : undefined}
       actionNote="Fra dag 6 efter fratrædelsen er det kun HR, der kan godkende, afvise eller genåbne måneden. Handlingerne ligger på hver række."
     >
-      <LeaverMonthsTable items={items} testId="list-leaver-final-month" />
+      <LeaverMonthsTable items={items} testId="list-leaver-final-month" onResolved={onResolved} />
       <p className={styles.caveat} data-testid="list-leaver-final-month-caveat">
         En fratrådt medarbejders sidste måned kan optræde her OG under "Forbi frist" — de to lister
         hører til forskellige roller, og tallene må ikke lægges sammen.

@@ -6,6 +6,7 @@ import { useYearOverview, type YearOverview, type YearOverviewCategory } from '.
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
 import { Spinner } from '../components/ui/Spinner'
+import { BALANCE_LABELS } from '../lib/entitlementConstants'
 import { NO_SETTLED_MONTH, formatDanishNumber, formatYearMonthWord } from '../lib/locale'
 import styles from './ArsoversigtPage.module.css'
 
@@ -105,18 +106,18 @@ function buildTiles(data: YearOverview): TileSpec[] {
       sub: t.flexBalance !== null && flexMonth !== null ? `afregnet flexsaldo pr. ${flexMonth}` : 'afregnet flexsaldo',
       emptyText: NO_SETTLED_MONTH,
     },
-    { label: 'Ferie', value: t.ferieRemaining, kind: 'hoursFirstDays', sub: 'saldo' },
-    { label: 'Omsorgsdage', value: t.careDayRemaining, kind: 'daysOnly', sub: 'saldo' },
+    { label: BALANCE_LABELS.VACATION, value: t.ferieRemaining, kind: 'hoursFirstDays', sub: 'saldo' },
+    { label: BALANCE_LABELS.CARE_DAY, value: t.careDayRemaining, kind: 'daysOnly', sub: 'saldo' },
   ]
   // Owner OQ-1: show NOTHING for ineligible entitlements — omit the tile entirely
   // (no em-dash placeholder). Seniordage needs senior eligibility; Barns sygedag
   // needs the stored child-sick opt-in.
   if (t.seniorDayEligible) {
-    tiles.push({ label: 'Seniordage', value: t.seniorDayRemaining, kind: 'daysOnly', sub: 'saldo' })
+    tiles.push({ label: BALANCE_LABELS.SENIOR_DAY, value: t.seniorDayRemaining, kind: 'daysOnly', sub: 'saldo' })
   }
   tiles.push({ label: 'Sygedage', value: t.sickDaysYtd, kind: 'daysOnly', sub: 'i år' })
   if (t.childSickEligible) {
-    tiles.push({ label: 'Barns sygedag', value: t.childSickRemaining, kind: 'hoursFirstDays', sub: 'saldo' })
+    tiles.push({ label: BALANCE_LABELS.CHILD_SICK, value: t.childSickRemaining, kind: 'hoursFirstDays', sub: 'saldo' })
   }
   return tiles
 }

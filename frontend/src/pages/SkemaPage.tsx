@@ -68,6 +68,7 @@ import {
 import { Button } from '../components/ui/Button'
 import { hasMinRole } from '../lib/roles'
 import { formatMonthLabel } from '../lib/locale'
+import { entitlementBalanceLabel } from '../lib/entitlementConstants'
 import { Badge } from '../components/ui/Badge'
 import { Alert } from '../components/ui/Alert'
 import { Spinner } from '../components/ui/Spinner'
@@ -85,16 +86,8 @@ import styles from './SkemaPage.module.css'
 // alone, because the quota 422 sends the entitlement type in `absenceType` and an ENGLISH
 // `message`. It holds no stored absence code: the rule alerts (full-day / not-eligible) take the
 // server's Danish `message`, else the served catalogue's `label` for the stored code.
-const ENTITLEMENT_LABELS: Record<string, string> = {
-  VACATION: 'Ferie',
-  SPECIAL_HOLIDAY: 'Særlige feriedage',
-  CARE_DAY: 'Omsorgsdage',
-  CHILD_SICK: 'Barns sygedag',
-  SENIOR_DAY: 'Seniordage',
-}
-
 function formatQuotaError(q: QuotaError): string {
-  const label = ENTITLEMENT_LABELS[q.absenceType] ?? q.absenceType
+  const label = entitlementBalanceLabel(q.absenceType)
   const remaining = q.remaining.toFixed(1).replace('.', ',')
   const requested = q.requested.toFixed(1).replace('.', ',')
   return `Du har overskredet din kvote for ${label}. Du har ${remaining} dage tilbage, men forsøgte at registrere ${requested} dage.`
@@ -1361,7 +1354,9 @@ export function SkemaPage() {
           {formatActionError(actionError)}
         </Alert>
       )}
-      {/* S147 TASK-14720 — saves dropped after their month left the screen: one persistent notice
+      {/* S147 TASK-14720 — save warnings kept out of the clearable slot: saves DROPPED and never resent
+          (their month left the screen, or the data they were sent under was replaced, also in the same
+          month), and warnings moved out by an "uvist" report or a reload; one persistent notice
           per month (days merged). Not the retryable slot above; cleared only by dismissal or by a
           later successful save of that month covering every listed day (in the hook). */}
       {droppedSaves.map((n) => (
