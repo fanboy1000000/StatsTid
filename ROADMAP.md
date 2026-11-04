@@ -338,7 +338,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   routes, each part under its own codes. Overtime, the 37-hour norm and flex became timeline-aware (evaluated once
   across the whole month, each day under its own contract), and payroll hands the planner only the rules it runs
   (ADR-016 D2–D4, S145 amendments); none of the fix options below was taken. One case stays manual, an agreement
-  change inside a settled week (QUAL-209), and the raw export routes refuse split months by their own reason.
+  change inside a settled week (QUAL-209), and the raw export routes refuse split months by their own reason *(retired in S147 with that reason: TASK-14716, SEC-054)*.
   Residuals: QUAL-209..213, and the design questions in the next entry. **S146 OQ-2 (2026-10-23):** QUAL-209, QUAL-210, QUAL-212 and QUAL-213 are frozen (no new work on the weekly settlement machinery); the S147 model program (ADR-043) resolves or retires them. QUAL-149 BUILT (all four Stage B evidence runs matched in CI, S145 C-6/C-7).
   Detail in `docs/sprints/SPRINT-145.md`.
   The entry below is kept as the statement of the problem that was solved.

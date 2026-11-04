@@ -404,7 +404,7 @@ Nothing new is stored: the hand-over dates are derived from the end date and one
   `reporting_lines.employee_id`, `manager_vikar.absent_approver_id`). An id that only holds authority over someone
   else is left to the acting-user rule below. Of the 84 write routes in the three hosts, 32 close through the
   validator; 19 are guarded another way (13 inline, 2 by the self-service floor, 4 by retirement: the two project
-  selection routes, retired by TASK-14710, and Payroll `/export` and `/export-period`, which TASK-14716 retires);
+  selection routes, retired by TASK-14710, and Payroll `/export` and `/export-period`, which TASK-14716 retires [merged `169e9980`, 2026-11-04: all 19 are now closed; see ADR-034's amendment of that date]);
   33 are classified out.
 - **Alternative declined (Q-C = (b)).** One check at each service's front door, refusing every write by a departed
   actor. It would have covered other people's data as well, but it is a new cross-cutting gate the owner chose not

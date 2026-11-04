@@ -142,10 +142,10 @@ No direct UI consumers. Called by PeriodCalculationService (PAT-005) and Backend
 
 | Endpoint | Method | UI Consumer | Data Model | Event | Purpose |
 |----------|--------|-------------|------------|-------|---------|
-| `/api/payroll/export` | POST | — (S2S) | PayrollExportLine, WageTypeMapping | PayrollExportGenerated | Map calculation result to wage lines |
-| `/api/payroll/export-period` | POST | — (S2S) | PeriodCalculationResult, PayrollExportLine | PayrollExportGenerated | Batch export multiple results |
-| `/api/payroll/calculate-and-export` | POST | **None yet** | PeriodCalculationResult, PayrollExportLine | PeriodCalculationCompleted, PayrollExportGenerated | Full period calculate + export (approval-guarded) |
+| `/api/payroll/calculate-and-export` | POST | **None yet** | PeriodCalculationResult, PayrollExportLine | PeriodCalculationCompleted, PayrollExportGenerated | Full period calculate + export (approval-guarded); since S147 the only route that exports |
 | `/api/payroll/recalculate` | POST | **None yet** | CorrectionExportLine | RetroactiveCorrectionRequested | Retroactive correction (idempotent) |
+
+**RETIRED (S147, TASK-14716; SEC-054).** `POST /api/payroll/export` (mapped a caller-built calculation result to wage lines) and `POST /api/payroll/export-period` (exported several results in one call) were removed, with their request types and the Orchestrator's `payroll-export` task type. They took pay lines the caller had written, with no approved month and no second person; every export now goes through `/calculate-and-export`. Both paths answer 404 (`RawExportRoutesRetiredTests`).
 
 ## External Integration Service (external:8080) — Service-to-Service Only
 

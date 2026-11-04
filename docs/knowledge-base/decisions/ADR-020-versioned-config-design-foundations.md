@@ -113,7 +113,7 @@ S29 implementing agent reads this section as the binding contract. S29's own ref
 
 6. **EventSerializer typeof() count** (carried forward from deferred refinement): S29 adds `WageTypeMappingSuperseded` event for cross-day supersession. Existing `WageTypeMappingUpdated` reused for same-day edits + the D2 reopen path. EventSerializer typeof count goes 47 → 48. DEP-003 reflection-coverage test catches misses.
 
-7. **MapCalculationResultAsync stays current-row** (carried forward from deferred refinement Open Q5): only `MapSegmentToExportLinesAsync` (the export-time path) gets `asOfDate=segmentStart`; `MapCalculationResultAsync` (per-line-date path) stays current-row per ROADMAP L350 "no retroactive recomputation."
+7. **MapCalculationResultAsync stays current-row** (carried forward from deferred refinement Open Q5): only `MapSegmentToExportLinesAsync` (the export-time path) gets `asOfDate=segmentStart`; `MapCalculationResultAsync` (per-line-date path) stays current-row per ROADMAP L350 "no retroactive recomputation." *(S147: `MapCalculationResultAsync` was deleted with the raw export routes, its only callers (TASK-14716 fix-up 1, ruling R-G1). The current-row branch of `PayrollMappingService.GetMappingAsync` that it used now has no production caller (QUAL-244).)*
 
 8. **Admin-list read filter** (carried forward from deferred refinement Approach 9): S29 adds `WHERE effective_to IS NULL` to `WageTypeMappingRepository.GetAllAsync`, `GetByAgreementAsync`, AND `GetByKeyAsync` (3 methods). Without this, history rows leak to admin UI.
 

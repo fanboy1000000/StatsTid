@@ -110,8 +110,8 @@ All UI components are barrel-exported from `ui/index.ts`.
 | ~~FlexBalanceCard~~ | — | Deleted in S146 (TASK-14608): the flex balance shows on the Skema balance card, the year tile and the team overview |
 | SkemaGrid | `SkemaGrid.tsx` | Monthly spreadsheet grid (days x projects/absence rows); supports read-only/locked rendering (S55) |
 | AllocationSummary | `AllocationSummary.tsx` | Work-time allocation reconciliation summary (S56/ADR-028) |
-| ComplianceWarnings | `ComplianceWarnings.tsx` | EU-WTD compliance warnings |
-| ProjectPicker | `ProjectPicker.tsx` | Project selector for work-time rows |
+| ComplianceWarnings | `ComplianceWarnings.tsx` | EU-WTD compliance warnings, and (S147, QUAL-234 interim) one month-level notice, "Hviletid ikke kontrolleret for N dage", for days the 11-hour rest check could not measure. The sentence is built by `restNotCheckedNotice`, exported from this module by design so Teamoversigt shows the same words; it retires when the rest check reads Skema's intervals (S148 stage 0) |
+| ~~ProjectPicker~~ | — | Deleted in S72 (the Skema redesign, `c91f63d2`) |
 | TimeEntryForm _(legacy)_ | `TimeEntryForm.tsx` | Superseded by SkemaPage; only referenced by unrouted legacy pages |
 | WeekGrid _(legacy)_ | `WeekGrid.tsx` | Superseded by SkemaGrid; only referenced by unrouted `WeeklyView` |
 
@@ -288,8 +288,7 @@ frontend/
       BalanceSummary.tsx        # Domain: balance overview
       SkemaGrid.tsx             # Domain: monthly spreadsheet (lockable)
       AllocationSummary.tsx     # Domain: work-time allocation (S56)
-      ComplianceWarnings.tsx    # Domain: EU-WTD warnings
-      ProjectPicker.tsx         # Domain: project selector
+      ComplianceWarnings.tsx    # Domain: EU-WTD warnings + the rest-not-checked notice (S147)
       TimeEntryForm.tsx         # Domain: legacy (unrouted)
       WeekGrid.tsx              # Domain: legacy (unrouted)
     hooks/                     # 28 data-fetching hooks
