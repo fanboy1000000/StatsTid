@@ -34,6 +34,18 @@ public sealed class PayrollExportService
         "(ADR-034 D4; SEC-054: the raw export routes that exported without one were retired in S147). Nothing was " +
         "written.";
 
+    /// <summary>
+    /// S147 / TASK-14716 (SEC-054; owner ruling R-G9, 2026-11-04) — the message of the
+    /// <see cref="InvalidOperationException"/> <see cref="ExportAsync"/> throws when its lines, or its lines and its
+    /// flex-ledger write, belong to more than one <c>(employee, year, month)</c>. An export is exactly one employee's
+    /// one calendar month; the one route sends nothing else, so this is a programming error, refused before any
+    /// connection opens. Never a response body.
+    /// </summary>
+    public const string MoreThanOneMonthMessage =
+        "PayrollExportService.ExportAsync: the export's lines, and its flex-ledger write when there is one, do not " +
+        "all belong to one (employee, year, month). An export is exactly one employee's one calendar month (S147, " +
+        "owner ruling R-G9). Nothing was read or written.";
+
     // The canonical serialization + content hash for the manifest columns lives in
     // PayrollExportManifest so the corrections path (RetroactiveCorrectionService) — which rewrites
     // current_effective_lines (B3) — hashes/serializes IDENTICALLY to this first-export write.
@@ -67,55 +79,75 @@ public sealed class PayrollExportService
     }
 
     /// <summary>
-    /// S90 / TASK-9002 (ADR-034) — the ATOMIC payroll-export refactor.
+    /// S90 / TASK-9002 (ADR-034) — the ATOMIC payroll export of ONE month: one employee's one calendar month,
+    /// recorded, locked and announced in one <c>(conn, tx)</c>.
     ///
     /// <para>
-    /// Groups the incoming <paramref name="lines"/> by <c>(employee_id, year, month)</c>
-    /// (B4 — written when the raw <c>/export-period</c> flattened several months into one call; that route was
-    /// retired in S147 TASK-14716, and the one caller, <c>/calculate-and-export</c>, sends a single month)
-    /// and, in ONE <c>(conn, tx)</c>, per group:
+    /// <b>One month per call (S147 / TASK-14716, SEC-054; owner ruling R-G9, 2026-11-04).</b> Every line, and the
+    /// flex-ledger write when there is one, belongs to ONE <c>(employee, year, month)</c>; a call that mixes them is a
+    /// programming error, refused before any connection opens (<see cref="MoreThanOneMonthMessage"/>). Until S147 this
+    /// method grouped a call's lines by <c>(employee, year, month)</c> and wrote one record per group, for the raw
+    /// <c>/export-period</c>. That route is retired, and the approval period is now required and re-checked as the
+    /// exported month's own (R-G2/R-G8), so a second group could never pass; the multi-group shape was removed.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Before the transaction</b>, in order, reading and writing nothing:
     /// <list type="number">
-    /// <item><description>runs the fail-closed <c>GuardSettlementLineDelivery</c> FIRST
-    /// (settlement lines must throw before any write);</description></item>
-    /// <item><description>(S147 / TASK-14716, SEC-054 step 2) requires an approval period
-    /// (<see cref="PayrollExportContext.PeriodId"/>): a context without one (null or <see cref="Guid.Empty"/>) is a
-    /// programming error and throws <see cref="InvalidOperationException"/> (<see cref="NoPeriodMessage"/>) before
-    /// the transaction opens, so nothing is read or written. Every export comes from an approved month;</description></item>
-    /// <item><description>(S145 / TASK-14512 Do 7) when the calculation required the PREVIOUS month to be
-    /// APPROVED (<see cref="PayrollExportContext.PriorMonthToRecheck"/> set — the
-    /// <c>/calculate-and-export</c> path), re-asserts that under <c>SELECT … FOR SHARE</c>, once, before any
-    /// group's own lock — a previous month no longer APPROVED aborts the WHOLE tx with
+    /// <item><description>the fail-closed <c>GuardSettlementLineDelivery</c> FIRST (ADR-034 D2; settlement lines must
+    /// throw before any write);</description></item>
+    /// <item><description>the line-shape rules: a line spanning two calendar months is the existing
+    /// <see cref="PayrollExportConflictException"/>; lines, or a flex-ledger write, of more than one
+    /// <c>(employee, year, month)</c> throw <see cref="InvalidOperationException"/>
+    /// (<see cref="MoreThanOneMonthMessage"/>; R-G9);</description></item>
+    /// <item><description>(S147 / TASK-14716, SEC-054 step 2) the approval period is required
+    /// (<see cref="PayrollExportContext.PeriodId"/>): a context without one (null or <see cref="Guid.Empty"/>) throws
+    /// <see cref="InvalidOperationException"/> (<see cref="NoPeriodMessage"/>). Every export comes from an approved
+    /// month;</description></item>
+    /// <item><description>with a flex-ledger write, the calculation's manifest is required (S146 Step 7a, R-54);</description></item>
+    /// <item><description>a call with no lines and no flex-ledger write (a direct service call only; the one route
+    /// always sends a flex-ledger write) has nothing to export: <c>Success = true</c>, no export id, and no connection
+    /// is opened.</description></item>
+    /// </list>
+    /// </para>
+    ///
+    /// <para>
+    /// <b>In ONE <c>(conn, tx)</c></b>, in order:
+    /// <list type="number">
+    /// <item><description>the employee's flex-ledger lock, the FIRST statement (the flex ledger, below);</description></item>
+    /// <item><description>with a flex-ledger write, the under-lock recheck of the opening (below);</description></item>
+    /// <item><description>(S145 / TASK-14512 Do 7) when the calculation required the PREVIOUS month to be APPROVED
+    /// (<see cref="PayrollExportContext.PriorMonthToRecheck"/>), that is re-asserted under <c>SELECT … FOR SHARE</c>,
+    /// before this month's own row lock; a previous month no longer APPROVED aborts the tx with
     /// <see cref="PriorMonthNotApprovedException"/>;</description></item>
-    /// <item><description>(B2) re-asserts <c>status='APPROVED'</c> on that period under
-    /// <c>SELECT … FOR UPDATE</c>, with the four-eyes checkpoint (S147 TASK-14704), for every group — always since
-    /// S147 TASK-14716, when the period became required — after checking that the locked period is that group's own
-    /// approval (the same employee, and the group's whole calendar month; TASK-14716 fix-ups 1 and 2, R-G2/R-G8); a
-    /// period that is not, or is not APPROVED at export time, aborts the WHOLE tx;</description></item>
-    /// <item><description>computes a deterministic <c>content_hash</c> over the group's lines;</description></item>
-    /// <item><description>INSERTs <c>payroll_export_records</c> — idempotent on
-    /// <c>UNIQUE(employee_id, year, month)</c>: same hash → NO-OP (returns the existing
-    /// export id, no duplicate, no re-emit); DIFFERENT hash → aborts with an
-    /// "already exported, use a correction" error;</description></item>
-    /// <item><description>emits <see cref="PayrollExportGenerated"/> to <c>outbox_events</c>
-    /// on <c>employee-{id}</c> + writes the ADR-026 audit row in the same tx.</description></item>
+    /// <item><description>(B2) the period is re-locked <c>FOR UPDATE</c>: it must be this month's own approval (the
+    /// same employee and the whole calendar month; R-G2/R-G8), <c>APPROVED</c>, and pass the four-eyes checkpoint
+    /// (S147 TASK-14704); otherwise the tx aborts;</description></item>
+    /// <item><description>the record-less <c>UNTRACKED</c> zero-line month writes nothing from here on (below);</description></item>
+    /// <item><description>a deterministic <c>content_hash</c> over the month's lines, then the INSERT into
+    /// <c>payroll_export_records</c>, idempotent on <c>UNIQUE(employee_id, year, month)</c>: same hash → NO-OP
+    /// (the existing export id, no duplicate, no re-emit; R-16 also compares the balance triple, below); DIFFERENT
+    /// hash → aborts with an "already exported, use a correction" error;</description></item>
+    /// <item><description>on a new record, <see cref="PayrollExportGenerated"/> to <c>outbox_events</c> on
+    /// <c>employee-{id}</c> plus the ADR-026 audit row, in the same tx.</description></item>
     /// </list>
     /// COMMIT sets the lock (OQ-1 "export committed"), independent of delivery.
     /// </para>
     ///
     /// <para>
-    /// AFTER commit (best-effort, unchanged delivery): the existing <c>outbox_messages</c>
-    /// 'pending' envelope + the synchronous HTTP POST to mock-payroll + the status update.
-    /// There is NO background payroll dispatcher (B1), so this stays the delivery path; the
-    /// lock does NOT depend on it.
+    /// AFTER commit (best-effort, unchanged delivery), and only for a NEW record with lines: the
+    /// <c>outbox_messages</c> 'pending' envelope + the synchronous HTTP POST to mock-payroll + the status update.
+    /// There is NO background payroll dispatcher (B1), so this stays the delivery path; the lock does NOT depend on
+    /// it. A same-hash no-op (already delivered), a newly recorded zero-line month and a month that wrote no record
+    /// deliver nothing: <c>Success = true</c>, no envelope.
     /// </para>
     ///
     /// <para>
     /// <b>S146 / TASK-14605 — the flex ledger (QUAL-188; R-3, R-14, R-15, R-16).</b>
     /// <list type="bullet">
-    /// <item><description><b>The ledger lock, first.</b> The FIRST statement of the transaction takes the
-    /// per-employee ledger lock for every employee of the call, in one statement ordered by key
-    /// (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>), before the previous month's
-    /// <c>FOR SHARE</c>, the current approval's <c>FOR UPDATE</c> and the record insert. Every export takes it
+    /// <item><description><b>The ledger lock, first.</b> The FIRST statement of the transaction takes the employee's
+    /// ledger lock (<see cref="PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync"/>), before the previous
+    /// month's <c>FOR SHARE</c>, the current approval's <c>FOR UPDATE</c> and the record insert. Every export takes it
     /// (this method is a writer of <c>payroll_export_records</c>).</description></item>
     /// <item><description><b>The recheck</b> (calculating route only, <see cref="PayrollExportContext.FlexLedger"/>
     /// set). Right after the lock, the derivation runs again on in-transaction reads
@@ -156,9 +188,8 @@ public sealed class PayrollExportService
         // Non-settlement lines (NORMAL_HOURS, OVERTIME, FLEX_PAYOUT, …) are unaffected.
         GuardSettlementLineDelivery(lines);
 
-        // B4 — group by (employee, year, month). year/month come from each line's PeriodStart;
-        // a line whose PeriodStart/PeriodEnd do NOT normalise to a single calendar month is a
-        // span across months and is rejected (a single record can't represent a multi-month line).
+        // A line whose PeriodStart/PeriodEnd do NOT normalise to a single calendar month spans months and is
+        // rejected: a record is one (employee, year, month) and cannot represent a month-spanning line.
         foreach (var line in lines)
         {
             if (line.PeriodStart.Year != line.PeriodEnd.Year || line.PeriodStart.Month != line.PeriodEnd.Month)
@@ -170,84 +201,78 @@ public sealed class PayrollExportService
             }
         }
 
-        var groups = lines
-            .GroupBy(l => new ExportGroupKey(l.EmployeeId, l.PeriodStart.Year, l.PeriodStart.Month))
-            .Select(g => (Key: g.Key, Lines: (IEnumerable<PayrollExportLine>)g))
-            .ToList();
+        // S147 TASK-14716 (SEC-054; owner ruling R-G9) — one (employee, year, month) per call. The month is the
+        // flex-ledger write's when there is one (the calculating route's record identity, R-3), else the first
+        // line's; every line must belong to it. Lines of two months or two employees, or lines outside the flex
+        // write's month, are a programming error: the one route sends one employee's one whole month by construction.
+        // Refused here, with the line-shape rule above, before the period check and before any connection opens.
+        var flex = context.FlexLedger;
+        ExportMonthKey? monthKey = flex is not null
+            ? new ExportMonthKey(flex.EmployeeId, flex.Year, flex.Month)
+            : lines.Count > 0 ? MonthKeyOf(lines[0]) : null;
+        foreach (var line in lines)
+        {
+            if (MonthKeyOf(line) != monthKey)
+            {
+                throw new InvalidOperationException(MoreThanOneMonthMessage);
+            }
+        }
 
         // S147 TASK-14716 (SEC-054 step 2; owner OQ-3 = (a)) — every export comes from an approved month. The raw
         // /export and /export-period routes, which exported without an approval period and so skipped the APPROVED
         // re-assert and its four-eyes checkpoint, are retired; the one caller, /calculate-and-export, always passes
-        // the month's period. A context without one is therefore a programming error, refused here: after the two
-        // line-shape guards above, and before the transaction opens, so nothing is read, locked or written. This is
-        // what makes the B2 re-assert below unconditional, and why the record-less UNTRACKED zero-line branch in the
-        // loop (S147 TASK-14715) always runs after it. An empty Guid counts as no period, as for the manifest below.
+        // the month's period. A context without one is therefore a programming error, refused here: after the
+        // line-shape rules above, and before the transaction opens, so nothing is read, locked or written. This is
+        // what makes the B2 re-assert below unconditional, and why the record-less UNTRACKED zero-line branch
+        // (S147 TASK-14715) always runs after it. An empty Guid counts as no period, as for the manifest below.
         if (context.PeriodId is not { } periodId || periodId == Guid.Empty)
         {
             throw new InvalidOperationException(NoPeriodMessage);
         }
 
-        // S146 TASK-14605 (R-3): the calculating route's record identity. Every line it sends belongs to that one
-        // (employee, year, month); a month with an EMPLOYED day but no lines still gets its record (an empty group),
-        // except a record-less UNTRACKED one (S147 TASK-14715, below).
-        var flex = context.FlexLedger;
-        ExportGroupKey? flexKey = null;
-        var untrackedZeroLine = false;
-        if (flex is not null)
+        // S146 Step 7a (R-54): the calculating route's export names the manifest of the calculation that produced
+        // it, carried onto PayrollExportGenerated. A record with no lines (R-3's employed zero-line month) has no
+        // other carrier of that link, so an export without it is refused here, before the transaction opens. An
+        // empty Guid counts as no manifest, the meaning StampAuditContext gives it ("no persisted manifest").
+        if (flex is not null && (context.ManifestId is not { } manifestId || manifestId == Guid.Empty))
         {
-            var key = new ExportGroupKey(flex.EmployeeId, flex.Year, flex.Month);
-            if (groups.Exists(g => g.Key != key))
-            {
-                throw new InvalidOperationException(
-                    $"PayrollExportService.ExportAsync: the calculating route's flex-ledger write is for employee " +
-                    $"'{flex.EmployeeId}' {flex.Year}-{flex.Month:D2}, but its lines also fall in another (employee, " +
-                    "year, month). A calculation is one employee and one month; nothing was written.");
-            }
-            // S146 Step 7a (R-54): the calculating route's export names the manifest of the calculation that produced
-            // it, carried onto PayrollExportGenerated. A record with no lines (R-3's employed zero-line month) has no
-            // other carrier of that link, so an export without it is refused here, before the transaction opens. An
-            // empty Guid counts as no manifest, the meaning StampAuditContext gives it ("no persisted manifest").
-            if (context.ManifestId is not { } manifestId || manifestId == Guid.Empty)
-            {
-                throw new InvalidOperationException(
-                    "PayrollExportService.ExportAsync: the calculating route's export names no manifest (null or empty); " +
-                    "a recorded closing must link the calculation that produced it (ADR-016 D10). Nothing was written.");
-            }
-            if (groups.Count == 0)
-            {
-                groups.Add((key, Array.Empty<PayrollExportLine>()));
-
-                // S147 TASK-14715 (SEC-054 step 1; owner OQ-3 remedy (i), R-17; fix-up 1, R-F1) — a month before the
-                // ledger start with no lines (UNTRACKED) hands payroll nothing: no lines, and no closing for the next
-                // month, because its flex is not tracked. When it also has no record, ADR-034 D3's own rule applies:
-                // nothing handed off, no record. That is decided INSIDE the transaction below, after the same checks
-                // every calculating export runs, so only the write is skipped (see the record-less branch in the loop).
-                untrackedZeroLine = flex.IsUntracked;
-            }
-            flexKey = key;
+            throw new InvalidOperationException(
+                "PayrollExportService.ExportAsync: the calculating route's export names no manifest (null or empty); " +
+                "a recorded closing must link the calculation that produced it (ADR-016 D10). Nothing was written.");
         }
 
+        // No lines and no flex-ledger write: nothing to export (a direct service call only; the one route always
+        // sends a flex-ledger write). As before, no record and Success = true; since R-G9, without a connection.
+        if (monthKey is not { } key)
+        {
+            return new ExportResult { ExportId = string.Empty, Success = true, MessageId = Guid.Empty };
+        }
+
+        // S147 TASK-14715 (SEC-054 step 1; owner OQ-3 remedy (i), R-17; fix-up 1, R-F1) — a month before the ledger
+        // start with no lines (UNTRACKED) hands payroll nothing: no lines, and no closing for the next month, because
+        // its flex is not tracked. When it also has no record, ADR-034 D3's own rule applies: nothing handed off, no
+        // record. That is decided INSIDE the transaction below, after the same checks every calculating export runs,
+        // so only the write is skipped. (S146 R-3: with a flex-ledger write and no lines, any other month still gets
+        // its zero-line record.)
+        var untrackedZeroLine = flex is not null && lines.Count == 0 && flex.IsUntracked;
+
+        var monthLines = PayrollExportManifest.OrderLines(lines);
         var exportedAt = DateTimeOffset.UtcNow;
 
-        // ── ATOMIC: one (conn, tx) covering ALL groups (all-or-nothing) ──
-        var perGroup = new List<GroupExportOutcome>(groups.Count);
-        // BLOCKER 1 — accumulate the lines of ONLY the groups that were actually newly exported.
-        // A mixed call (one (employee, year, month) is a same-hash idempotent no-op, another is new)
-        // must NOT re-deliver the already-exported month: the post-commit envelope + HTTP POST are
-        // built from these new-group lines, NOT the full incoming `lines`.
-        var newlyExportedLines = new List<PayrollExportLine>();
+        // ── ATOMIC: one (conn, tx) for the month. The outcome stays null when the record-less UNTRACKED zero-line
+        // month writes nothing. ──
+        (Guid ExportId, bool IsNew)? outcome = null;
         await using (var conn = _connectionFactory.Create())
         {
             await conn.OpenAsync(ct);
             await using var tx = await conn.BeginTransactionAsync(ct);
 
-            // S146 TASK-14605 (R-15; C3) — the ledger lock is the FIRST statement: every employee of the call, one
-            // statement, ordered by key. It precedes every row lock below (the previous month's FOR SHARE, the
-            // current approval's FOR UPDATE, the record insert's UNIQUE key), so payroll transactions lock in one
-            // order: advisory, then approval rows, then records. Every export takes it: this is a writer of
-            // payroll_export_records, as is the correction (RetroactiveCorrectionService), which takes the same lock.
-            await PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync(
-                conn, tx, groups.Select(g => g.Key.EmployeeId).Distinct(StringComparer.Ordinal).ToArray(), ct);
+            // S146 TASK-14605 (R-15; C3) — the ledger lock is the FIRST statement. It precedes every row lock below
+            // (the previous month's FOR SHARE, the current approval's FOR UPDATE, the record insert's UNIQUE key), so
+            // payroll transactions lock in one order: advisory, then approval rows, then records. Every export takes
+            // it: this is a writer of payroll_export_records, as is the correction (RetroactiveCorrectionService),
+            // which takes the same lock.
+            await PayrollExportRecordRepository.AcquireFlexLedgerLocksAsync(conn, tx, new[] { key.EmployeeId }, ct);
 
             // S146 TASK-14605 (R-14) — the under-lock recheck. The opening the calculation used was derived before
             // the calculation, outside any lock; another writer may have recorded or corrected the previous month
@@ -268,45 +293,36 @@ public sealed class PayrollExportService
             // When the calculation required no previous month, there is nothing to recheck.
             if (context.PriorMonthToRecheck is { } priorMonth)
             {
-                foreach (var employeeId in groups.Select(g => g.Key.EmployeeId).Distinct(StringComparer.Ordinal))
-                {
-                    await AssertPriorMonthApprovedForShareAsync(
-                        conn, tx, employeeId, priorMonth.PeriodStart, priorMonth.PeriodEnd, ct);
-                }
+                await AssertPriorMonthApprovedForShareAsync(
+                    conn, tx, key.EmployeeId, priorMonth.PeriodStart, priorMonth.PeriodEnd, ct);
             }
 
-            foreach (var group in groups)
+            // B2 — re-assert APPROVED under FOR UPDATE, with the four-eyes checkpoint, on the export's approval
+            // period, after checking it is this month's own approval (R-G2/R-G8). Unconditional since S147
+            // TASK-14716 (SEC-054 step 2): the period is required (checked before the transaction opened), so no
+            // export reaches the write below without this re-assert.
+            await AssertPeriodApprovedForUpdateAsync(conn, tx, periodId, key, ct);
+
+            // S147 TASK-14715 (R-17; fix-up 1, R-F1) — the record-less UNTRACKED zero-line month. It has passed every
+            // check above that any calculating export runs, in the same order and with the same refusals: the ledger
+            // lock, the under-lock recheck, the previous month's FOR SHARE recheck, and this month's APPROVED
+            // FOR UPDATE re-assert with the four-eyes checkpoint. Only the write is skipped: when the month has no
+            // record, nothing is handed off (ADR-034 D3), so no record, event, audit row or envelope. The month stays
+            // reopenable, a re-export writes nothing again and /recalculate refuses it as never exported. The read
+            // runs under the ledger lock that every writer of payroll_export_records takes first, so it sees every
+            // record committed before the lock was granted and none can appear until this transaction ends. A month
+            // that already HAS a record (case 3b, a re-run) goes on as before: the insert meets the record and the
+            // content compare answers 409 "use a correction" when the recorded lines differ.
+            var recordLess = untrackedZeroLine && !await MonthHasRecordAsync(conn, tx, key, ct);
+            if (!recordLess)
             {
-                var key = group.Key;
-                var groupLines = PayrollExportManifest.OrderLines(group.Lines);
+                var contentHash = PayrollExportManifest.ComputeContentHash(monthLines);
+                var manifestJson = PayrollExportManifest.Serialize(monthLines);
 
-                // B2 — re-assert APPROVED under FOR UPDATE, with the four-eyes checkpoint, on the export's approval
-                // period. Unconditional since S147 TASK-14716 (SEC-054 step 2): the period is required (checked
-                // before the transaction opened), so no export reaches the write below without this re-assert.
-                await AssertPeriodApprovedForUpdateAsync(conn, tx, periodId, key, ct);
-
-                // S147 TASK-14715 (R-17; fix-up 1, R-F1) — the record-less UNTRACKED zero-line month. It has passed every
-                // check above that any calculating export runs, in the same order and with the same refusals: the ledger
-                // lock, the under-lock recheck, the previous month's FOR SHARE recheck, and this month's APPROVED
-                // FOR UPDATE re-assert with the four-eyes checkpoint. Only the write is skipped: when the month has no
-                // record, nothing is handed off (ADR-034 D3), so no record, event, audit row or envelope. The month stays
-                // reopenable, a re-export writes nothing again and /recalculate refuses it as never exported. The read
-                // runs under the ledger lock that every writer of payroll_export_records takes first, so it sees every
-                // record committed before the lock was granted and none can appear until this transaction ends. A month
-                // that already HAS a record (case 3b, a re-run) goes on as before: the insert meets the record and the
-                // content compare answers 409 "use a correction" when the recorded lines differ.
-                if (untrackedZeroLine && key == flexKey && !await MonthHasRecordAsync(conn, tx, key, ct))
-                {
-                    continue;
-                }
-
-                var contentHash = PayrollExportManifest.ComputeContentHash(groupLines);
-                var manifestJson = PayrollExportManifest.Serialize(groupLines);
-
-                // S146 TASK-14605 (C1): the balances this record stores — the calculating route's, for its own month,
+                // S146 TASK-14605 (C1): the balances this record stores — the calculating route's, for its month,
                 // unless flex is not tracked (UNTRACKED is never stored); none when the context carries no flex-ledger
                 // write (a direct service call; the one route always sends one).
-                var balances = flex is not null && key == flexKey && !flex.IsUntracked
+                var balances = flex is not null && !flex.IsUntracked
                     ? new RecordedBalances(
                         flex.OpeningBalance ?? throw MissingBalance(flex, "opening"),
                         flex.ClosingBalance ?? throw MissingBalance(flex, "closing"),
@@ -316,13 +332,12 @@ public sealed class PayrollExportService
                 // INSERT with idempotency. ON CONFLICT (employee_id, year, month) DO NOTHING +
                 // RETURNING distinguishes the first write (a row comes back) from a conflict
                 // (no row → read the existing row and compare hashes).
-                var existingExportId = await TryInsertRecordAsync(
+                var insertedExportId = await TryInsertRecordAsync(
                     conn, tx, key, periodId, context, exportedAt, contentHash, manifestJson, balances, ct);
 
-                if (existingExportId is { } existing)
+                if (insertedExportId is { } exportId)
                 {
                     // First write → emit the event + audit row in the SAME tx.
-                    var exportId = existing;
                     var @event = new PayrollExportGenerated
                     {
                         EmployeeId = key.EmployeeId,
@@ -356,10 +371,7 @@ public sealed class PayrollExportService
                     var auditRow = _auditMapper.Map(@event, auditCtx);
                     await _auditRepo.InsertAsync(conn, tx, @event.EventId, outboxId, @event.EventType, auditRow, auditCtx, ct);
 
-                    // BLOCKER 1 — this group is newly exported → its lines feed the post-commit
-                    // delivery payload. A no-op group below does NOT (it was already delivered).
-                    newlyExportedLines.AddRange(groupLines);
-                    perGroup.Add(new GroupExportOutcome(exportId, IsNew: true));
+                    outcome = (exportId, IsNew: true);
                 }
                 else
                 {
@@ -379,7 +391,7 @@ public sealed class PayrollExportService
                     // start, whose record holds no balance: a case-3a calculating export since S147 TASK-14715, or a
                     // month the retired raw routes recorded) is equal to an all-null recorded triple whatever the
                     // computed closing; a context with no flex-ledger write keeps the content-hash compare alone.
-                    if (flex is not null && key == flexKey && !RecordedTripleMatches(flex, existingRecord))
+                    if (flex is not null && !RecordedTripleMatches(flex, existingRecord))
                     {
                         throw new PayrollExportConflictException(
                             $"Employee '{key.EmployeeId}' already has a payroll export for {key.Year}-{key.Month:D2} " +
@@ -387,45 +399,34 @@ public sealed class PayrollExportService
                             "(/api/payroll/recalculate) to amend an exported month.");
                     }
 
-                    // Same hash → idempotent no-op: return the existing export id, emit NOTHING.
-                    perGroup.Add(new GroupExportOutcome(existingRecord.ExportId, IsNew: false));
+                    // Same hash → idempotent no-op: the existing export id, emit NOTHING.
+                    outcome = (existingRecord.ExportId, IsNew: false);
                 }
             }
 
             await tx.CommitAsync(ct);
         }
 
-        // The lock is now committed (OQ-1). Pick a representative export id for the legacy
-        // single-id ExportResult (callers that need per-group ids read the records table).
-        // S147 TASK-14715: no group at all is the record-less UNTRACKED zero-line month, or (a direct service call only)
-        // an empty line list with no flex-ledger write; neither wrote a record, so it names no export id.
-        var primaryExportId = perGroup.Count switch
+        // The lock is now committed (OQ-1). A month that wrote no record (S147 TASK-14715's record-less UNTRACKED
+        // zero-line month) names no export id and has nothing to deliver.
+        if (outcome is not { } written)
         {
-            1 => perGroup[0].ExportId.ToString(),
-            0 => string.Empty,
-            _ => Guid.NewGuid().ToString(),
-        };
-        var anyNew = perGroup.Exists(g => g.IsNew);
+            return new ExportResult { ExportId = string.Empty, Success = true, MessageId = Guid.Empty };
+        }
+
+        var exportIdText = written.ExportId.ToString();
 
         // ── POST-COMMIT delivery (best-effort, UNCHANGED): the lock does NOT depend on this. ──
-        // An idempotent no-op (no new record) must not re-deliver to payroll either, and a month that wrote no record
-        // (S147 TASK-14715) has nothing to deliver: no envelope, no POST, Success = true.
-        if (!anyNew)
+        // A same-hash no-op (no new record) was delivered already and must not be re-delivered; a newly recorded
+        // zero-line month (S146 R-3: the calculating route's employed month with no lines) hands payroll nothing, its
+        // record existing for the ledger and the lock. Neither writes an envelope or POSTs: Success = true.
+        if (!written.IsNew || monthLines.Count == 0)
         {
-            return new ExportResult { ExportId = primaryExportId, Success = true, MessageId = Guid.Empty };
+            return new ExportResult { ExportId = exportIdText, Success = true, MessageId = Guid.Empty };
         }
 
-        // S146 TASK-14605 (R-3): a newly recorded zero-line month (the calculating route's employed month with no
-        // lines) hands payroll nothing; its record exists for the ledger and the lock. No envelope, no POST.
-        if (newlyExportedLines.Count == 0)
-        {
-            return new ExportResult { ExportId = primaryExportId, Success = true, MessageId = Guid.Empty };
-        }
-
-        // BLOCKER 1 — deliver ONLY the newly-exported groups' lines, never the full incoming `lines`.
-        // In a mixed call (month A same-hash no-op + month B new), `newlyExportedLines` holds month B
-        // only, so the already-exported month A is NOT re-POSTed to payroll / re-enveloped.
-        var payload = new { exportId = primaryExportId, lines = (IReadOnlyList<PayrollExportLine>)newlyExportedLines, exportedAt = exportedAt.UtcDateTime };
+        // A new record with lines: deliver this month's lines.
+        var payload = new { exportId = exportIdText, lines = (IReadOnlyList<PayrollExportLine>)monthLines, exportedAt = exportedAt.UtcDateTime };
         var messageId = await WriteToOutboxAsync("payroll", payload, ct);
 
         var client = _httpClientFactory.CreateClient();
@@ -435,18 +436,18 @@ public sealed class PayrollExportService
             var success = response.IsSuccessStatusCode;
 
             await UpdateOutboxStatusAsync(messageId, success ? "delivered" : "failed", ct);
-            _logger.LogInformation("Payroll export {ExportId}: {Status}", primaryExportId, success ? "delivered" : "failed");
+            _logger.LogInformation("Payroll export {ExportId}: {Status}", exportIdText, success ? "delivered" : "failed");
 
             // The export RECORD (the lock) is committed regardless of delivery success: a failed
             // downstream POST leaves a 'failed' outbox_messages envelope for ops, NOT an unlocked
             // month. Success here reflects the (best-effort) delivery, not the lock.
-            return new ExportResult { ExportId = primaryExportId, Success = success, MessageId = messageId };
+            return new ExportResult { ExportId = exportIdText, Success = success, MessageId = messageId };
         }
         catch (Exception ex)
         {
             await UpdateOutboxStatusAsync(messageId, "failed", ct, ex.Message);
-            _logger.LogError(ex, "Payroll export {ExportId} delivery failed (record committed)", primaryExportId);
-            return new ExportResult { ExportId = primaryExportId, Success = false, MessageId = messageId };
+            _logger.LogError(ex, "Payroll export {ExportId} delivery failed (record committed)", exportIdText);
+            return new ExportResult { ExportId = exportIdText, Success = false, MessageId = messageId };
         }
     }
 
@@ -462,9 +463,9 @@ public sealed class PayrollExportService
     ///
     /// <para><b>S147 / TASK-14716 fix-up 1 (ruling R-G2), exact since fix-up 2 (ruling R-G8) — the period IS the
     /// whole exported month.</b> Since the period became required, it is what makes every export "an approved month
-    /// with two signers"; so the locked row must be the approval of THIS group: its <c>employee_id</c> equals the
-    /// group's employee (Ordinal), and it is the group's whole calendar month — <c>period_start</c> is the 1st and
-    /// <c>period_end</c> the last day of the group's <c>(Year, Month)</c>. A period that merely lies inside the month
+    /// with two signers"; so the locked row must be the approval of THIS month: its <c>employee_id</c> equals the
+    /// exported employee (Ordinal), and it is the exported whole calendar month — <c>period_start</c> is the 1st and
+    /// <c>period_end</c> the last day of the key's <c>(Year, Month)</c>. A period that merely lies inside the month
     /// (for example a legacy <c>WEEKLY</c> approval of 6–12 April for April's lines) is not the month and is refused:
     /// calculating exports take only whole months (ADR-034 D3 amendment 2), and <c>/calculate-and-export</c> refuses
     /// any other period before it reads an approval (<c>Program.cs:296</c>, <c>RefusePeriodNotAMonth</c>). Otherwise
@@ -484,7 +485,7 @@ public sealed class PayrollExportService
     /// sender stamp passes the sender half; a null value never matches anything.</para>
     /// </summary>
     private static async Task AssertPeriodApprovedForUpdateAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, Guid periodId, ExportGroupKey key, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction tx, Guid periodId, ExportMonthKey key, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -520,16 +521,17 @@ public sealed class PayrollExportService
             throw new PayrollExportConflictException(
                 $"Approval period '{periodId}' (employee '{key.EmployeeId}', {key.Year}-{key.Month:D2}) not found at export time.");
         }
-        // S147 TASK-14716 fix-up 1 (R-G2), made exact by fix-up 2 (R-G8): the locked period must BE this group's own
-        // approval — the same employee, and the group's whole calendar month (start = the 1st, end = the last day) —
-        // before its status or approver means anything. A period merely inside the month (a legacy WEEKLY approval of
-        // 6–12 April for April's lines) is not the month: calculating exports take only whole months (ADR-034 D3
-        // amendment 2; /calculate-and-export refuses any other period before reading an approval, Program.cs:296).
-        var groupMonthStart = new DateOnly(key.Year, key.Month, 1);
-        var groupMonthEnd = new DateOnly(key.Year, key.Month, DateTime.DaysInMonth(key.Year, key.Month));
+        // S147 TASK-14716 fix-up 1 (R-G2), made exact by fix-up 2 (R-G8): the locked period must BE the exported
+        // month's own approval — the same employee, and that whole calendar month (start = the 1st, end = the last
+        // day) — before its status or approver means anything. A period merely inside the month (a legacy WEEKLY
+        // approval of 6–12 April for April's lines) is not the month: calculating exports take only whole months
+        // (ADR-034 D3 amendment 2; /calculate-and-export refuses any other period before reading an approval,
+        // Program.cs:296).
+        var monthStart = new DateOnly(key.Year, key.Month, 1);
+        var monthEnd = new DateOnly(key.Year, key.Month, DateTime.DaysInMonth(key.Year, key.Month));
         if (!string.Equals(employeeId, key.EmployeeId, StringComparison.Ordinal)
-            || periodStart != groupMonthStart
-            || periodEnd != groupMonthEnd)
+            || periodStart != monthStart
+            || periodEnd != monthEnd)
         {
             throw new PayrollExportConflictException(PeriodNotTheExportedMonthMessage(
                 periodId, employeeId!, periodStart, periodEnd, key.EmployeeId, key.Year, key.Month));
@@ -646,7 +648,7 @@ public sealed class PayrollExportService
     /// written from now on carries one. The column stays nullable for the records the retired raw routes wrote.</para>
     /// </summary>
     private static async Task<Guid?> TryInsertRecordAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, ExportGroupKey key, Guid periodId, PayrollExportContext context,
+        NpgsqlConnection conn, NpgsqlTransaction tx, ExportMonthKey key, Guid periodId, PayrollExportContext context,
         DateTimeOffset exportedAt, string contentHash, string manifestJson, RecordedBalances? balances,
         CancellationToken ct)
     {
@@ -686,7 +688,7 @@ public sealed class PayrollExportService
     }
 
     private static async Task<ExistingRecord> ReadExistingRecordAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, ExportGroupKey key, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction tx, ExportMonthKey key, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -719,7 +721,7 @@ public sealed class PayrollExportService
     /// every record committed before the lock was granted, and none can appear until the transaction ends.
     /// </summary>
     private static async Task<bool> MonthHasRecordAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, ExportGroupKey key, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction tx, ExportMonthKey key, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -759,14 +761,21 @@ public sealed class PayrollExportService
             $"'{flex.EmployeeId}' {flex.Year}-{flex.Month:D2} is {flex.Provenance} but carries no {which} balance; " +
             "a tracked month always has both. Nothing was written.");
 
-    private readonly record struct ExportGroupKey(string EmployeeId, int Year, int Month);
+    /// <summary>
+    /// The one <c>(employee, year, month)</c> an export call writes (S147 TASK-14716, owner ruling R-G9; until then
+    /// <c>ExportGroupKey</c>, one of several groups per call). Its string member compares Ordinal (the record's
+    /// default equality), as the record's UNIQUE key does.
+    /// </summary>
+    private readonly record struct ExportMonthKey(string EmployeeId, int Year, int Month);
+
+    /// <summary>The month of a line: its employee and the calendar month of its <c>PeriodStart</c>.</summary>
+    private static ExportMonthKey MonthKeyOf(PayrollExportLine line) =>
+        new(line.EmployeeId, line.PeriodStart.Year, line.PeriodStart.Month);
 
     private sealed record RecordedBalances(decimal Opening, decimal Closing, string Provenance);
 
     private sealed record ExistingRecord(
         Guid ExportId, string ContentHash, decimal? OpeningBalance, decimal? ClosingBalance, string? Provenance);
-
-    private readonly record struct GroupExportOutcome(Guid ExportId, bool IsNew);
 
     // ADR-033 slice 1b — one of three independent locks (the others: the D13 go-live gate keeps
     // the emitter dormant pre-launch; no delivery path is wired to settlement lines this sprint).
@@ -978,8 +987,9 @@ public sealed class FlexLedgerWrite
 
 /// <summary>
 /// S90 / TASK-9002 — a 409-mappable conflict raised by the atomic export path: a month-spanning
-/// line (B4), a not-APPROVED period at export time (B2), or a same-key/different-content
-/// re-export (idempotency). The endpoint maps this to a 409 Conflict.
+/// line, a period that is not the exported month's own approval (S147 R-G2/R-G8), a not-APPROVED or
+/// four-eyes-failing period at export time (B2), or a same-key/different-content re-export
+/// (idempotency). The endpoint maps this to a 409 Conflict.
 /// </summary>
 public sealed class PayrollExportConflictException : Exception
 {
