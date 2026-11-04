@@ -14,6 +14,13 @@
 //  - the rolling lookback floor renders on the three history tiles;
 //  - the eventual-consistency lag note renders on the two event-backed lists;
 //  - the §21 list surfaces `cannotCompute` and `projectionNote`.
+// S147 TIDY-4 (lazy full-list cache, `useLazyFollowUpLoad`):
+//  - a leaver-month approve reloads the three summaries (F) and, after leaving the tile and coming
+//    back, the leaver list refetches instead of showing the stale row (F; `invalidate`);
+//  - a lazy fetch cancelled before it landed is retried on the next activation (F, the Codex
+//    sequence), including under React.StrictMode on a direct load (F against 94bd32be);
+//  - a normal click fetches the full list once (B), and a list that LANDED is not fetched again on a
+//    leave-and-return (B).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { StrictMode } from 'react'
 import { render, screen, waitFor, within } from '@testing-library/react'
@@ -454,11 +461,29 @@ describe('OpfoelgningPage — a cancelled lazy fetch is retried on the next acti
   // Kind F against 94bd32be (pre-existing since S140, dev only). Red conditions: under React.StrictMode
   // the mount effect runs, cleans up and runs again; the first run set the started flag and its fetch
   // was cancelled by the cleanup, so the second run returned early and the list never left "loading".
-  it('under StrictMode a direct load of a lazy tile leaves "loading"', async () => {
+  it('under StrictMode a direct load of a lazy tile does not stay on "loading"', async () => {
     installFetchMock(transferAgreementsOpen)
     renderPage('past-deadline', true)
     await waitFor(() => expect(screen.getByTestId('list-past-deadline')).toBeInTheDocument())
     expect(within(screen.getByTestId('list-past-deadline')).getByText('Anna And')).toBeInTheDocument()
+  })
+
+  // Kind B, boundary pin - holds today: a list that LANDED is not fetched again on a leave-and-return.
+  // Mutations that turn it red: delete `landed = true`, or drop the `if (!landed)` condition in the
+  // cleanup; either re-arms every cancelled-or-finished fetch, so the second count below is 2.
+  it('a list that finished loading is not fetched again on a leave-and-return', async () => {
+    installFetchMock(transferAgreementsOpen)
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-past-deadline'))
+    await waitFor(() => expect(within(screen.getByTestId('list-past-deadline')).getByText('Anna And')).toBeInTheDocument())
+    const fullCount = () =>
+      mockFetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/hr/follow-up/past-deadline') && !u.includes('summary=true')).length
+    expect(fullCount()).toBe(1)
+    await user.click(screen.getByTestId('tile-approved-not-exported'))
+    await user.click(screen.getByTestId('tile-past-deadline'))
+    await waitFor(() => expect(within(screen.getByTestId('list-past-deadline')).getByText('Anna And')).toBeInTheDocument())
+    expect(fullCount()).toBe(1)
   })
 
   // Boundary pin - holds today: a normal tile click fetches the full list exactly once.

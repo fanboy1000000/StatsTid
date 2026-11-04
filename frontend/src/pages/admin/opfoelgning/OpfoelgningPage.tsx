@@ -20,8 +20,10 @@
 // spec calls these out specifically as "the two enumeration reads" — an
 // (employee x month) scan the full item list is comparatively expensive to
 // produce just to render a tile count, so the initial paint asks for
-// `?summary=true` and the full list is fetched lazily, once, the first time
-// that tile is opened (`useLazyFollowUpLoad`). The other seven reads are not
+// `?summary=true` and the full list is fetched lazily, the first time
+// that tile is opened, and kept (`useLazyFollowUpLoad`): a fetch that landed is not repeated on a
+// leave-and-return, but the cache can be marked stale (`invalidate`, after a leaver-month write) and a
+// fetch cancelled before it landed is retried on the next activation. The other seven reads are not
 // enumerations; the task spec does not ask for summary mode on them, so they
 // are fetched once, in full, on the first paint, and reused as both the tile
 // count source and the list content.
@@ -72,9 +74,11 @@ function useFollowUpLoad<T>(fetcher: () => Promise<ApiResult<T>>): Loaded<T> {
   return { ...state, reload: load }
 }
 
-/** Fetches exactly once, the first time `active` becomes true, and caches
-    the result thereafter — the lazy "full list" fetch behind past-deadline
-    and leaver-final-month's summary-first tiles. */
+/** Fetches the first time `active` becomes true and keeps the result — the lazy "full list" fetch
+    behind past-deadline and leaver-final-month's summary-first tiles. A fetch that LANDED is not
+    repeated on a leave-and-return; `invalidate()` marks the cache stale so the NEXT activation
+    refetches (an open list is never reloaded in place); a fetch cancelled before it landed (leaving
+    the tile mid-fetch, StrictMode's mount-cleanup-mount) is retried on the next activation. */
 function useLazyFollowUpLoad<T>(
   active: boolean,
   fetcher: () => Promise<ApiResult<T>>,
