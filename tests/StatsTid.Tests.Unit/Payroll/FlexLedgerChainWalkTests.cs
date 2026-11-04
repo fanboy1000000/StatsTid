@@ -24,7 +24,7 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// <b>Kind N for 24 of the 27 facts</b> (two are kind B boundary pins, at the S146 case-4b and unrecorded-month facts below, lines 520 and 539; one is kind F, case 3a, re-pinned by TASK-14715-T, line 132) — each N fact names a member this sprint creates (<c>DeriveLink</c>, <c>BuildIndex</c>,
 /// <c>LedgerStartOf</c>, the two-argument <c>WindowsReadRange</c>, <c>PriorMonthStale</c>, or the internal counter seam of
 /// <c>Derive</c>), so a compile error is not a RED; RED is a named MUTATION (keep the API, break one behaviour), proven at the
-/// wave gate in an isolated worktree. The plan's mutations are M-1 .. M-6; this file adds M-229-7 .. M-229-12 for the bullets they do not
+/// wave gate in an isolated worktree. The plan's mutations are M-1 .. M-6; this file adds M-229-7 .. M-229-18 for the bullets they do not
 /// cover. Each fact names its mutation under "Red conditions".
 /// </para>
 ///

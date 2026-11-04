@@ -152,7 +152,7 @@ public static class EmploymentDateEndpoints
             // exists here, but the completed employment's RECORD is the asset (Auditability).
             // A second administrator performs legitimate self-corrections; the GET above is
             // self-readable only while the reader is employed: since S147 (TASK-14703) a departed
-            // self's read is refused too (consult R1; the validator's departed-self clause).
+            // self's read is refused too (S147 security consult, point R1; the validator's departed-self clause).
             if (string.Equals(actor.ActorId, employeeId, StringComparison.Ordinal))
                 return Results.Json(new
                 {
@@ -451,7 +451,7 @@ public static class EmploymentDateEndpoints
             // employmentEndDate: null and permanently self-reinstate via the R1(c) reactivation.
             // A second administrator performs legitimate self-departures; the GET above is
             // self-readable only while the reader is employed: since S147 (TASK-14703) a departed
-            // self's read is refused too (consult R1; the validator's departed-self clause).
+            // self's read is refused too (S147 security consult, point R1; the validator's departed-self clause).
             if (string.Equals(actor.ActorId, employeeId, StringComparison.Ordinal))
                 return Results.Json(new
                 {

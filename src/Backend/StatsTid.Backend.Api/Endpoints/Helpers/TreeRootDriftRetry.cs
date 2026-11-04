@@ -14,7 +14,7 @@ namespace StatsTid.Backend.Api.Endpoints.Helpers;
 /// unlocked read, so a concurrent cross-styrelse transfer can leave a mutator holding a STALE key.
 /// <see cref="ReportingLineRepository.AcquireTreeLockForEmployeeAsync"/>, its terminated-inclusive twin
 /// <see cref="ReportingLineRepository.AcquireTreeLockForEmployeeIncludingTerminatedAsync"/> (S147
-/// TASK-14713, for the leaver's HR-only routes) and the transfer variant
+/// TASK-14713, for a leaver's final-month approve, reject and reopen, HR-only from day 6) and the transfer variant
 /// <see cref="ReportingLineRepository.AcquireTreeLocksForTransferAsync"/> detect this by re-deriving the
 /// root UNDER the held advisory and throwing <see cref="TreeRootDriftException"/>. Because
 /// <c>pg_advisory_xact_lock</c> releases ONLY at tx end, the sound recovery is to ROLL BACK the whole
