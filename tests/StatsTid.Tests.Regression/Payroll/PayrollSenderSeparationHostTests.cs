@@ -248,6 +248,11 @@ public sealed class PayrollSenderSeparationHostTests : IAsyncLifetime
         Assert.Equal(0, await CountAsync(
             "SELECT COUNT(*) FROM outbox_events WHERE stream_id = @s AND event_type = 'PayrollExportGenerated'",
             ("s", $"employee-{employeeId}")));
+        // S147 TIDY-3-T (row 12d) - kind R, a regression pin: holds today. The audit row is written in the same
+        // transaction as the record (ADR-026 D2), so a refused export leaves no audit_projection row either.
+        // The mapper sets target_resource_id to the employee id (PayrollExportGeneratedAuditMapper).
+        Assert.Equal(0, await CountAsync(
+            "SELECT COUNT(*) FROM audit_projection WHERE target_resource_id = @e", ("e", employeeId)));
     }
 
 #pragma warning disable CA2100 // every sql here is a hardcoded literal; values flow through parameters.

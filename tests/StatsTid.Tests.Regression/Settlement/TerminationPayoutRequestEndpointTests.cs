@@ -255,6 +255,33 @@ public sealed class TerminationPayoutRequestEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.UnprocessableEntity, nullRsp.StatusCode);
     }
 
+    /// <summary>
+    /// S147 TIDY-3-T (row 20d; owner ruling C-2 = (b)) - kind F, Docker, CI-pending. The "end date has not passed" 422 is
+    /// date-free (ADR-040 D3/D7): it names no employment end date, neither as a property nor inside the text.
+    ///
+    /// <para><b>Red conditions (F).</b> <c>Assert.DoesNotContain(... "employmentEndDate")</c> fails on master: the 422
+    /// body also carried an <c>employmentEndDate</c> property holding the future end date (2026-12-31 here).</para>
+    /// </summary>
+    [Fact]
+    public async Task EndDateNotPassed_422Body_CarriesNoEmploymentEndDate()
+    {
+        var future = await SeedEmployeeAsync();
+        await SeedSettlementRowAsync(future, EndDateFerieaar, trigger: Termination,
+            state: "SETTLED", crystallizedDays: 12.5m);
+        await ExecAsync("UPDATE users SET employment_end_date = @d WHERE user_id = @id",
+            ("id", future), ("d", new DateOnly(2026, 12, 31)));
+
+        var rsp = await PostRequestAsync(HrClient(CoveringOrg), future, EndDateFerieaar, 1, "\"1\"");
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+        var raw = await rsp.Content.ReadAsStringAsync();
+        var body = JsonDocument.Parse(raw).RootElement;
+        Assert.DoesNotContain(body.EnumerateObject(),
+            p => p.Name.Equals("employmentEndDate", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("2026-12-31", raw);
+        Assert.DoesNotContain("31-12-2026", raw);
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // Access / precondition matrix — 404 / 412 / 428 / body-shape 422.
     // ════════════════════════════════════════════════════════════════════════

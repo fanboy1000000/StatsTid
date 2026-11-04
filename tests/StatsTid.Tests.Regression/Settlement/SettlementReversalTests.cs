@@ -462,6 +462,45 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ("e", employeeId), ("a", OperatorId)));
     }
 
+    /// <summary>
+    /// S147 TIDY-3-T (row 22c) - kind F, Docker, CI-pending. The same refusal as the fact above (a correction to a
+    /// future date reactivates the leaver, so the supersession leg is ineligible): the failure text must also name the
+    /// remedy for a correction that lands inside the manager's 5-day grace: "retry from day 6".
+    ///
+    /// <para><b>Red conditions (F).</b> <c>Assert.Contains("retry from day 6", ...)</c> fails on master: the
+    /// SupersedeNotEligible text ended at "...to park the tuple instead." and carried no grace remedy.</para>
+    /// </summary>
+    [Fact]
+    public async Task ReverseSupersede_IneligibleCorrectedState_FailureText_NamesRetryFromDaySix()
+    {
+        var (settle, reversal) = BootFixedClockServices(Clock);
+        var employeeId = await SeedEmployeeAsync();
+        await MarkLeaverAsync(employeeId, EndDate);
+        await SettleInOwnTxAsync(settle, employeeId, EndDateFerieaar, Termination);
+        await SeedOpenRequestAsync(employeeId, EndDateFerieaar, 1);
+
+        var result = await reversal.ReverseAsync(new SettlementReversalCommand
+        {
+            EmployeeId = employeeId,
+            EntitlementType = VacationType,
+            EntitlementYear = EndDateFerieaar,
+            ExpectedSettlementSequence = 1,
+            ExpectedSettlementVersion = 1,
+            Mode = SettlementReversalMode.ReverseAndSupersede,
+            HasEndDateCorrection = true,
+            CorrectedEndDate = new DateOnly(2026, 9, 15),
+            ExpectedUserVersion = 1,
+            SupersedeGoLiveFloor = NarrowGoLive,
+            ActorId = OperatorId,
+            ActorRole = OperatorRole,
+            ActorOrgId = OrgId,
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(SettlementReversalFailure.SupersedeNotEligible, result.Failure);
+        Assert.Contains("retry from day 6", result.FailureReason);
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // B2 (Step-5a cycle-1) — the affected-span settlement guard INSIDE the reversal tx (the
     // R13 analog; R4/R12): active rows in ferieår 2024 AND 2025; reversing the 2024 row with

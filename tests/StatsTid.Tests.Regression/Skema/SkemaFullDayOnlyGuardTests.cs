@@ -157,6 +157,29 @@ public sealed class SkemaFullDayOnlyGuardTests : IAsyncLifetime
         Assert.Equal(0, await CountAbsenceRowsAsync(employeeId, Monday));
     }
 
+    /// <summary>
+    /// S147 TIDY-3-T (row 8a) - kind F, Docker, CI-pending. The 422's Danish <c>message</c> writes the required hours
+    /// with a decimal comma whatever the host culture: "(7,4 timer)", and the date as dd-MM-yyyy.
+    ///
+    /// <para><b>Red conditions (F).</b> The <c>Assert.Equal</c> on the message fails on master: the sentence was
+    /// interpolated under the container's thread culture (no <c>LANG</c> set), so the body said "(7.4 timer)".</para>
+    /// </summary>
+    [Fact]
+    public async Task FullDay_Rejection422_MessageWritesHoursWithDecimalComma()
+    {
+        var employeeId = await SeedEmployeeAsync(fraction: 1.000m, birthDate: new DateOnly(1960, 1, 1));
+        var client = CreateEmployeeClient(employeeId, CreateRuleStubbedClient());
+
+        var rsp = await PostAbsencesAsync(client, employeeId, Monday.Year, Monday.Month,
+            new[] { (Monday, "SENIOR_DAY", 3.7m) });
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        var message = body.GetProperty("message").GetString();
+        Assert.EndsWith(" kan kun registreres som hel dag (7,4 timer) den 06-01-2025.", message);
+        Assert.DoesNotContain("7.4", message);
+    }
+
     /// <summary>The ANNUAL_ACTIVITY academic fallback (ADR-032 D3, deliberately KEPT — R2):
     /// an AC_RESEARCH half-timer's basis is 7.4 × 0.5 = 3.7; the exact value is allowed and
     /// consumes 1.0 feriedag. Academics keep their omsorgsdage.</summary>
