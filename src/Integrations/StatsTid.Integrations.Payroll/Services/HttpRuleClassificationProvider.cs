@@ -55,8 +55,8 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// calculated at all — it refuses the month only when it can see a Reject or AlignedWindow rule.
 /// An empty list reads as "there is nothing to refuse", so an outage used to make every payroll
 /// route plan blind and export a split month with wrong lines. (Since S145 B2 payroll hands the
-/// planner only the rules it evaluates, none of which refuses a split, and the raw routes refuse a
-/// split month by their own check; the distinction still matters because payroll plans and merges
+/// planner only the rules it evaluates, none of which refuses a split, and the raw routes, retired in S147
+/// TASK-14716, refused a split month by their own check; the distinction still matters because payroll plans and merges
 /// by the strategies its rules declare, and an unknown set is not an empty one — R-91.) "I could not find out" is now a
 /// distinct signal, and the routes answer it with a 503 before anything is calculated, written or
 /// exported. An empty list means a genuinely empty registry, and a successful 200 <c>[]</c> is

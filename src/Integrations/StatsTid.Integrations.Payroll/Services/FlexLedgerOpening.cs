@@ -77,7 +77,10 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// of it derives nothing and so could never repair it; its successor is compared, re-derives REHIRE 0 against a
 /// recorded CHAINED, and is named (R-14, R-26). A month with no ledger record (never exported, or exported raw) has no
 /// recorded pair to compare; a hole of that kind shows up as the refusing link of the next ledger month (case 4b
-/// inside it), or, when it is P itself, as M's own case-4b refusal, exactly as before.
+/// inside it), or, when it is P itself, as M's own case-4b refusal, exactly as before. One shape is not surfaced: a
+/// hole followed by a month with no EMPLOYED day is never named, because the next ledger month then opens at
+/// REHIRE 0 and reads only its own P. That shape needs two employment spells, which single-spell storage cannot hold
+/// (ADR-040 D1), so it is unreachable today; multi-spell storage must revisit it.
 /// </para>
 ///
 /// <para>
