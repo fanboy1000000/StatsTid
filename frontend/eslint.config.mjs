@@ -113,8 +113,8 @@ const TYPED_SLICE_FILES = [
   'src/hooks/useYearOverview.ts',
   'src/hooks/useCompliance.ts',
   'src/hooks/useCompensationChoice.ts',
-  // S147 tidy item 23a — TASK-14714's typed-call hook (eight apiClient.get calls, no `as`, no type
-  // argument). AuditLogView.tsx stays out: it carries an `eslint-disable react-hooks/exhaustive-deps`
+  // S147 tidy item 23a — TASK-14714's typed-call hook (nine apiClient.get and three apiClient.post calls, no
+  // `as`, no type argument). AuditLogView.tsx stays out: it carries an `eslint-disable react-hooks/exhaustive-deps`
   // comment (:98) and this config loads no react-hooks plugin, so linting it fails on the unknown rule.
   'src/hooks/useHrFollowUp.ts',
   'src/hooks/useSkema.ts',

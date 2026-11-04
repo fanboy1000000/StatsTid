@@ -325,6 +325,75 @@ describe('OpfoelgningPage — each tile opens its list', () => {
   })
 })
 
+// S147 TIDY-4 item 23b + fix-up 1 (Fable W1, N6). The leaver list's send / approve / reject must
+// refresh the landing tiles AND leave no stale cached full list behind.
+describe('OpfoelgningPage — a resolved leaver month refreshes the tiles and the cached lists', () => {
+  const PERIOD = 'p-leaver'
+  const submittedLeaver = {
+    ...leaverFullResponse,
+    items: [{ employeeId: 'e3', displayName: 'Carl Christ', orgId: 'org1', year: 2025, month: 8, periodStatus: 'SUBMITTED', periodId: PERIOD, ageAnchor: '2025-08-20', daysPastAnchor: 20, deadlineSource: 'stored', lastManagerDay: '2025-08-18', firstHrOnlyDay: '2025-08-19' }],
+  }
+  const approvedLeaver = {
+    ...submittedLeaver,
+    items: [{ ...submittedLeaver.items[0], periodStatus: 'APPROVED' }],
+  }
+  const calls = (needle: string, summary: boolean | null = null) =>
+    mockFetch.mock.calls
+      .map(([url]) => String(url))
+      .filter((u) => u.includes(needle) && (summary === null || u.includes('summary=true') === summary))
+
+  function installLeaverMock(approvedRef: { done: boolean }) {
+    installFetchMock(transferAgreementsOpen, { leaverFull: submittedLeaver })
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes('/api/approval/') && url.endsWith('/approve')) {
+        approvedRef.done = true
+        return jsonResponse({ periodId: PERIOD, status: 'APPROVED' })
+      }
+      if (approvedRef.done && url.includes('/api/hr/follow-up/leaver-final-month') && !url.includes('summary=true')) {
+        return jsonResponse(approvedLeaver)
+      }
+      return base(url)
+    })
+  }
+
+  // N6, kind F against 94bd32be. Red conditions: before the change the leaver list had no onResolved,
+  // so after an approve each of the three summaries was fetched exactly once (on mount); the
+  // second-call assertions below fail with a count of 1.
+  it('an approve reloads the leaver, approved-not-exported and past-deadline summaries', async () => {
+    installLeaverMock({ done: false })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-leaver-final-month'))
+    await user.click(await screen.findByTestId('list-leaver-final-month-approve-e3-2025-8'))
+    await waitFor(() => expect(calls('/api/hr/follow-up/leaver-final-month', true).length).toBe(2))
+    await waitFor(() => expect(calls('/api/hr/follow-up/approved-not-exported').length).toBe(2))
+    await waitFor(() => expect(calls('/api/hr/follow-up/past-deadline', true).length).toBe(2))
+  })
+
+  // W1, kind F against 94bd32be. Red conditions: before the fix the full list stayed cached, so
+  // coming back to the tile showed the old SUBMITTED row (status "Indsendt", Godkend offered) and
+  // no second non-summary leaver fetch happened. The approved row's outcome sentence must survive
+  // while the list is on screen (no reload of an open list).
+  it('after an approve, leaving the tile and coming back refetches the list (no stale "Indsendt" row)', async () => {
+    installLeaverMock({ done: false })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-leaver-final-month'))
+    await user.click(await screen.findByTestId('list-leaver-final-month-approve-e3-2025-8'))
+    await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
+    // The open list was not reloaded: the row's own outcome sentence is still there.
+    expect(screen.getByTestId('list-leaver-final-month-outcome-e3-2025-8')).toBeInTheDocument()
+    expect(calls('/api/hr/follow-up/leaver-final-month', false).length).toBe(1)
+
+    await user.click(screen.getByTestId('tile-approved-not-exported'))
+    await user.click(await screen.findByTestId('tile-leaver-final-month'))
+    await waitFor(() => expect(calls('/api/hr/follow-up/leaver-final-month', false).length).toBe(2))
+    await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
+    expect(screen.queryByTestId('list-leaver-final-month-approve-e3-2025-8')).not.toBeInTheDocument()
+  })
+})
+
 describe('OpfoelgningPage — read-only lists (owner ruling OQ-4)', () => {
   it('the settlement-reviews list states the action is handled via API and offers no form', async () => {
     installFetchMock(transferAgreementsOpen)

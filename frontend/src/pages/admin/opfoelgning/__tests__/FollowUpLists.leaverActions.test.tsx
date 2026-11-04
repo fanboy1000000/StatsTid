@@ -23,6 +23,12 @@
 //  8 F  "Åbn måned" toggles the real month grid and flips its label. Red: 7d53bd53 shows a
 //       one-line summary, never the grid.
 //  9 B  boundary pin - holds today: the aging column and the window text are unchanged.
+// S147 tidy item 23b (TIDY-4, against 94bd32be; vitest does not type-check, so the old component
+// simply ignores the new prop):
+// 10 F  `onResolved` is called once after a successful send and once after a successful approve.
+//       Red: the prop is ignored, 0 calls.
+// 11 F  `onResolved` is called once after a successful reject. Red: 0 calls.
+// 12 B  boundary pin - holds today: a refused action (409) never calls `onResolved`.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'

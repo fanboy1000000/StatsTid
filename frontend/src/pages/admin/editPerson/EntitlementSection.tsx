@@ -5,6 +5,7 @@
 // independent HR-only PUTs (DOB / employment-start admin-strict If-Match;
 // CHILD_SICK its own If-None-Match:* / If-Match contract).
 import type { ChangeEvent } from 'react'
+import { TYPE_LABELS } from '../../../lib/entitlementConstants'
 import styles from '../EditPersonDrawer.module.css'
 import type { EntitlementFields, SectionSaveState } from './types'
 
@@ -55,7 +56,7 @@ export function EntitlementSection({
             <div>Ansættelsesdato kunne ikke gemmes: {employmentStartSave.message}</div>
           )}
           {childSickSave.status === 'failed' && (
-            <div>Barns sygedag kunne ikke gemmes: {childSickSave.message}</div>
+            <div>{TYPE_LABELS.CHILD_SICK} kunne ikke gemmes: {childSickSave.message}</div>
           )}
         </div>
       )}
@@ -108,7 +109,7 @@ export function EntitlementSection({
             onChange={(e) => onChildSickToggle(e.target.checked)}
             data-testid="ep-child-sick"
           />
-          <span>Barns sygedag – berettiget</span>
+          <span>{TYPE_LABELS.CHILD_SICK} – berettiget</span>
         </label>
         <div className={styles.helperText}>
           Giver medarbejderen adgang til at registrere barns 1./2./3. sygedag.

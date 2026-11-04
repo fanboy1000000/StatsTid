@@ -75,12 +75,23 @@ function useFollowUpLoad<T>(fetcher: () => Promise<ApiResult<T>>): Loaded<T> {
 /** Fetches exactly once, the first time `active` becomes true, and caches
     the result thereafter — the lazy "full list" fetch behind past-deadline
     and leaver-final-month's summary-first tiles. */
-function useLazyFollowUpLoad<T>(active: boolean, fetcher: () => Promise<ApiResult<T>>): LoadState<T> {
+function useLazyFollowUpLoad<T>(
+  active: boolean,
+  fetcher: () => Promise<ApiResult<T>>,
+): LoadState<T> & { invalidate: () => void } {
   const [state, setState] = useState<LoadState<T>>({ loading: false, error: null, data: null })
   const startedRef = useRef(false)
+  // S147 TIDY-4 fix-up 1: set by `invalidate`; the next ACTIVATION refetches. Never a reload while the
+  // list is on screen (the effect only runs when `active` changes), so an open list keeps its rows
+  // and their outcome sentences.
+  const staleRef = useRef(false)
+  const invalidate = useCallback(() => {
+    staleRef.current = true
+  }, [])
   useEffect(() => {
-    if (!active || startedRef.current) return
+    if (!active || (startedRef.current && !staleRef.current)) return
     startedRef.current = true
+    staleRef.current = false
     let cancelled = false
     setState((s) => ({ ...s, loading: true }))
     void fetcher().then((result) => {
@@ -93,7 +104,7 @@ function useLazyFollowUpLoad<T>(active: boolean, fetcher: () => Promise<ApiResul
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])
-  return state
+  return { ...state, invalidate }
 }
 
 const TILE_KEYS = [
@@ -161,11 +172,20 @@ export function OpfoelgningPage() {
   const reloadLeaverSummary = leaverSummary.reload
   const reloadApprovedNotExported = approvedNotExported.reload
   const reloadPastDeadlineSummary = pastDeadlineSummary.reload
+  // The two lazily cached FULL lists would otherwise come back from the cache with the old status
+  // (an approved month still "Indsendt", still offering Godkend). Mark them stale: the next time
+  // the tile is opened they refetch. The open list is NOT reloaded (that would remount its rows and
+  // lose the row's outcome sentence). approvedNotExported's list is not lazy: it is the same load
+  // as its tile, reloaded above.
+  const invalidateLeaverFull = leaverFull.invalidate
+  const invalidatePastDeadlineFull = pastDeadlineFull.invalidate
   const onLeaverMonthResolved = useCallback(() => {
     reloadLeaverSummary()
     reloadApprovedNotExported()
     reloadPastDeadlineSummary()
-  }, [reloadLeaverSummary, reloadApprovedNotExported, reloadPastDeadlineSummary])
+    invalidateLeaverFull()
+    invalidatePastDeadlineFull()
+  }, [reloadLeaverSummary, reloadApprovedNotExported, reloadPastDeadlineSummary, invalidateLeaverFull, invalidatePastDeadlineFull])
   const uncoveredApprovers = useFollowUpLoad(fetchUncoveredApprovers)
   const cannotRegister = useFollowUpLoad(fetchCannotRegister)
   const settlementReviews = useFollowUpLoad(fetchSettlementReviews)
