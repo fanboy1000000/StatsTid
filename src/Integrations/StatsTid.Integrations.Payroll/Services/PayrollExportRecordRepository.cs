@@ -158,8 +158,9 @@ public sealed class PayrollExportRecordRepository
     /// retired them) calls this as the FIRST statement of its writing transaction, before any row lock. Transaction-scoped (<c>pg_advisory_xact_lock</c>): held to commit or rollback.
     ///
     /// <para>
-    /// <b>One statement for several employees, ordered by the KEY</b> (reviewer c3 N2). <c>ExportAsync</c> writes
-    /// every line group of its call in one transaction, so it locks every employee of the call at once, de-duplicated
+    /// <b>One statement for several employees, ordered by the KEY</b> (reviewer c3 N2). Both callers pass one employee
+    /// today (<c>ExportAsync</c> exports one employee's one month since S147 TASK-14716, owner ruling R-G9; the
+    /// correction one profile). Several are locked in one statement, de-duplicated
     /// and ordered by the hashed key value: two ids whose <c>hashtext</c> collides are the same lock, so ordering by
     /// id could take two keys in opposite orders in two calls; ordering by key cannot. The keys are distinct by name
     /// (<c>payroll-ledger-</c> vs the <c>employee-</c> and org keys), and <c>hashtext</c> is 32-bit, so a collision is
