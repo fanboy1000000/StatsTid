@@ -89,8 +89,8 @@ public sealed class PayrollExportService
     /// <item><description>(B2) re-asserts <c>status='APPROVED'</c> on that period under
     /// <c>SELECT … FOR UPDATE</c>, with the four-eyes checkpoint (S147 TASK-14704), for every group — always since
     /// S147 TASK-14716, when the period became required — after checking that the locked period is that group's own
-    /// approval (the same employee, both dates in the group's month; TASK-14716 fix-up 1, R-G2); a period that is
-    /// not, or is not APPROVED at export time, aborts the WHOLE tx;</description></item>
+    /// approval (the same employee, and the group's whole calendar month; TASK-14716 fix-ups 1 and 2, R-G2/R-G8); a
+    /// period that is not, or is not APPROVED at export time, aborts the WHOLE tx;</description></item>
     /// <item><description>computes a deterministic <c>content_hash</c> over the group's lines;</description></item>
     /// <item><description>INSERTs <c>payroll_export_records</c> — idempotent on
     /// <c>UNIQUE(employee_id, year, month)</c>: same hash → NO-OP (returns the existing
@@ -460,15 +460,19 @@ public sealed class PayrollExportService
     /// committing until this export tx commits, closing the export↔reopen TOCTOU window. A period
     /// that is missing or not APPROVED at this point aborts the whole export tx.
     ///
-    /// <para><b>S147 / TASK-14716 fix-up 1 (ruling R-G2) — the period must be the exported month.</b> Since the
-    /// period became required, it is what makes every export "an approved month with two signers"; so the locked
-    /// row must be the approval of THIS group: its <c>employee_id</c> equals the group's employee (Ordinal), and its
-    /// <c>period_start</c> and <c>period_end</c> both fall in the group's calendar month. Otherwise the export throws
-    /// the existing conflict (→ 409, <see cref="PeriodNotTheExportedMonthMessage"/>) and rolls back. The check runs
-    /// right after the not-found check and before the status and four-eyes checks: a different month's approval says
-    /// nothing about this month, whatever its status. On <c>/calculate-and-export</c> it always holds by construction
-    /// (the period is read by the request's employee and exact whole-month dates, and every line belongs to that
-    /// employee and month); it guards any other caller of <see cref="ExportAsync"/>.</para>
+    /// <para><b>S147 / TASK-14716 fix-up 1 (ruling R-G2), exact since fix-up 2 (ruling R-G8) — the period IS the
+    /// whole exported month.</b> Since the period became required, it is what makes every export "an approved month
+    /// with two signers"; so the locked row must be the approval of THIS group: its <c>employee_id</c> equals the
+    /// group's employee (Ordinal), and it is the group's whole calendar month — <c>period_start</c> is the 1st and
+    /// <c>period_end</c> the last day of the group's <c>(Year, Month)</c>. A period that merely lies inside the month
+    /// (for example a legacy <c>WEEKLY</c> approval of 6–12 April for April's lines) is not the month and is refused:
+    /// calculating exports take only whole months (ADR-034 D3 amendment 2), and <c>/calculate-and-export</c> refuses
+    /// any other period before it reads an approval (<c>Program.cs:296</c>, <c>RefusePeriodNotAMonth</c>). Otherwise
+    /// the export throws the existing conflict (→ 409, <see cref="PeriodNotTheExportedMonthMessage"/>) and rolls back.
+    /// The check runs right after the not-found check and before the status and four-eyes checks: another period's
+    /// approval says nothing about this month, whatever its status. On <c>/calculate-and-export</c> it always holds
+    /// by construction (the period is read by the request's employee and exact whole-month dates, and every line
+    /// belongs to that employee and month); it guards any other caller of <see cref="ExportAsync"/>.</para>
     ///
     /// <para><b>S147 / TASK-14704 (SEC-053, owner ruling OQ-1 = (a)) — the payroll checkpoint of
     /// four-eyes.</b> Payroll is where an approval turns into money, so it re-checks the two
@@ -516,11 +520,16 @@ public sealed class PayrollExportService
             throw new PayrollExportConflictException(
                 $"Approval period '{periodId}' (employee '{key.EmployeeId}', {key.Year}-{key.Month:D2}) not found at export time.");
         }
-        // S147 TASK-14716 fix-up 1 (R-G2): the locked period must be this group's own approval — the same employee,
-        // and both of its dates inside the group's calendar month — before its status or approver means anything.
+        // S147 TASK-14716 fix-up 1 (R-G2), made exact by fix-up 2 (R-G8): the locked period must BE this group's own
+        // approval — the same employee, and the group's whole calendar month (start = the 1st, end = the last day) —
+        // before its status or approver means anything. A period merely inside the month (a legacy WEEKLY approval of
+        // 6–12 April for April's lines) is not the month: calculating exports take only whole months (ADR-034 D3
+        // amendment 2; /calculate-and-export refuses any other period before reading an approval, Program.cs:296).
+        var groupMonthStart = new DateOnly(key.Year, key.Month, 1);
+        var groupMonthEnd = new DateOnly(key.Year, key.Month, DateTime.DaysInMonth(key.Year, key.Month));
         if (!string.Equals(employeeId, key.EmployeeId, StringComparison.Ordinal)
-            || !InGroupMonth(periodStart)
-            || !InGroupMonth(periodEnd))
+            || periodStart != groupMonthStart
+            || periodEnd != groupMonthEnd)
         {
             throw new PayrollExportConflictException(PeriodNotTheExportedMonthMessage(
                 periodId, employeeId!, periodStart, periodEnd, key.EmployeeId, key.Year, key.Month));
@@ -544,15 +553,14 @@ public sealed class PayrollExportService
         // Ordinal, and a null or empty id never matches (the Backend guards' rule).
         static bool SameActor(string? a, string? b) =>
             !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b) && string.Equals(a, b, StringComparison.Ordinal);
-
-        bool InGroupMonth(DateOnly day) => day.Year == key.Year && day.Month == key.Month;
     }
 
     /// <summary>
     /// S147 / TASK-14716 fix-up 1 (ruling R-G2) — the message of the <see cref="PayrollExportConflictException"/>
     /// (→ 409 <c>payroll-export-conflict</c>) thrown when the export's approval period is not the approval of the
-    /// month being exported: another employee's, or dated outside that calendar month. It names the period id, the
-    /// period's employee and dates, and the exported employee and month. Public so a test can assert it exactly.
+    /// month being exported: another employee's, or not exactly that whole calendar month (another month, or a
+    /// shorter period inside it; fix-up 2, R-G8). It names the period id, the period's employee and dates, and the
+    /// exported employee and month. Public so a test can assert it exactly.
     /// Unreachable through <c>/calculate-and-export</c>, which reads the period by the request's own employee and
     /// month; it is a programming-error guard for any other caller of <see cref="ExportAsync"/>.
     /// </summary>
