@@ -80,27 +80,31 @@ function useLazyFollowUpLoad<T>(
   fetcher: () => Promise<ApiResult<T>>,
 ): LoadState<T> & { invalidate: () => void } {
   const [state, setState] = useState<LoadState<T>>({ loading: false, error: null, data: null })
-  const startedRef = useRef(false)
-  // S147 TIDY-4 fix-up 1: set by `invalidate`; the next ACTIVATION refetches. Never a reload while the
-  // list is on screen (the effect only runs when `active` changes), so an open list keeps its rows
-  // and their outcome sentences.
-  const staleRef = useRef(false)
+  // S147 TIDY-4 fix-up 1 + 2: true while the list still owes a fetch. It starts true, `invalidate` sets
+  // it (the next ACTIVATION refetches; an open list is never reloaded in place, because the effect only
+  // runs when `active` changes), and a fetch that is cancelled before it lands sets it back (cleanup:
+  // leaving the tile mid-fetch, or React.StrictMode's mount, cleanup, mount in dev), so the next
+  // activation fetches again instead of leaving the list on "loading". A fetch that landed is never
+  // repeated: the cleanup after a landing leaves the flag false, so a normal click fetches once.
+  const needsFetchRef = useRef(true)
   const invalidate = useCallback(() => {
-    staleRef.current = true
+    needsFetchRef.current = true
   }, [])
   useEffect(() => {
-    if (!active || (startedRef.current && !staleRef.current)) return
-    startedRef.current = true
-    staleRef.current = false
+    if (!active || !needsFetchRef.current) return
+    needsFetchRef.current = false
     let cancelled = false
+    let landed = false
     setState((s) => ({ ...s, loading: true }))
     void fetcher().then((result) => {
       if (cancelled) return
+      landed = true
       if (result.ok) setState({ loading: false, error: null, data: result.data })
       else setState({ loading: false, error: result.error, data: null })
     })
     return () => {
       cancelled = true
+      if (!landed) needsFetchRef.current = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active])

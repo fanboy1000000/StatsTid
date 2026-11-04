@@ -15,6 +15,7 @@
 //  - the eventual-consistency lag note renders on the two event-backed lists;
 //  - the §21 list surfaces `cannotCompute` and `projectionNote`.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { StrictMode } from 'react'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -166,16 +167,17 @@ function installFetchMock(
   })
 }
 
-function renderPage(initialTile?: string) {
+function renderPage(initialTile?: string, strict = false) {
   const path = initialTile ? `/admin/opfoelgning/${initialTile}` : '/admin/opfoelgning'
-  return render(
+  const tree = (
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/admin/opfoelgning" element={<OpfoelgningPage />} />
         <Route path="/admin/opfoelgning/:tile" element={<OpfoelgningPage />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
+  return render(strict ? <StrictMode>{tree}</StrictMode> : tree)
 }
 
 const READY_TILE_TESTIDS = ['tile-past-deadline', 'tile-leaver-final-month', 'tile-approved-not-exported', 'tile-transfer-agreements']
@@ -391,6 +393,83 @@ describe('OpfoelgningPage — a resolved leaver month refreshes the tiles and th
     await waitFor(() => expect(calls('/api/hr/follow-up/leaver-final-month', false).length).toBe(2))
     await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
     expect(screen.queryByTestId('list-leaver-final-month-approve-e3-2025-8')).not.toBeInTheDocument()
+  })
+})
+
+// S147 TIDY-4 fix-up 2 (Codex c2 W, Fable c2 N1): a lazy full-list fetch that is cancelled before it
+// lands must not leave the list stuck on "loading".
+describe('OpfoelgningPage — a cancelled lazy fetch is retried on the next activation', () => {
+  // Kind F against f1af775b (the Codex sequence). Red conditions: after approve the cache is stale;
+  // opening the tile starts refetch #2, leaving mid-fetch cancels it, and f1af775b had already consumed
+  // the stale flag, so the third activation fetched nothing: the third non-summary leaver call never
+  // happens and the list stays "loading" (waitFor on the third call times out).
+  it('approve, leave, return, leave before the refetch lands, return: the list fetches again', async () => {
+    installFetchMock(transferAgreementsOpen, {
+      leaverFull: {
+        ...leaverFullResponse,
+        items: [{ employeeId: 'e3', displayName: 'Carl Christ', orgId: 'org1', year: 2025, month: 8, periodStatus: 'SUBMITTED', periodId: 'p-leaver', ageAnchor: '2025-08-20', daysPastAnchor: 20, deadlineSource: 'stored', lastManagerDay: '2025-08-18', firstHrOnlyDay: '2025-08-19' }],
+      },
+    })
+    const base = mockFetch.getMockImplementation()!
+    let approved = false
+    let hold: Promise<void> | null = null
+    const fullCalls = () => mockFetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/hr/follow-up/leaver-final-month') && !u.includes('summary=true')).length
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes('/api/approval/') && url.endsWith('/approve')) {
+        approved = true
+        return jsonResponse({ periodId: 'p-leaver', status: 'APPROVED' })
+      }
+      if (url.includes('/api/hr/follow-up/leaver-final-month') && !url.includes('summary=true')) {
+        if (hold) await hold
+        if (approved) {
+          const r = await base(url)
+          const body = await r.json()
+          return jsonResponse({ ...body, items: body.items.map((i: object) => ({ ...i, periodStatus: 'APPROVED' })) })
+        }
+      }
+      return base(url)
+    })
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-leaver-final-month'))
+    await user.click(await screen.findByTestId('list-leaver-final-month-approve-e3-2025-8'))
+    await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
+    await user.click(screen.getByTestId('tile-approved-not-exported'))
+
+    // Refetch #2 is held, and the person leaves before it lands.
+    let release: () => void = () => {}
+    hold = new Promise<void>((r) => { release = r })
+    await user.click(screen.getByTestId('tile-leaver-final-month'))
+    await waitFor(() => expect(fullCalls()).toBe(2))
+    await user.click(screen.getByTestId('tile-approved-not-exported'))
+
+    // Back again, nothing held: the cancelled fetch must be retried.
+    hold = null
+    await user.click(screen.getByTestId('tile-leaver-final-month'))
+    await waitFor(() => expect(fullCalls()).toBe(3))
+    await waitFor(() => expect(screen.getByTestId('list-leaver-final-month-status-e3-2025-8')).toHaveTextContent('Godkendt'))
+    release()
+  })
+
+  // Kind F against 94bd32be (pre-existing since S140, dev only). Red conditions: under React.StrictMode
+  // the mount effect runs, cleans up and runs again; the first run set the started flag and its fetch
+  // was cancelled by the cleanup, so the second run returned early and the list never left "loading".
+  it('under StrictMode a direct load of a lazy tile leaves "loading"', async () => {
+    installFetchMock(transferAgreementsOpen)
+    renderPage('past-deadline', true)
+    await waitFor(() => expect(screen.getByTestId('list-past-deadline')).toBeInTheDocument())
+    expect(within(screen.getByTestId('list-past-deadline')).getByText('Anna And')).toBeInTheDocument()
+  })
+
+  // Boundary pin - holds today: a normal tile click fetches the full list exactly once.
+  it('a normal tile click fetches the full list once (no double fetch)', async () => {
+    installFetchMock(transferAgreementsOpen)
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByTestId('tile-past-deadline'))
+    await waitFor(() => expect(screen.getByTestId('list-past-deadline')).toBeInTheDocument())
+    const full = mockFetch.mock.calls.map(([u]) => String(u)).filter((u) => u.includes('/api/hr/follow-up/past-deadline') && !u.includes('summary=true'))
+    expect(full.length).toBe(1)
   })
 })
 
