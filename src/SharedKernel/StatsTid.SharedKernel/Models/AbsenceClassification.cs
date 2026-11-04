@@ -3,27 +3,41 @@ namespace StatsTid.SharedKernel.Models;
 /// <summary>
 /// How one absence day moves the flex balance. Every code in <see cref="AbsenceTypes"/> has
 /// exactly one effect, recorded in <see cref="AbsenceClassification"/>.
+///
+/// <para>
+/// <b>The zero value is <see cref="Neutral"/>, deliberately (S147 tidy item 15, TASK-14723).</b>
+/// An enum's <c>default</c> is its zero value, so whichever member is zero is what an unset
+/// field or a forgotten entry silently carries. Before the tidy pass that was <see cref="Credit"/>
+/// (declared first, numbered implicitly), so a slip would have counted as flex credit and
+/// overstated the balance: it failed open. Neutral counts as neither credit nor reduction, the
+/// same treatment a code outside the vocabulary already gets (<see cref="AbsenceClassification.TryGetEffect"/>
+/// returns false), so a slip now fails safe. Every member is numbered explicitly so a reorder
+/// cannot move the zero value again. No reader depends on the numbers: every reader compares
+/// by member name, and the effect is never serialized, stored or served (RR-4), so the
+/// renumbering changes no engine output.
+/// </para>
 /// </summary>
 public enum AbsenceNormEffect
 {
+    /// <summary>
+    /// The absence moves neither worked time nor the norm. No code is neutral since S147
+    /// (RR-4); the value keeps the classification total should a future code need it, and it is
+    /// the fail-safe zero value (see the enum's summary).
+    /// </summary>
+    Neutral = 0,
+
     /// <summary>
     /// The absence's hours count as performed working time: they are credited toward the norm,
     /// so a whole day of it leaves flex unchanged (paid absence; Statens arbejdstidsaftale
     /// § 7 nr. 2).
     /// </summary>
-    Credit,
+    Credit = 1,
 
     /// <summary>
     /// The absence's hours lower the norm instead (unpaid leave): the day is not owed, and it is
     /// not credited either.
     /// </summary>
-    Reduction,
-
-    /// <summary>
-    /// The absence moves neither worked time nor the norm. No code is neutral since S147
-    /// (RR-4); the value keeps the classification total should a future code need it.
-    /// </summary>
-    Neutral,
+    Reduction = 2,
 }
 
 /// <summary>
@@ -129,7 +143,11 @@ public static class AbsenceClassification
 
     /// <summary>
     /// The effect of <paramref name="absenceType"/>; false for a code outside the vocabulary
-    /// (and for null), which then counts as neither credit nor reduction.
+    /// (and for null), which then counts as neither credit nor reduction. On false,
+    /// <paramref name="effect"/> is <c>default</c>, which is <see cref="AbsenceNormEffect.Neutral"/>
+    /// since S147 tidy item 15 (it was <see cref="AbsenceNormEffect.Credit"/> before; every
+    /// caller, <see cref="IsCredit"/> and <see cref="IsReduction"/> included, tests the return
+    /// value first, so none ever read it).
     /// </summary>
     public static bool TryGetEffect(string? absenceType, out AbsenceNormEffect effect)
     {

@@ -1143,7 +1143,7 @@ public static class SkemaEndpoints
                                 absenceType = absence.AbsenceType,
                                 date = absence.Date,
                                 requiredHours,
-                                message = $"{AbsenceTypeLabels.LabelFor(absence.AbsenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {absence.Date:dd-MM-yyyy}.",
+                                message = AbsenceTypeLabels.FullDayOnlyMessage(absence.AbsenceType, requiredHours, absence.Date),
                             }, statusCode: 422);
                     }
                 }
@@ -2108,7 +2108,7 @@ public static class SkemaEndpoints
                                         absenceType = absence.AbsenceType,
                                         date = absence.Date,
                                         requiredHours,
-                                        message = $"{AbsenceTypeLabels.LabelFor(absence.AbsenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {absence.Date:dd-MM-yyyy}.",
+                                        message = AbsenceTypeLabels.FullDayOnlyMessage(absence.AbsenceType, requiredHours, absence.Date),
                                     });
                             }
                         }

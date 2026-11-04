@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.SharedKernel.Security;
@@ -260,6 +261,11 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         await SeedTerminationSettlementAsync(mette, endDate);
         await SeedTerminationSettlementAsync(other, endDate);
         using var host = _fx.Factory.WithFixedToday(new DateOnly(2026, 3, 5));
+        // S147 TIDY-3-T (row 18a) - kind B, boundary pin, holds today: the derived host inherits the fixture's
+        // withoutLeaverJob switch, so no leaver-flip job can deactivate the still-active self under this fact.
+        Assert.Empty(host.Services
+            .GetServices<Microsoft.Extensions.Hosting.IHostedService>()
+            .OfType<StatsTid.Infrastructure.SettlementCloseService>());
         using var client = ClientFor(Hr(mette, OrgA), host);
 
         // S147 TASK-14719 fix-up 1: pin the row's meaning at the moment of the request — the !deactivated case is a

@@ -241,6 +241,11 @@ public static class TerminationPayoutRequestEndpoints
                 // (7) End date passed — the CURRENT in-lock user state (the B1 lesson: live
                 // predicates, never snapshot-trusted). The end date is the LAST employed day,
                 // so "passed" means the Copenhagen business date is STRICTLY after it.
+                //
+                // S147 tidy item 20 (TASK-14723; Orchestrator ruling C-2 = (b), 2026-11-04): the
+                // body is date-free. It no longer echoes the end date, per ADR-040 D3 ("rejection
+                // bodies are date-free"); HR reads the date through the HROrAbove end-date GET
+                // (GET /api/admin/employees/{employeeId}/employment-end-date).
                 var today = CopenhagenToday(timeProvider);
                 if (user.EmploymentEndDate is not { } endDate || endDate >= today)
                 {
@@ -249,7 +254,6 @@ public static class TerminationPayoutRequestEndpoints
                     {
                         error = "The employee's employment end date has not passed (or is not set) — a §26 " +
                                 "payout request applies to a COMPLETED termination.",
-                        employmentEndDate = user.EmploymentEndDate,
                     });
                 }
 

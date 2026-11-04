@@ -462,6 +462,87 @@ public sealed class SettlementReversalTests : IAsyncLifetime
             ("e", employeeId), ("a", OperatorId)));
     }
 
+    /// <summary>
+    /// S147 TIDY-3-T (row 22c) - kind F, Docker, CI-pending. The same refusal as the fact above (a correction to a
+    /// future date reactivates the leaver, so the supersession leg is ineligible): the failure text must also name the
+    /// remedy for a correction that lands inside the manager's 5-day grace: "retry from day 6".
+    ///
+    /// <para><b>Red conditions (F).</b> <c>Assert.Contains("retry from day 6", ...)</c> fails on master: the
+    /// SupersedeNotEligible text ended at "...to park the tuple instead." and carried no grace remedy.</para>
+    /// </summary>
+    [Fact]
+    public async Task ReverseSupersede_IneligibleCorrectedState_FailureText_NamesRetryFromDaySix()
+    {
+        var (settle, reversal) = BootFixedClockServices(Clock);
+        var employeeId = await SeedEmployeeAsync();
+        await MarkLeaverAsync(employeeId, EndDate);
+        await SettleInOwnTxAsync(settle, employeeId, EndDateFerieaar, Termination);
+        await SeedOpenRequestAsync(employeeId, EndDateFerieaar, 1);
+
+        var result = await reversal.ReverseAsync(new SettlementReversalCommand
+        {
+            EmployeeId = employeeId,
+            EntitlementType = VacationType,
+            EntitlementYear = EndDateFerieaar,
+            ExpectedSettlementSequence = 1,
+            ExpectedSettlementVersion = 1,
+            Mode = SettlementReversalMode.ReverseAndSupersede,
+            HasEndDateCorrection = true,
+            CorrectedEndDate = new DateOnly(2026, 9, 15),
+            ExpectedUserVersion = 1,
+            SupersedeGoLiveFloor = NarrowGoLive,
+            ActorId = OperatorId,
+            ActorRole = OperatorRole,
+            ActorOrgId = OrgId,
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(SettlementReversalFailure.SupersedeNotEligible, result.Failure);
+        Assert.Contains("retry from day 6", result.FailureReason);
+    }
+
+    /// <summary>
+    /// S147 TIDY-3-T (row 22c, fix-up 1) - kind F, Docker, CI-pending. The IN-GRACE case the failure text is written for:
+    /// the leaver's recorded end date is 2026-02-28; the correction moves it to 2026-03-03 with the clock at 2026-03-06,
+    /// which is D+3 (inside the manager's 5-day grace: past the grace only when the end date is before 2026-03-01).
+    /// <c>EmploymentEndDateLifecycleWriter</c> therefore reactivates the lifecycle-deactivated leaver in the same
+    /// transaction, termination settlement (day 6 onward) finds nothing due, and the supersession refuses.
+    ///
+    /// <para><b>Red conditions (F).</b> <c>Assert.Contains("retry from day 6", ...)</c> fails on master, whose
+    /// SupersedeNotEligible text carried no grace remedy. The failure code assertion holds today; it tells this refusal
+    /// apart from the span, strand and version refusals, while the in-grace character comes from the chosen date.</para>
+    /// </summary>
+    [Fact]
+    public async Task ReverseSupersede_CorrectionIntoGrace_Refused_FailureText_NamesRetryFromDaySix()
+    {
+        var (settle, reversal) = BootFixedClockServices(Clock);
+        var employeeId = await SeedEmployeeAsync();
+        await MarkLeaverAsync(employeeId, EndDate);
+        await SettleInOwnTxAsync(settle, employeeId, EndDateFerieaar, Termination);
+        await SeedOpenRequestAsync(employeeId, EndDateFerieaar, 1);
+
+        var result = await reversal.ReverseAsync(new SettlementReversalCommand
+        {
+            EmployeeId = employeeId,
+            EntitlementType = VacationType,
+            EntitlementYear = EndDateFerieaar,
+            ExpectedSettlementSequence = 1,
+            ExpectedSettlementVersion = 1,
+            Mode = SettlementReversalMode.ReverseAndSupersede,
+            HasEndDateCorrection = true,
+            CorrectedEndDate = new DateOnly(2026, 3, 3), // D+3 at Clock 2026-03-06: inside the grace
+            ExpectedUserVersion = 1,
+            SupersedeGoLiveFloor = NarrowGoLive,
+            ActorId = OperatorId,
+            ActorRole = OperatorRole,
+            ActorOrgId = OrgId,
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(SettlementReversalFailure.SupersedeNotEligible, result.Failure);
+        Assert.Contains("retry from day 6", result.FailureReason);
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // B2 (Step-5a cycle-1) — the affected-span settlement guard INSIDE the reversal tx (the
     // R13 analog; R4/R12): active rows in ferieår 2024 AND 2025; reversing the 2024 row with

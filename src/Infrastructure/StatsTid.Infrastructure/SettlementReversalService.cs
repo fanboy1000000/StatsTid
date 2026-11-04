@@ -384,11 +384,18 @@ public sealed class SettlementReversalService
                     // Ineligible against the CORRECTED in-tx state — the supersession leg FAILED
                     // ⇒ FULL rollback (R4: no partial states; parking REVERSED-without-successor
                     // happens ONLY via the explicit bare-reversal verb).
+                    //
+                    // S147 tidy item 22 (TASK-14723, ADR-040 amendment K-14): a correction whose
+                    // end date lands inside the manager's 5-day grace reactivates the leaver, so
+                    // termination settlement (which runs from day 6) finds nothing due and this
+                    // refusal fires. The sentence names that case's remedy too: retry from day 6.
                     return await FailAsync(tx, SettlementReversalFailure.SupersedeNotEligible,
                         "The superseding settlement is not eligible against the corrected in-tx " +
                         "state (neither the TERMINATION due-predicate nor the ACTIVE YEAR_END " +
                         "boundary geometry holds) — the whole reversal rolled back; use the " +
-                        "explicit bare-reversal mode to park the tuple instead.", ct);
+                        "explicit bare-reversal mode to park the tuple instead, or, when the " +
+                        "corrected end date falls inside the manager's 5-day grace (which " +
+                        "reactivates the leaver), retry from day 6 after it.", ct);
                 }
                 successor = outcome.Row;
             }

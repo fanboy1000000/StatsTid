@@ -1,3 +1,4 @@
+using System.Globalization;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Backend.Api.Services;
@@ -79,4 +80,28 @@ public static class AbsenceTypeLabels
     /// </summary>
     public static string LabelFor(string absenceType)
         => ByCode.TryGetValue(absenceType, out var label) ? label : absenceType;
+
+    /// <summary>
+    /// S147 tidy item 8 (TASK-14723) — the ONE sentence the Skema save's typed 422
+    /// <c>absence_full_day_only</c> carries in its <c>message</c>, built for both emitters (the
+    /// pre-transaction advisory check and the in-lock authoritative re-check in
+    /// <c>SkemaEndpoints</c>), so the two can never word or format it differently.
+    ///
+    /// <para>
+    /// <b>Why a fixed culture.</b> Interpolating <paramref name="requiredHours"/> under the
+    /// thread's culture made the sentence depend on the host: the container sets no <c>LANG</c>,
+    /// so a Danish user read "(7.40 timer)" (the day norm keeps two decimals). The hours are
+    /// formatted with the Danish culture (<c>da-DK</c>, decimal comma: "(7,40 timer)") whatever
+    /// the thread culture is. Only the
+    /// culture changed: the number's value, scale and default format are as before, and the
+    /// typed <c>requiredHours</c> field beside the message is untouched. The date keeps its
+    /// <c>dd-MM-yyyy</c> pattern, which has no culture-dependent part. The culture is resolved
+    /// per call (the runtime caches it), so it can never fail this map's type initialisation;
+    /// ICU is a host requirement already (<c>CopenhagenBusinessDate</c>).
+    /// </para>
+    /// </summary>
+    public static string FullDayOnlyMessage(string absenceType, decimal requiredHours, DateOnly date)
+        => string.Create(
+            CultureInfo.GetCultureInfo("da-DK"),
+            $"{LabelFor(absenceType)} kan kun registreres som hel dag ({requiredHours} timer) den {date:dd-MM-yyyy}.");
 }
