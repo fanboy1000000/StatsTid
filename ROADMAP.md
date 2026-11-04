@@ -57,6 +57,13 @@ Not commitments or dates — direction.
    pointed to here. Closes QUAL-189, QUAL-216..222, QUAL-226, QUAL-227, QUAL-232..234 and QUAL-237 when built;
    retires S145's weekly settlement machinery (frozen by OQ-2, with QUAL-209/210/212/213).
    The source register's unreliable citations (QUAL-215) make the Phase-B engagement above more urgent.
+   **S147's tidy pass handed S148 stage 0 six small inputs** (recorded at S147's C-1; detail in
+   `docs/sprints/SPRINT-147.md`, "C-1 — the close candidate's records"): two optional Docker pins, a særlige
+   feriedage config ending mid-month and the April 2026 OK-transition month; a repository pin for the four-eyes SQL
+   predicate's legacy `submitted_by` half; payroll's four-eyes refusal getting a kind of its own (QUAL-246); which
+   compliance items are announced to screen readers, and a neutral style for the "not checked" notice, both with
+   D10's rest-check half, which replaces the notice; and the HRP-013 orphan roll-up counting a manager in the 5-day
+   grace as covering. S148's refinement places each.
 5. **Production hardening pass** — the "owed work" per CONVENTIONS.md: security disclosure posture,
    secrets/credentials (the dev JWT key + demo passwords), dependency audit, real deployment story.
    **The dependency part no longer waits for this pass** (owner-raised 2026-10-26): see §2 "Tooling / infra /
@@ -201,7 +208,7 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Reopen read-fork** — a leader-reopened month reverts to DRAFT and is withheld from the leader who
   approved it; `PeriodReopened.PreviousStatus` is the candidate discriminator. Owner has not ruled. [S128 R4]
 - **Self-approval class + `ORG_SCOPE_FALLBACK` ruling** — the HR/GlobalAdmin fallback and the
-  recurring self-approval defect class. [carried since S125; RES-003]
+  recurring self-approval defect class. [carried since S125; RES-003] *(S147: two members of the class are closed: SEC-053, the sender who approves (strict four-eyes, owner OQ-1 = (a)), and SEC-056's self part, a leader deciding their own overtime (owner Q-A = (a)). The fallback itself was not ruled on.)*
 - **`ProjectionBackfillService` unlocked writes** — writes projections outside the advisory lock. [S128 §3.4 exception]
 - **JWT 8h expiry, no revocation list** — no runtime invalidation of a minted token. [SECURITY.md]
 - **★ DECISION OWED — the agreement code carried on a login token goes stale when a scheduled change takes
@@ -495,6 +502,12 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   production; not enforced today. [CONVENTIONS.md] For a public-sector system it is a legal requirement (the
   webtilgængelighedslov: WCAG 2.1 AA and an accessibility statement); it is one row of the conformance register
   (§2 "Governance / docs", owner-raised 2026-10-26).
+- **Teamoversigt: say why an approval was refused for segregation of duties** (S147, the TASK-14704 review;
+  tidy item 12e). Today a refused approval reads only "Kunne ikke godkende <navn>."
+  (`frontend/src/pages/approval/TeamOversigt.tsx:603`), whether a leader tried to approve their own month (SEC-009)
+  or an HR user a month they sent on the employee's behalf (SEC-053, since S147). The server's reasons are English,
+  so this needs a Danish mapping, as HR's leaver list already has for the four-eyes case
+  (`frontend/src/pages/admin/opfoelgning/FollowUpLists.tsx:191`). A small UX task.
 
 ### Tooling / infra / environment
 - **★ Dependency inventory, security and updates** (owner-raised 2026-10-26: *"We need to have an overview of what
@@ -550,6 +563,11 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   `EmployeeProfile/Adr032RevaluationTests`, `Hosting/PublisherStallReadYourWriteTests`, `Outbox/ProjectionParityTests`,
   `Outbox/SkemaEntitlementEligibilityGuardTests`, `Outbox/SkemaMonthlyAccrualGuardTests`, `Skema/Adr032ConsumptionPinTests`,
   `Skema/SkemaAccrualCapTests`, `Skema/SkemaFullDayOnlyGuardTests`). A mechanical `sweep` task; tests only.
+- **Backlog — one copy of the payroll race-test machinery (S147 tidy item 3, from the TASK-14700-T review).**
+  `FlexLedgerStaleChainRaceTests.cs:48` copies about 100 lines of `FlexLedgerRaceTests.cs:52`: the `HeldLock`
+  helper that holds the ledger lock, and the observation that a waiter is blocked on it. Lift both into the
+  flex-ledger harness. Docker-only, so only CI can check it; do it with the next task that edits either race file.
+  Tests only.
 - **Fixed clock — ✅ DONE (S140).** Both tranches are now converted. S140 finished `QUAL-154`: the six remaining suites onto one
   constant anchor, three product seams widened plus a fourth found in passing (the cross-org transfer date), four probe legs, and
   the annual 1-September hard failure defused by a fact that calls the real resolver. The lasting lesson is a **method** correction,
@@ -566,7 +584,10 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
 - **Docker on the dev VDI** — impossible without nested virtualization; an IT ticket, may be declined. [S128 FU-E]
 - **SDK/toolchain fragility on the VDI** — SDK 8 vanished once (restored); Python absent (openapi
   gates run CI-only from here). [S128 FU-E]
-- **`SkemaPage` 7203-pin vitest flake** — one absorbed CI flake; graduates to a finding on recurrence. [S128 FU-D]
+- **`SkemaPage` 7203-pin vitest flake — ✅ RESOLVED (S147): it was a real race, not a flake.** A day panel opened before
+  the page had copied the month's data started with no work periods, and an edit there could wipe the day's stored
+  times. Registered as QUAL-241 and fixed by TASK-14718 and TASK-14720 (merged `782e2285`, `3ee2a8c9`; the frontend
+  job green at CI-W2b and CI-W3); QUAL-241 CLOSED. [S128 FU-D]
 
 ### Governance / docs
 - **★ Standards and requirements conformance — a systematic approach** (owner-raised 2026-10-26: *"What ISO
