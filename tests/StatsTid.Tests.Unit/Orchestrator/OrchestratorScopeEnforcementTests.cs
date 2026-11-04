@@ -156,10 +156,10 @@ public class OrchestratorScopeEnforcementTests
     [Fact]
     public async Task EvaluateAccessAsync_RejectsPayrollExportTaskType_WithoutCallingScopeCheck()
     {
-        // Allow-list rejection: payroll-export is a TaskDispatcher route but is
-        // intentionally NOT reachable via /execute (would let any Employee push
-        // a task record under their own JWT before the GlobalAdminOnly guard on
-        // /api/payroll/export rejects the dispatch). Scope check must NOT be
+        // Allow-list rejection: payroll-export is NOT in the /execute allow-list. (S147 SEC-054: it was once a
+        // TaskDispatcher route, intentionally unreachable via /execute because it would let any Employee push a task
+        // record under their own JWT before the GlobalAdminOnly guard on /api/payroll/export rejected the dispatch; the
+        // task type and the route are both retired, and a retired type must stay refused.) Scope check must NOT be
         // invoked; the rejection happens before any per-employee work.
         var request = new ExecuteRequest
         {

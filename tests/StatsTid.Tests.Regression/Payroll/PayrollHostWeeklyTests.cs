@@ -42,7 +42,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// APPROVED; until then the two calculating routes answer 409
 /// (<c>payroll-prior-month-not-approved</c>) naming the earlier month's pay period. A month that
 /// starts on a Monday, or whose employee was not yet hired in the earlier month, needs no earlier
-/// approval. The raw <c>/export</c> routes bypass approval by design and stay untouched.</item>
+/// approval. (The raw <c>/export</c> routes, retired in S147 SEC-054, bypassed approval by design.)</item>
 /// <item><b>The refusals have an order</b> (N1): the planner's 422 first, then the week check's
 /// 422, then this 409, then the rules. The 422s describe the month's own data, which approval
 /// cannot fix, so they are reported before a sequencing state the operator can fix.</item>
@@ -318,8 +318,8 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// H5. <c>POST /api/payroll/recalculate</c> for October 2026 — exported FIRST through the raw
-    /// <c>/api/payroll/export</c> route (which bypasses approval, so October has no approval row and
+    /// H5. <c>POST /api/payroll/recalculate</c> for October 2026 — exported FIRST (S147 SEC-054: seeded directly as a record with no period; the raw
+    /// <c>/api/payroll/export</c> route that did it is retired; October has no approval row and
     /// the route's own precondition, "the month is exported", is met) — while September has no
     /// approval row → <b>409</b> naming September. The recalculation writes nothing: the October
     /// baseline is unchanged, and there is no correction event, audit row, manifest or marker.
@@ -337,7 +337,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         var token = Guid.NewGuid();
         await SeedEmployeeAsync(employeeId);
         // September: deliberately NO approval row (C-H2).
-        await ExportRawAsync(employeeId, new DateOnly(2026, 10, 5), new DateOnly(2026, 10, 20));
+        await PersistExportRecordAsync(employeeId, 2026, 10); // S147 SEC-054: was ExportRawAsync (the raw route is retired); a direct record seed, the assertions unchanged
         var linesBefore = await ReadCurrentEffectiveLinesAsync(employeeId, 2026, 10);
 
         var (status, json) = await PostAsync(Host, "/api/payroll/recalculate",
@@ -522,34 +522,9 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         Assert.Equal(0, await CountExportRecordsAsync(employeeId));
         Assert.Equal(0, await CountManifestsAsync(employeeId));
     }
-
     // ═════════════════════════════════════════════════════════════════════
-    // The raw route is unaffected — guard (A5: "the raw routes bypass approval by design")
+    // (H11, "the raw route is unaffected", was retired with the raw routes in S147 SEC-054.)
     // ═════════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// H11 <b>(guard)</b>. The raw <c>POST /api/payroll/export</c> for October 2026 with September
-    /// not approved → <b>200</b>, and exactly one October export record. The raw routes take lines
-    /// the caller already calculated and bypass approval by design (admin retroactive and internal
-    /// calls); the months-in-order check belongs to the two calculating routes only.
-    ///
-    /// Red conditions (Docker-gated — cannot run locally; CI-verified): passes today, carries no
-    /// MD-id. It trips the day the raw-route guard (<c>RefuseUnplannableMonthsAsync</c>) also consults
-    /// the earlier month's approval → <b>409</b>; <c>Assert.True(status == 200)</c> trips.
-    /// </summary>
-    [Fact]
-    public async Task Export_October_SeptemberNotApproved_RawRouteUnaffected_200()
-    {
-        const string employeeId = "EMP-S145-H11";
-        await SeedEmployeeAsync(employeeId);
-        // No approval row for any month: the raw route does not read approval.
-
-        var (status, json) = await PostAsync(Host, "/api/payroll/export",
-            RawExportBody(employeeId, new DateOnly(2026, 10, 5), new DateOnly(2026, 10, 20)));
-
-        Assert.True(status == HttpStatusCode.OK, $"expected 200, got {(int)status}: {json}");
-        Assert.Equal(1, await CountExportRecordsAsync(employeeId, 2026, 10));
-    }
 
     // ═════════════════════════════════════════════════════════════════════
     // Q7 (b) — a recalculation names the next month (A6, ruled by the owner 2026-10-01; R37)
@@ -925,31 +900,6 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
         idempotencyToken,
     };
 
-    /// <summary>A caller-calculated result: one NORMAL_HOURS line (7.4 h) on each given date —
-    /// the shape the raw routes receive (lines already computed; the route only maps them).</summary>
-    private static PayrollExportRequest RawExportBody(string employeeId, params DateOnly[] dates) => new()
-    {
-        CalculationResult = new CalculationResult
-        {
-            RuleId = "NORM_CHECK_37H",
-            EmployeeId = employeeId,
-            Success = true,
-            LineItems = dates
-                .Select(d => new CalculationLineItem { TimeType = "NORMAL_HOURS", Hours = 7.4m, Rate = 0m, Date = d })
-                .ToList(),
-        },
-        Profile = Profile(employeeId),
-    };
-
-    /// <summary>Arrangement: export a month through the raw route (which bypasses approval and
-    /// records the lock with a null period id). Asserted, so a broken arrangement is not mistaken
-    /// for the behaviour under test.</summary>
-    private async Task ExportRawAsync(string employeeId, params DateOnly[] dates)
-    {
-        var (status, json) = await PostAsync(Host, "/api/payroll/export", RawExportBody(employeeId, dates));
-        Assert.True(status == HttpStatusCode.OK, $"arrangement: raw export expected 200, got {(int)status}: {json}");
-    }
-
     private sealed class DeliveringClientFactory : IHttpClientFactory
     {
         // Exactly POST /api/payroll/receive — the path PayrollExportService posts delivery to
@@ -1053,7 +1003,7 @@ public sealed class PayrollHostWeeklyTests : IAsyncLifetime
 
     /// <summary>The FIRST-export record for a calendar month (<c>original_lines ==
     /// current_effective_lines</c>), written with the production manifest serializer — one
-    /// NORMAL_HOURS line, with a null period id (the shape a raw-route export leaves).</summary>
+    /// NORMAL_HOURS line, with a null period id (the shape a raw-route export left before S147 SEC-054).</summary>
     private async Task PersistExportRecordAsync(string employeeId, int year, int month)
     {
         var periodStart = new DateOnly(year, month, 1);

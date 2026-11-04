@@ -159,20 +159,6 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
         return Convert.ToInt32(await cmd.ExecuteScalarAsync());
     }
 
-    /// <summary>Returns the JSON payloads of all <c>destination='payroll'</c> outbox envelopes, newest first.</summary>
-    private async Task<IReadOnlyList<string>> ReadPayrollOutboxPayloadsAsync()
-    {
-        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            "SELECT payload::text FROM outbox_messages WHERE destination='payroll' ORDER BY created_at DESC", conn);
-        await using var reader = await cmd.ExecuteReaderAsync();
-        var payloads = new List<string>();
-        while (await reader.ReadAsync())
-            payloads.Add(reader.GetString(0));
-        return payloads;
-    }
-
     // ════════════════════════════════════════════════════════════════════════
     //  Idempotency (RED on the pre-refactor behaviour)
     // ════════════════════════════════════════════════════════════════════════
@@ -217,44 +203,6 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MixedExport_OneNoOpMonth_OneNewMonth_DeliversOnlyNewMonthLines()
-    {
-        // BLOCKER 1 — a mixed /export-period: month A already exported (same hash → no-op) +
-        // month B new. The post-commit delivery (outbox_messages envelope + the mock HTTP POST)
-        // must carry ONLY month B's lines, NOT re-deliver the already-exported month A.
-        const string emp = "EMP_MIXED";
-        // Distinct, identifiable wage types so each month's lines are recognisable in the payload JSON.
-        var monthA = Line(emp, 2026, 1, wageType: "SLS_MONTH_A", amount: 111m);
-        var monthB = Line(emp, 2026, 2, wageType: "SLS_MONTH_B", amount: 222m);
-
-        // First: export month A alone → it is delivered (and its envelope contains A).
-        var firstA = await _service.ExportAsync(new[] { monthA }, RawExportContext());
-        Assert.True(firstA.Success);
-        var afterFirst = await ReadPayrollOutboxPayloadsAsync();
-        Assert.Single(afterFirst);
-        Assert.Contains("SLS_MONTH_A", afterFirst[0]);
-
-        // Now: a MIXED call — month A (same hash → no-op) + month B (new).
-        var mixed = await _service.ExportAsync(new[] { monthA, monthB }, RawExportContext());
-        Assert.True(mixed.Success);
-
-        // Exactly ONE new envelope was written by the mixed call (the no-op month wrote nothing new).
-        var afterMixed = await ReadPayrollOutboxPayloadsAsync();
-        Assert.Equal(2, afterMixed.Count);
-        var newest = afterMixed[0]; // newest first
-
-        // RED-on-old: pre-fix the envelope/POST were built from the FULL `lines`, so the newest
-        // payload would contain BOTH SLS_MONTH_A and SLS_MONTH_B → month A re-delivered.
-        Assert.Contains("SLS_MONTH_B", newest);          // the NEW month IS delivered
-        Assert.DoesNotContain("SLS_MONTH_A", newest);    // the already-exported month is NOT re-delivered
-
-        // Records/events are singular per month (the no-op added neither).
-        Assert.Equal(1, await CountRecordsAsync(emp, 2026, 1));
-        Assert.Equal(1, await CountRecordsAsync(emp, 2026, 2));
-        Assert.Equal(2, await CountExportEventsAsync(emp)); // one per month, total
-    }
-
-    [Fact]
     public async Task ReorderedLines_SameMonth_HashesIdentically_NoOp()
     {
         const string emp = "EMP_ORDER";
@@ -271,34 +219,10 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  B4 — multi-month / multi-employee grouping + month-spanning rejection
+    //  B4 — month-spanning rejection (the multi-month / multi-employee grouping facts were deleted in S147 SEC-054:
+    //  a call now carries ONE approval period, and R-G2 pins it to one employee-month, so a call spanning several
+    //  (employee, month) groups is refused; see RawExportRoutesRetiredTests)
     // ════════════════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task ExportPeriod_TwoMonths_TwoEmployees_WritesOneRecordPerEmployeeMonth()
-    {
-        // The raw /export-period flattens many months/employees into one call (PeriodId null →
-        // no APPROVED re-check). Each (employee, month) tuple gets exactly ONE record, atomically.
-        var lines = new[]
-        {
-            Line("EMP_A", 2026, 4),
-            Line("EMP_A", 2026, 5),
-            Line("EMP_B", 2026, 4),
-            Line("EMP_B", 2026, 5),
-        };
-
-        var result = await _service.ExportAsync(lines, RawExportContext());
-        Assert.True(result.Success);
-
-        Assert.Equal(1, await CountRecordsAsync("EMP_A", 2026, 4));
-        Assert.Equal(1, await CountRecordsAsync("EMP_A", 2026, 5));
-        Assert.Equal(1, await CountRecordsAsync("EMP_B", 2026, 4));
-        Assert.Equal(1, await CountRecordsAsync("EMP_B", 2026, 5));
-
-        // One PayrollExportGenerated per (employee, month): 2 per employee.
-        Assert.Equal(2, await CountExportEventsAsync("EMP_A"));
-        Assert.Equal(2, await CountExportEventsAsync("EMP_B"));
-    }
 
     [Fact]
     public async Task MonthSpanningLine_IsRejected_NoRecordWritten()
@@ -516,7 +440,7 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// R-54 (kind R). A RAW export (no <c>FlexLedger</c>, no <c>ManifestId</c>) names no manifest: the audit details omit the
+    /// R-54 (kind R). A non-calculating export (no <c>FlexLedger</c>, no <c>ManifestId</c>; S147 SEC-054: it carries an approval period now, the raw routes that sent none are retired) names no manifest: the audit details omit the
     /// <c>manifestId</c> key (the mapper writes no nulls) and the event payload carries no manifest value.
     ///
     /// <para><b>Red conditions.</b> A service or mapper that stamps a manifest on the raw route (an empty Guid, say) fails
@@ -526,8 +450,9 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
     public async Task Export_RawContext_EventOmitsManifestId()
     {
         const string emp = "EMP_MFID_RAW";
+        var periodId = await SeedApprovedPeriodAsync(emp, 2026, 8); // S147 SEC-054: was RawExportContext() (no period); the assertions are unchanged
 
-        await _service.ExportAsync(new[] { Line(emp, 2026, 8) }, RawExportContext());
+        await _service.ExportAsync(new[] { Line(emp, 2026, 8) }, CalcAndExportContext(periodId));
 
         using var evt = System.Text.Json.JsonDocument.Parse(await ReadEventPayloadAsync(emp));
         var hasValue = evt.RootElement.TryGetProperty("manifestId", out var m)

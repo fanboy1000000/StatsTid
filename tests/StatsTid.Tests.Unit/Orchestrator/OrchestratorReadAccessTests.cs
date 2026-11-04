@@ -214,10 +214,11 @@ public class OrchestratorReadAccessTests
     [Fact]
     public async Task EvaluateReadAccess_NonAdmin_OwnerlessTaskType_Denies_WithoutCallingScopeCheck()
     {
-        // An ownerless/admin task type (payroll-export is a real TaskDispatcher route) has no
+        // An ownerless/admin task type (external-integration is a real TaskDispatcher route) has no
         // subject ExtractEmployeeId knows how to read → null → fail-closed deny, and the scope
-        // check must NOT run (there is no subject to check).
-        var task = TaskFromJson("payroll-export", """{"employeeId":"USR01"}""");
+        // check must NOT run (there is no subject to check). S147 SEC-054: was payroll-export, whose
+        // task type is retired; re-pointed at a type that still exists, the assertions unchanged.
+        var task = TaskFromJson("external-integration", """{"employeeId":"USR01"}""");
         var scope = new FakeScopeCheck();
 
         var decision = await OrchestratorScopeHelpers.EvaluateReadAccessAsync(
