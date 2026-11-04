@@ -473,7 +473,9 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         {
             // S146 TASK-14605 (R-14 "the under-lock recheck"): inside the export transaction, after the ledger lock,
             // the derivation re-ran on in-transaction reads and no longer gave the opening the calculation used
-            // (another export or a correction recorded the previous month meanwhile). The transaction rolled back:
+            // (another export or a correction changed the ledger meanwhile: the previous month's record or, since S147
+            // TASK-14700, any earlier month in the chain, when the diagnostic names the inner
+            // payroll-prior-month-stale). The transaction rolled back:
             // no export record, no PayrollExportGenerated, no audit row. The calculation's own manifest stays, as
             // with the other export-time rechecks. 409 payroll-ledger-changed: retry.
             return FlexLedgerRefused(flexLedgerLogger, ex, "calculate-and-export export");
@@ -490,8 +492,14 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         }
         catch (PayrollExportConflictException ex)
         {
-            // Already exported for this month (idempotency: different content), or the period
-            // was no longer APPROVED at export time (B2) → 409 corrections-only.
+            // Every export-time conflict PayrollExportService raises answers this one 409: already exported for
+            // this month with different content (idempotency), or with the same lines but a different flex balance
+            // (S146 R-16); a line spanning more than one calendar month; a record that vanished mid-transaction
+            // (defensive); and a refusal of the approval re-assert under the row lock (B2): the period not found or
+            // no longer APPROVED, and since S147 also not the exported employee's whole calendar month (R-G2, R-G8),
+            // approved by the person who sent it (four-eyes, SEC-053), or approved by its own employee (SEC-009).
+            // All answer this one kind; a distinct four-eyes kind is a recorded follow-up (tidy item 12). For an
+            // already-exported month the remedy is a correction (/recalculate).
             return Results.Json(new
             {
                 result.EmployeeId,
@@ -673,8 +681,8 @@ app.MapPost("/api/payroll/recalculate", async (
     }
     catch (PriorMonthNotApprovedException ex)
     {
-        // S145 TASK-14512 (R5(b), R16): months in order — the previous month is not APPROVED (for a
-        // month exported through the raw routes it typically has no approval row at all). Raised before
+        // S145 TASK-14512 (R5(b), R16): months in order — the previous month is not APPROVED (a month the
+        // raw routes exported before S147 retired them typically has no approval row at all). Raised before
         // the correction transaction opens, so nothing was written. 409 naming the previous month.
         return PriorMonthNotApproved(ex);
     }
@@ -682,11 +690,12 @@ app.MapPost("/api/payroll/recalculate", async (
     {
         // S146 TASK-14605 (QUAL-188; R-14): either admission could not derive the month's opening flex balance
         // (payroll-prior-month-not-recorded: the employed previous month has no ledger record — "export it first",
-        // or "correct it first" for a raw one), raised before the correction transaction opens; or the under-lock
-        // recheck inside the correction transaction found the ledger changed while the correction was computed
-        // (payroll-ledger-changed), and the transaction rolled back. Either way nothing was written: no baseline
-        // or balance change, no correction event, no audit row, no idempotency marker (a retry with the same token
-        // is not short-circuited). 409 naming the month.
+        // or "correct it first" for a raw one; or, since S147 TASK-14700, payroll-prior-month-stale: an earlier
+        // recorded month is out of date, naming the earliest to recalculate first), raised before the correction
+        // transaction opens; or the under-lock recheck inside the correction transaction found the ledger changed
+        // while the correction was computed (payroll-ledger-changed), and the transaction rolled back. Either way
+        // nothing was written: no baseline or balance change, no correction event, no audit row, no idempotency
+        // marker (a retry with the same token is not short-circuited). 409 naming the month.
         return FlexLedgerRefused(flexLedgerLogger, ex, "recalculate");
     }
     catch (RuleClassificationsUnavailableException)

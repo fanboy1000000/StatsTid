@@ -31,8 +31,8 @@ public interface IPriorPeriodApprovalReader
     /// The <c>approval_periods.status</c> of exactly the period
     /// (<paramref name="employeeId"/>, <paramref name="periodStart"/>, <paramref name="periodEnd"/>) —
     /// for example <c>APPROVED</c>, <c>EMPLOYEE_APPROVED</c> or <c>DRAFT</c> — or <c>null</c> when no such
-    /// row exists. A month exported through the raw routes has no row (they write no approval period,
-    /// R16), so it answers <c>null</c>, which is not approved.
+    /// row exists. A month the raw routes exported before S147 retired them has no row (they wrote no
+    /// approval period, R16), so it answers <c>null</c>, which is not approved.
     /// </summary>
     Task<string?> GetApprovalStatusAsync(
         string employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct);

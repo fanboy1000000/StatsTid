@@ -45,7 +45,8 @@ app.UseAuthorization();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "external-integration" }));
 
 // SEC-023: outbound external dispatch is a privileged integration action — the same class as
-// its sibling /api/payroll/export (GlobalAdminOnly). It forwards a caller-supplied JSON envelope
+// the payroll host's raw /api/payroll/export was (GlobalAdminOnly; that route was retired in S147,
+// TASK-14716). It forwards a caller-supplied JSON envelope
 // to the external system, and the Orchestrator's TaskDispatcher forwards the caller's JWT, so the
 // endpoint floor is the control point. The floor was "Authenticated" (any valid JWT, incl. the
 // lowest Employee role); it is raised to GlobalAdminOnly. The body is also size-capped and

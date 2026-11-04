@@ -128,7 +128,9 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// <strong>The flex ledger (S146 / TASK-14605, QUAL-188; rulings R-14, R-28, R-36, R-37)</strong>: no entry point
 /// takes an opening flex balance any more. Admission derives it from the recorded ledger through the ONE function
 /// <see cref="FlexLedgerOpening.Derive"/> (records through <see cref="IFlexLedgerReader"/>, employment windows over
-/// <c>[the previous month's first day, this month's last day]</c>), after the existing checks and before any rule
+/// the range <see cref="FlexLedgerOpening.WindowsReadRange(DateOnly, DateOnly?)"/> gives: <c>[min(S, P).start, M.end]</c>
+/// with the ledger start S, so the S147 chain walk (TASK-14700, QUAL-229) can test every month from S to P;
+/// <c>[P.start, M.end]</c> while the ledger is empty), after the existing checks and before any rule
 /// call, for a month holding an EMPLOYED day; a refusal is <see cref="FlexLedgerRefusalException"/> (409). The
 /// derived opening feeds the timeline call and <see cref="PlanInputs"/>; the result carries the opening, the
 /// engine's clamped closing (<c>Flex.NewBalance</c>) and the provenance. The writing transactions re-run the same

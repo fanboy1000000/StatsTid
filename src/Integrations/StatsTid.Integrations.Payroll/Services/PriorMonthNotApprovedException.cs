@@ -10,7 +10,7 @@ namespace StatsTid.Integrations.Payroll.Services;
 /// week's overtime. Until September is approved its hours can still change, so October would be paid
 /// on unsigned hours. The operator can fix this (approve September), so the refusal names September.
 /// <c>EMPLOYEE_APPROVED</c> is not enough (the manager has not decided), and a month with no approval
-/// row at all (for example one exported through the raw routes, R16) is not approved either.
+/// row at all (for example one the raw routes exported before S147 retired them, R16) is not approved either.
 /// </para>
 ///
 /// <para>

@@ -1247,7 +1247,7 @@ ON CONFLICT DO NOTHING;
 
 -- S37 TASK-3702 Bug #2 absorption (2026-05-21): AC variants wage_type_mappings rewritten to mirror AC base
 -- per interim-expert decision. Resolves: (1) CHILD_SICK_1 phantom rows (rule engine emits CHILD_SICK_DAY
--- per AbsenceRule.cs:112-114, not CHILD_SICK_1, so prior AC variant child-sick events silently dropped);
+-- (AbsenceRule.cs:76, where since S147 TASK-14708 the line's time type is the stored code), not CHILD_SICK_1, so prior AC variant child-sick events silently dropped);
 -- (2) MERARBEJDE → SLS_0210 collision with HK/PROSA OVERTIME_50 → SLS_0210 (now both flow to distinct codes);
 -- (3) 4 other divergent SLS codes (CARE_DAY/SENIOR_DAY/LEAVE_WITH_PAY/LEAVE_WITHOUT_PAY) realigned to AC base.
 -- Bug-with-no-past-impact under pre-launch posture. See SR-AC_RESEARCH-OK24-006 + SR-AC_TEACHING-OK24-006.
