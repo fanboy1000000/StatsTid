@@ -518,9 +518,11 @@ public sealed class UserRepository
     /// with NO <c>is_active</c> filter. <b>A DELIBERATE S70 R9c ALLOWLIST EXTENSION</b> (ruled by
     /// ADR-040 D3 + the S136 refinement — see the section banner above): the admin
     /// employment-start-date PUT moves onto the terminated-inclusive pair because the ADR-040 D1
-    /// re-hire guard's target case (a CLOSED spell — end date set and passed) implies the Step-A
-    /// poller already flipped <c>is_active = FALSE</c>, so an active-only write shape dead-ends
-    /// at a false 404 there — and HR could never correct a deactivated leaver's start date at
+    /// re-hire guard's target case (a CLOSED spell — end date set and passed) is, from day 6 after
+    /// the last day, a row the Step-A poller has switched to <c>is_active = FALSE</c> (S147
+    /// TASK-14710: during the manager's 5-day grace, D+1 .. D+5, it is still active), so an
+    /// active-only write shape dead-ends at a false 404 there — and HR could never correct a
+    /// deactivated leaver's start date at
     /// all (the routine Danish-payroll correction case, the same B2/S68 origin as the end-date
     /// surfaces). The S60 active-only <c>SetEmploymentStartDateAsync</c> this superseded was
     /// DELETED in the S136 Step-5a fix-forward (production-dead once this became the PUT's only

@@ -49,8 +49,11 @@ public sealed class User
     /// <summary>
     /// S70 / ADR-033 slice 3a (SPRINT-70 R1) — HR-managed LAST day of employment.
     /// NULLABLE: null = no termination recorded. The deactivation lifecycle keys on this
-    /// date (Copenhagen business date &gt; <c>EmploymentEndDate</c> ⇒ deactivate — same-tx
-    /// in the admin end-date endpoint for an already-passed date, else the Step-A poller).
+    /// date (deactivated from day 6 after it, once the manager's 5-day grace has passed —
+    /// <c>EmploymentEndDateLifecycleWriter.IsPastGrace</c>, S147 TASK-14710, owner OQ-2 — same-tx
+    /// in the admin end-date endpoint for a date already past the grace, else the Step-A poller;
+    /// the person's own login and writes end on D+1, the day after this date, by the end-date
+    /// rule, <see cref="StatsTid.SharedKernel.Security.DepartedSubject"/>).
     ///
     /// <para>
     /// <b>RBAC — HR-scoped.</b> Set/read-gated to <c>HROrAbove</c> + the terminated-inclusive

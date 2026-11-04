@@ -117,9 +117,11 @@ public static class TimeEndpoints
             // actors bypass the scope validator entirely (the own-data branch above), so THIS check
             // is the load-bearing SEC-046 closure for them. For non-Employee actors the
             // IncludingTerminated validator already enforced the stronger PER-SCOPE floor (R9f1);
-            // this primary-role re-check is defense-in-depth there and can never deny an actor that
-            // validator admitted (its R9b gate already requires primary role ≥ LocalHR for a
-            // terminated subject).
+            // this primary-role re-check is defense-in-depth there and can still refuse an actor the
+            // validator let through: R9b's primary-role gate covers only a deactivated row, so for a
+            // subject inside the manager's grace (still active, past their last day) a mixed-role
+            // token passes the validator and is refused here by the primary-role arm, the outcome
+            // R9b intends (S147 TASK-14710 review N-3).
             //
             // S136 Step-5a (Codex BLOCKER 1) — this pre-transaction check is the ADVISORY FAST
             // PATH (advisory-then-authoritative, the house pattern the approval-period check

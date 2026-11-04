@@ -1,7 +1,7 @@
 using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Segmentation;
 
-namespace StatsTid.Tests.Unit.Rules;
+namespace StatsTid.Tests.Unit.Segmentation;
 
 /// <summary>
 /// S147 TASK-14706-T (QUAL-234 interim, refinement T7) - when a period is split into segments (an

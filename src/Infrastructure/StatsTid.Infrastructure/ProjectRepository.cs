@@ -121,13 +121,11 @@ public sealed class ProjectRepository
     /// established ADR-032 D4 employee advisory lock (<c>pg_advisory_xact_lock</c> on
     /// <c>hashtext('employee-' || employeeId)</c> — the SAME key scheme the consumption /
     /// settlement writers acquire), taken FIRST inside the mutation transaction and held to
-    /// commit. Without it, a row-preferences PUT's DELETE-and-reinsert can race a legacy
-    /// add whose <c>MAX(sort_order)</c> and reindex see the pre-delete snapshot — after the
-    /// row-lock waits resolve, the durable table can hold gaps or duplicate
-    /// <c>sort_order</c> values (masked by the GET's dense projection, but corrupt on
-    /// disk). The lock serializes the writers regardless of which rows each touches, so
-    /// every derived read (MAX, reindex ranking) happens against the latest committed
-    /// state. (The canonical helper lives in Backend.Api, out of this assembly's scope; the
+    /// commit. It was added (S72) because a row-preferences PUT could race the legacy
+    /// single-row add, whose <c>MAX(sort_order)</c> and reindex read the pre-delete snapshot.
+    /// That add was retired with its route in S147 (TASK-14710, the note above this summary),
+    /// so today the lock serialises concurrent row-preferences PUTs for one employee, the only
+    /// selection writer. (The canonical helper lives in Backend.Api, out of this assembly's scope; the
     /// lock VALUE is what matters for mutual exclusion, so the identical SQL is inlined —
     /// the established <c>VacationSettlementService</c> precedent.)
     /// </summary>
@@ -138,54 +136,6 @@ public sealed class ProjectRepository
             "SELECT pg_advisory_xact_lock(hashtext('employee-' || @employeeId))", conn, tx);
         cmd.Parameters.AddWithValue("employeeId", employeeId);
         await cmd.ExecuteScalarAsync(ct);
-    }
-
-    /// <summary>
-    /// R4 container init (first write stamps <c>initialized_at</c> via its DEFAULT; later
-    /// writes are no-ops). Lives here — not only in <c>SkemaRowPreferenceRepository</c> —
-    /// because the R14-aligned legacy add/remove must initialize the container in the SAME
-    /// transaction as their selection write (R13 grants ProjectRepository the
-    /// container/reindex writes for its own table's mutations).
-    /// </summary>
-    private static async Task EnsureContainerAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
-    {
-        await using var cmd = new NpgsqlCommand(
-            """
-            INSERT INTO user_skema_preferences (employee_id)
-            VALUES (@employeeId)
-            ON CONFLICT (employee_id) DO NOTHING
-            """, conn, tx);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    /// <summary>
-    /// Dense 0..n-1 reindex of ALL the employee's selection rows in the R4 deterministic
-    /// order (<c>sort_order, project_code</c>). Covers rows for inactive/other-org projects
-    /// too (every selection row has a <c>projects</c> parent via FK) so density is a
-    /// whole-table-per-employee invariant, not a visible-subset one.
-    /// </summary>
-    private static async Task ReindexSelectionsAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, string employeeId, CancellationToken ct)
-    {
-        await using var cmd = new NpgsqlCommand(
-            """
-            WITH ranked AS (
-                SELECT ups.project_id,
-                       ROW_NUMBER() OVER (ORDER BY ups.sort_order, p.project_code) - 1 AS dense_order
-                FROM user_project_selections ups
-                INNER JOIN projects p ON p.project_id = ups.project_id
-                WHERE ups.employee_id = @employeeId
-            )
-            UPDATE user_project_selections ups
-            SET sort_order = ranked.dense_order
-            FROM ranked
-            WHERE ups.employee_id = @employeeId
-              AND ups.project_id = ranked.project_id
-            """, conn, tx);
-        cmd.Parameters.AddWithValue("employeeId", employeeId);
-        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task<HashSet<Guid>> GetSelectionIdsAsync(string employeeId, CancellationToken ct = default)

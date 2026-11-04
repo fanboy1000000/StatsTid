@@ -61,7 +61,8 @@ public sealed class ApprovalPeriodRepository
         // so a composition built from this constructor runs on ONE clock end to end (the derived
         // repository/authorizer now have their own optional seam). Production is unaffected: in the
         // Backend host all three collaborators come from DI and share the registered singleton, and
-        // in the Payroll host (which registers no TimeProvider) every branch is TimeProvider.System.
+        // in the Payroll host, which registers TimeProvider.System as a singleton since S147
+        // TASK-14703 (Payroll Program.cs:192), every branch is that same system clock.
         _timeProvider = timeProvider ?? TimeProvider.System;
         _reportingLineRepo = reportingLineRepo
             ?? new ReportingLineRepository(connectionFactory, timeProvider: _timeProvider);
@@ -1810,6 +1811,13 @@ public sealed class ApprovalPeriodRepository
         return result is null or DBNull ? null : (Guid)result;
     }
 
+    /// <summary>
+    /// <b>Test-only.</b> No production code calls either overload. It writes any status
+    /// unconditionally: no source-state guard and none of the four-eyes refusal that
+    /// <see cref="TryUpdateStatusConditionalAsync"/> adds for APPROVED and REJECTED, nor the
+    /// departed checks the endpoints run before it. Production transitions go through
+    /// <see cref="TryUpdateStatusConditionalAsync"/>. Kept for tests that seed a status.
+    /// </summary>
     public async Task UpdateStatusAsync(
         Guid periodId, string status, string? actorId = null,
         string? rejectionReason = null,
@@ -1824,6 +1832,7 @@ public sealed class ApprovalPeriodRepository
 
     /// <summary>
     /// In-transaction sibling overload of <see cref="UpdateStatusAsync(Guid, string, string?, string?, string?, string?, CancellationToken)"/>.
+    /// Test-only, as above.
     /// </summary>
     public async Task UpdateStatusAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx,

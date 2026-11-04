@@ -30,7 +30,7 @@ namespace StatsTid.Tests.Regression.Skema;
 ///
 /// <para><b>Expected values come from the spec</b> (refinement T2 / AC-235-1..7, ADR-033, ADR-032 D1-D3,
 /// Cirkulære 021-24 §12), not from the code: the label is "Særlig feriedag"
-/// (<c>frontend/src/lib/entitlementConstants.ts:14</c>); a part-day costs <c>hours ÷ that day's norm</c>
+/// (<c>frontend/src/lib/entitlementConstants.ts:15</c>); a part-day costs <c>hours ÷ that day's norm</c>
 /// (ADR-032 D1) and "brøkdele af dage" is source-sanctioned for særlige feriedage (ADR-032 D3).</para>
 ///
 /// <para><b>Docker-gated; CI-pending.</b> Docker is unavailable on the dev machine, so none of these facts
@@ -51,7 +51,7 @@ public sealed class SkemaSpecialHolidayRowTests : IAsyncLifetime
     private const string SpecialHoliday = "SPECIAL_HOLIDAY";
     private const string YearEnd = "YEAR_END";
 
-    // "Særlig feriedage" label (escaped so source encoding can never change the asserted value).
+    // The "Særlig feriedag" label, written with a literal æ (the file is UTF-8, .editorconfig:7).
     private const string ExpectedLabel = "Særlig feriedag";
 
     private TestFixtures.DockerHarness _harness = null!;
@@ -242,9 +242,9 @@ public sealed class SkemaSpecialHolidayRowTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>AC-235-4 — kind R, regression pin</b> (today's save already accepts the code: there is no
-    /// absence-code check at the save, and existing tests save it —
-    /// <c>SkemaMonthlyAccrualGuardTests</c>, <c>SkemaQuotaRefusalOrderTests</c>,
+    /// <b>AC-235-4 — kind R, regression pin</b> (today's save already accepts the code: the save checks only that the code is in the vocabulary
+    /// (<c>AbsenceClassification.IsKnown</c>, <c>SkemaEndpoints.cs:970</c>, since S147 TASK-14708), which <c>SPECIAL_HOLIDAY_ALLOWANCE</c> is, and existing tests save it —
+    /// <c>SkemaMonthlyAccrualGuardTests</c> (under <c>Outbox/</c>), <c>SkemaQuotaRefusalOrderTests</c>,
     /// <c>Adr032RevaluationTests</c>). The row is a UI door onto that behaviour; this keeps the
     /// consumption consequence pinned alongside it.
     ///

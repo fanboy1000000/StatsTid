@@ -248,12 +248,14 @@ internal sealed class SkemaPayrollScenario : IAsyncDisposable
 
     private readonly FlexLedgerHostFixture _fx;
     private readonly StatsTidWebApplicationFactory _backend;
+    private readonly IDisposable _stubbed;
     private readonly HttpClient _skema;
 
-    private SkemaPayrollScenario(FlexLedgerHostFixture fx, StatsTidWebApplicationFactory backend, HttpClient skema)
+    private SkemaPayrollScenario(FlexLedgerHostFixture fx, StatsTidWebApplicationFactory backend, IDisposable stubbed, HttpClient skema)
     {
         _fx = fx;
         _backend = backend;
+        _stubbed = stubbed;
         _skema = skema;
     }
 
@@ -266,12 +268,13 @@ internal sealed class SkemaPayrollScenario : IAsyncDisposable
         var stubbed = backend.WithWebHostBuilder(builder =>
             builder.ConfigureTestServices(services =>
                 services.AddSingleton<IHttpClientFactory>(new RuleEngineStubFactory())));
-        return new SkemaPayrollScenario(fx, backend, stubbed.CreateClient());
+        return new SkemaPayrollScenario(fx, backend, stubbed, stubbed.CreateClient());
     }
 
     public ValueTask DisposeAsync()
     {
         _skema.Dispose();
+        _stubbed.Dispose();
         _backend.Dispose();
         return ValueTask.CompletedTask;
     }
@@ -350,7 +353,7 @@ internal sealed class SkemaPayrollScenario : IAsyncDisposable
         string employeeId, string agreement, IReadOnlyList<PlannedDay> plan, string storedCode)
     {
         var absenceDay = plan.Single(d => d.Absence != 0m);
-        var save = await SaveAbsencesAsync(employeeId, (absenceDay.Date, storedCode, absenceDay.Absence));
+        var save = await SaveAbsencesAsync(employeeId, agreement, (absenceDay.Date, storedCode, absenceDay.Absence));
         Assert.True(save.Status == HttpStatusCode.OK, $"the Skema save of {storedCode} expected 200, got {(int)save.Status}: {save.Json}");
 
         foreach (var day in plan.Where(d => d.Worked != 0m))
@@ -417,8 +420,13 @@ internal sealed class SkemaPayrollScenario : IAsyncDisposable
 
     // ── HTTP: Skema save (Backend host) and payroll (Payroll host, real engine) ──
 
+    /// <summary>The save as an "AC" employee: the claim is read nowhere in src, so callers that do not care which agreement it names use this.</summary>
+    internal Task<(HttpStatusCode Status, string Json)> SaveAbsencesAsync(
+        string employeeId, params (DateOnly Date, string Type, decimal Hours)[] absences) =>
+        SaveAbsencesAsync(employeeId, "AC", absences);
+
     internal async Task<(HttpStatusCode Status, string Json)> SaveAbsencesAsync(
-        string employeeId, params (DateOnly Date, string Type, decimal Hours)[] absences)
+        string employeeId, string agreement, params (DateOnly Date, string Type, decimal Hours)[] absences)
     {
         var body = new
         {
@@ -435,7 +443,7 @@ internal sealed class SkemaPayrollScenario : IAsyncDisposable
         {
             Content = JsonContent.Create(body),
         };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MintEmployeeToken(employeeId));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", MintEmployeeToken(employeeId, agreement));
         var response = await _skema.SendAsync(request);
         return (response.StatusCode, await response.Content.ReadAsStringAsync());
     }
@@ -473,7 +481,7 @@ internal sealed class SkemaPayrollScenario : IAsyncDisposable
 
     // ── Token (mirrors the sibling Skema regression suites) ──
 
-    private static string MintEmployeeToken(string actorId)
+    private static string MintEmployeeToken(string actorId, string agreement)
     {
         var tokenService = new JwtTokenService(new JwtSettings
         {
@@ -486,7 +494,7 @@ internal sealed class SkemaPayrollScenario : IAsyncDisposable
             employeeId: actorId,
             name: actorId,
             role: StatsTidRoles.Employee,
-            agreementCode: "AC",
+            agreementCode: agreement,
             orgId: OrgId,
             scopes: new[] { new RoleScope(StatsTidRoles.Employee, OrgId, "ORG_ONLY") });
     }

@@ -51,8 +51,9 @@ public sealed class DepartedSelfHostFixture : IAsyncLifetime
 /// <para><b>Plain language.</b> When someone leaves, their own access ends the day after their last
 /// working day. A leader, an HR user or an administrator reaches their OWN record through admin
 /// routes, so each of these facts uses the leaver's own still-valid token on a route that would
-/// otherwise let them rewrite themselves, and expects a refusal (403 carrying the date-free
-/// <see cref="DepartedSubject.DenyReason"/>) with NOTHING written. Each refusal is paired with the same
+/// otherwise let them rewrite themselves, and expects a refusal (403 with a date-free reason:
+/// <c>DepartedSubject.DenyReason</c>, or on the three overtime routes SEC-056's self-decision reason, which answers first by the
+/// Orchestrator's ruling (a) of 2026-10-29) with NOTHING written. Each refusal is paired with the same
 /// token acting on ANOTHER person in scope, which must still work: a manager keeps reaching a leaver
 /// during the grace, and HR keeps acting on leavers.</para>
 ///
@@ -61,7 +62,9 @@ public sealed class DepartedSelfHostFixture : IAsyncLifetime
 /// any real "today" after it, so no fact depends on the calendar day CI happens to run on. The two facts
 /// that need a controlled "today" (the last-day boundary; the termination-payout request, whose own rule
 /// compares the end date with today) use a derived host pinned with <c>WithFixedToday</c> (PAT-008).
-/// Absences are not seeded here, so the weekday rule (S138) is not engaged.</para>
+/// Absences are not seeded here, so the weekday rule (S138) is not engaged. The host runs without the leaver-flip job
+/// (<c>withoutLeaverJob: true</c>, TASK-14719 fix-up 1), so no seeded active-but-departed subject is switched off during a fact;
+/// every <c>WithFixedToday</c> host derived from it inherits that.</para>
 ///
 /// <para><b>Docker</b> — CI-pending (never locally green) until CI-W2 shows each fact green. Every fact
 /// says its kind. <b>F</b> = an assertion that fails on today's code (the production behaviour that
@@ -75,7 +78,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
     private const string DevFallbackSigningKey = "StatsTid_Sprint3_DevKey_MustBeAtLeast32BytesLong!";
     private const string OrgA = "STY01";   // settlement / overtime / agreement / users / role facts
     private const string OrgB = "STY02";   // reporting-line / unit facts
-    // SEC-056 (TASK-14705) reasons, copied as literals (the production strings live on the TASK-14705 branch).
+    // SEC-056 (TASK-14705) reasons, copied as literals (the production strings are inline in <c>OvertimeEndpoints.cs</c>, at the three self-guards).
     private const string PreApprovalSelfReason = "self-decision on an overtime pre-approval is not permitted (segregation of duties)";
     private const string CompensateSelfReason = "self-decision on overtime compensation is not permitted (segregation of duties)";
 
@@ -116,8 +119,8 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
 
     /// <summary>
     /// Kind F. Approve of her OWN pending pre-approval: 403, the row stays PENDING; approve of another
-    /// employee's pending row: 200 APPROVED. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red conditions: <c>Assert 403</c> — today the validator
-    /// admits the covered leader's own id and the route approves the row (200).
+    /// employee's pending row: 200 APPROVED. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red conditions: <c>Assert 403</c> — the route answers 200 (row approved)
+    /// only if BOTH guards are absent: SEC-056's self-guard and the departed-self clause.
     /// </summary>
     [Fact]
     public async Task LocalLeader_PreApprovalApprove_OwnPending_403_OtherEmployee_200()
@@ -138,7 +141,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
         Assert.Equal("APPROVED", await PreApprovalStatusAsync(theirs));
     }
 
-    /// <summary>Kind F. As above for reject. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red condition: <c>Assert 403</c> (today the row is rejected, 200).</summary>
+    /// <summary>Kind F. As above for reject. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red condition: <c>Assert 403</c> (200, row rejected, only if both guards are absent).</summary>
     [Fact]
     public async Task LocalLeader_PreApprovalReject_OwnPending_403_OtherEmployee_200()
     {
@@ -160,7 +163,7 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
 
     /// <summary>
     /// Kind F. Compensate naming herself: 403, <c>paid_out</c> unchanged; for another employee: 200 and
-    /// <c>paid_out</c> moved. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red condition: <c>Assert 403</c> (today the balance is adjusted, 200).
+    /// <c>paid_out</c> moved. SEC-056's self-guard (TASK-14705) answers first on this route, by the Orchestrator's ruling (a) of 2026-10-29; either refusal is correct, and the departed-self clause is the second line. Red condition: <c>Assert 403</c> (200, balance adjusted, only if both guards are absent).
     /// </summary>
     [Fact]
     public async Task LocalLeader_Compensate_ForHerself_403_OtherEmployee_200()

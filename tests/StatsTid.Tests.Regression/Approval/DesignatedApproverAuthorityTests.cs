@@ -1077,8 +1077,8 @@ public sealed class DesignatedApproverAuthorityTests : IAsyncLifetime
     //  S83 / TASK-8303 — DEACTIVATED designated approver fails the in-lock authority re-check.
     //  The in-lock approve/reject path re-evaluates IsEffectiveDesignatedApproverAsync UNDER the
     //  held tree advisory (ApprovalEndpoints ~:290/:299); its FIRST gate is
-    //  DesignatedApproverAuthorizer.IsActiveLeaderOrAboveAsync (the authorizer :131-145), which
-    //  requires the actor to be an ACTIVE user holding a LeaderOrAbove role. When the designated
+    //  DesignatedApproverAuthorizer.IsActingLeaderOrAboveAsync (DesignatedApproverAuthorizer.cs:637), which
+    //  requires the actor to be an ACTING user (active and not past their last day) holding a LeaderOrAbove role. When the designated
     //  approver is deactivated (users.is_active = FALSE) that gate fails CLOSED → the edge no longer
     //  grants authority; with a deliberately disjoint token scope (STY01, NOT covering Emp's STY02)
     //  org-scope also denies → 403 on BOTH approve and reject. (S92 flatten: Mgr's DB org STY02 would

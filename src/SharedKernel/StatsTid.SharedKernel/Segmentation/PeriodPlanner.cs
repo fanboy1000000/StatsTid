@@ -325,10 +325,10 @@ public static class PeriodPlanner
     /// Stage B that is no longer payroll's case (QUAL-149 built): the rules payroll evaluates over the
     /// whole month are <see cref="SplitBehavior.TimelineAware"/>, evaluated once across every part and
     /// never split, and payroll hands the planner only the classifications of the rules it evaluates, so
-    /// the calculating routes pay such a month part by part (and the raw export routes refuse it by their
-    /// own reason, after planning). The refusal is now reachable only through a rule set that hands the
-    /// planner an AlignedWindow or Reject rule — the Rule Engine's whole registry (the weekly norm and the
-    /// two rest-period rules) or a caller's fixture set.
+    /// the calculating routes pay such a month part by part (the raw export routes, which refused it by
+    /// their own reason after planning, were retired in S147 TASK-14716). The refusal is now reachable
+    /// only through a rule set that hands the planner an AlignedWindow or Reject rule — the Rule Engine's
+    /// whole registry (the weekly norm and the two rest-period rules) or a caller's fixture set.
     /// </para>
     ///
     /// <para>

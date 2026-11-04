@@ -57,22 +57,4 @@ public class RequestValidatorTests
         Assert.True(isValid);
         Assert.Null(error);
     }
-
-    [Fact]
-    public void Absence_InvalidAbsenceType_ReturnsError()
-    {
-        var (isValid, error) = RequestValidator.ValidateAbsence("EMP001", 7.4m, "INVALID_TYPE", "AC", "OK24");
-
-        Assert.False(isValid);
-        Assert.Contains("AbsenceType", error);
-    }
-
-    [Fact]
-    public void Absence_ValidRequest_NoError()
-    {
-        var (isValid, error) = RequestValidator.ValidateAbsence("EMP001", 7.4m, "VACATION", "AC", "OK24");
-
-        Assert.True(isValid);
-        Assert.Null(error);
-    }
 }

@@ -105,9 +105,10 @@ public static class EmploymentDateEndpoints
         // the terminated-INCLUSIVE OrgScopeValidator path — a DELIBERATE S70 R9c allowlist
         // EXTENSION ruled by ADR-040 D3 (role, not is_active, governs who may edit a
         // deactivated leaver's employment record). Without it the D1 re-hire guard below is
-        // UNREACHABLE: a CLOSED spell (end date set and passed) means the Step-A poller already
-        // flipped is_active=FALSE, and the old active-only validator/read/UPDATE trio
-        // dead-ended at 403/404 before the guard could ever run. Admin-strict If-Match
+        // UNREACHABLE: a CLOSED spell (end date set and passed) is, from day 6 after the last day,
+        // a row the Step-A poller has switched to is_active=FALSE (S147 TASK-14710: during the
+        // manager's 5-day grace, D+1 .. D+5, it is still active), and the old active-only
+        // validator/read/UPDATE trio dead-ended at 403/404 before the guard could ever run. Admin-strict If-Match
         // (ADR-019 D2). employmentStartDate may be null (clears an unknown start date).
         //
         // Atomic, in the S136 lock-regime order — all ONE tx (ADR-018 D3):
@@ -149,8 +150,9 @@ public static class EmploymentDateEndpoints
             // HR actor's still-valid JWT (8h lifetime, no revocation) could otherwise rewrite its
             // OWN employment-start history — the falsifiable-history vector: no reactivation lever
             // exists here, but the completed employment's RECORD is the asset (Auditability).
-            // A second administrator performs legitimate self-corrections; the GET above stays
-            // self-readable.
+            // A second administrator performs legitimate self-corrections; the GET above is
+            // self-readable only while the reader is employed: since S147 (TASK-14703) a departed
+            // self's read is refused too (S147 security consult, point R1; the validator's departed-self clause).
             if (string.Equals(actor.ActorId, employeeId, StringComparison.Ordinal))
                 return Results.Json(new
                 {
@@ -447,8 +449,9 @@ public static class EmploymentDateEndpoints
             // is the first INACTIVE-row write surface: without this, a lifecycle-deactivated HR
             // actor's still-valid JWT (8h lifetime, no revocation) could PUT its OWN
             // employmentEndDate: null and permanently self-reinstate via the R1(c) reactivation.
-            // A second administrator performs legitimate self-departures; the GET above stays
-            // self-readable.
+            // A second administrator performs legitimate self-departures; the GET above is
+            // self-readable only while the reader is employed: since S147 (TASK-14703) a departed
+            // self's read is refused too (S147 security consult, point R1; the validator's departed-self clause).
             if (string.Equals(actor.ActorId, employeeId, StringComparison.Ordinal))
                 return Results.Json(new
                 {

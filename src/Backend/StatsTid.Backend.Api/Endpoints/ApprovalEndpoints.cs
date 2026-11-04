@@ -2291,8 +2291,11 @@ public static class ApprovalEndpoints
         //     load-bearing closure for them. It is a deliberate 403 (a decision, auditable) where
         //     the old active-only read produced an accidental 404 — the same status change S136
         //     recorded for the Skema save. For non-Employee actors this re-check is defence in
-        //     depth: it can never deny an actor the validator admitted (R9b already requires
-        //     primary role ≥ LocalHR for a terminated subject).
+        //     depth, and it can still refuse an actor the validator let through: R9b's primary-role
+        //     gate covers only a deactivated row, so for a subject inside the manager's grace
+        //     (still active, past their last day) a mixed-role token passes the validator and is
+        //     refused here by the primary-role arm, the outcome R9b intends (S147 TASK-14710
+        //     review N-3).
         //
         // WHY THIS IS THE AUTHORITATIVE CHECK, with no advisory/authoritative two-step: the S136
         // writers read the subject BEFORE their transaction and had to RE-READ it under the lock

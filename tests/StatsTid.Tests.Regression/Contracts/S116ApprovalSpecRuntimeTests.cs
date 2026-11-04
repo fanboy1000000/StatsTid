@@ -634,7 +634,7 @@ public sealed class S116ApprovalSpecRuntimeTests : IAsyncLifetime
         }
 
         // The manager's LeaderOrAbove DB floor (the R5 predicate requires an active LOCAL_LEADER+
-        // role assignment — the JWT role alone does not satisfy IsActiveLeaderOrAboveAsync).
+        // role assignment — the JWT role alone does not satisfy IsActingLeaderOrAboveAsync).
         await using (var cmd = new NpgsqlCommand(
             """
             INSERT INTO role_assignments (user_id, role_id, org_id, scope_type, assigned_by) VALUES

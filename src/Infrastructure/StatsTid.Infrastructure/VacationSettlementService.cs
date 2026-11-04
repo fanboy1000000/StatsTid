@@ -1137,7 +1137,10 @@ public sealed class VacationSettlementService
     /// <list type="number">
     ///   <item><description><paramref name="isActive"/> is FALSE — a reactivated user is NOT a
     ///   leaver (Step B only ever enumerates flipped leavers; the R1 correct-to-future
-    ///   re-evaluation REACTIVATES);</description></item>
+    ///   re-evaluation REACTIVATES). S147 / TASK-14710 (K-2, OQ-2): a leaver inside the manager's
+    ///   5-day grace (D+1 .. D+5) is still active by design, so termination settlement is due only
+    ///   from D+6, once Step A has switched them off; a reversal whose corrected end date lands in
+    ///   the grace reactivates the leaver, so its re-settle is not due here (K-14);</description></item>
     ///   <item><description><paramref name="employmentEndDate"/> is non-null AND has PASSED on the
     ///   Copenhagen business date (<c>endDate &lt; copenhagenToday</c> — the end date is the LAST
     ///   day employed);</description></item>
@@ -1907,7 +1910,7 @@ public sealed class VacationSettlementService
         // forward-safety map the common types, defaulting to the identity (covers VACATION).
         var absenceType = entitlementType switch
         {
-            "SPECIAL_HOLIDAY" => "SPECIAL_HOLIDAY_ALLOWANCE",
+            "SPECIAL_HOLIDAY" => AbsenceTypes.SpecialHolidayAllowance,
             _ => entitlementType, // VACATION/CARE_DAY/SENIOR_DAY are identity; CHILD_SICK has 3 variants (not settled in 1a)
         };
 

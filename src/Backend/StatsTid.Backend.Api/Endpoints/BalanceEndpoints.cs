@@ -194,7 +194,7 @@ public static class BalanceEndpoints
             // read + client-side year filter rather than a date-range query.
             var allAbsences = await absenceProjectionRepo.GetByEmployeeAsync(employeeId, ct);
             var vacationDaysUsed = allAbsences
-                .Where(e => e.AbsenceType == "VACATION" && e.Date.Year == year)
+                .Where(e => e.AbsenceType == AbsenceTypes.Vacation && e.Date.Year == year)
                 .Select(e => e.Date)
                 .Distinct()
                 .Count();

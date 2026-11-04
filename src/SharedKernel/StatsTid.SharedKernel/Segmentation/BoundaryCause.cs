@@ -102,9 +102,10 @@ public enum BoundaryCause
     /// the day-1 agreement. Since S145 Stage B the planner splits such a month into one EMPLOYED
     /// segment per agreement, and payroll's calculating routes pay each part under its own
     /// agreement's wage-type codes; an agreement change on a Tuesday to Sunday inside a week the
-    /// month settles is still refused (payroll's week check), and the raw export routes refuse
-    /// every split month by their own reason. The planner itself refuses such a month only when
-    /// the rule set handed to it holds an AlignedWindow or Reject rule (ADR-016 D4).
+    /// month settles is still refused (payroll's week check), and the raw export routes (until
+    /// S147 TASK-14716 retired them) refused every split month by their own reason. The planner
+    /// itself refuses such a month only when the rule set handed to it holds an AlignedWindow or
+    /// Reject rule (ADR-016 D4).
     /// Tie-break slot (ruled R1, S144): after <see cref="PositionOverrideEffective"/>,
     /// immediately before <see cref="EmployeeProfileChange"/>.
     /// </summary>

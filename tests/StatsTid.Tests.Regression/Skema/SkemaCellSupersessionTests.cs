@@ -300,7 +300,7 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
     /// targets the same cell.</para>
     ///
     /// <para><b>Red conditions.</b> Today nothing validates the hours of a Skema cell (only
-    /// <c>RequestValidator.cs:17</c> does, on the additive route), so each row's save succeeds with 200 and
+    /// <c>RequestValidator.cs:16</c> does, on the additive route), so each row's save succeeds with 200 and
     /// <c>Assert.Equal(HttpStatusCode.BadRequest, ...)</c> trips. Listed under <b>MD-10</b> (the pre-lock
     /// validation loses its hours-at-or-below-zero 400), which turns all four rows red the same way.</para>
     /// </summary>
