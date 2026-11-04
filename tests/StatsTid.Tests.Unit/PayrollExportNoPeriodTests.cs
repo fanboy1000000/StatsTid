@@ -79,8 +79,13 @@ public sealed class PayrollExportNoPeriodTests
 
     /// <summary>
     /// AC-054-5 (P-4), kind N. The same refusal for an EMPTY period id (<see cref="Guid.Empty"/>, the "no period" meaning
-    /// the manifest id also gets). Same docstring, same mutation: under M-13 the empty id is no longer refused, the call
-    /// reaches the unreachable database, and <c>ThrowsAsync&lt;InvalidOperationException&gt;</c> fails on the exception type.
+    /// the manifest id also gets). Nothing was written, for the same reason: the throw precedes any connection.
+    ///
+    /// <para><b>Red conditions.</b> The mutation that drops only the empty-id half of the check (delete
+    /// <c>|| periodId == Guid.Empty</c>) compiles and still refuses <c>null</c>, so the null fact stays green; but
+    /// <c>Guid.Empty</c> is now accepted as a period, the call reaches the unreachable database and fails with a connection
+    /// exception, so <c>ThrowsAsync&lt;InvalidOperationException&gt;</c> fails on the exception type. Under M-13 (the whole
+    /// check dropped) it fails as well. This fact is what separates the two.</para>
     /// </summary>
     [Fact]
     public async Task ExportAsync_EmptyGuidPeriod_Refuses()

@@ -15,7 +15,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// <summary>
 /// S90 / TASK-9002 (ADR-034) — regression tests for the ATOMIC payroll-export refactor:
 /// the per-(employee, year, month) lock record, idempotency, the B2 APPROVED <c>FOR UPDATE</c>
-/// re-check, the B4 multi-month/multi-employee grouping + month-spanning rejection, the
+/// re-check, the B4 month-spanning rejection (the multi-month / multi-employee grouping is gone: S147 R-G9, one month per call), the
 /// <c>PayrollExportGenerated</c> event emission to <c>outbox_events</c>, the audit row, and the
 /// zero-line no-lock rule.
 ///
@@ -220,8 +220,8 @@ public sealed class PayrollExportRecordTests : IAsyncLifetime
 
     // ════════════════════════════════════════════════════════════════════════
     //  B4 — month-spanning rejection (the multi-month / multi-employee grouping facts were deleted in S147 SEC-054:
-    //  a call now carries ONE approval period, and R-G2 pins it to one employee-month, so a call spanning several
-    //  (employee, month) groups is refused; see RawExportRoutesRetiredTests)
+    //  an export is exactly one (employee, year, month) per call (S147 owner ruling R-G9), so lines of two months or
+    //  two employees are refused before any connection; see PayrollExportMoreThanOneMonthTests)
     // ════════════════════════════════════════════════════════════════════════
 
     [Fact]

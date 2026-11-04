@@ -117,12 +117,10 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
     /// <c>PeriodNotTheExportedMonthMessage(periodId, "EMP_IDENT_C", 2026-03-01, 2026-03-31, "EMP_IDENT_C", 2026, 4)</c>, and
     /// writes no record, no event and no audit row.
     ///
-    /// <para><b>Red conditions.</b> The mutation "drop the month comparison" (delete the
-    /// <c>|| !InGroupMonth(periodStart) || !InGroupMonth(periodEnd)</c> clauses) leaves the employee equal and the status
+    /// <para><b>Red conditions.</b> The mutation "drop the month comparison" (delete the start and end clauses of the
+    /// whole-month check) leaves the employee equal and the status
     /// APPROVED, so the export commits an April record carrying March's period id and <c>ThrowsAsync</c> fails with "no
-    /// exception was thrown". Checking only <c>period_start</c> (dropping the <c>period_end</c> clause) is NOT caught by this
-    /// fact (March's start and end are both outside April); that half is covered by the 5a reading of the code, recorded not
-    /// pinned. CI-pending.</para>
+    /// exception was thrown". The two facts that follow pin the half-measures. CI-pending.</para>
     /// </summary>
     [Fact]
     public async Task ExportAsync_PeriodOfAnotherMonth_Throws409_WritesNothing()
@@ -140,6 +138,61 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
             ex.Message);
         await AssertNothingWrittenAsync(emp, 2026, 4, auditBefore);
         await AssertNothingWrittenAsync(emp, 2026, 3, auditBefore);
+    }
+
+    /// <summary>
+    /// R-G8 (i), kind N, behaviour F against `e81e02b9^` (before fix-up 2 only a start inside the month was
+    /// compared): a period that STRADDLES the month end, 2026-04-27..2026-05-03, for the SAME employee, with that employee's
+    /// whole-month April lines. The period is APPROVED and four-eyes clean, the employee matches, its start lies in April, so
+    /// only an end-equals-last-day check refuses it: 409 with exactly <c>PeriodNotTheExportedMonthMessage</c>, and no record,
+    /// event or audit row. (Both seeds satisfy the constraints: <c>period_type</c> WEEKLY is allowed by its CHECK in the test schema and <c>init.sql</c>, and there is no
+    /// UNIQUE on the period dates.)
+    ///
+    /// <para><b>Red conditions.</b> The mutation "drop the <c>period_end</c> equality" (the end is no longer compared, or is
+    /// only required to start in the month) lets this period through; the export commits April's record carrying a period
+    /// that reaches into May, so <c>ThrowsAsync</c> fails with "no exception was thrown". CI-pending.</para>
+    /// </summary>
+    [Fact]
+    public async Task ExportAsync_PeriodStraddlingTheMonthEnd_Throws409_WritesNothing()
+    {
+        const string emp = "EMP_IDENT_D";
+        var start = new DateOnly(2026, 4, 27);
+        var end = new DateOnly(2026, 5, 3);
+        var periodId = await SeedApprovedPeriodAsync(emp, start, end, "WEEKLY");
+        var auditBefore = await CountAuditRowsAsync();
+
+        var ex = await Assert.ThrowsAsync<PayrollExportConflictException>(
+            () => _service.ExportAsync(new[] { Line(emp, 2026, 4) }, ContextWith(periodId)));
+
+        Assert.Equal(PayrollExportService.PeriodNotTheExportedMonthMessage(periodId, emp, start, end, emp, 2026, 4), ex.Message);
+        await AssertNothingWrittenAsync(emp, 2026, 4, auditBefore);
+    }
+
+    /// <summary>
+    /// R-G8 (ii), kind N, behaviour F against the within-the-month check of <c>e81e02b9^</c>: a WEEKLY period wholly inside
+    /// April, 2026-04-06..2026-04-12, for the SAME employee, with that employee's whole-month April lines. Both dates lie in
+    /// April, so only a "start is the 1st and end is the last day" check refuses it: 409 with exactly
+    /// <c>PeriodNotTheExportedMonthMessage</c>, and no record, event or audit row. (A week is not the month's approval; a
+    /// month is paid on the month's own approval.)
+    ///
+    /// <para><b>Red conditions.</b> The mutation "relax the start/end equalities to 'within the month'" (the behaviour before
+    /// fix-up 2) accepts this period; the export commits and <c>ThrowsAsync</c> fails with "no exception was thrown".
+    /// CI-pending.</para>
+    /// </summary>
+    [Fact]
+    public async Task ExportAsync_WeeklyPeriodInsideTheMonth_Throws409_WritesNothing()
+    {
+        const string emp = "EMP_IDENT_E";
+        var start = new DateOnly(2026, 4, 6);
+        var end = new DateOnly(2026, 4, 12);
+        var periodId = await SeedApprovedPeriodAsync(emp, start, end, "WEEKLY");
+        var auditBefore = await CountAuditRowsAsync();
+
+        var ex = await Assert.ThrowsAsync<PayrollExportConflictException>(
+            () => _service.ExportAsync(new[] { Line(emp, 2026, 4) }, ContextWith(periodId)));
+
+        Assert.Equal(PayrollExportService.PeriodNotTheExportedMonthMessage(periodId, emp, start, end, emp, 2026, 4), ex.Message);
+        await AssertNothingWrittenAsync(emp, 2026, 4, auditBefore);
     }
 
     private async Task AssertNothingWrittenAsync(string employeeId, int year, int month, int auditBefore)
@@ -172,7 +225,11 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
 
     /// <summary>An APPROVED whole-month period with <c>approved_by</c>, <c>employee_approved_by</c> and
     /// <c>submitted_by</c> all NULL: neither four-eyes rule can match, so only the identity check can refuse it.</summary>
-    private async Task<Guid> SeedApprovedPeriodAsync(string employeeId, int year, int month)
+    private Task<Guid> SeedApprovedPeriodAsync(string employeeId, int year, int month) =>
+        SeedApprovedPeriodAsync(
+            employeeId, new DateOnly(year, month, 1), new DateOnly(year, month, DateTime.DaysInMonth(year, month)), "MONTHLY");
+
+    private async Task<Guid> SeedApprovedPeriodAsync(string employeeId, DateOnly start, DateOnly end, string periodType)
     {
         var periodId = Guid.NewGuid();
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
@@ -182,13 +239,14 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
             INSERT INTO approval_periods
                 (period_id, employee_id, org_id, period_start, period_end, period_type, status, agreement_code, ok_version)
             VALUES
-                (@pid, @emp, @org, @start, @end, 'MONTHLY', 'APPROVED', 'AC', 'OK24')
+                (@pid, @emp, @org, @start, @end, @ptype, 'APPROVED', 'AC', 'OK24')
             """, conn);
         cmd.Parameters.AddWithValue("pid", periodId);
         cmd.Parameters.AddWithValue("emp", employeeId);
         cmd.Parameters.AddWithValue("org", OrgId);
-        cmd.Parameters.AddWithValue("start", new DateOnly(year, month, 1));
-        cmd.Parameters.AddWithValue("end", new DateOnly(year, month, DateTime.DaysInMonth(year, month)));
+        cmd.Parameters.AddWithValue("start", start);
+        cmd.Parameters.AddWithValue("end", end);
+        cmd.Parameters.AddWithValue("ptype", periodType);
         await cmd.ExecuteNonQueryAsync();
         return periodId;
     }
