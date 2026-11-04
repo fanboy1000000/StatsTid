@@ -75,7 +75,6 @@ services:
       ConnectionStrings__EventStore: "Host=postgres;Port=5432;Database=statstid;Username=statstid;Password=statstid_dev"
       ServiceUrls__RuleEngine: "http://rule-engine:8080"
       ServiceUrls__Backend: "http://backend-api:8080"
-      ServiceUrls__Payroll: "http://payroll:8080"
       ServiceUrls__External: "http://external:8080"
     depends_on:
       postgres:

@@ -27,7 +27,6 @@ public sealed class OutputValidator
             {
                 "rule-evaluation" => ValidateRuleEvaluationOutput(doc),
                 "weekly-calculation" => ValidateWeeklyCalculationOutput(doc),
-                "payroll-export" => ValidatePayrollExportOutput(doc),
                 "external-integration" => ValidateExternalIntegrationOutput(doc),
                 _ => true
             };
@@ -43,12 +42,6 @@ public sealed class OutputValidator
     {
         return doc.RootElement.TryGetProperty("ruleId", out _)
             && doc.RootElement.TryGetProperty("success", out _);
-    }
-
-    private bool ValidatePayrollExportOutput(JsonDocument doc)
-    {
-        return doc.RootElement.TryGetProperty("exportId", out _)
-            || doc.RootElement.TryGetProperty("success", out _);
     }
 
     private bool ValidateWeeklyCalculationOutput(JsonDocument doc)

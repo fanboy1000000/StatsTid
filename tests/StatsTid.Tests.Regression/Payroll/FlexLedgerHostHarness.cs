@@ -457,7 +457,7 @@ public sealed class FlexLedgerHostFixture : IAsyncLifetime
     }
 
     /// <summary>
-    /// A RAW record (no balances: what /export and /export-period write) for the month, holding
+    /// A RAW record (no balances: what /export and /export-period wrote before S147 SEC-054 retired them) for the month, holding
     /// <paramref name="lines"/> (empty by default) with the matching content hash.
     /// </summary>
     internal async Task SeedRawRecordAsync(string employeeId, DateOnly month, IReadOnlyList<PayrollExportLine>? lines = null)

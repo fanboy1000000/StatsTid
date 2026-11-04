@@ -212,7 +212,6 @@ public sealed class OrchestratorControlLoop
         {
             "rule-evaluation" => "RuleEngineAgent",
             "weekly-calculation" => "WeeklyCalculationAgent",
-            "payroll-export" => "PayrollAgent",
             "external-integration" => "IntegrationAgent",
             _ => null
         };

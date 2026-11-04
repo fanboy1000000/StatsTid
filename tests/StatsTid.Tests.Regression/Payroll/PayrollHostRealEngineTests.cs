@@ -234,7 +234,7 @@ public sealed class PayrollHostRealEngineTests : IAsyncLifetime
         // were read, because an employed month with NO lines now writes a zero-line record too (R-3).
         var recordedLines = await ReadExportedLinesAsync(employeeId, 2026, 9);
         // Counted and summed, not dated: the calculating route dates every exported line with its SEGMENT range
-        // (PeriodStart/PeriodEnd = the segment's), unlike /export and /export-period, which date per entry.
+        // (PeriodStart/PeriodEnd = the segment's), unlike the retired /export and /export-period (S147 SEC-054), which dated per entry.
         var recordedNormal = recordedLines.Where(l => l.SourceTimeType == "NORMAL_HOURS").ToList();
 
         Assert.Multiple(

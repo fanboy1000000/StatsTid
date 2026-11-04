@@ -28,11 +28,19 @@ public class TaskDispatcherTests
         Assert.Equal("http://rule-engine:8080", dispatcher.GetServiceUrl("rule-evaluation"));
     }
 
+    /// <summary>
+    /// AC-054-4 (S147 SEC-054, TASK-14716), kind F. The <c>payroll-export</c> task type is retired: the dispatcher has no
+    /// route for it, so <c>GetServiceUrl</c> answers null. (Its only target, the raw <c>/api/payroll/export</c> route, is
+    /// gone, and the scope helper already refused it on <c>/execute</c>.)
+    ///
+    /// <para><b>Red conditions.</b> On master the dispatcher maps <c>payroll-export</c> to <c>http://payroll:8080</c>, so
+    /// <c>Assert.Null</c> fails with that URL. Any change that re-adds the key to the route map fails it again.</para>
+    /// </summary>
     [Fact]
-    public void GetServiceUrl_PayrollExport_GoesToPayrollDefault()
+    public void GetServiceUrl_PayrollExport_IsNoLongerARoute()
     {
         var dispatcher = BuildDispatcher();
-        Assert.Equal("http://payroll:8080", dispatcher.GetServiceUrl("payroll-export"));
+        Assert.Null(dispatcher.GetServiceUrl("payroll-export"));
     }
 
     [Fact]
@@ -69,7 +77,8 @@ public class TaskDispatcherTests
 
         Assert.Equal("http://rule-engine.test:9999", dispatcher.GetServiceUrl("rule-evaluation"));
         // Unconfigured routes still fall back to their defaults.
-        Assert.Equal("http://payroll:8080", dispatcher.GetServiceUrl("payroll-export"));
+        // S147 SEC-054: was payroll-export -> http://payroll:8080 (the task type is retired); re-pointed at a type that still exists.
+        Assert.Equal("http://external:8080", dispatcher.GetServiceUrl("external-integration"));
     }
 
     // ── construction / helpers ─────────────────────────────────────────────────

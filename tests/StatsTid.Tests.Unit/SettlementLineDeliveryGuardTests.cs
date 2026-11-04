@@ -32,8 +32,10 @@ public sealed class SettlementLineDeliveryGuardTests
     private const string GuardMessageFragment = "Settlement export line delivery is disabled";
 
     // S90 / TASK-9002: ExportAsync now takes a PayrollExportContext. The guard runs first, so
-    // its content is irrelevant to these guard tests; a null PeriodId keeps the (unreachable here)
-    // B2 APPROVED re-check out of the picture.
+    // its content is irrelevant to the guard tests. S147 SEC-054 (TASK-14716): ExportAsync now also refuses a
+    // context with no period (PayrollExportService.NoPeriodMessage), AFTER the guard and before any connection,
+    // so the null PeriodId here is still never reached by the refusal tests; the one fact that lets the batch past
+    // the guard (NonSettlementOnlyBatch_GuardIsNoOp_...) now meets that refusal and says so.
     private static PayrollExportContext ExportContext() =>
         new() { Source = "EXPORT", PeriodId = null, ActorId = "test-actor", ResolvedTargetOrgId = "ORG_X" };
 
@@ -154,18 +156,24 @@ public sealed class SettlementLineDeliveryGuardTests
 
     // ════════════════════════════════════════════════════════════════════════
     // (e) A batch of ONLY non-settlement lines passes the guard untouched (guard is a no-op). We prove
-    //     the guard did NOT block it by asserting the failure (DB unreachable) is NOT the guard's throw.
+    //     the guard did NOT block it by asserting that the call fails on the NEXT check, the no-period refusal,
+    //     and not on the guard's throw.
     // ════════════════════════════════════════════════════════════════════════
 
     [Fact]
     public async Task NonSettlementOnlyBatch_GuardIsNoOp_DoesNotThrowGuard()
     {
-        // DB points nowhere; if the guard let the batch through (correct), ExportAsync proceeds to the
-        // outbox write and fails with a CONNECTION error — NOT the guard's InvalidOperationException.
+        // S147 SEC-054: the context carries no period, so a batch the guard lets through (correct) is refused by the
+        // no-period check that follows it (PayrollExportService.NoPeriodMessage) — before any connection is opened.
+        // (Before S147 it ran on to the outbox write and failed with a CONNECTION error; the DB is unreachable here
+        // either way, and is never touched.) NOT the guard's InvalidOperationException.
         var svc = BuildService(deliveryEnabled: null, connectionString: "Host=127.0.0.1;Port=1;Database=none;Username=x;Password=y;Timeout=1;Command Timeout=1");
 
         var ex = await Record.ExceptionAsync(() => svc.ExportAsync(new[] { NormalLine() }, ExportContext()));
-        Assert.NotNull(ex); // it fails at the DB (proves the guard did not short-circuit it)
+        Assert.NotNull(ex);
+        // S147 SEC-054: it fails on the period check, which comes after the guard (proves the guard did not short-circuit it).
+        Assert.IsType<InvalidOperationException>(ex);
+        Assert.Equal(PayrollExportService.NoPeriodMessage, ex.Message);
         Assert.False(
             ex is InvalidOperationException ioe && ioe.Message.Contains(GuardMessageFragment),
             $"The guard must be a no-op for a non-settlement-only batch, but it threw the guard exception: {ex.Message}");

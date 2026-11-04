@@ -28,21 +28,17 @@ public static class OrchestratorScopeHelpers
     /// <summary>
     /// Task types the <c>/api/orchestrator/execute</c> endpoint is allowed to
     /// dispatch. The <see cref="TaskDispatcher"/> also routes
-    /// <c>payroll-export</c> and <c>external-integration</c>, but those are
-    /// reachable only via direct calls to the payroll and external services
-    /// respectively — they MUST NOT be invokable through <c>/execute</c>:
+    /// <c>external-integration</c>, but it is reachable only via direct calls to
+    /// the external service — it MUST NOT be invokable through <c>/execute</c>:
     /// <list type="bullet">
     /// <item><c>external-integration</c> → <c>/api/external/send</c> is floored at
-    /// <c>GlobalAdminOnly</c> downstream (SEC-023), but it stays excluded from
-    /// <c>/execute</c> for the same reason as <c>payroll-export</c> below: the
-    /// Orchestrator persists a task record BEFORE dispatch, so allowing it here
-    /// would let a non-admin caller poison the audit log even though the dispatch
-    /// itself is rejected.</item>
-    /// <item><c>payroll-export</c> → <c>/api/payroll/export</c> requires
-    /// <c>GlobalAdminOnly</c> downstream, but the orchestrator persists a task
-    /// record BEFORE dispatch, so a non-admin caller would still poison the
-    /// audit log even though the dispatch itself is rejected.</item>
+    /// <c>GlobalAdminOnly</c> downstream (SEC-023), but the Orchestrator persists a
+    /// task record BEFORE dispatch, so allowing it here would let a non-admin caller
+    /// poison the audit log even though the dispatch itself is rejected.</item>
     /// </list>
+    /// (S147 TASK-14716, SEC-054 step 2: the dispatcher's payroll task type, which
+    /// pointed at the raw payroll export route, was deleted with that route. It was
+    /// never on this list, for the same audit-log reason.)
     /// Adding a new task type here REQUIRES corresponding identity extraction in
     /// <see cref="ExtractEmployeeId"/> AND test coverage in
     /// <c>OrchestratorScopeEnforcementTests</c>.
@@ -313,8 +309,8 @@ public static class OrchestratorScopeHelpers
     /// <item><b>Non-admin</b> — resolve the task's subject employee via
     /// <see cref="ExtractEmployeeId"/> (task-type-aware: <c>weekly-calculation</c> top-level,
     /// <c>rule-evaluation</c> nested <c>profile.employeeId</c>). Fail-closed: a conflict, a
-    /// missing/unresolvable id, or an ownerless/admin task type (payroll-export,
-    /// external-integration, or any type <see cref="ExtractEmployeeId"/> does not know) all
+    /// missing/unresolvable id, or an ownerless/admin task type (external-integration,
+    /// or any type <see cref="ExtractEmployeeId"/> does not know) all
     /// deny WITHOUT calling the scope check. Otherwise the supplied
     /// <paramref name="scopeCheck"/> delegate decides (production:
     /// <c>OrgScopeValidator.ValidateEmployeeAccessAsync(actor, id, ct)</c>).</item>

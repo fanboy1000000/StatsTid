@@ -181,8 +181,8 @@ public sealed class PeriodCalculationService
     private readonly UserAgreementCodeRepository? _userAgreementCodeRepo;
     // S145 TASK-14508 (rulings R14, R25): the ONE source of the hours a calculation consumes —
     // payroll reads the employee's recorded rows itself instead of taking them from its caller.
-    // Optional in the constructor (fixtures that only PLAN — the raw routes' plan-only guard, the
-    // reflection-driven planning tests — need no hours), but NEVER SILENT: every calculation and
+    // Optional in the constructor (fixtures that only PLAN — the reflection-driven planning tests —
+    // need no hours), but NEVER SILENT: every calculation and
     // replay entry point calls RequireHoursReader first, before any read, so a missing reader is a
     // named InvalidOperationException rather than a month paid as if nothing had been worked.
     private readonly IRecordedHoursReader? _hoursReader;
@@ -387,8 +387,9 @@ public sealed class PeriodCalculationService
         _userAgreementCodeRepo = userAgreementCodeRepo;
         // S145 TASK-14508 (R25): NOT enforced here, deliberately — unlike the window resolver above,
         // whose absence is only ever a wiring defect, a PCS without a reader is a legitimate
-        // plan-only instance (EnsurePeriodCalculableAsync, which the raw export routes call, never
-        // reads hours). The never-silent check runs at call time instead (RequireHoursReader), on
+        // plan-only instance (a test fixture that only plans never reads hours; S147 TASK-14716 removed
+        // the raw routes' plan-only guard, the one production path that planned without calculating).
+        // The never-silent check runs at call time instead (RequireHoursReader), on
         // every entry point that calculates or replays, before it reads anything.
         _hoursReader = hoursReader;
         // S145 TASK-14512 (R21/R26): NOT enforced here either, for the same reason — a plan-only instance,
@@ -1425,9 +1426,10 @@ public sealed class PeriodCalculationService
             perSegmentRuleResults, ruleSet, employeeId, plan.ManifestId,
             timelineRows: timeline?.Results.ToDictionary(r => r.RuleId, StringComparer.Ordinal));
 
-        // S146 TASK-14605 (R-14 case 3b): a raw month before the ledger start runs UNTRACKED — its flex is not
-        // tracked, so no payout may come from it: every FLEX_PAYOUT export line is dropped (the rule report keeps
-        // what the engine computed). A replay of an UNTRACKED manifest drops them the same way (R-33 item 2).
+        // S146 TASK-14605 (R-14 case 3b; case 3a since S147 TASK-14715): a month before the ledger start, recorded or
+        // not, runs UNTRACKED — its flex is not tracked, so no payout may come from it: every FLEX_PAYOUT export line
+        // is dropped (the rule report keeps what the engine computed). A replay of an UNTRACKED manifest drops them
+        // the same way (R-33 item 2).
         var untracked = string.Equals(openingFlexProvenance, FlexLedgerOpening.Untracked, StringComparison.Ordinal);
         if (untracked)
         {
@@ -1502,7 +1504,7 @@ public sealed class PeriodCalculationService
             // empty when none is EMPLOYED), never the request body's. No rule and no export line reads it.
             AgreementCode = evaluatedAgreementCode,
             // The result-level OkVersion remains the period-start-resolved version for
-            // legacy callers that read this field (RetroactiveCorrectionService, /export).
+            // legacy callers that read this field (RetroactiveCorrectionService).
             // Per-line OK-version stamping on PayrollExportLine.OkVersion is the new
             // canonical truth; TASK-2010 will route the export boundary through that.
             OkVersion = OkVersionResolver.ResolveVersion(plan.PeriodStart),
@@ -1781,105 +1783,6 @@ public sealed class PeriodCalculationService
             authorizationHeader, correlationId, hoursReader, ct);
     }
 
-    // -------------------------------------------------------------------
-    // Calculability guard for the raw export routes — S144 TASK-14410 (QUAL-183), extended by
-    // S145 TASK-14512 (Q5 (c)) and S145 Stage B / TASK-14522 (Q6 (a))
-    // -------------------------------------------------------------------
-
-    /// <summary>
-    /// Plans <paramref name="periodStart"/>..<paramref name="periodEnd"/> for
-    /// <paramref name="profile"/> exactly as the calculating endpoints do, runs the same week check,
-    /// then the raw routes' own single-profile check, and discards the plan. Returns normally when the
-    /// period can be exported through a raw route. Otherwise it throws, in this order (ruled R-74):
-    /// <list type="number">
-    /// <item>the planner's <see cref="PlannerInvariantViolation"/> when the period is not plannable (a split
-    /// refusal under a rule set that still holds a Reject or AlignedWindow rule, or a geometric defect);</item>
-    /// <item><see cref="PeriodNotCalculableException"/> with
-    /// <see cref="PeriodNotCalculableException.AgreementChangeMidWeek"/> when an agreement change falls inside
-    /// a week the month settles, on a day other than its Monday (S145 / TASK-14512, Q5 (c));</item>
-    /// <item><see cref="PeriodNotCalculableException"/> with
-    /// <see cref="PeriodNotCalculableException.SplitMonthSingleProfileRoute"/> when the plan has two or more
-    /// EMPLOYED segments (S145 Stage B / TASK-14522, Q6 (a), ruling R-76), carrying the EMPLOYED segment count
-    /// and the plan's distinct interior boundary causes in date order.</item>
-    /// </list>
-    ///
-    /// <para>
-    /// <b>Why it exists (plain language).</b> The raw <c>/api/payroll/export</c> and
-    /// <c>/api/payroll/export-period</c> routes take lines the caller has ALREADY calculated and
-    /// export them; they never plan. So a month the calculating endpoints refuse could still be exported
-    /// through them with wrong wage-type lines. The owner ruled (S144, 2026-09-29) that those routes must
-    /// refuse the same months, with the same 422 — which since S145 includes the week check's variant. They
-    /// still bypass APPROVAL by design: the months-in-order check (the 409) is the calculating routes' alone,
-    /// and nothing here reads an approval or an hour.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>The single-profile check (Q6 (a)).</b> Since S145 Stage B the calculating routes pay a month with
-    /// two or more EMPLOYED parts, mapping each line under the wage-type codes of the part its date falls in.
-    /// These routes cannot: they map every line under the request's ONE profile, so the second part's lines
-    /// would be exported under the first part's codes. They therefore refuse such a month by their own reason,
-    /// separate from the week check's, because they answer a different question: the week check asks "can
-    /// this week be calculated?", this one asks "can a single-profile route export a two-profile month?". A
-    /// month with one EMPLOYED part (a hire or a leaver month: an employment edge truncates, it does not split)
-    /// still exports. The check runs after the week check, so an interior agreement change on a Tuesday to
-    /// Sunday — both a mid-week change and a split month — gets the week check's answer, exactly as on the
-    /// calculating routes ("one predicate, three consumers"). The calculating routes never meet this check: it
-    /// lives here, in the raw-route-only method.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Same builder and same week check, by design.</b> This goes through the SAME private
-    /// <see cref="BuildPlanWithHistoriesAsync"/> as
-    /// <see cref="CalculateWithOutcomeAsync(EmploymentProfile, DateOnly, DateOnly, string?, Guid?, CancellationToken)"/>
-    /// — same boundary sources, same rule classifications (<see cref="EvaluatedRuleIds"/>), same
-    /// <see cref="PeriodPlanner.Plan"/> — and the SAME <see cref="EnsureNoMidWeekAgreementChange"/> the
-    /// calculating routes' admission runs. There is no second copy of the boundary or week logic to drift,
-    /// and no caller-supplied "already checked" flag. It writes nothing: no manifest, no event, no row — the
-    /// plan is built in memory and dropped. When the rule classification set cannot be obtained, it throws
-    /// <see cref="RuleClassificationsUnavailableException"/> rather than planning blind (the routes map that
-    /// to a 503; S144 TASK-14412).
-    /// </para>
-    /// </summary>
-    public async Task EnsurePeriodCalculableAsync(
-        EmploymentProfile profile,
-        DateOnly periodStart,
-        DateOnly periodEnd,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(profile);
-        var (plan, histories) = await BuildPlanWithHistoriesAsync(profile, periodStart, periodEnd, ct);
-        EnsureNoMidWeekAgreementChange(plan, histories);
-
-        // Q6 (a) (S145 Stage B, R-76): a single-profile route cannot export a month with two or more
-        // EMPLOYED parts. The causes are the planner's own report of the plan's interior boundaries: each
-        // segment carries the cause of one boundary (segment 0 that of boundary 0, PeriodPlanner.Plan), so
-        // the distinct causes in segment order, first occurrence kept, are the distinct boundary causes in
-        // date order — the list the planner's refusal reports. Causes and a count only, never a date
-        // (ADR-040 D7).
-        var employedSegmentCount = plan.Segments.Count(s => s.EmploymentStatus == EmploymentWindowStatus.EMPLOYED);
-        if (employedSegmentCount < 2)
-            return;
-
-        var interiorBoundaryCauses = new List<BoundaryCause>(plan.Segments.Count);
-        foreach (var segment in plan.Segments)
-        {
-            if (!interiorBoundaryCauses.Contains(segment.BoundaryCause))
-                interiorBoundaryCauses.Add(segment.BoundaryCause);
-        }
-
-        throw new PeriodNotCalculableException(
-            PeriodNotCalculableException.SplitMonthSingleProfileRoute,
-            $"PeriodCalculationService raw-route check: employee '{plan.EmployeeId}' — the period " +
-            $"[{plan.PeriodStart.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}.." +
-            $"{plan.PeriodEnd.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)}] has " +
-            $"{employedSegmentCount} EMPLOYED segments (interior boundary causes: " +
-            $"{string.Join(", ", interiorBoundaryCauses)}). A raw export route maps every line under the " +
-            "request's single profile, so it cannot export a period with more than one EMPLOYED part (Q6 (a)); " +
-            $"the calculating routes pay it part by part. ManifestId={plan.ManifestId}.",
-            employedSegmentCount,
-            interiorBoundaryCauses);
-    }
-
     /// <summary>
     /// Build a <see cref="PlannedCalculation"/> for callers that haven't migrated to the
     /// PlannedCalculation-first signature yet, returning ALSO the employee histories the planning
@@ -1951,8 +1854,7 @@ public sealed class PeriodCalculationService
     /// the settlement cutoff (R41), and the widened profile and agreement-code date reads (from the opening
     /// week's Monday) give the context pieces' edges and the week check's change dates. The planner itself
     /// ignores every date on or before the period start (<c>BoundaryDetector.IsInsidePeriod</c> keeps only
-    /// <c>periodStart &lt; d &lt;= periodEnd</c>), so the widened reads change no plan. The raw routes'
-    /// <see cref="EnsurePeriodCalculableAsync"/> uses them for the same week check.
+    /// <c>periodStart &lt; d &lt;= periodEnd</c>), so the widened reads change no plan.
     /// </para>
     ///
     /// <para>
@@ -2147,8 +2049,8 @@ public sealed class PeriodCalculationService
     /// </para>
     ///
     /// <para>
-    /// <b>Where it applies, and where not.</b> Only planning uses it, so the calculating routes and the raw
-    /// routes' guard (<see cref="EnsurePeriodCalculableAsync"/>) plan with the same set. The merge and a
+    /// <b>Where it applies, and where not.</b> Only planning uses it, so both calculating routes plan with the
+    /// same set. The merge and a
     /// replay's <see cref="PeriodPlanner.FromManifest"/> keep the provider's whole list: the merge sees only
     /// rules that produced results, and <c>FromManifest</c> re-asserts only the rule-side invariants (it never
     /// refuses a split). A rule set handed in by a caller keeps every rule of this list it names, so a fixture
@@ -3618,8 +3520,7 @@ public sealed class PeriodCalculationService
     }
 
     /// <summary>
-    /// The week check (Q5 (c)), run by admission after the planner and by the raw routes'
-    /// <see cref="EnsurePeriodCalculableAsync"/>: throws <see cref="PeriodNotCalculableException"/>
+    /// The week check (Q5 (c)), run by admission after the planner: throws <see cref="PeriodNotCalculableException"/>
     /// (<see cref="PeriodNotCalculableException.AgreementChangeMidWeek"/>) when an agreement change falls on a
     /// day other than a Monday inside any Monday–Sunday week the month settles (context days included).
     ///
@@ -3708,9 +3609,10 @@ public sealed class PeriodCalculationService
     /// Months in order (R5(b), R16, R21 as amended by R26), run by admission after the week check and
     /// before the hours read and any rule call. When the opening week holds EMPLOYED days of the previous
     /// month (<see cref="PriorMonthRequiringApproval"/>), that month must be <c>APPROVED</c>:
-    /// <c>EMPLOYEE_APPROVED</c> is not enough (the manager has not decided), and no row at all — the case
-    /// of a month exported through the raw routes, which write no approval period (R16) — is not approved
-    /// either. Otherwise it throws <see cref="PriorMonthNotApprovedException"/> carrying M−1's pay period.
+    /// <c>EMPLOYEE_APPROVED</c> is not enough (the manager has not decided), and no row at all — for example
+    /// a month exported through the raw routes before S147 TASK-14716 retired them, which wrote no approval
+    /// period (R16) — is not approved either. Otherwise it throws <see cref="PriorMonthNotApprovedException"/>
+    /// carrying M−1's pay period.
     ///
     /// <para>
     /// <b>Optional but never silent (R21/R26).</b> When the check applies and no
@@ -4060,10 +3962,9 @@ public sealed class PeriodCalculationService
                 }
 
                 // Per-segment semantics: PeriodStart/End = segment range, OkVersion =
-                // segment-resolved (NOT per-line). Contrast with PayrollMappingService.
-                // MapCalculationResultAsync which sets Period* = lineItem.Date. Both go
-                // through PayrollMappingService.BuildLine for the canonical line shape
-                // (post-S20 cleanup).
+                // segment-resolved (NOT per-line). The line shape comes from
+                // PayrollMappingService.BuildLine (post-S20 cleanup; its per-line-date caller went
+                // with the raw export routes in S147 TASK-14716).
                 lines.Add(PayrollMappingService.BuildLine(
                     lineItem, result, segmentProfile, mapping,
                     periodStart: plannedSegment.StartDate,

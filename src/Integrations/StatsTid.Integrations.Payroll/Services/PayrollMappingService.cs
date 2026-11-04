@@ -1,6 +1,5 @@
 using Npgsql;
 using StatsTid.Infrastructure;
-using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Integrations.Payroll.Services;
@@ -33,10 +32,11 @@ public sealed class PayrollMappingService
     /// supplied, the lookup routes through
     /// <see cref="WageTypeMappingRepository.GetByKeyAtAsync"/> for an effective-dated read
     /// (closed rows queryable at past dates per S29 effective-dating). When null, the
-    /// existing current-row query path is preserved unchanged — this is the
-    /// <c>MapCalculationResultAsync</c> per-line-date contract (Implications §7
-    /// "no retroactive recomputation"). Only the planner-driven per-segment export
-    /// (<c>PCS.MapSegmentToExportLinesAsync</c>) passes <c>asOfDate = segmentStart</c>.
+    /// existing current-row query path is preserved unchanged (Implications §7 "no retroactive
+    /// recomputation"). The planner-driven per-segment export
+    /// (<c>PCS.MapSegmentToExportLinesAsync</c>) passes <c>asOfDate = segmentStart</c>, and since S147
+    /// TASK-14716 it is the only production caller: the current-row path's production caller, a per-line
+    /// mapper that served only the raw export routes, was deleted with them.
     /// </para>
     /// </summary>
     public async Task<WageTypeMapping?> GetMappingAsync(
@@ -125,92 +125,15 @@ public sealed class PayrollMappingService
     }
 
     /// <summary>
-    /// Maps a CalculationResult to PayrollExportLines using wage type mappings.
-    /// Accepts optional position for position-aware mapping lookup; null/empty == generic.
-    ///
-    /// <para>
-    /// OK-version stamping (TASK-2010, ADR-016 D5): the per-line OK version is resolved from
-    /// each <see cref="CalculationLineItem.Date"/> via <see cref="OkVersionResolver.ResolveVersion"/>.
-    /// This supersedes any caller-supplied <c>profile.OkVersion</c> at the export boundary
-    /// — the same resolved value flows into both the wage-type-mapping lookup and the
-    /// emitted <see cref="PayrollExportLine.OkVersion"/>, so a straddling export across an
-    /// OK transition produces correctly per-line-stamped lines (Step 0b WARNING W3 bound:
-    /// only OK version is per-line resolved; wage-type-mapping itself remains non-dated /
-    /// snapshot-at-calculation per ADR-016 D5b).
-    /// </para>
-    ///
-    /// <para>
-    /// Manifest linkage (ADR-016 D10): the optional <paramref name="manifestId"/> is stamped
-    /// onto every emitted line. Default <see cref="Guid.Empty"/> preserves callers that do
-    /// not yet thread the manifest id (e.g. tests, pre-S20 fixtures).
-    /// </para>
-    /// </summary>
-    public async Task<IReadOnlyList<PayrollExportLine>> MapCalculationResultAsync(
-        CalculationResult result,
-        EmploymentProfile profile,
-        string? position = null,
-        Guid manifestId = default,
-        CancellationToken ct = default)
-    {
-        // Silent-loss guard (post-S20 cleanup, Reviewer wave-2 WARNING): the caller has the
-        // manifest id available on result.ManifestId but did not thread it into the optional
-        // parameter — emitted lines would carry Guid.Empty in PayrollExportLine.ManifestId,
-        // breaking the audit chain without any compile-time or runtime signal. Warn loudly;
-        // do not throw (legacy callers without manifest plumbing remain valid).
-        if (result.ManifestId != Guid.Empty && manifestId == Guid.Empty)
-        {
-            _logger.LogWarning(
-                "MapCalculationResultAsync: result.ManifestId={ResultManifestId} but caller passed " +
-                "manifestId=Guid.Empty. Emitted PayrollExportLines will carry empty ManifestId, " +
-                "breaking the audit chain. Thread result.ManifestId through to close the gap.",
-                result.ManifestId);
-        }
-
-        var lines = new List<PayrollExportLine>();
-
-        foreach (var lineItem in result.LineItems)
-        {
-            // Per-line OK supersedes profile.OkVersion at the export boundary (ADR-016 D5,
-            // Step 0b W3): resolves from CalculationLineItem.Date so a straddling export
-            // across an OK transition stamps each line with the segment-resolved OK.
-            var lineOkVersion = OkVersionResolver.ResolveVersion(lineItem.Date);
-
-            // ADR-020 Implications §7 + ROADMAP L350 (S29 TASK-2907): per-line-date export
-            // stays current-row — no asOfDate passed. Only PCS.MapSegmentToExportLinesAsync
-            // routes the planner-driven per-segment export through the dated-read path.
-            var mapping = await GetMappingAsync(lineItem.TimeType, lineOkVersion, profile.AgreementCode, position, ct);
-            if (mapping is null) continue;
-
-            // Per-line semantics: PeriodStart == PeriodEnd == lineItem.Date. The /export and
-            // /export-period endpoints don't have segment knowledge — each line stands alone
-            // at its entry date. Contrast with the planner-driven path in PCS which sets
-            // PeriodStart/End to the segment range; both go through BuildLine for the
-            // canonical line shape (post-S20 cleanup; previously two near-duplicate
-            // constructors in PCS and here).
-            lines.Add(BuildLine(
-                lineItem, result, profile, mapping,
-                periodStart: lineItem.Date,
-                periodEnd: lineItem.Date,
-                okVersion: lineOkVersion,
-                manifestId: manifestId));
-        }
-
-        return lines;
-    }
-
-    /// <summary>
-    /// Canonical <see cref="PayrollExportLine"/> shape constructor — one source of truth for
-    /// per-line semantics across both per-line-date callers (this service's
-    /// <see cref="MapCalculationResultAsync"/> serving <c>/export</c> and
-    /// <c>/export-period</c>) and per-segment callers
-    /// (<c>PeriodCalculationService.MapSegmentToExportLinesAsync</c> serving the planner-driven
-    /// path). The two callers differ in <paramref name="periodStart"/>/<paramref name="periodEnd"/>
-    /// and <paramref name="okVersion"/> resolution; everything else is identical.
+    /// Canonical <see cref="PayrollExportLine"/> shape constructor — the one source of truth for an export
+    /// line's shape, used by <c>PeriodCalculationService.MapSegmentToExportLinesAsync</c> (the planner-driven,
+    /// per-segment path) with the segment's dates and OK version. (Its per-line-date caller served only the
+    /// raw export routes and was deleted with them in S147 TASK-14716.)
     ///
     /// <para>
     /// Internal so PCS can call it without re-exposing the type via a public surface;
     /// <see cref="System.Runtime.CompilerServices.InternalsVisibleToAttribute"/> on
-    /// <c>StatsTid.Integrations.Payroll</c> is not needed because both consumers live in the
+    /// <c>StatsTid.Integrations.Payroll</c> is not needed because the consumer lives in the
     /// same assembly.
     /// </para>
     /// </summary>
