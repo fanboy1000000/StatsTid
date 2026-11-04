@@ -1882,8 +1882,8 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     // S147 QUAL-231: kind F. Fails on the pre-change formatAbsenceRuleError, which ignored `message`
     // and rendered a label-table sentence ("Omsorgsdage skal registreres som en hel dag (7,4 t). ...").
     // Red conditions: the getByText below finds nothing (that sentence is rendered instead). Was
-    // /Omsorgsdage skal registreres som en hel dag/. The mock's decimal comma is the da-DK target of
-    // tidy item 8; the container renders 7.4 until then.
+    // /Omsorgsdage skal registreres som en hel dag/. The mock's decimal comma is what the server sends
+    // since S147 tidy item 8 (da-DK formatting; a full-timer's served value keeps two decimals, "7,40").
     expect(
       screen.getByText('Omsorgsdag kan kun registreres som hel dag (7,4 timer) den 03-03-2026. Registreringen blev derfor sat tilbage.'),
     ).toBeInTheDocument()

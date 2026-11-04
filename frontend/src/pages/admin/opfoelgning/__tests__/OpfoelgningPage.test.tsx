@@ -15,7 +15,7 @@
 //  - the eventual-consistency lag note renders on the two event-backed lists;
 //  - the §21 list surfaces `cannotCompute` and `projectionNote`.
 // S147 TIDY-4 (lazy full-list cache, `useLazyFollowUpLoad`):
-//  - a leaver-month approve reloads the three summaries (F) and, after leaving the tile and coming
+//  - a leaver-month approve reloads the leaver and past-deadline summaries and the approved-not-exported list (F) and, after leaving the tile and coming
 //    back, the leaver list refetches instead of showing the stale row (F; `invalidate`);
 //  - a lazy fetch cancelled before it landed is retried on the next activation (F, the Codex
 //    sequence), including under React.StrictMode on a direct load (F against 94bd32be);
