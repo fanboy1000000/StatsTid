@@ -21,10 +21,10 @@ namespace StatsTid.Tests.Unit.Payroll;
 /// </para>
 ///
 /// <para>
-/// <b>Kind N for every fact</b> — each names a member this sprint creates (<c>DeriveLink</c>, <c>BuildIndex</c>,
+/// <b>Kind N for 24 of the 27 facts</b> (two are kind B boundary pins, at the S146 case-4b and unrecorded-month facts below, lines 520 and 539; one is kind F, case 3a, re-pinned by TASK-14715-T, line 132) — each N fact names a member this sprint creates (<c>DeriveLink</c>, <c>BuildIndex</c>,
 /// <c>LedgerStartOf</c>, the two-argument <c>WindowsReadRange</c>, <c>PriorMonthStale</c>, or the internal counter seam of
 /// <c>Derive</c>), so a compile error is not a RED; RED is a named MUTATION (keep the API, break one behaviour), proven at the
-/// wave gate in an isolated worktree. The plan's mutations are M-1 .. M-6; this file adds M-7 .. M-12 for the bullets they do not
+/// wave gate in an isolated worktree. The plan's mutations are M-1 .. M-6; this file adds M-229-7 .. M-229-12 for the bullets they do not
 /// cover. Each fact names its mutation under "Red conditions".
 /// </para>
 ///
@@ -98,7 +98,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// <c>DeriveLink</c> case 1 — M is a LEDGER_START record: its opening (7.5, not the 0 case 2 would give) is kept, and the
     /// walking <c>Derive</c> says the same. Kind N. Red conditions: Balance 7.5, LEDGER_START, LedgerStart = M for both
-    /// functions; mutation M-7 (case 1 deleted from the link: a start is re-derived by case 2 as 0 or by case 4) trips it.
+    /// functions; mutation M-229-7 (case 1 deleted from the link: a start is re-derived by case 2 as 0 or by case 4) trips it.
     /// </summary>
     [Fact]
     public void DeriveLink_Case1_LedgerStartRecordOfM_KeepsItsOpening()
@@ -114,7 +114,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// <c>DeriveLink</c> case 2 — an empty ledger (raw history only): LEDGER_START 0, whatever the month, including a raw
     /// record of M. Kind N. Red conditions: (0, LEDGER_START, LedgerStart = M) for a raw-only index and for an empty one;
-    /// mutation M-8 (raw records counted as ledger records in <c>BuildIndex</c>'s S) refuses or goes UNTRACKED.
+    /// mutation M-229-8 (raw records counted as ledger records in <c>BuildIndex</c>'s S) refuses or goes UNTRACKED.
     /// </summary>
     [Fact]
     public void DeriveLink_Case2_EmptyLedger_RawHistoryOnly_IsLedgerStartZero()
@@ -130,7 +130,7 @@ public class FlexLedgerChainWalkTests
     /// <c>DeriveLink</c> case 3a - M precedes S and has no record: 0, UNTRACKED, LedgerStart = S (June); no refusal.
     /// // S147 OQ-3 (i): re-pinned from the S146 refusal (409 payroll-export-out-of-order naming S) by the owner's ruling.
     /// Kind F. Red conditions: Refusal null, (0, UNTRACKED, June), <c>IsUntracked</c>, and the same decision from
-    /// <c>Derive</c>. On <c>1185624f</c> the link refuses (Opening null), so the Refusal-null assertion fails; mutation M-9
+    /// <c>Derive</c>. On <c>1185624f</c> the link refuses (Opening null), so the Refusal-null assertion fails; mutation M-229-9
     /// (3a refuses, or names M instead of S) trips it.
     /// </summary>
     [Fact]
@@ -148,7 +148,7 @@ public class FlexLedgerChainWalkTests
 
     /// <summary>
     /// <c>DeriveLink</c> case 3b — M precedes S but has a raw record: 0, UNTRACKED, LedgerStart = S. Kind N. Red conditions:
-    /// (0, UNTRACKED, June) and <c>IsUntracked</c>; mutation M-9 (3b refuses like 3a) trips it.
+    /// (0, UNTRACKED, June) and <c>IsUntracked</c>; mutation M-229-9 (3b refuses like 3a) trips it.
     /// </summary>
     [Fact]
     public void DeriveLink_Case3b_RawMonthBeforeLedgerStart_IsUntrackedZero()
@@ -165,7 +165,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// <c>DeriveLink</c> case 4a — P is employed and a ledger record: CHAINED from P's CLOSING (9.5, not P's opening 4); a
     /// later record (July, closing 77) is not consulted; M may be any day of its month (17 June). Kind N. Red conditions:
-    /// (9.5, CHAINED, March); mutation M-10 (chain from P's opening, or from the latest record's closing) trips it.
+    /// (9.5, CHAINED, March); mutation M-229-10 (chain from P's opening, or from the latest record's closing) trips it.
     /// </summary>
     [Fact]
     public void DeriveLink_Case4a_PreviousMonthEmployedAndRecorded_ChainsFromItsClosing()
@@ -187,7 +187,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// <c>DeriveLink</c> case 4b, P unrecorded — 409 <c>payroll-prior-month-not-recorded</c> naming P (May), "Export that month
     /// first". Kind N. Red conditions: Opening null, the kind, Month = May, the export-first sentence and not the
-    /// correct-first one; mutation M-11 (4b opens at 0 as REHIRE) trips it.
+    /// correct-first one; mutation M-229-11 (4b opens at 0 as REHIRE) trips it.
     /// </summary>
     [Fact]
     public void DeriveLink_Case4b_PreviousMonthUnrecorded_RefusesNamingP_ExportFirst()
@@ -205,7 +205,7 @@ public class FlexLedgerChainWalkTests
 
     /// <summary>
     /// <c>DeriveLink</c> case 4b, P raw — the same refusal naming P with "Correct that month first". Kind N. Red conditions:
-    /// the correct-first sentence and not the export-first one; mutation M-11 trips it.
+    /// the correct-first sentence and not the export-first one; mutation M-229-11 trips it.
     /// </summary>
     [Fact]
     public void DeriveLink_Case4b_PreviousMonthRaw_RefusesNamingP_CorrectFirst()
@@ -223,7 +223,7 @@ public class FlexLedgerChainWalkTests
 
     /// <summary>
     /// <c>DeriveLink</c> case 4c — P holds no employed day: REHIRE 0, even though an older closing exists. Kind N. Red
-    /// conditions: (0, REHIRE, March); mutation M-11 (4c chains from the older record, or refuses) trips it.
+    /// conditions: (0, REHIRE, March); mutation M-229-11 (4c chains from the older record, or refuses) trips it.
     /// </summary>
     [Fact]
     public void DeriveLink_Case4c_PreviousMonthNotEmployed_IsRehireZero()
@@ -244,7 +244,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// <c>DeriveLink</c> reads the link ONLY — it never walks. A chain whose February is stale gives the link of June the
     /// same answer as if it were consistent (May's closing, 11), while <c>Derive</c> refuses it. Kind N. Red conditions: the
-    /// link opens (11, CHAINED, January) and the walking <c>Derive</c> names February; mutation M-12 (the link itself walks
+    /// link opens (11, CHAINED, January) and the walking <c>Derive</c> names February; mutation M-229-12 (the link itself walks
     /// and refuses stale chains) makes the link refuse, tripping the first assertion.
     /// </summary>
     [Fact]
@@ -263,7 +263,7 @@ public class FlexLedgerChainWalkTests
     /// <c>BuildIndex</c> / <c>LedgerStartOf</c> (R-11, R-13) — S is the earliest LEDGER month (raw records do not count),
     /// <c>null</c> for an empty or raw-only ledger; <c>TryGetRecord</c> finds a month by any of its days; two records for one
     /// month throw. Kind N. Red conditions: S = February although a raw January exists; null for raw-only; the record found
-    /// for 17 March; the throw; mutation M-8 (raw counted) gives January.
+    /// for 17 March; the throw; mutation M-229-8 (raw counted) gives January.
     /// </summary>
     [Fact]
     public void BuildIndex_LedgerStartIsEarliestLedgerMonth_RawIgnored_DuplicateThrows()
@@ -320,7 +320,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// A consistent chain passes: June opens at May's closing, 11, CHAINED, with S = January. Also with a non-zero ledger-start
     /// opening (S is never re-derived: a start of 7.5 is not stale) and with a later record beyond M. Kind N. Red conditions:
-    /// (11, CHAINED, January) and (13.5, CHAINED, January); mutation M-13 (the walk starts at S inclusive and re-derives S as case 2,
+    /// (11, CHAINED, January) and (13.5, CHAINED, January); mutation M-229-13 (the walk starts at S inclusive and re-derives S as case 2,
     /// 0 LEDGER_START, instead of case 1) names January in the second case.
     /// </summary>
     [Fact]
@@ -349,7 +349,7 @@ public class FlexLedgerChainWalkTests
     /// A stale P is named: May's recorded opening is 7 although April closed at 9, so June cannot be opened and the month to
     /// recalculate is May (the sentence is the fixed, date-free one, and the exception carries yyyy-MM). Kind N. Red
     /// conditions: Kind payroll-prior-month-stale, Month May, the fixed sentence, MonthText "2026-05", no digit in the sentence;
-    /// mutation M-14 (the walk's upper bound excludes P, <c>x &lt; p</c>) lets June through (Opening non-null).
+    /// mutation M-229-14 (the walk's upper bound excludes P, <c>x &lt; p</c>) lets June through (Opening non-null).
     /// </summary>
     [Fact]
     public void Walk_StalePreviousMonth_IsNamed()
@@ -408,7 +408,7 @@ public class FlexLedgerChainWalkTests
     /// A recalculation of the named month never refuses itself: with February stale, M = February (the correction of the
     /// named month) has nothing before it to walk and opens CHAINED from January's closing, 3; M = January keeps its start.
     /// And a LATER month's recalculation (March) is refused naming February. Kind N. Red conditions: (3, CHAINED, January) for
-    /// February, (0, LEDGER_START) for January, stale February for March; mutation M-15 (the walk includes M itself) names
+    /// February, (0, LEDGER_START) for January, stale February for March; mutation M-229-15 (the walk includes M itself) names
     /// February when M = February.
     /// </summary>
     [Fact]
@@ -589,7 +589,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// A consistent chain with a REHIRE inside passes: the same employment, February repaired (3); April has no employed day;
     /// May is recorded REHIRE 0; June opens CHAINED from May's closing, 11. Kind N. Red conditions: (11, CHAINED, January);
-    /// mutation M-16 (case 4c deleted from the link, so a month after an unemployed month is derived CHAINED) names May.
+    /// mutation M-229-16 (case 4c deleted from the link, so a month after an unemployed month is derived CHAINED) names May.
     /// </summary>
     [Fact]
     public void Walk_ConsistentChainWithRehireInside_Passes()
@@ -614,7 +614,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// The provenance is part of the comparison: February is recorded REHIRE 0 but January is employed and closes at 0, so the
     /// link now gives CHAINED 0 — the same balance, a different provenance, and February is named. Kind N. Red conditions:
-    /// Month February; mutation M-17 (compare the balance only) lets June open.
+    /// Month February; mutation M-229-17 (compare the balance only) lets June open.
     /// </summary>
     [Fact]
     public void Walk_SameBalanceDifferentProvenance_IsStale()
@@ -634,7 +634,7 @@ public class FlexLedgerChainWalkTests
     /// <summary>
     /// R-13 — with a ledger start the windows are read over <c>[min(S, P).start, M.end]</c>: S well before P gives S's first
     /// day; S = P or S = M or S after M gives today's range (P's first day); no S (null) gives today's range. The one-argument
-    /// calls in <c>FlexLedgerOpeningTests</c> keep today's range. Kind N. Red conditions: the five exact tuples; mutation M-18
+    /// calls in <c>FlexLedgerOpeningTests</c> keep today's range. Kind N. Red conditions: the five exact tuples; mutation M-229-18
     /// (the helper ignores <c>ledgerStart</c>) gives (2026-05-01, ...) for the first.
     /// </summary>
     [Fact]

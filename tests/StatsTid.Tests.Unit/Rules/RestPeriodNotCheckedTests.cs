@@ -225,7 +225,7 @@ public class RestPeriodNotCheckedTests
         var entries = new List<TimeEntry>
         {
             HoursOnly(Sat7, 4m),
-            HoursOnly(Mon2, 3m, activity: "VACATION"),
+            HoursOnly(Mon2, 3m, activity: "ON_CALL"),
             HoursOnly(Mon2, 4.4m),
         };
 

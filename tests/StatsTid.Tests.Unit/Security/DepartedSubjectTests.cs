@@ -63,7 +63,10 @@ public class DepartedSubjectTests
 
     /// <summary>Kind N. Deactivated with a FUTURE end date is still departed (the flag governs). Red condition: the
     /// deactivated flag is ignored when an end date is present. Mutation M-12 (drop the deactivated arm) captured RED:
-    /// "Assert.True() Failure  Expected: True  Actual: False".</summary>
+    /// "Assert.True() Failure  Expected: True  Actual: False".
+    /// It alone pins the narrower mutation "the deactivated flag counts only when no end date is set" (<c>!IsActive &amp;&amp; EmploymentEndDate is null</c>):
+    /// run in a detached worktree, it failed this fact alone ("Assert.True() Failure  Expected: True  Actual: False"; 14 of 15 passed);
+    /// M-12 also trips <c>DeactivatedNoEndDate_IsDeparted</c>.</summary>
     [Fact]
     public void DeactivatedFutureEndDate_IsDeparted()
         => Assert.True(DepartedSubject.IsDeparted(Subject(false, Today.AddDays(5)), Today));

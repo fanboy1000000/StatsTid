@@ -208,7 +208,8 @@ public sealed class LeaverGraceTests : IAsyncLifetime
     /// whose subject has a passed end date is refused <c>NotDueUnderLock</c>), so this fact does NOT by itself prove the
     /// K-3 SQL filter: with only that filter reverted the pass picks the leaver up, the guard refuses, and the fact stays
     /// green. What the K-3 filter adds is tidiness (the leaver is never picked up, no lock taken, no NotDue churn); the
-    /// selection step cannot be observed from a test without touching src, so that part is not pinned here. The fact
+    /// selection step is observable only through a logger: with the filter reverted, the in-lock guard writes its Debug line
+    /// (<c>VacationSettlementService.cs:285-288</c>). This fact captures no logs, so that part is not pinned here. The fact
     /// guards the OUTCOME against any future change that removes both layers.
     ///
     /// <para>Seeding: the settlement gates are ENABLED (go-live 2020-01-01 and the SPECIAL_HOLIDAY flag). Two ordinary

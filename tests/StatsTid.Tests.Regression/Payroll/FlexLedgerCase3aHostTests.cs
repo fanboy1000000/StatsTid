@@ -290,7 +290,7 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
     [Fact]
     public async Task Case3a_ZeroLines_SelfApprovedMonth_Returns409FourEyes_NothingWritten()
     {
-        var employeeId = $"EMP-S147-C3A-SELF";
+        var employeeId = "EMP-S147-C3A-SELF";
         await _fx.SeedEmployeeAsync(employeeId);
         await _fx.SeedLedgerRecordAsync(employeeId, Jun, closing: 1m);
         await _fx.SeedApprovedMonthAsync(employeeId, Mar);
@@ -328,6 +328,7 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
         Assert.Equal(0, await _fx.CountRecordsAsync(employeeId));
         Assert.Equal(0, await _fx.CountExportEventsAsync(employeeId));
     }
+
     // ═════════════════════════════════════════════════════════════════════
     // D1 — the zero-line skip is guarded by "no record"
     // ═════════════════════════════════════════════════════════════════════

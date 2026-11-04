@@ -106,7 +106,7 @@ public sealed class FlexLedgerHostTests : IClassFixture<FlexLedgerHostFixture>
     /// <summary>
     /// R-36 (kind N, Docker). One employee whose employment spell ENDS INSIDE the previous month P (10 May; M = June): the
     /// self-managed <c>GetWindowsAsync</c> and the new in-transaction overload <c>GetWindowsAsync(conn, tx, ...)</c>, both over
-    /// <c>[P.start, M.end]</c> (<see cref="FlexLedgerOpening.WindowsReadRange"/>), return the SAME windows, and
+    /// <c>[P.start, M.end]</c> (<see cref="FlexLedgerOpening.WindowsReadRange"/>, the one-argument form this fact calls; production passes the ledger start S too and reads <c>[min(S, P).start, M.end]</c>, S147 R-13), return the SAME windows, and
     /// <c>EmployedIn(P)</c> is true on both (while <c>EmployedIn(M)</c> is false), so the admission read and the under-lock
     /// recheck cannot disagree about the chain.
     ///
