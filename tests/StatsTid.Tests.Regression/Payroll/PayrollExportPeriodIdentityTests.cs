@@ -32,9 +32,10 @@ namespace StatsTid.Tests.Regression.Payroll;
 ///
 /// <para>
 /// <b>The check, and which fact pins which clause.</b> The identity check in <c>AssertPeriodApprovedForUpdateAsync</c> refuses
-/// when <c>employeeId != group employee || periodStart != the 1st || periodEnd != the last day</c> (each clause alone is enough
-/// to refuse). Each fact below is built so that exactly ONE clause refuses it, the others holding, and its docstring names the
-/// single mutation that turns it red. Together: (a) delete the end clause is caught by <c>PeriodWithWrongEnd</c>; (b) delete the
+/// when <c>employeeId != the exported employee || periodStart != the 1st || periodEnd != the last day</c> (each clause alone is
+/// enough to refuse). <c>PeriodOfAnotherEmployee</c>, <c>PeriodWithWrongEnd</c> and <c>PeriodWithWrongStart</c> are each refused
+/// by exactly ONE clause, the others holding; <c>PeriodOfAnotherMonth</c> and <c>WeeklyPeriodInsideTheMonth</c> are refused by
+/// both date clauses. Each docstring names the mutation that turns its fact red. Together: (a) delete the end clause is caught by <c>PeriodWithWrongEnd</c>; (b) delete the
 /// start clause by <c>PeriodWithWrongStart</c>; (c) relax both date clauses to "within the month" by
 /// <c>WeeklyPeriodInsideTheMonth</c>; (d) delete the employee clause by <c>PeriodOfAnotherEmployee</c>; (e) delete BOTH date
 /// clauses by <c>PeriodOfAnotherMonth</c> (and by the three date facts). The facts are Docker facts and cannot run locally: each
@@ -127,7 +128,7 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
 
     /// <summary>
     /// R-G2 (ii), kind N (names <c>PeriodNotTheExportedMonthMessage</c>); behaviour F against master <c>19c1e6a1</c> (no export-time identity check) and against
-    /// <c>124a7933</c> (status check only): a call naming the SAME employee's APPROVED March
+    /// <c>124a7933</c> (not-found, APPROVED and four-eyes, but no identity check): a call naming the SAME employee's APPROVED March
     /// period while exporting April's lines passed the status check and wrote April's record with March's period id.
     /// Exporting EMP_IDENT_C's April lines under EMP_IDENT_C's own APPROVED March period throws
     /// <see cref="PayrollExportConflictException"/> with exactly
