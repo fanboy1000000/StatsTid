@@ -30,6 +30,22 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// sender both NULL, so neither four-eyes rule can be what refuses) that belongs to someone or somewhere else.
 /// </para>
 ///
+/// <para>
+/// <b>The check, and which fact pins which clause.</b> The identity check in <c>AssertPeriodApprovedForUpdateAsync</c> refuses
+/// when <c>employeeId != group employee || periodStart != the 1st || periodEnd != the last day</c> (each clause alone is enough
+/// to refuse). Each fact below is built so that exactly ONE clause refuses it, the others holding, and its docstring names the
+/// single mutation that turns it red. Together: (a) delete the end clause is caught by <c>PeriodWithWrongEnd</c>; (b) delete the
+/// start clause by <c>PeriodWithWrongStart</c>; (c) relax both date clauses to "within the month" by
+/// <c>WeeklyPeriodInsideTheMonth</c>; (d) delete the employee clause by <c>PeriodOfAnotherEmployee</c>; (e) delete BOTH date
+/// clauses by <c>PeriodOfAnotherMonth</c> (and by the three date facts). The facts are Docker facts and cannot run locally: each
+/// mutation is argued by reading the check, not executed.
+/// </para>
+///
+/// <para>
+/// <b>Seeding.</b> <c>approval_periods</c> carries <c>UNIQUE (employee_id, period_start, period_end)</c> (init.sql and the test
+/// schema). It is harmless here: every fact seeds one period for its own employee, so no two seeds can collide.
+/// </para>
+///
 /// Docker-gated (Testcontainers Postgres): CI-pending until the sprint checkpoint, never locally green.
 /// </summary>
 [Trait("Category", "Docker")]
@@ -86,8 +102,8 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
     /// <para><b>Red conditions.</b> The mutation "drop the employee comparison" (delete
     /// <c>!string.Equals(employeeId, key.EmployeeId, StringComparison.Ordinal) ||</c> from the identity check in
     /// <c>AssertPeriodApprovedForUpdateAsync</c>) leaves a file that compiles; the period is APPROVED and four-eyes clean, the
-    /// month matches, so the export commits and <c>ThrowsAsync</c> fails with "no exception was thrown". Dropping the whole
-    /// check fails this fact and (ii). A check that ran AFTER the status check would not change this fact's outcome (the period
+    /// month matches, so the export commits and <c>ThrowsAsync</c> fails with "no exception was thrown". This is the one fact that turns red under mutation (d) alone; the period is the exact whole
+    /// month, so no date clause could refuse it. A check that ran AFTER the status check would not change this fact's outcome (the period
     /// is APPROVED); the order is pinned by the code's docstring, not here. CI-pending.</para>
     /// </summary>
     [Fact]
@@ -110,17 +126,19 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// R-G2 (ii), kind N, behaviour F against the code before fix-up 1: a call naming the SAME employee's APPROVED March
+    /// R-G2 (ii), kind N (names <c>PeriodNotTheExportedMonthMessage</c>); behaviour F against master <c>19c1e6a1</c> (no export-time identity check) and against
+    /// <c>124a7933</c> (status check only): a call naming the SAME employee's APPROVED March
     /// period while exporting April's lines passed the status check and wrote April's record with March's period id.
     /// Exporting EMP_IDENT_C's April lines under EMP_IDENT_C's own APPROVED March period throws
     /// <see cref="PayrollExportConflictException"/> with exactly
     /// <c>PeriodNotTheExportedMonthMessage(periodId, "EMP_IDENT_C", 2026-03-01, 2026-03-31, "EMP_IDENT_C", 2026, 4)</c>, and
     /// writes no record, no event and no audit row.
     ///
-    /// <para><b>Red conditions.</b> The mutation "drop the month comparison" (delete the start and end clauses of the
-    /// whole-month check) leaves the employee equal and the status
-    /// APPROVED, so the export commits an April record carrying March's period id and <c>ThrowsAsync</c> fails with "no
-    /// exception was thrown". The two facts that follow pin the half-measures. CI-pending.</para>
+    /// <para><b>Red conditions.</b> Both date clauses refuse this period (March's start is not 1 April, its end is not 30 April),
+    /// so deleting ONE clause leaves it green; it turns red only under mutation (e), deleting BOTH date clauses (the employee is
+    /// equal and the status APPROVED, so the export commits an April record carrying March's period id and <c>ThrowsAsync</c>
+    /// fails with "no exception was thrown"). It does NOT catch (a), (b) or (c) (March is outside April, so even "within the
+    /// month" refuses it); the three facts that follow do. At <c>75b463b7</c> (both dates compared) it was green. CI-pending.</para>
     /// </summary>
     [Fact]
     public async Task ExportAsync_PeriodOfAnotherMonth_Throws409_WritesNothing()
@@ -141,24 +159,26 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// R-G8 (i), kind N, behaviour F against `e81e02b9^` (before fix-up 2 only a start inside the month was
-    /// compared): a period that STRADDLES the month end, 2026-04-27..2026-05-03, for the SAME employee, with that employee's
-    /// whole-month April lines. The period is APPROVED and four-eyes clean, the employee matches, its start lies in April, so
-    /// only an end-equals-last-day check refuses it: 409 with exactly <c>PeriodNotTheExportedMonthMessage</c>, and no record,
-    /// event or audit row. (Both seeds satisfy the constraints: <c>period_type</c> WEEKLY is allowed by its CHECK in the test schema and <c>init.sql</c>, and there is no
-    /// UNIQUE on the period dates.)
+    /// R-G8 END-clause pin (renamed from <c>ExportAsync_PeriodStraddlingTheMonthEnd_Throws409_WritesNothing</c>), kind N (names
+    /// <c>PeriodNotTheExportedMonthMessage</c>). The same employee's APPROVED, four-eyes-clean period 2026-04-01..2026-05-03
+    /// (it STARTS on the 1st and runs past the month end) with that employee's whole-month April lines. The employee matches and
+    /// the start is exactly 1 April, so ONLY the end clause (<c>periodEnd != 30 April</c>) refuses it: 409 with exactly
+    /// <c>PeriodNotTheExportedMonthMessage</c>, and no record, event or audit row.
     ///
-    /// <para><b>Red conditions.</b> The mutation "drop the <c>period_end</c> equality" (the end is no longer compared, or is
-    /// only required to start in the month) lets this period through; the export commits April's record carrying a period
-    /// that reaches into May, so <c>ThrowsAsync</c> fails with "no exception was thrown". CI-pending.</para>
+    /// <para><b>Red conditions.</b> Mutation (a): delete <c>|| periodEnd != monthEnd</c>. The remaining clauses all hold, the
+    /// period is APPROVED and four-eyes clean, so the export commits an April record whose period reaches into May and
+    /// <c>ThrowsAsync</c> fails with "no exception was thrown". Mutation (b) (start clause deleted) leaves it green because the
+    /// end clause still refuses; mutation (c) ("within the month") also refuses it (3 May is outside April). Kind against
+    /// master <c>19c1e6a1</c>: F in behaviour (the export committed); it cannot compile there. Against <c>75b463b7</c> (both
+    /// dates within the month): refused there too, so a regression pin there. Argued from the code, not run (Docker). CI-pending.</para>
     /// </summary>
     [Fact]
-    public async Task ExportAsync_PeriodStraddlingTheMonthEnd_Throws409_WritesNothing()
+    public async Task ExportAsync_PeriodWithWrongEnd_Throws409_WritesNothing()
     {
         const string emp = "EMP_IDENT_D";
-        var start = new DateOnly(2026, 4, 27);
+        var start = new DateOnly(2026, 4, 1);
         var end = new DateOnly(2026, 5, 3);
-        var periodId = await SeedApprovedPeriodAsync(emp, start, end, "WEEKLY");
+        var periodId = await SeedApprovedPeriodAsync(emp, start, end, "MONTHLY");
         var auditBefore = await CountAuditRowsAsync();
 
         var ex = await Assert.ThrowsAsync<PayrollExportConflictException>(
@@ -169,15 +189,45 @@ public sealed class PayrollExportPeriodIdentityTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// R-G8 (ii), kind N, behaviour F against the within-the-month check of <c>e81e02b9^</c>: a WEEKLY period wholly inside
-    /// April, 2026-04-06..2026-04-12, for the SAME employee, with that employee's whole-month April lines. Both dates lie in
-    /// April, so only a "start is the 1st and end is the last day" check refuses it: 409 with exactly
-    /// <c>PeriodNotTheExportedMonthMessage</c>, and no record, event or audit row. (A week is not the month's approval; a
-    /// month is paid on the month's own approval.)
+    /// R-G8 START-clause pin, kind N (names <c>PeriodNotTheExportedMonthMessage</c>). The same employee's APPROVED, four-eyes-clean
+    /// period 2026-04-02..2026-04-30 (it ENDS on the last day but starts on the 2nd) with that employee's whole-month April lines.
+    /// The employee matches and the end is exactly 30 April, so ONLY the start clause (<c>periodStart != 1 April</c>) refuses it:
+    /// 409 with exactly <c>PeriodNotTheExportedMonthMessage</c>, and no record, event or audit row.
     ///
-    /// <para><b>Red conditions.</b> The mutation "relax the start/end equalities to 'within the month'" (the behaviour before
-    /// fix-up 2) accepts this period; the export commits and <c>ThrowsAsync</c> fails with "no exception was thrown".
-    /// CI-pending.</para>
+    /// <para><b>Red conditions.</b> Mutation (b): delete <c>|| periodStart != monthStart</c>. The remaining clauses all hold, so
+    /// the export commits and <c>ThrowsAsync</c> fails with "no exception was thrown". Mutation (a) (end clause deleted) leaves it
+    /// green because the start clause still refuses. Mutation (c) ("within the month") ACCEPTS this period (both dates are in
+    /// April) and turns it red too. Against master <c>19c1e6a1</c>: F in behaviour (the export committed). Against
+    /// <c>75b463b7</c> (both dates only had to be within the month): F as well, the period passed. Argued from the code, not run
+    /// (Docker). CI-pending.</para>
+    /// </summary>
+    [Fact]
+    public async Task ExportAsync_PeriodWithWrongStart_Throws409_WritesNothing()
+    {
+        const string emp = "EMP_IDENT_F";
+        var start = new DateOnly(2026, 4, 2);
+        var end = new DateOnly(2026, 4, 30);
+        var periodId = await SeedApprovedPeriodAsync(emp, start, end, "MONTHLY");
+        var auditBefore = await CountAuditRowsAsync();
+
+        var ex = await Assert.ThrowsAsync<PayrollExportConflictException>(
+            () => _service.ExportAsync(new[] { Line(emp, 2026, 4) }, ContextWith(periodId)));
+
+        Assert.Equal(PayrollExportService.PeriodNotTheExportedMonthMessage(periodId, emp, start, end, emp, 2026, 4), ex.Message);
+        await AssertNothingWrittenAsync(emp, 2026, 4, auditBefore);
+    }
+
+    /// <summary>
+    /// R-G8 "within the month" pin, kind N (names <c>PeriodNotTheExportedMonthMessage</c>): a WEEKLY period wholly inside April,
+    /// 2026-04-06..2026-04-12, for the SAME employee, with that employee's whole-month April lines. A week is not the month's
+    /// approval. Both date clauses refuse it (neither date is the 1st or the last day); 409 with exactly
+    /// <c>PeriodNotTheExportedMonthMessage</c>, and no record, event or audit row.
+    ///
+    /// <para><b>Red conditions.</b> Mutation (c): relax the two equalities to "within the month" (<c>periodStart</c> and
+    /// <c>periodEnd</c> must merely lie in the exported year and month, the behaviour at <c>75b463b7</c>). Both dates are in April,
+    /// so the period is accepted, the export commits and <c>ThrowsAsync</c> fails with "no exception was thrown". Deleting only one
+    /// date clause (a or b) leaves it green, because the other still refuses it. Against master <c>19c1e6a1</c>: F in behaviour;
+    /// against <c>75b463b7</c>: F. Argued from the code, not run (Docker). CI-pending.</para>
     /// </summary>
     [Fact]
     public async Task ExportAsync_WeeklyPeriodInsideTheMonth_Throws409_WritesNothing()
