@@ -90,8 +90,9 @@ public static class AbsenceTypeLabels
     /// <para>
     /// <b>Why a fixed culture.</b> Interpolating <paramref name="requiredHours"/> under the
     /// thread's culture made the sentence depend on the host: the container sets no <c>LANG</c>,
-    /// so a Danish user read "(7.4 timer)". The hours are formatted with the Danish culture
-    /// (<c>da-DK</c>, decimal comma: "(7,4 timer)") whatever the thread culture is. Only the
+    /// so a Danish user read "(7.40 timer)" (the day norm keeps two decimals). The hours are
+    /// formatted with the Danish culture (<c>da-DK</c>, decimal comma: "(7,40 timer)") whatever
+    /// the thread culture is. Only the
     /// culture changed: the number's value, scale and default format are as before, and the
     /// typed <c>requiredHours</c> field beside the message is untouched. The date keeps its
     /// <c>dd-MM-yyyy</c> pattern, which has no culture-dependent part. The culture is resolved
