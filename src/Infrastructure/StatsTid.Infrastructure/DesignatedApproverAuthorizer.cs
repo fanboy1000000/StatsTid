@@ -65,7 +65,9 @@ namespace StatsTid.Infrastructure;
 /// before the authority date (<see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/>). It no longer
 /// waits for the leaver job's Step A to switch the leaver off: that switch-off, which the active-only
 /// same-Organisation re-check reads, is now belt and braces. HR is not decided here (the endpoints'
-/// org-scope arm admits HR), so HR is unaffected.
+/// org-scope arm admits HR), so HR is unaffected. The org-scope layer carries the same date rule
+/// (<see cref="Security.OrgScopeValidator"/>, TASK-14725 fix-up 1); the paths decided here do not pass
+/// through it, so both layers are needed.
 /// </para>
 /// </summary>
 public sealed class DesignatedApproverAuthorizer
@@ -378,10 +380,18 @@ public sealed class DesignatedApproverAuthorizer
         // (EmploymentEndDateLifecycleWriter.IsPastGrace: end date < asOf − 5, i.e. from D+6), whether or
         // not Step A has run. D .. D+5 are unchanged; no end date, or one in the future, is unchanged.
         //
-        // ONE PLACE. Every manager path — the designated edge, the admin-assigned acting manager, the
-        // edge manager's stand-in, the unit leader and the unit leader's stand-in — reaches the verdict
-        // through this line, and every production authority read calls this predicate. HR is not decided
-        // here (the endpoints admit HR through their org-scope arm), so HR is unaffected.
+        // ONE PLACE FOR THIS LAYER. Every manager path — the designated edge, the admin-assigned acting
+        // manager, the edge manager's stand-in, the unit leader and the unit leader's stand-in — reaches
+        // the verdict through this line, and every production authority read calls this predicate. HR is
+        // not decided here (the endpoints admit HR through their org-scope arm), so HR is unaffected.
+        //
+        // TWO LAYERS, BOTH NEEDED (TASK-14725 fix-up 1). OrgScopeValidator now applies the same date rule
+        // to every route's org-scope check (a past-grace subject counts as switched off there). But the
+        // paths decided HERE are never decided by that validator: a manager is admitted by the reporting
+        // graph (the edge, a stand-in, a unit leadership), not by a role scope, and the callers consult
+        // this predicate precisely when the validator's arm did NOT admit (on approve, reject and reopen
+        // that arm is floored at LocalHR, so it never admits a manager at all). Removing either check
+        // would reopen the window on its own layer.
         //
         // TODAY. effectiveAsOf is the caller's single Copenhagen date (PAT-028): every production caller
         // passes its handler's `today` (or the projection's), so the clock is not read again here.

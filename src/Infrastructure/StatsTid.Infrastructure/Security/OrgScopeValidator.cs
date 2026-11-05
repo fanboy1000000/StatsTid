@@ -27,16 +27,47 @@ namespace StatsTid.Infrastructure.Security;
 /// </para>
 ///
 /// <para>
+/// <b>S147 / TASK-14725 fix-up 1 (owner ruling 2026-11-05, "(a) Extend now") — a target past the
+/// manager grace BY DATE counts as switched off.</b> The owner ruled (OQ-2) that a leaver's own manager
+/// may act for 5 calendar days after the last day employed and that from D+6 only HR may. Until this
+/// fix-up both employee overloads learned that a leaver had passed D+5 only from <c>is_active</c>, which
+/// the leaver job's Step A (a 5-minute poll) switches off on D+6 — so between Copenhagen midnight and
+/// that poll, or for as long as Step A failed, every route still treated the leaver as an ordinary
+/// active employee. Now, after the identity clause, a target whose last day employed lies past the
+/// grace (<see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/>: before today − 5) is answered
+/// exactly as a switched-off one, whatever <c>is_active</c> says: the active-only overload answers
+/// "Target employee not found" to every actor, and the terminated-inclusive overload admits it only
+/// through a scope that is itself LocalHR or above (TASK-14713's rule). D .. D+5, no end date or a
+/// future one: unchanged. The switch-off stays as belt and braces. The approval EDGE and the unit-leader
+/// path do not pass through this validator, so <see cref="DesignatedApproverAuthorizer"/> carries the
+/// same date rule for them (TASK-14725): both layers are needed. The refusal texts are the existing
+/// ones (no date, ADR-040 D7); the WARNING log line names the clause (<see cref="PastGraceClauseName"/>).
+/// </para>
+///
+/// <para>
 /// <b>"Today"</b> is the Copenhagen business day read from the injected <see cref="TimeProvider"/>, at
-/// most once per call and only when the identity matches. The handler that called the validator may
-/// read the same provider again for its own dates; the two reads can differ only for a request that
-/// straddles Copenhagen midnight (the PAT-028 residual, recorded in the ADR-040 amendment). Every host
-/// that builds this validator must therefore register a <see cref="TimeProvider"/> (BC-6: the Backend,
-/// Payroll and Orchestrator hosts).
+/// most once per call, and only when a clause needs it: the identity matches (the departed-self clause)
+/// or the target has a recorded last day employed (the past-grace rule). The handler that called the
+/// validator may read the same provider again for its own dates; the two reads can differ only for a
+/// request that straddles Copenhagen midnight (the PAT-028 residual, recorded in the ADR-040 amendment).
+/// Every host that builds this validator must therefore register a <see cref="TimeProvider"/> (BC-6: the
+/// Backend, Payroll and Orchestrator hosts).
 /// </para>
 /// </summary>
 public sealed class OrgScopeValidator
 {
+    /// <summary>
+    /// S147 / TASK-14725 fix-up 1 — the clause name the WARNING log line carries when a target is
+    /// refused because it is past the manager grace by date and so treated as switched off (one name
+    /// per clause, the S147 house rule). The response body never names it, nor any date.
+    /// </summary>
+    public const string PastGraceClauseName = "past-grace-as-switched-off";
+
+    // The two existing refusal texts a switched-off target gets, held once so the past-grace answer is
+    // provably the same text (S147 / TASK-14725 fix-up 1). Wording unchanged.
+    private const string TargetNotFoundReason = "Target employee not found";
+    private const string TerminatedRequiresHrReason = "Terminated-employee access requires LocalHR or above";
+
     private readonly OrganizationRepository _organizationRepository;
     private readonly UserRepository _userRepository;
     private readonly TimeProvider _timeProvider;
@@ -106,14 +137,28 @@ public sealed class OrgScopeValidator
 
         var targetUser = await _userRepository.GetByIdAsync(targetEmployeeId, ct);
         if (targetUser is null)
-            return Deny(actor, targetEmployeeId, "Target employee not found");
+            return Deny(actor, targetEmployeeId, TargetNotFoundReason);
+
+        // PAT-028 — this call's ONE Copenhagen business date, read lazily and at most once (only when
+        // a clause below needs it: the identity matches, or the target has a recorded last day).
+        DateOnly? today = null;
+        DateOnly Today() => today ??= CopenhagenBusinessDate.Today(_timeProvider);
 
         // S147 / TASK-14703 (R-30) — the departed-self clause, right after the target read. On this
         // active-only overload a DEACTIVATED self has already answered "Target employee not found"
         // above (as before); what this adds is the self still active but past their last day (the
         // grace between the last day and the deactivation). Identity arm only — see the class remarks.
-        if (IsDepartedSelf(actor, targetEmployeeId, targetUser))
+        if (IsDepartedSelf(actor, targetEmployeeId, targetUser, Today))
             return DenyDepartedSelf(actor, targetEmployeeId);
+
+        // S147 / TASK-14725 fix-up 1 (owner ruling 2026-11-05, "(a) Extend now") — a target past the
+        // manager grace BY DATE is answered exactly as a switched-off target is answered by the
+        // active-only read above: "Target employee not found", to every actor. The read above only
+        // stops matching once the leaver job's Step A has run; this makes the answer the same from
+        // Copenhagen midnight on D+6, and for as long as Step A fails. Runs after the identity clause,
+        // so a departed self keeps that clause's answer (unchanged). See the class remarks.
+        if (IsPastGraceByDate(targetUser, Today))
+            return DenyPastGraceAsSwitchedOff(actor, targetEmployeeId, TargetNotFoundReason);
 
         var targetOrg = await _organizationRepository.GetByIdAsync(targetUser.PrimaryOrgId, ct);
         if (targetOrg is null)
@@ -163,7 +208,9 @@ public sealed class OrgScopeValidator
     /// and the leader arm of reopen (<c>roleFloor</c> LocalHR; the designated-approver edge beside them
     /// refuses the leaver's manager from that day BY DATE — S147 / TASK-14725, the
     /// <c>DesignatedApproverAuthorizer</c> manager-grace check — and still fails closed for a deactivated
-    /// subject as belt and braces); the Skema month view's HR tier, through <c>ApprovalReadTier.ClassifyMonthViewTierIncludingTerminatedAsync</c>
+    /// subject as belt and braces; since TASK-14725 fix-up 1 this overload, too, treats a subject past
+    /// the grace by date as switched off, so "from that day" no longer waits for Step A on either
+    /// layer); the Skema month view's HR tier, through <c>ApprovalReadTier.ClassifyMonthViewTierIncludingTerminatedAsync</c>
     /// (that view only; the shared <c>IsLeaderTierReadAsync</c> stays on the active-only overload); and the
     /// Payroll host's <c>/calculate-and-export</c> (<c>roleFloor</c> LocalAdmin). Each is bounded AFTER this
     /// gate to a month that holds an employed day (ADR-040 D3's date-free refusal), and the three decision
@@ -199,7 +246,8 @@ public sealed class OrgScopeValidator
     ///
     /// <para>
     /// <b>HROrAbove gate (R9b), enforced at the moment it matters:</b> when the resolved target is
-    /// TERMINATED (<c>is_active = FALSE</c>), the actor's role must be LocalHR or above
+    /// TERMINATED (<c>is_active = FALSE</c>; since S147 / TASK-14725 fix-up 1 also a target past the
+    /// manager grace by date — see the class remarks), the actor's role must be LocalHR or above
     /// (<see cref="StatsTidRoles.IsAtLeast"/> vs <see cref="StatsTidRoles.LocalHR"/> — the same
     /// GlobalAdmin/LocalAdmin/LocalHR set the <c>HROrAbove</c> endpoint policy admits). For an
     /// ACTIVE target this validator is deliberately behavior-identical to
@@ -277,24 +325,40 @@ public sealed class OrgScopeValidator
         // "Target employee not found").
         var targetUser = await _userRepository.GetByIdIncludingTerminatedAsync(targetEmployeeId, ct);
         if (targetUser is null)
-            return Deny(actor, targetEmployeeId, "Target employee not found");
+            return Deny(actor, targetEmployeeId, TargetNotFoundReason);
+
+        // PAT-028 — this call's ONE Copenhagen business date, read lazily and at most once.
+        DateOnly? today = null;
+        DateOnly Today() => today ??= CopenhagenBusinessDate.Today(_timeProvider);
 
         // S147 / TASK-14703 (R-30) — the departed-self clause, right after the target read and BEFORE
         // the HR gate below. On this overload a deactivated self IS resolved, and before S147 an HR-tier
         // self passed the gate (the S136 adjudicated residual, re-decided by the owner's OQ-2): the
         // clause refuses both the deactivated self and the self past their last day. Identity arm only —
         // HR acting on someone ELSE who has left still reaches the gate and the scope loop as before.
-        if (IsDepartedSelf(actor, targetEmployeeId, targetUser))
+        if (IsDepartedSelf(actor, targetEmployeeId, targetUser, Today))
             return DenyDepartedSelf(actor, targetEmployeeId);
+
+        // S147 / TASK-14725 fix-up 1 (owner ruling 2026-11-05, "(a) Extend now") — "switched off" for
+        // THIS overload's two HR gates below means: deactivated (is_active = FALSE), OR past the
+        // manager grace BY DATE (EmploymentEndDateLifecycleWriter.IsPastGrace — last day employed
+        // before today − 5, so from D+6) whatever is_active says. A past-grace target is therefore
+        // admitted only through a scope that is itself LocalHR or above, exactly as a deactivated one
+        // (TASK-14713's rule) — from Copenhagen midnight on D+6, not from Step A's poll. D .. D+5, no
+        // end date, or a future one: unchanged. The departed-self clause above is unchanged.
+        var pastGraceWhileActive = targetUser.IsActive && IsPastGraceByDate(targetUser, Today);
+        var terminatedTarget = !targetUser.IsActive || pastGraceWhileActive;
 
         // R9b HROrAbove gate on terminated-employee data (fail-closed BEFORE the scope loop, so
         // a non-HR actor holding a GLOBAL scope is still refused a terminated target here).
         // Kept as defense-in-depth/fail-fast — the per-scope R9f1 floor inside the loop is the
         // gate that actually binds privilege to the ADMITTING scope.
-        if (!targetUser.IsActive &&
+        if (terminatedTarget &&
             (actor.ActorRole is null || !StatsTidRoles.IsAtLeast(actor.ActorRole, StatsTidRoles.LocalHR)))
         {
-            return Deny(actor, targetEmployeeId, "Terminated-employee access requires LocalHR or above");
+            return pastGraceWhileActive
+                ? DenyPastGraceAsSwitchedOff(actor, targetEmployeeId, TerminatedRequiresHrReason)
+                : Deny(actor, targetEmployeeId, TerminatedRequiresHrReason);
         }
 
         var targetOrg = await _organizationRepository.GetByIdAsync(targetUser.PrimaryOrgId, ct);
@@ -302,10 +366,9 @@ public sealed class OrgScopeValidator
             return Deny(actor, targetEmployeeId, "Target organization not found");
 
         // CoversOrg/PrimaryOrgId subtree check — identical to ValidateEmployeeAccessAsync for an
-        // ACTIVE target; for a TERMINATED target each scope must ALSO clear the R9f1 per-scope
-        // HROrAbove floor below before it can admit.
+        // ACTIVE target; for a TERMINATED target (S147 / TASK-14725: or one past the grace by date)
+        // each scope must ALSO clear the R9f1 per-scope HROrAbove floor below before it can admit.
         var orgPathCache = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var terminatedTarget = !targetUser.IsActive;
 
         foreach (var scope in actor.Scopes)
         {
@@ -518,11 +581,40 @@ public sealed class OrgScopeValidator
     /// <summary>
     /// S147 / TASK-14703 (R-30) — the clause's test: the actor IS the target (Ordinal; a null or empty
     /// actor id never matches) AND the target has departed as of the Copenhagen business day. "Today"
-    /// is read from the injected provider only when the identity matches, so at most once per call.
+    /// comes from the caller's per-call lazy date (<paramref name="today"/>) and is asked for only when
+    /// the identity matches.
     /// </summary>
-    private bool IsDepartedSelf(ActorContext actor, string targetEmployeeId, User targetUser) =>
+    private static bool IsDepartedSelf(
+        ActorContext actor, string targetEmployeeId, User targetUser, Func<DateOnly> today) =>
         DepartedSubject.IsSelf(actor.ActorId, targetEmployeeId)
-        && DepartedSubject.IsDeparted(targetUser, CopenhagenBusinessDate.Today(_timeProvider));
+        && DepartedSubject.IsDeparted(targetUser, today());
+
+    /// <summary>
+    /// S147 / TASK-14725 fix-up 1 — the target's last day employed is recorded and lies past the owner's
+    /// 5-day manager grace at the call's Copenhagen date
+    /// (<see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/>: false on D .. D+5, true from D+6),
+    /// whatever <c>is_active</c> says. The same helper the leaver job's Step A and
+    /// <see cref="DesignatedApproverAuthorizer"/> decide through, so the grace length has one home.
+    /// "Today" is asked for only when an end date is recorded.
+    /// </summary>
+    private static bool IsPastGraceByDate(User targetUser, Func<DateOnly> today) =>
+        targetUser.EmploymentEndDate is { } endDate
+        && EmploymentEndDateLifecycleWriter.IsPastGrace(endDate, today());
+
+    /// <summary>
+    /// S147 / TASK-14725 fix-up 1 — the refusal for a target treated as switched off because it is past
+    /// the grace by date: the SAME <c>(false, reason)</c> a deactivated target gets on that overload
+    /// (<paramref name="reason"/> is that overload's existing text — no date, ADR-040 D7), and ONE
+    /// WARNING line that names the clause (<see cref="PastGraceClauseName"/>) so the refusal is
+    /// traceable to this rule rather than to the deactivation.
+    /// </summary>
+    private (bool Allowed, string? Reason) DenyPastGraceAsSwitchedOff(ActorContext actor, string target, string reason)
+    {
+        _logger.LogWarning(
+            "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Target={Target} Reason={Reason} CorrelationId={CorrelationId}",
+            PastGraceClauseName, actor.ActorId, actor.ActorRole, target, reason, actor.CorrelationId);
+        return (false, reason);
+    }
 
     /// <summary>
     /// The clause's refusal: the standard <c>(false, reason)</c> shape with the date-free

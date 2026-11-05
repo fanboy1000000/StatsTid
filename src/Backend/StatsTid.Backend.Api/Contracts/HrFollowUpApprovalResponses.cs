@@ -63,7 +63,8 @@ namespace StatsTid.Backend.Api.Contracts;
 /// <param name="FirstHrOnlyDay">
 /// S147 / TASK-14713 (R-27) — leaver-final-month items only; <c>null</c> on the other two lists. The
 /// first day only HR may act on the month (D+6): from this date the manager is refused, decided by the
-/// date itself (S147 / TASK-14725); the leaver job also switches the leaver off on this day. Always
+/// date itself on every route (S147 / TASK-14725 + fix-up 1); the leaver job's switch-off on this day is
+/// belt and braces. Always
 /// <paramref name="LastManagerDay"/> + 1 day.
 /// </param>
 public sealed record HrFollowUpMonthItem(
