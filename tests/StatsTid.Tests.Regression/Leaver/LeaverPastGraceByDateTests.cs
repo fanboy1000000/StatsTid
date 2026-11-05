@@ -201,8 +201,9 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// <summary>
     /// <b>Kind F</b>, the leader-tier READ. The leaver's May is seeded as SENT (EMPLOYEE_APPROVED) before the first read.
     /// At D+6 with the leaver still active, the manager's Skema month view is 403 and the 403's reason is the date rule's
-    /// ("Target employee not found", never "The month has not been submitted for approval"); HR's is 200 (the leaver's
-    /// final month, May, holds employed days). At D+5 the manager's is 200 (the mirror, kind B).
+    /// ("Target employee not found", never "The month has not been submitted for approval"); HR's is 200 (HR is not
+    /// month-gated, and the employed-month bound is inert for a still-active subject, <c>ApprovalEndpoints.cs:71-72</c>).
+    /// At D+5 the manager's is 200 (the mirror, kind B).
     /// <para><b>Why the month is seeded as sent.</b> Since S124 the leader tier of this view is month-gated
     /// (<c>SkemaEndpoints.cs:535-553</c>, <c>ApprovalVisibility.IsSubmittedToManager</c>): a leader reading a month with no
     /// period, or a DRAFT one, is refused 403 "The month has not been submitted for approval"
@@ -212,8 +213,9 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// (run 42013444380). HR is not month-gated, which is why HR's 200 never noticed.</para>
     /// <para><b>Red conditions (Docker, argued):</b> the D+6 manager assertions
     /// (<c>Assert.Equal(Forbidden, ...)</c> and <c>Assert.Contains("Target employee not found", ...)</c>). Trace on HEAD:
-    /// the tier classification refuses the LocalLeader scope at the LocalHR floor, so the read is leader tier
-    /// (<c>ApprovalReadTier.cs:105-107</c>); the active-only validator answers "Target employee not found" for a subject
+    /// the tier classification does not admit the LocalLeader at HR tier, so the read is leader tier
+    /// (<c>ApprovalReadTier.cs:105-107</c>; at D+6 the refusal is the primary-role gate for a subject past the grace while
+    /// active, <c>OrgScopeValidator.cs:356-361</c>, at D+5 the per-scope LocalHR floor); the active-only validator answers "Target employee not found" for a subject
     /// past the grace by date (<c>OrgScopeValidator.cs:160-161</c>) at <c>SkemaEndpoints.cs:237</c>; the edge arm at
     /// <c>:246</c> asks <c>IsEffectiveApproverOrUnitLeaderAsync</c>, whose <c>manager-grace-ended</c> clause refuses
     /// (<c>DesignatedApproverAuthorizer.cs:401</c>); so <c>:249</c> answers 403 with that reason. The month gate is not
@@ -232,7 +234,9 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// bypassed by the covering scope at <c>:237</c>). It turns red only under an error both layers share, the common
     /// grace rule <c>EmploymentEndDateLifecycleWriter.IsPastGrace</c> (<c>OrgScopeValidator.cs:602</c>,
     /// <c>DesignatedApproverAuthorizer.cs:423</c>), or a broken seed. Each layer's own D+5 boundary is pinned elsewhere
-    /// (the approve boundary fact above; <c>DepartedSelfValidatorTests</c>). (Fix-up 4 c2, Codex WARNING.)</para>
+    /// (the approve boundary fact above for the predicate; <c>DepartedSelfValidatorTests</c> and, at route level, the
+    /// year-overview fact's D+5 mirror below for the validator). (Fix-up 4 c2, Codex WARNING; Fable fix-up 4 NOTE-1,
+    /// NOTE-2, NOTE-4.)</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_ManagerSkemaMonthView_Is403_HrIs200_Day5ManagerIs200()
