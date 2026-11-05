@@ -19,7 +19,7 @@ Brings up the backend docker-compose stack, the Vite frontend, and the demo data
 - `demo_styx1_0025` — LocalLeader: Godkend tid (Team-/Leder-oversigt), Vikariering
 - `demo_styx1_0001` — LocalHR: Organisation & medarbejdere, Audit log
 - `demo_styx1_0285` — LocalAdmin: Projekter, Brugerrettigheder, Lokal OK-konfiguration
-- `demo_admin` — GlobalAdmin: Overenskomster, Lønartstilknytning + all admin surfaces
+- `demo_admin` — GlobalAdmin: Overenskomster, Lønartstilknytning + all admin surfaces. *Since S147 (SEC-053, four-eyes) it cannot approve or reject demo months by hand: the demo loader sends every pending month as `demo_admin`, and whoever sent a month may not decide it. Approve as `demo_styx1_0025` (LocalLeader) or `demo_styx1_0001` (LocalHR).*
 - Baseline `emp001` / `mgr03` / `admin01` / `ladm01` also work.
 
 > 📅 **The rolling reseed (Step 2) puts activity in the PREVIOUS (last complete) month** so it never goes stale. Godkend tid / Mine perioder / Årsoversigt default to the *current* month, so switch back one month to see submitted periods. `demo_styx1_0025` is guaranteed a member awaiting approval there every reseed (curated); approvals are unit-scoped, so a leader whose unit has no submissions (e.g. `demo_styx1_0002`) shows an empty list.
