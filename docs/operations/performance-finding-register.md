@@ -28,6 +28,7 @@ window away from being unrecoverable.
 | F4 | *description lost; re-derived below* | RE-DERIVED 2026-08-03 — see below |
 | F5 | Flex-balance full-stream replay on the consolidated `employee-{id}` stream | **DONE** S126 — see below |
 | F6 | Loading-flash perception | **OPEN — the S126 measurement was RETRACTED** (harness measured full page loads, and its stop condition was true before the route mounted). Chunk sizes valid; durations and the 250 ms threshold are not. |
+| F7 | One extra single-row read per admitted manager–employee pair on the my-reports list and Teamoversigt (S147, TASK-14725) | **OPEN — accepted, revisit** (S147 Step 7a fix; Fable's TASK-14725 review, NOTE 6). See below |
 
 ---
 
@@ -284,6 +285,24 @@ find the CEILING of the blank interval rather than to model a carrier.
 **Implementation is deliberately not done.** F6 was scoped as measure-then-decide; the measurement and
 the threshold are the deliverable. The skeleton itself is a UI task for a later sprint, now backed by
 numbers instead of intuition.
+
+## F7 — the manager-grace read per admitted pair (S147, recorded 2026-11-05)
+
+**What it is.** TASK-14725 made a leaver's manager lose authority at D+6 by date (S147 Step 7a; SEC-058). Once a
+manager path has admitted the actor, the shared approver predicate asks one more question: is the subject past the
+grace? On the live paths that is one more single-row read by primary key, `users` by `user_id` joined to its
+organisation (`DesignatedApproverAuthorizer.cs:443-458`, `QueryPastManagerGraceAsync`, at `0a64c1eb`). Two list
+reads call the predicate once per admitted pair: the manager's my-reports list (`ApprovalPeriodRepository.cs:464`)
+and Teamoversigt (`:581`). Each therefore gains one read per employee the manager may act on. HR's tree counts
+(`:915`) use the prefetched authority facts, which now carry the end date inside the existing four queries
+(`IAuthorityFactsSource.cs`), so they are unchanged.
+
+**Size.** Linear in the manager's own team, and each read is a primary-key lookup. Not the F1 class, which was an
+organisation-wide fan-out. Not measured.
+
+**Disposition: accepted, revisit.** The tidy option: let the pair's existing read, `SameOrganisationAsync`
+(`DesignatedApproverAuthorizer.cs:706`), carry the end date, so the pair costs one read instead of two. Revisit if a
+team grows large, or if one of these lists moves onto a hot path.
 
 ## Standing convention
 

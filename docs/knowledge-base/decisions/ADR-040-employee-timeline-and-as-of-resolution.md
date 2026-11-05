@@ -358,7 +358,7 @@ and CI-W3b (run `41641201066`). D1, D2, D6 and D7 stand; D7 gains one precision 
 |---|---|---|---|---|
 | **D** | as any employee | active | as before | as before |
 | **D+1 … D+5** | cannot log in; a session opened earlier cannot change anything of their own, whatever their role; their authority as an approver over others has ended | still `is_active`, by design | approves, rejects or reopens from Teamoversigt, as before | as before |
-| **D+6 on** | no access | switched off by Step A (the leaver job's switch-off step) | refused | HR approves, rejects, reopens and views the month; payroll's LocalAdmin pays it |
+| **D+6 on** | no access | switched off by Step A (the leaver job's switch-off step) | refused *(by date since S147 Step 7a, whether or not Step A has run; see the note at the end)* | HR approves, rejects, reopens and views the month; payroll's LocalAdmin pays it *(from D+6 by date; see the note)* |
 
 Example: last day Friday 13 March 2026 → login refused from 14 March; the manager acts until 18 March; HR only
 from 19 March. **The month's own deadline and payroll export cutoff do not move:** month-end + 5 (here 5 April),
@@ -373,7 +373,7 @@ Nothing new is stored: the hand-over dates are derived from the end date and one
    Copenhagen date (`DepartedSubject.IsDeparted`, `src/SharedKernel/StatsTid.SharedKernel/Security/DepartedSubject.cs:101-116`).
    The last day itself still counts as employed. `is_active` still decides which reads see a person (active-only,
    or the R9c terminated-inclusive reads: the allowlist of surfaces that may address a switched-off person) and,
-   from D+6, who may act for them.
+   from D+6, who may act for them *(decided by date since S147 Step 7a; see the note at the end of this amendment)*.
 2. **A departed self has no role to fall back on.** D3 said a deactivated self "is not exempt" from the role
    floor. Under that letter, S136's Step 5a accepted that a deactivated HR-tier actor could still register and
    send their own facts (adjudicated behaviour (a), `SPRINT-136.md:89-90`). **That residual is superseded**
@@ -427,7 +427,7 @@ through `ValidateEmployeeAccessIncludingTerminatedAsync`:
 - the Skema month view, HR tier only (`SkemaEndpoints.cs:224`, `:262`);
 - Payroll `/calculate-and-export`, at the LocalAdmin floor (`Payroll/Program.cs:369-370`).
 
-The manager's edge fails closed for a switched-off subject, so the manager is refused from D+6. **An
+The manager's edge fails closed for a switched-off subject, so the manager is refused from D+6. *(S147 Step 7a, 2026-11-05: as built here, that rested on Step A's switch-off; since TASK-14725 the manager is refused from D+6 by date, on two layers. See the note at the end of this amendment.)* **An
 employed-month bound runs after the gate** (R-15): a switched-off subject is admitted only for a month that holds
 an employed day, otherwise D3's date-free 422 `month_outside_employment_period` (`ApprovalEndpoints.cs:61-85`,
 `:117-123`). Because it runs after the gate, an actor the gate refuses sees the same 403 for every month, so the
@@ -480,7 +480,7 @@ end date (`SettlementCloseService.cs:912-938`; K-3). `/remove` still deactivates
 - **Two reads of "today" (PAT-028, compute today once per operation; TASK-14703 consult R6).** The validator reads
   the Copenhagen date from its own `TimeProvider` once per call (`OrgScopeValidator.cs:524`); the handler reads it
   again for its own dates. The two can differ only for a request that straddles Copenhagen midnight, and the
-  self-service sites re-check in-lock. **And (consult R4):** the clear routes reuse one date across a retry, so a
+  self-service sites re-check in-lock. *(Widened by TASK-14725: the validator now also reads the date for every subject with a recorded end date; see the note at the end of this amendment.)* **And (consult R4):** the clear routes reuse one date across a retry, so a
   lock wait that crosses midnight acts on the day the request arrived (the delegate clear reads it at
   `ReportingLineEndpoints.cs:2329`, before its retry at `:2346`; the admin stand-in clear at `:2828`, before
   `:2851`). The create routes re-read the clock per attempt.
@@ -505,3 +505,62 @@ to give a leaver's final month its last approval".
 `DepartedSubjectWriteFloorTests`, `EndDateLifecycleWriterParityTests` and `SettlementCloseLeaverLogicTests`; the
 Docker facts in `tests/StatsTid.Tests.Regression/Leaver/`, `Security/DepartedSelf*Tests.cs`, `LeaverLoginTests`,
 `DepartedApproverTests` and `RecalculateDepartedSelfTests`; and the screen's `FollowUpLists.leaverActions.test.tsx`.
+
+**S147 Step 7a, 2026-11-05 (TASK-14725): the manager's day 6 is decided by date.**
+
+*Why, in plain words.* The table above says the manager is refused from D+6. As built by TASK-14713, that refusal
+rested on Step A. The manager's paths and every leader-tier org-scope check read `is_active`, and only Step A,
+polled every 5 minutes, switches the leaver off. So between Copenhagen midnight on D+6 and the next poll, or for as
+long as the job failed, the leaver's own manager could still approve, reject or reopen the month and read the leaver's
+data. Both Step 7a lenses found it (cycle 1: Fable W-1, Codex WARNING 1); it is registered as SEC-058 (fixed in code; it closes when C-2 runs its Docker pins green).
+The owner ruled "(a) Fix it now". When the first commit showed that the leader-tier org-scope reads had the same
+window, the owner ruled "(a) Extend now" (both 2026-11-05). TASK-14725 (merged `2cfae13c`) decides the cut-off
+by the date on two layers. Step A's switch-off stays, as a second guard and as the source of the switch-off events
+(K-4). Code lines below are at `0a64c1eb`.
+- **Layer 1, the shared approver predicate.** Once a manager path has admitted the actor (the designated edge, the
+  admin-assigned acting manager, the edge manager's stand-in, the unit leader or the unit leader's stand-in),
+  `DesignatedApproverAuthorizer` refuses when the subject's last day employed lies before the authority date minus 5,
+  that is from D+6 (`DesignatedApproverAuthorizer.cs:401`; the rule `IsPastManagerGrace`, `:422`, over
+  `EmploymentEndDateLifecycleWriter.IsPastGrace`, the one grace constant). Every production authority read calls
+  this predicate: approve, reject and reopen's leader arm, the allocation breakdown, the compliance and Skema edge
+  arms, my-reports, Teamoversigt and HR's tree counts. So the pending lists and the actions still agree (see = act).
+  The refusal is date-free; the server log names the clause `manager-grace-ended`.
+- **Layer 2, the org-scope validator.** A still-active subject past the grace by date is treated as switched off
+  (`OrgScopeValidator.cs:600-602`).
+  - The active-only overload answers "Target employee not found" to every actor (`:160-161`).
+  - The terminated-inclusive overload admits it only through a LocalHR-or-above scope (`:349-350`, `:356`, `:385`),
+    exactly as a deactivated subject (TASK-14713's rule).
+  - The departed-self clause still runs first (`:150-151`, `:339-340`). The log names the clause
+    `past-grace-as-switched-off`.
+  - Without this layer, a leader whose scope covers the leaver's organisation would still reach the leaver's reads
+    and the overtime decisions until the switch-off. On approve, reject and reopen the validator's arm is floored at
+    LocalHR, so there the shared predicate alone decides a manager's case.
+- **The D+6 row, as built now.** The manager is refused from Copenhagen midnight on D+6, on both layers, whether or
+  not Step A has run.
+  - HR keeps every route it uses to finish the month: they are terminated-inclusive (TASK-14713's five surfaces and
+    the R9c inventory), and payroll's `/calculate-and-export` still admits LocalAdmin (`PayrollPastGraceLeaverScopeTests`).
+  - On the active-only routes (33 by the task's census, verified by Fable's review), HR gets at D+6 the answer it
+    gets after the switch-off, "Target employee not found". Nothing changes for HR once the job has run; only the
+    moment moves from the poll to the date.
+  - The leader year-overview reads stay null-floored by design, but a switched-off target is admitted only through
+    a LocalHR-or-above scope (`OrgScopeValidator.cs:385`). From D+6 a leader therefore no longer sees a leaver's
+    year overview; HR still does.
+- **Residuals recorded, not fixed.**
+  - **PAT-028, widened.** The validator reads the Copenhagen date at most once per call, and now does so for every
+    subject with a recorded end date, not only when the identity matches (`OrgScopeValidator.cs:145`, `:332`; the
+    class remark `:48-54`). The handler may read the date again. Traced: for a request that straddles midnight,
+    the outcome equals that of a request wholly on one of the two days, so a straddle cannot admit an actor whom
+    neither day admits.
+  - **The employed-month bound still keys on the flag** (`ApprovalEndpoints.cs:71`; Payroll `Program.cs:876`).
+    Between D+6 and the switch-off it does not fire. That is not exploitable: the send already refuses a month with
+    no employed day (`ApprovalEndpoints.cs:2473-2480`), so no such month reaches approval or payroll. It is a
+    consistency residual.
+  - **`/remove` of a leaver whose switch-off was missed works only to D+5.** `/remove` reads the person through the
+    active-only check, so from D+6 by date it answers "not found", as it does for a switched-off person. HR reassigns
+    the leaver's reports one by one through `POST /api/admin/reporting-lines`, whose check reads the report, not the
+    leaver (`ReportingLineEndpoints.cs:87`, `:108`). Step A closes the leaver's own edges when it runs.
+  - **One extra read per admitted manager–employee pair** on my-reports and Teamoversigt: performance register F7.
+- **Pinned by** the Unit facts `ManagerGracePredicateTests` (7; mutation M-26 trips 3 of them) and the Docker facts
+  `LeaverPastGraceByDateTests`, the four D+5 and D+6 facts in `DepartedSelfValidatorTests`, and
+  `PayrollPastGraceLeaverScopeTests`. Each Docker fact keeps the leaver active at D+6, with the leaver job off, and
+  has D+5 boundary pins. The Docker facts are CI-pending until C-2 (`<C-2 run id>`).
