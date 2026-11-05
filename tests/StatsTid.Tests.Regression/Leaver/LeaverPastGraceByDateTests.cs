@@ -99,8 +99,8 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// has not run). The manager's approve is 403 (reason: the LocalHR text, no date), the month stays
     /// EMPLOYEE_APPROVED; then HR's approve of the same month is 200 and the month becomes APPROVED.
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, mgr.StatusCode)</c>. On
-    /// <c>c13024cd</c> the leaver is active, so the terminated-inclusive org-scope arm treats her as an ordinary
-    /// employee and admits the LocalLeader's covering scope, and the edge predicate has no date clause: the manager
+    /// <c>c13024cd</c> the org-scope arm refuses the LocalLeader scope at its LocalHR floor (as it does today), and
+    /// the designated-approver predicate, which had no date clause, admits the manager through the EDGE: the manager
     /// gets 200 and the month becomes APPROVED.
     /// <b>Mutation table (each ONE mutation alone turns this fact RED).</b> The approve handler asks the
     /// terminated-inclusive validator at a LocalHR floor first, and a LocalLeader scope never clears that floor (so the
@@ -136,7 +136,8 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// <b>Kind F</b>, approve through a designated UNIT LEADER row (no reporting-line edge to the leaver). Same state
     /// as above. The unit leader's approve is 403 and the month stays EMPLOYEE_APPROVED.
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, ...)</c>. On <c>c13024cd</c> the
-    /// org-scope arm admits the covering LocalLeader scope of an active subject (200).
+    /// org-scope arm refuses the LocalLeader scope at its LocalHR floor, and the unit-leader leg of the predicate,
+    /// which had no date clause, admits (200).
     /// <b>Mutation table.</b> <b>M-26</b> alone (<c>IsPastManagerGrace</c> returns false) turns it RED: the scope arm
     /// refuses a LocalLeader at the LocalHR floor regardless, then the unit-leader leg admits, so 200. <b>M-25</b> alone
     /// does NOT: it only changes the refusal's reason text, and this fact asserts the status and the unchanged month,
