@@ -403,9 +403,14 @@ public static class ApprovalEndpoints
             // subject the leader job has switched off it admits ONLY through a scope that is itself
             // LocalHR or above, where the active-only call answered "not found" to everyone, HR
             // included, so a leaver's final month could never be approved. TASK-14703's departed-self
-            // clause runs inside it. The edge arm below is unchanged: it fails closed for a
-            // switched-off employee (the same-Organisation re-check reads active users only), so the
-            // leaver's manager is refused from day 6 — the end of their 5-day grace.
+            // clause runs inside it.
+            //
+            // S147 / TASK-14725 (Step 7a W-1; owner ruling 2026-11-05) — the edge arm below refuses the
+            // leaver's manager from day 6 BY DATE: the shared predicate refuses every manager path over a
+            // subject whose last day employed is past the 5-day grace at `today`
+            // (EmploymentEndDateLifecycleWriter.IsPastGrace), whether or not the leaver job's Step A has
+            // switched them off yet. That switch-off (which the active-only same-Organisation re-check
+            // also reads) is now belt and braces. The refusal is this arm's existing 403; it names no date.
             var (orgScopeAllowed, orgScopeReason) =
                 await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
@@ -685,7 +690,8 @@ public static class ApprovalEndpoints
             //
             // S147 / TASK-14713 (QUAL-230 T5b; OQ-2) — the TERMINATED-INCLUSIVE validator at the same
             // LocalHR floor, for the reason spelled out on approve: HR may reject a switched-off leaver's
-            // month from day 6; the edge arm, unchanged, refuses their manager from day 6.
+            // month from day 6. S147 / TASK-14725 — the edge arm refuses their manager from day 6 by DATE
+            // (the shared predicate's manager-grace check), whether or not Step A has run; see approve.
             var (orgScopeAllowed, orgScopeReason) =
                 await scopeValidator.ValidateEmployeeAccessIncludingTerminatedAsync(actor, period.EmployeeId, StatsTidRoles.LocalHR, ct);
             if (!orgScopeAllowed)
@@ -1907,7 +1913,8 @@ public static class ApprovalEndpoints
                 // S147 / TASK-14713 (QUAL-230 T5b; OQ-2) — the TERMINATED-INCLUSIVE validator at the
                 // same LocalHR floor, for the reason spelled out on approve: from day 6 HR may reopen a
                 // switched-off leaver's month (until it is sent to payroll — the export lock below is
-                // unchanged); the edge arm, unchanged, refuses their manager from day 6. TASK-14703's
+                // unchanged); the edge arm refuses their manager from day 6 by DATE (S147 / TASK-14725,
+                // the shared predicate's manager-grace check), whether or not Step A has run. TASK-14703's
                 // departed-self clause runs inside this overload, so a departed HR-tier self reopening
                 // their own month is refused there, before the HR gate, as on the active-only call.
                 var (allowed2, reason2) =

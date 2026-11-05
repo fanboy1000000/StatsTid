@@ -43,6 +43,29 @@ public interface IAuthorityFactsSource
     /// (the LOCKED ADR-038 D5 boundary). A NULL unit, or actor == employee, yields
     /// <see cref="UnitLeaderApprovalKind.None"/>.</summary>
     Task<UnitLeaderApprovalKind> GetUnitLeaderKindAsync(string actorId, string employeeId, CancellationToken ct);
+
+    /// <summary>
+    /// S147 / TASK-14725 (Step 7a W-1; owner ruling 2026-11-05) — <c>true</c> when NO manager may act for
+    /// <paramref name="userId"/> any more at <paramref name="asOf"/>: their last day employed lies more
+    /// than the owner's 5-day manager grace before <paramref name="asOf"/>
+    /// (<see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/>, i.e. from D+6), OR they are outside
+    /// the set <see cref="GetActiveHomeOrgAsync"/> answers for (missing, switched off, or under an
+    /// inactive home Organisation). A NULL end date (open-ended employment) is not past the grace.
+    ///
+    /// <para><b>Why it exists.</b> Until TASK-14725 the manager's day-6 cut-off held only because the
+    /// leaver job (Step A, a 5-minute poll) switches the leaver off on D+6 and the same-Organisation
+    /// re-check reads active users only. Between Copenhagen midnight and that poll — or for as long as
+    /// Step A fails — the manager could still approve, reject or reopen. This fact lets the authorizer
+    /// decide the cut-off from the DATE; the switch-off stays as belt and braces. Same discipline as
+    /// <see cref="IsActingLeaderOrAboveAsync"/>: both forms read the same columns and decide through the
+    /// same call; <paramref name="asOf"/> is the authorizer's own authority date (PAT-028).</para>
+    ///
+    /// <para><b>The default is fail-CLOSED</b> (<c>true</c>: "past"), so an implementation that does not
+    /// supply this fact can only ever DENY manager authority. Both production sources override it; the
+    /// default exists so a test double written before TASK-14725 keeps compiling.</para>
+    /// </summary>
+    Task<bool> IsPastManagerGraceAsync(string userId, DateOnly asOf, CancellationToken ct)
+        => Task.FromResult(true);
 }
 
 /// <summary>Live-SQL implementation — the behaviour every caller had before step 3c, and the reference
@@ -68,6 +91,10 @@ public sealed class SqlAuthorityFactsSource : IAuthorityFactsSource
 
     public Task<UnitLeaderApprovalKind> GetUnitLeaderKindAsync(string actorId, string employeeId, CancellationToken ct)
         => DesignatedApproverAuthorizer.QueryUnitLeaderKindSqlAsync(_conn, _tx, actorId, employeeId, _asOf, ct);
+
+    /// <summary>S147 / TASK-14725 — the live form, the authorizer's own query.</summary>
+    public Task<bool> IsPastManagerGraceAsync(string userId, DateOnly asOf, CancellationToken ct)
+        => DesignatedApproverAuthorizer.QueryPastManagerGraceAsync(_conn, _tx, userId, asOf, ct);
 }
 
 /// <summary>
@@ -103,6 +130,9 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
     // The user half is decided per call by DepartedSubject.IsDeparted, the same call the live form makes.
     private readonly Dictionary<string, (bool IsActive, DateOnly? EmploymentEndDate)> _leaderOrAbove;
     private readonly Dictionary<string, string> _activeHomeOrg;
+    // S147 / TASK-14725 — the recorded last day employed of every user in _activeHomeOrg (null = none),
+    // from the SAME read (2). Its key set is _activeHomeOrg's; a user absent from it is "past" (deny).
+    private readonly Dictionary<string, DateOnly?> _activeEmploymentEndDate;
     private readonly Dictionary<string, Guid> _unitOfUser;
     private readonly Dictionary<Guid, HashSet<string>> _leadersOfUnit;
     // vikar stand-in → the leaders they currently cover (reverse of absent_approver_id).
@@ -111,12 +141,14 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
     private PrefetchedAuthorityFacts(
         Dictionary<string, (bool IsActive, DateOnly? EmploymentEndDate)> leaderOrAbove,
         Dictionary<string, string> activeHomeOrg,
+        Dictionary<string, DateOnly?> activeEmploymentEndDate,
         Dictionary<string, Guid> unitOfUser,
         Dictionary<Guid, HashSet<string>> leadersOfUnit,
         Dictionary<string, HashSet<string>> coversLeaders)
     {
         _leaderOrAbove = leaderOrAbove;
         _activeHomeOrg = activeHomeOrg;
+        _activeEmploymentEndDate = activeEmploymentEndDate;
         _unitOfUser = unitOfUser;
         _leadersOfUnit = leadersOfUnit;
         _coversLeaders = coversLeaders;
@@ -166,11 +198,15 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
         // (2) Home Organisation for ACTIVE users whose home Organisation is itself ACTIVE — the same
         //     join the per-pair check applies. A user failing either condition is simply absent, which
         //     is the deny answer.
+        //     S147 / TASK-14725 — the same rows also carry employment_end_date, the one column the
+        //     subject's manager-grace fact reads (IsPastManagerGraceAsync). A column on this read, not
+        //     a fifth statement: BuildStatementCount stays 4 and the projection stays flat.
         var activeHomeOrg = new Dictionary<string, string>(StringComparer.Ordinal);
+        var activeEmploymentEndDate = new Dictionary<string, DateOnly?>(StringComparer.Ordinal);
         var unitOfUser = new Dictionary<string, Guid>(StringComparer.Ordinal);
         await using (var cmd = new NpgsqlCommand(
             """
-            SELECT u.user_id, u.primary_org_id, u.unit_id
+            SELECT u.user_id, u.primary_org_id, u.unit_id, u.employment_end_date
             FROM users u
             JOIN organizations o ON o.org_id = u.primary_org_id AND o.is_active = TRUE
             WHERE u.is_active = TRUE
@@ -185,6 +221,7 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
                 activeHomeOrg[userId] = reader.GetString(1);
                 if (!reader.IsDBNull(2))
                     unitOfUser[userId] = reader.GetGuid(2);
+                activeEmploymentEndDate[userId] = reader.IsDBNull(3) ? null : reader.GetFieldValue<DateOnly>(3);
             }
         }
 
@@ -247,7 +284,7 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
         }
 
         return new PrefetchedAuthorityFacts(
-            leaderOrAbove, activeHomeOrg, unitOfUser, leadersOfUnit, coversLeaders);
+            leaderOrAbove, activeHomeOrg, activeEmploymentEndDate, unitOfUser, leadersOfUnit, coversLeaders);
     }
 
     /// <summary>S147 / TASK-14712 (T5c) — absent from the role set → not a leader (deny, as before);
@@ -260,6 +297,16 @@ public sealed class PrefetchedAuthorityFacts : IAuthorityFactsSource
 
     public Task<string?> GetActiveHomeOrgAsync(string userId, CancellationToken ct)
         => Task.FromResult(_activeHomeOrg.TryGetValue(userId, out var org) ? org : null);
+
+    /// <summary>S147 / TASK-14725 — absent from read (2) (missing, switched off, home Organisation
+    /// inactive, or outside the prefetched tree) → past (deny, the same population
+    /// <see cref="GetActiveHomeOrgAsync"/> denies); present → past only when the recorded last day is
+    /// past the manager grace at <paramref name="asOf"/>, by the same call as the live form
+    /// (<see cref="DesignatedApproverAuthorizer.QueryPastManagerGraceAsync"/>).</summary>
+    public Task<bool> IsPastManagerGraceAsync(string userId, DateOnly asOf, CancellationToken ct)
+        => Task.FromResult(
+            !_activeEmploymentEndDate.TryGetValue(userId, out var endDate)
+            || DesignatedApproverAuthorizer.IsPastManagerGrace(endDate, asOf));
 
     public Task<UnitLeaderApprovalKind> GetUnitLeaderKindAsync(
         string actorId, string employeeId, CancellationToken ct)

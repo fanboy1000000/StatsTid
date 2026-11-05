@@ -160,9 +160,10 @@ public sealed class OrgScopeValidator
     /// itself LocalHR+; the general read paths stay active-only).
     /// <b>S147 / TASK-14713 (QUAL-230 T5b; owner OQ-2: HR only from the sixth day after a leaver's last
     /// working day)</b> adds the surfaces that FINISH a switched-off leaver's final month: approve, reject
-    /// and the leader arm of reopen (<c>roleFloor</c> LocalHR; the designated-approver edge beside them is
-    /// unchanged and fails closed for a deactivated subject, so the leaver's manager is refused from that
-    /// day); the Skema month view's HR tier, through <c>ApprovalReadTier.ClassifyMonthViewTierIncludingTerminatedAsync</c>
+    /// and the leader arm of reopen (<c>roleFloor</c> LocalHR; the designated-approver edge beside them
+    /// refuses the leaver's manager from that day BY DATE — S147 / TASK-14725, the
+    /// <c>DesignatedApproverAuthorizer</c> manager-grace check — and still fails closed for a deactivated
+    /// subject as belt and braces); the Skema month view's HR tier, through <c>ApprovalReadTier.ClassifyMonthViewTierIncludingTerminatedAsync</c>
     /// (that view only; the shared <c>IsLeaderTierReadAsync</c> stays on the active-only overload); and the
     /// Payroll host's <c>/calculate-and-export</c> (<c>roleFloor</c> LocalAdmin). Each is bounded AFTER this
     /// gate to a month that holds an employed day (ADR-040 D3's date-free refusal), and the three decision

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using StatsTid.SharedKernel.Calendar;
 using StatsTid.SharedKernel.Security;
@@ -52,12 +53,35 @@ namespace StatsTid.Infrastructure;
 /// effective approver of that grandchild and so is correctly denied — see == act one
 /// level up too.
 /// </para>
+///
+/// <para>
+/// <b>S147 / TASK-14725 — the leaver's manager grace ends by DATE</b> (Step 7a W-1; owner ruling
+/// 2026-11-05, "(a) Fix it now"; owner OQ-2: the leaver's own manager may act until D+5, only HR from
+/// D+6). The combined predicate
+/// (<see cref="IsEffectiveApproverOrUnitLeaderAsync(NpgsqlConnection, NpgsqlTransaction?, ApprovalAuthorityContext?, IReportingLineDataSource?, IAuthorityFactsSource?, string, string, DateOnly?, CancellationToken)"/>)
+/// refuses every manager path — the designated edge, the admin-assigned acting manager, the edge
+/// manager's stand-in, the unit leader and the unit leader's stand-in — over a SUBJECT whose last day
+/// employed lies more than <see cref="EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays"/> days
+/// before the authority date (<see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/>). It no longer
+/// waits for the leaver job's Step A to switch the leaver off: that switch-off, which the active-only
+/// same-Organisation re-check reads, is now belt and braces. HR is not decided here (the endpoints'
+/// org-scope arm admits HR), so HR is unaffected.
+/// </para>
 /// </summary>
 public sealed class DesignatedApproverAuthorizer
 {
+    /// <summary>
+    /// S147 / TASK-14725 — the clause name the server log carries when the subject's manager grace has
+    /// ended by date and an otherwise-admitted manager is refused (one name per clause, the S147 house
+    /// rule). The refusal the caller returns names no date (ADR-040 D7); only this log line names the
+    /// clause.
+    /// </summary>
+    public const string ManagerGraceEndedClause = "manager-grace-ended";
+
     private readonly DbConnectionFactory _connectionFactory;
     private readonly ReportingLineRepository _reportingLineRepo;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<DesignatedApproverAuthorizer>? _logger;
 
     /// <summary>
     /// Primary constructor (DI). S140 / TASK-14001 — <paramref name="timeProvider"/> is the
@@ -81,15 +105,23 @@ public sealed class DesignatedApproverAuthorizer
     /// only between Danish and UTC midnight — the hardest window to notice. "Nothing depends on it
     /// today" is a reason it is CHEAP to convert, never a reason to skip it.
     /// </para>
+    ///
+    /// <para>
+    /// S147 / TASK-14725 — <paramref name="logger"/> is appended LAST and OPTIONAL for the same reason as
+    /// the clock: DI supplies it in the Backend host, and every existing direct construction keeps
+    /// compiling (null = no log line; the decision is identical).
+    /// </para>
     /// </summary>
     public DesignatedApproverAuthorizer(
         DbConnectionFactory connectionFactory,
         ReportingLineRepository reportingLineRepo,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<DesignatedApproverAuthorizer>? logger = null)
     {
         _connectionFactory = connectionFactory;
         _reportingLineRepo = reportingLineRepo;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _logger = logger;
     }
 
     // ════════════════════════════════════════════════════════════════════════════════════════
@@ -119,6 +151,12 @@ public sealed class DesignatedApproverAuthorizer
     /// The R5 canonical predicate. Returns <c>true</c> iff the actor is active +
     /// LeaderOrAbove AND is the single resolved effective approver of
     /// <paramref name="employeeId"/> at <paramref name="asOf"/>.
+    ///
+    /// <para><b>S147 / TASK-14725 — the edge LEG only.</b> This leg does not apply the subject's
+    /// manager-grace check; the combined predicate
+    /// (<see cref="IsEffectiveApproverOrUnitLeaderAsync(string, string, DateOnly?, CancellationToken)"/>)
+    /// does, once for both legs, and every production authority read calls the combined predicate. A
+    /// new caller deciding whether a manager may act must call the combined predicate, not this leg.</para>
     /// </summary>
     /// <param name="actorId">The acting user (the JWT subject).</param>
     /// <param name="employeeId">The employee whose period the actor wants to see/act on.</param>
@@ -249,9 +287,10 @@ public sealed class DesignatedApproverAuthorizer
     /// stages of the my-reports pipeline + the team-overview filter + the allocation-breakdown gate +
     /// the compliance gate can never drift apart). Returns <c>true</c> iff the actor holds the effective
     /// designated-approver EDGE (<see cref="IsEffectiveDesignatedApproverAsync"/>) OR the secondary
-    /// unit-leader path (<see cref="IsUnitLeaderApproverAsync"/>). This is the my-reports "edge OR
-    /// unit-leader visibility" set — it does NOT include the HR/Admin org-scope branch (TASK-10502: the
-    /// action endpoints compose that separately as a pre-tx JWT gate).
+    /// unit-leader path (<see cref="IsUnitLeaderApproverAsync"/>), AND (S147 / TASK-14725) the subject's
+    /// manager grace has not ended by date (see the class summary and the terminal overload). This is the
+    /// my-reports "edge OR unit-leader visibility" set — it does NOT include the HR/Admin org-scope branch
+    /// (TASK-10502: the action endpoints compose that separately as a pre-tx JWT gate).
     /// </summary>
     public async Task<bool> IsEffectiveApproverOrUnitLeaderAsync(
         string actorId, string employeeId, DateOnly? asOf = null, CancellationToken ct = default)
@@ -317,12 +356,95 @@ public sealed class DesignatedApproverAuthorizer
         // S142 / TASK-14203 — the resolved date is the COPENHAGEN calendar day.
         var effectiveAsOf = asOf ?? ctx?.AsOf ?? CopenhagenBusinessDate.Today(_timeProvider);
 
-        if (await IsEffectiveDesignatedApproverAsync(
-                conn, tx, ctx, source, facts, actorId, employeeId, effectiveAsOf, ct))
+        var holdsManagerPath =
+            await IsEffectiveDesignatedApproverAsync(
+                conn, tx, ctx, source, facts, actorId, employeeId, effectiveAsOf, ct)
+            || await ResolveUnitLeaderApprovalKindAsync(
+                conn, tx, ctx, facts, actorId, employeeId, effectiveAsOf, ct) != UnitLeaderApprovalKind.None;
+        if (!holdsManagerPath)
+            return false;
+
+        // ── S147 / TASK-14725 (Step 7a W-1; owner ruling 2026-11-05) — THE SUBJECT'S MANAGER GRACE, BY DATE ──
+        // WHY, in plain terms. The owner ruled (OQ-2) that a leaver's own manager may finish their final
+        // month for 5 calendar days after the last day employed (D+1 .. D+5), and from D+6 only HR may.
+        // Until this task that cut-off was enforced only because the leaver job (Step A, a 5-minute poll)
+        // switches the leaver off on D+6 and the same-Organisation re-check in both legs above reads
+        // active users only. So between Copenhagen midnight and that poll — or for as long as Step A
+        // failed — a manager could still approve, reject or reopen. The leaver's own D+1 cut-off and a
+        // departed MANAGER's D+1 (TASK-14712, the role floor in both legs) were already decided from the
+        // dated record; this was the one edge decided by a timer. It is now decided by the date too.
+        //
+        // WHAT. Refuse when the subject's last day employed is past the grace at effectiveAsOf
+        // (EmploymentEndDateLifecycleWriter.IsPastGrace: end date < asOf − 5, i.e. from D+6), whether or
+        // not Step A has run. D .. D+5 are unchanged; no end date, or one in the future, is unchanged.
+        //
+        // ONE PLACE. Every manager path — the designated edge, the admin-assigned acting manager, the
+        // edge manager's stand-in, the unit leader and the unit leader's stand-in — reaches the verdict
+        // through this line, and every production authority read calls this predicate. HR is not decided
+        // here (the endpoints admit HR through their org-scope arm), so HR is unaffected.
+        //
+        // TODAY. effectiveAsOf is the caller's single Copenhagen date (PAT-028): every production caller
+        // passes its handler's `today` (or the projection's), so the clock is not read again here.
+        //
+        // ORDER. Asked only once a leg has admitted the actor, so a pair that is already refused costs
+        // no extra read; the verdict is the same either way (both legs are side-effect-free reads).
+        if (await SubjectPastManagerGraceAsync(conn, tx, facts, employeeId, effectiveAsOf, ct))
+        {
+            // The server log names the clause; the caller's refusal names no date (ADR-040 D7).
+            _logger?.LogInformation(
+                "Refused ({Clause}): actor {ActorId} holds a manager path over {EmployeeId}, whose manager " +
+                "grace has ended at authority date {AsOf:yyyy-MM-dd}; only HR may act",
+                ManagerGraceEndedClause, actorId, employeeId, effectiveAsOf);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// S147 / TASK-14725 — the pure rule behind the subject's manager-grace check: <c>true</c> iff a last
+    /// day employed is recorded and lies past the owner's 5-day manager grace at <paramref name="asOf"/>
+    /// (<see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/> — false on D .. D+5, true from D+6).
+    /// A NULL end date (open-ended employment) is never past. Both fact forms decide through this call
+    /// (the live query below and <see cref="PrefetchedAuthorityFacts.IsPastManagerGraceAsync"/>), so the
+    /// grace length has one home (<see cref="EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays"/>).
+    /// </summary>
+    internal static bool IsPastManagerGrace(DateOnly? employmentEndDate, DateOnly asOf)
+        => employmentEndDate is { } endDate && EmploymentEndDateLifecycleWriter.IsPastGrace(endDate, asOf);
+
+    /// <summary>S147 / TASK-14725 — the subject's manager-grace fact, from the prefetch when one is
+    /// supplied, else live SQL (the same split as the role floor and the home-Organisation lookup).</summary>
+    private static Task<bool> SubjectPastManagerGraceAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, IAuthorityFactsSource? facts,
+        string employeeId, DateOnly asOf, CancellationToken ct)
+        => facts is null
+            ? QueryPastManagerGraceAsync(conn, tx, employeeId, asOf, ct)
+            : facts.IsPastManagerGraceAsync(employeeId, asOf, ct);
+
+    /// <summary>
+    /// S147 / TASK-14725 — the live-SQL form behind <see cref="IAuthorityFactsSource.IsPastManagerGraceAsync"/>
+    /// (and <see cref="SqlAuthorityFactsSource"/>). It reads the SAME population as the home-Organisation
+    /// lookup (<see cref="ReportingLineRepository.QueryActiveHomeOrgAsync"/>: an active user under an
+    /// active home Organisation): a user outside it is answered "past" (deny), exactly as that lookup
+    /// answers null, so this and the prefetched form agree fact for fact, not only verdict for verdict.
+    /// Inside it, <see cref="IsPastManagerGrace"/> decides on <c>employment_end_date</c>. The date is the
+    /// caller's <paramref name="asOf"/>, never <c>CURRENT_DATE</c> (PAT-028).
+    /// </summary>
+    internal static async Task<bool> QueryPastManagerGraceAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, string userId, DateOnly asOf, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT u.employment_end_date FROM users u
+            JOIN organizations o ON o.org_id = u.primary_org_id AND o.is_active = TRUE
+            WHERE u.user_id = @userId AND u.is_active = TRUE
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("userId", userId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
             return true;
-        return await ResolveUnitLeaderApprovalKindAsync(
-                conn, tx, ctx, facts, actorId, employeeId, effectiveAsOf, ct)
-            != UnitLeaderApprovalKind.None;
+        DateOnly? employmentEndDate = reader.IsDBNull(0) ? null : reader.GetFieldValue<DateOnly>(0);
+        return IsPastManagerGrace(employmentEndDate, asOf);
     }
 
     /// <summary>
