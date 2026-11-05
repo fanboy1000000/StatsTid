@@ -32,7 +32,7 @@ public class EmploymentEndDateLifecycleLogicTests
     /// moved from day 1 to day 6 — endDate == today ⇒ no flip; yesterday and today − 5 (the last
     /// grace day) ⇒ no flip; today − 6 ⇒ flip (R1(a)).</summary>
     [Fact]
-    public void R1_Boundary_EndDateToday_NoFlip_EndDateYesterday_Flips()
+    public void R1_Boundary_EndDateToday_NoFlip_Day1ToDay5_NoFlip_Day6_Flips()
     {
         var onBoundary = EmploymentDateEndpoints.ComputeEndDateLifecycle(
             Today, oldIsActive: true, oldEndDateDeactivated: false, copenhagenToday: Today);

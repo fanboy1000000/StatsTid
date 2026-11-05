@@ -168,7 +168,7 @@ public sealed class SettlementCloseLeaverTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task Exclusions_ManualInactive_NullEndDate_BoundaryDay_NotFlipped_DayAfter_Flipped()
+    public async Task Exclusions_ManualInactive_NullEndDate_BoundaryDay_GraceDays_NotFlipped_Day6_Flipped()
     {
         var manualInactive = await SeedEmployeeAsync();   // is_active=FALSE, NO end date (R3)
         await ManuallyDeactivateAsync(manualInactive);
