@@ -29,10 +29,12 @@ namespace StatsTid.Tests.Regression.Leaver;
 /// <para><b>Two layers, both pinned.</b> The approval EDGE and the unit-leader path never pass through the org-scope
 /// validator, so the shared approver predicate (<c>DesignatedApproverAuthorizer.IsPastManagerGrace</c>, clause
 /// <c>manager-grace-ended</c>) carries the date rule for them; every leader read and overtime write goes through
-/// <c>OrgScopeValidator</c> (clause <c>past-grace-as-switched-off</c>). The manager in these facts is a LocalLeader whose
+/// <c>OrgScopeValidator</c> (clause <c>past-grace-as-switched-off</c>). In sections (a) to (f) the manager is a LocalLeader whose
 /// authority is the designated reporting-line edge (and, in the unit fact, a unit-leader row): the approve handler admits
-/// an HR-tier actor through the org-scope arm before it asks the edge question, so an HR-tier manager would make the fact
-/// pass or fail for the wrong reason (the S147 P-6 setup rule).</para>
+/// an HR-tier actor through the org-scope arm before it asks the edge question, so an HR-tier manager would make those
+/// facts pass or fail for the wrong reason (the S147 P-6 setup rule). Section (g) is the deliberate exception: it asks
+/// what the audit LABEL says when an HR officer is also the manager, so its actors (<c>HrMgr</c>, <c>HrUnitLdr</c>) ARE
+/// HR-tier, and its <c>LeaverM</c> seed (switched off by hand, no end date) has no date rule to act on at all.</para>
 ///
 /// <para><b>Dates.</b> Host clock pinned to <see cref="F"/> (Wednesday 2026-06-10, Copenhagen day). D+6 means an end
 /// date of F-6, D+5 an end date of F-5 (the last grace day). The month under approval is May 2026.</para>
@@ -171,8 +173,12 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// F-5 (D+5, the LAST grace day): the manager approves through the edge (200, APPROVED) and the unit leader
     /// approves through the unit-leader row (200, APPROVED). Proves the D+6 refusals are about the DATE and not about
     /// the fixture (a broken seed would refuse here too).
-    /// <para><b>Red conditions:</b> an off-by-one in <c>IsPastGrace</c> or in either layer's use of it (<c>end &lt;=
-    /// today-5</c>) makes one of these 403.</para>
+    /// <para><b>Red conditions:</b> an off-by-one in the shared <c>IsPastGrace</c> (<c>end &lt;= today-5</c>), or in the
+    /// approver predicate's use of it (<c>DesignatedApproverAuthorizer.IsPastManagerGrace</c>), makes one of these 403.
+    /// A validator-only off-by-one does NOT: on approve the org-scope arm already refuses these LocalLeader actors at
+    /// its LocalHR floor, so only the reason changes and the edge / unit-leader path still admits
+    /// (<c>ApprovalEndpoints.cs:447-456</c>). The validator's own D+5 boundary is pinned by
+    /// <c>DepartedSelfValidatorTests</c>. (Fix-up 4 c3, Codex fix-up 4 c2 WARNING.)</para>
     /// </summary>
     [Fact]
     public async Task Day5_LeaverStillActive_ManagerAndUnitLeaderApprove_Is200_BoundaryPin()
@@ -193,24 +199,56 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>Kind F</b>, the leader-tier READ. At D+6 with the leaver still active, the manager's Skema month view is 403;
-    /// HR's is 200 (the leaver's final month, May, holds employed days). At D+5 the manager's is 200 (the mirror, kind
-    /// B).
-    /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, ...)</c> on the D+6 manager read. On
-    /// <c>c13024cd</c> the leader tier's active-only check admits the covering scope of an ACTIVE subject (200).
-    /// Both layers matter here, and EITHER mutation alone turns the manager assertion RED. The leader tier asks the
-    /// active-only validator first (<c>SkemaEndpoints.cs:237</c>); only if that refuses does it fall through to the
-    /// designated-approver edge (<c>:246</c>). <b>M-25</b> alone (validator rule off): the covering LocalLeader scope
-    /// admits at <c>:237</c>, so 200. <b>M-26</b> alone (predicate off): the validator still answers "Target employee
-    /// not found", then the edge arm admits, so 200.</para>
+    /// <b>Kind F</b>, the leader-tier READ. The leaver's May is seeded as SENT (EMPLOYEE_APPROVED) before the first read.
+    /// At D+6 with the leaver still active, the manager's Skema month view is 403 and the 403's reason is the date rule's
+    /// ("Target employee not found", never "The month has not been submitted for approval"); HR's is 200 (HR is not
+    /// month-gated, and the employed-month bound is inert for a still-active subject, <c>ApprovalEndpoints.cs:71-72</c>).
+    /// At D+5 the manager's is 200 (the mirror, kind B).
+    /// <para><b>Why the month is seeded as sent.</b> Since S124 the leader tier of this view is month-gated
+    /// (<c>SkemaEndpoints.cs:535-553</c>, <c>ApprovalVisibility.IsSubmittedToManager</c>): a leader reading a month with no
+    /// period, or a DRAFT one, is refused 403 "The month has not been submitted for approval"
+    /// (<c>ApprovalReadTier.MonthNotSubmittedForbidden</c>, <c>ApprovalReadTier.cs:116-121</c>). Without the period every
+    /// manager read here is refused by THAT gate, so the D+6 half passed for a reason that is not the date (on
+    /// <c>c13024cd</c> and under either mutation too: vacuous) and the D+5 mirror, which needs a 200, failed in CI
+    /// (run 42013444380). HR is not month-gated, which is why HR's 200 never noticed.</para>
+    /// <para><b>Red conditions (Docker, argued):</b> the D+6 manager assertions
+    /// (<c>Assert.Equal(Forbidden, ...)</c> and <c>Assert.Contains("Target employee not found", ...)</c>). Trace on HEAD:
+    /// the tier classification does not admit the LocalLeader at HR tier, so the read is leader tier
+    /// (<c>ApprovalReadTier.cs:105-107</c>; at D+6 the refusal is the primary-role gate for a subject past the grace while
+    /// active, <c>OrgScopeValidator.cs:356-361</c>, at D+5 the per-scope LocalHR floor); the active-only validator answers "Target employee not found" for a subject
+    /// past the grace by date (<c>OrgScopeValidator.cs:160-161</c>) at <c>SkemaEndpoints.cs:237</c>; the edge arm at
+    /// <c>:246</c> asks <c>IsEffectiveApproverOrUnitLeaderAsync</c>, whose <c>manager-grace-ended</c> clause refuses
+    /// (<c>DesignatedApproverAuthorizer.cs:401</c>); so <c>:249</c> answers 403 with that reason. The month gate is not
+    /// reached (the 403 returns at :249, and the month is sent anyway).
+    /// <b>On <c>c13024cd</c></b> (no date rule): the same classification, then the validator resolves the still-active
+    /// leaver and the covering LocalLeader scope admits at <c>:237</c>, the month is sent, so the manager gets 200 and
+    /// <c>Assert.Equal(Forbidden, ...)</c> fails. Both layers matter, and EITHER mutation alone turns the manager
+    /// assertion RED. <b>M-25</b> alone (validator rule off): the validator admits at <c>:237</c> (covering scope, active
+    /// subject), the edge arm is not asked, the month is sent: 200. <b>M-26</b> alone (predicate off,
+    /// <c>IsPastManagerGrace</c> false): the validator still answers "Target employee not found" at <c>:237</c>, then the
+    /// edge arm at <c>:246</c> admits Mgr (the edge Leaver to Mgr is live, as the approve facts prove), so no 403: 200.
+    /// The reason assertions (<c>Contains "Target employee not found"</c>, <c>DoesNotContain "has not been
+    /// submitted"</c>) make it impossible for a 403 from the month gate, or from anything but this clause, to satisfy the
+    /// fact. The D+5 mirror needs only ONE admitting path on the last grace day, so an off-by-one in a single layer is
+    /// masked here (a validator-only error falls through to the live edge at <c>:246</c>; a predicate-only error is
+    /// bypassed by the covering scope at <c>:237</c>). It turns red only under an error both layers share, the common
+    /// grace rule <c>EmploymentEndDateLifecycleWriter.IsPastGrace</c> (<c>OrgScopeValidator.cs:602</c>,
+    /// <c>DesignatedApproverAuthorizer.cs:423</c>), or a broken seed. Each layer's own D+5 boundary is pinned elsewhere
+    /// (the approve boundary fact above for the predicate; <c>DepartedSelfValidatorTests</c> and, at route level, the
+    /// year-overview fact's D+5 mirror below for the validator). (Fix-up 4 c2, Codex WARNING; Fable fix-up 4 NOTE-1,
+    /// NOTE-2, NOTE-4.)</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_ManagerSkemaMonthView_Is403_HrIs200_Day5ManagerIs200()
     {
         await SetEndDateAsync(Leaver, EndDay6);
+        await InsertPeriodAsync(Leaver, "EMPLOYEE_APPROVED"); // sent: the S124 leader-tier month gate must not be what refuses
 
         var mgr = await Client(Mgr).GetAsync($"/api/skema/{Leaver}/month?year=2026&month=5");
+        var mgrBody = await mgr.Content.ReadAsStringAsync();
         Assert.Equal(HttpStatusCode.Forbidden, mgr.StatusCode);
+        Assert.Contains("Target employee not found", mgrBody);
+        Assert.DoesNotContain("has not been submitted", mgrBody);
 
         var hr = await Client(Hr, StatsTidRoles.LocalHR).GetAsync($"/api/skema/{Leaver}/month?year=2026&month=5");
         Assert.Equal(HttpStatusCode.OK, hr.StatusCode);
@@ -304,12 +342,17 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// <summary>
     /// <b>Kind F</b>, the leader's YEAR OVERVIEW (<c>GET /api/balance/{id}/year-overview</c>, <c>BalanceEndpoints.cs</c>
     /// ~:710). At D+6 with the leaver still active, a leader whose scope covers her organisation gets 403 and HR gets
-    /// 200. This route uses only the terminated-inclusive validator (no edge arm).
+    /// 200; at D+5 the same leader gets 200 (the mirror, kind B). This route uses only the terminated-inclusive validator (no edge arm).
     /// <para><b>Red conditions (Docker, argued):</b> on <c>c13024cd</c> the validator treats the active leaver as an
     /// ordinary subject and the covering leader scope admits, so the leader gets 200 and
     /// <c>Assert.Equal(Forbidden, ...)</c> fails. <b>Mutation table.</b> <b>M-25</b> alone turns it RED (the leader is
     /// admitted: 200). <b>M-26</b> alone leaves it green, because this route never asks the edge predicate. The HR half
-    /// keeps "everyone is refused" from passing.</para>
+    /// keeps "everyone is refused" from passing. <b>Other gates (audited, fix-up 4):</b> this route has no month gate and
+    /// no employed-month bound, and an ACTIVE leaver with a covering leader scope clears the validator, so the only thing
+    /// that can answer 403 with the LocalHR text is the date rule (<c>OrgScopeValidator.cs</c>, the
+    /// <c>pastGraceWhileActive</c> branch of the terminated-inclusive overload). The D+5 mirror (the same leader, last day
+    /// F-5) is 200: the same request on the same seed, so a 200 there proves the D+6 403 is the date and not the fixture
+    /// (HR's 200 at D+6 reaches the same body, so the body itself works for this seed).</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_LeaderYearOverview_Is403_HrIs200()
@@ -323,6 +366,11 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
 
         var hr = await Client(Hr, StatsTidRoles.LocalHR).GetAsync($"/api/balance/{Leaver}/year-overview?year=2026");
         Assert.Equal(HttpStatusCode.OK, hr.StatusCode);
+
+        // The D+5 mirror (fix-up 4): the same leader on the same seed, one day earlier, inside the grace.
+        await SetEndDateAsync(Leaver, EndDay5);
+        var mirror = await Client(Mgr).GetAsync($"/api/balance/{Leaver}/year-overview?year=2026");
+        Assert.Equal(HttpStatusCode.OK, mirror.StatusCode);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
