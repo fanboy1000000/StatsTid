@@ -223,7 +223,12 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// edge arm at <c>:246</c> admits Mgr (the edge Leaver to Mgr is live, as the approve facts prove), so no 403: 200.
     /// The reason assertions (<c>Contains "Target employee not found"</c>, <c>DoesNotContain "has not been
     /// submitted"</c>) make it impossible for a 403 from the month gate, or from anything but this clause, to satisfy the
-    /// fact. The D+5 mirror is 200 only if the seed itself admits (an off-by-one in either layer makes it 403).</para>
+    /// fact. The D+5 mirror needs only ONE admitting path on the last grace day, so an off-by-one in a single layer is
+    /// masked here (a validator-only error falls through to the live edge at <c>:246</c>; a predicate-only error is
+    /// bypassed by the covering scope at <c>:237</c>). It turns red only under an error both layers share, the common
+    /// grace rule <c>EmploymentEndDateLifecycleWriter.IsPastGrace</c> (<c>OrgScopeValidator.cs:602</c>,
+    /// <c>DesignatedApproverAuthorizer.cs:423</c>), or a broken seed. Each layer's own D+5 boundary is pinned elsewhere
+    /// (the approve boundary fact above; <c>DepartedSelfValidatorTests</c>). (Fix-up 4 c2, Codex WARNING.)</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_ManagerSkemaMonthView_Is403_HrIs200_Day5ManagerIs200()
