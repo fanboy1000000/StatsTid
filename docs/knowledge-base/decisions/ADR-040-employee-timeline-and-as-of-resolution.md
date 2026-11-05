@@ -552,13 +552,19 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
     the outcome equals that of a request wholly on one of the two days, so a straddle cannot admit an actor whom
     neither day admits.
   - **The employed-month bound still keys on the flag** (`ApprovalEndpoints.cs:71`; Payroll `Program.cs:876`).
-    Between D+6 and the switch-off it does not fire. That is not exploitable: the send already refuses a month with
-    no employed day (`ApprovalEndpoints.cs:2473-2480`), so no such month reaches approval or payroll. It is a
-    consistency residual.
+    It never applies to an active subject, so between D+6 and the switch-off it does not fire. The send refuses a
+    month with no employed day (`ApprovalEndpoints.cs:2473-2480`), but a month sent first and an end date set
+    retroactively before it later survives (the end-date writer touches no `approval_periods` row): such a month can
+    be approved and paid until the switch-off, and gets the date-free 422 after it. A consistency residual; S148
+    stage 0 keys the bound on "past the grace or switched off", the same two-layer rule (Step 7a cycle 2, Fable N-1).
   - **`/remove` of a leaver whose switch-off was missed works only to D+5.** `/remove` reads the person through the
     active-only check, so from D+6 by date it answers "not found", as it does for a switched-off person. HR reassigns
     the leaver's reports one by one through `POST /api/admin/reporting-lines`, whose check reads the report, not the
-    leaver (`ReportingLineEndpoints.cs:87`, `:108`). Step A closes the leaver's own edges when it runs.
+    leaver (`ReportingLineEndpoints.cs:87`, `:108`). Step A closes the leaver's own edges when it runs. HR can also
+    switch the person off directly: `PUT /api/admin/users/{userId}` (`AdminEndpoints.cs:1579`, "the sanctioned
+    deactivation path", `:1742`) or the end-date correction (`EmploymentDateEndpoints.cs:373`), whose writer
+    deactivates with provenance when the date is past the grace (`EmploymentEndDateLifecycleWriter.cs:289-315`)
+    (Step 7a cycle 2, Fable N-2).
   - **One extra read per admitted manager–employee pair** on my-reports and Teamoversigt: performance register F7.
 - **Pinned by** the Unit facts `ManagerGracePredicateTests` (7; mutation M-26 trips 3 of them) and the Docker facts
   `LeaverPastGraceByDateTests`, the four D+5 and D+6 facts in `DepartedSelfValidatorTests`, and
