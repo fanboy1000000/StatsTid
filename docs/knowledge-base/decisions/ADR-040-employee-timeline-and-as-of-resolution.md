@@ -516,7 +516,7 @@ data. Both Step 7a lenses found it (cycle 1: Fable W-1, Codex WARNING 1); it is 
 The owner ruled "(a) Fix it now". When the first commit showed that the leader-tier org-scope reads had the same
 window, the owner ruled "(a) Extend now" (both 2026-11-05). TASK-14725 (merged `2cfae13c`) decides the cut-off
 by the date on two layers. Step A's switch-off stays, as a second guard and as the source of the switch-off events
-(K-4). Code lines below are at `0a64c1eb`.
+(K-4). Code lines below are at `ab77c475` (re-checked at Step 7a cycle 2).
 - **Layer 1, the shared approver predicate.** Once a manager path has admitted the actor (the designated edge, the
   admin-assigned acting manager, the edge manager's stand-in, the unit leader or the unit leader's stand-in),
   `DesignatedApproverAuthorizer` refuses when the subject's last day employed lies before the authority date minus 5,
@@ -530,7 +530,7 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
   - The active-only overload answers "Target employee not found" to every actor (`:160-161`).
   - The terminated-inclusive overload admits it only through a LocalHR-or-above scope (`:349-350`, `:356`, `:385`),
     exactly as a deactivated subject (TASK-14713's rule).
-  - The departed-self clause still runs first (`:150-151`, `:339-340`). The log names the clause
+  - The departed-self clause still runs first (`:151-152`, `:339-340`). The log names the clause
     `past-grace-as-switched-off`.
   - Without this layer, a leader whose scope covers the leaver's organisation would still reach the leaver's reads
     and the overtime decisions until the switch-off. On approve, reject and reopen the validator's arm is floored at
@@ -545,6 +545,29 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
   - The leader year-overview reads stay null-floored by design, but a switched-off target is admitted only through
     a LocalHR-or-above scope (`OrgScopeValidator.cs:385`). From D+6 a leader therefore no longer sees a leaver's
     year overview; HR still does.
+- **The recorded approval method follows the same predicate (Step 7a cycle 2, Codex WARNING 1; TASK-14725
+  fix-ups 2 and 3, merged `ab77c475`).** Every approve and reject records how the decider was entitled
+  (`approval_periods.approval_method`). Until fix-up 2 the label was derived without asking about the subject. So an
+  HR actor admitted through HR scope who also held the manager or unit-leader position was recorded as the manager
+  from D+6.
+  - **How it works now.** Each handler evaluates the authority predicate once, under the held locks, for every actor
+    (`ApprovalEndpoints.cs:539-542` approve, `:785-788` reject). That one answer both refuses a manager the
+    org-scope arm did not admit and names the label: a manager or unit-leader label only when the predicate admits,
+    otherwise `ORG_SCOPE_FALLBACK` (`DeriveApprovalMethodAsync`, step (0), `:240-241`).
+  - **The cases.** An HR actor who also holds a manager position records `ORG_SCOPE_FALLBACK` from D+6 by date,
+    after the switch-off, and for a subject switched off by hand with no end date (the predicate's active-user
+    re-check; Fable's fix-up 2 WARNING-1).
+  - **Why two fix-ups.** Fix-up 2 copied only the date clause into the label; fix-up 3 replaced that copy with the
+    predicate's own answer, which covers every clause.
+  - **What did not change.** The refusal rule (`!orgScopeAllowed && !holdsManagerPath`), and
+    `DesignatedApproverAuthorizer.cs`, which is as TASK-14725 left it. When the predicate admits, the labels are as
+    before: `DESIGNATED_MANAGER` / `ACTING_MANAGER` on the edge, `UNIT_LEADER` / `UNIT_LEADER_VIKAR` on the
+    unit-leader path.
+  - **`designated_approver_id` still names the manager the reporting line resolves, by design.** It records *who*
+    the line names; the method records *how* the decider was entitled; and no reader infers the method from the id
+    pair (Fable's fix-up 2 NOTE-5).
+  - **Cost.** For HR this is one more predicate evaluation per approve or reject (Fable's fix-up 3 NOTE-6; no F-row
+    needed).
 - **Residuals recorded, not fixed.**
   - **PAT-028, widened.** The validator reads the Copenhagen date at most once per call, and now does so for every
     subject with a recorded end date, not only when the identity matches (`OrgScopeValidator.cs:145`, `:332`; the
@@ -553,7 +576,7 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
     neither day admits.
   - **The employed-month bound still keys on the flag** (`ApprovalEndpoints.cs:71`; Payroll `Program.cs:876`).
     It never applies to an active subject, so between D+6 and the switch-off it does not fire. The send refuses a
-    month with no employed day (`ApprovalEndpoints.cs:2473-2480`), but a month sent first and an end date set
+    month with no employed day (`ApprovalEndpoints.cs:2513-2520`), but a month sent first and an end date set
     retroactively before it later survives (the end-date writer touches no `approval_periods` row): such a month can
     be approved and paid until the switch-off, and gets the date-free 422 after it. A consistency residual; S148
     stage 0 keys the bound on "past the grace or switched off", the same two-layer rule (Step 7a cycle 2, Fable N-1).
@@ -565,8 +588,29 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
     deactivation path", `:1742`) or the end-date correction (`EmploymentDateEndpoints.cs:373`), whose writer
     deactivates with provenance when the date is past the grace (`EmploymentEndDateLifecycleWriter.cs:289-315`)
     (Step 7a cycle 2, Fable N-2).
+  - **The label's step (3).** When the predicate admits but neither the re-resolved edge nor the unit-leader
+    resolution names the actor, the label is `ORG_SCOPE_FALLBACK` (`ApprovalEndpoints.cs:256-259`). Which manager
+    label applies comes from two further reads after the predicate: the resolver (`:553-554`) and the unit-leader
+    kind (`:249-250`). State outside the held advisories, such as a role expiry or a revocation, can move between
+    them. The answer then errs toward the fallback, never toward a manager label the reads do not support (Fable's
+    fix-up 3 NOTE-1; Codex's fix-up 3 notes).
+  - **Reading the log.** The predicate's `manager-grace-ended` line (`DesignatedApproverAuthorizer.cs:404-407`,
+    Information) names a refused manager *path*, not the request's outcome. An HR actor who also holds that path is
+    admitted through HR scope, so the line can sit beside a 200 (Fable's fix-up 3 NOTE-2). The validator's
+    `past-grace-as-switched-off` line is Information since fix-up 2 (`OrgScopeValidator.cs:622`; Step 7a cycle 2,
+    Fable N-4).
   - **One extra read per admitted manager–employee pair** on my-reports and Teamoversigt: performance register F7.
 - **Pinned by** the Unit facts `ManagerGracePredicateTests` (7; mutation M-26 trips 3 of them) and the Docker facts
   `LeaverPastGraceByDateTests`, the four D+5 and D+6 facts in `DepartedSelfValidatorTests`, and
-  `PayrollPastGraceLeaverScopeTests`. Each Docker fact keeps the leaver active at D+6, with the leaver job off, and
-  has D+5 boundary pins. The Docker facts are CI-pending until C-2 (`<C-2 run id>`).
+  `PayrollPastGraceLeaverScopeTests`. Each access fact keeps the leaver active at D+6, with the leaver job off, and
+  has D+5 boundary pins. Six more facts in `LeaverPastGraceByDateTests` pin the recorded approval method (fix-ups
+  2 and 3):
+  - `Day6_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:347`);
+  - `Day6_LeaverStillActive_HrWhoIsUnitLeaderRejects_MethodIsOrgScopeFallback` (`:372`);
+  - `Day5_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodStaysDesignatedManager_BoundaryPin` (`:394`);
+  - `Day6_LeaverSwitchedOff_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:418`);
+  - `Day6_LeaverStillActive_ManagerVikarStandIn_Is403_Day5Is200` (`:450`: the stand-in refused at D+6, and at D+5
+    recorded as `ACTING_MANAGER`);
+  - `ManuallySwitchedOff_NoEndDate_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:500`).
+
+  The Docker facts are CI-pending until C-2 (`<C-2 run id>`).
