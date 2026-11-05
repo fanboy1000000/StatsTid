@@ -65,7 +65,8 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     private const string HrMgr = "s147g_hrmgr";          // LocalHR AND the designated (edge) manager of LeaverH
     private const string LeaverV = "s147g_leaver_v";     // Employee in unit V; NO edge; HrUnitLdr leads V
     private const string HrUnitLdr = "s147g_hrunitldr";  // LocalHR AND the designated unit leader of V
-    private const string Vik = "s147g_vik";              // LocalLeader; active manager_vikar stand-in for Mgr
+    private const string LeaverM = "s147g_leaver_m";     // Employee switched off by hand (no end date); edge manager = HrMgr
+    private const string Vik ="s147g_vik";              // LocalLeader; active manager_vikar stand-in for Mgr
     private static readonly Guid UnitV = Guid.Parse("51470000-0000-0000-0000-0000000000a2");
 
     private TestFixtures.DockerHarness _harness = null!;
@@ -336,10 +337,11 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// <c>approval_periods.approval_method = ORG_SCOPE_FALLBACK</c>.
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal("ORG_SCOPE_FALLBACK", method)</c>. On
     /// <c>076ac29e</c> <c>DeriveApprovalMethodAsync</c> tested the edge first (<c>actor == resolved approver</c>) and
-    /// recorded <c>DESIGNATED_MANAGER</c>. <b>Mutation:</b> delete the new first step of
-    /// <c>DeriveApprovalMethodAsync</c> (the <c>IsPastManagerGrace(...)</c> return of <c>ORG_SCOPE_FALLBACK</c>): the edge
-    /// step answers and the assertion fails with <c>DESIGNATED_MANAGER</c>. The 200 and status assertions keep it
-    /// from passing on a refusal.</para>
+    /// recorded <c>DESIGNATED_MANAGER</c>. On <c>d145f85a</c> the handler evaluates the authority predicate in-lock for
+    /// every actor; at D+6 its <c>manager-grace-ended</c> clause refuses, so <c>holdsManagerPath</c> is false and step (0)
+    /// returns the fallback. <b>Mutation (fix-up 3):</b> step (0) ignores <c>holdsManagerPath</c> (or the handler passes
+    /// <c>true</c>): the edge step answers and the assertion fails with <c>DESIGNATED_MANAGER</c>. The 200 and status
+    /// assertions keep it from passing on a refusal.</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback()
@@ -361,8 +363,10 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// month REJECTED, <c>approval_method = ORG_SCOPE_FALLBACK</c>.
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal("ORG_SCOPE_FALLBACK", method)</c>. On
     /// <c>076ac29e</c> the unit-leader step of the classification ran while the subject was still active (its
-    /// same-organisation re-check reads active users), so the label was <c>UNIT_LEADER</c>. <b>Mutation:</b> delete
-    /// the new first step of <c>DeriveApprovalMethodAsync</c>; reject calls it at <c>ApprovalEndpoints.cs</c> ~:812.</para>
+    /// same-organisation re-check reads active users), so the label was <c>UNIT_LEADER</c>. On <c>d145f85a</c> the
+    /// predicate refuses at D+6 (grace clause), <c>holdsManagerPath</c> is false, step (0) returns the fallback.
+    /// <b>Mutation (fix-up 3):</b> step (0) ignores <c>holdsManagerPath</c> (or reject passes <c>true</c>, ~:800): the
+    /// unit-leader resolution still names HrUnitLdr (subject active), so the label is <c>UNIT_LEADER</c>.</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_HrWhoIsUnitLeaderRejects_MethodIsOrgScopeFallback()
@@ -383,8 +387,8 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// <b>Kind B — boundary pin, holds today.</b> D+5, the LAST grace day: the same HR-who-is-the-manager approves and
     /// the method stays <c>DESIGNATED_MANAGER</c> (inside the grace the manager position is real authority and the
     /// audit says so). Proves the D+6 label is about the DATE, not a blanket "HR always records the fallback".
-    /// <para><b>Red conditions:</b> an off-by-one in the new step (<c>end &lt;= today-5</c>) records
-    /// <c>ORG_SCOPE_FALLBACK</c> here.</para>
+    /// <para><b>Red conditions:</b> an off-by-one in the predicate's grace clause (<c>end &lt;= today-5</c>), or
+    /// <c>holdsManagerPath</c> forced false (step (0) always falling back), records <c>ORG_SCOPE_FALLBACK</c> here.</para>
     /// </summary>
     [Fact]
     public async Task Day5_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodStaysDesignatedManager_BoundaryPin()
@@ -405,8 +409,10 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// line), approves: 200 and <c>approval_method = ORG_SCOPE_FALLBACK</c>.
     /// <para><b>Red conditions (Docker, argued):</b> on <c>076ac29e</c> the edge test is
     /// <c>actor == resolved approver</c> and never looks at the subject, so the manager label survived the
-    /// switch-off: <c>DESIGNATED_MANAGER</c>, and <c>Assert.Equal("ORG_SCOPE_FALLBACK", ...)</c> fails.
-    /// <b>Mutation:</b> delete the new first step of <c>DeriveApprovalMethodAsync</c>.</para>
+    /// switch-off: <c>DESIGNATED_MANAGER</c>, and <c>Assert.Equal("ORG_SCOPE_FALLBACK", ...)</c> fails. On
+    /// <c>d145f85a</c> the predicate refuses (grace clause and the inactive-subject re-check), so
+    /// <c>holdsManagerPath</c> is false. <b>Mutation (fix-up 3):</b> step (0) ignores <c>holdsManagerPath</c>; the
+    /// edge step (<c>actor == resolved approver</c>, which survives the switch-off) answers <c>DESIGNATED_MANAGER</c>.</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverSwitchedOff_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback()
@@ -432,7 +438,13 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, ...)</c> at D+6. On <c>c13024cd</c>
     /// (before TASK-14725) the org-scope arm refuses a LocalLeader at its LocalHR floor, then the edge predicate (no date
     /// clause) admits the resolved stand-in: 200. <b>Mutation:</b> <c>IsPastManagerGrace</c> returns false (M-26):
-    /// the edge arm admits Vik at D+6, 200. The D+5 half is the boundary pin (holds today).</para>
+    /// the edge arm admits Vik at D+6, 200. The D+5 half is the boundary pin (holds today).
+    /// <b>Checked against <c>d145f85a</c> (fix-up 3):</b> the D+6 half still targets M-26 and no other mutation of
+    /// fix-up 3. Vik is a LocalLeader, so the org-scope arm never admits her; her admission is exactly
+    /// <c>holdsManagerPath</c> (<c>if (!orgScopeAllowed &amp;&amp; !holdsManagerPath) 403</c>), whose date clause is
+    /// <c>IsPastManagerGrace</c>. The label mutation ("step (0) ignores <c>holdsManagerPath</c>") cannot turn this
+    /// half RED because a refused request never reaches the label. At D+5 the predicate holds and step (1) names
+    /// <c>ACTING_MANAGER</c>.</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_ManagerVikarStandIn_Is403_Day5Is200()
@@ -469,6 +481,35 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
         Assert.Equal("ACTING_MANAGER", await ReadMethodAsync(period));
     }
 
+    /// <summary>
+    /// <b>Kind F</b> (fix-up 3, Fable WARNING-1): a subject switched off BY HAND, with no end date. LeaverM is
+    /// <c>is_active = FALSE</c>, <c>employment_end_date IS NULL</c>, <c>end_date_deactivated = FALSE</c> (what
+    /// <c>PUT /api/admin/users/{userId}</c> leaves: it sets only <c>is_active</c>; there is no deactivation-reason
+    /// column in the schema, the brief's name for it does not exist). Her designated edge manager HrMgr is LocalHR.
+    /// HrMgr approves her submitted month: 200, APPROVED, <c>approval_method = ORG_SCOPE_FALLBACK</c>.
+    /// <para><b>Gates checked:</b> the terminated-inclusive scope gate admits a LocalHR scope for an inactive target
+    /// (the R9b floor is LocalHR); the employed-month bound passes because the window is both-NULL, which
+    /// <c>EmploymentWindow.Overlaps</c> treats as unbounded. So the seed reaches approve.</para>
+    /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal("ORG_SCOPE_FALLBACK", method)</c>. On
+    /// <c>d997ee12</c> the only subject test was the manager-grace date, and a NULL end date is never past, so the
+    /// edge step recorded <c>DESIGNATED_MANAGER</c>. On <c>d145f85a</c> the predicate's active-user re-check refuses, so
+    /// <c>holdsManagerPath</c> is false. <b>Mutation:</b> step (0) ignores <c>holdsManagerPath</c> (or the date-only
+    /// rule is restored): the edge step answers <c>DESIGNATED_MANAGER</c>.</para>
+    /// </summary>
+    [Fact]
+    public async Task ManuallySwitchedOff_NoEndDate_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback()
+    {
+        await SetActiveAsync(LeaverM, false);
+        var period = await InsertPeriodAsync(LeaverM, "EMPLOYEE_APPROVED");
+
+        var rsp = await Client(HrMgr, StatsTidRoles.LocalHR).PostAsync($"/api/approval/{period}/approve", null);
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(period));
+        Assert.False(await IsActiveAsync(LeaverM), "the fixture must be the manual switch-off");
+        Assert.Equal("ORG_SCOPE_FALLBACK", await ReadMethodAsync(period));
+    }
+
     // ════════════════════════════════════════════════════════════════════════════════
     //  Seed + helpers
     // ════════════════════════════════════════════════════════════════════════════════
@@ -492,6 +533,7 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
         await InsertUserAsync(conn, LeaverV, "EMPLOYEE", unit: UnitV);
         await InsertUserAsync(conn, HrUnitLdr, "LOCAL_HR", unit: UnitV); // a leader is a member of her own unit (D3)
         await InsertUserAsync(conn, Vik, "LOCAL_LEADER");
+        await InsertUserAsync(conn, LeaverM, "EMPLOYEE");
 
         await Exec(conn, "INSERT INTO unit_leaders (unit_id, user_id) VALUES (@u, @m)", ("u", UnitU), ("m", UnitLeader));
         await Exec(conn, "INSERT INTO unit_leaders (unit_id, user_id) VALUES (@u, @m)", ("u", UnitV), ("m", HrUnitLdr));
@@ -499,6 +541,7 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
         var rl = new ReportingLineRepository(_dbFactory);
         await rl.AssignAsync(null, Line(Leaver, Mgr));
         await rl.AssignAsync(null, Line(LeaverH, HrMgr));
+        await rl.AssignAsync(null, Line(LeaverM, HrMgr));
     }
 
     private static async Task InsertUserAsync(NpgsqlConnection conn, string id, string roleId, Guid? unit = null)
