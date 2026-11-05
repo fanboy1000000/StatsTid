@@ -41,7 +41,7 @@ namespace StatsTid.Infrastructure.Security;
 /// future one: unchanged. The switch-off stays as belt and braces. The approval EDGE and the unit-leader
 /// path do not pass through this validator, so <see cref="DesignatedApproverAuthorizer"/> carries the
 /// same date rule for them (TASK-14725): both layers are needed. The refusal texts are the existing
-/// ones (no date, ADR-040 D7); the WARNING log line names the clause (<see cref="PastGraceClauseName"/>).
+/// ones (no date, ADR-040 D7); the INFORMATION log line names the clause (<see cref="PastGraceClauseName"/>).
 /// </para>
 ///
 /// <para>
@@ -57,7 +57,7 @@ namespace StatsTid.Infrastructure.Security;
 public sealed class OrgScopeValidator
 {
     /// <summary>
-    /// S147 / TASK-14725 fix-up 1 — the clause name the WARNING log line carries when a target is
+    /// S147 / TASK-14725 fix-up 1 — the clause name the INFORMATION log line carries when a target is
     /// refused because it is past the manager grace by date and so treated as switched off (one name
     /// per clause, the S147 house rule). The response body never names it, nor any date.
     /// </summary>
@@ -605,12 +605,21 @@ public sealed class OrgScopeValidator
     /// S147 / TASK-14725 fix-up 1 — the refusal for a target treated as switched off because it is past
     /// the grace by date: the SAME <c>(false, reason)</c> a deactivated target gets on that overload
     /// (<paramref name="reason"/> is that overload's existing text — no date, ADR-040 D7), and ONE
-    /// WARNING line that names the clause (<see cref="PastGraceClauseName"/>) so the refusal is
+    /// INFORMATION line that names the clause (<see cref="PastGraceClauseName"/>) so the refusal is
     /// traceable to this rule rather than to the deactivation.
+    /// <para>
+    /// Information, not Warning (TASK-14725 fix-up 2; Step 7a cycle 2, N-4): the refusal is the rule
+    /// working as designed, not a fault or a probe. Until the leaver job switches the subject off, every
+    /// refused request for a past-grace, still-active subject lands here (on both overloads; on the
+    /// active-only routes HR's too), so a Warning would fill the log with expected refusals. The level
+    /// matches the approver predicate's line for the same rule on the other layer
+    /// (<see cref="DesignatedApproverAuthorizer.ManagerGraceEndedClause"/>). Deliberately not throttled:
+    /// one line per refusal keeps each refusal traceable.
+    /// </para>
     /// </summary>
     private (bool Allowed, string? Reason) DenyPastGraceAsSwitchedOff(ActorContext actor, string target, string reason)
     {
-        _logger.LogWarning(
+        _logger.LogInformation(
             "Access denied ({Clause}): Actor={ActorId} Role={ActorRole} Target={Target} Reason={Reason} CorrelationId={CorrelationId}",
             PastGraceClauseName, actor.ActorId, actor.ActorRole, target, reason, actor.CorrelationId);
         return (false, reason);
