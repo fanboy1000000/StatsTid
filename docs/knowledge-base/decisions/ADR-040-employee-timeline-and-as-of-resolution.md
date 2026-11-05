@@ -512,7 +512,7 @@ Docker facts in `tests/StatsTid.Tests.Regression/Leaver/`, `Security/DepartedSel
 rested on Step A. The manager's paths and every leader-tier org-scope check read `is_active`, and only Step A,
 polled every 5 minutes, switches the leaver off. So between Copenhagen midnight on D+6 and the next poll, or for as
 long as the job failed, the leaver's own manager could still approve, reject or reopen the month and read the leaver's
-data. Both Step 7a lenses found it (cycle 1: Fable W-1, Codex WARNING 1); it is registered as SEC-058 (fixed in code; it closes when C-2 runs its Docker pins green).
+data. Both Step 7a lenses found it (cycle 1: Fable W-1, Codex WARNING 1); it is registered as SEC-058 (fixed in code, and CLOSED on 2026-11-05, when C-2 on the final candidate, run `42036154930`, ran its Docker pins green).
 The owner ruled "(a) Fix it now". When the first commit showed that the leader-tier org-scope reads had the same
 window, the owner ruled "(a) Extend now" (both 2026-11-05). TASK-14725 (merged `2cfae13c`) decides the cut-off
 by the date on two layers. Step A's switch-off stays, as a second guard and as the source of the switch-off events
@@ -629,7 +629,7 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
   **The Skema fact ran red in CI once, for a fixture reason.** In C-2 on K′ (run `42013444380`, 2026-11-05) its D+5
   half got 403. The fact had not sent the month, so the month gate refused. The same gate let its D+6 half pass for
   the wrong reason, even on the code before TASK-14725 (`c13024cd`). The product was right. Fix-up 4's correction is
-  CI-pending until C-2 on K‴.
+  CI-verified: C-2 on K‴ ran it green (run `42036154930`, 2026-11-05).
 
   Fix-ups 2 and 3 added six facts in all to `LeaverPastGraceByDateTests`: five pin the recorded approval method,
   and the stand-in fact pins both the stand-in's D+6 refusal and its D+5 label. The predicate's other
@@ -645,4 +645,4 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
     recorded as `ACTING_MANAGER`);
   - `ManuallySwitchedOff_NoEndDate_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:548`).
 
-  The Docker facts are CI-pending until C-2 (`<C-2 run id>`).
+  The Docker facts are CI-verified: C-2 on the final candidate, K‴ (`a3ce6f7f`), ran them all green (run `42036154930`, 2026-11-05; Regression 2436/2436).
