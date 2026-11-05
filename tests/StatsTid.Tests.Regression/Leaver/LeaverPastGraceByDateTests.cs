@@ -173,8 +173,12 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// F-5 (D+5, the LAST grace day): the manager approves through the edge (200, APPROVED) and the unit leader
     /// approves through the unit-leader row (200, APPROVED). Proves the D+6 refusals are about the DATE and not about
     /// the fixture (a broken seed would refuse here too).
-    /// <para><b>Red conditions:</b> an off-by-one in <c>IsPastGrace</c> or in either layer's use of it (<c>end &lt;=
-    /// today-5</c>) makes one of these 403.</para>
+    /// <para><b>Red conditions:</b> an off-by-one in the shared <c>IsPastGrace</c> (<c>end &lt;= today-5</c>), or in the
+    /// approver predicate's use of it (<c>DesignatedApproverAuthorizer.IsPastManagerGrace</c>), makes one of these 403.
+    /// A validator-only off-by-one does NOT: on approve the org-scope arm already refuses these LocalLeader actors at
+    /// its LocalHR floor, so only the reason changes and the edge / unit-leader path still admits
+    /// (<c>ApprovalEndpoints.cs:447-456</c>). The validator's own D+5 boundary is pinned by
+    /// <c>DepartedSelfValidatorTests</c>. (Fix-up 4 c3, Codex fix-up 4 c2 WARNING.)</para>
     /// </summary>
     [Fact]
     public async Task Day5_LeaverStillActive_ManagerAndUnitLeaderApprove_Is200_BoundaryPin()
