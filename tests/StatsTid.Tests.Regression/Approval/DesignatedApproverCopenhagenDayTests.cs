@@ -286,5 +286,10 @@ public sealed class DesignatedApproverCopenhagenDayTests
 
         public Task<UnitLeaderApprovalKind> GetUnitLeaderKindAsync(string actorId, string employeeId, CancellationToken ct)
             => Task.FromResult(UnitLeaderApprovalKind.None);
+
+        // S147 TASK-14725-T fix-up 1 (Fable N7): the interface's DEFAULT for this fact is fail-closed (true = "the
+        // manager grace has ended" = refuse), which would silently refuse every admission this double is meant to
+        // exercise. Nobody in this fixture is a past-grace leaver, so the honest answer is false.
+        public Task<bool> IsPastManagerGraceAsync(string userId, DateOnly asOf, CancellationToken ct) => Task.FromResult(false);
     }
 }

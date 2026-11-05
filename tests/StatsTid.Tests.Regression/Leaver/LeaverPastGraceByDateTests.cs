@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
@@ -100,10 +101,16 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, mgr.StatusCode)</c>. On
     /// <c>c13024cd</c> the leaver is active, so the terminated-inclusive org-scope arm treats her as an ordinary
     /// employee and admits the LocalLeader's covering scope, and the edge predicate has no date clause: the manager
-    /// gets 200 and the month becomes APPROVED. Named mutations: <c>IsPastManagerGrace</c> returns false (the edge
-    /// arm admits) AND the validator's <c>pastGraceWhileActive</c> forced false; either alone is not enough, because
-    /// the scope arm and the edge arm each refuse on their own. The HR half (<c>Assert.Equal(OK, hr.StatusCode)</c>)
-    /// keeps the refusal from being "everyone is refused".</para>
+    /// gets 200 and the month becomes APPROVED.
+    /// <b>Mutation table (each ONE mutation alone turns this fact RED).</b> The approve handler asks the
+    /// terminated-inclusive validator at a LocalHR floor first, and a LocalLeader scope never clears that floor (so the
+    /// scope arm refuses a leader whatever the clause says); it then asks the edge predicate. <b>M-26</b>
+    /// (<c>IsPastManagerGrace</c> returns false): the edge arm admits, so the manager gets 200 and
+    /// <c>Assert.Equal(Forbidden, ...)</c> fails. <b>M-25</b> (the validator's past-grace rule off): the scope arm still
+    /// refuses, but with the reason "Actor scope does not cover target organization" instead of the LocalHR text
+    /// (the subject no longer counts as switched off, so the R9b gate is not reached), so the status stays 403 and
+    /// <c>Assert.Contains(HrGateReason, ...)</c> fails. The HR half (<c>Assert.Equal(OK, hr.StatusCode)</c>) keeps the
+    /// refusal from being "everyone is refused".</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_ManagerApproveEdge_Is403_HrApprove_Is200()
@@ -129,8 +136,11 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// <b>Kind F</b>, approve through a designated UNIT LEADER row (no reporting-line edge to the leaver). Same state
     /// as above. The unit leader's approve is 403 and the month stays EMPLOYEE_APPROVED.
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, ...)</c>. On <c>c13024cd</c> the
-    /// org-scope arm admits the covering LocalLeader scope of an active subject (200). Mutation: validator
-    /// <c>pastGraceWhileActive</c> forced false AND <c>IsPastManagerGrace</c> returns false.</para>
+    /// org-scope arm admits the covering LocalLeader scope of an active subject (200).
+    /// <b>Mutation table.</b> <b>M-26</b> alone (<c>IsPastManagerGrace</c> returns false) turns it RED: the scope arm
+    /// refuses a LocalLeader at the LocalHR floor regardless, then the unit-leader leg admits, so 200. <b>M-25</b> alone
+    /// does NOT: it only changes the refusal's reason text, and this fact asserts the status and the unchanged month,
+    /// not the reason, so it stays green under M-25 (the approve-edge fact above carries the reason assertion).</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_UnitLeaderApprove_Is403()
@@ -177,10 +187,11 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// B).
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, ...)</c> on the D+6 manager read. On
     /// <c>c13024cd</c> the leader tier's active-only check admits the covering scope of an ACTIVE subject (200).
-    /// Both layers matter here: the validator now answers "Target employee not found", and the fall-through to the
-    /// designated-approver edge is refused by the predicate. Forcing the validator off alone lets the covering scope
-    /// admit; forcing the predicate off alone lets the edge admit after the validator's refusal; so the named
-    /// mutation is the validator's past-grace rule off AND <c>IsPastManagerGrace</c> false.</para>
+    /// Both layers matter here, and EITHER mutation alone turns the manager assertion RED. The leader tier asks the
+    /// active-only validator first (<c>SkemaEndpoints.cs:237</c>); only if that refuses does it fall through to the
+    /// designated-approver edge (<c>:246</c>). <b>M-25</b> alone (validator rule off): the covering LocalLeader scope
+    /// admits at <c>:237</c>, so 200. <b>M-26</b> alone (predicate off): the validator still answers "Target employee
+    /// not found", then the edge arm admits, so 200.</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_ManagerSkemaMonthView_Is403_HrIs200_Day5ManagerIs200()
@@ -208,8 +219,8 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     /// switched-off person gets) and the row stays PENDING.
     /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, ...)</c>. On <c>c13024cd</c> the
     /// validator resolves the still-active leaver and the leader's covering scope admits: 200, row APPROVED. This
-    /// route never touches the edge predicate, so ONLY the validator layer refuses here: the mutation
-    /// <c>pastGraceWhileActive</c> false plus dropping the active-only past-grace branch turns it 200.</para>
+    /// route never touches the edge predicate, so ONLY the validator layer refuses here. <b>M-25</b> alone
+    /// (the active-only past-grace branch off) turns it RED (200, row APPROVED); <b>M-26</b> alone leaves it green.</para>
     /// </summary>
     [Fact]
     public async Task Day6_LeaverStillActive_LeaderOvertimePreApprovalApprove_Is403_RowStaysPending()
@@ -240,6 +251,67 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         Assert.Equal("APPROVED", await ReadOvertimeStatusAsync(id));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    //  (f) reject, and the year overview (TASK-14725-T fix-up 1, Fable N5)
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Kind F</b>, reject through the designated EDGE. Same state as the approve fact (leaver still ACTIVE, last day
+    /// F-6, job off). The manager's reject is 403 with the LocalHR text, the month stays EMPLOYEE_APPROVED; then HR's
+    /// reject of the same month is 200 and the month becomes REJECTED.
+    /// <para><b>Red conditions (Docker, argued):</b> on <c>c13024cd</c> the manager's reject is 200 (the active leaver is
+    /// an ordinary subject; the edge has no date clause), so <c>Assert.Equal(Forbidden, ...)</c> fails.
+    /// <b>Mutation table (each ONE mutation alone turns it RED).</b> Reject runs the same two arms as approve
+    /// (<c>ApprovalEndpoints.cs</c> ~:696-710): the terminated-inclusive validator at the LocalHR floor, which a
+    /// LocalLeader scope never clears, then the edge predicate. <b>M-26</b> alone: the edge arm admits, 200.
+    /// <b>M-25</b> alone: the scope arm's reason becomes "Actor scope does not cover target organization" (the subject no
+    /// longer counts as switched off, so the R9b gate is not reached), so <c>Assert.Contains(HrGateReason, ...)</c>
+    /// fails while the status stays 403.</para>
+    /// </summary>
+    [Fact]
+    public async Task Day6_LeaverStillActive_ManagerRejectEdge_Is403_HrReject_Is200()
+    {
+        await SetEndDateAsync(Leaver, EndDay6);
+        var period = await InsertPeriodAsync(Leaver, "EMPLOYEE_APPROVED");
+
+        var mgr = await Client(Mgr).PostAsJsonAsync($"/api/approval/{period}/reject", new { reason = "s147 past-grace pin" });
+        var mgrBody = await mgr.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Forbidden, mgr.StatusCode);
+        Assert.Contains(HrGateReason, mgrBody);
+        Assert.DoesNotContain(EndDay6.ToString("yyyy-MM-dd"), mgrBody); // ADR-040 D7
+        Assert.Equal("EMPLOYEE_APPROVED", await ReadStatusAsync(period));
+        Assert.True(await IsActiveAsync(Leaver), "the fixture must be the window: still is_active = TRUE");
+
+        var hr = await Client(Hr, StatsTidRoles.LocalHR).PostAsJsonAsync($"/api/approval/{period}/reject", new { reason = "s147 past-grace pin" });
+        Assert.Equal(HttpStatusCode.OK, hr.StatusCode);
+        Assert.Equal("REJECTED", await ReadStatusAsync(period));
+    }
+
+    /// <summary>
+    /// <b>Kind F</b>, the leader's YEAR OVERVIEW (<c>GET /api/balance/{id}/year-overview</c>, <c>BalanceEndpoints.cs</c>
+    /// ~:710). At D+6 with the leaver still active, a leader whose scope covers her organisation gets 403 and HR gets
+    /// 200. This route uses only the terminated-inclusive validator (no edge arm).
+    /// <para><b>Red conditions (Docker, argued):</b> on <c>c13024cd</c> the validator treats the active leaver as an
+    /// ordinary subject and the covering leader scope admits, so the leader gets 200 and
+    /// <c>Assert.Equal(Forbidden, ...)</c> fails. <b>Mutation table.</b> <b>M-25</b> alone turns it RED (the leader is
+    /// admitted: 200). <b>M-26</b> alone leaves it green, because this route never asks the edge predicate. The HR half
+    /// keeps "everyone is refused" from passing.</para>
+    /// </summary>
+    [Fact]
+    public async Task Day6_LeaverStillActive_LeaderYearOverview_Is403_HrIs200()
+    {
+        await SetEndDateAsync(Leaver, EndDay6);
+
+        var leader = await Client(Mgr).GetAsync($"/api/balance/{Leaver}/year-overview?year=2026");
+        var leaderBody = await leader.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.Forbidden, leader.StatusCode);
+        Assert.Contains(HrGateReason, leaderBody);
+
+        var hr = await Client(Hr, StatsTidRoles.LocalHR).GetAsync($"/api/balance/{Leaver}/year-overview?year=2026");
+        Assert.Equal(HttpStatusCode.OK, hr.StatusCode);
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
