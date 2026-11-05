@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Npgsql;
 using StatsTid.Auth;
 using StatsTid.Infrastructure;
+using StatsTid.SharedKernel.Models;
 using StatsTid.SharedKernel.Security;
 using StatsTid.Tests.Regression.Hosting;
 using StatsTid.Tests.Regression.Segmentation;
@@ -58,6 +59,14 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     private const string Hr = "s147g_hr";                // LocalHR over OrgA
 
     private static readonly Guid UnitU = Guid.Parse("51470000-0000-0000-0000-0000000000a1");
+
+    // TASK-14725-T fix-up 2: the HR actors who ALSO hold a manager position, and a stand-in.
+    private const string LeaverH = "s147g_leaver_h";     // Employee; PRIMARY edge manager = HrMgr
+    private const string HrMgr = "s147g_hrmgr";          // LocalHR AND the designated (edge) manager of LeaverH
+    private const string LeaverV = "s147g_leaver_v";     // Employee in unit V; NO edge; HrUnitLdr leads V
+    private const string HrUnitLdr = "s147g_hrunitldr";  // LocalHR AND the designated unit leader of V
+    private const string Vik = "s147g_vik";              // LocalLeader; active manager_vikar stand-in for Mgr
+    private static readonly Guid UnitV = Guid.Parse("51470000-0000-0000-0000-0000000000a2");
 
     private TestFixtures.DockerHarness _harness = null!;
     private StatsTidWebApplicationFactory _factory = null!;
@@ -316,6 +325,151 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
+    //  (g) TASK-14725 fix-up 2 (Step 7a cycle 2, Codex WARNING): the RECORDED approval_method follows the date
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// <b>Kind F</b>, approve, the audit label. Plain language: from the sixth day the system refuses every manager
+    /// path, so an HR officer who also happens to be the leaver's manager acts as HR, and the audit must say HR
+    /// (<c>ORG_SCOPE_FALLBACK</c>), not "the manager approved". The leaver is still ACTIVE, last day F-6, job off.
+    /// HrMgr (LocalHR AND the designated edge manager) approves: 200, month APPROVED, and
+    /// <c>approval_periods.approval_method = ORG_SCOPE_FALLBACK</c>.
+    /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal("ORG_SCOPE_FALLBACK", method)</c>. On
+    /// <c>076ac29e</c> <c>DeriveApprovalMethodAsync</c> tested the edge first (<c>actor == resolved approver</c>) and
+    /// recorded <c>DESIGNATED_MANAGER</c>. <b>Mutation:</b> delete the new first step of
+    /// <c>DeriveApprovalMethodAsync</c> (the <c>IsPastManagerGrace(...)</c> return of <c>ORG_SCOPE_FALLBACK</c>): the edge
+    /// step answers and the assertion fails with <c>DESIGNATED_MANAGER</c>. The 200 and status assertions keep it
+    /// from passing on a refusal.</para>
+    /// </summary>
+    [Fact]
+    public async Task Day6_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback()
+    {
+        await SetEndDateAsync(LeaverH, EndDay6);
+        var period = await InsertPeriodAsync(LeaverH, "EMPLOYEE_APPROVED");
+
+        var rsp = await Client(HrMgr, StatsTidRoles.LocalHR).PostAsync($"/api/approval/{period}/approve", null);
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(period));
+        Assert.True(await IsActiveAsync(LeaverH), "the fixture must be the window: still is_active = TRUE");
+        Assert.Equal("ORG_SCOPE_FALLBACK", await ReadMethodAsync(period));
+    }
+
+    /// <summary>
+    /// <b>Kind F</b>, reject, the audit label, through a UNIT LEADER row. Same state (D+6, still active, job off).
+    /// HrUnitLdr (LocalHR AND the designated unit leader of the leaver's unit; no edge to the leaver) rejects: 200,
+    /// month REJECTED, <c>approval_method = ORG_SCOPE_FALLBACK</c>.
+    /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal("ORG_SCOPE_FALLBACK", method)</c>. On
+    /// <c>076ac29e</c> the unit-leader step of the classification ran while the subject was still active (its
+    /// same-organisation re-check reads active users), so the label was <c>UNIT_LEADER</c>. <b>Mutation:</b> delete
+    /// the new first step of <c>DeriveApprovalMethodAsync</c>; reject calls it at <c>ApprovalEndpoints.cs</c> ~:812.</para>
+    /// </summary>
+    [Fact]
+    public async Task Day6_LeaverStillActive_HrWhoIsUnitLeaderRejects_MethodIsOrgScopeFallback()
+    {
+        await SetEndDateAsync(LeaverV, EndDay6);
+        var period = await InsertPeriodAsync(LeaverV, "EMPLOYEE_APPROVED");
+
+        var rsp = await Client(HrUnitLdr, StatsTidRoles.LocalHR)
+            .PostAsJsonAsync($"/api/approval/{period}/reject", new { reason = "s147 fix-up 2 pin" });
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("REJECTED", await ReadStatusAsync(period));
+        Assert.True(await IsActiveAsync(LeaverV));
+        Assert.Equal("ORG_SCOPE_FALLBACK", await ReadMethodAsync(period));
+    }
+
+    /// <summary>
+    /// <b>Kind B — boundary pin, holds today.</b> D+5, the LAST grace day: the same HR-who-is-the-manager approves and
+    /// the method stays <c>DESIGNATED_MANAGER</c> (inside the grace the manager position is real authority and the
+    /// audit says so). Proves the D+6 label is about the DATE, not a blanket "HR always records the fallback".
+    /// <para><b>Red conditions:</b> an off-by-one in the new step (<c>end &lt;= today-5</c>) records
+    /// <c>ORG_SCOPE_FALLBACK</c> here.</para>
+    /// </summary>
+    [Fact]
+    public async Task Day5_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodStaysDesignatedManager_BoundaryPin()
+    {
+        await SetEndDateAsync(LeaverH, EndDay5);
+        var period = await InsertPeriodAsync(LeaverH, "EMPLOYEE_APPROVED");
+
+        var rsp = await Client(HrMgr, StatsTidRoles.LocalHR).PostAsync($"/api/approval/{period}/approve", null);
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(period));
+        Assert.Equal("DESIGNATED_MANAGER", await ReadMethodAsync(period));
+    }
+
+    /// <summary>
+    /// <b>Kind F</b>, AFTER the flip. The leaver is switched off (<c>is_active = FALSE</c>, last day F-6, as Step A
+    /// leaves her). HrMgr, still her designated edge manager (the switch-off does not end the leaver's own reporting
+    /// line), approves: 200 and <c>approval_method = ORG_SCOPE_FALLBACK</c>.
+    /// <para><b>Red conditions (Docker, argued):</b> on <c>076ac29e</c> the edge test is
+    /// <c>actor == resolved approver</c> and never looks at the subject, so the manager label survived the
+    /// switch-off: <c>DESIGNATED_MANAGER</c>, and <c>Assert.Equal("ORG_SCOPE_FALLBACK", ...)</c> fails.
+    /// <b>Mutation:</b> delete the new first step of <c>DeriveApprovalMethodAsync</c>.</para>
+    /// </summary>
+    [Fact]
+    public async Task Day6_LeaverSwitchedOff_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback()
+    {
+        await SetEndDateAsync(LeaverH, EndDay6);
+        await SetActiveAsync(LeaverH, false);
+        var period = await InsertPeriodAsync(LeaverH, "EMPLOYEE_APPROVED");
+
+        var rsp = await Client(HrMgr, StatsTidRoles.LocalHR).PostAsync($"/api/approval/{period}/approve", null);
+
+        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(period));
+        Assert.False(await IsActiveAsync(LeaverH), "the fixture must be the switched-off state");
+        Assert.Equal("ORG_SCOPE_FALLBACK", await ReadMethodAsync(period));
+    }
+
+    /// <summary>
+    /// <b>Kind F at D+6, kind B at D+5</b> (Fable Step 7a cycle 2, N-6): a <c>manager_vikar</c> STAND-IN for the leaver's
+    /// manager. Vik (LocalLeader) is the active stand-in for Mgr, so the edge resolves to Vik (seeded through
+    /// <c>ManagerVikarRepository.CreateAsync</c>, the precedent in <c>DesignatedApproverAuthorityTests.CreateVikarRawAsync</c>).
+    /// At D+6 with the leaver still active her approve is 403 and the month stays EMPLOYEE_APPROVED; at D+5 the same
+    /// month is 200, APPROVED, recorded <c>ACTING_MANAGER</c>.
+    /// <para><b>Red conditions (Docker, argued):</b> <c>Assert.Equal(Forbidden, ...)</c> at D+6. On <c>c13024cd</c>
+    /// (before TASK-14725) the org-scope arm refuses a LocalLeader at its LocalHR floor, then the edge predicate (no date
+    /// clause) admits the resolved stand-in: 200. <b>Mutation:</b> <c>IsPastManagerGrace</c> returns false (M-26):
+    /// the edge arm admits Vik at D+6, 200. The D+5 half is the boundary pin (holds today).</para>
+    /// </summary>
+    [Fact]
+    public async Task Day6_LeaverStillActive_ManagerVikarStandIn_Is403_Day5Is200()
+    {
+        await using (var conn = _dbFactory.Create())
+        {
+            await conn.OpenAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            await new ManagerVikarRepository(_dbFactory).CreateAsync(conn, tx, new ManagerVikar
+            {
+                VikarId = Guid.NewGuid(),
+                AbsentApproverId = Mgr,
+                VikarUserId = Vik,
+                UntilDate = new DateOnly(2099, 12, 31),
+                Reason = "FERIE",
+                OrganisationId = OrgA,
+                Version = 1,
+                CreatedBy = "TEST",
+            });
+            await tx.CommitAsync();
+        }
+
+        await SetEndDateAsync(Leaver, EndDay6);
+        var period = await InsertPeriodAsync(Leaver, "EMPLOYEE_APPROVED");
+        var refused = await Client(Vik).PostAsync($"/api/approval/{period}/approve", null);
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal("EMPLOYEE_APPROVED", await ReadStatusAsync(period));
+        Assert.True(await IsActiveAsync(Leaver), "the fixture must be the window: still is_active = TRUE");
+
+        await SetEndDateAsync(Leaver, EndDay5);
+        var admitted = await Client(Vik).PostAsync($"/api/approval/{period}/approve", null);
+        Assert.Equal(HttpStatusCode.OK, admitted.StatusCode);
+        Assert.Equal("APPROVED", await ReadStatusAsync(period));
+        Assert.Equal("ACTING_MANAGER", await ReadMethodAsync(period));
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
     //  Seed + helpers
     // ════════════════════════════════════════════════════════════════════════════════
 
@@ -324,17 +478,27 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
         await Exec(conn,
             "INSERT INTO units (unit_id, organisation_id, parent_unit_id, type, name) VALUES (@u, @org, NULL, 'kontor', 'S147 Unit G')",
             ("u", UnitU), ("org", OrgA));
+        await Exec(conn,
+            "INSERT INTO units (unit_id, organisation_id, parent_unit_id, type, name) VALUES (@u, @org, NULL, 'kontor', 'S147 Unit V')",
+            ("u", UnitV), ("org", OrgA));
 
         await InsertUserAsync(conn, Leaver, "EMPLOYEE");
         await InsertUserAsync(conn, LeaverU, "EMPLOYEE", unit: UnitU);
         await InsertUserAsync(conn, Mgr, "LOCAL_LEADER");
         await InsertUserAsync(conn, UnitLeader, "LOCAL_LEADER", unit: UnitU); // a leader is a member of her own unit (D3)
         await InsertUserAsync(conn, Hr, "LOCAL_HR");
+        await InsertUserAsync(conn, LeaverH, "EMPLOYEE");
+        await InsertUserAsync(conn, HrMgr, "LOCAL_HR");
+        await InsertUserAsync(conn, LeaverV, "EMPLOYEE", unit: UnitV);
+        await InsertUserAsync(conn, HrUnitLdr, "LOCAL_HR", unit: UnitV); // a leader is a member of her own unit (D3)
+        await InsertUserAsync(conn, Vik, "LOCAL_LEADER");
 
         await Exec(conn, "INSERT INTO unit_leaders (unit_id, user_id) VALUES (@u, @m)", ("u", UnitU), ("m", UnitLeader));
+        await Exec(conn, "INSERT INTO unit_leaders (unit_id, user_id) VALUES (@u, @m)", ("u", UnitV), ("m", HrUnitLdr));
 
         var rl = new ReportingLineRepository(_dbFactory);
         await rl.AssignAsync(null, Line(Leaver, Mgr));
+        await rl.AssignAsync(null, Line(LeaverH, HrMgr));
     }
 
     private static async Task InsertUserAsync(NpgsqlConnection conn, string id, string roleId, Guid? unit = null)
@@ -382,6 +546,23 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await Exec(conn, "UPDATE users SET employment_end_date = @d WHERE user_id = @id", ("d", end), ("id", userId));
+    }
+
+    private async Task SetActiveAsync(string userId, bool active)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await Exec(conn, "UPDATE users SET is_active = @a WHERE user_id = @id", ("a", active), ("id", userId));
+    }
+
+    private async Task<string?> ReadMethodAsync(Guid periodId)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("SELECT approval_method FROM approval_periods WHERE period_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", periodId);
+        var r = await cmd.ExecuteScalarAsync();
+        return r is DBNull or null ? null : (string)r;
     }
 
     private async Task<bool> IsActiveAsync(string userId)
