@@ -75,7 +75,14 @@ if (-not $command) {
     exit 0
 }
 
-if ($command -notmatch '(?i)git\s+commit') {
+# S147 post-close (FAIL-009 review, Codex NOTE; cycle 2, Fable NOTE-1/-2): git's global options may stand
+# between `git` and `commit` (`git -C <dir> commit`, `git -c k=v commit`, `git --no-pager commit`,
+# `git --git-dir .git commit`); the old `git\s+commit` let those through. An option's argument may be quoted.
+# `-C` is matched case-sensitively and captured (`cdir`), because it moves the commit to another directory (see
+# "Run from the top of the commit's checkout" below). Each option is an ATOMIC group, so a long run of option-like tokens cannot make the
+# match backtrack exponentially (a hook that runs past its timeout fails open).
+$gitCommitRx = '(?i)\bgit(?<opts>(?>\s+(?:(?-i:-C)\s+(?<cdir>"[^"]*"|''[^'']*''|\S+)|(?-i:-c)\s+(?:"[^"]*"|''[^'']*''|\S+)|--(?:git-dir|work-tree|namespace|super-prefix|config-env)\s+(?:"[^"]*"|''[^'']*''|\S+)|--?[A-Za-z][\w-]*(?:=\S+)?))*)\s+commit(?![\w-])'
+if ($command -notmatch $gitCommitRx) {
     exit 0  # not a commit attempt
 }
 
@@ -112,6 +119,90 @@ if (-not $sprintNum) {
     [Console]::Error.WriteLine("sprint-close-guard: 'sprint close' phrase without an 'S<N>' token; treating as a non-close commit and allowing.")
     exit 0
 }
+
+# --- Run from the top of the commit's checkout (S147 post-close, FAIL-009) --
+# .claude/reviews, docs/sprints, HEAD and the untracked/worktree gates must be read at the top of the checkout
+# the commit is MADE in. Claude Code starts this hook in the session's working directory, which follows a
+# persisted Bash `cd` into a subfolder or a worktree (Codex review W1). The command itself can also move the
+# commit (cycle 2, Codex W1 / Fable W-1). This guard follows exactly two forms: ONE `cd` / `Set-Location` / `sl`
+# at the very start of the command (`cd <dir> && ...` or `cd <dir>; ...`), then `git -C <dir>`, each relative
+# to the one before; Git Bash paths (/c/Users/...) and `~` are converted. Anything else that changes directory
+# before the commit — a second `cd`, `chdir`, `pushd`/`popd`, a subshell or `$( )`, a leading `cd` not joined by
+# `&&` or `;` (e.g. followed by a newline), `GIT_DIR=` / `GIT_WORK_TREE=` / `env -C`, even the word `cd` or `sl`
+# inside quoted text or as a path segment — BLOCKS the close attempt (cycle 3, Codex W1: shell scope cannot be
+# read reliably from text, and a wrong guess gates the wrong tree; a false block costs a re-run). So do more than
+# one `git commit` in the command (cycle 4), a directory that does not exist, one outside any git checkout,
+# `--git-dir` / `--work-tree`, and any error while resolving (cycle 3, Fable W-2: an uncaught error would end the
+# hook with exit 1, which fails open). Done only for a recognised close attempt, so ordinary commands pay for no
+# extra git call.
+function ConvertTo-HookPath([string]$p, [string]$base) {
+    $p = $p.Trim()
+    if ($p.Length -ge 2 -and (($p.StartsWith('"') -and $p.EndsWith('"')) -or ($p.StartsWith("'") -and $p.EndsWith("'")))) {
+        $p = $p.Substring(1, $p.Length - 2)
+    }
+    if ($p -match '^/([a-zA-Z])(/.*)?$') {
+        $rest = if ($matches[2]) { $matches[2] -replace '/', '\' } else { '\' }
+        $p = $matches[1].ToUpper() + ':' + $rest
+    } elseif ($p -eq '~') {
+        $p = $HOME
+    } elseif ($p.StartsWith('~/')) {
+        $p = Join-Path $HOME $p.Substring(2)
+    }
+    if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $base $p }
+    return $p
+}
+function Block-UnresolvedCheckout([string]$why) {
+    [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit: $why")
+    [Console]::Error.WriteLine('  The gates must read the checkout the commit is made in. Run the close commit from that checkout''s')
+    [Console]::Error.WriteLine('  root, or with `cd <dir> &&` / `git -C <dir>` naming an existing directory inside it.')
+    exit 2
+}
+try {
+    $commitDir = (Get-Location).Path
+    # One commit per close command (cycle 4, Codex W1 / Fable W-1): with two, the directory moves before the
+    # SECOND one (`git commit … && cd other && git commit …`) would go unread.
+    if ([regex]::Matches($command, $gitCommitRx).Count -gt 1) {
+        Block-UnresolvedCheckout 'the command contains more than one git commit; make the close commit its own command.'
+    }
+    $commitMatch = [regex]::Match($command, $gitCommitRx)
+    if ($commitMatch.Success) {
+        $beforeCommit = $command.Substring(0, $commitMatch.Index)
+        $leadMove = [regex]::Match($beforeCommit, '(?i)^\s*(?:cd|Set-Location|sl)\s+(?:-(?:Literal)?Path\s+)?(?<d>"[^"]*"|''[^'']*''|[^\s;&|()]+)\s*(?:&&|;)')
+        if ($leadMove.Success) {
+            $commitDir = ConvertTo-HookPath $leadMove.Groups['d'].Value $commitDir
+            $beforeCommit = $beforeCommit.Substring($leadMove.Length)
+        }
+        # cycle 4: also PowerShell's `chdir` (Codex W2), and a repository named through the environment
+        # (`GIT_DIR=`, `GIT_WORK_TREE=`, `$env:GIT_DIR = …`) or `env -C` / `env --chdir` (Fable NOTE-6).
+        if ($beforeCommit -match '(?i)(?<![\w-])(?:cd|chdir|pushd|popd|sl|Set-Location|Push-Location|Pop-Location)(?![\w-])|[()]|(?<![\w-])GIT_(?:DIR|WORK_TREE)\s*=|(?<![\w-])env\s+(?:-C|--chdir)') {
+            Block-UnresolvedCheckout 'the command changes directory, or names the repository, in a way this guard does not follow (a cd after the first command, chdir, pushd/popd, a subshell or $( ), GIT_DIR / GIT_WORK_TREE, env -C, or the word cd/sl in text before the commit). Start the close command with one `cd <dir> &&` (or use `git -C <dir>`) and nothing else that changes directory.'
+        }
+        # `git -C <dir>` (separated; git itself rejects a glued `-C<dir>`, so that form never commits).
+        foreach ($cMove in $commitMatch.Groups['cdir'].Captures) {
+            $commitDir = ConvertTo-HookPath $cMove.Value $commitDir
+        }
+        if ($commitMatch.Groups['opts'].Value -match '(?i)--(git-dir|work-tree)\b') {
+            Block-UnresolvedCheckout 'the command names the repository with --git-dir / --work-tree, which this guard does not follow.'
+        }
+    }
+    if (-not (Test-Path -LiteralPath $commitDir -PathType Container)) {
+        Block-UnresolvedCheckout "cannot find the directory the commit runs in ('$commitDir')."
+    }
+    $checkoutTop = $null
+    try { $checkoutTop = (& git -C $commitDir rev-parse --show-toplevel 2>$null | Out-String).Trim() } catch { $checkoutTop = $null }
+    if (-not ($LASTEXITCODE -eq 0 -and $checkoutTop -and (Test-Path -LiteralPath $checkoutTop))) {
+        Block-UnresolvedCheckout "'$commitDir' is not inside a git checkout."
+    }
+    Set-Location -LiteralPath $checkoutTop
+} catch {
+    # Any error while resolving BLOCKS (cycle 3, Fable W-2): .NET Framework's IsPathRooted throws on '<', '"' or
+    # '|' in a path, and an uncaught error would end the hook with exit 1, which Claude Code lets through.
+    Block-UnresolvedCheckout "could not resolve the directory the commit runs in ($($_.Exception.Message))."
+}
+# The close line goes to the project's central log when Claude Code started the hook (CLAUDE_PROJECT_DIR is set
+# only for hook commands), never into a worktree's copy, which is deleted with the worktree. Resolved here, not
+# in the model-check block below: that block may read no environment variable but the telemetry switch (T26).
+$telemetryRoot = if ($env:CLAUDE_PROJECT_DIR -and (Test-Path -LiteralPath $env:CLAUDE_PROJECT_DIR)) { $env:CLAUDE_PROJECT_DIR } else { (Get-Location).Path }
 
 # --- Resolve artifact paths -----------------------------------------------
 
@@ -280,7 +371,7 @@ foreach ($artifact in @($codex, $reviewer)) {
             [Console]::Error.WriteLine("sprint-close-guard: telemetry suppressed (test seam): $tline")
         } else {
             try {
-                $tlog = Join-Path (Get-Location) '.claude/telemetry/model-routing.log'
+                $tlog = Join-Path $telemetryRoot '.claude/telemetry/model-routing.log'   # set before this block (FAIL-009)
                 $tdir = Split-Path $tlog -Parent
                 if (-not (Test-Path $tdir)) { New-Item -ItemType Directory -Path $tdir -Force | Out-Null }
                 Add-Content -Path $tlog -Value $tline -Encoding utf8

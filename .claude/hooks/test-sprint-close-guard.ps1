@@ -549,6 +549,113 @@ try {
     Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 }
 
+# ---------------------------------------------------------------------------
+# T29-T30 - S147 post-close (FAIL-009 and its review).
+# T29: a close commit written with a git global option before `commit` (`git -C <dir> commit`) is still detected:
+# with no artifacts it must block on them. Before the fix the detector's `git\s+commit` let it through (exit 0).
+# T30: the hook started from a SUBFOLDER of the checkout (.claude/reviews, where the Orchestrator's session had
+# sat) resolves the checkout's top: with fresh valid artifacts it passes, reaching the CI-health gate. Before
+# the fix it looked for .claude/reviews/.claude/reviews/SPRINT-99-* and blocked on "missing artifacts".
+# ---------------------------------------------------------------------------
+$env:STATSTID_SPRINTLOG_MOCK = $tmpLedgerLog
+try {
+    Remove-Item $codex,$reviewer,$waiver -ErrorAction SilentlyContinue
+    $r = Invoke-Hook "git -C `"$repoRoot`" commit -m `"S99 TASK-9999: sprint close -- test`""
+    $missing = $r.Stderr -match 'Missing required Step 7a review artifacts'
+    $ok = ($r.Exit -eq 2) -and $missing
+    $results += "T29 (a close commit written as git -C <dir> commit is detected): exit=$($r.Exit) expect=2 missing-artifacts=$missing $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    Set-Content -Path $codex    -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+    Set-Content -Path $reviewer -Value $validContent -Encoding UTF8
+    $r = Invoke-Hook $mock -workDir $reviewsDir
+    $noMissing = -not ($r.Stderr -match 'Missing required Step 7a review artifacts')
+    $ciReached = $r.Stderr -match 'CI-health gate using MOCKED conclusion'
+    $ok = ($r.Exit -eq 0) -and $noMissing -and $ciReached
+    $results += "T30 (started from a subfolder, the hook reads the checkout's top): exit=$($r.Exit) expect=0 artifacts-found=$noMissing ci-gate-reached=$ciReached $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    # T31-T33 (S147 post-close, FAIL-009 review cycle 2, Codex W1 / Fable W-1): the command can move the commit
+    # away from the hook's working directory, and the gates must follow it. The hook starts in a folder OUTSIDE
+    # any git checkout ($notRepo), so only following the command can find the S99 fixtures.
+    # T31: `git -C "<repo>" commit` -> passes (before: gated in $notRepo, blocked on missing artifacts).
+    # T32: `cd /c/<repo in Git Bash form> && git commit` -> passes (the Orchestrator's usual close shape).
+    # T33: from the repo root, `git -C <a directory that does not exist> commit` -> BLOCKED as unresolvable
+    #      (before: silently gated against the repo root, which has valid fixtures -> exit 0).
+    $notRepo = Join-Path $env:TEMP 'statstid-guard-test-notrepo'
+    New-Item -ItemType Directory -Force -Path $notRepo | Out-Null
+    $repoBash = '/' + $repoRoot.Substring(0, 1).ToLower() + ($repoRoot.Substring(2) -replace '\\', '/')
+
+    $r = Invoke-Hook "git -C `"$repoRoot`" commit -m `"S99 TASK-9999: sprint close -- test`"" -workDir $notRepo
+    $ciReached = $r.Stderr -match 'CI-health gate using MOCKED conclusion'
+    $ok = ($r.Exit -eq 0) -and $ciReached
+    $results += "T31 (git -C <repo> commit from outside any checkout follows the -C): exit=$($r.Exit) expect=0 ci-gate-reached=$ciReached $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    $r = Invoke-Hook "cd $repoBash && git add -A && git commit -m `"S99 TASK-9999: sprint close -- test`"" -workDir $notRepo
+    $ciReached = $r.Stderr -match 'CI-health gate using MOCKED conclusion'
+    $ok = ($r.Exit -eq 0) -and $ciReached
+    $results += "T32 (cd /c/<repo> && git commit from outside any checkout follows the cd): exit=$($r.Exit) expect=0 ci-gate-reached=$ciReached $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    $r = Invoke-Hook 'git -C "C:/statstid-guard-test/no such dir" commit -m "S99 TASK-9999: sprint close -- test"'
+    $unresolved = $r.Stderr -match 'cannot find the directory the commit runs in'
+    $ok = ($r.Exit -eq 2) -and $unresolved
+    $results += "T33 (an unresolvable commit directory blocks instead of gating the wrong tree): exit=$($r.Exit) expect=2 unresolved-block=$unresolved $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    # T34 (cycle 3, Codex W1): a directory change the guard cannot read reliably (here a subshell whose cd does not
+    # move the commit) BLOCKS, from the repo root with valid fixtures. Before: the scan followed the subshell's cd
+    # and gated a tree the commit never touches; without the strict check the guard would pass (exit 0).
+    $r = Invoke-Hook "(cd `"$notRepo`" && git status); git commit -m `"S99 TASK-9999: sprint close -- test`""
+    $ambiguous = $r.Stderr -match 'in a way this guard does not follow'
+    $ok = ($r.Exit -eq 2) -and $ambiguous
+    $results += "T34 (a directory change the guard cannot read reliably blocks the close attempt): exit=$($r.Exit) expect=2 ambiguous-block=$ambiguous $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    # T35 (cycle 3, Fable NOTE-3): a plain close commit from a folder outside any git checkout BLOCKS as "not inside
+    # a git checkout" (the branch had no test).
+    $r = Invoke-Hook $mock -workDir $notRepo
+    $notCheckout = $r.Stderr -match 'is not inside a git checkout'
+    $ok = ($r.Exit -eq 2) -and $notCheckout
+    $results += "T35 (a close commit from outside any checkout blocks): exit=$($r.Exit) expect=2 not-a-checkout=$notCheckout $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    # T36 (cycle 3, Fable W-2): a path .NET Framework cannot parse ('|' inside the quoted cd target) BLOCKS with a
+    # reason. Before: IsPathRooted threw, the hook ended with exit 1, and Claude Code let the commit through.
+    $r = Invoke-Hook "cd `"C:\statstid-guard-test|bad`"; git commit -m `"S99 TASK-9999: sprint close -- test`""
+    $resolveError = $r.Stderr -match 'could not resolve the directory the commit runs in'
+    $ok = ($r.Exit -eq 2) -and $resolveError
+    $results += "T36 (an error while resolving the commit's directory blocks instead of letting the commit through): exit=$($r.Exit) expect=2 resolve-error-block=$resolveError $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    # T37-T39 (cycle 4, Codex W1-W2 / Fable W-1, NOTE-6): from the repo root with valid fixtures, each of these
+    # commits somewhere the gates did not read, and passed (exit 0) before the fix; now each blocks.
+    # T37: two commits in one command, a cd between them.
+    $r = Invoke-Hook "git commit -m `"x`" && cd `"$notRepo`" && git commit -m `"S99 TASK-9999: sprint close -- test`""
+    $multi = $r.Stderr -match 'more than one git commit'
+    $ok = ($r.Exit -eq 2) -and $multi
+    $results += "T37 (two commits in one close command block): exit=$($r.Exit) expect=2 multi-commit-block=$multi $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    # T38: PowerShell's chdir alias before the commit.
+    $r = Invoke-Hook "chdir `"$notRepo`"; git commit -m `"S99 TASK-9999: sprint close -- test`""
+    $chdirBlock = $r.Stderr -match 'in a way this guard does not follow'
+    $ok = ($r.Exit -eq 2) -and $chdirBlock
+    $results += "T38 (a chdir before the commit blocks): exit=$($r.Exit) expect=2 chdir-block=$chdirBlock $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+
+    # T39: the repository named through the environment.
+    $r = Invoke-Hook "GIT_WORK_TREE=`"$notRepo`" git commit -m `"S99 TASK-9999: sprint close -- test`""
+    $envBlock = $r.Stderr -match 'in a way this guard does not follow'
+    $ok = ($r.Exit -eq 2) -and $envBlock
+    $results += "T39 (GIT_WORK_TREE= before the commit blocks): exit=$($r.Exit) expect=2 git-env-block=$envBlock $(if($ok){'PASS'}else{'FAIL'})"
+    if (-not $ok) { $results += $r.Stderr }
+} finally {
+    Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
+    if ($notRepo) { Remove-Item $notRepo -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 } finally {
     # Cleanup - the outer finally, so it runs on success and on abort alike. The saved waiver goes back FIRST, in
     # its own try, so no cleanup error can stand between it and its restore; the fixture cleanup runs in that
@@ -574,13 +681,13 @@ try {
 }
 
 Write-Output $results
-$failed = $results | Where-Object { $_ -match 'FAIL' }
+$failed = $results | Where-Object { $_ -cmatch '^T\d+ .* FAIL$' }   # cycle 4, Fable NOTE-5: a test's own FAIL line only, mirroring the PASS rule (a label saying "failing" once read as red)
 if ($failed) { Write-Output ""; Write-Output "FAILURES PRESENT"; exit 1 }
 # S145 Step 7a (Codex W1; Opus N-D at cycle 2): a skipped test is not a passed one, and "ALL" means the
-# full count of PASS lines, not merely the absence of FAIL. 26: T1-T22 and T25-T28 (T23-T24 were deleted,
-# R-139; T27-T28 added in S146 for the review-floor waiver).
+# full count of PASS lines, not merely the absence of FAIL. 37: T1-T22 and T25-T39 (T23-T24 were deleted,
+# R-139; T27-T28 added in S146 for the review-floor waiver; T29-T39 after S147, FAIL-009).
 $skipped = @($results | Where-Object { $_ -cmatch 'SKIPPED' })   # case-sensitive: only the explicit "SKIPPED" marker counts
 $passed  = @($results | Where-Object { $_ -match '^T\d+ .* PASS$' })
 Write-Output ""
-if ($skipped.Count -gt 0 -or $passed.Count -ne 26) { Write-Output "$($passed.Count) OF 26 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 26 RAN"; exit 1 }
-else { Write-Output "ALL 26 TESTS PASSED ($($passed.Count) PASS lines)" }
+if ($skipped.Count -gt 0 -or $passed.Count -ne 37) { Write-Output "$($passed.Count) OF 37 PASS LINES, $($skipped.Count) SKIPPED LINE(S); NOT ALL 37 RAN"; exit 1 }
+else { Write-Output "ALL 37 TESTS PASSED ($($passed.Count) PASS lines)" }

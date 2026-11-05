@@ -350,7 +350,10 @@ one of its 19 agents inherited that model because no routing existed.
 2. *Gate at spawn.* `.claude/hooks/model-routing-guard.ps1` is a PreToolUse hook on the `Agent` tool. It
    blocks a reviewer on anything but the floor, blocks implementers/validators/traces/sweeps on Fable, and
    blocks a bare generic spawn that names no model (the choice must be conscious). Read-only built-ins
-   (Explore, Plan) and forks pass. Fail-open on hook-internal errors, like the close guard.
+   (Explore, Plan) and forks pass. Fail-open on hook-internal errors, like the close guard — and, because
+   Claude Code treats both as non-blocking, on a hook timeout or a start failure too: in S147 the guard did not
+   run on 51 of 200 spawns (FAIL-009). Both hooks now start by `${CLAUDE_PROJECT_DIR}` with a 60 s limit; whether
+   to fail closed instead is queued for the owner (`ROADMAP.md`).
 3. *Self-check inside the agent.* The reviewer's first output line is `reviewed-by-model: <id>`; if the id is
    not the floor it writes `verdict: REFUSED — wrong model for review` and stops. A refusal cannot be mistaken
    for a review.
@@ -512,6 +515,7 @@ never polled.
 event to `.claude/telemetry/model-routing.log` (local, gitignored). At close, the retrospective adds the
 sprint's row to [`docs/operations/model-routing-register.md`](operations/model-routing-register.md) — spawns by
 model, guard blocks, review findings by lens, CI runs to green, post-close defects — from artifacts the close
-guard already requires. Read for direction over three sprints; the register names the three signals that put
+guard already requires. Spawn counts come from the subagent transcripts, reconciled against the log's `ALLOW`
+lines, because the log shows only what the guard saw (FAIL-009). Read for direction over three sprints; the register names the three signals that put
 the routing back on the entropy-scan agenda. No per-task attribution, no score, no CI gate: at ten tasks a
 sprint the numbers cannot carry more.

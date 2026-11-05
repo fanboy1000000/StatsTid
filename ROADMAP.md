@@ -590,6 +590,14 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   job green at CI-W2b and CI-W3); QUAL-241 CLOSED. [S128 FU-D]
 
 ### Governance / docs
+- **Should the governance hooks fail closed?** (FAIL-009, 2026-11-05; an owner decision, to be put in prose,
+  one question at a time). Both guards fail OPEN: if PowerShell cannot start the guard in time (now 60 s) or at
+  all, Claude Code lets the action through unchecked — in S147 that happened on 51 of 200 agent spawns. Claude
+  Code's `"onFailure": "block"` makes a failed hook block instead. Options: (a) the routing guard only — a blocked
+  spawn is visible and retried; (b) both — the close guard runs on every shell command, so on this
+  memory-constrained machine a slow start would stop all shell work; (c) neither — rely on the register's
+  "log ALLOW N / transcripts M" reconciliation and the close commit's hook record to notice misses. Read
+  S148's reconciliation first: it shows whether 60 s alone closes the gap.
 - **★ Standards and requirements conformance — a systematic approach** (owner-raised 2026-10-26: *"What ISO
   standards, tekniske minimumskrav etc. do we need to measure the system against. We need to add a systematic
   approach."*).
