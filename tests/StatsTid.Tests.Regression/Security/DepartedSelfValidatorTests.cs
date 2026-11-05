@@ -246,6 +246,106 @@ public sealed class DepartedSelfValidatorTests : IClassFixture<DepartedSelfDbFix
         Assert.Equal("Target employee not found", r.Reason);
     }
 
+    // ── S147 / TASK-14725 fix-up 1 (owner ruling 2026-11-05 "(a) Extend now"): ANOTHER person past the
+    //    manager grace BY DATE, still is_active = TRUE, counts as switched off. D+6 = last day employed before
+    //    today - 5; D+5 is the last grace day. ──
+    //
+    // Docker, not Unit: OrgScopeValidator takes the sealed OrganizationRepository / UserRepository (raw Npgsql),
+    // so the validator cannot be built without a database (the same reason CalculateAndExportScopeTests gives).
+    // CI-pending. Mutation for the wave gate (M-25, one named mutation, API kept): in OrgScopeValidator drop the past-grace
+    // term, i.e. IsPastGraceByDate returns false (so pastGraceWhileActive is false too) and the active-only
+    // overload's DenyPastGraceAsSwitchedOff branch is never taken.
+
+    private static readonly DateOnly Day6 = Today.AddDays(-6);
+    private static readonly DateOnly Day5 = Today.AddDays(-5);
+
+    /// <summary>Kind N (names the past-grace clause this task adds; the TASK-14725 fix-up). Active-only overload,
+    /// subject active with last day D+6: "Target employee not found" to a LocalLeader AND to a LocalHR whose scopes
+    /// cover the organisation (exactly what a deactivated subject answers on this overload).
+    /// <b>Red conditions (Docker, argued):</b> <c>Assert.False(Allowed)</c> for both actors. Without the clause the
+    /// subject is resolved (still active) and both covering scopes admit. Under mutation M-25 (past-grace term
+    /// removed) the first assertion fails with Allowed = True.</summary>
+    [Fact]
+    public async Task ActiveOnly_Other_ActiveDay6_NotFound_ToLeaderAndHr()
+    {
+        var subject = await SeedAsync("ds_v_pg_a6", active: true, end: Day6);
+        var v = Validator();
+
+        var leader = await v.ValidateEmployeeAccessAsync(Leader("ds_v_pg_a6_l_" + Guid.NewGuid().ToString("N")[..6]), subject);
+        Assert.False(leader.Allowed);
+        Assert.Equal("Target employee not found", leader.Reason);
+
+        var hr = await v.ValidateEmployeeAccessAsync(Hr("ds_v_pg_a6_h_" + Guid.NewGuid().ToString("N")[..6]), subject);
+        Assert.False(hr.Allowed);
+        Assert.Equal("Target employee not found", hr.Reason);
+    }
+
+    /// <summary>Kind N. Terminated-inclusive overload, subject active with last day D+6: a LocalLeader is refused with
+    /// the LocalHR text (the R9b gate, reached because the subject counts as switched off); a LocalHR whose scope
+    /// covers the organisation is admitted.
+    /// <b>Red conditions (Docker, argued):</b> <c>Assert.False(leader.Allowed)</c>: without the clause an ACTIVE subject
+    /// never meets the HR gate and the leader's covering scope admits. The HR half
+    /// (<c>Assert.True(hr.Allowed)</c>) fails if the clause refused HR too (the ruling keeps HR on every leaver
+    /// route). Under mutation M-25 the leader assertion fails with Allowed = True.</summary>
+    [Fact]
+    public async Task TerminatedInclusive_Other_ActiveDay6_LeaderRefusedWithHrText_HrAdmitted()
+    {
+        var subject = await SeedAsync("ds_v_pg_t6", active: true, end: Day6);
+        var v = Validator();
+
+        var leader = await v.ValidateEmployeeAccessIncludingTerminatedAsync(
+            Leader("ds_v_pg_t6_l_" + Guid.NewGuid().ToString("N")[..6]), subject);
+        Assert.False(leader.Allowed);
+        Assert.Equal("Terminated-employee access requires LocalHR or above", leader.Reason);
+
+        var hr = await v.ValidateEmployeeAccessIncludingTerminatedAsync(
+            Hr("ds_v_pg_t6_h_" + Guid.NewGuid().ToString("N")[..6]), subject);
+        Assert.True(hr.Allowed);
+    }
+
+    /// <summary>Kind N, the per-scope floor. A mixed-role actor: primary role LocalHR (a scope in the DISJOINT
+    /// organisation STY05) plus a LocalLeader scope that covers the subject's organisation. For a D+6 active subject the
+    /// R9b primary-role gate passes, but the LocalLeader scope must not admit (the per-scope LocalHR floor applies as
+    /// for a deactivated subject), so the actor is refused with the scope reason.
+    /// <b>Red conditions (Docker, argued):</b> <c>Assert.False(Allowed)</c>. Without the clause the subject is an
+    /// ordinary active one and the leader scope covering it admits. Under mutation M-25 it is admitted.</summary>
+    [Fact]
+    public async Task TerminatedInclusive_Other_ActiveDay6_MixedRole_LeaderScopeDoesNotAdmit()
+    {
+        var subject = await SeedAsync("ds_v_pg_mx", active: true, end: Day6);
+        var mixed = new ActorContext(
+            "ds_v_pg_mx_a_" + Guid.NewGuid().ToString("N")[..6], StatsTidRoles.LocalHR, Guid.NewGuid(), "STY05",
+            new[]
+            {
+                new RoleScope(StatsTidRoles.LocalHR, "STY05", "ORG_ONLY"),
+                new RoleScope(StatsTidRoles.LocalLeader, Org, "ORG_ONLY"),
+            });
+
+        var r = await Validator().ValidateEmployeeAccessIncludingTerminatedAsync(mixed, subject);
+
+        Assert.False(r.Allowed);
+        Assert.Equal("Actor scope does not cover target organization", r.Reason);
+    }
+
+    /// <summary>Kind B — boundary pin, holds today (the grace's last day D+5). Both overloads admit a LocalLeader
+    /// and a LocalHR whose scope covers the organisation, exactly as before the clause. Proves the D+6 refusals above
+    /// are about the date.
+    /// <b>Red conditions:</b> an off-by-one in the grace test (<c>end &lt;= today - 5</c>) makes a leader assertion
+    /// fail with Allowed = False.</summary>
+    [Fact]
+    public async Task Other_ActiveDay5_BothOverloads_AdmitLeaderAndHr_BoundaryPin()
+    {
+        var subject = await SeedAsync("ds_v_pg_d5", active: true, end: Day5);
+        var leader = Leader("ds_v_pg_d5_l_" + Guid.NewGuid().ToString("N")[..6]);
+        var hr = Hr("ds_v_pg_d5_h_" + Guid.NewGuid().ToString("N")[..6]);
+        var v = Validator();
+
+        Assert.True((await v.ValidateEmployeeAccessAsync(leader, subject)).Allowed);
+        Assert.True((await v.ValidateEmployeeAccessAsync(hr, subject)).Allowed);
+        Assert.True((await v.ValidateEmployeeAccessIncludingTerminatedAsync(leader, subject)).Allowed);
+        Assert.True((await v.ValidateEmployeeAccessIncludingTerminatedAsync(hr, subject)).Allowed);
+    }
+
     // ── G1: an actor with no id is never "self" ──
 
     /// <summary>Kind B (G1) — boundary pin, holds today: an HR-scoped actor with NO actor id acting on a

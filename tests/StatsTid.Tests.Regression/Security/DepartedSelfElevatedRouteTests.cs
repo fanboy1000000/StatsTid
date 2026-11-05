@@ -687,13 +687,22 @@ public sealed class DepartedSelfElevatedRouteTests : IClassFixture<DepartedSelfH
     /// Kind B (G6) — boundary pin, holds today. An active HR actor removes a leaver who is still active in the
     /// grace (end date passed, no reports): the clause is the identity arm only, so this is allowed: 200, the
     /// leaver deactivated.
+    /// <para>S147 TASK-14725: the clock is pinned INSIDE the grace (Thursday 2026-03-06 = D+2 for the last day
+    /// <see cref="Gone"/> = 2026-03-04). Before this change the host ran on the real clock, so the leaver was
+    /// hundreds of days past the grace and the fact only passed because a still-active subject was treated as an
+    /// ordinary employee. From D+6 a leaver counts as switched off BY DATE on every route (owner ruling 2026-11-05),
+    /// and HR's active-only /remove then answers "not found" for a past-grace leaver exactly as for a switched-off
+    /// one (the access no longer depends on the flip); the fact keeps the meaning its name and this docstring claim,
+    /// a leaver still in the grace, and every assertion is unchanged.</para>
     /// </summary>
     [Fact]
     public async Task Remove_ActorRemovesGraceLeaver_AsToday()
     {
         var actor = await SeedAsync("ds_rm_g_a", OrgB);
         var leaver = await SeedAsync("ds_rm_g", OrgB, active: true, end: Gone);
-        using var client = ClientFor(Hr(actor, OrgB));
+        // S147 TASK-14725: pin today inside D+1..D+5 so this stays the grace pin it claims to be (was: the real clock).
+        using var host = _fx.Factory.WithFixedToday(new DateOnly(2026, 3, 6));
+        using var client = ClientFor(Hr(actor, OrgB), host);
 
         var rsp = await RemoveAsync(client, leaver, new Dictionary<string, string>());
 

@@ -278,8 +278,10 @@ public sealed class UserRepository
     //     (GetByIdIncludingTerminatedAsync on (conn, tx)); and the tree lock's terminated-
     //     inclusive overload (ReportingLineRepository.AcquireTreeLockForEmployeeIncludingTerminatedAsync,
     //     these three callers only — the shared AcquireTreeLockForEmployeeAsync and its six
-    //     reporting-line callers stay active-only). The designated-approver edge is unchanged and
-    //     fails closed for a deactivated subject, so the leaver's manager is refused from D+6.
+    //     reporting-line callers stay active-only). From D+6 the leaver's manager is refused BY DATE
+    //     on both layers (S147 / TASK-14725 + fix-up 1: the DesignatedApproverAuthorizer
+    //     manager-grace check on the edge, and OrgScopeValidator treating a past-grace subject as
+    //     switched off); the deactivation these reads key on is belt and braces.
     //   • GET /api/skema/{employeeId}/month — its subject read, admitting a deactivated subject
     //     only when the view's terminated-inclusive tier method
     //     (ApprovalReadTier.ClassifyMonthViewTierIncludingTerminatedAsync, this view only) says the

@@ -725,7 +725,9 @@ public sealed class HrFollowUpApprovalReadRepository
     /// until D+5, HR only from D+6", where D is the last day employed (<c>employment_end_date</c>,
     /// inclusive). Derived from the ONE grace constant the two deactivation paths read
     /// (<see cref="EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays"/>), so this display cannot
-    /// drift from the day the leaver job actually switches the leaver off:
+    /// drift from the day the leaver job actually switches the leaver off, nor (S147 / TASK-14725 + fix-up 1)
+    /// from the day <c>DesignatedApproverAuthorizer</c> and <c>OrgScopeValidator</c> start refusing the
+    /// manager by date:
     /// <see cref="EmploymentEndDateLifecycleWriter.IsPastGrace"/> is false on <c>LastManagerDay</c> and
     /// true from <c>FirstHrOnlyDay</c>. Not a second "past the grace" rule — it decides nothing; it only
     /// names the two days for HR. No overflow: an HRP-011 end date has already passed (<c>&lt;= today</c>).

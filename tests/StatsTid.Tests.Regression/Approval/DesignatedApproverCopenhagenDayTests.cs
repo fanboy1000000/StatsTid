@@ -286,5 +286,11 @@ public sealed class DesignatedApproverCopenhagenDayTests
 
         public Task<UnitLeaderApprovalKind> GetUnitLeaderKindAsync(string actorId, string employeeId, CancellationToken ct)
             => Task.FromResult(UnitLeaderApprovalKind.None);
+
+        // S147 TASK-14725-T fix-up 1 (Fable N7): the interface's DEFAULT for this fact is fail-closed (true = "the
+        // manager grace has ended" = refuse). No current fact here reaches the grace check (the edge facts end in the
+        // edge leg; the combined fact returns earlier), but a future admission fact through the combined predicate
+        // would be refused by that default. Nobody in this fixture is a past-grace leaver, so the honest answer is false.
+        public Task<bool> IsPastManagerGraceAsync(string userId, DateOnly asOf, CancellationToken ct) => Task.FromResult(false);
     }
 }

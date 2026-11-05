@@ -38,7 +38,7 @@ public class SettlementCloseLeaverLogicTests
     /// to 4) — 11 of 81 failed across the three grace suites, this fact among them; <b>M-8b</b> (<c>endDate &lt; cutoff</c> changed to
     /// <c>&lt;=</c>) — 6 of 81 failed, this fact among them ("Assert.False() Failure  Expected: False  Actual: True" on the D+5 row).</summary>
     [Fact]
-    public void IsDeactivationDue_BoundaryDay_NotDue_FirstFollowingDay_Due()
+    public void IsDeactivationDue_BoundaryDayAndGraceDays1To5_NotDue_Day6_Due()
     {
         Assert.False(SettlementCloseService.IsDeactivationDue(Today, isActive: true, copenhagenToday: Today));
         // S147 OQ-2: the old pin was "today − 1 is due"; that day is now inside the grace.
