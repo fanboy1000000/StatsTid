@@ -66,7 +66,7 @@ public sealed class LeaverPastGraceByDateTests : IAsyncLifetime
     private const string LeaverV = "s147g_leaver_v";     // Employee in unit V; NO edge; HrUnitLdr leads V
     private const string HrUnitLdr = "s147g_hrunitldr";  // LocalHR AND the designated unit leader of V
     private const string LeaverM = "s147g_leaver_m";     // Employee switched off by hand (no end date); edge manager = HrMgr
-    private const string Vik ="s147g_vik";              // LocalLeader; active manager_vikar stand-in for Mgr
+    private const string Vik = "s147g_vik";              // LocalLeader; active manager_vikar stand-in for Mgr
     private static readonly Guid UnitV = Guid.Parse("51470000-0000-0000-0000-0000000000a2");
 
     private TestFixtures.DockerHarness _harness = null!;

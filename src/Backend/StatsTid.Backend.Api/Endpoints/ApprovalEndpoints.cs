@@ -254,7 +254,7 @@ public static class ApprovalEndpoints
             return "UNIT_LEADER_VIKAR";
 
         // (3) No path named (the predicate admitted, but neither the re-resolved edge nor the unit-leader
-        //     resolution names this actor — only possible if the locked state moved between the reads;
+        //     resolution names this actor — only possible if state outside the held advisories (a role expiry or revocation) moved between the reads;
         //     the conservative answer is the fallback, never a manager label the reads do not support).
         return "ORG_SCOPE_FALLBACK";
     }
