@@ -516,7 +516,7 @@ data. Both Step 7a lenses found it (cycle 1: Fable W-1, Codex WARNING 1); it is 
 The owner ruled "(a) Fix it now". When the first commit showed that the leader-tier org-scope reads had the same
 window, the owner ruled "(a) Extend now" (both 2026-11-05). TASK-14725 (merged `2cfae13c`) decides the cut-off
 by the date on two layers. Step A's switch-off stays, as a second guard and as the source of the switch-off events
-(K-4). Code lines below are at `ab77c475` (re-checked at Step 7a cycle 2).
+(K-4). Code lines below are at `ab77c475` (re-checked at Step 7a cycle 2); the six test facts' lines in "Pinned by" are at `a0c67f4f`, after TASK-14725-T fix-up 4 (Step 7a cycle 3).
 - **Layer 1, the shared approver predicate.** Once a manager path has admitted the actor (the designated edge, the
   admin-assigned acting manager, the edge manager's stand-in, the unit leader or the unit leader's stand-in),
   `DesignatedApproverAuthorizer` refuses when the subject's last day employed lies before the authority date minus 5,
@@ -603,14 +603,46 @@ by the date on two layers. Step A's switch-off stays, as a second guard and as t
 - **Pinned by** the Unit facts `ManagerGracePredicateTests` (7; mutation M-26 trips 3 of them) and the Docker facts
   `LeaverPastGraceByDateTests`, the four D+5 and D+6 facts in `DepartedSelfValidatorTests`, and
   `PayrollPastGraceLeaverScopeTests`. Each access fact keeps the leaver active at D+6, with the leaver job off, and
-  has D+5 boundary pins. Six more facts in `LeaverPastGraceByDateTests` pin the recorded approval method (fix-ups
+  each D+6 refusal has a D+5 counterpart that admits on the same seed. The counterpart shows that the refusal comes
+  from the date, not from the fixture. What it can detect beyond that depends on how many paths admit on its route
+  *(Step 7a cycle 3, Fable NOTE-3: as first written, this sentence said every access fact had D+5 boundary pins,
+  but the year overview had none, and the Skema view's was the one that ran red; TASK-14725-T fix-up 4, merged
+  `a0c67f4f`, fixes both)*:
+  - **Approve, the manager and the unit leader** (`Day5_LeaverStillActive_ManagerAndUnitLeaderApprove_Is200_BoundaryPin`).
+    It turns red on an off-by-one in the shared grace rule or in the approver predicate's use of it. It does not
+    turn red on a validator-only error: approve's org-scope arm refuses these LocalLeader actors at its LocalHR floor
+    anyway (`ApprovalEndpoints.cs:446-456`), so only the refusal's reason would change. Reject runs the same two arms
+    and shares this counterpart; it has no D+5 fact of its own.
+  - **Overtime approve** (`Day5_LeaverStillActive_LeaderOvertimePreApprovalApprove_Is200_BoundaryPin`) and **the
+    validator itself** (the D+5 fact in `DepartedSelfValidatorTests`). The validator is the only admitting path
+    there, so a validator off-by-one shows.
+  - **The Skema month view** (the D+5 half of its own fact). Since fix-up 4 the fact sends the month first, so the
+    S124 leader month gate (`SkemaEndpoints.cs:535-553`, "The month has not been submitted for approval") cannot be
+    what refuses. The D+6 refusal must also carry the date rule's reason, "Target employee not found". The mirror
+    needs only one admitting path (the covering scope at `:237`, or the live edge at `:246`). So it shows only an
+    error both layers share, in `EmploymentEndDateLifecycleWriter.IsPastGrace` (`OrgScopeValidator.cs:602`,
+    `DesignatedApproverAuthorizer.cs:423`), or a broken seed.
+  - **The year overview** (a D+5 mirror added by fix-up 4). The route asks only the terminated-inclusive validator
+    (`BalanceEndpoints.cs:710-712`), so a validator off-by-one shows: it is the validator's route-level D+5 pin.
+  - **The stand-in** (the D+5 half of `Day6_LeaverStillActive_ManagerVikarStandIn_Is403_Day5Is200`).
+
+  **The Skema fact ran red in CI once, for a fixture reason.** In C-2 on K′ (run `42013444380`, 2026-11-05) its D+5
+  half got 403. The fact had not sent the month, so the month gate refused. The same gate let its D+6 half pass for
+  the wrong reason, even on the code before TASK-14725 (`c13024cd`). The product was right. Fix-up 4's correction is
+  CI-pending until C-2 on K‴.
+
+  Fix-ups 2 and 3 added six facts in all to `LeaverPastGraceByDateTests`: five pin the recorded approval method,
+  and the stand-in fact pins both the stand-in's D+6 refusal and its D+5 label. The predicate's other
+  refusals (another organisation, no leader role in the database, an inactive home organisation) also record
+  `ORG_SCOPE_FALLBACK`. That follows by construction, because the label takes the predicate's answer; no fact pins
+  those cases by name (Step 7a cycle 3, Fable NOTE-1). The six (fix-ups
   2 and 3):
-  - `Day6_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:347`);
-  - `Day6_LeaverStillActive_HrWhoIsUnitLeaderRejects_MethodIsOrgScopeFallback` (`:372`);
-  - `Day5_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodStaysDesignatedManager_BoundaryPin` (`:394`);
-  - `Day6_LeaverSwitchedOff_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:418`);
-  - `Day6_LeaverStillActive_ManagerVikarStandIn_Is403_Day5Is200` (`:450`: the stand-in refused at D+6, and at D+5
+  - `Day6_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:395`);
+  - `Day6_LeaverStillActive_HrWhoIsUnitLeaderRejects_MethodIsOrgScopeFallback` (`:420`);
+  - `Day5_LeaverStillActive_HrWhoIsDesignatedManagerApproves_MethodStaysDesignatedManager_BoundaryPin` (`:442`);
+  - `Day6_LeaverSwitchedOff_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:466`);
+  - `Day6_LeaverStillActive_ManagerVikarStandIn_Is403_Day5Is200` (`:498`: the stand-in refused at D+6, and at D+5
     recorded as `ACTING_MANAGER`);
-  - `ManuallySwitchedOff_NoEndDate_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:500`).
+  - `ManuallySwitchedOff_NoEndDate_HrWhoIsDesignatedManagerApproves_MethodIsOrgScopeFallback` (`:548`).
 
   The Docker facts are CI-pending until C-2 (`<C-2 run id>`).
