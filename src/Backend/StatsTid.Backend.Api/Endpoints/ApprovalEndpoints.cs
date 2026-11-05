@@ -206,35 +206,38 @@ public static class ApprovalEndpoints
     /// is blocked from committing by the held <c>unit-org-</c> advisory).
     ///
     /// <para>
-    /// S147 / TASK-14725 fix-up 2 (Step 7a cycle 2, Codex WARNING) — FIRST, a subject past the manager
-    /// grace BY DATE (<paramref name="subjectEmploymentEndDate"/> under
-    /// <see cref="DesignatedApproverAuthorizer.IsPastManagerGrace"/> at <paramref name="asOf"/>: from D+6)
-    /// records <c>ORG_SCOPE_FALLBACK</c>, whatever reporting-line or unit position the actor holds.
+    /// S147 / TASK-14725 fix-up 3 (fix-up 2's Step 5a, Fable WARNING-1) — the gate's verdict FIRST:
+    /// <paramref name="holdsManagerPath"/> is the handler's ONE in-lock evaluation of the authority
+    /// predicate (<see cref="DesignatedApproverAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(string, string, DateOnly?, CancellationToken)"/>)
+    /// for this actor, subject and date — the same value that decided a manager's admission. When it is
+    /// <c>false</c> the method is <c>ORG_SCOPE_FALLBACK</c>; only when it is <c>true</c> do steps (1) and
+    /// (2) name WHICH manager path.
     /// </para>
     /// </summary>
     private static async Task<string> DeriveApprovalMethodAsync(
         DesignatedApproverAuthorizer designatedAuthorizer,
-        string? actorId, string employeeId, DateOnly? subjectEmploymentEndDate,
+        string? actorId, string employeeId, bool holdsManagerPath,
         string? designatedManagerId, string? resolvedMethod,
         DateOnly asOf, CancellationToken ct)
     {
-        // (0) S147 / TASK-14725 fix-up 2 — THE SUBJECT'S MANAGER GRACE, BY DATE, in the AUDIT too.
-        //     WHY. From D+6 no manager path carries authority over the subject: the shared predicate
-        //     refuses every one of them on that date (the `manager-grace-ended` clause), so an actor
-        //     who reaches this line was admitted by the HR/Admin org-scope arm (floored at LocalHR). The
-        //     classification below never asked about the subject, though: an HR actor who is ALSO the
-        //     designated approver or a unit leader of the subject was recorded as DESIGNATED_MANAGER /
-        //     ACTING_MANAGER / UNIT_LEADER / UNIT_LEADER_VIKAR — manager authority the system had
-        //     just refused. The unit-leader labels fell to ORG_SCOPE_FALLBACK only once the leaver job
-        //     had switched the subject off (its same-Organisation re-check reads active users), so that
-        //     audit depended on a 5-minute poll; the edge labels did not fall even then, because the
-        //     switch-off does not end the leaver's own reporting line and the edge test below is
-        //     `actor == resolved approver`, which never looks at the subject.
-        //     WHAT. The SAME rule (IsPastManagerGrace, the one the authorizer decides through) at the
-        //     SAME date (`asOf` = the handler's `today`, PAT-028). D .. D+5, no end date, or a future
-        //     end date are unchanged; the persisted designated_approver_id (WHO the reporting line
-        //     names) is unchanged — only the method (HOW the actor was entitled) follows the date.
-        if (DesignatedApproverAuthorizer.IsPastManagerGrace(subjectEmploymentEndDate, asOf))
+        // (0) S147 / TASK-14725 fix-up 3 — a manager or unit-leader label ONLY when the authority
+        //     predicate says the actor holds a manager path over this subject at this date.
+        //     WHY. Steps (1) and (2) alone never asked about the SUBJECT: step (1) is `actor == the
+        //     resolved approver`, and the resolver walks reporting lines whatever the subject's state.
+        //     So an actor admitted as HR (the org-scope arm, floored at LocalHR) who also held a manager
+        //     position was recorded as the manager although the predicate refused that path: from D+6
+        //     (the manager grace, by date), for a subject switched off by hand with no end date (the
+        //     predicate's active-user / active-Organisation re-check), and for any other clause the
+        //     predicate holds. Fix-up 2 copied ONE of those clauses (the date) into this method;
+        //     asking the predicate's own verdict covers every clause, now and when one is added.
+        //     WHICH VALUE. The handler's in-lock evaluation (the same call that refuses a manager the
+        //     org-scope arm did not admit), so the label and the admission cannot disagree: they are
+        //     one answer from one evaluation under the held advisories, not two separate reads.
+        //     WHAT IS UNCHANGED. When the predicate admits, the labels are exactly as before — the
+        //     resolver's DESIGNATED_MANAGER / ACTING_MANAGER on the edge, UNIT_LEADER /
+        //     UNIT_LEADER_VIKAR on the unit-leader path. designated_approver_id (WHO the reporting line
+        //     names) is unchanged; only the method (HOW the actor was entitled) follows the verdict.
+        if (!holdsManagerPath || string.IsNullOrEmpty(actorId))
             return "ORG_SCOPE_FALLBACK";
 
         // (1) The EDGE path — the actor is the single resolved effective approver.
@@ -243,17 +246,16 @@ public static class ApprovalEndpoints
 
         // (2) The SECONDARY unit-leader paths (D4 path-2/3) — classify for an honest audit (NOT the
         //     misleading ORG_SCOPE_FALLBACK, which is HR/Admin scope, not unit-leader authority).
-        if (!string.IsNullOrEmpty(actorId))
-        {
-            var unitKind = await designatedAuthorizer.ResolveUnitLeaderApprovalKindAsync(
-                actorId, employeeId, asOf: asOf, ct: ct);
-            if (unitKind == UnitLeaderApprovalKind.Direct)
-                return "UNIT_LEADER";
-            if (unitKind == UnitLeaderApprovalKind.Vikar)
-                return "UNIT_LEADER_VIKAR";
-        }
+        var unitKind = await designatedAuthorizer.ResolveUnitLeaderApprovalKindAsync(
+            actorId, employeeId, asOf: asOf, ct: ct);
+        if (unitKind == UnitLeaderApprovalKind.Direct)
+            return "UNIT_LEADER";
+        if (unitKind == UnitLeaderApprovalKind.Vikar)
+            return "UNIT_LEADER_VIKAR";
 
-        // (3) The HR/Admin org-scope fallback, or no designated approver.
+        // (3) No path named (the predicate admitted, but neither the re-resolved edge nor the unit-leader
+        //     resolution names this actor — only possible if the locked state moved between the reads;
+        //     the conservative answer is the fallback, never a manager label the reads do not support).
         return "ORG_SCOPE_FALLBACK";
     }
 
@@ -525,13 +527,20 @@ public static class ApprovalEndpoints
             // the pre-tx ORG-scope gate did NOT already admit the actor (orgScopeAllowed): an
             // org-scope-admitted approval does not depend on the edge, so a revoked edge must not
             // flip it to 403 (not the authorizing surface).
-            if (!orgScopeAllowed)
-            {
-                var stillAuthorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                    actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
-                if (!stillAuthorized)
-                    return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
-            }
+            //
+            // S147 / TASK-14725 fix-up 3 — the in-lock evaluation now runs for EVERY actor, ONCE, and its
+            // answer serves two purposes. (a) The REFUSAL is unchanged: only an actor the org-scope arm did
+            // NOT admit is refused on `false`, so an HR approval still never depends on the edge. (b) The
+            // same answer names the recorded method (DeriveApprovalMethodAsync step (0)): a manager or
+            // unit-leader label only when the predicate holds. Before, an actor admitted as HR never had
+            // this question asked, so the label could claim a manager path the predicate refuses (D+6 by
+            // date; a subject switched off by hand). For a manager, admission and label are now literally
+            // one value; for HR, this is one more evaluation than before (the label's).
+            var holdsManagerPath = !string.IsNullOrEmpty(actor.ActorId)
+                && await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                    actor.ActorId, period.EmployeeId, asOf: today, ct: ct);
+            if (!orgScopeAllowed && !holdsManagerPath)
+                return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
 
             // S78 BLOCKER 2 — re-resolve the designated approver + re-derive the approval-method
             // classification UNDER the held advisories (the AUTHORITATIVE values for the persisted audit
@@ -540,18 +549,11 @@ public static class ApprovalEndpoints
             // UnitLeaderRemoved is blocked from committing until we release), so this re-derivation reflects
             // the locked tree. S94 / TASK-9402: the REQUIRED-mode 428 re-eval is GONE. S105 / ADR-038 D4:
             // a secondary-unit-leader approval now records UNIT_LEADER / UNIT_LEADER_VIKAR (not the
-            // misleading ORG_SCOPE_FALLBACK).
-            //
-            // S147 / TASK-14725 fix-up 2 — the subject is read HERE, terminated-inclusive and on this
-            // transaction, once: its last day employed decides the manager-grace step of the
-            // classification (from D+6 the method is ORG_SCOPE_FALLBACK, the date the authority gate
-            // uses), and the same row supplies the audit projection's target organisation below (the
-            // read that used to sit there, moved up; a missing row still throws at that point).
-            var subjectUser = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, period.EmployeeId, ct);
+            // misleading ORG_SCOPE_FALLBACK). S147 / TASK-14725 fix-up 3: gated by holdsManagerPath above.
             var (designatedManagerId, resolvedMethod, depth) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: today);
             var approvalMethod = await DeriveApprovalMethodAsync(
-                designatedAuthorizer, actor.ActorId, period.EmployeeId, subjectUser?.EmploymentEndDate,
+                designatedAuthorizer, actor.ActorId, period.EmployeeId, holdsManagerPath,
                 designatedManagerId, resolvedMethod, today, ct);
 
             // S78 R2 — the CONDITIONAL status transition is the FIRST mutation in the tx (BEFORE the
@@ -632,14 +634,13 @@ public static class ApprovalEndpoints
             // TERMINATED-INCLUSIVE (an R9c read): HR approving a switched-off leaver's month must record
             // the leaver's Organisation, where the active-only read returned null and threw. A missing
             // users row is still a data fault and still throws (the transaction rolls back).
-            // S147 / TASK-14725 fix-up 2 — the row is the one read above for the classification (same
-            // subject, same transaction, nothing in between writes users), not a second read.
+            var auditUser = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, @event.EmployeeId, ct);
             var auditCtx = new AuditProjectionContext(
                 ActorId: actor.ActorId,
                 ActorPrimaryOrgId: actor.OrgId,
                 CorrelationId: actor.CorrelationId,
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: subjectUser?.PrimaryOrgId
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
                         ?? throw new InvalidOperationException(
                             $"Audit projection: employee {@event.EmployeeId} not found."));
             var auditRow = auditMapper.Map(@event, auditCtx);
@@ -778,26 +779,25 @@ public static class ApprovalEndpoints
             await UnitRepository.AcquireUnitOrgLockAsync(conn, tx, empCurrentOrg, ct);
             // The in-lock re-evaluation reuses the request's single date (`today`, read at the top —
             // PAT-028); it was a second clock read before (S140 / TASK-14001).
-            if (!orgScopeAllowed)
-            {
-                var stillAuthorized = await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
-                    actor.ActorId!, period.EmployeeId, asOf: today, ct: ct);
-                if (!stillAuthorized)
-                    return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
-            }
+            // S147 / TASK-14725 fix-up 3 — evaluated for EVERY actor, once: it refuses only an actor the
+            // org-scope arm did not admit (unchanged), and the same answer names the recorded method (a
+            // manager or unit-leader label only when it holds). See approve.
+            var holdsManagerPath = !string.IsNullOrEmpty(actor.ActorId)
+                && await designatedAuthorizer.IsEffectiveApproverOrUnitLeaderAsync(
+                    actor.ActorId, period.EmployeeId, asOf: today, ct: ct);
+            if (!orgScopeAllowed && !holdsManagerPath)
+                return Results.Json(new { error = "Access denied", reason = orgScopeReason }, statusCode: 403);
 
             // S78 BLOCKER 2 — re-resolve + re-classify UNDER the held advisories (the authoritative values
             // for the persisted audit metadata). Same rationale as approve: a concurrent reassignment /
             // UnitLeaderRemoved is blocked from committing, so the resolver observes the frozen locked tree.
             // S94 / TASK-9402: the REQUIRED-mode 428 re-eval is GONE. S105 / ADR-038 D4: a
-            // secondary-unit-leader reject records UNIT_LEADER / UNIT_LEADER_VIKAR.
-            // S147 / TASK-14725 fix-up 2 — the subject read once, here, for the classification's
-            // manager-grace step and for the audit's target organisation below (same as approve).
-            var subjectUser = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, period.EmployeeId, ct);
+            // secondary-unit-leader reject records UNIT_LEADER / UNIT_LEADER_VIKAR. S147 / TASK-14725
+            // fix-up 3: gated by holdsManagerPath above.
             var (designatedManagerId, resolvedMethod, depth) =
                 await reportingLineRepo.ResolveDesignatedApproverAsync(period.EmployeeId, ct, asOf: today);
             var approvalMethod = await DeriveApprovalMethodAsync(
-                designatedAuthorizer, actor.ActorId, period.EmployeeId, subjectUser?.EmploymentEndDate,
+                designatedAuthorizer, actor.ActorId, period.EmployeeId, holdsManagerPath,
                 designatedManagerId, resolvedMethod, today, ct);
 
             // S78 R2 — the CONDITIONAL status transition is the FIRST mutation (BEFORE the warning, audit,
@@ -869,14 +869,14 @@ public static class ApprovalEndpoints
             var outboxId = await outbox.EnqueueAndReturnIdAsync(conn, tx, streamId, @event, ct);
 
             // S147 / TASK-14713 — the audit's target organisation is the subject's, read terminated-
-            // inclusive (an R9c read), for the reason spelled out on approve. S147 / TASK-14725 fix-up 2 —
-            // the row read above for the classification, not a second read.
+            // inclusive (an R9c read), for the reason spelled out on approve.
+            var auditUser = await userRepo.GetByIdIncludingTerminatedAsync(conn, tx, @event.EmployeeId, ct);
             var auditCtx = new AuditProjectionContext(
                 ActorId: actor.ActorId,
                 ActorPrimaryOrgId: actor.OrgId,
                 CorrelationId: actor.CorrelationId,
                 OccurredAt: new DateTimeOffset(@event.OccurredAt),
-                ResolvedTargetOrgId: subjectUser?.PrimaryOrgId
+                ResolvedTargetOrgId: auditUser?.PrimaryOrgId
                         ?? throw new InvalidOperationException(
                             $"Audit projection: employee {@event.EmployeeId} not found."));
             var auditRow = auditMapper.Map(@event, auditCtx);

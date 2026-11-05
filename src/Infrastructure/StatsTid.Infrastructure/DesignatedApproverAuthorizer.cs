@@ -418,15 +418,8 @@ public sealed class DesignatedApproverAuthorizer
     /// A NULL end date (open-ended employment) is never past. Both fact forms decide through this call
     /// (the live query below and <see cref="PrefetchedAuthorityFacts.IsPastManagerGraceAsync"/>), so the
     /// grace length has one home (<see cref="EmploymentEndDateLifecycleWriter.ManagerGraceCalendarDays"/>).
-    /// <para>
-    /// Public since TASK-14725 fix-up 2 (Step 7a cycle 2, Codex WARNING) for exactly one more reader: the
-    /// approve / reject handlers' audit classification (<c>ApprovalEndpoints.DeriveApprovalMethodAsync</c>),
-    /// which must record HR authority, not manager authority, for a subject this rule puts past the grace,
-    /// so the recorded <c>approval_method</c> follows the same date as the authority decision instead of
-    /// the leaver job's switch-off.
-    /// </para>
     /// </summary>
-    public static bool IsPastManagerGrace(DateOnly? employmentEndDate, DateOnly asOf)
+    internal static bool IsPastManagerGrace(DateOnly? employmentEndDate, DateOnly asOf)
         => employmentEndDate is { } endDate && EmploymentEndDateLifecycleWriter.IsPastGrace(endDate, asOf);
 
     /// <summary>S147 / TASK-14725 — the subject's manager-grace fact, from the prefetch when one is
