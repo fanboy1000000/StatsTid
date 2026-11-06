@@ -598,6 +598,9 @@ tracked as SEC-NNN rows there; this list is the pickup summary.)*
   memory-constrained machine a slow start would stop all shell work; (c) neither — rely on the register's
   "log ALLOW N / transcripts M" reconciliation and the close commit's hook record to notice misses. Read
   S148's reconciliation first: it shows whether 60 s alone closes the gap.
+  **Owner ruling 2026-11-06: (c) for now — decide at S148's close**, with S148's register row (log vs
+  transcripts, and any `hook_cancelled` / `hook_non_blocking_error` in the session transcript) as the evidence;
+  if misses remain, choose (a) or (b) then.
 - **★ Standards and requirements conformance — a systematic approach** (owner-raised 2026-10-26: *"What ISO
   standards, tekniske minimumskrav etc. do we need to measure the system against. We need to add a systematic
   approach."*).

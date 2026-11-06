@@ -99,7 +99,8 @@ Both hooks still **fail open**: a timeout or a start failure lets the tool call 
 2026-11-05; not yet exercised here) to fail closed instead; for the close guard, which runs on every shell
 command, that would stop all shell work whenever PowerShell cannot start in time on this memory-constrained
 machine. Whether to fail closed — on the routing guard, the close guard, both or neither — is an owner decision,
-not taken here; it is queued in `ROADMAP.md`'s backlog. Until then the register's reconciliation and close-line
+not taken here; it is queued in `ROADMAP.md`'s backlog (owner ruling 2026-11-06: keep fail-open for now and
+decide at S148's close, on S148's reconciliation). Until then the register's reconciliation and close-line
 check are the detective control, and S148's "log ALLOW N / transcripts M" is the first test of whether 60 s is
 enough: the 60 s limit is a judgment, not a measurement (a cancelled hook leaves no completion time).
 
