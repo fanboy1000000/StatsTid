@@ -14,6 +14,10 @@ HARD checks (exit 1 on failure):
      SPRINT-<n>.md log (catches the "S55 black hole"). Git-based; skipped
      gracefully if history is shallow/unavailable.
 
+  5. Shortcut tags: every `shortcut(<tag>):` comment in tracked code is in the
+     valid form and backed by a row in its register (PAT-032); `pending` never
+     reaches master. Git-based; skipped gracefully if git is unavailable.
+
 SOFT checks (report-only warnings, never fail):
   4. Doc freshness: docs carrying an `<!-- anchor-sprint: N -->` marker that
      trail the latest sprint by more than ANCHOR_SLACK.
@@ -179,12 +183,116 @@ def check_freshness() -> None:
         print(f"[ok] freshness: checked {anchored} anchored doc(s) against S{head}")
 
 
+SHORTCUT_EXTS = {".cs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".sql", ".ps1",
+                 ".psm1", ".py", ".sh", ".yml", ".yaml"}
+# A comment marker (`*` only as the first non-blank character, so multiplication and
+# globs do not trigger), then the keyword and `:` or `(`. Group 1 starts at the keyword.
+SHORTCUT_TRIGGER = re.compile(r"(?://|#|--|/\*|^\s*\*)\s*(shortcut\s*[:(].*)", re.I)
+SHORTCUT_VALID = re.compile(r"shortcut\((QUAL-\d{3}|SEC-\d{3}|F\d+|QUAL-BF-\d{3}|pending)\):")
+SHORTCUT_REGISTERS = {
+    "QUAL": REPO / "docs" / "operations" / "quality-finding-register.md",
+    "SEC": REPO / "docs" / "operations" / "security-finding-register.md",
+    "F": REPO / "docs" / "operations" / "performance-finding-register.md",
+}
+
+
+def register_rows(path: Path) -> dict[str, str]:
+    """First cell (whitespace, `**`, backticks stripped) -> second cell (outer whitespace and
+    backticks stripped, so a path keeps any inner spaces), for every table row."""
+    rows: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return rows
+    for line in text.split("\n"):
+        if not line.startswith("|"):
+            continue
+        cells = line.split("|")
+        if len(cells) < 3:
+            continue
+        rows[re.sub(r"\s|\*\*|`", "", cells[1])] = cells[2].strip().strip("`").strip()
+    return rows
+
+
+def classify_shortcut(text: str) -> tuple[str, str | None]:
+    """Return ("valid", tag) or ("fail", reason) for a trigger beginning at the keyword."""
+    folded = "shortcut" + text[8:]  # the keyword is case-folded; the tag keeps its case
+    m = SHORTCUT_VALID.match(folded)
+    if m:
+        return ("valid", m.group(1)) if text[:8] == "shortcut" else ("fail", "wrong case")
+    if re.match(r"shortcut\s*:", folded):
+        return "fail", "untagged"
+    if re.match(r"shortcut\([A-Za-z0-9-]+\):", folded):
+        return "fail", "unknown tag"
+    return "fail", "malformed"
+
+
+def check_shortcuts() -> None:
+    try:
+        # -z: unquoted paths, so a non-ASCII file name is read rather than silently skipped.
+        res = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], capture_output=True,
+                             encoding="utf-8", errors="surrogateescape", timeout=30)
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"shortcuts: git unavailable ({e}); skipped")
+        return
+    if res.returncode != 0:
+        warnings.append("shortcuts: `git ls-files` failed; skipped")
+        return
+
+    registers = {fam: register_rows(p) for fam, p in SHORTCUT_REGISTERS.items()}
+    found: list[str] = []
+    bad: list[str] = []
+    for rel in res.stdout.split("\0"):
+        if (Path(rel).suffix.lower() not in SHORTCUT_EXTS or rel.startswith("docs/")
+                or rel == "tools/check_docs.py"):
+            continue
+        try:
+            text = (REPO / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for n, line in enumerate(text.split("\n"), 1):
+            m = SHORTCUT_TRIGGER.search(line)
+            if not m:
+                continue
+            # Messages show an undecodable file-name byte as U+FFFD; `rel` itself stays exact for opening
+            # the file and comparing it with a register path.
+            shown = rel.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+            where = f"{shown}:{n}"
+            kind, detail = classify_shortcut(m.group(1))
+            if kind == "fail":
+                bad.append(f"shortcut: {where}: {detail}")
+                continue
+            tag = detail or ""
+            if tag == "pending":
+                bad.append(f"shortcut: {where}: pending — register it before it reaches master")
+                continue
+            fam = "QUAL" if tag.startswith("QUAL") else "SEC" if tag.startswith("SEC") else "F"
+            rows = registers[fam]
+            if tag not in rows:
+                bad.append(f"shortcut: {where}: no such row — {tag} is not in its register")
+            elif tag.startswith("QUAL-BF-") and rows[tag] != rel:
+                bad.append(f"shortcut: {where}: wrong file — {tag} names `{rows[tag]}`, "
+                           f"the comment is in `{shown}`")
+            else:
+                found.append(f"  {tag}  {where}")
+
+    print(f"[shortcuts] {len(found)} found")
+    for f in found:
+        print(f)
+    if bad:
+        failures.append("shortcut comments not in the valid, registered form (PAT-032):\n    "
+                        + "\n    ".join(bad))
+    else:
+        print(f"[ok] shortcuts: {len(found)}, all registered")
+
+
 def main() -> int:
     print("== StatsTid doc consistency check ==")
     check_db_schema()
     check_kb_index()
     check_sprint_inventory()
     check_freshness()
+    check_shortcuts()
 
     if warnings:
         print("\nWARNINGS (report-only):")

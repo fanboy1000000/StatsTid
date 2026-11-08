@@ -70,6 +70,36 @@ alias or `inherit`). The reference list of newest ids lives in `docs/WORKFLOW.md
   ```
   If the transcript format changes and these stop working, record "not measured" in the row rather than a
   stale number, and decide then whether a script is worth writing.
+- *The Ponytail-adoption trial* (S148–S150; added 2026-11-08 before S148, owner "Go"). Three changes went in
+  together: the SMALLEST COMPLETE CHANGE block for implementers (`docs/AGENTS.md`), PAT-032's comment rule and
+  `shortcut(<tag>)` comments, and "no concrete case, no BLOCKER or WARNING" for both review lenses. The keep/revert
+  rule is in `ROADMAP.md` § Governance / docs. S148–S150 rows add, in Notes:
+  **M1** review cycles per chain, by stage (5a, 7a) and lens; **M2** cycle-1 B/W/N (descriptive only: it falls by
+  construction when findings without a case become NOTEs); **M3** this table's post-close defects (its CI runs to
+  green are still recorded, but descriptive only — see the baseline below); **M4** `(unproven)` NOTEs, split into *followed up* (proved or refuted in-sprint by the follow-up the
+  Orchestrator ordered) and *hidden* (left open, later a real defect); **M5** required machinery missed because of
+  the block (overruled "Not built" items plus review findings of missing machinery, each traced, counted only when
+  it does not trace to another cause); **M6** shortcuts registered and any check-5 false positive.
+  **Counting rules:** a chain is one lens on one scope (a task's 5a including its fix-up re-reviews; a sprint's 7a);
+  cycle 1 is its first review; a finding repeated in a later cycle counts once; adjudications, Constraint Validator
+  files and security consults are not reviews; a number the records cannot supply is "not reconstructable", never
+  estimated. **CI runs to green** counts every CI run the sprint log lists by id (push and evidence-PR runs), not
+  only the close push. **Baseline S145–S147**, reconstructed 2026-11-08 — full per-chain lists, sensitivities and
+  method in this register's appendix, [`model-routing-baseline-s145-s147.md`](model-routing-baseline-s145-s147.md):
+  - M1, 5a: internal 56 chains, 113 cycles, mean **2.02** (S145 1.86 · S146 1.83 · S147 2.26); Codex 43 chains,
+    94 cycles, mean **2.19** (2.07 · 1.88 · 2.38). 7a: 3 chains per lens, 8 · 4 · 4 cycles, mean **5.33** for each
+    lens (S145's eight cycles mostly reviewed the close guard's own harness).
+  - M2, 5a cycle 1: a blocker in 6 of 55 internal and 8 of 43 Codex first rounds (11 Codex blockers in those 8);
+    S147 cycle-1 B/W/N internal 4/29/128, Codex 3/15/26; S145 W/N not reconstructable (only verdict words survive).
+  - M3: post-close defects 0 · 0 · 0 (total 0). CI runs to green on the listed-ids rule: S145 not reconstructed
+    from the repository's records (its row counts only the close push; GitHub's run list could supply it), S146 5,
+    S147 12 — so there is no three-sprint baseline, and CI runs stay descriptive (S146–S147 mean 8.5, for context
+    only). This narrows M3 from the approved refinement, which also compared CI runs; the reason is recorded in
+    `ROADMAP.md`'s entry.
+  - The reconstruction found three cells in the rows below that disagree with their records, left as written
+    (history): S145's row omits the Codex blocker on TASK-14524 (four chains had one, not three); S146's "Codex
+    blockers on … the CI-W2 fix" (that artifact has none; the blocker was a CI failure); S147's "13 runs" (12 ids
+    listed).
 
 **When to reopen the routing.** Any of these, sustained over the trailing three sprints, puts the routing
 on the entropy-scan agenda for the owner's decision (nothing moves automatically):

@@ -2,6 +2,10 @@
 
 **Status**: living document. Created 2026-08-03 (S126) to give the F-series a durable home.
 
+**Shortcuts (2026-11-08, [PAT-032](../knowledge-base/patterns/PAT-032-comments-say-what-is-true-now-shortcuts-are-registered.md)).**
+A performance limit an agent accepts on purpose is a `shortcut(F<n>): <the limit>; upgrade when <trigger>` comment
+in the code, pointing at its row here; `tools/check_docs.py` check 5 fails CI when the id has no row.
+
 ## Why this file exists
 
 The original F1–F6 performance analysis was produced during S125 and **never written to a file**. It

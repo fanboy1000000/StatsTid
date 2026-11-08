@@ -98,6 +98,10 @@ The Orchestrator authorizes the cross-domain claim at decompose time (Step 1) an
   6. No anonymous type serialization for JWT/claims data (Sprint 6 lesson)
   7. All new files are within the agent's declared scope
   8. No `FindFirst` on claims that may be arrays (FAIL-001 — must use `FindAll`)
+  9. Every `shortcut` comment in the changed files has the valid form `shortcut(<tag>):` with a tag from PAT-032
+     (`QUAL-nnn`, `SEC-nnn`, `F<n>`, `QUAL-BF-nnn`, `pending`). Matching the agent's "Shortcuts taken" list is the
+     Orchestrator's job at Step 5b, where it registers the items; CI's docs job (check 5) rejects `pending` and
+     unregistered ids before anything reaches master.
 
 ### Constraint Validator Prompt Template
 
@@ -120,6 +124,8 @@ CHECKS:
 6. No new()/anonymous types used in JWT claim serialization — use typed classes (S6 lesson)
 7. All new/modified files fall within the agent's declared scope: [scope paths]
 8. No .FindFirst() on "scopes" claims — must use .FindAll() (FAIL-001)
+9. Every comment where `shortcut` follows a comment marker and is followed by "(" or ":" has exactly the form
+   shortcut(<tag>): with <tag> one of QUAL-nnn, SEC-nnn, F<n>, QUAL-BF-nnn, pending — lowercase, no spaces (PAT-032)
 
 OUTPUT FORMAT:
 PASS — No violations found.
@@ -246,7 +252,9 @@ the Orchestrator's. The model-routing register attributes the quality to the ins
 brief is valuable", not to the model tier — yet until 2026-09-25 it lived only in the Orchestrator's memory. It
 is now in every non-reviewer definition under `.claude/agents/` (so it applies even when this template is not
 used) and in the template below. The Orchestrator reads each "Brief contradictions" section before accepting
-output. **A contradiction is a report, not a permission.** The Orchestrator settles *factual* brief errors
+output — and, since 2026-11-08, each "Not built / not checked", "Found, not fixed" and "Shortcuts taken" section (a
+"Found, not fixed" item is triaged like any finding: fixed in-sprint, registered, or recorded in the task entry).
+**A contradiction is a report, not a permission.** The Orchestrator settles *factual* brief errors
 itself (a wrong line number, count or pointer — even in a calculation or an audit write, when the correction
 still satisfies the spec); only a contradiction that cannot be resolved without compromising an invariant,
 granting an architectural exception or changing a requirement goes to the owner, which is exactly the
@@ -256,6 +264,22 @@ distinguishes claims about the *existing* code (verify; the code wins) from clai
 behaviour (the spec wins; report, do not substitute) — without that split, the test agent would be told to
 take expected values from the code, which is precisely how a test comes to protect a bug instead of catching
 it (Codex blocker, 2026-09-25).
+
+**Why the SMALLEST COMPLETE CHANGE block exists (standing rule since 2026-11-08, a trial to S150).** It is adapted
+from the Ponytail plugin (github.com/dietrichgebert/ponytail, MIT licence; assessed 2026-11-06 and not installed):
+build no feature, option or abstraction the task does not ask for, reuse before writing, and say what was left out.
+What makes it safe here is its list of things that are **never extras** — everything an invariant, an accepted ADR,
+a KB entry, an owner ruling or a checklist demands (the outbox event, the audit row, the concurrency token,
+OK-version awareness, the RED-first test), a test for a case the change reaches, and reporting a defect met on the
+way — so "smallest" can never mean "skip the machinery". It also routes the work through scope: a caller or root
+cause outside the agent's scope is declared, never patched around. Like BRIEF CHALLENGE it lives in every
+implementer definition under `.claude/agents/` (rule-engine, backend-infrastructure, payroll-integration,
+data-model, api-integration, security, ux, test-qa; not `sweep`, which works from an exact specification, nor the
+read-only roles) and in the template below, **identical after whitespace normalisation** — the S143 roster-drift
+lesson; the hash check is recorded in PAT-032. Its COMMENTS sentence and the `shortcut(<tag>)` convention are
+[PAT-032](knowledge-base/patterns/PAT-032-comments-say-what-is-true-now-shortcuts-are-registered.md). It is
+measured in `docs/operations/model-routing-register.md` for S148–S150 and kept or reverted at S150's close
+(`ROADMAP.md` § Governance / docs).
 
 When spawning a domain agent, use this structure:
 ```
@@ -301,6 +325,32 @@ ACCEPTANCE CRITERIA:
 - [criterion 1]
 - [criterion 2]
 
+SMALLEST COMPLETE CHANGE (standing instruction, 2026-11-08; adapted from the Ponytail plugin, MIT): be
+sparing with the solution, never with the change. Do not build features, options, abstractions or
+flexibility the task does not ask for; name them under "Not built / not checked" instead. For each piece
+you do build, take the first option that fully works: (1) something this codebase already has — a helper,
+repository, component or pattern — used the way the surrounding code uses it, unless that use is itself a
+registered finding or a KB entry names a different shape (a sibling is a pointer to verify, never an
+authority); (2) the platform (.NET, PostgreSQL, React), within your definition's constraints; (3) a
+dependency already installed — never add one for a few lines; (4) otherwise, the least new code that
+works. Never extras: anything an invariant, an accepted ADR, a KB entry or owner ruling you were given, a
+checklist in your prompt, or your definition's constraints demand (for example the outbox event, the
+audit row, the concurrency token, OK-version awareness, the RED-first test); a test for a case your
+change reaches; and a defect you meet on the way, reported under "Found, not fixed" with its file:line
+even when it is outside the task. Finish the change within your scope: every caller, test and fixture it
+breaks there; declare the ones outside your scope as cross-domain needs. For a bug, find every caller
+first and fix the root cause once, in the shared code if it is in your scope; otherwise declare it, and
+do not patch around it downstream. Code you move keeps its validation and error handling. Never cut
+validation at a trust boundary, protection against data loss, security or accessibility. COMMENTS state
+what is true now and why, with the register, ADR or KB id(s) where the history lives; the history itself
+(which sprint, which review round, what the code used to do) belongs in the sprint log, the register and
+git. Rewrite an old history comment only where you are changing that code anyway. REPORT under "Not built
+/ not checked" what you chose not to build and what you could not verify yourself (e.g. a Docker-gated
+test). A limit you accept on purpose — not a bug — gets a line under "Shortcuts taken" (file:line or "no
+spot", the limit, the trigger, your severity estimate) and, where it has a spot in the code, a comment
+there, `shortcut(pending): <the limit>; upgrade when <trigger>`; the Orchestrator registers it and
+replaces `pending` (PAT-032).
+
 BRIEF CHALLENGE:
 Contradicting this brief is valuable — and a contradiction is a report, never a permission.
 (a) Claims about the EXISTING code (line numbers, counts, which function does what, "copy this
@@ -322,6 +372,8 @@ PRE-SUBMISSION CHECKLIST (MANDATORY — verify before returning output):
 - [ ] No hardcoded URLs — use configuration or relative paths
 - [ ] Changes stay within declared file scope
 - [ ] No unused imports, dead code, or leftover debugging statements
+- [ ] "Not built / not checked", "Found, not fixed" and "Shortcuts taken" sections present ("none" when empty)
+- [ ] Every accepted limit with a spot in the code carries a `shortcut(pending): …` comment and its "Shortcuts taken" line
 - [ ] [Domain-specific checks from KB entries provided above]
 Report any checklist failures in your output rather than silently ignoring them.
 ```
@@ -341,6 +393,7 @@ The Reviewer:
 - Has no file scope — it reads agent outputs and existing code context provided by the Orchestrator, but writes nothing
 - Is spawned by the Orchestrator at workflow step 5a, only when trigger criteria are met
 - Must not review its own prior advice — if a domain agent was re-dispatched based on Reviewer findings, the second pass is NOT sent back to the Reviewer for the same concern
+- **No concrete case, no BLOCKER or WARNING** (since 2026-11-08, both lenses; a trial to S150, adapted from the Ponytail plugin's review skill). In a code review the case is the input, state or order of events that produces the wrong outcome ("A reads, B revokes, A commits" counts), the exact line that crosses a boundary, or the doc sentence the code contradicts; in a plan or refinement review it is the plan sentence and the scenario it produces. A concern that cannot yet be shown that way is a NOTE marked `(unproven)` that states what evidence would prove it. Such NOTEs are always recorded and get a disposition — proved, refuted or open (`WORKFLOW.md` Steps 5a/5c) — so a hard-to-demonstrate concern (a timing window, say) is kept, not dropped
 
 ### Trigger Criteria
 
@@ -361,8 +414,8 @@ The Reviewer:
 | Severity | Meaning | Expected Orchestrator Response |
 |----------|---------|-------------------------------|
 | BLOCKER | Invariant violation or architectural breach | Strongly consider withholding approval and re-dispatching the responsible agent with the finding |
-| WARNING | Quality or simplicity concern, potential future issue | Note in sprint log; address at Orchestrator discretion |
-| NOTE | Suggestion for improvement; not blocking | Record if useful; no required action |
+| WARNING | Quality or simplicity concern, with a concrete case | Note in sprint log; address at Orchestrator discretion |
+| NOTE | Suggestion for improvement, or an `(unproven)` concern with the evidence that would prove it; not blocking | Record if useful; an `(unproven)` NOTE is always recorded and gets a disposition (`WORKFLOW.md` Step 5c) |
 
 The Reviewer NEVER uses the words "approved", "rejected", "pass", or "fail" in its output.
 
@@ -415,12 +468,19 @@ Structured findings report using severity labels: BLOCKER, WARNING, NOTE.
 Do not use "approved", "rejected", "pass", or "fail".
 If no issues found: "No findings for the reviewed scope."
 
+NO CONCRETE CASE, NO BLOCKER OR WARNING. Every BLOCKER and WARNING names a concrete case: the input,
+state or order of events that produces the wrong outcome ("A reads, B revokes, A commits" counts); or
+the exact line that crosses a boundary; or the doc sentence the code contradicts. A concern you cannot
+yet show that way is a NOTE marked "(unproven)" that states what evidence would prove it.
+
 Format:
 BLOCKER: [Title]
+In plain words: [What this is and why it matters, in terms a product manager follows]
 Invariant / Trade-off: [Architectural integrity | Domain correctness | Auditability | Integration isolation & delivery | Security | trade-off: usability/cadence | n/a]
 Location: [File and line or section]
-Finding: [What the problem is]
-Recommendation: [What the agent should do]
+Concrete case: [Input / state / order of events → the wrong outcome; or the boundary-crossing line; or the contradicted sentence]
+Fix: [What the agent should do]
+If we skip it: [The consequence, in product terms]
 
 SELF-REVIEW CONSTRAINT:
 If this is a second pass on a previously flagged concern, do NOT re-raise it.
@@ -503,10 +563,16 @@ REVIEW FOCUS:
 - **Implicit features**: Watch for plan language that encodes a security hole as a feature (e.g., "top-level wins over nested" when the downstream reads nested).
 
 OUTPUT:
-Label findings as BLOCKER, WARNING, or NOTE. For each finding:
-- The plan section / task ID being flagged
-- What is wrong or concerning
-- Recommended fix to the plan
+Label findings as BLOCKER, WARNING, or NOTE. No concrete case, no BLOCKER or WARNING: the case is the
+plan sentence and the scenario it produces (e.g. a criterion that, met literally, suppresses a
+revaluation). A concern you cannot yet show that way is a NOTE marked "(unproven)" that states what
+evidence would prove it. For each finding:
+- In plain words: what this is and why it matters, for a product manager
+- Invariant / Trade-off: the invariant or trade-off at stake, or n/a
+- Location: the plan section / task ID being flagged
+- Concrete case: the plan sentence and the scenario it produces
+- Fix: the recommended change to the plan
+- If we skip it: the consequence, in product terms
 
 If no issues found: "No findings for the reviewed plan."
 ```
@@ -609,10 +675,10 @@ Same semantics as the internal Reviewer Agent:
 | Severity | Meaning | Expected Orchestrator Response |
 |----------|---------|-------------------------------|
 | BLOCKER | Correctness, security, or architectural breach | Strongly consider withholding approval and re-dispatching the responsible agent |
-| WARNING | Quality or simplicity concern | Note in sprint log; address at Orchestrator discretion |
-| NOTE | Suggestion; not blocking | Record if useful; no required action |
+| WARNING | Quality or simplicity concern, with a concrete case | Note in sprint log; address at Orchestrator discretion |
+| NOTE | Suggestion, or an `(unproven)` concern with the evidence that would prove it; not blocking | Record if useful; an `(unproven)` NOTE is always recorded and gets a disposition (`WORKFLOW.md` Step 5c) |
 
-Codex's native output may not use these exact labels. The Orchestrator maps Codex's findings to BLOCKER/WARNING/NOTE when recording them in the sprint log.
+Codex's native output may not use these exact labels. The Orchestrator maps Codex's findings to BLOCKER/WARNING/NOTE when recording them in the sprint log. A BLOCKER or WARNING Codex reports without a concrete case is recorded as an `(unproven)` NOTE unless a case is then established (the lens's next cycle or a `trace` dispatch); the Orchestrator does not invent one.
 
 ### Scope-Creep Governance (Review Cycle Cap)
 
@@ -659,10 +725,16 @@ REVIEW FOCUS:
 [per-task: "Domain correctness of the high-risk change. Logic bugs, edge cases, spec misalignment. Do NOT re-audit architectural invariants — that is covered by the internal Reviewer Agent."]
 
 OUTPUT:
-Label findings as BLOCKER, WARNING, or NOTE. For each finding, include:
-- File and approximate location
-- What is wrong or concerning
-- Recommended action
+Label findings as BLOCKER, WARNING, or NOTE. No concrete case, no BLOCKER or WARNING: the case is the
+input, state or order of events that produces the wrong outcome, the exact line that crosses a
+boundary, or the doc sentence the code contradicts. A concern you cannot yet show that way is a NOTE
+marked "(unproven)" that states what evidence would prove it. For each finding, include:
+- In plain words: what this is and why it matters, for a product manager
+- Invariant / Trade-off: the invariant or trade-off at stake, or n/a
+- Location: file and approximate line
+- Concrete case: as above
+- Fix: the recommended action
+- If we skip it: the consequence, in product terms
 
 If no issues found: "No findings."
 ```

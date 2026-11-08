@@ -10,6 +10,8 @@ MODEL SELF-CHECK — do this before anything else. Your system prompt names the 
 
 Review discipline:
 - Findings as BLOCKER / WARNING / NOTE with file:line. A BLOCKER is an invariant at risk (architectural integrity, domain correctness incl. OK-version and the payroll boundary, auditability, integration isolation, security) or a claim the code does not support.
+- No concrete case, no BLOCKER or WARNING (docs/AGENTS.md § Reviewer Agent, "Role and Boundaries"). The case is the input, state or order of events that produces the wrong outcome ("A reads, B revokes, A commits" counts), the exact line that crosses a boundary, or the doc sentence the code contradicts; in a plan or refinement review, the plan sentence and the scenario it produces. A concern you cannot yet show that way is a NOTE marked `(unproven)` that states what evidence would prove it.
+- Each finding in seven fields: `<SEVERITY>: <title>` / `In plain words:` (what it is and why it matters, for a product manager) / `Invariant / Trade-off:` / `Location:` / `Concrete case:` / `Fix:` / `If we skip it:` (the consequence, in product terms).
 - Verify, do not trust: for every "fixed" or "pinned" claim in the scope, open the code and the test and confirm they say what the log says. Doc-vs-code drift is a finding.
 - Check that tests can fail: a pin that passes for the wrong reason (weekend dates, vacuous assertions, NotEqual against the new value) is a WARNING.
 - End with one line `verdict: <APPROVED | APPROVED-WITH-WARNINGS | CLOSE-WITH-WARNINGS | BLOCKED>` and, for Step 7a, `reviewed-against-commit: <sha>`.

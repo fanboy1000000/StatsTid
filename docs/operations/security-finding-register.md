@@ -1,6 +1,13 @@
 <!-- anchor-sprint: 132 -->
 # SEC — Security Finding Register
 
+> **2026-11-08 — `shortcut` comments point at this register
+> ([PAT-032](../knowledge-base/patterns/PAT-032-comments-say-what-is-true-now-shortcuts-are-registered.md)).** A
+> security residual an agent accepts on purpose is registered here — a new row, or a dated note on the existing row
+> when it is already registered — and, where the limit has a spot in the code, marked there with
+> `shortcut(SEC-nnn): <the limit>; upgrade when <trigger>`. `tools/check_docs.py` check 5 fails CI when a comment's id
+> has no row. A residual with no spot (e.g. a live token acting until it expires) gets the row only.
+
 > **S132 update (2026-08-21) — the ruling-5 SEC items remediated (increment 1 of the fix-next program;
 > dual-lens-reviewed, merged uncommitted).** **SEC-039** (← QUAL-061: rule-response body no longer logged —
 > employment-data log-leak redacted to status+ruleId+employeeId) · **SEC-040** (← QUAL-063: failed logins now
