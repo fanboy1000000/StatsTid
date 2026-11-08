@@ -406,8 +406,6 @@ row here naming its own file. A closed row is kept (status `closed S<n>`), never
 | ID | Path | Limit | Upgrade when | Status |
 |----|------|-------|--------------|--------|
 | QUAL-BF-001 | `tools/shortcut-evidence/plants.ts` | evidence probe 18, valid | never (evidence only) | open |
-| QUAL-BF-002 | `tools/shortcut-evidence/plants.ts` | evidence probe 12: the comment is in plants.cs | never (evidence only) | open |
-| QUAL-BF-003 | `plants.cs:6` | evidence probe 13: wrong path style | never (evidence only) | open |
 
 None yet.
 
