@@ -8,6 +8,19 @@ floor (owner-ruled)**: **Medium+** — would plausibly change behavior, block or
 or misinform a reader. Below-floor items live ONLY in the inventory appendix.
 
 
+> ## 2026-11-08 (before S148) — `shortcut` comments point at this register; one false comment fixed in passing
+> **Shortcuts ([PAT-032](../knowledge-base/patterns/PAT-032-comments-say-what-is-true-now-shortcuts-are-registered.md)).**
+> A limit an agent accepts on purpose is a `shortcut(QUAL-nnn): <the limit>; upgrade when <trigger>` comment in the
+> code, pointing at its row here; one below the Medium+ floor gets a `QUAL-BF-nnn` row in the appendix table
+> "Shortcuts below the floor". `tools/check_docs.py` check 5 fails CI when a comment's id has no row. When a row
+> closes, its comment is removed in the same change.
+> **FIXED in passing, never registered:** `ReportingLineEndpoints.cs` (the reporting-line assign path) carried a
+> nine-line history comment saying `ValidateSameOrganisationAsync` runs "(below)" when it runs just above it, every
+> true claim of which was already stated nearby; it was deleted, and the comment above the call now cites ADR-027
+> D15 (re-keyed by ADR-035 D6) instead of the superseded ADR-027 D2 (a D7-class misinforming comment, the QUAL-090
+> family). The same superseded "ADR-027 D2" cite remains on the vikar path (~`:2083`) for its next editor
+> (forward only, PAT-032).
+
 > ## S139 status (2026-09-07) — HR follow-up register + the QUAL-153 fixed clock
 > Per-fix detail in `docs/sprints/SPRINT-139.md`. **FIXED:** **QUAL-153** (a fixed test clock the PRODUCT shares —
 > shared fixture + `WithFixedToday` + a falsifiability probe; the clock SOURCE on the profile, agreement-code and
@@ -383,6 +396,17 @@ D7 **13** (below-floor stale pointers incl. the CLAUDE.md "docs job" name; judgm
 (noise/actionability/level singles; the OrgScopeValidator denial-noise class → SEC-012 note).
 Also recorded: the S74 marker without a BEGIN (folds into QUAL-014's fix); the GoLiveDate
 comment/config mismatch (quick-check owed); `SkemaEndpoints.cs:1490-1491` stale anchors (unverified). **S147 (C-1, 2026-11-04), below the floor (L):** a missing users row in the employed-month bound's handler overload (`ApprovalEndpoints.cs:93-108`; its summary, `:91`, leaves that case to the handler's downstream reads) goes on to the lock, which throws (500), as Fable's TASK-14713 review traced (`.claude/reviews/S147-TASK-14713-5a-reviewer.md:11`). Only a data fault reaches it: `approval_periods.employee_id` has no foreign key to `users` (`init.sql:902`), but no product path deletes a users row (tidy item 23d).
+
+### Shortcuts below the floor (PAT-032)
+A deliberately accepted quality limit below the Medium+ floor, one row per shortcut. The path cell is the
+repo-relative POSIX path exactly as `git ls-files` prints it, in backticks, no line number — or `no spot` for a limit
+with no place in the code. `tools/check_docs.py` check 5 requires every `shortcut(QUAL-BF-nnn)` comment to have a
+row here naming its own file. A closed row is kept (status `closed S<n>`), never deleted.
+
+| ID | Path | Limit | Upgrade when | Status |
+|----|------|-------|--------------|--------|
+
+None yet.
 
 ## Cross-register updates applied from this sweep (2026-08-19)
 SEC-022 status split (half fixed S130-incidental, verified; half open) · SEC-037 reachability annotation ·

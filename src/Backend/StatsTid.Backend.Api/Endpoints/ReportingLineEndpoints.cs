@@ -155,20 +155,11 @@ public static class ReportingLineEndpoints
                     // Step 2: validate same-tree + manager-active IN-TX, UNDER the held advisory, and
                     // PIN BOTH the employee + manager `users` rows FOR UPDATE in id-order (B1 — so
                     // neither party can be transferred between this check and the edge insert: the
-                    // cross-tree-edge race, ADR-027 D2). Sees the current committed user state, so a
-                    // concurrent R10 that deactivated the manager (committed before us) makes it read
-                    // inactive here → 400, no orphan. Returns the AUTHORITATIVE common tree root.
+                    // cross-Organisation edge race; ADR-027 D15, re-keyed by ADR-035 D6). Sees the current
+                    // committed user state, so a concurrent deactivation of the manager (committed before
+                    // us) makes it read inactive here → 400, no orphan. Returns the AUTHORITATIVE common
+                    // tree root.
                     var organisationId = await repo.ValidateSameOrganisationAsync(conn, tx, request.EmployeeId, request.ManagerId, ct);
-
-                    // S78 R9 — the S74-7403 stale-key residual is now CLOSED. The advisory key is no
-                    // longer taken from an unguarded unlocked read: AcquireTreeLockForEmployeeAsync (Step 1)
-                    // re-derives the root under the held advisory and signals a retry on drift, so the key
-                    // this transaction holds IS the employee's current tree root. ValidateSameOrganisationAsync
-                    // (below) still pins BOTH user rows FOR UPDATE in id-order and re-resolves the common
-                    // root — defence-in-depth that also rejects a cross-tree manager (the manager may be in
-                    // a different tree even with a non-stale employee key) with CrossOrganisationAssignmentException
-                    // → 400. The order stays advisory → user rows → slot (no inversion); the simultaneous-
-                    // transfer cycle window the prior pass deferred is eliminated by the drift guard.
 
                     // Step 3: reject an approver that is the employee or any descendant of the
                     // employee (would form a cycle).
