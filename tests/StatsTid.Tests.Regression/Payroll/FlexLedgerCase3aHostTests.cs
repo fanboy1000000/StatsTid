@@ -238,8 +238,11 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // Four-eyes — the record-less zero-line month runs the same in-transaction checks (fix-up 1, R-F1)
+    // Four-eyes — a self-approved month is refused at admission, before it is calculated (payroll-four-eyes, QUAL-246)
     // ═════════════════════════════════════════════════════════════════════
+    // The record-less zero-line month's path to the IN-TRANSACTION four-eyes check (TASK-14715 fix-up 1, R-F1) is pinned by
+    // PayrollFourEyesRefusalTests.ApprovalFlippedAfterAdmission_InTransactionRefusal_SameKind, row
+    // "recordless-zero-line-april" (a race: a seeded self-approved month never reaches the transaction).
 
     /// <summary>Seeds an APPROVED month whose approver is the same person who sent it (TASK-14704's seeding, as in
     /// <c>PayrollSenderSeparationHostTests</c>: submitted_by, employee_approved_by and approved_by all the same actor).</summary>
@@ -268,24 +271,30 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
     private static string FourEyesError(string json)
     {
         using var doc = JsonDocument.Parse(json);
-        Assert.Equal("payroll-export-conflict", Str(doc.RootElement, "kind"));
+        // S148 P-5: kind payroll-export-conflict -> payroll-four-eyes (payroll's own refusal kind, QUAL-246)
+        Assert.Equal("payroll-four-eyes", Str(doc.RootElement, "kind"));
         Assert.False(doc.RootElement.GetProperty("success").GetBoolean());
         var error = Str(doc.RootElement, "error")!;
-        Assert.Contains("approved by the person who sent it (four-eyes)", error);
+        // S148 P-5: "approved by the person who sent it (four-eyes)" -> the fixed sentence's own wording (both clauses share it)
+        Assert.Contains("approved by the person who sent it, or by the employee whose month it is", error);
+        Assert.Contains("(four-eyes)", error);
         return error;
     }
 
     /// <summary>
-    /// Four-eyes on a record-less pre-ledger zero-line month (kind F, Docker; TASK-14715 fix-up 1, R-F1, Fable 5a WARNING).
-    /// April has no record, no hours (zero lines) and comes before the June ledger start, but its approval was stamped by the
-    /// same person who sent it. It must meet the same refusal every other month meets: 409 <c>payroll-export-conflict</c>
-    /// whose error says the month "was approved by the person who sent it (four-eyes)", and nothing is written (no record,
-    /// no event). A tracked month in the same situation (June with no ledger yet) answers the same status, kind and
-    /// four-eyes sentence, shown by the mirror fact below; only the period id inside the sentence differs.
+    /// Four-eyes on a record-less pre-ledger zero-line month (kind F, Docker; S148 TASK-14801, QUAL-246; originally TASK-14715
+    /// fix-up 1, R-F1). April has no record, no hours (zero lines) and comes before the June ledger start, but its approval
+    /// was stamped by the same person who sent it. It meets the same refusal every other month meets, and since S148 it
+    /// meets it at ADMISSION, before the month is calculated: 409 <c>payroll-four-eyes</c> whose error carries the fixed
+    /// four-eyes sentence, and nothing is written (no record, no event). A tracked month in the same situation (June with
+    /// no ledger yet) answers the same status, kind and sentence, shown by the mirror fact below.
     ///
-    /// <para><b>Red conditions.</b> At <c>2ffbd482</c> the record-less zero-line month returned before the transaction, so it
-    /// skipped the four-eyes checkpoint and answered 200: the 409 status assertion fails (<c>expected 409, got 200</c>). A
-    /// fix that ran the checkpoint but still wrote an empty record would trip the no-record assertion.</para>
+    /// <para>Because admission refuses this seeded month first, this fact no longer reaches the in-transaction four-eyes
+    /// check that R-F1 was about. That path is pinned by <c>PayrollFourEyesRefusalTests.ApprovalFlippedAfterAdmission_
+    /// InTransactionRefusal_SameKind</c>, row "recordless-zero-line-april", which races the approval row after admission.</para>
+    ///
+    /// <para><b>Red conditions.</b> The kind and sentence assertions (<c>FourEyesError</c>) fail on the parent of TASK-14801,
+    /// which answers 409 <c>payroll-export-conflict</c> with the old sentence after calculating the month.</para>
     /// </summary>
     [Fact]
     public async Task Case3a_ZeroLines_SelfApprovedMonth_Returns409FourEyes_NothingWritten()
@@ -307,12 +316,14 @@ public sealed class FlexLedgerCase3aHostTests : IClassFixture<FlexLedgerHostFixt
     }
 
     /// <summary>
-    /// Four-eyes mirror on a normal tracked month (kind R, "regression pin — holds today"). June with NO ledger yet (so it is
-    /// the ledger start, tracked), self-approved: the same 409, kind and four-eyes sentence as the pre-ledger zero-line
-    /// month, and nothing written. It shows that the record-less zero-line month is refused exactly as a normal month is.
+    /// Four-eyes mirror on a normal tracked month (kind F, Docker; S148 TASK-14801, QUAL-246). June with NO ledger yet (so it
+    /// is the ledger start, tracked), self-approved: the same 409, kind <c>payroll-four-eyes</c> and four-eyes sentence as the
+    /// pre-ledger zero-line month, refused at admission, and nothing written. It shows that the record-less zero-line month
+    /// is refused exactly as a normal month is.
     ///
-    /// <para><b>Red conditions.</b> Holds today and must keep holding: a calculating export that skipped the four-eyes
-    /// check would answer 200 and fail the status assertion.</para>
+    /// <para><b>Red conditions.</b> The kind and sentence assertions (<c>FourEyesError</c>) fail on the parent of TASK-14801
+    /// (409 <c>payroll-export-conflict</c>, the old sentence). A path that skipped the check would answer 200 and fail the
+    /// status assertion.</para>
     /// </summary>
     [Fact]
     public async Task TrackedMonth_SelfApproved_Returns409FourEyes_NothingWritten()
