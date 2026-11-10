@@ -280,6 +280,13 @@ export function ProfileEditor({
         </div>
       </Card>
 
+      <div data-testid="stage0-label">
+        <Alert variant="info">
+          <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
+          endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
+        </Alert>
+      </div>
+
       {staleConflict && (
         <Alert variant="warning">
           Din redigering var baseret paa en forældet tilstand. Profilen er blevet opdateret

@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { usePositionOverrides, type PositionOverrideConfig, type WithEtag } from '../../hooks/usePositionOverrides'
-import { Spinner } from '../../components/ui'
+import { Alert, Spinner } from '../../components/ui'
 import styles from './PositionOverrideManagement.module.css'
 
 interface CreateForm {
@@ -163,6 +163,13 @@ export function PositionOverrideManagement() {
         >
           {showCreate ? 'Annuller' : 'Opret ny'}
         </button>
+      </div>
+
+      <div data-testid="stage0-label">
+        <Alert variant="info">
+          <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
+          endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
+        </Alert>
       </div>
 
       {staleConflict && (

@@ -5,7 +5,7 @@ import { formatVersionAsIfMatch, resolveEtag } from '../../lib/etag'
 import { useAgreementConfigActions, isConfigMutationError } from '../../hooks/useAgreementConfigs'
 import type { AgreementConfig } from '../../hooks/useAgreementConfigs'
 import { EntitlementSection, type Entitlement } from '../../components/admin/EntitlementSection'
-import { Spinner } from '../../components/ui'
+import { Alert, Spinner } from '../../components/ui'
 import styles from './AgreementConfigEditor.module.css'
 
 // S118 / TASK-11801 (PAT-012) — the by-id GET rides the TYPED spec-keyed form;
@@ -369,6 +369,13 @@ export function AgreementConfigEditor() {
             Tilbage
           </button>
         </div>
+      </div>
+
+      <div data-testid="stage0-label">
+        <Alert variant="info">
+          <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
+          endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
+        </Alert>
       </div>
 
       {staleConflict && (
