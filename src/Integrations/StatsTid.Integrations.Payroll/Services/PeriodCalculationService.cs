@@ -3063,7 +3063,7 @@ public sealed class PeriodCalculationService
     /// window mirrors ComplianceEndpoints' widened read). Example: October 2026 starts on a
     /// Thursday, its opening week starts Monday 28 September, so the read starts Sunday 27 September.
     /// </summary>
-    private static DateOnly HoursReadStart(DateOnly periodStart) =>
+    internal static DateOnly HoursReadStart(DateOnly periodStart) =>
         WeeklyContext.WeekStart(periodStart).AddDays(-1);
 
     /// <summary>

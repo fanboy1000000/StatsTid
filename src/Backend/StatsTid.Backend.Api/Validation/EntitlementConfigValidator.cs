@@ -10,9 +10,8 @@ namespace StatsTid.Backend.Api.Validation;
 /// a 422 says "this value is in range but breaks a domain rule".
 ///
 /// Bounds are non-negativity + domain sets ONLY — no invented upper ceilings (owner ruling,
-/// SEC-033: fat-finger ceilings are a deferred follow-up needing agreement-truth). Mirrors the
-/// shared-validator pattern of <see cref="RequestValidator"/> so it is unit-testable without a
-/// database container.
+/// SEC-033: fat-finger ceilings are a deferred follow-up needing agreement-truth). A static, pure
+/// validator so it is unit-testable without a database container.
 /// </summary>
 public static class EntitlementConfigValidator
 {
