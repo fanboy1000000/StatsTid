@@ -165,6 +165,11 @@ export function PositionOverrideManagement() {
         </button>
       </div>
 
+      <p className={styles.stage0Label} data-testid="stage0-label" role="note">
+        <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
+        endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
+      </p>
+
       {staleConflict && (
         <div className={styles.alert} role="alert" data-testid="stale-conflict-banner">
           Din handling var baseret paa en foraeldet tilstand. Listen er blevet opdateret siden.
