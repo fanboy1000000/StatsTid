@@ -645,20 +645,28 @@ public sealed class ApprovalPeriodRepository
     /// <param name="treeRootPathPrefix">The tree-root org's <c>materialized_path</c> (e.g.
     /// <c>/MIN01/STY02/</c>). Employees are scoped via <c>organizations.materialized_path LIKE
     /// prefix || '%'</c> — the same path-prefix idiom as <see cref="GetPendingByOrgPathAsync"/>.</param>
-    public async Task<TreePeriodStatusProjection> GetPeriodStatusProjectionForTreeAsync(
+    public Task<TreePeriodStatusProjection> GetPeriodStatusProjectionForTreeAsync(
         string treeRootPathPrefix, CancellationToken ct = default)
+        => GetPeriodStatusProjectionForTreeAsync(
+            treeRootPathPrefix, CopenhagenBusinessDate.Today(_timeProvider), ct);
+
+    /// <summary>The projection at a Copenhagen business day the caller has already read, so a caller
+    /// that composes it into a larger response (<see cref="GetMedarbejderRosterForTreeAsync"/>)
+    /// describes one day end to end (PAT-028).</summary>
+    private async Task<TreePeriodStatusProjection> GetPeriodStatusProjectionForTreeAsync(
+        string treeRootPathPrefix, DateOnly today, CancellationToken ct)
     {
-        // ONE date for BOTH phases (PAT-028: one operation, one date — compute it once at the top,
-        // pass it everywhere). Phase (1)'s "already ended" SQL cut-off and phase (2)'s vikar-aware
-        // approver resolution are two halves of ONE response, so they must describe the same
-        // effective date. Read separately they would not: a projection spanning the day boundary
+        // ONE date for BOTH phases (PAT-028: one operation, one date — read it once, at the top of the
+        // request, and pass it everywhere). Phase (1)'s "already ended" SQL cut-off and phase (2)'s
+        // vikar-aware approver resolution are two halves of ONE response, so they must describe the
+        // same effective date. Read separately they would not: a projection spanning the day boundary
         // could badge the employees against the 7th and count the manager tiles against the 8th, and
         // no instant in time would explain the page — the same skew the RepeatableRead snapshot below
         // exists to close on the DATA side, closed here on the DATE side.
         //
-        // S142 / TASK-14203 — the boundary that matters is COPENHAGEN midnight, not UTC midnight
-        // (which is what this comment used to name). Both phases derive the Danish calendar day.
-        var today = CopenhagenBusinessDate.Today(_timeProvider);
+        // S142 / TASK-14203 — the boundary that matters is COPENHAGEN midnight, not UTC midnight.
+        // `today` is the Danish calendar day: the public overload reads it from the injected clock,
+        // the roster passes the one it read for its own rows.
 
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
@@ -1055,12 +1063,14 @@ public sealed class ApprovalPeriodRepository
     /// <para>
     /// <b>R3 — the root/orphan classification (HRP-013), from <see cref="ApproverCoverage"/>, the one
     /// predicate HR's cross-organisation roll-up uses too:</b> a person the approval walk names nobody
-    /// for today is an <c>isRoot</c> when another roster person's open PRIMARY line names them (a
-    /// people-hierarchy top), else an <c>isOrphan</c> (no designated approver for their month). A person
-    /// the walk names someone for is neither, so a manager who has left stops counting as cover from the
-    /// day after their last day. <c>structuralApproverId</c> stays the raw edge: it is the tree's key, not
-    /// the cover. Multiple roots may co-exist in messy/Phase-1 trees (the ADR-027 D9 ≤1-root invariant is
-    /// a Phase-4 enforcement concern, not enforced here).
+    /// for today is an <c>isRoot</c> when they hold no open PRIMARY line of their own and another roster
+    /// person's open PRIMARY line names them (a people-hierarchy top, ADR-027 D9), else an
+    /// <c>isOrphan</c> (no designated approver for their month, which includes a manager whose own
+    /// manager has left with nobody usable above). A person the walk names someone for is neither, so a
+    /// manager who has left stops counting as cover from the day after their last day.
+    /// <c>structuralApproverId</c> stays the raw edge: it is the tree's key, not the cover. Multiple roots
+    /// may co-exist in messy/Phase-1 trees (the ADR-027 D9 ≤1-root invariant is a Phase-4 enforcement
+    /// concern, not enforced here).
     /// </para>
     ///
     /// <para>Read-only / additive — touches no write path and emits no events.</para>
@@ -1231,7 +1241,9 @@ public sealed class ApprovalPeriodRepository
         //     scope + same last-closed-month rule). S106 / TASK-10604: that tally now expands to the
         //     per-authorized-approver cardinality (edge manager + each unit-leader / their vikar) — the
         //     roster reuses it unchanged, so the medarbejder-page tiles shift accordingly (intended).
-        var statusProjection = await GetPeriodStatusProjectionForTreeAsync(treeRootPathPrefix, ct);
+        //     The roster's one `today` (PAT-028), so the badges, tiles and root/orphan flags describe
+        //     the same day across Copenhagen midnight.
+        var statusProjection = await GetPeriodStatusProjectionForTreeAsync(treeRootPathPrefix, today, ct);
         var statusByEmployee = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var e in statusProjection.Employees)
             statusByEmployee[e.EmployeeId] = e.Status;
@@ -1275,7 +1287,7 @@ public sealed class ApprovalPeriodRepository
             foreach (var leaderId in r.LeaderIds)
                 referencedIds.Add(leaderId);
         }
-        var nameResolution = await ResolvePersonRefsByIdAsync(referencedIds, ct);
+        var nameResolution = await ResolvePersonRefsByIdAsync(referencedIds, today, ct);
 
         return new MedarbejderRosterProjection(
             employees,
@@ -1301,8 +1313,9 @@ public sealed class ApprovalPeriodRepository
     /// reader will act on. Same LATERAL … LIMIT 1 shape and same reasoning as the roster query.
     /// </para>
     /// </summary>
+    /// <param name="today">The roster's Copenhagen business day, read once per request (PAT-028).</param>
     private async Task<IReadOnlyDictionary<string, ResolvedPersonRef>> ResolvePersonRefsByIdAsync(
-        IReadOnlyCollection<string> ids, CancellationToken ct)
+        IReadOnlyCollection<string> ids, DateOnly today, CancellationToken ct)
     {
         var result = new Dictionary<string, ResolvedPersonRef>(StringComparer.Ordinal);
         if (ids.Count == 0)
@@ -1346,8 +1359,8 @@ public sealed class ApprovalPeriodRepository
         // (Deliberately paraphrased rather than naming the spliced constant: ScheduledChangeMarkerTests
         // counts that identifier's occurrences in this file as a source-level "no fourth copy" guard,
         // and a mention in prose is indistinguishable from a fourth splice to a text count.)
-        cmd.Parameters.AddWithValue(
-            "today", CopenhagenBusinessDate.Today(_timeProvider));
+        // The roster's one date, passed in (PAT-028), not a second clock read.
+        cmd.Parameters.AddWithValue("today", today);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         var idOrd = reader.GetOrdinal("user_id");

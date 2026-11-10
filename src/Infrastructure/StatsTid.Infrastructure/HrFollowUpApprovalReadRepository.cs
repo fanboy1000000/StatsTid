@@ -22,8 +22,8 @@ namespace StatsTid.Infrastructure;
 //                                   counted SEPARATELY from approver late (sent, past +5)
 //   HRP-011  leaver's final month — the month containing an employment end date, not approved
 //   HRP-022  approved not exported— an approved month with no payroll export record
-//   HRP-013  orphan employees     — the approval walk names nobody for them today, and nobody in
-//                                   scope reports to them (cross-organisation roll-up)
+//   HRP-013  orphan employees     — the approval walk names nobody for them today, and they are not
+//                                   a hierarchy root (cross-organisation roll-up)
 //   HRP-014  expired delegations  — a stand-in (vikar) the expiry sweep closed in the last 30 days
 //   HRP-015  cannot register      — employed today but no record covers today. S141 / TASK-14105
 //                                   (refinement B8) widened this from the agreement-code hole alone
@@ -152,9 +152,10 @@ public sealed record HrApprovalMonthItem(
     DateOnly? FirstHrOnlyDay);
 
 /// <summary>
-/// One orphan employee (HRP-013) — the approval walk names nobody for them today and nobody in scope
-/// reports to them (<see cref="ApproverCoverageKind.Orphan"/>), so no designated approver can approve
-/// their month. Carries no age anchor: there is no date on which an employee "became" an orphan, and
+/// One orphan employee (HRP-013) — the approval walk names nobody for them today and they are not a
+/// root (<see cref="ApproverCoverageKind.Orphan"/>): nobody in scope reports to them, or they hold a
+/// PRIMARY line of their own whose chain names nobody. No designated approver can approve their month.
+/// Carries no age anchor: there is no date on which an employee "became" an orphan, and
 /// the process has no ratified deadline (register row HRP-013 is NOT READY), so nothing here may be
 /// aged or coloured.
 /// </summary>
@@ -411,10 +412,10 @@ public sealed class HrFollowUpApprovalReadRepository
     /// classifies them with <see cref="ApproverCoverage"/>, the one predicate the per-organisation
     /// roster card uses too, so the roll-up and the card agree by construction (PAT-030).
     ///
-    /// <para>"Is nobody's approver" is judged over this SAME in-scope population, which is sound
-    /// because approval authority is same-Organisation bounded (the flat-authority model): if a
-    /// person approves anyone, that person's reports live in their own Organisation, which is in
-    /// scope whenever they are. <c>is_active = TRUE</c> matches the roster read's population.</para>
+    /// <para>"Someone reports to them" (the root test) is judged over this SAME in-scope population,
+    /// which is sound because approval authority is same-Organisation bounded (the flat-authority
+    /// model): if a person approves anyone, that person's reports live in their own Organisation,
+    /// which is in scope whenever they are. <c>is_active = TRUE</c> matches the roster read's population.</para>
     /// </summary>
     private const string SelectOrphanPopulationSql =
         """

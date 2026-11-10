@@ -11,12 +11,14 @@ public enum ApproverCoverageKind
     /// <summary>The approval walk names someone for the day.</summary>
     Covered,
 
-    /// <summary>The walk names nobody, and another person in the read reports to them on an open
-    /// PRIMARY line: the top of a people hierarchy, which by design has no approver (ADR-027 D9).</summary>
+    /// <summary>The walk names nobody, they hold no open PRIMARY line of their own, and another person in
+    /// the read reports to them on one: the top of a people hierarchy, which by design has no approver
+    /// (ADR-027 D9's root).</summary>
     Root,
 
-    /// <summary>The walk names nobody, and nobody in the read reports to them: no designated approver
-    /// exists for their month.</summary>
+    /// <summary>The walk names nobody and they are not a root: nobody in the read reports to them, or
+    /// they hold an open PRIMARY line of their own whose chain names nobody (a manager whose own
+    /// manager has left with nobody usable above). No designated approver exists for their month.</summary>
     Orphan,
 }
 
@@ -39,14 +41,19 @@ public enum ApproverCoverageKind
 /// named person to hold a leader role in the same Organisation, and a unit leader may approve where
 /// the walk names nobody (<see cref="DesignatedApproverAuthorizer"/>); this read does not apply either.</para>
 ///
-/// <para><b>"Someone's approver"</b> (R-19) means another member of <paramref name="population"/>
-/// reports to them on an open PRIMARY line. A line from a person to themselves does not count. This is
-/// the reading both surfaces used before "covered" came from the walk, kept because being a root is a
-/// fact about the hierarchy, not about today's routing. Under "the walk names them for someone", a
-/// director who appoints a stand-in for a holiday, or who leaves with nobody above, would turn from root
-/// into orphan, and a stand-in with no approver of her own would drop off the list. Under "holds any
-/// open PRIMARY line", lines from people outside the read would count too (a switched-off leaver's line
-/// stays open), and finding them needs a read beyond the prefetch below.</para>
+/// <para><b>Root</b> (R-19) is ADR-027 D9's literal root: the walk names nobody, the person holds no
+/// open PRIMARY line of their own, and another member of <paramref name="population"/> reports to them
+/// on an open PRIMARY line. Every other uncovered person is an orphan. Requiring no line of one's own is
+/// what keeps a middle manager on the list when the manager above them leaves with nobody usable above:
+/// their own line still points at the departed manager (switching that manager off does not close it),
+/// so they are not a top by design, and no designated approver exists for their month however many
+/// people report to them. Being a root stays a fact about the hierarchy, not about today's routing: a
+/// director who appoints a stand-in for a holiday, or who leaves with nobody above, is still a root, and
+/// a stand-in with no line of her own stays an orphan. "Reports to them" counts only lines from people
+/// in the read, so a switched-off leaver's still-open line makes nobody a root. A line from a person
+/// to themselves is not counted either; the <c>reporting_lines</c> CHECK
+/// (<c>employee_id &lt;&gt; manager_id</c>, <c>init.sql</c>) makes such a line impossible, so that
+/// clause is defensive only.</para>
 ///
 /// <para><b>Cost.</b> For each path prefix, the walk's inputs are prefetched in three set-based reads
 /// (<see cref="PrefetchedReportingLineDataSource"/>). The sources are chained, so an id outside one
@@ -80,6 +87,7 @@ public static class ApproverCoverage
 
         var covered = new HashSet<string>(StringComparer.Ordinal);
         var someonesApprover = new HashSet<string>(StringComparer.Ordinal);
+        var holdsPrimaryLine = new HashSet<string>(StringComparer.Ordinal);
         foreach (var employeeId in population)
         {
             var (approverId, _, _) = await resolver.ResolveDesignatedApproverAsync(source, employeeId, today, ct);
@@ -87,7 +95,11 @@ public static class ApproverCoverage
                 covered.Add(employeeId);
 
             var primaryLine = await source.GetActiveLineAsync(employeeId, "PRIMARY", ct);
-            if (primaryLine is not null && !string.Equals(primaryLine.ManagerId, employeeId, StringComparison.Ordinal))
+            if (primaryLine is null)
+                continue;
+            holdsPrimaryLine.Add(employeeId);
+            // Defensive only: init.sql's CHECK (employee_id <> manager_id) rules out a line to oneself.
+            if (!string.Equals(primaryLine.ManagerId, employeeId, StringComparison.Ordinal))
                 someonesApprover.Add(primaryLine.ManagerId);
         }
 
@@ -95,7 +107,8 @@ public static class ApproverCoverage
         foreach (var employeeId in population)
         {
             result[employeeId] = covered.Contains(employeeId) ? ApproverCoverageKind.Covered
-                : someonesApprover.Contains(employeeId) ? ApproverCoverageKind.Root
+                : someonesApprover.Contains(employeeId) && !holdsPrimaryLine.Contains(employeeId)
+                    ? ApproverCoverageKind.Root
                 : ApproverCoverageKind.Orphan;
         }
         return result;
