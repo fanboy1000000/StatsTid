@@ -1784,11 +1784,18 @@ public static class SkemaEndpoints
             //     zero-norm day), compared through RoundBasis like both caps, so an exact rounded full
             //     day stays bookable. A null basis (no dated profile covers the day) is not bounded,
             //     as both caps skip it.
-            // Why at the save rather than in payroll: the employee is told at once and can correct
-            // the day, and no engine arithmetic changes (ADR-043 D2). It runs twice. Here, after every
-            // other pre-transaction refusal, as the cheap advisory 422 on unlocked reads: a request
-            // refused today keeps today's answer, and on a date both refuse the all-types cap answers
-            // first. Then AUTHORITATIVELY inside the per-employee lock, before any write, where two
+            // Why at the save rather than in payroll: the employee is told at once, before anything is
+            // saved, and no engine arithmetic changes (ADR-043 D2). A wrong cell can be changed but
+            // never emptied, and a full-day-only care or senior day cannot even be lowered:
+            // shortcut(pending): an absence or project cell cannot be cleared (SPRINT-72 R17), so a mistaken full-day absence blocks work on that day; upgrade when cell clearing ships
+            // It runs twice. Here, after every other pre-transaction refusal, as the cheap advisory
+            // 422 on unlocked reads: every refusal decided before the transaction keeps today's
+            // answer, and on a date both refuse the all-types cap answers first. Two refusals decided
+            // only inside the lock do not take precedence over the bound: the employment-window gate
+            // and the authoritative quota guard. That is chosen, as for the month lock at the
+            // employment-window gate's comment in the transaction below: all of them refuse
+            // fail-closed, nothing is written either way, and the bound's body carries no employment
+            // date. Then AUTHORITATIVELY inside the per-employee lock, before any write, where two
             // concurrent saves can no longer each judge the day without the other. The refusal keeps
             // the all-types cap's error string and shape, so the grid still shows its absence alert,
             // and adds kind = "paid-absence-day-bound", plannedHours and workedHours; its date is the
@@ -2290,7 +2297,8 @@ public static class SkemaEndpoints
                     // to a day holding paid absence) is judged too; after B1-B3, so on a date both
                     // refuse the all-types cap answers first. Planned reuses the basis the authoritative
                     // consumption read under this lock. A breach throws, the catch below rolls the
-                    // whole save back, and the answer is the advisory check's 422 body.
+                    // whole save back, and the answer is the advisory check's 422 body. The bound is
+                    // judged before the writes, so it answers before the quota guard that runs with them.
                     var lockedBoundBreach = await FindPaidAbsenceDayBoundBreachAsync(
                         conn, tx, authoritativeConsumption);
                     if (lockedBoundBreach is not null)
@@ -2547,10 +2555,14 @@ public static class SkemaEndpoints
             }
             catch (SkemaConsumptionValidationException ex)
             {
-                // S66 / TASK-6603 FIX-FORWARD — in-lock D2/D3 re-check failure (B1 profile-missing /
-                // B2 norm cap) after a racing profile-PUT. The throw site already shaped the body to
-                // match its pre-tx sibling guard byte-for-byte; surface it unchanged so the racing-save
-                // loser gets a clean validation 422 (never a 500) and the frontend contract holds.
+                // One of the four in-lock re-checks refused the save before any write, and the inner
+                // catch has rolled the transaction back: B1 (employment profile missing), B2 (the
+                // all-types cap) or B3 (full-day-only), each re-run because a profile change can race
+                // the save (ADR-032 D2/D3); or the paid-absence day bound (ADR-043 D2), refused mostly
+                // because another save of the same employee committed while this one waited for the
+                // lock. The throw site already shaped the body to match its pre-tx sibling
+                // byte-for-byte; surface it unchanged so the race loser gets a clean validation 422
+                // (never a 500) and the frontend contract holds.
                 return Results.Json(ex.Body, statusCode: 422);
             }
 
