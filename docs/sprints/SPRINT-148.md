@@ -344,3 +344,196 @@ The alternative, a care day covering "the rest of the day", was not chosen for S
 4. B9's merge order applies to TASK-14804 itself, not only to its test pass.
 
 One fact corrected along the way: A9's `cref` premise does not hold. No project sets `GenerateDocumentationFile`, so the compiler does not check doc-comment references, and the deleted validator leaves only a dangling comment.
+
+**Dispatched 2026-11-10** from local master `a03d61ae`, each in its own worktree: TASK-14801, 14804, 14806 and 14807. TASK-14805 and 14808 wait for a free slot, so that too many builds do not run at once on this machine. 14802 → 14803 follow 14801's merge.
+
+**TASK-14801** (`payroll-integration`, Opus).
+- **Returned** on `worktree-agent-a926cc928b39a3fab` at tip `e7fcb023`, with one commit changing two files (`Program.cs`, `PayrollExportService.cs`). Report: `.claude/reviews/S148-TASK-14801-report.md`.
+- **What it does:** payroll now checks "the approver is the sender" and "the approver is the employee" right after reading the month's approval, before calculating. It answers its own 409 `payroll-four-eyes`, and writes nothing. The in-transaction re-check gives the same answer, and both sites call one rule, `PayrollFourEyesException.FailedClause`.
+- **Agent's gate:** build 0 errors / 144 warnings / CA2100 114; Unit 1722, DemoSeed 170, Regression non-Docker 140.
+- **Expected Docker reds, which 14801-T re-pins:**
+  - `FlexLedgerCase3aHostTests` `:291` and `:318` (the kind);
+  - `PayrollSenderSeparationHostTests` `:96`, `:114` and `:132` (the exception type).
+- **Declared deviation, accepted by the Orchestrator:** the in-transaction query reads `employee_approved_by` and `submitted_by` raw rather than a SQL `COALESCE`. This keeps the sender rule in one C# home, as RES-003 asks, instead of a SQL-to-C# mirror. No other task owns those lines (14831 owns `:262-286`).
+- **Found, not fixed:** `PriorMonthNotApprovedException.cs:35-39` says "Nothing was calculated, written or exported". The export-time re-check uses the same body after the manifest has already been written. It is Low severity and outside 14801's files, so it goes to the register at close.
+- **Docs owed:** ADR-034's line citations into the payroll host have shifted; QUAL-246's row (O-3).
+- **TASK-14801-T dispatched** on `e7fcb023` (`test-qa`).
+- **TASK-14805 dispatched** (`backend-infrastructure`), when a slot freed.
+
+**TASK-14807** (`ux`).
+- **Returned** on `worktree-agent-a0a2101a4c01b8608`, tip `e1673e46`, changing 4 files. The notice is identical on the agreement editor, `ProfileEditor.tsx` and the position-override page: "**Bemærk:** Indstillingerne her påvirker skærmbilleder og booking, men endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier." AC-S0-8a adds 5 vitest facts, all red with the pages reverted. The five frontend checks exit 0.
+- **5α:** PASS (`.claude/reviews/S148-TASK-14807-5alpha.md`).
+- **5a (Fable 5.2):** APPROVED-WITH-WARNINGS, 0 B / 2 W / 4 N (`.claude/reviews/S148-TASK-14807-5a-reviewer.md`). Both warnings were accepted as a fix-up by the same agent.
+  - **W-1:** `Alert` is `role="alert"`, so screen readers announce the notice as an interruption, again after every save. It becomes a plain static note.
+  - **W-2:** the test matched only "endnu ikke", so the pay clause could vanish with a green suite. The fix-up asserts the three clauses in order, plus a fact that the element is not a live region.
+  - **NOTE (unproven), carried to wave 5:** payroll reads a local profile's activation date to split a period (`PeriodCalculationService.cs:2286`). If a split alone can change a pay line, then "not yet pay" is not strictly true for the profile editor.
+
+**TASK-14804** (`backend-infrastructure`).
+- **Returned** on `worktree-agent-a7b9324ca7deb4f36`, tip `cf0d4aef`, changing 2 files: `SkemaEndpoints.cs` +188, and `SkemaConsumptionValidationException.cs`, whose summary comment now names its four failure modes. Report: `.claude/reviews/S148-TASK-14804-report.md`.
+- **What it does:** one function checks the bound at two insertion points: an advisory check before the transaction, after every existing refusal, and an authoritative check inside the per-employee lock, before any write. Today's cap answers first on a day both would refuse. The body is `kind: "paid-absence-day-bound"`, with `plannedHours` and `workedHours`.
+- **Agent's gate:** build 0 errors / 144 warnings / CA2100 114; Unit 1722, DemoSeed 170, Regression non-Docker 140.
+- **Expected Docker reds:** `Adr032ConsumptionPinTests.cs:240` (a weekend sick day) and `SkemaFullDayOnlyGuardTests.cs:414` (owner Q1). Both are intentional; 14804-T re-pins them. AC7d now fails by timeout, because the bound refuses its save before it queues on the lock; 14804-T repairs the fixture.
+- **Shortcut (PAT-032), registered at merge:** the bound reads the § 7 nr. 2 per-day norm, not the configured credit basis (`SkemaEndpoints.cs:1868-1870`). Upgrade when stage 1 serves the one planned-hours figure.
+- **Found, not fixed:**
+  - A day with no dated profile has no limit at all (ruled B3).
+  - **A day can be locked with no way out in Skema.** An absence cell cannot be cleared, because hours must be above 0 (SPRINT-72 R17). So an employee who recorded a sick day by mistake, and actually worked, can no longer add the work. A day stored over the bound before this change refuses every later save that touches it. This goes to the 5a lenses for verification before anything is put to the owner.
+  - Two stale comments (`:2550-2553`, `:2137-2138`) join the comment sweep.
+- **TASK-14804-T dispatched** on `cf0d4aef`.
+
+**TASK-14801-T** (`test-qa`).
+- **Returned** on `worktree-agent-ab79b8abde8c799bf`, tip `11172d86`, on top of `e7fcb023`. It changes three test files.
+  - New `PayrollFourEyesRefusalTests`, two theories, kind F:
+    - AC-12b-a: admission refusal, rows "sender" and "employee", including that the rule engine is never called and no manifest is written;
+    - AC-12b-b: the in-transaction race, rows "tracked June" and "record-less zero-line April" (ruling A3). It is forced by a `FOR UPDATE` holder and a `pg_stat_activity` condition wait.
+  - Five facts re-pinned to the new kind and type, each labelled `// S148 P-5:`.
+- **Gate:** build 0 errors / 144 warnings; Unit 1722, DemoSeed 170, Regression non-Docker 140. Report: `.claude/reviews/S148-TASK-14801-T-report.md`.
+
+**TASK-14801 + -T, reviewed and merged.**
+- **5α:** PASS (`S148-TASK-14801-5alpha.md`).
+- **5a (Fable 5.2):** APPROVED, 0 B / 0 W / 5 N (`S148-TASK-14801-5a-reviewer.md`). No path pays a self-approved month through `/calculate-and-export`. `??` and the old `COALESCE` agree for every row. The race cannot pass without racing. The notes, none promoted:
+  - `FailedClause` has no Docker-free pin;
+  - an empty-string `employee_approved_by` would hide a legacy sender. This is `(unproven)`, pre-existing, and the same in the Backend's guard;
+  - the HTTP race covers the sender clause only;
+  - the race's wait filter is not row-specific (safe: own container, sequential rows);
+  - docs owed.
+- **5a (Codex):** APPROVED, 0 B / 0 W / 1 N (`S148-TASK-14801-5a-codex.md`; Docker still pending).
+- **Merged** to local master as `c18d525b`. **GATE** green: build 0 errors, 144 warnings, CA2100 114; Unit 1722, DemoSeed 170, Regression non-Docker 140.
+- **Docs owed at close:**
+  - QUAL-246 closes (O-3);
+  - ADR-034's line citations into the payroll host;
+  - register the `PriorMonthNotApprovedException.cs:35-39` sentence (Low).
+- **TASK-14802 dispatched next**, from `c18d525b`.
+
+**TASK-14807 fix-up** `fb90143f`.
+- The notice is now a static `<p role="note">` on all three pages, styled from the info tokens. The two `Alert` imports were removed.
+- The test asserts the three clauses in order, and that the element is not a live region. Each mutation turned 2 facts red.
+- The five frontend checks exit 0, read unpiped (vitest 85 files / 1094 tests).
+- **5α on the fix-up:** PASS (`S148-TASK-14807-5alpha-c2.md`). Spacing is raw px, matching each file's own neighbouring rules; colours are tokens.
+- **Unrelated flake** on a first vitest run: `OpfoelgningPage.test.tsx`, "OPEN state … at a 'November' anchor", got '0' for '1'. It passed alone and on a full rerun; it may depend on the date. It is recorded for the Fable verification.
+
+**TASK-14804-T** (`test-qa`).
+- **Returned** on `worktree-agent-a54f2710ce52466ec`, tip `c01758bd`, on top of `cf0d4aef`.
+- **AC-S0-7a … 7e:** five new Docker facts, every refusal asserting `kind`. AC-S0-7e is F, a pg_locks-ordered race on Friday 12 June 2026.
+- **Re-pins:**
+  - `Guard_WeekendSickDay_Allowed_LegacyBehavior` → `…_Rejected422_PaidAbsenceDayBound`;
+  - `FullDayPlusSameDayWorkHours_Allowed200` → `…_Refused422` (owner Q1);
+  - the AC7d fixture moved to Saturday 14 March 2026, so the work save reaches the lock.
+- **Gate:** build 0 errors / 143 warnings / CA2100 114; Unit 1722, DemoSeed 170, Regression non-Docker 140.
+- **Flagged for the Orchestrator:** `Adr032ConsumptionPinTests.cs:283` and `SkemaFullDayOnlyGuardTests.cs:393` assert only `error` and `maxHours`, so they would pass if the bound answered instead of the cap.
+- **5α:** PASS (`S148-TASK-14804-5alpha.md`). The two 5a lenses are running; both were asked to verify the "a day can be locked" finding.
+
+**TASK-14805** (`backend-infrastructure`).
+- **Returned** on `worktree-agent-a65134109752c498f`, tip `aede6e63`, a single file: `OvertimeEndpoints.cs` +20 / −10.
+- **What it does:** compensate reads the guarded update's `Success`; on false it rolls back and answers 409 before the enqueue. The 200 path is byte-identical. The stale clause at `:563` was rewritten (ADR-043 D8, stage 2).
+- **Gate:** build 0 errors / 144 / 114; Unit 1722, DemoSeed 170, Regression non-Docker 140. No existing fact expected red. Report: `.claude/reviews/S148-TASK-14805-report.md`.
+- **Found, not fixed, to register at close:**
+  - F-1 (M): the compensation-choice PUT reads the balance and writes all three figures back non-atomically, so a compensation committed in between is overwritten. It is unreachable today and retires in stage 2.
+  - F-2 (M): the same PUT records no event and runs outside the outbox, although the model matters for pay. It is reachable today.
+  - F-3: QUAL-239's citations and the audit catalog's `:170` label.
+- **TASK-14805-T dispatched** on `aede6e63`.
+
+**TASK-14806** (`backend-infrastructure`).
+- **Returned** on `worktree-agent-ab037c8fc8947599f`, tip `5c76266f`. It adds a new `ApproverCoverage.cs` with one predicate behind both the roster card and the HR roll-up, and passes `today` at `:207` (C1). Report: `.claude/reviews/S148-TASK-14806-report.md`.
+- **R-19 reading (i):** "someone's approver" means another member reports to them on an open PRIMARY line. No stand-in drops off the list, so C2 has nothing to bring back.
+- **Cost:** the card's Org1 count is now 5, exactly at the guard's ≤ 5 bound (CI-pending).
+- **Requirement-level gap, to the adjudicator:** "shape F". The top manager G departs with nobody above, M reports to G, and R reports to M. M is uncovered, but under every reading M counts as "someone's approver", so M is classed Root and stays off the orphan list. Nobody is named to approve M's month. This is not a regression (today M reads as covered), but it is not surfaced either.
+- **TASK-14806-T** was refused once: the harness found a half-created worktree with unresolvable metadata. That worktree was confirmed clean and removed, and 14806-T was redispatched on `5c76266f`.
+
+**TASK-14807, merged** to local master as `ece51892`.
+- **Frontend gate:**
+  - tsc, lint, typecheck:e2e and build all exit 0.
+  - The first vitest run was red on 1 of 1094: the known `OpfoelgningPage` flake ("OPEN state … at a 'November' anchor" read '0' for '1' under machine load).
+  - **Flake fixed** under the small-task exception (one test-only line, in a file no S148 task owns). The test now waits on the count's text, not on the element's presence, because the tile renders its count as 0 before the fetch resolves. This is the cause Fable's c2 review traced.
+  - The file passes 21/21, and a full vitest rerun is green: 85 files, 1094/1094.
+  - The .NET gate is unchanged from `c18d525b`, because no .NET file changed.
+- **Carried to wave 5's brief (TASK-14829):** its authorized files gain the two CSS modules' `.stage0Label` class. The class's px spacing equals that of its sibling rules (Fable c2 NOTE); this is recorded as a declared deviation.
+
+**TASK-14805 + -T, reviewed and ready to merge.**
+- **TASK-14805-T** returned on `worktree-agent-a5a94c394e9bd1b0c`, tip `0acde975`. It adds `OvertimeCompensateRaceTests.TwoConcurrentCompensationsOfSix_One200_One409_OneOutboxEvent`, kind F. A row lock holds both requests at the guarded UPDATE; the test observes one waiter, then two, then releases. Gate green. Report: `S148-TASK-14805-T-report.md`.
+- **5α:** PASS (`S148-TASK-14805-14806-5alpha.md`).
+- **5a (Fable 5.2):** APPROVED-WITH-WARNINGS, 0 B / 1 W / 4 N (`S148-TASK-14805-5a-reviewer.md`).
+  - The warning is F-1: the compensation-choice PUT can erase a committed payout. It is unregistered and not reachable today; it is registered at Medium at close.
+- **5a (Codex):** APPROVED-WITH-WARNINGS, 0 B / 2 W / 4 N (`S148-TASK-14805-5a-codex.md`).
+  - The two warnings are F-1 and F-2, both pre-existing and outside scope; both are registered at close.
+- **Not built (recorded):** a race on the AFSPADSERING branch. Both lenses rate it a NOTE.
+
+**TASK-14806 + -T, reviewed.**
+- **TASK-14806-T** returned on `worktree-agent-a7f734124e435385e`, tip `ae3968a0`. It adds four `OrphanCoverageTests` facts:
+  - AC-21a-a, kind F;
+  - AC-21a-b and -c, kind R, each with a discriminating assertion;
+  - AC-21a-d: card = roll-up for every person in shapes A, B, D and E.
+
+  Report: `S148-TASK-14806-T-report.md`.
+- **5α:** PASS.
+- **5a (Fable 5.2):** APPROVED-WITH-WARNINGS, 0 B / 2 W / 7 N (`S148-TASK-14806-5a-reviewer.md`).
+  - W-1: shape F.
+  - W-2: three stale comments outside the task's files.
+- **5a (Codex):** APPROVED-WITH-WARNINGS, 0 B / 2 W / 3 N (`S148-TASK-14806-5a-codex.md`).
+  - W-1: shape F.
+  - W-2: the card read "today" more than once (projection `:661`, name lookup `:1350`), against contract 4(e).
+- **Adjudication** (`S148-TASK-14804-14806-adjudication.md`, item 2a): **shape F is fixed in S148** with a fourth reading. Root = the walk names nobody AND the person has no PRIMARY line of their own (ADR-027 D9's literal root) AND someone reports to them. Every other uncovered person is an Orphan. Shapes A, B, D and E are unchanged; only shape F's middle manager moves from Root to Orphan. No new database read.
+- **Fix-up `38b800f6`** (same agent, on top of `ae3968a0`):
+  - the fourth reading, with the docs aligned in both callers;
+  - Fable W-2's three stale comments, comment only (`HrFollowUpApprovalResponses.cs:173`, `:208-209`; `Program.cs:192-194`). No OpenAPI drift: 0 matches for the old sentences;
+  - **Codex W-2 fixed:** the card now reads "today" once (`:1102`). A private overload threads it into the projection and the name lookup. The public `GetPeriodStatusProjectionForTreeAsync` keeps its signature and behaviour for `AdminEndpoints.cs:3505`.
+  - Gate: build 0 / 144 / 114; Unit 1722, DemoSeed 170, Regression non-Docker 140.
+- **14806-T fix-up dispatched:** the shape F fact `ManagerOfManagersLosesApprover_IsOrphan_CardEqualsRollUp` (kind F) and the `HrFollowUpApprovalEndpointTests.cs:399-402` docstring. Both lenses then re-review the fix-up delta.
+
+**TASK-14804 + -T: review outcome and adjudication** (`S148-TASK-14804-14806-adjudication.md`, items 1a–1e).
+- **5a (Fable 5.2):** APPROVED-WITH-WARNINGS, 0 B / 4 W / 3 N.
+- **5a (Codex):** CHANGES-REQUIRED, 1 B / 4 W / 1 N.
+- **1a, Codex BLOCKER dismissed** as an Orchestrator prompt error. The prompt wrote the rule as "max(project, intervals) + manual". The brief and ruling B2 define "worked" as the larger of project hours and interval-plus-manual hours. The prompt's version would count manual hours twice whenever they are also allocated to a project. Codex re-runs on the fix-up with the rule stated correctly.
+- **1b, precedence accepted as chosen.** Two refusals that are decided only inside the lock no longer take precedence over the bound: the employment-window gate and the authoritative quota guard. Both are still 422s, nothing is written, and no employment date is exposed. The comment now says so. Moving code was rejected, because it would either double-count replaced cells or run writes for a save already known to be refused.
+- **1c, to the owner.** See owner Q2 below.
+- **1d, test fix-ups owed now, in 14804-T:**
+  - AC-S0-7c asserts `totalHours` 4,5 and re-saves 4,4 → 200, so it proves the replaced-cell exclusion;
+  - a new R fact: today's cap answers first, with no `kind`;
+  - a new F race: an absence save against a work save.
+
+  Recorded, not owed: facts for B3, B5 and `TIME_POST`. B5 is `(unproven)` for M4.
+- **1e:** the legacy route bypasses the bound until 14802 merges. B9's merge order (14802's stack first) is the answer. After 14804 merges, grep that only the Skema save writes the projections.
+- **14804 fix-up `8415a2a2`** (comment-only, on top of `c01758bd`). Build 0 / 144 / 114. It adds:
+  - the precedence paragraph;
+  - the quota-guard sentence;
+  - a catch comment naming all four in-lock refusals;
+  - `shortcut(pending)` at `SkemaEndpoints.cs:1790` ("an absence or project cell cannot be cleared … upgrade when cell clearing ships").
+- **14804-T fix-up dispatched** (facts 5–7).
+
+**Owner Q2 (2026-11-10), "Build it in S148 (Recommended)":** may an employee empty a Skema cell? Yes, built in S148.
+- **Today's limitation:** a cell can be changed but never emptied, because hours must be above 0 (SPRINT-72 R17), and there is no delete route.
+- **Why it matters now:** under the new paid-absence bound, a mistaken entry can lock a day.
+  - A mistaken full sick day blocks recording the real 7,4 h.
+  - A mistaken care or senior day (full-day only) blocks all work that day.
+  - A mistaken project entry must keep at least 0,01 h.
+  - HR has no tool to help.
+- **How it is built** (the adjudicator's lean): a new task pair, a backend task with its test pass plus a stacked frontend task, in wave 2 after 14811 in the `SkemaEndpoints.cs` order. It gets its own plan addendum and Step 0b review. 14804 merges first, with the limit marked by `shortcut(pending)`.
+- **What clearing must preserve:**
+  - the removal is its own audited event with the actor, never a 0-hour row or a silent delete;
+  - the approval lock and the month bound refuse a clear exactly as they refuse a save;
+  - clearing a holiday-type cell returns the days, with the balance event;
+  - the full-day-only types' clear rule is stated;
+  - the roadmap's two riders (ROADMAP:490-503): the "away today" filter pin, and the QUAL-196 revisit.
+
+**TASK-14808** (`test-qa`).
+- **Returned** on `worktree-agent-acec1e191d8c165a5`, tip `cffee784`, with three R facts:
+  - AC-5b `April2026_ServesTheOk26Row`;
+  - AC-5a, renamed `ConfigEndingMidMonth_RowNotServedInTheEndingMonth_ServedTheMonthBefore`, whose docstring states the month-level limit;
+  - AC-12a `ApprovalFourEyesPredicateTests.LegacySubmittedByActor_Refused_DifferentActor_Admitted`.
+
+  Gate green. Report: `S148-TASK-14808-report.md`.
+- **5a (Fable 5.2, with the 5α checklist):** APPROVED-WITH-WARNINGS, 0 B / 1 W / 2 N (`S148-TASK-14808-5a-reviewer.md`). All three were accepted as a fix-up:
+  - W: the AC-5a docstring's red condition is wrong (an inclusive read stays green);
+  - N1: a stray deleted space in an existing banner;
+  - N2: a probably needless CA2100 pragma.
+
+**TASK-14802** (`backend-infrastructure`).
+- **Returned** on `worktree-agent-a19ac318296cbfca2`, tip `8949b1c8` (implementation `e2864079` plus a merge of master `ece51892`). Report: `S148-TASK-14802-report.md`.
+- **What it does:**
+  - Removes `POST /api/time-entries`, its request and receipt types, and `RequestValidator.cs`, together with the validator's unit tests (A4, six facts; Unit is now 1716).
+  - Both calculating routes now refuse a month whose calculation window (`HoursReadStart`, A5) holds a stored entry typed other than null or `NORMAL`. The answer is 422 `payroll-activity-type-refused`. It comes after 14801's four-eyes check, and on `/recalculate` after the idempotency fast path.
+- **Gate:** build 0 / 144 / 114; Unit 1716, DemoSeed 170, Regression non-Docker 140.
+- **Stale-comment sweep:** the list grows to 23 — the adjudication's eleven, the two A9 items, and ten more the census pattern missed.
+- **Accepted:**
+  - two declared deviations: the POST-only logger locals are removed; a blank-id branch makes `/recalculate` keep its 422 rather than throw a 500;
+  - one unlisted `shortcut(pending)`: a stored typed row has no in-product remedy.
+- **TASK-14802-T dispatched** on `8949b1c8`.

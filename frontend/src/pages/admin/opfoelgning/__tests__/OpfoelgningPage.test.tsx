@@ -286,8 +286,9 @@ describe('OpfoelgningPage — the §21 tile window states', () => {
   it('shows the OPEN state (count + days-to-deadline) at a "November" anchor', async () => {
     installFetchMock(transferAgreementsOpen)
     renderPage()
-    await waitFor(() => expect(screen.getByTestId('tile-transfer-agreements-count')).toBeInTheDocument())
-    expect(screen.getByTestId('tile-transfer-agreements-count').textContent).toBe('1')
+    // Wait on the count's text, not the element: the tile renders its count element (as 0) before
+    // the fetch resolves, so waiting only for the element let the assertion read '0' under load.
+    await waitFor(() => expect(screen.getByTestId('tile-transfer-agreements-count').textContent).toBe('1'))
     expect(screen.getByTestId('tile-transfer-agreements-footnote').textContent).toContain('20 dage')
   })
 })
