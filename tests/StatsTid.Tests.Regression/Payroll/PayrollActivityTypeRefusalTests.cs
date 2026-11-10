@@ -189,7 +189,8 @@ public sealed class PayrollActivityTypeRefusalTests : IClassFixture<FlexLedgerHo
     [InlineData("normal")]
     public async Task TimerAndLowercaseNormal_AreRefused_OrdinalComparison(string storedType)
     {
-        var emp = $"EMP-S148-AT-{storedType.ToUpperInvariant()}";
+        // Distinct from every other id in this class: the fixture is shared and its approval rows are never cleaned up.
+        var emp = storedType == "timer" ? "EMP-S148-AT-ORD-TIMER" : "EMP-S148-AT-ORD-LOWNORMAL";
         await _fx.SeedEmployeeAsync(emp);
         await _fx.SeedApprovedMonthAsync(emp, Jun);
         await _fx.SeedWeekdayHoursAsync(emp, Jun, new DateOnly(2026, 6, 5));
