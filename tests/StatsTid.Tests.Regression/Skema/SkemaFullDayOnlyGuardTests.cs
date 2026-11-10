@@ -33,7 +33,8 @@ namespace StatsTid.Tests.Regression.Skema;
 /// <para><b>The D-A consequence pins:</b> a full omsorgsdag + ANY other same-day absence →
 /// the total-cap 422 (the existing per-day cap totals ALL absence types, so a full day is the
 /// day's ONLY absence); a full omsorgsdag + same-day WORK hours (project entries + work time)
-/// → 200 (work is not an absence).</para>
+/// → 422 (the paid-absence day bound, ADR-043 D2: care and senior days are full-day only, so
+/// they go only on a day with no work).</para>
 ///
 /// <para><b>The R3 pins:</b> the month GET serves <c>fullDayOnly</c> on BOTH absence-type DTO
 /// surfaces (the catalog — <c>absenceTypes</c> + <c>catalogs.absenceTypes</c> — AND the
@@ -407,11 +408,16 @@ public sealed class SkemaFullDayOnlyGuardTests : IAsyncLifetime
         Assert.Equal(0, await CountAbsenceRowsAsync(employeeId, Monday));
     }
 
-    /// <summary>D-A consequence 2: a FULL CARE_DAY plus same-day WORK hours (a project entry
-    /// AND a work-time registration) is LEGAL — work is not an absence and never enters the
-    /// absence cap. The save succeeds and the care day consumes 1.0 feriedag.</summary>
+    /// <summary>ADR-043 D2 (S0-7): a FULL CARE_DAY (7,4) plus same-day WORK hours (a 4,0 h project
+    /// entry AND an 08:00-12:00 work-time registration) breaks the paid-absence day bound
+    /// (7,4 &gt; 7,4 - 4,0) ⇒ 422 with <c>kind</c> "paid-absence-day-bound". The whole save rolls
+    /// back: no absence, entry or work-time row. (S73 D-A's clause "same-day work hours remain
+    /// legal" is retired by the owner's ruling, 2026-11-10.)
+    ///
+    /// <para>Kind: F. Red conditions: on the base code the work rows never enter the absence cap, so
+    /// the save answers 200 and the 422 assertion trips.</para></summary>
     [Fact]
-    public async Task FullDayPlusSameDayWorkHours_Allowed200()
+    public async Task FullDayPlusSameDayWorkHours_Refused422()
     {
         var employeeId = await SeedEmployeeAsync(fraction: 1.000m);
         var client = CreateEmployeeClient(employeeId, CreateRuleStubbedClient());
@@ -440,8 +446,17 @@ public sealed class SkemaFullDayOnlyGuardTests : IAsyncLifetime
         };
         var rsp = await client.PostAsJsonAsync($"/api/skema/{employeeId}/save", request);
 
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
-        Assert.Equal(1.0m, await ReadFeriedageAsync(employeeId, Monday));
+        // S148 S0-7 (ADR-043 D2; owner Q1 2026-11-10): was 200 + 1,0 feriedag.
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("paid-absence-day-bound", body.GetProperty("kind").GetString());
+        Assert.Equal(0, await CountAbsenceRowsAsync(employeeId, Monday));
+        Assert.Equal(0L, Convert.ToInt64(await ScalarAsync(
+            "SELECT COUNT(*) FROM time_entries_projection WHERE employee_id = @p0 AND date = @p1",
+            employeeId, Monday)));
+        Assert.Equal(0L, Convert.ToInt64(await ScalarAsync(
+            "SELECT COUNT(*) FROM work_time_projection WHERE employee_id = @p0 AND date = @p1",
+            employeeId, Monday)));
     }
 
     // ════════════════════════════════════════════════════════════════════════

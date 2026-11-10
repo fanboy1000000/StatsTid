@@ -552,7 +552,11 @@ public sealed class SendConcurrencyTests : SendConcurrencyTestBase
         var emp = UniqueEmp("7d");
         await SeedEmployeeAsync(emp);
         await CoverMarchWithAbsencesAsync(emp);
-        var saveDay = new DateOnly(2026, 3, 10); // a March weekday
+        // S148 S0-7: Saturday 14 March 2026, a day CoverMarchWithAbsencesAsync leaves without paid absence
+        // (it covers weekdays only). A weekday here holds Vacation 7,4, so the paid-absence day bound
+        // (ADR-043 D2) would refuse the 7,4 h work save in its advisory check before it ever queued on the
+        // lock, and the race this fact pins (send vs save on the month lock) would never happen.
+        var saveDay = new DateOnly(2026, 3, 14);
         var (classId, objId) = await AdvisoryKeyPartsAsync(emp);
 
         await using var blockerConn = Fx.Db.Create();
