@@ -59,21 +59,48 @@ internal static class PayLineCanonicaliser
                      .ThenBy(l => l.SourceTimeType ?? string.Empty, StringComparer.Ordinal)
                      .ThenBy(l => l.Hours)
                      .ThenBy(l => l.Amount)
-                     .ThenBy(l => l.OkVersion, StringComparer.Ordinal))
+                     .ThenBy(l => l.OkVersion, StringComparer.Ordinal)
+                     // Tie-breakers appended after the keys above, so lines those keys already order keep their order:
+                     // the period end, then the whole printed line (settles a null versus an empty string).
+                     .ThenBy(l => l.PeriodEnd)
+                     .ThenBy(PrintLine, StringComparer.Ordinal))
         {
-            sb.Append("line|").Append(l.EmployeeId)
-              .Append('|').Append(Date(l.PeriodStart))
-              .Append('|').Append(Date(l.PeriodEnd))
-              .Append('|').Append(l.WageType)
-              .Append('|').Append(l.SourceRuleId ?? Null)
-              .Append('|').Append(l.SourceTimeType ?? Null)
-              .Append('|').Append(Number(l.Hours))
-              .Append('|').Append(Number(l.Amount))
-              .Append('|').Append(l.OkVersion)
-              .Append('\n');
+            sb.Append(PrintLine(l)).Append('\n');
         }
 
         return sb.ToString();
+    }
+
+    private static string PrintLine(PayrollExportLine l) =>
+        "line|" + l.EmployeeId
+        + '|' + Date(l.PeriodStart)
+        + '|' + Date(l.PeriodEnd)
+        + '|' + l.WageType
+        + '|' + (l.SourceRuleId ?? Null)
+        + '|' + (l.SourceTimeType ?? Null)
+        + '|' + Number(l.Hours)
+        + '|' + Number(l.Amount)
+        + '|' + l.OkVersion;
+
+    /// <summary>
+    /// The header lines PIN-1's text opens with, every number and date formatted with the invariant culture so the
+    /// bytes do not depend on the machine's culture or calendar.
+    /// </summary>
+    internal static string[] Header(
+        string scale, DateOnly referenceDate, int activityYear, int activityMonth, int seed,
+        int manifestApproved, int loaderApproved, int calculated, int lineCount)
+    {
+        var inv = CultureInfo.InvariantCulture;
+        return new[]
+        {
+            "pay-pin-golden v1",
+            $"world: scale={scale} referenceDate={Date(referenceDate)} " +
+                $"activityMonth={activityYear.ToString("D4", inv)}-{activityMonth.ToString("D2", inv)} seed={seed.ToString(inv)}",
+            $"manifestApprovedMonths: {manifestApproved.ToString(inv)}",
+            $"loaderPeriodsApproved: {loaderApproved.ToString(inv)}",
+            $"monthsCalculated: {calculated.ToString(inv)}",
+            $"lines: {lineCount.ToString(inv)}",
+        };
     }
 
     private static string Date(DateOnly d) => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);

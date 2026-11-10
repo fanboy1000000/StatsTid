@@ -1,3 +1,4 @@
+using System.Globalization;
 using StatsTid.SharedKernel.Models;
 
 namespace StatsTid.Tests.Regression.PayPin;
@@ -53,6 +54,75 @@ public sealed class PayLineCanonicaliserTests
         Assert.Equal("line|E1|2026-06-01|2026-06-30|SLS_0110|R1|NORMAL_HOURS|7.4|1000.5|OK26\n", low);
         Assert.Equal("line|E1|2026-06-01|2026-06-30|SLS_0110|R1|NORMAL_HOURS|7.4|2000.5|OK26\n", high);
         Assert.NotEqual(low, high);
+    }
+
+    /// <summary>
+    /// The header's bytes do not depend on the machine's culture or calendar.
+    ///
+    /// <para><b>Kind: R</b> (today's behaviour under the invariant culture is kept). <b>Red conditions:</b> a
+    /// culture-dependent format in the header: under <c>th-TH</c> (Buddhist calendar, Thai digits possible) the reference
+    /// date or a number prints differently from the invariant text.</para>
+    /// </summary>
+    [Fact]
+    public void Header_IsCultureInvariant()
+    {
+        string[] Build() => PayLineCanonicaliser.Header(
+            "smoke", new DateOnly(2026, 1, 15), 2025, 12, 47, 3, 3, 3, 1234);
+
+        var original = CultureInfo.CurrentCulture;
+        string[] invariant, thai;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+            invariant = Build();
+            CultureInfo.CurrentCulture = new CultureInfo("th-TH");
+            thai = Build();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
+
+        Assert.Equal("world: scale=smoke referenceDate=2026-01-15 activityMonth=2025-12 seed=47", invariant[1]);
+        Assert.Equal(invariant, thai);
+    }
+
+    /// <summary>
+    /// The text depends only on the lines' values, not on the order they arrive in. The set holds two lines identical
+    /// except <c>PeriodEnd</c>, and two identical except a null versus an empty <c>SourceRuleId</c> (which print
+    /// differently).
+    ///
+    /// <para><b>Kind: R.</b> The tie-breakers (the period end, then the printed line) are appended after the brief's
+    /// sort keys, so lines those keys already order keep their order. <b>Red conditions:</b> input order leaking into the
+    /// output: with no tie-breaker the forward and reversed inputs print the tied pairs in different orders.</para>
+    /// </summary>
+    [Fact]
+    public void ReversedInput_GivesIdenticalText()
+    {
+        PayrollExportLine L(DateOnly end, string? rule) => new()
+        {
+            EmployeeId = "E1", WageType = "SLS_0110", Hours = 7.4m, Amount = 100m,
+            PeriodStart = new DateOnly(2026, 6, 1), PeriodEnd = end, OkVersion = "OK26",
+            SourceRuleId = rule, SourceTimeType = "NORMAL_HOURS",
+        };
+        var set = new[]
+        {
+            L(new DateOnly(2026, 6, 30), "R1"),
+            L(new DateOnly(2026, 6, 29), "R1"),
+            L(new DateOnly(2026, 6, 30), null),
+            L(new DateOnly(2026, 6, 30), ""),
+        };
+
+        var forward = PayLineCanonicaliser.Canonicalise(Array.Empty<string>(), set, Array.Empty<PayRecord>());
+        var reversed = PayLineCanonicaliser.Canonicalise(Array.Empty<string>(), set.Reverse(), Array.Empty<PayRecord>());
+
+        Assert.Equal(
+            "line|E1|2026-06-01|2026-06-30|SLS_0110||NORMAL_HOURS|7.4|100|OK26\n" +
+            "line|E1|2026-06-01|2026-06-30|SLS_0110|~|NORMAL_HOURS|7.4|100|OK26\n" +
+            "line|E1|2026-06-01|2026-06-29|SLS_0110|R1|NORMAL_HOURS|7.4|100|OK26\n" +
+            "line|E1|2026-06-01|2026-06-30|SLS_0110|R1|NORMAL_HOURS|7.4|100|OK26\n",
+            forward);
+        Assert.Equal(forward, reversed);
     }
 
     /// <summary>

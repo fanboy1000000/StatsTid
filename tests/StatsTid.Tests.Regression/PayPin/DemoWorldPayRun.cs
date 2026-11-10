@@ -168,16 +168,9 @@ internal static class DemoWorldPayRun
             Assert.Fail($"{world.File}: non-vacuity broken:\n" + string.Join("\n", problems));
 
         var activity = approved[0];
-        var header = new[]
-        {
-            "pay-pin-golden v1",
-            $"world: scale={PinnedWorld.Scale} referenceDate={world.ReferenceDate:yyyy-MM-dd} " +
-                $"activityMonth={activity.Year:D4}-{activity.Month:D2} seed={world.Seed}",
-            $"manifestApprovedMonths: {approved.Count}",
-            $"loaderPeriodsApproved: {load.PeriodsApproved}",
-            $"monthsCalculated: {calculated}",
-            $"lines: {lines.Count}",
-        };
+        var header = PayLineCanonicaliser.Header(
+            PinnedWorld.Scale, world.ReferenceDate, activity.Year, activity.Month, world.Seed,
+            approved.Count, load.PeriodsApproved, calculated, lines.Count);
         return PayLineCanonicaliser.Canonicalise(header, lines, records);
     }
 
