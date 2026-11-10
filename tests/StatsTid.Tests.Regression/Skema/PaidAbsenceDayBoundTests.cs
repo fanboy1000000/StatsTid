@@ -110,11 +110,15 @@ public sealed class PaidAbsenceDayBoundTests : IAsyncLifetime
     }
 
     /// <summary>AC-S0-7c. 3,0 h worked and 4,4 h sick is accepted (4,4 = 7,4 − 3,0); re-saving the
-    /// Sygdom cell at 4,5 is refused and the stored row stays 4,4. The last step also proves a
-    /// replaced cell is not counted beside its replacement: 4,5 alone breaches, whereas 4,4 + 4,5
-    /// would breach for the wrong reason.
+    /// Sygdom cell at 4,5 is refused and the stored row stays 4,4.
     ///
-    /// <para>Kind: F, on its last assertion. Red conditions: 4,5 ≤ 7,4 passes the base cap, so the
+    /// <para>Which step proves what: the re-save of the same cell at 4,4 (expected 200) proves a
+    /// replaced cell is not counted beside its replacement; without that exclusion the day would
+    /// read 4,4 + 4,4 = 8,8 &gt; 4,4 and the re-save would be refused. The 4,5 refusal's body
+    /// (<c>totalHours</c> 4,5, not 8,9) proves the same on the refusing side. The bare 422 does
+    /// not prove it, because 4,4 + 4,5 would also breach.</para>
+    ///
+    /// <para>Kind: F, on its last assertions. Red conditions: 4,5 ≤ 7,4 passes the base cap, so the
     /// 4,5 save answers 200 and the 422 assertion trips. The 4,4-accepted half holds today.</para></summary>
     [Fact]
     public async Task Worked30Sick44_Accepted_Sick45_422()
@@ -128,10 +132,45 @@ public sealed class PaidAbsenceDayBoundTests : IAsyncLifetime
         var sick44 = await SaveAsync(client, emp, Wednesday, absences: new[] { ("SICK_DAY", 4.4m) });
         Assert.Equal(HttpStatusCode.OK, sick44.StatusCode);
 
+        // The same cell at the same value: replaced, not added to itself.
+        var sick44Again = await SaveAsync(client, emp, Wednesday, absences: new[] { ("SICK_DAY", 4.4m) });
+        Assert.Equal(HttpStatusCode.OK, sick44Again.StatusCode);
+
         var sick45 = await SaveAsync(client, emp, Wednesday, absences: new[] { ("SICK_DAY", 4.5m) });
-        await AssertBoundRefusalAsync(sick45);
+        var body = await AssertBoundRefusalAsync(sick45);
+        Assert.Equal(4.5m, body.GetProperty("totalHours").GetDecimal());
+        Assert.Equal(4.4m, body.GetProperty("maxHours").GetDecimal());
 
         Assert.Equal(new[] { ("SICK_DAY", 4.4m) }, await ReadCurrentAbsencesAsync(emp, Wednesday));
+    }
+
+    /// <summary>One request that carries 4,0 Sygdom and 4,0 paid leave (8,0 &gt; 7,4) is refused by
+    /// today's all-types cap, which answers first; its body keeps the old shape and carries no
+    /// <c>kind</c>, <c>plannedHours</c> or <c>workedHours</c> (TASK-14810 relies on this). Nothing is
+    /// written.
+    ///
+    /// <para>Kind: R. Red conditions: if the bound answered before the cap, the body would carry
+    /// <c>kind</c> and the "no kind" assertion trips; if the cap stopped answering, the status or
+    /// the <c>error</c> string trips.</para></summary>
+    [Fact]
+    public async Task SingleRequestOverThePlan_AllTypesCapAnswersFirst_NoKind()
+    {
+        var emp = await SeedEmployeeAsync();
+        var client = CreateEmployeeClient(emp);
+
+        var rsp = await SaveAsync(client, emp, Wednesday,
+            absences: new[] { ("SICK_DAY", 4.0m), ("LEAVE_WITH_PAY", 4.0m) });
+
+        var text = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.UnprocessableEntity, $"got {(int)rsp.StatusCode}: {text}");
+        var body = JsonDocument.Parse(text).RootElement;
+        Assert.Equal("Total absence hours exceed norm day", body.GetProperty("error").GetString());
+        Assert.Equal(8.0m, body.GetProperty("totalHours").GetDecimal());
+        Assert.Equal(7.4m, body.GetProperty("maxHours").GetDecimal());
+        Assert.False(body.TryGetProperty("kind", out _));
+        Assert.False(body.TryGetProperty("plannedHours", out _));
+        Assert.False(body.TryGetProperty("workedHours", out _));
+        Assert.Empty(await ReadCurrentAbsencesAsync(emp, Wednesday));
     }
 
     /// <summary>AC-S0-7d (QUAL-240). A Saturday (planned 0) holds no credit-class paid absence:
@@ -158,13 +197,14 @@ public sealed class PaidAbsenceDayBoundTests : IAsyncLifetime
 
     // ── assertions ──
 
-    private static async Task AssertBoundRefusalAsync(HttpResponseMessage rsp)
+    private static async Task<JsonElement> AssertBoundRefusalAsync(HttpResponseMessage rsp)
     {
         var text = await rsp.Content.ReadAsStringAsync();
         Assert.True(rsp.StatusCode == HttpStatusCode.UnprocessableEntity,
             $"expected the day-bound 422, got {(int)rsp.StatusCode}: {text}");
         var body = JsonDocument.Parse(text).RootElement;
         Assert.Equal(BoundKind, body.GetProperty("kind").GetString());
+        return body;
     }
 
     // ── the save ──

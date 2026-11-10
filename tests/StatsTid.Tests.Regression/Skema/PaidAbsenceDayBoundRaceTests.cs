@@ -46,6 +46,62 @@ public sealed class PaidAbsenceDayBoundRaceTests : SendConcurrencyTestBase
     public async Task TwoConcurrentSaves_NeverExceedTheBound()
     {
         var emp = UniqueEmp("7e");
+        var (rspA, rspB) = await RaceAsync(emp,
+            (client, e) => SaveAbsenceAsync(client, e, "VACATION"),
+            (client, e) => SaveAbsenceAsync(client, e, "SICK_DAY"));
+
+        var statuses = new[] { rspA.StatusCode, rspB.StatusCode }.OrderBy(s => (int)s).ToArray();
+        Assert.Equal(new[] { HttpStatusCode.OK, HttpStatusCode.UnprocessableEntity }, statuses);
+
+        var loser = rspA.StatusCode == HttpStatusCode.UnprocessableEntity ? rspA : rspB;
+        Assert.Equal("paid-absence-day-bound",
+            JsonDocument.Parse(await BodyAsync(loser)).RootElement.GetProperty("kind").GetString());
+
+        // THE invariant: the day holds no more credit-class absence than it was worth.
+        Assert.Equal(7.4m, await SumCurrentAbsenceHoursAsync(emp));
+    }
+
+    /// <summary>The save-vs-save direction: save A is an absence (<c>SICK_DAY</c> 7,4) and save B
+    /// carries no absences, only work time 08:00-15:24, on Friday 12 June 2026. Exactly one answers
+    /// 200 and the other 422 with the bound's <c>kind</c>; the day never holds both the sick row and
+    /// the work row.
+    ///
+    /// <para>Kind: F. Red conditions: on the base code the absence cap sums only its own request and a
+    /// work-only save skips both absence blocks (<c>SkemaEndpoints.cs:982</c>, <c>:1985</c>), so both
+    /// racers answer 200 and the "exactly one 422" assertion trips (first assertion to fail: the
+    /// status pair).</para></summary>
+    [Fact]
+    public async Task AbsenceSaveVsWorkSave_NeverExceedTheBound()
+    {
+        var emp = UniqueEmp("7f");
+        var (rspA, rspB) = await RaceAsync(emp,
+            (client, e) => SaveAbsenceAsync(client, e, "SICK_DAY"),
+            (client, e) => PostSkemaWorkTimeSaveAsync(client, e, Friday, "08:00", "15:24",
+                year: Friday.Year, month: Friday.Month));
+
+        var statuses = new[] { rspA.StatusCode, rspB.StatusCode }.OrderBy(s => (int)s).ToArray();
+        Assert.Equal(new[] { HttpStatusCode.OK, HttpStatusCode.UnprocessableEntity }, statuses);
+
+        var loser = rspA.StatusCode == HttpStatusCode.UnprocessableEntity ? rspA : rspB;
+        Assert.Equal("paid-absence-day-bound",
+            JsonDocument.Parse(await BodyAsync(loser)).RootElement.GetProperty("kind").GetString());
+
+        // THE invariant: never both the sick row and the work row on the day.
+        var sickRows = await SumCurrentAbsenceHoursAsync(emp);
+        var workRows = await CountWorkTimeRowsAsync(emp, Friday);
+        Assert.True((sickRows == 7.4m && workRows == 0L) || (sickRows == 0m && workRows == 1L),
+            $"the day holds sick hours {sickRows} and {workRows} work row(s)");
+    }
+
+    /// <summary>The shared choreography: seeds a fresh employee, holds the employee lock on a third
+    /// connection, fires both saves, waits until BOTH are observed queued on the lock (each has then
+    /// passed its advisory check against the empty day), asserts nothing committed meanwhile, then
+    /// releases the lock. Ordering is by observation, never by a sleep.</summary>
+    private async Task<(HttpResponseMessage A, HttpResponseMessage B)> RaceAsync(
+        string emp,
+        Func<HttpClient, string, Task<HttpResponseMessage>> saveA,
+        Func<HttpClient, string, Task<HttpResponseMessage>> saveB)
+    {
         await RegressionSeed.SeedEmployeeAsync(
             Fx.ConnectionString, emp, Org, "HK", "OK26", ensureOrg: false);
         var (classId, objId) = await AdvisoryKeyPartsAsync(emp);
@@ -61,26 +117,15 @@ public sealed class PaidAbsenceDayBoundRaceTests : SendConcurrencyTestBase
         await using var blockerTx = await blockerConn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
         await EmployeeConsumptionLock.AcquireAsync(blockerConn, blockerTx, emp);
 
-        var saveA = Task.Run(() => SaveAbsenceAsync(clientA, emp, "VACATION"));
-        var saveB = Task.Run(() => SaveAbsenceAsync(clientB, emp, "SICK_DAY"));
+        var taskA = Task.Run(() => saveA(clientA, emp));
+        var taskB = Task.Run(() => saveB(clientB, emp));
 
-        // Both saves are genuinely queued behind the holder: each has passed its advisory check.
         await WaitForWaitersAsync(classId, objId, expected: 2);
-        Assert.Equal(0m, await SumCurrentAbsenceHoursAsync(emp)); // nothing committed while the lock is held
+        Assert.Equal(0m, await SumCurrentAbsenceHoursAsync(emp));
+        Assert.Equal(0L, await CountWorkTimeRowsAsync(emp, Friday)); // nothing committed while the lock is held
 
         await blockerTx.CommitAsync();
-
-        var rspA = await saveA;
-        var rspB = await saveB;
-        var statuses = new[] { rspA.StatusCode, rspB.StatusCode }.OrderBy(s => (int)s).ToArray();
-        Assert.Equal(new[] { HttpStatusCode.OK, HttpStatusCode.UnprocessableEntity }, statuses);
-
-        var loser = rspA.StatusCode == HttpStatusCode.UnprocessableEntity ? rspA : rspB;
-        Assert.Equal("paid-absence-day-bound",
-            JsonDocument.Parse(await BodyAsync(loser)).RootElement.GetProperty("kind").GetString());
-
-        // THE invariant: the day holds no more credit-class absence than it was worth.
-        Assert.Equal(7.4m, await SumCurrentAbsenceHoursAsync(emp));
+        return (await taskA, await taskB);
     }
 
     private static Task<HttpResponseMessage> SaveAbsenceAsync(HttpClient client, string emp, string type)
