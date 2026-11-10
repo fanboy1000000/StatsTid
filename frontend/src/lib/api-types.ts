@@ -76,52 +76,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/time-entries": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest"];
-                };
-            };
-            responses: {
-                /** @description Created */
-                201: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse"];
-                    };
-                };
-                /** @description Conflict */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/time-entries/{employeeId}": {
         parameters: {
             query?: never;
@@ -6375,22 +6329,6 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
-        "StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest": {
-            employeeId: string;
-            /** Format: date */
-            date: string;
-            /** Format: double */
-            hours: number;
-            /** Format: time */
-            startTime?: string | null;
-            /** Format: time */
-            endTime?: string | null;
-            taskId?: string | null;
-            activityType?: string | null;
-            agreementCode: string;
-            /** @deprecated */
-            okVersion?: string;
-        };
         "StatsTid.Backend.Api.Contracts.RemoveWithReassignmentResponse": {
             removed: string;
             /** Format: int32 */
@@ -6762,11 +6700,6 @@ export interface components {
             count: number;
             /** Format: date */
             today: string;
-        };
-        "StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse": {
-            /** Format: uuid */
-            eventId: string;
-            streamId: string;
         };
         "StatsTid.Backend.Api.Contracts.TransferAgreementResponse": {
             employeeId: string;
