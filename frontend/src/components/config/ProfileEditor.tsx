@@ -280,12 +280,22 @@ export function ProfileEditor({
         </div>
       </Card>
 
-      <div data-testid="stage0-label">
-        <Alert variant="info">
-          <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
-          endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
-        </Alert>
-      </div>
+      <p
+        data-testid="stage0-label"
+        role="note"
+        style={{
+          margin: 0,
+          padding: '12px 16px',
+          border: '1px solid var(--color-info)',
+          borderLeftWidth: 4,
+          background: 'var(--color-info-light)',
+          color: 'var(--color-text)',
+          fontSize: '0.875rem',
+        }}
+      >
+        <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
+        endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
+      </p>
 
       {staleConflict && (
         <Alert variant="warning">

@@ -1,8 +1,9 @@
 // AC-S0-8a (TASK-14807, S0-8 stage-0 label). Kind F.
-// Red conditions: every `getByTestId('stage0-label')` below fails on code
-// without the label (no element carries that test id), and the text assertions
-// fail without the three clauses, on each render (agreement editor new and
-// existing, position-override page, local profile editor).
+// Red conditions: getByTestId('stage0-label') fails without the label; the
+// ordered-clause regex fails if any clause (notably "endnu ikke lønberegningen")
+// changes; the role/aria-live assertions fail if the label becomes an Alert
+// (role="alert"). Rendered on the agreement editor (new and existing), the
+// position-override page and the local profile editor.
 // The label says: affects screens and booking; does not yet affect pay; the rest
 // check still reads the built-in values. It must read identically on all pages.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -29,10 +30,15 @@ beforeEach(() => {
 })
 
 function expectLabel(): string {
-  const text = screen.getByTestId('stage0-label').textContent ?? ''
-  expect(text).toMatch(/skærmbilleder og booking/)
-  expect(text).toMatch(/endnu ikke/)
-  expect(text).toMatch(/hviletidskontrollen.*indbyggede værdier/i)
+  const el = screen.getByTestId('stage0-label')
+  const text = el.textContent ?? ''
+  // The three clauses, in the contract's order.
+  expect(text).toMatch(/skærmbilleder og booking.*endnu ikke lønberegningen.*hviletidskontrollen.*indbyggede værdier/i)
+  // A static note, not a live region: a live region would be announced on every
+  // (re-)mount, i.e. after each save.
+  expect(el.getAttribute('role')).toBe('note')
+  expect(el.getAttribute('aria-live')).toBeNull()
+  expect(el.closest('[role="alert"], [aria-live]')).toBeNull()
   return text
 }
 

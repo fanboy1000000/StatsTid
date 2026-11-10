@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { usePositionOverrides, type PositionOverrideConfig, type WithEtag } from '../../hooks/usePositionOverrides'
-import { Alert, Spinner } from '../../components/ui'
+import { Spinner } from '../../components/ui'
 import styles from './PositionOverrideManagement.module.css'
 
 interface CreateForm {
@@ -165,12 +165,10 @@ export function PositionOverrideManagement() {
         </button>
       </div>
 
-      <div data-testid="stage0-label">
-        <Alert variant="info">
-          <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
-          endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
-        </Alert>
-      </div>
+      <p className={styles.stage0Label} data-testid="stage0-label" role="note">
+        <strong>Bemærk:</strong> Indstillingerne her påvirker skærmbilleder og booking, men
+        endnu ikke lønberegningen. Hviletidskontrollen læser stadig de indbyggede værdier.
+      </p>
 
       {staleConflict && (
         <div className={styles.alert} role="alert" data-testid="stale-conflict-banner">
