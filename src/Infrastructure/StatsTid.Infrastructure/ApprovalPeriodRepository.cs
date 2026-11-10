@@ -1053,12 +1053,14 @@ public sealed class ApprovalPeriodRepository
     /// </para>
     ///
     /// <para>
-    /// <b>R3 — the deterministic root/orphan classification (one in-memory pass over the roster):</b>
-    /// with no persisted root marker (ADR-027 D9 has none), a person with <em>no</em> active PRIMARY
-    /// approver is an <c>isRoot</c> when they are the <c>structuralApproverId</c> of ≥1 other roster
-    /// person (a people-hierarchy top), else an <c>isOrphan</c> (a legacy no-approver leaf gap). A
-    /// person WITH an active PRIMARY approver is neither. Multiple roots may co-exist in messy/Phase-1
-    /// trees (the ADR-027 D9 ≤1-root invariant is a Phase-4 enforcement concern, not enforced here).
+    /// <b>R3 — the root/orphan classification (HRP-013), from <see cref="ApproverCoverage"/>, the one
+    /// predicate HR's cross-organisation roll-up uses too:</b> a person the approval walk names nobody
+    /// for today is an <c>isRoot</c> when another roster person's open PRIMARY line names them (a
+    /// people-hierarchy top), else an <c>isOrphan</c> (no designated approver for their month). A person
+    /// the walk names someone for is neither, so a manager who has left stops counting as cover from the
+    /// day after their last day. <c>structuralApproverId</c> stays the raw edge: it is the tree's key, not
+    /// the cover. Multiple roots may co-exist in messy/Phase-1 trees (the ADR-027 D9 ≤1-root invariant is
+    /// a Phase-4 enforcement concern, not enforced here).
     /// </para>
     ///
     /// <para>Read-only / additive — touches no write path and emits no events.</para>
@@ -1089,9 +1091,15 @@ public sealed class ApprovalPeriodRepository
         //     hours of that day, which is the same off-by-one B1 closed for the other direction.
         var today = CopenhagenBusinessDate.Today(_timeProvider);
         var rosterRows = new List<RosterRow>();
+        IReadOnlyDictionary<string, ApproverCoverageKind> coverage;
         await using (var conn = _connectionFactory.Create())
         {
             await conn.OpenAsync(ct);
+            // One REPEATABLE READ snapshot for the roster rows and their root/orphan classification
+            // (step (3)): the classification's prefetch equals live SQL only inside one, and the rows
+            // and their flags then describe the same instant.
+            await using var snapshot = await conn.BeginTransactionAsync(
+                System.Data.IsolationLevel.RepeatableRead, ct);
             await using var cmd = new NpgsqlCommand(
                 """
                 SELECT
@@ -1155,7 +1163,7 @@ public sealed class ApprovalPeriodRepository
                 WHERE u.is_active = TRUE
                   AND o.materialized_path LIKE @pathPrefix ESCAPE '\'
                 ORDER BY u.display_name, u.user_id
-                """, conn);
+                """, conn, snapshot);
             // Escape LIKE metacharacters in the (system-derived) path so a literal '%' or '_'
             // in an org id/path cannot widen the prefix into a wildcard (cross-styrelse over-match).
             cmd.Parameters.AddWithValue("pathPrefix", EscapeLike(treeRootPathPrefix) + "%");
@@ -1209,6 +1217,14 @@ public sealed class ApprovalPeriodRepository
                     // S141 / TASK-14116 (B0) — NULL = no change scheduled for this person.
                     ScheduledChangeFrom: reader.IsDBNull(schedOrd) ? null : reader.GetFieldValue<DateOnly>(schedOrd)));
             }
+
+            // The reader must be closed before the classification reads on this connection.
+            await reader.CloseAsync();
+            coverage = await ApproverCoverage.ClassifyAsync(
+                conn, snapshot, _reportingLineRepo, new[] { treeRootPathPrefix },
+                rosterRows.Select(r => r.EmployeeId).ToList(), today, ct);
+            // Read-only: the commit only releases the snapshot.
+            await snapshot.CommitAsync(ct);
         }
 
         // (2) periodStatus + pendingCountByManager: REUSE the existing S74 projection (same roster
@@ -1220,21 +1236,12 @@ public sealed class ApprovalPeriodRepository
         foreach (var e in statusProjection.Employees)
             statusByEmployee[e.EmployeeId] = e.Status;
 
-        // (3) R3 root/orphan: one in-memory pass. A person is an effective people-hierarchy parent
-        //     iff they appear as some roster person's structuralApproverId. Then: no-approver +
-        //     is-a-parent = root; no-approver + parents-no-one = orphan; has-approver = neither.
-        var approverIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var r in rosterRows)
-            if (r.StructuralApproverId is not null)
-                approverIds.Add(r.StructuralApproverId);
-
+        // (3) R3 root/orphan (HRP-013), classified in step (1)'s snapshot by ApproverCoverage — the
+        //     one predicate HR's cross-organisation roll-up uses too, so the two cannot disagree.
         var employees = new List<MedarbejderRosterRow>(rosterRows.Count);
         foreach (var r in rosterRows)
         {
-            var hasApprover = r.StructuralApproverId is not null;
-            var approvesSomeone = approverIds.Contains(r.EmployeeId);
-            var isRoot = !hasApprover && approvesSomeone;
-            var isOrphan = !hasApprover && !approvesSomeone;
+            var kind = coverage[r.EmployeeId];
             employees.Add(new MedarbejderRosterRow(
                 EmployeeId: r.EmployeeId,
                 DisplayName: r.DisplayName,
@@ -1244,8 +1251,8 @@ public sealed class ApprovalPeriodRepository
                 // the same scope, so every row should be present).
                 PeriodStatus: statusByEmployee.GetValueOrDefault(r.EmployeeId, "OPEN"),
                 OutgoingVikar: r.OutgoingVikar,
-                IsRoot: isRoot,
-                IsOrphan: isOrphan,
+                IsRoot: kind == ApproverCoverageKind.Root,
+                IsOrphan: kind == ApproverCoverageKind.Orphan,
                 UnitId: r.UnitId,
                 UnitName: r.UnitName,
                 LeaderIds: r.LeaderIds,

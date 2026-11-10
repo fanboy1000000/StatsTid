@@ -204,7 +204,7 @@ public static class HrFollowUpApprovalEndpoints
                 return NoHrScopeForbidden();
 
             var today = CopenhagenBusinessDate.Today(timeProvider);
-            var orphans = await followUpRepo.GetOrphanEmployeesAsync(accessibleOrgIds, ct);
+            var orphans = await followUpRepo.GetOrphanEmployeesAsync(accessibleOrgIds, today, ct);
             var expired = await followUpRepo.GetExpiredDelegationsAsync(accessibleOrgIds, today, ct);
             var summaryOnly = summary ?? false;
 
