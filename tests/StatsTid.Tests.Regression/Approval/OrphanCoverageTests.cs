@@ -179,16 +179,15 @@ public sealed class OrphanCoverageTests : IAsyncLifetime
     /// shape B  Mb (departs D) ← Rb ; stand-in Vb of Mb    Mb Root,  Rb Covered, Vb Orphan
     /// shape E  Ae (active, away) ← Pe ; stand-in Ve of Ae Ae Root,  Pe Covered, Ve Orphan
     /// </code>
-    /// <para><b>The wording chosen for "someone's approver" (R-19), reading (i):</b> another member of the read
-    /// reports to them on an open PRIMARY line (a line to oneself does not count). A person the walk names nobody
-    /// for is a Root if someone is thus theirs, otherwise an Orphan.</para>
+    /// <para><b>The wording chosen for Root (R-19), ADR-027 D9's literal root:</b> the walk names nobody, the person
+    /// holds no open PRIMARY line of their own, and another member of the read reports to them on an open PRIMARY
+    /// line. Every other uncovered person is an Orphan. (The shape where a middle manager keeps their own line to a
+    /// departed top is pinned by <see cref="ManagerOfManagersLosesApprover_IsOrphan_CardEqualsRollUp"/>.)</para>
     /// <para><b>Does this fixture discriminate the readings?</b> Reading (ii), "the walk names them for someone",
     /// would classify Ma, Mb and Ae as Orphan and Vb and Ve as Root — so shapes A, B and E discriminate (i) from
     /// (ii). Shape D does not: every person is classified the same under all three. Reading (iii), "holds any open
     /// PRIMARY line", differs from (i) only for a line from a person OUTSIDE the read (a switched-off report whose line
     /// stays open); no such person is seeded, so this fixture does NOT discriminate (i) from (iii).</para>
-    /// <para>Shape F (the top manager departs with M and R beneath) is deliberately NOT pinned: whether M, uncovered
-    /// but someone's approver, should be a Root or an Orphan is open for ruling.</para>
     /// <para><b>Red conditions:</b> on the base, Ra is covered by her open line to the departed Ma, so
     /// <c>Assert.Equal("Orphan", ...)</c> for Ra fails; Rb likewise is covered on the base and only the stand-in keeps
     /// her covered now, so a predicate dropping the stand-in fails <c>Rb == Covered</c>; a reading (ii) predicate
@@ -250,6 +249,39 @@ public sealed class OrphanCoverageTests : IAsyncLifetime
         Assert.Equal(users.Length, expected.Count);
         foreach (var (id, kind) in expected)
             Assert.Equal(kind, seen[id]);
+    }
+
+    /// <summary>
+    /// <b>Kind F (shape F; adjudication 2a, fix-up 10).</b> G has no line above and leaves on D; M reports to G; R
+    /// reports to M. On D+1 and on D+5: G is a Root (walk names nobody, no line of their own, M reports to them), M is
+    /// an Orphan (G is gone and nobody is above, so no approver exists for M's month, although R reports to M), and R
+    /// is Covered (M is still acting). Card = roll-up for all three.
+    /// <para><b>Red conditions:</b> <c>Assert.Equal("Orphan", seen["oc_f_m"])</c>. On the base (<c>a03d61ae</c>) M's
+    /// open line to G counts as cover, so M is on neither list and reads as Covered; under the earlier reading (i)
+    /// (<c>ae3968a0</c>) R reporting to M made M a Root. Either way the assertion fails.</para>
+    /// </summary>
+    [Fact]
+    public async Task ManagerOfManagersLosesApprover_IsOrphan_CardEqualsRollUp()
+    {
+        var onD1 = Boot(D1);
+        var onD5 = Boot(D5);
+        var users = new[] { "oc_f_g", "oc_f_m", "oc_f_r" };
+        await SeedAsync(async conn =>
+        {
+            await UserAsync(conn, "oc_f_g", "LOCAL_LEADER", endDate: D);
+            await UserAsync(conn, "oc_f_m", "LOCAL_LEADER");
+            await UserAsync(conn, "oc_f_r", "EMPLOYEE");
+            await LineAsync("oc_f_m", "oc_f_g");
+            await LineAsync("oc_f_r", "oc_f_m");
+        });
+
+        foreach (var host in new[] { onD1, onD5 })
+        {
+            var seen = await ReadBothAsync(host, users);
+            Assert.Equal("Root", seen["oc_f_g"]);
+            Assert.Equal("Orphan", seen["oc_f_m"]);
+            Assert.Equal("Covered", seen["oc_f_r"]);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
