@@ -189,8 +189,64 @@ public sealed class SkemaSpecialHolidayRowTests : IAsyncLifetime
         Assert.Equal(ExpectedLabel, row.GetProperty("label").GetString());
     }
 
+    /// <summary>
+    /// <b>AC-5b — kind R, regression pin, holds today.</b> April 2026 is the first OK26 month (OK24 runs to
+    /// 2026-03-31, <c>OkVersionResolver.cs:16-20</c>), so its month-end anchor (Thursday 2026-04-30) resolves
+    /// OK26 and the gate reads OK26's SPECIAL_HOLIDAY row; March 2026 (anchor Tuesday 2026-03-31) is the last
+    /// OK24 month and reads OK24's. One AC_TEACHING employee, stored as OK24 so the stored version cannot
+    /// explain the outcome. (1) Only OK26's row ended: April NOT served, March served. (2) OK26 restored,
+    /// only OK24's row ended: April served, March NOT served.
+    ///
+    /// <para><b>Red conditions (Docker; argued).</b> Holds today. The discriminating assertions are step
+    /// (1)'s April "not served" and step (2)'s April "served": a gate that resolves the version one month
+    /// late (April read as OK24, e.g. an anchor or resolver off by one month) serves April in (1) and drops
+    /// it in (2); a gate that reads the stored OK24 version does the same.</para>
+    /// </summary>
+    [Fact]
+    public async Task April2026_ServesTheOk26Row()
+    {
+        var employeeId = await SeedEmployeeAsync("AC_TEACHING", okVersion: "OK24");
+
+        await SetSpecialHolidayConfigWindowAsync("AC_TEACHING", "OK26", closed: true);
+        AssertServed(await GetMonthAsync(employeeId, "STY01", 2026, 4), expected: false);
+        AssertServed(await GetMonthAsync(employeeId, "STY01", 2026, 3), expected: true);
+
+        await SetSpecialHolidayConfigWindowAsync("AC_TEACHING", "OK26", closed: false);
+        await SetSpecialHolidayConfigWindowAsync("AC_TEACHING", "OK24", closed: true);
+        AssertServed(await GetMonthAsync(employeeId, "STY01", 2026, 4), expected: true);
+        AssertServed(await GetMonthAsync(employeeId, "STY01", 2026, 3), expected: false);
+    }
+
+    /// <summary>
+    /// <b>AC-5a (NR-1 (a), item C3) — kind R, regression pin, holds today.</b> The month view decides the
+    /// "Særlig feriedag" row ONCE per month, at the month's last day (<c>SkemaEndpoints.cs:321-329</c>,
+    /// <c>:2666-2691</c>), so the fact pins month granularity: an OK24 AC_RESEARCH SPECIAL_HOLIDAY row with
+    /// <c>effective_to</c> = Saturday 2025-11-15 (first day NOT covered; last covered day Friday 2025-11-14)
+    /// is served for October 2025 (anchor Friday 2025-10-31) and NOT for November 2025 (anchor Sunday
+    /// 2025-11-30), on both surfaces.
+    ///
+    /// <para><b>Known limit, registered, not the desired end state.</b> In the month a configuration ends the
+    /// grid offers no "Særlig feriedag" row, even on the days the configuration still covers (1-14
+    /// November). The save path values each day independently (<c>SkemaEndpoints.cs:31-38</c>), so this is a
+    /// display convention, not a wrong payment. A later fix of the limit must re-pin this fact deliberately.</para>
+    ///
+    /// <para><b>Red conditions (Docker; argued).</b> Holds today. The discriminating assertion is November's
+    /// "not served": a gate anchored on a covered day of the month (the 1st, say) instead of its last day
+    /// would serve November and fail it. October's "served" fails if the gate ignored the config's
+    /// <c>effective_to</c> window only partially (e.g. read it as inclusive and dropped October).</para>
+    /// </summary>
+    [Fact]
+    public async Task ConfigEndingMidMonth_RowNotServedInTheEndingMonth_ServedTheMonthBefore()
+    {
+        var employeeId = await SeedEmployeeAsync("AC_RESEARCH", okVersion: "OK24");
+        await SetSpecialHolidayConfigEndAsync("AC_RESEARCH", "OK24", new DateOnly(2025, 11, 15));
+
+        AssertServed(await GetMonthAsync(employeeId, "STY01", 2025, 10), expected: true);
+        AssertServed(await GetMonthAsync(employeeId, "STY01", 2025, 11), expected: false);
+    }
+
     // ════════════════════════════════════════════════════════════════════════
-    // AC-235-3 — the admin visibility list names it; hiding removes the row.
+    // AC-235-3— the admin visibility list names it; hiding removes the row.
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -483,6 +539,29 @@ public sealed class SkemaSpecialHolidayRowTests : IAsyncLifetime
         cmd.Parameters.AddWithValue("ok", okVersion);
         var rows = await cmd.ExecuteNonQueryAsync();
         Assert.True(rows == 1, $"fixture: expected to change exactly one {agreementCode}/{okVersion} SPECIAL_HOLIDAY row, changed {rows}.");
+    }
+
+    /// <summary>Ends the open SPECIAL_HOLIDAY row of one agreement + OK version at <paramref name="endsOn"/>
+    /// (<c>effective_to</c>, the first day NOT covered). Same agreement rule as
+    /// <see cref="SetSpecialHolidayConfigWindowAsync"/>.</summary>
+    private async Task SetSpecialHolidayConfigEndAsync(string agreementCode, string okVersion, DateOnly endsOn)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        // CA2100-justified (QUAL-073 ratchet): a compile-time test constant; values go through parameters.
+#pragma warning disable CA2100
+        await using var cmd = new NpgsqlCommand(
+            """
+            UPDATE entitlement_configs SET effective_to = @to
+            WHERE entitlement_type = 'SPECIAL_HOLIDAY' AND agreement_code = @ac AND ok_version = @ok
+              AND effective_to IS NULL
+            """, conn);
+#pragma warning restore CA2100
+        cmd.Parameters.AddWithValue("to", endsOn);
+        cmd.Parameters.AddWithValue("ac", agreementCode);
+        cmd.Parameters.AddWithValue("ok", okVersion);
+        var rows = await cmd.ExecuteNonQueryAsync();
+        Assert.True(rows == 1, $"fixture: expected to end exactly one {agreementCode}/{okVersion} SPECIAL_HOLIDAY row, ended {rows}.");
     }
 
     // ─────────────────────────────── reads / drivers ───────────────────────────────
