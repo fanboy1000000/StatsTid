@@ -139,7 +139,7 @@ $results += "T3 (no reviewed-sha): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}els
 # on the REVIEWER artifact after this harness was written, and the harness was never updated,
 # so T5/T9/T11/T12/T14 had been failing for the wrong reason ever since. That is the failure
 # mode the path fix above also addresses: a guard whose own tests quietly stop meaning anything.
-$staleContent = "reviewed-by-model: claude-fable-5-1`nverdict: APPROVED`nreviewed-against-commit: $staleSha"
+$staleContent = "reviewed-by-model: claude-fable-5-2`nverdict: APPROVED`nreviewed-against-commit: $staleSha"
 Set-Content -Path $codex -Value $staleContent -Encoding UTF8
 Set-Content -Path $reviewer -Value $staleContent -Encoding UTF8
 $r = Invoke-Hook $mock
@@ -147,7 +147,7 @@ $ok = ($r.Exit -eq 2)
 $results += "T4 (stale sha): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
 
 # T5: Valid reviewed-against-commit matches HEAD prefix
-$validContent = "reviewed-by-model: claude-fable-5-1`nverdict: APPROVED`nreviewed-against-commit: $headShort"
+$validContent = "reviewed-by-model: claude-fable-5-2`nverdict: APPROVED`nreviewed-against-commit: $headShort"
 Set-Content -Path $codex -Value $validContent -Encoding UTF8
 Set-Content -Path $reviewer -Value $validContent -Encoding UTF8
 $r = Invoke-Hook $mock
@@ -163,8 +163,8 @@ $ok = ($r.Exit -eq 0)
 $results += "T6 (waiver): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
 
 # T7: Full 40-char SHA also accepted (not just short)
-Set-Content -Path $codex -Value "reviewed-by-model: claude-fable-5-1`nverdict: APPROVED`nreviewed-against-commit: $headSha" -Encoding UTF8
-Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-1`nverdict: APPROVED`nreviewed-against-commit: $headSha" -Encoding UTF8
+Set-Content -Path $codex -Value "reviewed-by-model: claude-fable-5-2`nverdict: APPROVED`nreviewed-against-commit: $headSha" -Encoding UTF8
+Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-2`nverdict: APPROVED`nreviewed-against-commit: $headSha" -Encoding UTF8
 Remove-Item $waiver -ErrorAction SilentlyContinue
 $r = Invoke-Hook $mock
 $ok = ($r.Exit -eq 0)
@@ -172,7 +172,7 @@ $results += "T7 (full sha): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL
 
 # ── S63 post-close gates ─────────────────────────────────────────────────────
 # Baseline for T8+: valid artifacts (so only the new gates are under test).
-$validContent = "reviewed-by-model: claude-fable-5-1`nverdict: APPROVED`nreviewed-against-commit: $headShort"
+$validContent = "reviewed-by-model: claude-fable-5-2`nverdict: APPROVED`nreviewed-against-commit: $headShort"
 Set-Content -Path $codex -Value $validContent -Encoding UTF8
 Set-Content -Path $reviewer -Value $validContent -Encoding UTF8
 
@@ -240,7 +240,7 @@ $env:STATSTID_SPRINTLOG_MOCK = $mockLog
 
 # Artifacts valid for all of T15-T19 (we are testing the ledger, not the others).
 Set-Content -Path $codex    -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
-Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-1`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-2`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
 
 # T15: tasks named, NO ledger section at all -> block
 Set-Content -Path $mockLog -Encoding UTF8 -Value @"
@@ -336,7 +336,7 @@ Wave 1: TASK-9901.
 | TASK-9901 | DONE | merged |
 "@
 Set-Content -Path $codex    -Value "verdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
-Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-1[1m]`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-2[1m]`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
 $r = Invoke-Hook $mock
 $ok = ($r.Exit -eq 0)
 $results += "T20 (floor + [1m] suffix): exit=$($r.Exit) expect=0 $(if($ok){'PASS'}else{'FAIL'})"
@@ -349,7 +349,7 @@ $results += "T21 (wrong model + suffix blocks): exit=$($r.Exit) expect=2 $(if($o
 if (-not $ok) { $results += $r.Stderr }
 
 # T22: only the context-window shape is stripped; an arbitrary bracket suffix on the floor id still blocks
-Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-1[garbage]`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
+Set-Content -Path $reviewer -Value "reviewed-by-model: claude-fable-5-2[garbage]`nverdict: APPROVED`nreviewed-against-commit: $headShort" -Encoding UTF8
 $r = Invoke-Hook $mock
 $ok = ($r.Exit -eq 2 -and $r.Stderr -match '\[garbage\]')
 $results += "T22 (floor + invalid suffix blocks): exit=$($r.Exit) expect=2 $(if($ok){'PASS'}else{'FAIL'})"
@@ -377,7 +377,7 @@ Remove-Item Env:\STATSTID_SPRINTLOG_MOCK -ErrorAction SilentlyContinue
 $hookSource = Get-Content -Path $hookPath -Raw
 $noPathSeam = -not ($hookSource -match 'STATSTID_TELEMETRY_LOG_MOCK')
 Remove-Item $ciHealthWaiver -ErrorAction SilentlyContinue
-$validS99 = "reviewed-by-model: claude-fable-5-1`nverdict: APPROVED`nreviewed-against-commit: $headShort"
+$validS99 = "reviewed-by-model: claude-fable-5-2`nverdict: APPROVED`nreviewed-against-commit: $headShort"
 Set-Content -Path $codex -Value $validS99 -Encoding UTF8
 Set-Content -Path $reviewer -Value $validS99 -Encoding UTF8
 $env:STATSTID_TELEMETRY_LOG_MOCK = $ciHealthWaiver
@@ -385,7 +385,7 @@ try {
     $r = Invoke-Hook $mock
     $noWaiver   = -not (Test-Path $ciHealthWaiver)
     $notWaived  = -not ($r.Stderr -match 'has a CI-health waiver')
-    $echoS99    = $r.Stderr -match 'telemetry suppressed \(test seam\): \S+ \| close \| S99 \| claude-fable-5-1 \| PASS'
+    $echoS99    = $r.Stderr -match 'telemetry suppressed \(test seam\): \S+ \| close \| S99 \| claude-fable-5-2 \| PASS'
     $ciMocked   = $r.Stderr -match 'CI-health gate using MOCKED conclusion'
     $ok = $noPathSeam -and $noWaiver -and $notWaived -and $echoS99 -and $ciMocked
     $results += "T25 (telemetry seam cannot create a waiver): no-path-seam=$noPathSeam no-waiver=$noWaiver no-waiver-line=$notWaived s99-echo=$echoS99 ci-gate-reached=$ciMocked $(if($ok){'PASS'}else{'FAIL'})"

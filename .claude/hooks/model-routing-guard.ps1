@@ -118,7 +118,7 @@ if ($ReviewRoles -contains $type) {
 # pass too, so this check runs for EVERY type except `reviewer` (handled above), the read-only pass
 # list and `fork` (both exit before reaching here). Signature = the placeholder instruction
 # `reviewed-by-model: <...>` or a self-granted floor clause.
-# A literal id (`reviewed-by-model: claude-fable-5-1`, e.g. a harness fixture edit) does not match.
+# A literal id (`reviewed-by-model: claude-fable-5-2`, e.g. a harness fixture edit) does not match.
 # Detection of a signature, not a closed door: a brief avoiding both phrases still passes.
 $prompt = ''
 if ($in.PSObject.Properties['prompt'] -and $in.prompt) { $prompt = [string]$in.prompt }

@@ -332,7 +332,7 @@ foreach ($artifact in @($codex, $reviewer)) {
     # owner decision 2026-10-26), checked outside this block ("Review-floor waiver" above); it
     # lifts this check alone.
     if ($artifact -eq $reviewer -and -not $reviewFloorWaived) {
-        $reviewFloor = 'claude-fable-5-1'
+        $reviewFloor = 'claude-fable-5-2'
         if ($content -notmatch '(?im)^\s*reviewed-by-model\s*:\s*(\S+)') {
             [Console]::Error.WriteLine("sprint-close-guard: BLOCKING sprint S$sprintNum close commit.")
             [Console]::Error.WriteLine('')
@@ -344,7 +344,7 @@ foreach ($artifact in @($codex, $reviewer)) {
             [Console]::Error.WriteLine('The reviewer agent (.claude/agents/reviewer.md) prints this as its first line; copy it into the artifact.')
             exit 2
         }
-        # A self-report may carry a context-window suffix (`claude-fable-5-1[1m]`); it is not part of the id.
+        # A self-report may carry a context-window suffix (`claude-fable-5-2[1m]`); it is not part of the id.
         # Only that shape (digits + m) is stripped; `[]`, `[garbage]` or anything else still fails the compare.
         $reviewedBy = $matches[1] -replace '\[[0-9]+m\]$', ''
         if ($reviewedBy -ne $reviewFloor) {

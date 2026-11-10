@@ -370,7 +370,7 @@ one of its 19 agents inherited that model because no routing existed.
 3. *Self-check inside the agent.* The reviewer's first output line is `reviewed-by-model: <id>`; if the id is
    not the floor it writes `verdict: REFUSED — wrong model for review` and stops. A refusal cannot be mistaken
    for a review.
-4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-1` in the Step-7a
+4. *Gate at close.* `sprint-close-guard.ps1` requires `reviewed-by-model: claude-fable-5-2` in the Step-7a
    reviewer artifact (a trailing context-window suffix such as `[1m]` is ignored in the comparison). A sprint
    cannot close on a review that ran cheap, whatever happened upstream. (S145 alone closed on an Opus review,
    by a one-sprint owner exception in the hook while Fable was on its usage limit, R-104 in
@@ -433,9 +433,9 @@ this is a checklist with a record, like the Orchestrator seat:
   support this model; version 2.1.280 or newer is required … model sent to the API: claude-opus-5-5` — the
   **first** pin's value, not the file's current one. The next day, on client 2.1.281, the alias resolved to
   `claude-opus-5-5` with no pin at all. Two things follow directly: a pin **does** reach the API (the 400
-  names it), and Opus 5.5 **does** need 2.1.280+ (the 400 says so). *Inferred, not separately tested:* agent
-  definitions are reloaded with a lag, so a spawn made seconds after editing one can still run on the
-  previous definition — the "silent" first spawn is most simply explained as its pin not yet being loaded,
+  names it), and Opus 5.5 **does** need 2.1.280+ (the 400 says so). *Inferred at the time, and observed on client 2.1.322
+  (2026-11-10, "Last verified" below):* a spawn made after editing a definition can still run on the
+  previous definition, on 2.1.322 until the session restarts — the "silent" first spawn is most simply explained as its pin not yet being loaded,
   rather than as an unknown id falling through to the session model (the documentation's resolution order,
   per-spawn `model` → frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → main conversation's model, does not say
   what an unknown id does). The `[1m]` suffix on that first spawn's self-report was read at the time as the session model's signature; it is not — a current client's alias-`opus` spawn self-reports `claude-opus-5-5[1m]` too, so the suffix cannot establish a session-model fallback; where it comes from is not established. Either way the lesson is the same: a pin is not known to be in effect until a
@@ -443,11 +443,18 @@ this is a checklist with a record, like the Orchestrator seat:
   first spawn ran on a model other than the pinned one with no error at all — which is why the self-report
   comparison after any pin is mandatory. A stale client is a cause a pin does not fix.
 - **Current newest per tier** (update this line when a release ships; it is the reference the checks below
-  compare against): Fable **`claude-fable-5-1`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5-5`** ·
+  compare against): Fable **`claude-fable-5-2`** · Opus **`claude-opus-5-5`** · Sonnet **`claude-sonnet-5-5`** ·
   Haiku **`claude-haiku-4-5-20251001`**. A self-report may carry a context-window suffix (`claude-opus-5-5[1m]`);
   the suffix is ignored when comparing. *(Sonnet corrected from `claude-sonnet-5` at the S144 close: from client
   2.1.284 on, all ten S144 Sonnet-tier spawns resolved to `claude-sonnet-5-5`, read from the subagent transcripts.)*
-- **Last verified 2026-09-25 (client 2.1.281):** a `backend-infrastructure` spawn (alias `opus`) ran on
+- **Last verified 2026-11-10 (client 2.1.322), with the floor bump to Fable 5.2:** after the client update
+  (2.1.301 → 2.1.322, a restart), the alias `fable` resolved to `claude-fable-5-2` in three probes. Those three
+  spawns ran 1–5 minutes after the five-place edit, in the same session, and all three still read the old
+  self-check (`claude-fable-5-1`), although the file on disk was changed. After a second restart, a
+  `reviewer` probe and an `adjudicator` probe self-reported `claude-fable-5-2` and read the new floor. So on this
+  client **an agent-definition edit reaches spawns only in a session started after it**. A floor bump (or any pin)
+  therefore ends with a restart and then the self-report comparison. It does not end with the edit.
+- **Previously verified 2026-09-25 (client 2.1.281):** a `backend-infrastructure` spawn (alias `opus`) ran on
   `claude-opus-5-5`, confirmed both by self-report and by the subagent transcript's `"model"` field — the
   client had been updated 2.1.263 → 2.1.281 between the sessions, so no pin was needed. The same day a full id
   *temporarily* pinned in a definition file (`trace.md`, `model: claude-sonnet-5`, applied and reverted around
@@ -477,12 +484,16 @@ this is a checklist with a record, like the Orchestrator seat:
   up. Treat the whole event as a routing deviation, not a cosmetic one — the owner's rule is "always the
   newest", not "the right family".
 - **The close gate's reviewer pin** (`sprint-close-guard.ps1`, layer 4) enforces the *configured* Fable id
-  (`$reviewFloor`), which is the newest only while someone maintains it. When a new Fable ships, bump **four**
+  (`$reviewFloor`), which is the newest only while someone maintains it. When a new Fable ships, bump **five**
   things in ONE commit: the reference list above, `$reviewFloor` in the close guard, the literal id in the
-  reviewer's self-check (`.claude/agents/reviewer.md`), and the fixtures in the guard's own test harness
+  reviewer's self-check (`.claude/agents/reviewer.md`), the literal id in the adjudicator's self-check
+  (`.claude/agents/adjudicator.md`), and the fixtures in the guard's own test harness
   (`.claude/hooks/test-sprint-close-guard.ps1`, which hard-codes the id — the omission that cost five harness
   tests in S141). There is no other route to a new floor — the reviewer accepts no successor named only in a
-  prompt, because the close gate would refuse that review at close.
+  prompt, because the close gate would refuse that review at close. Then run the harness, **restart the
+  session**, and confirm the floor with a `reviewer` probe and an `adjudicator` probe, each reporting both
+  the model it runs on and the floor its definition names. Before a restart, a probe still reads the
+  old definition ("Last verified" above).
 - The register row for each sprint records the **resolved** id per tier, not the alias, and the client
   version the session ran on.
 
