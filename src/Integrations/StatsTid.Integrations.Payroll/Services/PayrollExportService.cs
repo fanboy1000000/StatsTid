@@ -475,31 +475,34 @@ public sealed class PayrollExportService
     /// by construction (the period is read by the request's employee and exact whole-month dates, and every line
     /// belongs to that employee and month); it guards any other caller of <see cref="ExportAsync"/>.</para>
     ///
-    /// <para><b>S147 / TASK-14704 (SEC-053, owner ruling OQ-1 = (a)) — the payroll checkpoint of
-    /// four-eyes.</b> Payroll is where an approval turns into money, so it re-checks the two
-    /// segregation-of-duties rules on the locked row rather than trusting that every path that wrote
-    /// <c>APPROVED</c> enforced them: the approver (<c>approved_by</c>) must be neither the month's
-    /// sender (<c>employee_approved_by</c>, else the legacy <c>submitted_by</c> — the same expression the
-    /// Backend's approve guard and transactional predicate use) nor the employee (SEC-009). Either
-    /// match throws the existing conflict (→ 409), which rolls the whole export back. A month with no
-    /// sender stamp passes the sender half; a null value never matches anything.</para>
+    /// <para><b>The payroll checkpoint of four-eyes (SEC-053, owner ruling OQ-1 = (a); SEC-009; QUAL-246).</b>
+    /// Payroll is where an approval turns into money, so it re-checks the two segregation-of-duties rules on the
+    /// locked row rather than trusting that every path that wrote <c>APPROVED</c> enforced them: the approver
+    /// (<c>approved_by</c>) must be neither the month's sender nor its employee. The rule has one home,
+    /// <see cref="PayrollFourEyesException.FailedClause"/>, which <c>/calculate-and-export</c> also runs at admission,
+    /// before calculating, on the row it reads; this re-check under the row lock is the race guard for an approval
+    /// that changed after admission. A match throws <see cref="PayrollFourEyesException"/> (→ 409
+    /// <c>payroll-four-eyes</c>, the same answer as admission's), which rolls the whole export back. It runs last,
+    /// after the status check: a month that is not APPROVED is refused for that.</para>
     /// </summary>
     private static async Task AssertPeriodApprovedForUpdateAsync(
         NpgsqlConnection conn, NpgsqlTransaction tx, Guid periodId, ExportMonthKey key, CancellationToken ct)
     {
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT status, approved_by, COALESCE(employee_approved_by, submitted_by) AS sender, employee_id,
-                   period_start, period_end
+            SELECT status, approved_by, employee_approved_by, submitted_by, employee_id, period_start, period_end
               FROM approval_periods
              WHERE period_id = @periodId
                FOR UPDATE
             """, conn, tx);
         cmd.Parameters.AddWithValue("periodId", periodId);
 
+        // The sender stamps are read raw: who the sender is (employee_approved_by, else submitted_by) is decided in
+        // PayrollFourEyesException.FailedClause, the one home admission also calls (RES-003 item 4).
         string? status = null;
         string? approvedBy = null;
-        string? sender = null;
+        string? employeeApprovedBy = null;
+        string? submittedBy = null;
         string? employeeId = null;
         var periodStart = default(DateOnly);
         var periodEnd = default(DateOnly);
@@ -509,10 +512,11 @@ public sealed class PayrollExportService
             {
                 status = reader.GetString(0);
                 approvedBy = reader.IsDBNull(1) ? null : reader.GetString(1);
-                sender = reader.IsDBNull(2) ? null : reader.GetString(2);
-                employeeId = reader.GetString(3);
-                periodStart = reader.GetFieldValue<DateOnly>(4);
-                periodEnd = reader.GetFieldValue<DateOnly>(5);
+                employeeApprovedBy = reader.IsDBNull(2) ? null : reader.GetString(2);
+                submittedBy = reader.IsDBNull(3) ? null : reader.GetString(3);
+                employeeId = reader.GetString(4);
+                periodStart = reader.GetFieldValue<DateOnly>(5);
+                periodEnd = reader.GetFieldValue<DateOnly>(6);
             }
         }
 
@@ -541,20 +545,10 @@ public sealed class PayrollExportService
             throw new PayrollExportConflictException(
                 $"Approval period '{periodId}' is '{status}', not APPROVED, at export time; payroll export aborted.");
         }
-        if (SameActor(approvedBy, sender))
+        if (PayrollFourEyesException.FailedClause(approvedBy, employeeApprovedBy, submittedBy, employeeId) is { } clause)
         {
-            throw new PayrollExportConflictException(
-                $"Approval period '{periodId}' was approved by the person who sent it (four-eyes); payroll export aborted.");
+            throw new PayrollFourEyesException(periodId, clause);
         }
-        if (SameActor(approvedBy, employeeId))
-        {
-            throw new PayrollExportConflictException(
-                $"Approval period '{periodId}' was approved by its own employee (segregation of duties); payroll export aborted.");
-        }
-
-        // Ordinal, and a null or empty id never matches (the Backend guards' rule).
-        static bool SameActor(string? a, string? b) =>
-            !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b) && string.Equals(a, b, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -987,13 +981,94 @@ public sealed class FlexLedgerWrite
 
 /// <summary>
 /// S90 / TASK-9002 — a 409-mappable conflict raised by the atomic export path: a month-spanning
-/// line, a period that is not the exported month's own approval (S147 R-G2/R-G8), a not-APPROVED or
-/// four-eyes-failing period at export time (B2), or a same-key/different-content re-export
-/// (idempotency). The endpoint maps this to a 409 Conflict.
+/// line, a period that is not the exported month's own approval (S147 R-G2/R-G8), a period not found
+/// or not APPROVED at export time (B2), or a same-key/different-content re-export (idempotency). The
+/// endpoint maps this to a 409 <c>payroll-export-conflict</c>. A four-eyes failure is not one of these: it
+/// is <see cref="PayrollFourEyesException"/>, with its own kind (QUAL-246).
 /// </summary>
 public sealed class PayrollExportConflictException : Exception
 {
     public PayrollExportConflictException(string message) : base(message) { }
+}
+
+/// <summary>
+/// The payroll checkpoint of four-eyes (SEC-053, owner ruling OQ-1 = (a); SEC-009; QUAL-246): a month whose approval
+/// was given by the person who sent the month, or by the employee whose month it is, is not two people's decision, so
+/// payroll does not pay it.
+///
+/// <para><b>Who the sender is.</b> <c>employee_approved_by</c> (the send / employee-approve stamp), else the legacy
+/// <c>submitted_by</c>: the rule of the Backend's approve guard (<c>ApprovalSenderGuard.SenderOf</c>) and of its
+/// transactional predicate (<c>COALESCE(employee_approved_by, submitted_by)</c>). Ids compare Ordinal, and a null or
+/// empty id never matches, so a month with no sender stamp passes the sender half.</para>
+///
+/// <para><b>One predicate, two sites.</b> <see cref="FailedClause"/> is the rule's one home in Payroll (RES-003 item 4:
+/// a hand-copied mirror of an approval predicate is where a guard gets dropped). <c>/calculate-and-export</c> runs it
+/// at admission on the approval row it reads, before anything is calculated or written, and answers the 409 itself.
+/// The export transaction runs it again on the row it locks <c>FOR UPDATE</c>, the race guard for an approval that
+/// changed after admission, and throws this exception, which the route maps to the same 409. Both sites check the
+/// sender equality first, then the employee equality.</para>
+///
+/// <para><b>The response.</b> 409 <c>{ success:false, error, kind:"payroll-four-eyes" }</c> with the fixed
+/// <see cref="ErrorSentence"/>, the same for both clauses: no employee id, no date and no period id (ADR-040 D7). The
+/// server log names the clause and the period id. <see cref="Exception.Message"/> is for diagnosis and never reaches a
+/// response.</para>
+/// </summary>
+public sealed class PayrollFourEyesException : Exception
+{
+    /// <summary>The discriminator of the host's 409 body.</summary>
+    public const string KindValue = "payroll-four-eyes";
+
+    /// <summary>
+    /// The fixed sentence of the host's 409 body, for either clause. It contains no date, no id and no digit, so it can
+    /// never leak one. It claims only what is true at both sites: at admission nothing was calculated either, but at
+    /// the export transaction the calculation's manifest already exists.
+    /// </summary>
+    public const string ErrorSentence =
+        "The month cannot be exported to payroll: it was approved by the person who sent it, or by the employee " +
+        "whose month it is. Payroll needs two different people behind every paid month, one who sends it and " +
+        "another who approves it (four-eyes). Have the month reopened, sent again and approved by someone other " +
+        "than its sender and its employee, then try again. Nothing was exported to payroll.";
+
+    /// <summary>The clause for an approver who is the month's sender (four-eyes, SEC-053).</summary>
+    public const string ApproverIsSender = "approver-is-sender";
+
+    /// <summary>The clause for an approver who is the month's own employee (segregation of duties, SEC-009).</summary>
+    public const string ApproverIsEmployee = "approver-is-employee";
+
+    public PayrollFourEyesException(Guid periodId, string clause)
+        : base(clause == ApproverIsSender
+            ? $"Approval period '{periodId}' was approved by the person who sent it (four-eyes); payroll export aborted."
+            : $"Approval period '{periodId}' was approved by its own employee (segregation of duties); payroll export aborted.")
+    {
+        PeriodId = periodId;
+        Clause = clause;
+    }
+
+    /// <summary>The approval period that failed the check, for the server log only.</summary>
+    public Guid PeriodId { get; }
+
+    /// <summary><see cref="ApproverIsSender"/> or <see cref="ApproverIsEmployee"/>, for the server log only.</summary>
+    public string Clause { get; }
+
+    /// <summary>
+    /// The four-eyes rule on an approval row's raw columns. Returns the clause that fails, checking the sender first
+    /// (<see cref="ApproverIsSender"/>: <paramref name="approvedBy"/> equals <paramref name="employeeApprovedBy"/>, else
+    /// <paramref name="submittedBy"/> when that is null) and then the employee (<see cref="ApproverIsEmployee"/>), or
+    /// <c>null</c> when the approval is two people's decision. Call it only on an APPROVED row.
+    /// </summary>
+    public static string? FailedClause(
+        string? approvedBy, string? employeeApprovedBy, string? submittedBy, string? employeeId)
+    {
+        if (SameActor(approvedBy, employeeApprovedBy ?? submittedBy))
+            return ApproverIsSender;
+        if (SameActor(approvedBy, employeeId))
+            return ApproverIsEmployee;
+        return null;
+    }
+
+    // Ordinal, and a null or empty id never matches (the Backend guards' rule).
+    private static bool SameActor(string? a, string? b) =>
+        !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b) && string.Equals(a, b, StringComparison.Ordinal);
 }
 
 public sealed class ExportResult

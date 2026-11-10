@@ -16,7 +16,7 @@ namespace StatsTid.Tests.Regression.Payroll;
 /// <summary>
 /// S147 / TASK-14704-T (SEC-053, AC-053-4) — payroll is the last place an approval turns into money, so it
 /// re-checks four-eyes itself: an APPROVED month whose approver is the month's SENDER, or the month's own
-/// EMPLOYEE, is refused at export (the existing 409-class <see cref="PayrollExportConflictException"/>) and
+/// EMPLOYEE, is refused at export (<see cref="PayrollFourEyesException"/>, which the route answers as 409 <c>payroll-four-eyes</c>) and
 /// the whole export transaction writes nothing. A month with no sender stamp is not blocked by the sender
 /// half.
 ///
@@ -81,7 +81,7 @@ public sealed class PayrollSenderSeparationHostTests : IAsyncLifetime
 
     /// <summary>
     /// AC-053-4 (sender, current shape) — kind <b>F</b>. APPROVED month whose approver equals
-    /// <c>employee_approved_by</c> (the sender): the export is refused (<see cref="PayrollExportConflictException"/>),
+    /// <c>employee_approved_by</c> (the sender): the export is refused (<see cref="PayrollFourEyesException"/>),
     /// mentions four-eyes, and NOTHING is written.
     ///
     /// <para><b>Red conditions.</b> Today <c>AssertPeriodApprovedForUpdateAsync</c> reads only <c>status</c>:
@@ -93,7 +93,8 @@ public sealed class PayrollSenderSeparationHostTests : IAsyncLifetime
         const string emp = "EMP_SENDERSEP_1";
         var periodId = await SeedAsync(emp, submittedBy: "hr-sender", employeeApprovedBy: "hr-sender", approvedBy: "hr-sender");
 
-        var ex = await Assert.ThrowsAsync<PayrollExportConflictException>(() => ExportAsync(emp, periodId));
+        // S148 P-5: PayrollExportConflictException -> PayrollFourEyesException (payroll's own four-eyes type, QUAL-246)
+        var ex = await Assert.ThrowsAsync<PayrollFourEyesException>(() => ExportAsync(emp, periodId));
         Assert.Contains("four-eyes", ex.Message);
         await AssertNothingWrittenAsync(emp);
     }
@@ -111,7 +112,8 @@ public sealed class PayrollSenderSeparationHostTests : IAsyncLifetime
         const string emp = "EMP_SENDERSEP_2";
         var periodId = await SeedAsync(emp, submittedBy: "hr-legacy", employeeApprovedBy: null, approvedBy: "hr-legacy");
 
-        var ex = await Assert.ThrowsAsync<PayrollExportConflictException>(() => ExportAsync(emp, periodId));
+        // S148 P-5: PayrollExportConflictException -> PayrollFourEyesException (payroll's own four-eyes type, QUAL-246)
+        var ex = await Assert.ThrowsAsync<PayrollFourEyesException>(() => ExportAsync(emp, periodId));
         Assert.Contains("four-eyes", ex.Message);
         await AssertNothingWrittenAsync(emp);
     }
@@ -129,7 +131,8 @@ public sealed class PayrollSenderSeparationHostTests : IAsyncLifetime
         const string emp = "EMP_SENDERSEP_3";
         var periodId = await SeedAsync(emp, submittedBy: "hr-other", employeeApprovedBy: "hr-other", approvedBy: emp);
 
-        var ex = await Assert.ThrowsAsync<PayrollExportConflictException>(() => ExportAsync(emp, periodId));
+        // S148 P-5: PayrollExportConflictException -> PayrollFourEyesException (payroll's own four-eyes type, QUAL-246)
+        var ex = await Assert.ThrowsAsync<PayrollFourEyesException>(() => ExportAsync(emp, periodId));
         Assert.Contains("own employee", ex.Message);
         await AssertNothingWrittenAsync(emp);
     }

@@ -321,6 +321,17 @@ app.MapPost("/api/payroll/calculate-and-export", async (
         }, statusCode: 403);
     }
 
+    // The payroll checkpoint of four-eyes, at admission (QUAL-246; SEC-053, SEC-009): an APPROVED month whose approver
+    // is its sender or its own employee is not two people's decision and is not paid. Checked on the row just read,
+    // before anything is calculated or written: no manifest, no export record, no PayrollExportGenerated, no ADR-026
+    // audit row. The export transaction re-checks the same predicate under its row lock (the row can change after this
+    // read) and answers the same 409.
+    if (PayrollFourEyesException.FailedClause(
+            approval.ApprovedBy, approval.EmployeeApprovedBy, approval.SubmittedBy, approval.EmployeeId) is { } fourEyesClause)
+    {
+        return PayrollFourEyesRefused(loggerFactory, approval.PeriodId, fourEyesClause, "calculate-and-export admission");
+    }
+
     // Forward auth header and correlation ID for traceability
     var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
     Guid? correlationId = httpContext.Request.Headers.TryGetValue("X-Correlation-Id", out var corrValues)
@@ -490,16 +501,22 @@ app.MapPost("/api/payroll/calculate-and-export", async (
             // admission's.
             return PriorMonthNotApproved(ex);
         }
+        catch (PayrollFourEyesException ex)
+        {
+            // The export's row-locked re-check of four-eyes (B2) refused: the approval changed after admission read it.
+            // The transaction rolled back: no export record, no PayrollExportGenerated, no audit row. The calculation's
+            // own manifest stays, as with the other export-time rechecks. The same 409 as admission's (QUAL-246).
+            return PayrollFourEyesRefused(loggerFactory, ex.PeriodId, ex.Clause, "calculate-and-export export");
+        }
         catch (PayrollExportConflictException ex)
         {
-            // Every export-time conflict PayrollExportService raises answers this one 409: already exported for
+            // Every other export-time conflict PayrollExportService raises answers this one 409: already exported for
             // this month with different content (idempotency), or with the same lines but a different flex balance
             // (S146 R-16); a line spanning more than one calendar month; a record that vanished mid-transaction
-            // (defensive); and a refusal of the approval re-assert under the row lock (B2): the period not found or
-            // no longer APPROVED, and since S147 also not the exported employee's whole calendar month (R-G2, R-G8),
-            // approved by the person who sent it (four-eyes, SEC-053), or approved by its own employee (SEC-009).
-            // All answer this one kind; a distinct four-eyes kind is a recorded follow-up (tidy item 12). For an
-            // already-exported month the remedy is a correction (/recalculate).
+            // (defensive); and a refusal of the approval re-assert under the row lock (B2): the period not found, no
+            // longer APPROVED, or not the exported employee's whole calendar month (R-G2, R-G8). A four-eyes failure
+            // has its own kind, payroll-four-eyes (caught above; QUAL-246). For an already-exported month the remedy
+            // is a correction (/recalculate).
             return Results.Json(new
             {
                 result.EmployeeId,
@@ -799,6 +816,25 @@ static IResult PriorMonthNotApproved(PriorMonthNotApprovedException ex) =>
         periodStart = ex.PeriodStart,
         periodEnd = ex.PeriodEnd
     }, statusCode: 409);
+
+// The ONE response for "this month's approval is not two people's decision" (QUAL-246; SEC-053, SEC-009). 409 because
+// the month is in a state the operator can fix (reopen it and have someone else approve it) and retry. Shared by
+// /calculate-and-export's admission check and the export transaction's row-locked re-check (PayrollFourEyesException),
+// so a given case answers alike at both. The body is FIXED (PayrollFourEyesException.ErrorSentence): no employee id, no
+// date and no period id (ADR-040 D7). The server log names the clause that fired, the approval period id and the site;
+// the refusal itself writes nothing, so the log line is its record beside the HTTP request's own audit_log row.
+static IResult PayrollFourEyesRefused(ILoggerFactory loggerFactory, Guid periodId, string clause, string site)
+{
+    loggerFactory.CreateLogger("StatsTid.Integrations.Payroll.FourEyes").LogWarning(
+        "Refused ({Clause}): approval period {PeriodId} is not two people's decision ({Site})",
+        clause, periodId, site);
+    return Results.Json(new
+    {
+        success = false,
+        error = PayrollFourEyesException.ErrorSentence,
+        kind = PayrollFourEyesException.KindValue
+    }, statusCode: 409);
+}
 
 // S145 TASK-14508 (R14) — the ONE refusal for "this request carries hours". Payroll reads the
 // employee's recorded, current hours itself, so a caller-supplied hours list is no longer an input.
