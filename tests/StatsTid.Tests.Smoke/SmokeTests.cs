@@ -122,29 +122,32 @@ public class SmokeTests
     [Fact]
     public async Task Backend_RegisterAndRetrieveTimeEntry()
     {
-        // OrgScopeValidator deny-before-GLOBAL (S64 census): ValidateEmployeeAccessAsync
-        // resolves the target employee BEFORE the GLOBAL scope short-circuit, so a GlobalAdmin
-        // POSTing for a NEVER-SEEDED target gets 403 ("Target employee not found"), not 201.
-        // Target an init.sql-seeded employee (emp001, org STY01, agreement_code AC) so the
-        // GlobalAdmin end-to-end 201 write path is exercised.
+        // S148 R-20 re-point: POST /api/time-entries is retired; the surviving time-entry writer
+        // is the Skema save. OrgScopeValidator deny-before-GLOBAL (S64 census): a GlobalAdmin
+        // saving for a NEVER-SEEDED target gets 403 ("Target employee not found"), so target an
+        // init.sql-seeded employee (emp001, org STY01, agreement_code AC).
         const string seededEmployeeId = "emp001";
-        var registerRequest = new
-        {
-            employeeId = seededEmployeeId,
-            date = "2024-04-01",
-            hours = 7.4m,
-            agreementCode = "AC",
-            okVersion = "OK24"
-        };
 
-        var postRequest = new HttpRequestMessage(HttpMethod.Post, $"{BackendUrl}/api/time-entries")
-        {
-            Content = JsonContent.Create(registerRequest)
-        };
-        WithAuth(postRequest);
+        // A unique far-future month per run (the in-file picker) on a WEEKDAY: PayrollCalcAuditSmokeTests
+        // approves emp001's February/March 2026, so a save there would answer 409 (period lock), and a
+        // fresh far-future month never carries a lock or a quota from another run.
+        var (year, month, ferieDay, _) = PickUniqueFutureWeekdays();
+        var entryDate = AddWeekdays(new DateOnly(year, month, ferieDay), 3); // distinct from the ferie/care days; stays in the month
+        var entryDateText = entryDate.ToString("yyyy-MM-dd");
 
-        var registerResponse = await _client.SendAsync(postRequest);
-        Assert.Equal(HttpStatusCode.Created, registerResponse.StatusCode);
+        var saveRequest = new HttpRequestMessage(HttpMethod.Post, $"{BackendUrl}/api/skema/{seededEmployeeId}/save")
+        {
+            Content = JsonContent.Create(new
+            {
+                year = entryDate.Year,
+                month = entryDate.Month,
+                entries = new[] { new { date = entryDateText, projectCode = "SMOKE-PROJ", hours = 7.4m } },
+            })
+        };
+        WithAuth(saveRequest);
+
+        var saveResponse = await _client.SendAsync(saveRequest);
+        Assert.Equal(HttpStatusCode.OK, saveResponse.StatusCode);
 
         var getRequest = new HttpRequestMessage(HttpMethod.Get, $"{BackendUrl}/api/time-entries/{seededEmployeeId}");
         WithAuth(getRequest);
@@ -152,34 +155,35 @@ public class SmokeTests
         var getResponse = await _client.SendAsync(getRequest);
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
 
+        // A write round-trips: the entry just saved is in the read (not merely "some entry exists").
         var entries = await getResponse.Content.ReadFromJsonAsync<JsonElement>();
-        Assert.True(entries.GetArrayLength() > 0);
+        Assert.Contains(entries.EnumerateArray(), e =>
+            (e.GetProperty("date").GetString() ?? string.Empty).StartsWith(entryDateText, StringComparison.Ordinal)
+            && e.GetProperty("hours").GetDecimal() == 7.4m);
     }
 
     [Fact]
     public async Task Backend_RegisterTimeEntry_UnknownTarget_Forbidden()
     {
+        // S148 R-20 re-point: the write is the Skema save (POST /api/time-entries is retired).
         // OrgScopeValidator deny-before-GLOBAL (S64 census): even a GlobalAdmin is denied a
-        // POST against a target employee that does not exist — ValidateEmployeeAccessAsync
-        // resolves the target user and returns "Target employee not found" (403) BEFORE the
-        // GLOBAL scope short-circuit. SMOKE002 is never seeded, so this pins the 403 contract.
-        var registerRequest = new
+        // save against a target employee that does not exist — the non-Employee actor's scope
+        // check resolves the target user and returns "Target employee not found" (403) BEFORE the
+        // GLOBAL scope short-circuit and before the subject read. SMOKE002 is never seeded, so
+        // this pins the 403 contract.
+        var saveRequest = new HttpRequestMessage(HttpMethod.Post, $"{BackendUrl}/api/skema/SMOKE002/save")
         {
-            employeeId = "SMOKE002",
-            date = "2024-04-01",
-            hours = 7.4m,
-            agreementCode = "AC",
-            okVersion = "OK24"
+            Content = JsonContent.Create(new
+            {
+                year = 2024,
+                month = 4,
+                entries = new[] { new { date = "2024-04-01", projectCode = "SMOKE-PROJ", hours = 7.4m } },
+            })
         };
+        WithAuth(saveRequest);
 
-        var postRequest = new HttpRequestMessage(HttpMethod.Post, $"{BackendUrl}/api/time-entries")
-        {
-            Content = JsonContent.Create(registerRequest)
-        };
-        WithAuth(postRequest);
-
-        var registerResponse = await _client.SendAsync(postRequest);
-        Assert.Equal(HttpStatusCode.Forbidden, registerResponse.StatusCode);
+        var saveResponse = await _client.SendAsync(saveRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, saveResponse.StatusCode);
     }
 
     [Fact]

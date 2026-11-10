@@ -31,8 +31,9 @@ namespace StatsTid.Tests.Regression.Skema;
 /// Skema save is "this is now the cell's value" (refinement A0, constraint 6). These pins define that
 /// meaning for every surface an employee or HR sees. They speak HTTP and SQL only, so they compile against
 /// today's code, and they fail today for the right reason: a server total shows 15.4 where the spec says 8.0.
-/// The additive <c>POST /api/time-entries</c> registrations are a DIFFERENT meaning (several rows for one
-/// day and task are real, and all count); two guards below keep that untouched.</para>
+/// The additive <c>POST /api/time-entries</c> registrations were a DIFFERENT meaning (several rows for one
+/// day and task were real, and all counted); that route is retired (S148 R-20), so stored <c>TIME_POST</c>
+/// rows keep their additive meaning only through the rebuild, pinned in <c>ProjectionBackfillTests</c>.</para>
 ///
 /// <para><b>Expected values come from the spec</b> (SYSTEM_TARGET.md section A; refinement A0 and criteria
 /// <c>:557-580</c>; ADR-028 D1/D4), never from what the code returns today. Where a fact "fails today", that
@@ -42,7 +43,7 @@ namespace StatsTid.Tests.Regression.Skema;
 /// C-S1: every <c>Resave_Entry_*</c> fact (and S7, S11-S13) saves and re-saves ONE entry cell and no absence
 /// cell; <c>Resave_Absence_*</c> saves and re-saves ONE absence cell and no entry cell.
 /// C-S2: S7 counts the cell's current rows by SQL, not through a GET.
-/// C-S3: S11 and S13 use Skema saves only, no <c>POST /api/time-entries</c>.
+/// C-S3: S11 and S13 use Skema saves only (the time-entry route is retired, S148 R-20).
 /// C-S4: S9 asserts the reason, <c>error == "absence_full_day_only"</c>, so a quota 422 cannot stand in.
 /// Criterion (i): 8.0 h of work time is recorded for the day first (the send gate and the allocation
 /// readers compare it with the allocated hours). Absences sit on a WEEKDAY, nudged by
@@ -299,8 +300,8 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
     /// events, the projection's rows and, for the absence rows, the VACATION balance. The refused save
     /// targets the same cell.</para>
     ///
-    /// <para><b>Red conditions.</b> Today nothing validates the hours of a Skema cell (only
-    /// <c>RequestValidator.cs:16</c> does, on the additive route), so each row's save succeeds with 200 and
+    /// <para><b>Red conditions.</b> These rows pin the Skema save's own 400 checks
+    /// (<c>SkemaEndpoints.cs:809-838</c>). Without them, each row's save would succeed with 200 and
     /// <c>Assert.Equal(HttpStatusCode.BadRequest, ...)</c> trips. Listed under <b>MD-10</b> (the pre-lock
     /// validation loses its hours-at-or-below-zero 400), which turns all four rows red the same way.</para>
     /// </summary>
@@ -375,46 +376,6 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
 
         Assert.Equal(1L, await AbsenceRowCountAsync(emp, Day));
         Assert.Equal(1.0m, await BalanceUsedAsync(emp, "CARE_DAY", Day.Year));
-    }
-
-    /// <summary>
-    /// <b>S10 (guard: passes today).</b> The additive registrations are untouched: two
-    /// <c>POST /api/time-entries</c> for the same day and task (3.4 h and 4.0 h) leave TWO rows, and both
-    /// count: the list returns two rows and the balance summary's actual hours are 7.4 (3.4 + 4.0). Only a
-    /// Skema save replaces a cell; a TIME_POST registration never does.
-    ///
-    /// <para><b>Red conditions.</b> Passes today and must keep passing. <b>MD-13</b> (both repositories'
-    /// insert marks for every source, dropping the SKEMA-only restriction) makes the second registration
-    /// supersede the first: the list shrinks to one row and <c>Assert.Equal(2, rows.Length)</c> trips.</para>
-    /// </summary>
-    [Fact]
-    public async Task TimePost_TwoRegistrationsSameDayAndTask_BothCounted()
-    {
-        var emp = await SeedEmployeeAsync();
-        var client = EmployeeClient(emp);
-
-        foreach (var hours in new[] { 3.4m, 4.0m })
-        {
-            var rsp = await client.PostAsJsonAsync("/api/time-entries", new
-            {
-                employeeId = emp,
-                date = Day.ToString("yyyy-MM-dd"),
-                hours,
-                taskId = Project,
-                activityType = "NORMAL",
-                agreementCode = "AC",
-            });
-            Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
-        }
-
-        var list = (await (await client.GetAsync($"/api/time-entries/{emp}"))
-            .Content.ReadFromJsonAsync<JsonElement>()).EnumerateArray().ToArray();
-        Assert.Equal(2, list.Length);
-        Assert.Equal(new[] { 3.4m, 4.0m }, list.Select(r => r.GetProperty("hours").GetDecimal()).OrderBy(h => h).ToArray());
-
-        var summary = await (await client.GetAsync(
-            $"/api/balance/{emp}/summary?year={Day.Year}&month={Day.Month}")).Content.ReadFromJsonAsync<JsonElement>();
-        Assert.Equal(7.4m, summary.GetProperty("normHoursActual").GetDecimal());
     }
 
     // ════════════════════════════════════════════════════════════════════════

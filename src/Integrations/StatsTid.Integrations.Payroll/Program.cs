@@ -239,6 +239,8 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     // the terminated-inclusive subject read and the window read.
     UserRepository userRepo,
     IEmploymentWindowResolver windowResolver,
+    // The typed-entry refusal's read of the month's current recorded hours (RefuseTypedEntriesAsync).
+    IRecordedHoursReader hoursReader,
     ILoggerFactory loggerFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
@@ -331,6 +333,13 @@ app.MapPost("/api/payroll/calculate-and-export", async (
     {
         return PayrollFourEyesRefused(loggerFactory, approval.PeriodId, fourEyesClause, "calculate-and-export admission");
     }
+
+    // Typed time is refused by name (QUAL-232, QUAL-202): after the approval and four-eyes checks, before anything is
+    // calculated or written — no manifest, no export record, no PayrollExportGenerated, no ADR-026 audit row.
+    if (await RefuseTypedEntriesAsync(
+            hoursReader, loggerFactory, request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd,
+            "calculate-and-export", ct) is { } typedEntriesRefusal)
+        return typedEntriesRefusal;
 
     // Forward auth header and correlation ID for traceability
     var authHeader = httpContext.Request.Headers.Authorization.FirstOrDefault();
@@ -570,6 +579,8 @@ app.MapPost("/api/payroll/recalculate", async (
     // S147 / TASK-14703 (F1): the departed-self guard's deny-only subject read and its clock.
     UserRepository userRepo,
     TimeProvider timeProvider,
+    // The typed-entry refusal's read of the month's current recorded hours (RefuseTypedEntriesAsync).
+    IRecordedHoursReader hoursReader,
     ILoggerFactory loggerFactory,
     HttpContext httpContext,
     CancellationToken ct) =>
@@ -638,6 +649,14 @@ app.MapPost("/api/payroll/recalculate", async (
             idempotencyToken
         });
     }
+
+    // Typed time is refused by name (QUAL-232, QUAL-202): after the idempotency fast path, so a token already delivered
+    // keeps its original answer, and before the correction is calculated — no manifest, no correction event, no baseline
+    // or balance change, no ADR-026 audit row, no idempotency marker.
+    if (await RefuseTypedEntriesAsync(
+            hoursReader, loggerFactory, request.Profile.EmployeeId, request.PeriodStart, request.PeriodEnd,
+            "recalculate", ct) is { } typedEntriesRefusal)
+        return typedEntriesRefusal;
 
     // Extract actor ID from claims
     var actorId = httpContext.User.FindFirst("sub")?.Value ?? "unknown";
@@ -834,6 +853,53 @@ static IResult PayrollFourEyesRefused(ILoggerFactory loggerFactory, Guid periodI
         error = PayrollFourEyesException.ErrorSentence,
         kind = PayrollFourEyesException.KindValue
     }, statusCode: 409);
+}
+
+// The ONE refusal for "this month holds recorded time typed as something other than ordinary work" (QUAL-232, QUAL-202).
+// Payroll pays a stored time entry as ordinary work only when its ActivityType is null or "NORMAL" (Ordinal). Any other
+// type is paid wrongly by today's rules (an on-call hour at the reduced on-call rate AND as a fully worked hour), so the
+// month is refused by name instead of paid; a historical "timer" row is refused too (ADR-028 D5). No route registers a
+// typed entry (the Skema save writes NORMAL itself), so this is defence in depth over rows already stored.
+// The window is the calculation's own hours read — the same reader, the same CURRENT rows and the same
+// [PeriodCalculationService.HoursReadStart(periodStart), periodEnd] (ADR-016 D10) — so a typed row on a context day of
+// the opening week is refused exactly when the calculation would read and pay it. Both calculating routes call it before
+// anything is calculated, so a refusal writes nothing; replay never does (evaluation, never admission: ADR-016 D10 R42).
+// A blank employee id cannot hold stored entries, so it is left to the route's own outcome. 422 because the request is
+// well formed but the month's data cannot be paid. The body is FIXED: no employee id, no date, no row data (ADR-040 D7);
+// the server log names the employee, the period and the refused rows' event ids and types.
+// shortcut(pending): a month holding a stored typed row has no in-product remedy (no route removes or re-types a stored
+// entry), so it stays refused; upgrade when a database holding typed rows is carried forward instead of reseeded.
+static async Task<IResult?> RefuseTypedEntriesAsync(
+    IRecordedHoursReader hoursReader,
+    ILoggerFactory loggerFactory,
+    string employeeId,
+    DateOnly periodStart,
+    DateOnly periodEnd,
+    string route,
+    CancellationToken ct)
+{
+    if (string.IsNullOrWhiteSpace(employeeId))
+        return null;
+
+    var recorded = await hoursReader.ReadCurrentAsync(
+        employeeId, PeriodCalculationService.HoursReadStart(periodStart), periodEnd, ct);
+    var typed = recorded.Entries
+        .Where(e => e.ActivityType is not null && !string.Equals(e.ActivityType, "NORMAL", StringComparison.Ordinal))
+        .ToList();
+    if (typed.Count == 0)
+        return null;
+
+    loggerFactory.CreateLogger("StatsTid.Integrations.Payroll.ActivityType").LogWarning(
+        "Refused ({Kind}): employee {EmployeeId}, period {PeriodStart:yyyy-MM-dd}..{PeriodEnd:yyyy-MM-dd} holds {Count} " +
+        "recorded time entries typed other than NORMAL: {TypedEntries} ({Route})",
+        "payroll-activity-type-refused", employeeId, periodStart, periodEnd, typed.Count,
+        string.Join(", ", typed.Select(e => $"{e.EventId}:{e.ActivityType}")), route);
+    return Results.Json(new
+    {
+        success = false,
+        error = "The month holds recorded hours of an activity type other than ordinary work (such as on-call duty, a call-in or travel). Payroll calculates a month only when all its recorded working hours are ordinary work, so this month is refused. Nothing was calculated, written or exported.",
+        kind = "payroll-activity-type-refused"
+    }, statusCode: 422);
 }
 
 // S145 TASK-14508 (R14) — the ONE refusal for "this request carries hours". Payroll reads the

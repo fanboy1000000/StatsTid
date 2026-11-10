@@ -32,7 +32,7 @@ namespace StatsTid.Tests.Regression.Security;
 /// <b>Docker</b> — CI-pending.</para>
 ///
 /// <para><b>Kinds.</b> Each Employee fact is F: on today's code the floor tests only <c>!IsActive</c>, so the
-/// active subject is admitted (200/201) on the Skema save, the time entry, send and employee-approve, and the
+/// active subject is admitted (200) on the Skema save, send and employee-approve, and the
 /// reopen, row-preferences and compensation-choice routes have no floor at all. The LocalHR fact is F for the
 /// same reason on the two self-only routes. The wave-gate mutations: M-9a drops the identity arm of the floor
 /// (turns the LocalHR fact RED); M-9c checks the role arm first (turns every body assertion RED).</para>
@@ -80,25 +80,6 @@ public sealed class DepartedSelfServiceTests : SendCommandMatrixTestBase
         {
             year = MarchYear, month = MarchMonth,
             entries = new[] { new { date = new DateOnly(2026, 3, 10), projectCode = "PROJ-S147", hours = 7.4m } },
-        });
-
-        await AssertSelfRefusalAsync(rsp);
-        Assert.Equal(0L, await ScalarLongAsync(
-            "SELECT COUNT(*) FROM time_entries_projection WHERE employee_id=@e", ("e", mette)));
-        Assert.Equal(0L, await CountOutboxTotalAsync($"employee-{mette}"));
-    }
-
-    /// <summary>Kind F. Own time entry: 403 with the self sentence, no row. Red condition: <c>Assert 403</c> — today 201.</summary>
-    [Fact]
-    public async Task Employee_OwnTimeEntry_403()
-    {
-        var mette = await SeedMetteAsync("ds14710_emp_entry");
-        using var client = EmployeeClient(mette);
-
-        var rsp = await client.PostAsJsonAsync("/api/time-entries", new
-        {
-            employeeId = mette, date = new DateOnly(2026, 3, 10), hours = 7.4m,
-            taskId = (string?)null, activityType = "NORMAL", agreementCode = "HK",
         });
 
         await AssertSelfRefusalAsync(rsp);
@@ -195,7 +176,7 @@ public sealed class DepartedSelfServiceTests : SendCommandMatrixTestBase
     /// Kind F — the discriminating fact for the floor's identity arm (M-9a). An HR user who has left cannot change
     /// her OWN row preferences or her OWN compensation choice: both routes are self-only and never reach the
     /// organisation-scope validator, so the floor is the only layer that can refuse an HR self. 403 with the self
-    /// sentence on each, nothing written. (Her Skema save, time entry, send and leader-arm reopen are closed by the
+    /// sentence on each, nothing written. (Her Skema save, send and leader-arm reopen are closed by the
     /// validator clause and pinned by TASK-14703-T.) Red conditions: <c>Assert 403</c> on each — today neither route
     /// has any floor, so both succeed whatever her role; with M-9a (drop the identity arm) both answer 200 again.
     /// </summary>
@@ -223,7 +204,7 @@ public sealed class DepartedSelfServiceTests : SendCommandMatrixTestBase
     /// <summary>
     /// Kind B — boundary pin, holds today (an employee with no end date saving their own row preferences and
     /// registering their own time is not a leaver). The new floor must never refuse a person who has not departed.
-    /// Row-preferences 200, time entry 201.
+    /// Row-preferences 200, Skema save 200 (S148 R-20 re-point; was time entry 201).
     /// </summary>
     [Fact]
     public async Task Employee_NoEndDate_OwnWrites_StillAllowed()
@@ -236,11 +217,13 @@ public sealed class DepartedSelfServiceTests : SendCommandMatrixTestBase
             new { projects = Array.Empty<object>(), absenceTypes = Array.Empty<object>() });
         Assert.Equal(HttpStatusCode.OK, rowPrefs.StatusCode);
 
-        var entry = await client.PostAsJsonAsync("/api/time-entries", new
+        // S148 R-20 re-point: the own write is a Skema save (POST /api/time-entries is retired).
+        var entry = await client.PostAsJsonAsync($"/api/skema/{emp}/save", new
         {
-            employeeId = emp, date = new DateOnly(2026, 3, 10), hours = 7.4m,
-            taskId = (string?)null, activityType = "NORMAL", agreementCode = "HK",
+            year = MarchYear, month = MarchMonth,
+            entries = new[] { new { date = new DateOnly(2026, 3, 10), projectCode = "PROJ-S148", hours = 7.4m } },
         });
-        Assert.Equal(HttpStatusCode.Created, entry.StatusCode);
+        // S148 R-20: was 201 (the retired route); the Skema save answers 200.
+        Assert.Equal(HttpStatusCode.OK, entry.StatusCode);
     }
 }

@@ -46,38 +46,6 @@
         }
       }
     },
-    "/api/time-entries": {
-      "post": {
-        "tags": [
-          "StatsTid.Backend.Api"
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict"
-          }
-        }
-      }
-    },
     "/api/time-entries/{employeeId}": {
       "get": {
         "tags": [
@@ -9137,54 +9105,6 @@
         },
         "additionalProperties": false
       },
-      "StatsTid.Backend.Api.Contracts.RegisterTimeEntryRequest": {
-        "required": [
-          "agreementCode",
-          "date",
-          "employeeId",
-          "hours"
-        ],
-        "type": "object",
-        "properties": {
-          "employeeId": {
-            "type": "string"
-          },
-          "date": {
-            "type": "string",
-            "format": "date"
-          },
-          "hours": {
-            "type": "number",
-            "format": "double"
-          },
-          "startTime": {
-            "type": "string",
-            "format": "time",
-            "nullable": true
-          },
-          "endTime": {
-            "type": "string",
-            "format": "time",
-            "nullable": true
-          },
-          "taskId": {
-            "type": "string",
-            "nullable": true
-          },
-          "activityType": {
-            "type": "string",
-            "nullable": true
-          },
-          "agreementCode": {
-            "type": "string"
-          },
-          "okVersion": {
-            "type": "string",
-            "deprecated": true
-          }
-        },
-        "additionalProperties": false
-      },
       "StatsTid.Backend.Api.Contracts.RemoveWithReassignmentResponse": {
         "required": [
           "actingEdgesClosed",
@@ -10532,23 +10452,6 @@
           "today": {
             "type": "string",
             "format": "date"
-          }
-        },
-        "additionalProperties": false
-      },
-      "StatsTid.Backend.Api.Contracts.TimeEntryCreatedResponse": {
-        "required": [
-          "eventId",
-          "streamId"
-        ],
-        "type": "object",
-        "properties": {
-          "eventId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "streamId": {
-            "type": "string"
           }
         },
         "additionalProperties": false

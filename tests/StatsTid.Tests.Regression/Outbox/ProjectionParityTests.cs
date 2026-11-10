@@ -72,7 +72,8 @@ public sealed class ProjectionParityTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Time entries parity: write N entries via POST under a stalled publisher, assert
+    /// Time entries parity: write N entries via Skema saves (S148 R-20 re-point; the
+    /// POST /api/time-entries route is retired) under a stalled publisher, assert
     /// row-count guard (N unpublished outbox rows), drain, assert (N events) AND
     /// (N matching projection rows with identical field values + outbox_id ordering).
     /// </summary>
@@ -84,26 +85,25 @@ public sealed class ProjectionParityTests : IAsyncLifetime
 
         var employeeId = "EMP_PARITY_T_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         var streamId = $"employee-{employeeId}";
-        // S136 / TASK-13603 — POST /api/time-entries now resolves the subject's users row
+        // S136 / TASK-13603 — the write resolves the subject's users row
         // (terminated-inclusive read, ADR-040 D3 / SEC-046) before writing, so the employee must
         // exist. NULL employment dates ⇒ window-unbounded (D2); is_active=true ⇒ no role floor.
         await SeedFullTimeEmployeeAsync(employeeId, "HK");
         var token = MintEmployeeToken(employeeId);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        // Write N entries on consecutive days.
+        // Write N entries on consecutive days (a distinct task each, so each is its own cell).
         for (int i = 0; i < N; i++)
         {
-            var rsp = await client.PostAsJsonAsync("/api/time-entries", new
+            var date = new DateOnly(2026, 5, 1).AddDays(i);
+            var rsp = await client.PostAsJsonAsync($"/api/skema/{employeeId}/save", new
             {
-                employeeId,
-                date = new DateOnly(2026, 5, 1).AddDays(i).ToString("yyyy-MM-dd"),
-                hours = 7.4m,
-                taskId = $"PROJ-PAR-{i}",
-                activityType = "NORMAL",
-                agreementCode = "HK",
+                year = date.Year,
+                month = date.Month,
+                entries = new[] { new { date = date.ToString("yyyy-MM-dd"), projectCode = $"PROJ-PAR-{i}", hours = 7.4m } },
             });
-            Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+            // S148 R-20: was 201 (the retired route); the Skema save answers 200.
+            Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
         }
 
         // (1) Row-count guard BEFORE drain: exactly N unpublished outbox rows.
@@ -257,35 +257,33 @@ public sealed class ProjectionParityTests : IAsyncLifetime
 
     /// <summary>
     /// <b>Plain language.</b> The projection table is a read-model kept in step with the event log. After
-    /// S145 it must hold, for a Skema cell that was saved twice, only the LATER save as current, while a
-    /// <c>POST /api/time-entries</c> for the same day and task stays additive. This fact proves the live
-    /// write path and the event log tell the same story: it writes through the real endpoints (two Skema
-    /// saves of one cell, then one time-entry POST for the same day and task), lets the publisher drain,
-    /// folds the drained events in <c>outbox_id</c> order under the ruled semantics, and requires the fold
-    /// to equal the rows the live path left current. This suite never runs the rebuild; the rebuild is
-    /// pinned in <see cref="ProjectionBackfillTests"/>.
+    /// S145 it must hold, for a Skema cell that was saved twice, only the LATER save as current. This fact
+    /// proves the live write path and the event log tell the same story: it writes through the real
+    /// endpoint (two Skema saves of one cell), lets the publisher drain, folds the drained events in
+    /// <c>outbox_id</c> order under the ruled semantics, and requires the fold to equal the rows the live
+    /// path left current. This suite never runs the rebuild; the rebuild is pinned in
+    /// <see cref="ProjectionBackfillTests"/>.
     ///
     /// <para><b>The ruled semantics (refinement A0).</b> A <c>source</c> of <c>SKEMA</c> replaces the cell's
     /// earlier SKEMA event (same employee, date, task). Anything else is <c>TIME_POST</c> and is additive,
-    /// and an event with no <c>source</c> at all is <c>TIME_POST</c>: that is every pre-S145 event.</para>
+    /// and an event with no <c>source</c> at all is <c>TIME_POST</c>: that is every pre-S145 event. The
+    /// additive rule for stored <c>TIME_POST</c> events has no live writer since S148 (the
+    /// <c>POST /api/time-entries</c> route is retired, R-20); it stays pinned by the rebuild in
+    /// <see cref="ProjectionBackfillTests"/>.</para>
     ///
-    /// <para><b>Guard: passes today.</b> Today no event carries <c>source</c>, so the fold keeps all three
-    /// events, and the live table holds all three rows with no supersession column to filter on (the
-    /// column is read only when it exists). After S145 the events carry <c>source</c>, the fold keeps two
-    /// and the live current rows are the same two. The fold reads the payload, so it is not decided by
-    /// the live path under test.</para>
+    /// <para><b>Kind R (regression pin, holds today).</b> The events carry <c>source</c> SKEMA, the fold
+    /// keeps the later save and the live current row is the same one. The fold reads the payload, so it
+    /// is not decided by the live path under test. S148 R-20 re-point: the third write of the original
+    /// fact (an additive time-entry POST) is dropped with the route.</para>
     ///
-    /// <para><b>Red conditions (after S145; <b>MD-12</b>, <b>MD-13</b>).</b> MD-12 (the save handler updates a
-    /// cell with a current SKEMA row in place and emits no second event): the log holds the 7.4 h save
-    /// and the Time-POST event only, so the fold's Skema row says 7.4 h while the live row says 8.0 h, and
-    /// the set comparison fails on the hours. MD-13 (both repositories' <c>InsertAsync</c> mark for every
-    /// insert, dropping the <c>source = 'SKEMA'</c> restriction): the Time-POST insert, which comes last,
-    /// supersedes the current Skema row, so the live current set is missing the 8.0 h Skema row that the
-    /// fold keeps. Both are compared on (event id, date, task, hours), so neither can hide behind a
-    /// matching count.</para>
+    /// <para><b>Red condition (<b>MD-12</b>).</b> If the save handler updated a cell with a current SKEMA
+    /// row in place and emitted no second event, the log would hold only the 7.4 h save, so the fold's
+    /// Skema row says 7.4 h while the live row says 8.0 h, and the set comparison fails on the hours. The
+    /// two sets are compared on (event id, date, task, hours), so it cannot hide behind a matching count.
+    /// (MD-13, a time-entry insert superseding a Skema row, has no live writer now.)</para>
     /// </summary>
     [Fact]
-    public async Task Parity_AfterSkemaResaveAndTimePost_LiveCurrentSetEqualsFoldOfEvents()
+    public async Task Parity_AfterSkemaResave_LiveCurrentSetEqualsFoldOfEvents()
     {
         var client = _factory.CreateClient();
         var employeeId = "EMP_PARITY_S145_" + Guid.NewGuid().ToString("N").Substring(0, 8);
@@ -293,7 +291,7 @@ public sealed class ProjectionParityTests : IAsyncLifetime
         await SeedFullTimeEmployeeAsync(employeeId, "HK");
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", MintEmployeeToken(employeeId));
 
-        // A WEEKDAY (Monday 4 May 2026); the same cell for all three writes.
+        // A WEEKDAY (Monday 4 May 2026); the same cell for both writes.
         var cellDate = new DateOnly(2026, 5, 4);
         Assert.Equal(DayOfWeek.Monday, cellDate.DayOfWeek);
         const string task = "PROJ-PAR-S145-CELL";
@@ -310,19 +308,6 @@ public sealed class ProjectionParityTests : IAsyncLifetime
             Assert.True(save.StatusCode == HttpStatusCode.OK,
                 $"Skema save at {hours} h: expected 200, got {(int)save.StatusCode} {await save.Content.ReadAsStringAsync()}");
         }
-
-        // One additive registration for the same day and task.
-        var post = await client.PostAsJsonAsync("/api/time-entries", new
-        {
-            employeeId,
-            date = cellDate.ToString("yyyy-MM-dd"),
-            hours = 2.0m,
-            taskId = task,
-            activityType = "NORMAL",
-            agreementCode = "HK",
-        });
-        Assert.True(post.StatusCode == HttpStatusCode.Created,
-            $"POST /api/time-entries: expected 201, got {(int)post.StatusCode} {await post.Content.ReadAsStringAsync()}");
 
         // Let the publisher drain EVERY TimeEntryRegistered row of the stream into `events` (the count
         // is deliberately not fixed: under MD-12 the log legitimately holds one event fewer).
