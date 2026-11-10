@@ -174,6 +174,35 @@ public sealed class PayrollActivityTypeRefusalTests : IClassFixture<FlexLedgerHo
         Assert.Equal(1, await _fx.CountRecordsAsync(emp));
     }
 
+    /// <summary>
+    /// AC-S0-1b, the comparison's edge (kind F, Docker; CI-pending; Step 5a N-5, ruling A6). A stored row typed <c>timer</c>
+    /// (a historical type) and a stored row typed lowercase <c>normal</c> are each refused on <c>/calculate-and-export</c> with
+    /// the same 422 and kind, and nothing is written. The rule is "the type is null or exactly <c>NORMAL</c>" (ordinal), so
+    /// <c>normal</c> is not <c>NORMAL</c>. I see no reason to admit a lowercase spelling: nothing in the system writes one, the
+    /// Skema save writes <c>NORMAL</c>, and a quiet case-folding would pay a row the refusal exists to keep out.
+    ///
+    /// <para><b>Red conditions.</b> On the base nothing is refused (200, a manifest). A case-insensitive comparison would pay the
+    /// <c>normal</c> row (200), failing that row's 422 assertion.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("timer")]
+    [InlineData("normal")]
+    public async Task TimerAndLowercaseNormal_AreRefused_OrdinalComparison(string storedType)
+    {
+        var emp = $"EMP-S148-AT-{storedType.ToUpperInvariant()}";
+        await _fx.SeedEmployeeAsync(emp);
+        await _fx.SeedApprovedMonthAsync(emp, Jun);
+        await _fx.SeedWeekdayHoursAsync(emp, Jun, new DateOnly(2026, 6, 5));
+        await SeedTypedEntryAsync(emp, new DateOnly(2026, 6, 10), storedType);
+        _fx.Engine.Configure(emp, Jun, closing: 5m);
+
+        var response = await _fx.CalculateAndExportMonthAsync(emp, Jun);
+
+        AssertRefusal(response);
+        Assert.Equal(0, _fx.Engine.CallCountFor(emp));
+        await AssertNothingWrittenAsync(emp);
+    }
+
     // ═════════════════════════════════════════════════════════════════════
     // AC-S0-1c — a month already paid: replay reproduces it, recalculate is refused
     // ═════════════════════════════════════════════════════════════════════

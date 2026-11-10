@@ -300,8 +300,8 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
     /// events, the projection's rows and, for the absence rows, the VACATION balance. The refused save
     /// targets the same cell.</para>
     ///
-    /// <para><b>Red conditions.</b> Today nothing validates the hours of a Skema cell (the
-    /// Skema save's own 400 checks, <c>SkemaEndpoints.cs:809-838</c>, are what these rows pin), so each row's save succeeds with 200 and
+    /// <para><b>Red conditions.</b> These rows pin the Skema save's own 400 checks
+    /// (<c>SkemaEndpoints.cs:809-838</c>). Without them, each row's save would succeed with 200 and
     /// <c>Assert.Equal(HttpStatusCode.BadRequest, ...)</c> trips. Listed under <b>MD-10</b> (the pre-lock
     /// validation loses its hours-at-or-below-zero 400), which turns all four rows red the same way.</para>
     /// </summary>

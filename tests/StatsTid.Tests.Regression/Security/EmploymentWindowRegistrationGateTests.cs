@@ -25,9 +25,10 @@ namespace StatsTid.Tests.Regression.Security;
 ///   fixture) is byte-unaffected.</item>
 ///   <item><b>The D3 date-free body</b>: the 422 carries EXACTLY
 ///   <c>{error, kind, message}</c> — no date-valued field, no start/end echo, and ONE uniform
-///   body for before-start and after-end, so employment dates (HR-scoped, <c>User.cs:38-62</c>)
-///   cannot be binary-searched by probing registration dates. The body comes from
-///   ONE construction site (<c>EmploymentWindowGate</c>).</item>
+///   body for before-start and after-end (pinned byte for byte by
+///   <c>SkemaSave_BeforeStartAndAfterEnd_RefusalBodiesAreByteIdentical</c>), so employment dates
+///   (HR-scoped, <c>User.cs:38-62</c>) cannot be binary-searched by probing registration dates. The
+///   body comes from ONE construction site (<c>EmploymentWindowGate</c>).</item>
 ///   <item><b>All THREE skema arrays</b> are gated — Entries, Absences, AND WorkTime (the
 ///   first date gate Entries/Absences have ever had) — and a single offending date rejects the
 ///   WHOLE save atomically (zero rows in any projection).</item>
@@ -227,6 +228,26 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
 
         await AssertWindow422DateFreeAsync(rsp);
         await AssertNothingWrittenAsync(emp);
+    }
+
+    /// <summary>Kind R (regression pin, holds today; S148 Step 5a W-1, replacing the retired time-entry
+    /// boundary matrix's uniformity assertion). For the same windowed employee, a save dated the day BEFORE
+    /// the start and a save dated the day AFTER the end both answer the date-free 422, and the two bodies are
+    /// equal byte for byte: the refusal must not reveal which side of the window a date falls on (ADR-040 D3,
+    /// SEC-046). <b>Red condition:</b> a direction-dependent message (or any direction-dependent member) in
+    /// <c>EmploymentWindowGate.OutsideEmploymentPeriod()</c> makes <c>Assert.Equal(beforeBody, afterBody)</c> fail.</summary>
+    [Fact]
+    public async Task SkemaSave_BeforeStartAndAfterEnd_RefusalBodiesAreByteIdentical()
+    {
+        var emp = UniqueEmp("uni");
+        await SeedEmployeeAsync(emp);
+        await SetEmploymentWindowAsync(emp, WindowStart, WindowEnd);
+        var client = PinnedEmployeeClient(emp); // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
+
+        var beforeBody = await AssertWindow422DateFreeAsync(await PostSkemaEntryAsync(client, emp, DayBeforeStart));
+        var afterBody = await AssertWindow422DateFreeAsync(await PostSkemaEntryAsync(client, emp, DayAfterEnd));
+
+        Assert.Equal(beforeBody, afterBody);
     }
 
     /// <summary>Absences array: an absence dated after the employment end ⇒ 422, nothing

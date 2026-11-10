@@ -530,6 +530,7 @@ public sealed class TerminatedEmployeeAccessTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
         Assert.Equal(0L, await CountTimeEntryRowsTotalAsync(employeeId));
+        Assert.Equal(0L, await CountEmployeeStreamOutboxTotalAsync(employeeId));
     }
 
     /// <summary>The positive half, writer #2: in-subtree HR saves an IN-WINDOW-dated skema
