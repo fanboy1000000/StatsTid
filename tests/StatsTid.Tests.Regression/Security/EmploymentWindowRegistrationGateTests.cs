@@ -11,8 +11,9 @@ using Xunit;
 namespace StatsTid.Tests.Regression.Security;
 
 /// <summary>
-/// S136 / TASK-13603 — the employment-window registration gate (ADR-040 D1–D3) on BOTH
-/// registration writers: <c>POST /api/time-entries</c> and <c>POST /api/skema/{id}/save</c>.
+/// S136 / TASK-13603 — the employment-window registration gate (ADR-040 D1–D3) on the registration
+/// writer <c>POST /api/skema/{id}/save</c> (S148 R-20: the second writer, <c>POST /api/time-entries</c>,
+/// is retired; its boundary-matrix and windowless facts are pinned by the Skema facts below).
 ///
 /// <para><b>What is pinned here:</b></para>
 /// <list type="bullet">
@@ -25,8 +26,8 @@ namespace StatsTid.Tests.Regression.Security;
 ///   <item><b>The D3 date-free body</b>: the 422 carries EXACTLY
 ///   <c>{error, kind, message}</c> — no date-valued field, no start/end echo, and ONE uniform
 ///   body for before-start and after-end, so employment dates (HR-scoped, <c>User.cs:38-62</c>)
-///   cannot be binary-searched by probing registration dates. Both writers return the body from
-///   ONE construction site (<c>EmploymentWindowGate</c>), asserted byte-identical.</item>
+///   cannot be binary-searched by probing registration dates. The body comes from
+///   ONE construction site (<c>EmploymentWindowGate</c>).</item>
 ///   <item><b>All THREE skema arrays</b> are gated — Entries, Absences, AND WorkTime (the
 ///   first date gate Entries/Absences have ever had) — and a single offending date rejects the
 ///   WHOLE save atomically (zero rows in any projection).</item>
@@ -79,11 +80,16 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
 
     private static string UniqueEmp(string tag) => $"s136wg_{tag}_{Guid.NewGuid():N}"[..18];
 
-    /// <summary>The direct time-entry POST, self-registered (HK — the fixture org's agreement).</summary>
-    private static Task<HttpResponseMessage> PostTimeEntryAsync(
+    /// <summary>An entries-only Skema save of one project entry for the date's month, self-registered
+    /// (S148 R-20: replaces the retired time-entry POST helper).</summary>
+    private static Task<HttpResponseMessage> PostSkemaEntryAsync(
         HttpClient client, string employeeId, DateOnly date, decimal hours = 7.4m)
-        => client.PostAsJsonAsync("/api/time-entries",
-            new { employeeId, date, hours, taskId = (string?)null, activityType = "NORMAL", agreementCode = "HK" });
+        => client.PostAsJsonAsync($"/api/skema/{employeeId}/save", new
+        {
+            year = date.Year,
+            month = date.Month,
+            entries = new[] { new { date, projectCode = "PROJ-S136-NUL", hours } },
+        });
 
     // ── Direct window seeding (the gate keys on the users date columns however written;
     //    the employment-date PUTs have their own suites — TASK-13604) ─────────────────────────
@@ -155,79 +161,40 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════
-    // POST /api/time-entries — the D1 boundary matrix + D2 NULL sides on one writer.
+    // POST /api/skema/{id}/save — the D2 NULL sides (S148 R-20: re-pointed from the retired time-entry route).
     // ═══════════════════════════════════════════════════════════════════════════════════════════
-
-    /// <summary>D1 boundary matrix: start day and end day (inclusive) are 201; the day before
-    /// the start and the day after the end are the date-free 422 — and the two refusals'
-    /// bodies are BYTE-IDENTICAL (uniform class message: no before/after oracle). Exactly the
-    /// two accepted boundary rows exist afterwards.</summary>
-    [Fact]
-    public async Task TimeEntry_BoundaryMatrix_EndInclusive_DayOutside422()
-    {
-        var emp = UniqueEmp("bnd");
-        await SeedEmployeeAsync(emp);
-        await SetEmploymentWindowAsync(emp, WindowStart, WindowEnd);
-        var client = PinnedEmployeeClient(emp); // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
-
-        var onStart = await PostTimeEntryAsync(client, emp, WindowStart);
-        Assert.Equal(HttpStatusCode.Created, onStart.StatusCode);
-
-        var onEnd = await PostTimeEntryAsync(client, emp, WindowEnd);
-        Assert.Equal(HttpStatusCode.Created, onEnd.StatusCode);
-
-        var beforeBody = await AssertWindow422DateFreeAsync(await PostTimeEntryAsync(client, emp, DayBeforeStart));
-        var afterBody = await AssertWindow422DateFreeAsync(await PostTimeEntryAsync(client, emp, DayAfterEnd));
-        Assert.Equal(beforeBody, afterBody); // uniform for before-start and after-end — no oracle
-
-        Assert.Equal(2L, await CountTimeEntriesTotalAsync(emp)); // only the two boundary 201s
-    }
 
     /// <summary>D2, NULL start: employed "since the beginning of time" — a date far before the
     /// end is accepted; the end still binds (day after ⇒ 422).</summary>
     [Fact]
-    public async Task TimeEntry_NullStart_UnboundedPast_EndStillBinds()
+    public async Task SkemaSave_NullStart_UnboundedPast_EndStillBinds()
     {
         var emp = UniqueEmp("nst");
         await SeedEmployeeAsync(emp);
         await SetEmploymentWindowAsync(emp, start: null, end: WindowEnd);
         var client = PinnedEmployeeClient(emp); // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
 
-        var pastRsp = await PostTimeEntryAsync(client, emp, new DateOnly(2026, 3, 2)); // no start to violate
-        Assert.Equal(HttpStatusCode.Created, pastRsp.StatusCode);
+        var pastRsp = await PostSkemaEntryAsync(client, emp, new DateOnly(2026, 3, 2)); // no start to violate
+        Assert.Equal(HttpStatusCode.OK, pastRsp.StatusCode); // S148 R-20: was 201 (the retired time-entry route); the Skema save answers 200
 
-        await AssertWindow422DateFreeAsync(await PostTimeEntryAsync(client, emp, DayAfterEnd));
+        await AssertWindow422DateFreeAsync(await PostSkemaEntryAsync(client, emp, DayAfterEnd));
         Assert.Equal(1L, await CountTimeEntriesTotalAsync(emp));
     }
 
     /// <summary>D2, NULL end: open-ended employment — a date after the start is accepted with no
     /// upper bound; the start still binds (day before ⇒ 422).</summary>
     [Fact]
-    public async Task TimeEntry_NullEnd_OpenEnded_StartStillBinds()
+    public async Task SkemaSave_NullEnd_OpenEnded_StartStillBinds()
     {
         var emp = UniqueEmp("nen");
         await SeedEmployeeAsync(emp);
         await SetEmploymentWindowAsync(emp, start: WindowStart, end: null);
         var client = EmployeeClient(emp);
 
-        await AssertWindow422DateFreeAsync(await PostTimeEntryAsync(client, emp, DayBeforeStart));
+        await AssertWindow422DateFreeAsync(await PostSkemaEntryAsync(client, emp, DayBeforeStart));
 
-        var futureRsp = await PostTimeEntryAsync(client, emp, new DateOnly(2026, 3, 25)); // no end to violate
-        Assert.Equal(HttpStatusCode.Created, futureRsp.StatusCode);
-        Assert.Equal(1L, await CountTimeEntriesTotalAsync(emp));
-    }
-
-    /// <summary>D2, the no-backfill guarantee: a fully windowless employee (both dates NULL —
-    /// every pre-S136 fixture and every existing user) registers exactly as before. THE pin that
-    /// enforcement landing required no data migration.</summary>
-    [Fact]
-    public async Task TimeEntry_WindowlessEmployee_Unaffected()
-    {
-        var emp = UniqueEmp("nul");
-        await SeedEmployeeAsync(emp); // RegressionSeed writes NULL employment dates
-
-        var rsp = await PostTimeEntryAsync(EmployeeClient(emp), emp, DayBeforeStart);
-        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
+        var futureRsp = await PostSkemaEntryAsync(client, emp, new DateOnly(2026, 3, 25)); // no end to violate
+        Assert.Equal(HttpStatusCode.OK, futureRsp.StatusCode); // S148 R-20: was 201 (the retired time-entry route); the Skema save answers 200
         Assert.Equal(1L, await CountTimeEntriesTotalAsync(emp));
     }
 
@@ -238,7 +205,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
 
     /// <summary>Entries array: an out-of-window entry date (in an otherwise legal save) ⇒ the
     /// date-free 422 and ZERO rows across ALL projections + the outbox — the whole save is
-    /// atomic, and its body is byte-identical to the time-entry writer's 422 (ONE construction
+    /// atomic, and its body is the shared date-free 422 (ONE construction
     /// site). Entries never had ANY date gate before S136.</summary>
     [Fact]
     public async Task SkemaSave_EntryBeforeStart_Whole422_NothingWritten()
@@ -258,13 +225,8 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
             },
         });
 
-        var skemaBody = await AssertWindow422DateFreeAsync(rsp);
+        await AssertWindow422DateFreeAsync(rsp);
         await AssertNothingWrittenAsync(emp);
-
-        // Cross-writer byte-identity: the SAME employee's time-entry refusal is the same body.
-        var teBody = await AssertWindow422DateFreeAsync(
-            await PostTimeEntryAsync(PinnedEmployeeClient(emp), emp, DayBeforeStart)); // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first
-        Assert.Equal(teBody, skemaBody);
     }
 
     /// <summary>Absences array: an absence dated after the employment end ⇒ 422, nothing

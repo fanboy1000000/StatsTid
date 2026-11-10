@@ -349,8 +349,8 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
     //
     //  Owner ruling 2026-07-30: "A manager can never edit an employee's registrations. Only HR and
     //  admins can." Before this, ANY non-Employee actor whose org-scope covered the target could
-    //  write another employee's time data — LocalLeader included. Two endpoints carried that shape:
-    //  the skema save, and POST /api/time-entries (which has NO approval-period check at all).
+    //  write another employee's time data — LocalLeader included. Two endpoints carried that shape: the skema
+    //  save and POST /api/time-entries; the latter is retired (S148 R-20), so the skema save is the one writer left.
     //
     //  These are RED-on-old in the denial direction: both leader writes returned 2xx before the
     //  floor. The HR-allowed and SELF-allowed cases are the guards that the narrowing did not
@@ -365,16 +365,6 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
         entries = Array.Empty<object>(),
         absences = Array.Empty<object>(),
         workTime = Array.Empty<object>(),
-    };
-
-    private static object TimeEntryPayload(string employeeId) => new
-    {
-        employeeId,
-        date = "2026-05-04",
-        hours = 7.4m,
-        activityType = "NORMAL",
-        agreementCode = "AC",
-        okVersion = "OK24",
     };
 
     /// <summary>THE RULING, denial direction: a LocalLeader covering the target's org may NOT save
@@ -415,39 +405,6 @@ public sealed class S91TreePageHrAccessTests : IAsyncLifetime
 
         var rsp = await client.PostAsync($"/api/skema/{self}/save", JsonContent.Create(SkemaSavePayload));
         Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
-    }
-
-    /// <summary>The same ruling on the OTHER member of the write class. This endpoint is the worse
-    /// one: it has no approval-period status check, so before the floor a leader could write an
-    /// employee's entry in any period state. RED-on-old.</summary>
-    [Fact]
-    public async Task TimeEntryCreate_LeaderOnAnotherEmployee_Is403()
-    {
-        var emp = await SeedTargetEmployeeAsync("s124te_leader");
-        var client = ClientWith(AdminToken(StatsTidRoles.LocalLeader, CoveringOrg, "s124_te_leader"));
-
-        var rsp = await client.PostAsync("/api/time-entries", JsonContent.Create(TimeEntryPayload(emp)));
-        Assert.Equal(HttpStatusCode.Forbidden, rsp.StatusCode);
-    }
-
-    [Fact]
-    public async Task TimeEntryCreate_HrOnAnotherEmployee_Is201()
-    {
-        var emp = await SeedTargetEmployeeAsync("s124te_hr");
-        var client = ClientWith(AdminToken(StatsTidRoles.LocalHR, CoveringOrg, "s124_te_hr"));
-
-        var rsp = await client.PostAsync("/api/time-entries", JsonContent.Create(TimeEntryPayload(emp)));
-        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
-    }
-
-    [Fact]
-    public async Task TimeEntryCreate_LeaderOnTheirOwnEntry_Is201()
-    {
-        var self = await SeedTargetEmployeeAsync("s124te_self");
-        var client = ClientWith(AdminToken(StatsTidRoles.LocalLeader, CoveringOrg, self));
-
-        var rsp = await client.PostAsync("/api/time-entries", JsonContent.Create(TimeEntryPayload(self)));
-        Assert.Equal(HttpStatusCode.Created, rsp.StatusCode);
     }
 
     /// <summary>The TASK-12404 WRITE narrowing did not bleed into READS: HR still reads the month (its

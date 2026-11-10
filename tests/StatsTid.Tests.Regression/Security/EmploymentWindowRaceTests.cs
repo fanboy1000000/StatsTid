@@ -18,7 +18,7 @@ namespace StatsTid.Tests.Regression.Security;
 /// edit's strand guard, running concurrently, never saw.
 ///
 /// <para><b>Test shape</b> — the same advisory-then-authoritative choreography as the S128
-/// send-wins-then-POST pin (<c>SendConcurrencyTests.S128_SendWinsThenTimeEntry_...</c>), with
+/// send-wins-then-save pin (<c>SendConcurrencyTests.AC7d_SendVsSkemaSave_...</c>), with
 /// the window edit in the send's seat: a blocker connection takes the employee's advisory lock
 /// and — INSIDE that lock-holding transaction, exactly like the production employment-date PUT,
 /// which acquires this same lock as its first in-tx statement (the lock regime) — narrows
@@ -72,51 +72,7 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
         Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
     }
 
-    // ── Writer #1: POST /api/time-entries ─────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task WindowEditWins_ThenTimeEntry_ObservesNarrowedWindowInLock_And422s()
-    {
-        var emp = UniqueEmp("wed");
-        await SeedEmployeeAsync(emp); // NULL employment dates — unbounded until the edit lands
-        var (classId, objId) = await AdvisoryKeyPartsAsync(emp);
-
-        // The "window edit" holds the lock and narrows the end date, uncommitted — the exact
-        // in-lock position the production employment-date PUT gives this write.
-        await using var blockerConn = Fx.Db.Create();
-        await blockerConn.OpenAsync();
-        await using var blockerTx = await blockerConn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
-        await EmployeeConsumptionLock.AcquireAsync(blockerConn, blockerTx, emp);
-        await NarrowEndDateInTxAsync(blockerConn, blockerTx, emp, NarrowedEnd);
-
-        // Fire the REAL registration — its pre-lock reads (the terminated-inclusive subject
-        // read) see the pre-edit row (MVCC), so only the in-lock gate can catch the edit.
-        // S147 OQ-2: today pinned inside the window — the departed-self floor would otherwise answer first.
-        // Pinned to the narrowed last day (2026-03-10): not yet departed, so the in-lock window gate answers (422).
-        using var pinnedHost = Fx.Factory.WithFixedToday(NarrowedEnd);
-        var teClient = ClientFor(pinnedHost, emp, StatsTidRoles.Employee, Org, new RoleScope(StatsTidRoles.Employee, Org, "ORG_ONLY"));
-        var timeEntry = Task.Run(() => PostTimeEntryAsync(teClient, emp, RegistrationDay, 7.4m));
-
-        // Prove genuine contention: the POST is QUEUED on our advisory key…
-        await WaitForWaitersAsync(classId, objId, expected: 1);
-        // …and nothing has committed while the edit holds the window.
-        Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, RegistrationDay));
-
-        // The edit commits; the POST acquires and must now see end=03-10 < 03-12 in-lock.
-        await blockerTx.CommitAsync();
-
-        var rsp = await timeEntry;
-        var body = await BodyAsync(rsp);
-        Assert.True(rsp.StatusCode == HttpStatusCode.UnprocessableEntity,
-            $"expected the in-lock window 422, got {(int)rsp.StatusCode}: {body}");
-        Assert.Contains("outside_employment_period", body);
-        Assert.DoesNotContain("2026-03-12", body); // date-free even under the race (ADR-040 D3)
-
-        // THE invariant: no registration committed into the narrowed window.
-        Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, RegistrationDay));
-    }
-
-    // ── Writer #2: POST /api/skema/{id}/save (WorkTime arm — same gate, same lock) ────────────
+    // ── Writer: POST /api/skema/{id}/save (WorkTime arm — same gate, same lock) ───────────────
 
     [Fact]
     public async Task WindowEditWins_ThenSkemaSave_ObservesNarrowedWindowInLock_And422s()
@@ -165,51 +121,7 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
     // 201/200 a write for a just-deactivated subject.
     // ══════════════════════════════════════════════════════════════════════════════════════════
 
-    /// <summary>Writer #1: the deactivation commits while the time-entry POST waits on the lock
-    /// ⇒ the Employee's still-live token is refused with the D3-floor 403 and writes nothing.</summary>
-    [Fact]
-    public async Task DeactivationWins_ThenTimeEntry_ObservesDeactivatedSubjectInLock_And403s()
-    {
-        var emp = UniqueEmp("ded");
-        await SeedEmployeeAsync(emp); // active; NULL employment dates (the window gate is inert)
-        var (classId, objId) = await AdvisoryKeyPartsAsync(emp);
-
-        // The "deactivation" holds the lock and flips is_active, uncommitted — the exact
-        // in-lock position the production deactivation writers give this flip.
-        await using var blockerConn = Fx.Db.Create();
-        await blockerConn.OpenAsync();
-        await using var blockerTx = await blockerConn.BeginTransactionAsync(IsolationLevel.ReadCommitted);
-        await EmployeeConsumptionLock.AcquireAsync(blockerConn, blockerTx, emp);
-        await DeactivateInTxAsync(blockerConn, blockerTx, emp);
-
-        // Fire the REAL registration — its pre-lock subject read sees the pre-flip row (MVCC),
-        // so only the in-lock re-check can catch the deactivation.
-        var teClient = EmployeeClient(emp);
-        var timeEntry = Task.Run(() => PostTimeEntryAsync(teClient, emp, RegistrationDay, 7.4m));
-
-        // Prove genuine contention: the POST is QUEUED on our advisory key…
-        await WaitForWaitersAsync(classId, objId, expected: 1);
-        // …and nothing has committed while the deactivation holds the lock.
-        Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, RegistrationDay));
-
-        // The deactivation commits; the POST acquires and must now see is_active=FALSE in-lock.
-        await blockerTx.CommitAsync();
-
-        var rsp = await timeEntry;
-        var body = await BodyAsync(rsp);
-        Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden,
-            $"expected the in-lock D3-floor 403, got {(int)rsp.StatusCode}: {body}");
-        // S147 OQ-2 (fix-up 1 ruling): re-decided — the self body. This Employee acts on their OWN record, so both floor
-        // arms hold and the departed-self clause answers (TASK-14703's date-free sentence), not ADR-040 D3's
-        // role sentence; it was "deactivated employee" before S147. The in-lock authority being pinned is unchanged.
-        Assert.Contains(DepartedSubject.DenyReason, body);
-        Assert.DoesNotContain("deactivated employee", body);
-
-        // THE invariant: no registration committed for the just-deactivated subject.
-        Assert.Equal(0L, await CountTimeEntryRowsAsync(emp, RegistrationDay));
-    }
-
-    /// <summary>Writer #2: the same deactivation race against the Skema save (WorkTime arm) ⇒
+    /// <summary>The deactivation commits while the Skema save (WorkTime arm) waits on the lock ⇒
     /// the in-lock D3-floor 403, zero work-time rows.</summary>
     [Fact]
     public async Task DeactivationWins_ThenSkemaSave_ObservesDeactivatedSubjectInLock_And403s()
@@ -236,7 +148,7 @@ public sealed class EmploymentWindowRaceTests : SendConcurrencyTestBase
         var body = await BodyAsync(rsp);
         Assert.True(rsp.StatusCode == HttpStatusCode.Forbidden,
             $"expected the in-lock D3-floor 403, got {(int)rsp.StatusCode}: {body}");
-        // S147 OQ-2 (fix-up 1 ruling): re-decided — the self body (see the time-entry fact above): an Employee acting
+        // S147 OQ-2 (fix-up 1 ruling): re-decided — the self body (the Employee acts
         // on their own record gets the departed-self sentence, not the role sentence.
         Assert.Contains(DepartedSubject.DenyReason, body);
         Assert.DoesNotContain("deactivated employee", body);
