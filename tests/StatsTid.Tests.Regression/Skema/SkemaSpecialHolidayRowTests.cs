@@ -232,8 +232,9 @@ public sealed class SkemaSpecialHolidayRowTests : IAsyncLifetime
     ///
     /// <para><b>Red conditions (Docker; argued).</b> Holds today. The discriminating assertion is November's
     /// "not served": a gate anchored on a covered day of the month (the 1st, say) instead of its last day
-    /// would serve November and fail it. October's "served" fails if the gate ignored the config's
-    /// <c>effective_to</c> window only partially (e.g. read it as inclusive and dropped October).</para>
+    /// would serve November and fail it. October's "served" fails if the gate read the live open
+    /// row (<c>effective_to IS NULL</c>, as the save path's <c>GetCurrentOpenAsync</c> does) instead of the dated
+    /// read: the ended row would then never be served.</para>
     /// </summary>
     [Fact]
     public async Task ConfigEndingMidMonth_RowNotServedInTheEndingMonth_ServedTheMonthBefore()
@@ -246,7 +247,7 @@ public sealed class SkemaSpecialHolidayRowTests : IAsyncLifetime
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // AC-235-3— the admin visibility list names it; hiding removes the row.
+    // AC-235-3 — the admin visibility list names it; hiding removes the row.
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -548,15 +549,12 @@ public sealed class SkemaSpecialHolidayRowTests : IAsyncLifetime
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
-        // CA2100-justified (QUAL-073 ratchet): a compile-time test constant; values go through parameters.
-#pragma warning disable CA2100
         await using var cmd = new NpgsqlCommand(
             """
             UPDATE entitlement_configs SET effective_to = @to
             WHERE entitlement_type = 'SPECIAL_HOLIDAY' AND agreement_code = @ac AND ok_version = @ok
               AND effective_to IS NULL
             """, conn);
-#pragma warning restore CA2100
         cmd.Parameters.AddWithValue("to", endsOn);
         cmd.Parameters.AddWithValue("ac", agreementCode);
         cmd.Parameters.AddWithValue("ok", okVersion);
