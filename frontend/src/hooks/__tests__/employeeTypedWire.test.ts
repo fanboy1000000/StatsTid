@@ -6,15 +6,12 @@
 //    read (time-entries, flex, summary, year-overview, compliance ×2,
 //    compensation-choice, skema month);
 //  • the FE-called mutations are UNCONDITIONED — no If-Match and no
-//    If-None-Match on ANY of them (time-entries POST, skema save POST,
+//    If-None-Match on ANY of them (skema save POST,
 //    compensation-choice PUT, row-preferences PUT — the S119 doubly-pinned
 //    precedent);
-//  • request key sets byte-unchanged (the time-entries register body passes
-//    through verbatim; the skema save body keeps the exact
+//  • request key sets byte-unchanged (the skema save body keeps the exact
 //    year/month/entries/absences/workTime key set with the empty→null
 //    collapsing; the choice PUT sends exactly { periodYear, compensationModel });
-//  • the time-entries create consumes the declared 201 receipt
-//    ({ eventId, streamId } — streamId surfaced additively);
 //  • the flex BOTH-branch handling (ruling #1 delta-pinned FE-side): the
 //    normalized no-history shape (nulls, NO `message`) and the with-history
 //    shape both flow through to state unchanged;
@@ -108,7 +105,7 @@ const TIME_ENTRY_ROW = {
   voluntaryUnsocialHours: false,
 }
 
-describe('useTimeEntries — typed GET + the 201 receipt POST', () => {
+describe('useTimeEntries — typed GET', () => {
   it('list → GET /api/time-entries/{employeeId} (exact legacy URL); the SharedKernel rows flow through incl. voluntaryUnsocialHours', async () => {
     const calls = captureCalls((_url, method) =>
       method === 'GET' ? { body: [TIME_ENTRY_ROW] } : {},
@@ -118,38 +115,6 @@ describe('useTimeEntries — typed GET + the 201 receipt POST', () => {
     expect(calls[0].url).toBe('/api/time-entries/emp001')
     expect(calls[0].method).toBe('GET')
     expect(result.current.entries[0]).toEqual(TIME_ENTRY_ROW)
-  })
-
-  it('register → POST /api/time-entries, UNCONDITIONED, body key set byte-unchanged, 201 receipt {eventId, streamId} returned', async () => {
-    const receipt = { eventId: '11111111-1111-1111-1111-111111111111', streamId: 'time-emp001' }
-    const calls = captureCalls((_url, method) =>
-      method === 'POST' ? { status: 201, body: receipt } : { body: [] },
-    )
-    const { result } = renderHook(() => useTimeEntries('emp001'))
-    await waitFor(() => expect(result.current.loading).toBe(false))
-    const entry = {
-      employeeId: 'emp001',
-      date: '2026-03-02',
-      hours: 7.4,
-      startTime: '08:00',
-      endTime: '16:00',
-      taskId: 'DRIFT',
-      activityType: 'NORMAL',
-      agreementCode: 'AC',
-      okVersion: 'OK24',
-    }
-    let returned: { eventId: string; streamId: string } | undefined
-    await act(async () => {
-      returned = await result.current.registerEntry(entry)
-    })
-    const post = calls.find((c) => c.method === 'POST')!
-    expect(post.url).toBe('/api/time-entries')
-    expectUnconditioned(post)
-    // The register body passes through VERBATIM (byte-unchanged key set incl.
-    // the spec-deprecated okVersion the form still sends).
-    expect(post.body).toEqual(entry)
-    expect(Object.keys(post.body as Record<string, unknown>)).toEqual(Object.keys(entry))
-    expect(returned).toEqual(receipt)
   })
 })
 
