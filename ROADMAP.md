@@ -54,7 +54,10 @@ Not commitments or dates — direction.
    calendar split and recorded forfeiture; **stage 2** decided hours, +50 % overtime, the +25 % supplement and § 14,
    and the overtime account; **stage 3** AC extra-work claims. S148's refinement starts from the build input
    (`.claude/plans/s147/S148-BUILD-INPUT.md`) and decides how many stages S148 carries; a stage it cannot carry is
-   pointed to here. Closes QUAL-189, QUAL-216..222, QUAL-226, QUAL-227, QUAL-232..234 and QUAL-237 when built;
+   pointed to here. **Owner scope ruling 2026-11-09: S148 carries stage 0 and the config stage** (no demo payslip changes, so
+   the sprint's acceptance pin is identical demo pay lines; the one arithmetic change, QUAL-236's new credited
+   call-home day, has no demo row); stage 1, where every HK and PROSA payslip moves, gets its own sprint (S149), then
+   stage 2 and stage 3. Closes QUAL-189, QUAL-216..222, QUAL-226, QUAL-227, QUAL-232..234 and QUAL-237 when built;
    retires S145's weekly settlement machinery (frozen by OQ-2, with QUAL-209/210/212/213).
    The source register's unreliable citations (QUAL-215) make the Phase-B engagement above more urgent.
    **S147's tidy pass handed S148 stage 0 six small inputs** (recorded at S147's C-1; detail in
