@@ -62,45 +62,52 @@ public sealed class PaidAbsenceDayBoundRaceTests : SendConcurrencyTestBase
     }
 
     /// <summary>The save-vs-save direction: save A is an absence (<c>SICK_DAY</c> 7,4) and save B
-    /// carries no absences, only work time 08:00-15:24, on Friday 12 June 2026. Exactly one answers
-    /// 200 and the other 422 with the bound's <c>kind</c>; the day never holds both the sick row and
-    /// the work row.
+    /// carries no absences, only work time 08:00-15:24, on Friday 12 June 2026. The order is FIXED
+    /// by observation: the sick save is observed queued on the lock first, then the work save, so
+    /// Postgres grants the lock in that order. The sick save commits first and the work save is the
+    /// one judged inside the lock, against a day that now holds Sygdom 7,4: it answers 422 with the
+    /// bound's <c>kind</c>, the day holds the sick row and no work row.
     ///
-    /// <para>Kind: F. Red conditions: on the base code the absence cap sums only its own request and a
-    /// work-only save skips both absence blocks (<c>SkemaEndpoints.cs:982</c>, <c>:1985</c>), so both
-    /// racers answer 200 and the "exactly one 422" assertion trips (first assertion to fail: the
-    /// status pair).</para></summary>
+    /// <para>Why the order is fixed: with a simultaneous start, the work save could take the lock first
+    /// and commit, and the sick save would then be the one refused (it carries absences, so it runs the
+    /// in-lock check even if the bound is skipped for work-only saves). That order cannot tell a bound
+    /// that judges work-only saves in the lock from one that does not.</para>
+    ///
+    /// <para>Kind: F. Red conditions: on the base code a work-only save skips both absence blocks
+    /// (<c>SkemaEndpoints.cs:982</c>, <c>:1985</c>) and answers 200, so the work-save 422 assertion
+    /// trips (first to fail). The mutation "the in-lock bound call (<c>SkemaEndpoints.cs:2302</c>) moved
+    /// inside <c>if (request.Absences is { Length: &gt; 0 })</c>" also turns it red: the work save, queued
+    /// second, is no longer judged in the lock and answers 200.</para></summary>
     [Fact]
     public async Task AbsenceSaveVsWorkSave_NeverExceedTheBound()
     {
         var emp = UniqueEmp("7f");
-        var (rspA, rspB) = await RaceAsync(emp,
+        var (sick, work) = await RaceAsync(emp,
             (client, e) => SaveAbsenceAsync(client, e, "SICK_DAY"),
             (client, e) => PostSkemaWorkTimeSaveAsync(client, e, Friday, "08:00", "15:24",
-                year: Friday.Year, month: Friday.Month));
+                year: Friday.Year, month: Friday.Month),
+            aFirst: true);
 
-        var statuses = new[] { rspA.StatusCode, rspB.StatusCode }.OrderBy(s => (int)s).ToArray();
-        Assert.Equal(new[] { HttpStatusCode.OK, HttpStatusCode.UnprocessableEntity }, statuses);
-
-        var loser = rspA.StatusCode == HttpStatusCode.UnprocessableEntity ? rspA : rspB;
+        Assert.Equal(HttpStatusCode.OK, sick.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, work.StatusCode);
         Assert.Equal("paid-absence-day-bound",
-            JsonDocument.Parse(await BodyAsync(loser)).RootElement.GetProperty("kind").GetString());
+            JsonDocument.Parse(await BodyAsync(work)).RootElement.GetProperty("kind").GetString());
 
-        // THE invariant: never both the sick row and the work row on the day.
-        var sickRows = await SumCurrentAbsenceHoursAsync(emp);
-        var workRows = await CountWorkTimeRowsAsync(emp, Friday);
-        Assert.True((sickRows == 7.4m && workRows == 0L) || (sickRows == 0m && workRows == 1L),
-            $"the day holds sick hours {sickRows} and {workRows} work row(s)");
+        // THE invariant: the day holds the sick row and no work row.
+        Assert.Equal(7.4m, await SumCurrentAbsenceHoursAsync(emp));
+        Assert.Equal(0L, await CountWorkTimeRowsAsync(emp, Friday));
     }
 
     /// <summary>The shared choreography: seeds a fresh employee, holds the employee lock on a third
     /// connection, fires both saves, waits until BOTH are observed queued on the lock (each has then
     /// passed its advisory check against the empty day), asserts nothing committed meanwhile, then
-    /// releases the lock. Ordering is by observation, never by a sleep.</summary>
+    /// releases the lock. Ordering is by observation, never by a sleep. With <c>aFirst</c>, A is
+    /// observed queued before B starts, which fixes the grant order (A, then B).</summary>
     private async Task<(HttpResponseMessage A, HttpResponseMessage B)> RaceAsync(
         string emp,
         Func<HttpClient, string, Task<HttpResponseMessage>> saveA,
-        Func<HttpClient, string, Task<HttpResponseMessage>> saveB)
+        Func<HttpClient, string, Task<HttpResponseMessage>> saveB,
+        bool aFirst = false)
     {
         await RegressionSeed.SeedEmployeeAsync(
             Fx.ConnectionString, emp, Org, "HK", "OK26", ensureOrg: false);
@@ -118,6 +125,10 @@ public sealed class PaidAbsenceDayBoundRaceTests : SendConcurrencyTestBase
         await EmployeeConsumptionLock.AcquireAsync(blockerConn, blockerTx, emp);
 
         var taskA = Task.Run(() => saveA(clientA, emp));
+        // Ordered: A is observed queued BEFORE B starts, so A is first in the lock's FIFO queue and
+        // always commits first. Unordered: the two saves are symmetric and start together.
+        if (aFirst)
+            await WaitForWaitersAsync(classId, objId, expected: 1);
         var taskB = Task.Run(() => saveB(clientB, emp));
 
         await WaitForWaitersAsync(classId, objId, expected: 2);
