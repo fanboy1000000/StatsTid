@@ -22,7 +22,8 @@ namespace StatsTid.Infrastructure;
 //                                   counted SEPARATELY from approver late (sent, past +5)
 //   HRP-011  leaver's final month — the month containing an employment end date, not approved
 //   HRP-022  approved not exported— an approved month with no payroll export record
-//   HRP-013  orphan employees     — nobody structurally approves them (cross-organisation roll-up)
+//   HRP-013  orphan employees     — the approval walk names nobody for them today, and they are not
+//                                   a hierarchy root (cross-organisation roll-up)
 //   HRP-014  expired delegations  — a stand-in (vikar) the expiry sweep closed in the last 30 days
 //   HRP-015  cannot register      — employed today but no record covers today. S141 / TASK-14105
 //                                   (refinement B8) widened this from the agreement-code hole alone
@@ -151,9 +152,11 @@ public sealed record HrApprovalMonthItem(
     DateOnly? FirstHrOnlyDay);
 
 /// <summary>
-/// One orphan employee (HRP-013) — nobody structurally approves them, so nobody CAN approve their
-/// month. Carries no age anchor: there is no date on which an employee "became" an orphan, and the
-/// process has no ratified deadline (register row HRP-013 is NOT READY), so nothing here may be
+/// One orphan employee (HRP-013) — the approval walk names nobody for them today and they are not a
+/// root (<see cref="ApproverCoverageKind.Orphan"/>): nobody in scope reports to them, or they hold a
+/// PRIMARY line of their own whose chain names nobody. No designated approver can approve their month.
+/// Carries no age anchor: there is no date on which an employee "became" an orphan, and
+/// the process has no ratified deadline (register row HRP-013 is NOT READY), so nothing here may be
 /// aged or coloured.
 /// </summary>
 public sealed record HrOrphanEmployeeItem(
@@ -247,6 +250,7 @@ public sealed record HrCannotRegisterItem(
 public sealed class HrFollowUpApprovalReadRepository
 {
     private readonly DbConnectionFactory _connectionFactory;
+    private readonly ReportingLineRepository _reportingLineRepo;
 
     /// <summary>
     /// The rolling lookback floor, in months, for the three history-scanning reads — owner ruling
@@ -266,9 +270,15 @@ public sealed class HrFollowUpApprovalReadRepository
     /// <summary>The window, in days, for the HRP-014 expired-delegation read.</summary>
     public const int ExpiredDelegationWindowDays = 30;
 
-    public HrFollowUpApprovalReadRepository(DbConnectionFactory connectionFactory)
+    /// <param name="reportingLineRepo">The approval walk the HRP-013 roll-up classifies by, through
+    /// <see cref="ApproverCoverage"/>. Only its date-taking forms run here, with the endpoint's
+    /// <c>today</c>; the clock it holds for its other callers is never read by this repository
+    /// (rule 2).</param>
+    public HrFollowUpApprovalReadRepository(
+        DbConnectionFactory connectionFactory, ReportingLineRepository reportingLineRepo)
     {
         _connectionFactory = connectionFactory;
+        _reportingLineRepo = reportingLineRepo;
     }
 
     // ── SQL (literal constants only — CA2100 discipline; every date and offset is a parameter) ──
@@ -396,44 +406,30 @@ public sealed class HrFollowUpApprovalReadRepository
         """;
 
     /// <summary>
-    /// HRP-013 — the cross-organisation ORPHAN roll-up. Mirrors the per-organisation roster card's
-    /// rule exactly (an employee with no active PRIMARY reporting-line edge who is nobody's
-    /// approver), which today is computed per organisation with no roll-up; this is that roll-up
-    /// over the actor's accessible-org set.
+    /// HRP-013 — the POPULATION of the cross-organisation orphan roll-up: every active employee homed
+    /// in the actor's accessible-org set, with their home organisation's path (the prefetch scope) and
+    /// unit name. Which of them are orphans is not decided here: <see cref="GetOrphanEmployeesAsync"/>
+    /// classifies them with <see cref="ApproverCoverage"/>, the one predicate the per-organisation
+    /// roster card uses too, so the roll-up and the card agree by construction (PAT-030).
     ///
-    /// <para>"Is nobody's approver" is evaluated over the SAME in-scope population, which is sound
-    /// because approval authority is same-Organisation bounded (the flat-authority model): if a
-    /// person approves anyone, that person's reports live in their own Organisation, which is in
-    /// scope whenever they are. <c>is_active = TRUE</c> matches the roster read's population so the
-    /// roll-up and the per-organisation card can never disagree.</para>
+    /// <para>"Someone reports to them" (the root test) is judged over this SAME in-scope population,
+    /// which is sound because approval authority is same-Organisation bounded (the flat-authority
+    /// model): if a person approves anyone, that person's reports live in their own Organisation,
+    /// which is in scope whenever they are. <c>is_active = TRUE</c> matches the roster read's population.</para>
     /// </summary>
-    private const string SelectOrphanEmployeesSql =
+    private const string SelectOrphanPopulationSql =
         """
-        WITH scoped AS (
-            SELECT u.user_id, u.display_name, u.primary_org_id, u.unit_id
-            FROM users u
-            WHERE u.is_active = TRUE
-              AND (@allOrgs OR u.primary_org_id = ANY(@orgIds))
-        ),
-        edges AS (
-            SELECT rl.employee_id, rl.manager_id
-            FROM reporting_lines rl
-            WHERE rl.relationship = 'PRIMARY'
-              AND rl.effective_to IS NULL
-        )
-        SELECT s.user_id     AS employee_id,
-               s.display_name,
-               s.primary_org_id AS org_id,
-               un.name       AS unit_name
-        FROM scoped s
-        LEFT JOIN units un ON un.unit_id = s.unit_id
-        WHERE NOT EXISTS (SELECT 1 FROM edges e WHERE e.employee_id = s.user_id)
-          AND NOT EXISTS (
-                  SELECT 1
-                  FROM edges e2
-                  JOIN scoped s2 ON s2.user_id = e2.employee_id
-                  WHERE e2.manager_id = s.user_id)
-        ORDER BY s.display_name, s.user_id
+        SELECT u.user_id           AS employee_id,
+               u.display_name,
+               u.primary_org_id    AS org_id,
+               un.name             AS unit_name,
+               o.materialized_path AS org_path
+        FROM users u
+        LEFT JOIN units un ON un.unit_id = u.unit_id
+        LEFT JOIN organizations o ON o.org_id = u.primary_org_id
+        WHERE u.is_active = TRUE
+          AND (@allOrgs OR u.primary_org_id = ANY(@orgIds))
+        ORDER BY u.display_name, u.user_id
         """;
 
     /// <summary>
@@ -738,33 +734,61 @@ public sealed class HrFollowUpApprovalReadRepository
         return (lastManagerDay, lastManagerDay.AddDays(1));
     }
 
-    /// <summary>HRP-013 — the cross-organisation orphan roll-up (see <see cref="SelectOrphanEmployeesSql"/>).</summary>
+    /// <summary>
+    /// HRP-013 — the cross-organisation orphan roll-up: the in-scope employees
+    /// <see cref="ApproverCoverage"/> classifies as <see cref="ApproverCoverageKind.Orphan"/> on
+    /// <paramref name="today"/>, in display-name order (see <see cref="SelectOrphanPopulationSql"/>).
+    /// </summary>
+    /// <param name="today">The Copenhagen business day, computed once per request (PAT-028): the day
+    /// the approval walk is asked about.</param>
     public async Task<IReadOnlyList<HrOrphanEmployeeItem>> GetOrphanEmployeesAsync(
-        IReadOnlyCollection<string>? accessibleOrgIds, CancellationToken ct = default)
+        IReadOnlyCollection<string>? accessibleOrgIds, DateOnly today, CancellationToken ct = default)
     {
         if (accessibleOrgIds is { Count: 0 })
             return Array.Empty<HrOrphanEmployeeItem>();
 
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(SelectOrphanEmployeesSql, conn);
-        AddOrgScopeParameters(cmd, accessibleOrgIds);
+        // One REPEATABLE READ snapshot for the population and the walk's prefetched inputs: the
+        // prefetch equals live SQL only inside one. Read-only; the commit only releases it.
+        await using var snapshot = await conn.BeginTransactionAsync(
+            System.Data.IsolationLevel.RepeatableRead, ct);
 
-        var items = new List<HrOrphanEmployeeItem>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        var employeeOrd = reader.GetOrdinal("employee_id");
-        var nameOrd = reader.GetOrdinal("display_name");
-        var orgOrd = reader.GetOrdinal("org_id");
-        var unitOrd = reader.GetOrdinal("unit_name");
-        while (await reader.ReadAsync(ct))
+        var population = new List<HrOrphanEmployeeItem>();
+        var homeOrgPaths = new HashSet<string>(StringComparer.Ordinal);
+        await using (var cmd = new NpgsqlCommand(SelectOrphanPopulationSql, conn, snapshot))
         {
-            items.Add(new HrOrphanEmployeeItem(
-                EmployeeId: reader.GetString(employeeOrd),
-                DisplayName: reader.GetString(nameOrd),
-                OrgId: reader.GetString(orgOrd),
-                UnitName: reader.IsDBNull(unitOrd) ? null : reader.GetString(unitOrd)));
+            AddOrgScopeParameters(cmd, accessibleOrgIds);
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            var employeeOrd = reader.GetOrdinal("employee_id");
+            var nameOrd = reader.GetOrdinal("display_name");
+            var orgOrd = reader.GetOrdinal("org_id");
+            var unitOrd = reader.GetOrdinal("unit_name");
+            var pathOrd = reader.GetOrdinal("org_path");
+            while (await reader.ReadAsync(ct))
+            {
+                population.Add(new HrOrphanEmployeeItem(
+                    EmployeeId: reader.GetString(employeeOrd),
+                    DisplayName: reader.GetString(nameOrd),
+                    OrgId: reader.GetString(orgOrd),
+                    UnitName: reader.IsDBNull(unitOrd) ? null : reader.GetString(unitOrd)));
+                if (!reader.IsDBNull(pathOrd))
+                    homeOrgPaths.Add(reader.GetString(pathOrd));
+            }
         }
-        return items;
+
+        // The prefetch loads the read's scope: every organisation for a GlobalAdmin (the empty
+        // prefix), otherwise each home organisation the population holds — three reads apiece.
+        // shortcut(pending): an HR scope of several organisations costs three prefetch reads per
+        // organisation, because the prefetch takes one path prefix; upgrade when an HR scope spans
+        // many organisations and this roll-up measures slow (a prefetch keyed on an org-id set).
+        IReadOnlyCollection<string> orgPathPrefixes = accessibleOrgIds is null ? new[] { "" } : homeOrgPaths;
+        var coverage = await ApproverCoverage.ClassifyAsync(
+            conn, snapshot, _reportingLineRepo, orgPathPrefixes,
+            population.Select(p => p.EmployeeId).ToList(), today, ct);
+        await snapshot.CommitAsync(ct);
+
+        return population.Where(p => coverage[p.EmployeeId] == ApproverCoverageKind.Orphan).ToList();
     }
 
     /// <summary>

@@ -170,7 +170,7 @@ public sealed record HrApprovedNotExportedResponse(
     DateOnly? OldestAnchor,
     IReadOnlyList<HrFollowUpMonthItem>? Items);
 
-/// <summary>One employee nobody structurally approves (HRP-013). Carries no date — see <see cref="HrUncoveredApproversResponse"/>.</summary>
+/// <summary>One employee the approval walk names nobody for on the read's date, who is not a hierarchy root (HRP-013). Carries no date — see <see cref="HrUncoveredApproversResponse"/>.</summary>
 public sealed record HrOrphanEmployee(
     string EmployeeId,
     string DisplayName,
@@ -205,8 +205,8 @@ public sealed record HrExpiredDelegation(
 /// <summary>
 /// HRP-013 / HRP-014 — UNCOVERED APPROVERS: two facts on one surface.
 ///
-/// <para><b>Orphans</b> (HRP-013): employees for whom no structural approver resolves, so nobody
-/// CAN approve their month. The fact already exists per roster row on the organisation page, but
+/// <para><b>Orphans</b> (HRP-013): employees the approval walk names nobody for on the read's date
+/// (<c>Today</c>) and who are not a hierarchy root, so no designated approver can approve their month. The fact already exists per roster row on the organisation page, but
 /// only per organisation, with no cross-organisation roll-up — this is that roll-up. Orphan items
 /// carry NO date: there is no moment at which an employee "became" an orphan.</para>
 ///
