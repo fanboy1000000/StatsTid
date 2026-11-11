@@ -21,9 +21,8 @@
 //   R11 — the modal opens from BOTH the header button AND the panel's step-2
 //         link; modal actions apply LIVE to the grid (optimistic overlay +
 //         server-truth refetch).
-//   R16 — the page consumes the HOOK's buildWorkTimePayload (the page's former
-//         private copy is DELETED — R7 manualHours preservation lives in the
-//         hook); preference writes FLUSH pending debounced saves (cells AND
+//   R16 — the page consumes the HOOK's buildWorkTimePayload (the single
+//         owner of the clock-time-only payload; ADR-028, ADR-043 D10); preference writes FLUSH pending debounced saves (cells AND
 //         workTime) BEFORE the PUT + month refetch, so the refetch can never
 //         clobber in-flight local state. S72 Step-7a B2: the flush is failure-
 //         AND in-flight-safe — the debounce callbacks retain their save
@@ -33,9 +32,8 @@
 //         workTime (the same merged view the save path uses), so the §J
 //         adjacent-day analysis sees locally-edited NEIGHBOR days.
 //   R9  — AllocationSummary + ProjectPicker retired; ComplianceWarnings kept;
-//         the legacy add-row wiring (onWorkIntervalsChange/onManualHoursChange
-//         grid plumbing for the deleted "Tilføj periode"/"Tilføj timer" rows)
-//         removed from the page side.
+//         the legacy add-row wiring (onWorkIntervalsChange grid plumbing for
+//         the deleted "Tilføj periode" row) removed from the page side.
 import { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
@@ -46,7 +44,6 @@ import {
   SkemaGrid,
   type WorkInterval,
   type WorkIntervalsMap,
-  type ManualHoursMap,
   type DailyNormMap,
   type ConsumptionBasisMap,
 } from '../components/SkemaGrid'
@@ -114,10 +111,23 @@ function formatAbsenceRuleError(e: AbsenceRuleError, labelFor: (absenceType: str
 }
 
 /** S123 / TASK-12303 — the daily-norm ABSENCE cap 422 (a day's summed absence
-    hours exceed the norm) → a comprehensible Danish alert. */
+    hours exceed the norm) → a comprehensible Danish alert. A body with
+    `kind: 'paid-absence-day-bound'` (planned minus worked leaves no or too little room) names
+    the planned and worked hours instead of the norm (ADR-043; three fixed sentences). */
 function formatAbsenceCapError(e: AbsenceCapError): string {
-  const total = e.totalHours.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
-  const max = e.maxHours.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
+  const fmt = (h: number) => h.toFixed(2).replace(/\.?0+$/, '').replace('.', ',')
+  const total = fmt(e.totalHours)
+  const max = fmt(e.maxHours)
+  if (e.kind === 'paid-absence-day-bound' && e.plannedHours !== undefined && e.workedHours !== undefined) {
+    const planned = fmt(e.plannedHours)
+    const worked = fmt(e.workedHours)
+    const tail = 'Registreringen blev derfor sat tilbage.'
+    if (e.plannedHours === 0)
+      return `Der er ingen planlagte timer denne dag, så der kan ikke registreres betalt fravær (${total} t). ${tail}`
+    if (e.maxHours === 0)
+      return `Dagen er allerede fyldt: planlagt ${planned} t, registreret arbejde ${worked} t, så der er ikke plads til betalt fravær (${total} t). ${tail}`
+    return `Dagens betalte fravær (${total} t) er mere end dagen kan rumme: planlagt ${planned} t, registreret arbejde ${worked} t, så der er plads til højst ${max} t. ${tail}`
+  }
   return `Det samlede fravær for dagen (${total} t) overstiger normtiden (${max} t). Registreringen blev derfor sat tilbage.`
 }
 
@@ -192,14 +202,13 @@ function toHHmm(value: string): string | null {
   return `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
 }
 
-/** S73 Step-7a B2 — value-equality of a single day's work-time (intervals +
-    manualHours), used as the overlap guard for the work-time 422 revert: revert a
-    day only when its CURRENT local value still equals what the rejected save SENT. */
+/** S73 Step-7a B2 — value-equality of a single day's work-time intervals, used as
+    the overlap guard for the work-time 422 revert: revert a day only when its
+    CURRENT local value still equals what the rejected save SENT. */
 function workTimeDayEquals(
-  aIntervals: WorkInterval[], aManual: number,
-  bIntervals: WorkInterval[], bManual: number,
+  aIntervals: WorkInterval[],
+  bIntervals: WorkInterval[],
 ): boolean {
-  if (aManual !== bManual) return false
   if (aIntervals.length !== bIntervals.length) return false
   for (let i = 0; i < aIntervals.length; i++) {
     if (aIntervals[i].start !== bIntervals[i].start || aIntervals[i].end !== bIntervals[i].end) {
@@ -395,22 +404,12 @@ export function SkemaPage() {
   )
   const rows = rowBasis.rows
 
-  // Build work intervals + manual hours maps from backend workTime
+  // Build the work intervals map from backend workTime
   const workIntervalsFromData = useMemo<WorkIntervalsMap>(() => {
     const map: WorkIntervalsMap = new Map()
     for (const wt of data?.workTime ?? []) {
       if (wt.intervals && wt.intervals.length > 0) {
         map.set(wt.date, wt.intervals.map(iv => ({ start: iv.start, end: iv.end })))
-      }
-    }
-    return map
-  }, [data])
-
-  const manualHoursFromData = useMemo<ManualHoursMap>(() => {
-    const map: ManualHoursMap = new Map()
-    for (const wt of data?.workTime ?? []) {
-      if (wt.manualHours && wt.manualHours !== 0) {
-        map.set(wt.date, wt.manualHours)
       }
     }
     return map
@@ -435,23 +434,18 @@ export function SkemaPage() {
     return map
   }, [data])
 
-  // Local editable work-time state (intervals + manual hours; D-B: manual hours
-  // have no entry UI anymore but existing values keep counting and round-trip)
+  // Local editable work-time state (clock intervals only; manual hours are retired, ADR-043 D10)
   const [localWorkIntervals, setLocalWorkIntervals] = useState<WorkIntervalsMap>(new Map())
-  const [localManualHours, setLocalManualHours] = useState<ManualHoursMap>(new Map())
 
-  // Live refs so the debounced work-time save reads the latest local state
+  // Live ref so the debounced work-time save reads the latest local state
   const workIntervalsRef = useRef<WorkIntervalsMap>(localWorkIntervals)
-  const manualHoursRef = useRef<ManualHoursMap>(localManualHours)
   useEffect(() => { workIntervalsRef.current = localWorkIntervals }, [localWorkIntervals])
-  useEffect(() => { manualHoursRef.current = localManualHours }, [localManualHours])
 
-  // S73 Step-7a B2 — server-truth work-time maps (the last refetched/successful
-  // month): a work-time 422 reverts the affected day's intervals + manualHours to
-  // THESE values (the mirror of serverCellsRef for cells). Kept in refs so the
-  // memoized fireWorkTimeSave reads them fresh without re-binding.
+  // S73 Step-7a B2 — server-truth work-time map (the last refetched/successful
+  // month): a work-time 422 reverts the affected day's intervals to THESE values
+  // (the mirror of serverCellsRef for cells). Kept in a ref so the memoized
+  // fireWorkTimeSave reads it fresh without re-binding.
   const serverWorkIntervalsRef = useRef<WorkIntervalsMap>(new Map())
-  const serverManualHoursRef = useRef<ManualHoursMap>(new Map())
 
   // Send-order protection for the 422-revert truth: a per-key sequence number is taken
   // when a save is SENT; a successful save advances server truth for a key only when its
@@ -467,8 +461,7 @@ export function SkemaPage() {
   const workTimeDirtyRef = useRef<Set<string>>(new Set())
   const workTimeSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // S147 / QUAL-241 — rehydrate ALL editable local state (cells, work intervals, manual
-  // hours) from the served data DURING RENDER ("adjust state while rendering": React
+  // S147 / QUAL-241 — rehydrate ALL editable local state (cells, work intervals) from the served data DURING RENDER ("adjust state while rendering": React
   // discards this render and re-renders at once, before anything is committed). This used
   // to be three effects, which left one committed render in which the grid and every day
   // trigger were live while local state was still empty (first load) or still the previous
@@ -481,7 +474,6 @@ export function SkemaPage() {
     setHydratedFrom(data)
     setLocalCells(cellsFromData)
     setLocalWorkIntervals(workIntervalsFromData)
-    setLocalManualHours(manualHoursFromData)
   }
 
   // The ref-side of hydration (server truth for the 422 revert, the pending-save queues, the
@@ -502,13 +494,12 @@ export function SkemaPage() {
     dataMonthRef.current = data ? { year: data.year, month: data.month } : null
     serverCellsRef.current = new Map(cellsFromData)
     serverWorkIntervalsRef.current = new Map(workIntervalsFromData)
-    serverManualHoursRef.current = new Map(manualHoursFromData)
     pendingChangesRef.current = []
     workTimeDirtyRef.current = new Set()
     cellAdvancedSeqRef.current = new Map()
     workTimeAdvancedSeqRef.current = new Map()
     hydrationEpochRef.current += 1
-  }, [data, hydratedFrom, cellsFromData, workIntervalsFromData, manualHoursFromData])
+  }, [data, hydratedFrom, cellsFromData, workIntervalsFromData])
 
   // S147 / QUAL-241 fix-up 1 — the edit surfaces are locked while the displayed month and
   // the held `data` disagree. useSkema keeps the PREVIOUS month's data on screen while the
@@ -538,9 +529,8 @@ export function SkemaPage() {
   }, [])
 
 
-  // Debounced work-time save (intervals + the preserved manual hours). The
-  // payload ALWAYS builds through the hook's buildWorkTimePayload — the single
-  // R16/R7 owner (manualHours carry-forward is enforced and tested THERE).
+  // Debounced work-time save (clock intervals). The payload ALWAYS builds
+  // through the hook's buildWorkTimePayload — the single R16 owner.
 
   /** Serial save queue. Every save carries its own fully classified payload and month (fixed when
       it was queued), so a save made in March still goes to March, classified as it was then. A
@@ -619,7 +609,7 @@ export function SkemaPage() {
     const seq = ++saveSeqRef.current
     // What each date SENDS (the frozen rows), so a 422 revert can be overlap-guarded: revert a
     // day ONLY when its CURRENT local work-time still equals what this save sent.
-    const sentByDate = new Map(payload.map((r) => [r.date, { intervals: r.intervals, manualHours: r.manualHours }]))
+    const sentByDate = new Map(payload.map((r) => [r.date, { intervals: r.intervals }]))
     const save = saveSerial({ year: env.year, month: env.month, entries: null, absences: null, workTime: payload, isDropped: () => epoch !== hydrationEpochRef.current }).then((result) => {
       const current = dataMonthRef.current
       const here =
@@ -639,11 +629,7 @@ export function SkemaPage() {
         for (const d of dates) {
           const sent = sentByDate.get(d)!
           // Overlap guard: skip a day a NEWER edit has changed since the send.
-          if (!workTimeDayEquals(
-            sent.intervals, sent.manualHours,
-            workIntervalsRef.current.get(d) ?? [],
-            manualHoursRef.current.get(d) ?? 0,
-          )) continue
+          if (!workTimeDayEquals(sent.intervals, workIntervalsRef.current.get(d) ?? [])) continue
           revertDates.push(d)
         }
         if (revertDates.length > 0) {
@@ -652,15 +638,6 @@ export function SkemaPage() {
             for (const d of revertDates) {
               const truth = serverWorkIntervalsRef.current.get(d)
               if (truth && truth.length > 0) next.set(d, truth.map((iv) => ({ ...iv })))
-              else next.delete(d)
-            }
-            return next
-          })
-          setLocalManualHours((prev) => {
-            const next = new Map(prev)
-            for (const d of revertDates) {
-              const truth = serverManualHoursRef.current.get(d)
-              if (truth && truth !== 0) next.set(d, truth)
               else next.delete(d)
             }
             return next
@@ -680,9 +657,6 @@ export function SkemaPage() {
           if (sent.intervals.length > 0)
             serverWorkIntervalsRef.current.set(d, sent.intervals.map((iv) => ({ ...iv })))
           else serverWorkIntervalsRef.current.delete(d)
-          if (sent.manualHours !== 0)
-            serverManualHoursRef.current.set(d, sent.manualHours)
-          else serverManualHoursRef.current.delete(d)
         }
         return true
       }
@@ -703,7 +677,7 @@ export function SkemaPage() {
   const fireWorkTimeSave = useCallback((dates: string[]): Promise<boolean> => {
     const env = dataMonthRef.current
     if (!env) return Promise.resolve(true)
-    return sendWorkTime(env, buildWorkTimePayload(dates, workIntervalsRef.current, manualHoursRef.current))
+    return sendWorkTime(env, buildWorkTimePayload(dates, workIntervalsRef.current))
   }, [sendWorkTime])
 
   /** Bound a WHOLE flush (the in-flight saves it awaits AND the saves it fires itself). On timeout
@@ -1006,7 +980,7 @@ export function SkemaPage() {
       the refs as they are at this instant, each under the month on screen (its envelope and
       classification). Month navigation and unmount call it BEFORE the month changes: the
       debounce timers would otherwise fire after the next month hydrated, build the old day's
-      payload from refs that no longer hold it and send {intervals: [], manualHours: 0} — the
+      payload from refs that no longer hold it and send {intervals: []} — the
       whole-day replace would wipe the stored times. (Unlike the flushes this does not first
       await the in-flight POSTs: the awaits are what let the month change slip in before the
       read.) */
@@ -1085,7 +1059,7 @@ export function SkemaPage() {
       // the panel and are excluded; the work-time save is a latest-wins whole-day
       // replace, so every change re-sends the full valid set). The save goes
       // through the existing debounced workTime path → the hook's
-      // buildWorkTimePayload (R16) which carries the day's manualHours (R7).
+      // buildWorkTimePayload (R16).
       const intervals: WorkInterval[] = []
       for (const p of periods) {
         if (periodHours(p) === null) continue
@@ -1235,7 +1209,7 @@ export function SkemaPage() {
   const absenceKeys = rowBasis.absenceKeys
 
   // R2: the Flex card's "Denne måned" computes over the SAME local month state
-  // the grid renders (cells + intervals + manual + served norms) — never from
+  // the grid renders (cells + intervals + served norms) — never from
   // /summary, never refetched.
   const monthFlexDelta = useMemo<number | null>(() => {
     if (!data) return null
@@ -1246,22 +1220,20 @@ export function SkemaPage() {
       projectKeys,
       absenceKeys,
       workIntervals: localWorkIntervals,
-      manualHours: localManualHours,
       dailyNorm,
     })
-  }, [data, year, month, localCells, projectKeys, absenceKeys, localWorkIntervals, localManualHours, dailyNorm])
+  }, [data, year, month, localCells, projectKeys, absenceKeys, localWorkIntervals, dailyNorm])
 
   const monthAbsenceUsage = useMemo(() => deriveMonthAbsenceUsage(data?.absences), [data])
 
   // S72 Step-7a W2 — the §J analysis must see locally-edited NEIGHBOR days:
   // the panel receives the LOCALLY-OVERLAID month workTime (the SAME merged
-  // view the save path reads — local intervals/manual edits over the served
+  // view the save path reads — local interval edits over the served
   // rows, built through the hook's payload builder), never raw data.workTime.
   // Editing day N's periods and opening day N+1 must reflect N's LOCAL state.
   const localMonthWorkTime = useMemo<WorkTimeDay[]>(() => {
-    const dates = new Set<string>([...localWorkIntervals.keys(), ...localManualHours.keys()])
-    return buildWorkTimePayload(dates, localWorkIntervals, localManualHours)
-  }, [localWorkIntervals, localManualHours])
+    return buildWorkTimePayload(localWorkIntervals.keys(), localWorkIntervals)
+  }, [localWorkIntervals])
 
   // ── Day panel derived props ──
   const panelProjectRows = useMemo<DayPanelProjectRow[]>(
@@ -1468,7 +1440,6 @@ export function SkemaPage() {
         readOnly={isReadOnly}
         onCellChange={handleCellChange}
         workIntervals={localWorkIntervals}
-        manualHours={localManualHours}
         dailyNorm={dailyNorm}
         consumptionBasis={consumptionBasis}
         rowPreferences={effectivePrefs}
@@ -1494,7 +1465,6 @@ export function SkemaPage() {
           open
           date={openDayDate}
           periods={panelPeriods}
-          manualHours={localManualHours.get(openDayDate) ?? 0}
           projectRows={panelProjectRows}
           allocations={panelAllocations}
           dailyNorm={dailyNorm.get(openDayDate) ?? null}

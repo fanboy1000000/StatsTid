@@ -14,7 +14,7 @@
 //         served daily norm is flagged inline (aria-invalid) as the client mirror
 //         of the backend's absence-only cap (SkemaEndpoints.cs:740 — advisory; the
 //         backend 422 stays authoritative).
-//   R2  — Diff(day) = (workTime periods + manualHours + absence hours) − served norm.
+//   R2  — Diff(day) = (workTime clock periods + absence hours) − served norm.
 //         A full-absence day shows 0,0 GREEN (the shipped grid showed −7,4 red); a day
 //         with NO registration at all is BLANK (the shipped grid deliberately showed
 //         −norm). Trailing total sums rendered values.
@@ -48,7 +48,6 @@ export interface WorkInterval {
 }
 
 export type WorkIntervalsMap = Map<string, WorkInterval[]>  // dateKey -> intervals
-export type ManualHoursMap = Map<string, number>            // dateKey -> manual hours
 export type DailyNormMap = Map<string, number | null>       // dateKey -> norm hours (null = blank)
 // S73 / TASK-7302 — dateKey -> the served ADR-032 consumption basis (R3/R5).
 // `null` = no dated profile covers the day → NO full-day snap (the typed value
@@ -64,16 +63,12 @@ interface SkemaGridProps {
   cellValues: Map<string, number>
   readOnly: boolean
   onCellChange: (rowKey: string, date: string, hours: number | null) => void
-  /** Served work-time intervals per day — feeds worked = periods + manual (R2). */
+  /** Served work-time intervals per day — feeds worked = clock periods (R2). */
   workIntervals?: WorkIntervalsMap
   /** Legacy pre-S72 page wiring ("Tilføj periode" dialog) — accepted for prop
       compatibility until TASK-7205 swaps the page; no longer used (the day panel
       owns interval editing per R16). */
   onWorkIntervalsChange?: (date: string, intervals: WorkInterval[]) => void
-  manualHours?: ManualHoursMap
-  /** Legacy pre-S72 page wiring ("Tilføj timer" row) — accepted-but-unused
-      (owner ruling D-B drops the lump-hours entry UI). */
-  onManualHoursChange?: (date: string, hours: number | null) => void
   dailyNorm?: DailyNormMap
   /** S73 R5 / S123 — the served per-day ADR-032 consumption basis. An entry in a
       `fullDayOnly` absence cell fills-to-norm ON INPUT to `consumptionBasis.get(dateKey)`
@@ -184,7 +179,6 @@ export function SkemaGrid({
   readOnly,
   onCellChange,
   workIntervals,
-  manualHours,
   dailyNorm,
   consumptionBasis,
   rowPreferences,
@@ -293,16 +287,15 @@ export function SkemaGrid({
     flashTimerRef.current = setTimeout(() => setRecentKey(null), 1200)
   }, [])
 
-  // ── Per-day worked = interval hours + manual hours (ADR-028 workTime; R2) ──
+  // ── Per-day worked = clock-interval hours (ADR-028 workTime; R2; manual hours retired, ADR-043 D10) ──
   const workedPerDay = useMemo(() => {
     const map = new Map<string, number>()
     for (const dateKey of dateKeys) {
       const period = workIntervals ? calcIntervalHours(workIntervals.get(dateKey) ?? []) : 0
-      const manual = manualHours?.get(dateKey) ?? 0
-      map.set(dateKey, round2(period + manual))
+      map.set(dateKey, round2(period))
     }
     return map
-  }, [dateKeys, workIntervals, manualHours])
+  }, [dateKeys, workIntervals])
 
   // Allocated per day = Σ project cells over ALL served project rows (R3).
   const allocatedPerDay = useMemo(() => {
@@ -367,10 +360,9 @@ export function SkemaGrid({
         projectKeys: new Set(projectRowsAll.map((r) => r.key)),
         absenceKeys: new Set(absenceRowsAll.map((r) => r.key)),
         workIntervals: workIntervals ?? new Map(),
-        manualHours: manualHours ?? new Map(),
         dailyNorm: dailyNorm ?? new Map(),
       }),
-    [year, month, cellValues, projectRowsAll, absenceRowsAll, workIntervals, manualHours, dailyNorm],
+    [year, month, cellValues, projectRowsAll, absenceRowsAll, workIntervals, dailyNorm],
   )
 
   // Trailing Diff total = Σ of RENDERED values (R2) — same single owner.

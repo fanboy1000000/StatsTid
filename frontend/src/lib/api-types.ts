@@ -6616,8 +6616,6 @@ export interface components {
             /** Format: date */
             date: string;
             intervals: components["schemas"]["StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow"][];
-            /** Format: double */
-            manualHours: number;
         };
         "StatsTid.Backend.Api.Contracts.TeamOverviewEmployeeRow": {
             /** Format: uuid */
@@ -7404,8 +7402,6 @@ export interface components {
             /** Format: date */
             date: string;
             intervals?: components["schemas"]["StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkInterval"][] | null;
-            /** Format: double */
-            manualHours?: number;
         };
         "StatsTid.Backend.Api.Endpoints.TerminationPayoutRequestEndpoints.CreateTerminationPayoutRequestBody": {
             entitlementType?: string | null;

@@ -89,6 +89,11 @@ export interface AbsenceCapError {
   date?: string
   totalHours: number
   maxHours: number
+  /** Present only on the paid-absence day bound's 422 (`kind: 'paid-absence-day-bound'`);
+   *  the all-types cap bodies carry none of the three (ADR-043). */
+  kind?: string
+  plannedHours?: number
+  workedHours?: number
 }
 
 /**
@@ -460,6 +465,9 @@ export function useSkema(
               date: body.date,
               totalHours: body.totalHours,
               maxHours: body.maxHours,
+              kind: body.kind,
+              plannedHours: body.plannedHours,
+              workedHours: body.workedHours,
             })
           } else {
             failAction('save', result.error, batch.year, batch.month, batchDates(batch), batch.isDropped?.())
@@ -610,33 +618,22 @@ export function useSkema(
 // owner of the workTime payload builder and the day panel's period arithmetic).
 // Everything below is a PURE module-level export — unit-testable without DOM.
 //
-// NOTE (R16 transition): SkemaPage.tsx still carries its own private
-// buildWorkTimePayload callback; that file is 7205-owned and must compile
-// UNCHANGED this sprint, so the hook export below is the PARALLEL single owner
-// that 7205 swaps the page onto. The R7 pin (manualHours carry-forward) lives
-// and is tested HERE.
+// R16: useSkema is the single owner of the workTime payload builder. Every day
+// is clock time only — manual hours are retired (ADR-028, ADR-043 D10 / D-2.4).
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
- * R7 — manualHours preservation. The ADR-028 work-time save is a latest-wins
- * whole-day replace (`{date, intervals, manualHours}`), so EVERY write that
- * round-trips a day's workTime MUST carry the day's EXISTING manualHours or the
- * write silently clobbers it. This builder is the one place that contract is
- * enforced: callers pass the dirty dates plus the CURRENT (server-hydrated)
- * interval/manual maps, and each emitted day carries
- * `manualHours: <the day's existing value>` (0 when the day has none — the save
- * contract's "absent" value, byte-identical to the shipped page behavior; R5/R17
- * freeze the contract itself).
+ * The ADR-028 work-time save is a latest-wins whole-day replace, so each
+ * emitted day is exactly `{ date, intervals }`: callers pass the dirty dates
+ * plus the CURRENT (server-hydrated) interval map.
  */
 export function buildWorkTimePayload(
   dates: Iterable<string>,
   workIntervals: ReadonlyMap<string, readonly WorkTimeInterval[]>,
-  manualHours: ReadonlyMap<string, number>,
 ): WorkTimeDay[] {
   return [...dates].map((date) => ({
     date,
     intervals: (workIntervals.get(date) ?? []).map((iv) => ({ start: iv.start, end: iv.end })),
-    manualHours: manualHours.get(date) ?? 0,
   }))
 }
 
@@ -701,15 +698,6 @@ export function periodsTotalHours(periods: readonly ClockPeriod[]): number {
     if (f !== null && t !== null && t > f) totalMin += t - f
   }
   return round2(totalMin / 60)
-}
-
-/**
- * The day's worked total = clock periods + the day's existing manual hours
- * (owner ruling D-B: the manual-entry UI is dropped but existing manual_hours
- * keep counting in worked totals). Same basis as the grid's workedPerDay.
- */
-export function dayWorkedHours(periods: readonly ClockPeriod[], manualHours: number): number {
-  return round2(periodsTotalHours(periods) + manualHours)
 }
 
 /**
@@ -926,14 +914,13 @@ export interface MonthDiffInputs {
   /** ALL served absence-type keys (R3). */
   absenceKeys: ReadonlySet<string>
   workIntervals: ReadonlyMap<string, readonly WorkTimeInterval[]>
-  manualHours: ReadonlyMap<string, number>
   /** Served per-day norm (null = academic ANNUAL_ACTIVITY → the day is skipped, R1). */
   dailyNorm: ReadonlyMap<string, number | null>
 }
 
 /**
- * S72 Step-7a W1 — R2's SINGLE computation owner. Diff(day) = (workTime periods
- * + manualHours + absence hours) − served norm. A day is ABSENT from the result
+ * S72 Step-7a W1 — R2's SINGLE computation owner. Diff(day) = (workTime clock periods
+ * + absence hours) − served norm. A day is ABSENT from the result
  * (renders BLANK) when its norm is null/missing (R1) or when it carries NO
  * registration at all — no workTime, no absence, no allocation (the R2 pinned
  * pro-handoff change). Per-day values round to 2 decimals. The grid's Diff row,
@@ -949,10 +936,7 @@ export function computeDayDiffs(inputs: MonthDiffInputs): Map<string, number> {
     const norm = inputs.dailyNorm.get(dateKey)
     if (norm === null || norm === undefined) continue
     const intervals = inputs.workIntervals.get(dateKey) ?? []
-    const worked = round2(
-      periodsTotalHours(intervals.map((iv) => ({ from: iv.start, to: iv.end }))) +
-        (inputs.manualHours.get(dateKey) ?? 0),
-    )
+    const worked = periodsTotalHours(intervals.map((iv) => ({ from: iv.start, to: iv.end })))
     let absence = 0
     for (const key of inputs.absenceKeys) {
       absence += inputs.cellValues.get(`${key}:${dateKey}`) ?? 0
