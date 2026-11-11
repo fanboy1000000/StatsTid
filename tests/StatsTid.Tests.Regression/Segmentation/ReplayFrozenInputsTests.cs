@@ -373,7 +373,7 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
     /// <c>weekly-timeline-v3</c> (today's marker) against the recorded <c>weekly-timeline-v1</c> (a manifest
     /// recorded before S147 / TASK-14708 moved the marker). Replay must be
     /// refused with <c>replay-evaluation-model-changed</c>. S147 T3 (QUAL-231), kind R (a regression pin, re-pinned):
-    /// before S147 the "changed" marker was a made-up v2; it is now the REAL pair, the v1 recording refused under v2.
+    /// before S147 the "changed" marker was a made-up v2; it is now the REAL pair, the v1 recording refused under the live marker (v3 since S148 / TASK-14811).
     ///
     /// <para><b>Expected, derived from the spec.</b> A7 table, "Evaluation-model marker … Must match:
     /// <c>replay-evaluation-model-changed</c>". The fingerprints are left equal, so only the marker

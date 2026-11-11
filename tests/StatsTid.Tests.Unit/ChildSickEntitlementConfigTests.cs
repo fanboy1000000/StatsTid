@@ -87,6 +87,22 @@ public class ChildSickEntitlementConfigTests
         }).ToArray());
     }
 
+    /// <summary>
+    /// QUAL-236 (Fable 5a W-1), kind N (the set is a member TASK-14811 created, so the base cannot compile this and a base run is not RED; the RED is the named mutation below). <see cref="DefaultEntitlementConfigs.ChildSickCodes"/> is exactly the four child's
+    /// sick-day codes. The per-code check, the HR opt-in gate and the catalogue filter all read this set, so a code missing
+    /// from it would be skipped by all three (call-home hours postable without the opt-in, or on an OK24 date).
+    /// Red conditions: set equality. Mutation (local census): remove <c>AbsenceTypes.ChildSickCallHome</c> from the set; the assertion fails with "ChildSickCodes was [CHILD_SICK_DAY, CHILD_SICK_DAY_2, CHILD_SICK_DAY_3]".
+    /// </summary>
+    [Fact]
+    public void ChildSickCodes_AreTheThreeDayCodesAndCallHome()
+    {
+        Assert.True(
+            new HashSet<string>(StringComparer.Ordinal)
+                { "CHILD_SICK_DAY", "CHILD_SICK_DAY_2", "CHILD_SICK_DAY_3", "CHILD_SICK_CALL_HOME" }
+                .SetEquals(DefaultEntitlementConfigs.ChildSickCodes),
+            $"ChildSickCodes was [{string.Join(", ", DefaultEntitlementConfigs.ChildSickCodes.OrderBy(c => c, StringComparer.Ordinal))}]");
+    }
+
     private static EntitlementConfig Config(string agreement, string okVersion, int days) => new()
     {
         ConfigId = Guid.NewGuid(),

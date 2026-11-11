@@ -44,7 +44,7 @@ namespace StatsTid.Tests.Regression.Segmentation;
 /// <para>
 /// <b>The two variants.</b> The engine returns the config fingerprints and the evaluation-model
 /// marker it was constructed with (defaults <c>["stub"]</c> and <c>weekly-timeline-v3</c>, the live
-/// engine's marker since S147 / TASK-14708). A replay
+/// engine's marker since S148 / TASK-14811). A replay
 /// PCS built with <c>new ReplayEchoRuleEngine(fingerprints: new[] { "stub-2" })</c> answers differently
 /// at replay time; so does a RECORDING engine built with
 /// <c>new ReplayEchoRuleEngine(evaluationModel: "weekly-timeline-v1")</c> (a manifest recorded under the

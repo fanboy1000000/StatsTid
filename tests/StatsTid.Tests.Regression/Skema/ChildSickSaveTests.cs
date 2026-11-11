@@ -58,6 +58,57 @@ public sealed class ChildSickSaveTests : IAsyncLifetime
         await ChildSickHost.AssertRefusalAsync(rsp, "child-sick-not-offered", "CHILD_SICK_DAY_3", monday);
         Assert.Empty(await _host.ReadAbsencesAsync(emp));
     }
+
+    /// <summary>
+    /// QUAL-236 (Fable 5a W-1). An opted-in HK employee posts a hand-built <c>CHILD_SICK_CALL_HOME</c> of 3,5 h on Monday
+    /// 2 March 2026 (OK24) alone. OK24 grants no call-home day, so the per-code check refuses it: 422,
+    /// <c>error = absence_type_not_eligible</c>, <c>kind = child-sick-not-offered</c>, naming <c>CHILD_SICK_CALL_HOME</c>
+    /// and 2026-03-02, and no row is written. The code must belong to <c>DefaultEntitlementConfigs.ChildSickCodes</c>,
+    /// the set the per-code check reads; were it missing, the check would skip it and the save would answer 200.
+    ///
+    /// <para><b>Kind F.</b> Red conditions: the 422 / <c>kind</c> assertion. On the base the code is not in the
+    /// vocabulary, so the save answers a different refusal, 422 <c>absence_type_unknown</c> (<c>SkemaEndpoints.cs</c>
+    /// vocabulary gate), which carries no <c>kind</c> and fails the <c>error</c> assertion.</para>
+    /// </summary>
+    [Fact]
+    public async Task HkOk24_CallHome_NotOffered_Returns422()
+    {
+        var monday = new DateOnly(2026, 3, 2);
+        var emp = await _host.SeedEmployeeAsync("HK", "OK24");
+
+        var rsp = await _host.SaveAsync(emp, "HK", monday, ("CHILD_SICK_CALL_HOME", 3.5m, monday));
+
+        await ChildSickHost.AssertRefusalAsync(rsp, "child-sick-not-offered", "CHILD_SICK_CALL_HOME", monday);
+        Assert.Empty(await _host.ReadAbsencesAsync(emp));
+    }
+
+    /// <summary>
+    /// QUAL-236 (Fable 5a W-1). An employee with NO child's-sick opt-in posts <c>CHILD_SICK_CALL_HOME</c> of 3,5 h on
+    /// Wednesday 10 June 2026 (OK26, where the code is offered). The opt-in gate refuses it, with today's opt-in body:
+    /// 422, <c>error = absence_type_not_eligible</c>, <c>entitlementType = CHILD_SICK</c>, NO <c>kind</c> member, and no row
+    /// is written. The code must belong to <c>ChildSickCodes</c>, the set the opt-in gate reads; were it missing, an
+    /// employee without the opt-in could post call-home hours.
+    ///
+    /// <para><b>Kind F.</b> Red conditions: the <c>entitlementType</c> assertion. On the base the code is unknown to the
+    /// vocabulary, so the save answers 422 <c>absence_type_unknown</c>, which has no <c>entitlementType</c>.</para>
+    /// </summary>
+    [Fact]
+    public async Task NoOptIn_CallHome_Returns422_OptInBody()
+    {
+        var wednesday = new DateOnly(2026, 6, 10);
+        var emp = await _host.SeedEmployeeAsync("HK", optedIn: false);
+
+        var rsp = await _host.SaveAsync(emp, "HK", wednesday, ("CHILD_SICK_CALL_HOME", 3.5m, wednesday));
+
+        var text = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.UnprocessableEntity, $"expected 422, got {(int)rsp.StatusCode}: {text}");
+        var body = JsonDocument.Parse(text).RootElement;
+        Assert.Multiple(
+            () => Assert.Equal("absence_type_not_eligible", body.GetProperty("error").GetString()),
+            () => Assert.Equal("CHILD_SICK", body.GetProperty("entitlementType").GetString()),
+            () => Assert.False(body.TryGetProperty("kind", out _)));
+        Assert.Empty(await _host.ReadAbsencesAsync(emp));
+    }
 }
 
 /// <summary>
