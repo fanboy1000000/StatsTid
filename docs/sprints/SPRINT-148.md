@@ -537,3 +537,84 @@ One fact corrected along the way: A9's `cref` premise does not hold. No project 
   - two declared deviations: the POST-only logger locals are removed; a blank-id branch makes `/recalculate` keep its 422 rather than throw a 500;
   - one unlisted `shortcut(pending)`: a stored typed row has no in-product remedy.
 - **TASK-14802-T dispatched** on `8949b1c8`.
+
+**Merges and gates (2026-11-10).** Every gate below gave: build 0 errors, 144 warnings, CA2100 114; Unit 1722; DemoSeed 170; Regression non-Docker 140.
+- **TASK-14805 + -T** merged as `14521382`. GATE green.
+- **TASK-14808** merged as `b42b3b23`, after fix-up `3afc8996` (the docstring's red condition corrected, the banner's space restored, the unneeded CA2100 pragma removed with the count still 114). 5a Fable cycle 2: APPROVED, 0/0/0, with the fix-up's 5α checklist (`S148-TASK-14808-5a-reviewer-c2.md`). GATE green.
+- **TASK-14806 + -T** merged as `81705338`:
+  - It carries the fix-up `38b800f6` and 14806-T's `fee20add`. The latter adds `ManagerOfManagersLosesApprover_IsOrphan_CardEqualsRollUp` (kind F) and the `HrFollowUpApprovalEndpointTests.cs:399-404` docstring.
+  - 5a cycle 2: Fable APPROVED, 0 B / 0 W / 6 N (`S148-TASK-14806-5a-reviewer-c2.md`); Codex APPROVED, 0 B / 0 W / 4 N (`S148-TASK-14806-5a-codex-c2.md`).
+  - GATE green.
+  - Owed:
+    - N-1: the doc's "D9's literal root" becomes "D9's root that also has a report";
+    - N-3: three stale test-comment words (`OrphanCoverageTests.cs:74`, `:187`, `:190`) join the comment sweep;
+    - N-2: record the fourth reading in `TASK-14806.md` contract 4(b);
+    - O-6: HRP-013 wording "a designated approver is named".
+
+**TASK-14804 + -T, cycle 2.**
+- **Fable:** APPROVED-WITH-WARNINGS, 0 B / 1 W / 2 N (`S148-TASK-14804-5a-reviewer-c2.md`).
+- **Codex:** CHANGES-REQUIRED, 0 B / 1 W / 4 N (`S148-TASK-14804-5a-codex-c2.md`). Codex accepts the adjudicated worked-hours formula.
+- **The shared warning:** both lenses found the same gap. In the new absence-versus-work race, either save could take the lock first. Under the mutation the fact was commissioned to catch (the in-lock check moved inside the absences block), it stays green when the work save goes first.
+- **Fix-up `2f1d3a57`:** an ordered start. The sick save is fired, one waiter is observed, the work save is fired, two waiters are observed, then the lock is released. The end state is now deterministic: sick 200, work 422 with `kind`, SICK_DAY 7,4 and zero work rows. Both lenses are verifying it (cycle 3).
+- **Fable NOTE 2:** the register row for the cell-clearing shortcut must name both lock-in cases (absence and project cell).
+
+**TASK-14802 + -T + REGEN + TASK-14803, reviewed and merged.**
+- **TASK-14802-T** returned on `worktree-agent-ac765aa6f755d08a9`, tip `789b3ccf`. Report: `S148-TASK-14802-T-report.md`.
+  - **Route-retirement census:** 15 posting files moved to the Skema save, moved to a SQL insert, or retired, wherever a Skema twin pins the same property.
+  - **New facts:** AC-S0-1a (the route answers 404 or 405, and the GET stays), AC-S0-1b (the typed refusal on both routes, including the context day Sunday 27 September 2026), AC-S0-1c (replay reproduces; `/recalculate` is refused), plus an R pin for a blank employee id.
+  - **Smoke:** both facts re-pointed to the Skema save; the smoke count stays at 7.
+- **REGEN `2c6a7dd1`** (Orchestrator): `docs/api/openapi.json` drops exactly the POST operation and its two schemas (97 deletions).
+- **5a, cycle 1:**
+  - **Fable:** APPROVED-WITH-WARNINGS, 0 B / 2 W / 10 N (`S148-TASK-14802-5a-reviewer.md`). Retiring the route lost two pins:
+    - **W-1:** the "same refusal body before the start and after the end" pin, part of SEC-046's date dimension;
+    - **W-2:** the month-lock status matrix on the surviving writer.
+
+    Both are test-only.
+  - **Codex:** APPROVED-WITH-WARNINGS, 0 B / 1 W / 3 N (`S148-TASK-14802-5a-codex.md`).
+    - **W:** the projection rebuild can restore a historical typed `TimeEntryRegistered` between payroll's admission check and the calculation. The report's "no production writer of typed rows" was too broad.
+    - **Orchestrator disposition: recorded, not fixed.** Under "reseed, don't migrate" no historical typed events exist. A complete fix would need the check inside the calculation's own snapshot, which ruling A5 declined (option c). This becomes a QUAL row at close and a line in the legacy-database upgrade runbook: carry no historical typed `TimeEntryRegistered` events into a live payroll; reseed instead.
+- **14802-T fix-ups:**
+  - **`43ffa351`:**
+    - **W-1:** `SkemaSave_BeforeStartAndAfterEnd_RefusalBodiesAreByteIdentical` (R).
+    - **W-2:** new `SkemaSaveMonthLockMatrixTests` (R, Theory). EMPLOYEE_APPROVED and APPROVED answer 409 with nothing written; DRAFT, SUBMITTED, REJECTED and no-row answer 200.
+    - **N-5:** `timer` and lowercase `normal` are refused, an ordinal comparison (F).
+    - **N-7, N-8:** an outbox assertion and a docstring.
+  - **`2d33539e`:** the N-5 rows' employee id collided with an existing fact in the same shared fixture, `EMP-S148-AT-NORMAL`. Codex c2 raised it as a BLOCKER and Fable c2 marked the fix-up BLOCKED. The rows now use `EMP-S148-AT-ORD-TIMER` and `-ORD-LOWNORMAL`.
+  - **Verdicts:** Codex c3 APPROVED. Fable c2 ruled the delta approvable once the worktree's correction was committed; the committed diff is that correction.
+- **TASK-14803** (`ux`, stacked on `2c6a7dd1`): returned at `b8316737`.
+  - **Removed:** the page, the form, the form's test and two CSS files (A8); the register path in `useTimeEntries`. `api-types.ts` was regenerated: 67 deletions, exactly the POST.
+  - **Checks:** the five frontend checks exit 0 (vitest 84 files / 1090).
+  - **5a (Fable):** APPROVED, 0 B / 0 W / 4 N (`S148-TASK-14803-5a-reviewer.md`). The reviewer regenerated the client itself and got an identical file. The census count is 7, not 8.
+  - **Notes carried:** `useTimeEntries` now has no production consumer (`docs/FRONTEND.md:217` to be corrected under BC-4). The phase-pin test title's counts were already stale (comment sweep).
+- **Merged:** 14802 stack as `e4e6b0ea`, then 14803 as `fc91e554`.
+  - **GATE green.** .NET: build 0 errors / 143 warnings / CA2100 113; Unit 1716; DemoSeed 170; Regression non-Docker 140. Frontend: tsc, lint, typecheck:e2e and build exit 0; vitest 84 files / 1090.
+
+**TASK-14804 + -T merged** as `72f286fe`, after the 14802 stack, as ruling B9 requires.
+- **Cycle 3:** both lenses APPROVED the ordered race (`S148-TASK-14804-5a-codex-c3.md`, `…-5a-reviewer-c3.md`). The sick save is queued first by observation, under a FIFO advisory lock, so the named mutation always turns the fact red.
+- **Auto-merge in `SendConcurrencyTests.cs`:** both sides survive. The AC7d fixture is on Saturday 14 March, and 14802-T's deletions are present.
+- **Adjudication item 1e check:** `git grep` over `src` shows the projection tables written only by the Skema save (`SkemaEndpoints.cs:2339`, `:2372`, `:2425`) and by the backfill replay. `new TimeEntryRegistered`, `AbsenceRegistered` and `WorkTimeRegistered` are constructed only in the Skema save.
+- **GATE:** see below.
+
+**Cell clearing: plan addendum A1** (`.claude/plans/s148/ADDENDUM-A1-cell-clearing.md`).
+- **Draft 1** (`planner`): TASK-14840 (backend), 14840-T and 14841 (ux), 32 ACs, NR-A1 … NR-A10.
+- **Step 0b, cycle 1.**
+  - **Fable:** CHANGES-REQUIRED, 1 B / 3 W / 7 N (`ADDENDUM-A1-reviewer-c1.md`).
+  - **Codex:** CHANGES-REQUIRED, 1 B / 4 W / 2 N (`ADDENDUM-A1-codex-c1.md`).
+  - **The shared BLOCKER:** a cleared work-time day was to be deleted. The startup projection rebuild reads only published events and runs before the publisher, so a clear that was committed but not yet published came back after a restart.
+- **Adjudication** (`ADDENDUM-A1-adjudication-c1.md`, RULED-WITH-QUESTIONS):
+  - **The fix, option (c):** a cleared work-time day is kept and marked (`cleared_by_outbox_id`, with `outbox_id` advanced to the clear's id), as entries and absences already are. That means one nullable column, and a filter at six reader sites. `init.sql` approval is widened to cover it.
+  - **The from-empty rebuild gap:** it exists today for every replayed type. It is registered as a QUAL row (O-31), not built in 14840.
+  - **AC-S0-2j** moves to 14840-T *before* 14811 is dispatched.
+  - **New tests owed:** two forced-order clear-versus-re-save facts, and M-18 and M-20 redefined.
+  - **AC-CL-20(2):** becomes kind R.
+  - **D-13:** rewritten, because an exported month cannot be reopened (409 `payroll-locked`). Two new ACs come with it.
+  - **Frontend:** one 409 behaviour, the same as any failed edit; only a 422 restores the cell's value. The removal announcement is shown only when it is true.
+- **Owner Q3 (2026-11-11), "Fix it in S148 (Recommended)":** QUAL-196, the missing balance record, is fixed in S148.
+  - **The problem:** clearing would let an employee in that rare state reach −1 day used, so the screen would offer one more holiday day than they are entitled to.
+  - **The fix:** a missing record is created from the actual current bookings, in all three places that create one. It is a new task pair, TASK-14842 + -T.
+- **Told, not asked** (2026-11-11):
+  - Clearing has no confirmation dialog and no undo.
+  - An empty posted work-time day is refused; the screen sends a removal instead.
+  - The from-empty rebuild gap is registered.
+- **Draft 1.1** is being written by a `planner` run: the adjudication's 17 edits, plus 14842, plus the main-plan "final + 3". Cycle 2 of Step 0b follows.
+- **GATE after 14804** (`72f286fe`): green. Build 0 errors / 143 warnings / CA2100 113; Unit 1716; DemoSeed 170; Regression non-Docker 140. **All of wave 1 is merged on local master**: 14801, 14802 (+ 14803 stack), 14804, 14805, 14806, 14807 and 14808, each with its paired pass where it has one. **CI-W1 next**, on a throwaway branch and draft PR (owner "go ahead" for evidence runs, 2026-11-10).
