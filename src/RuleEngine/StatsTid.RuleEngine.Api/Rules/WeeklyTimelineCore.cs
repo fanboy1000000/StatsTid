@@ -140,8 +140,17 @@ public static class WeeklyTimelineCore
     /// v1 is therefore refused on replay (<c>replay-evaluation-model-changed</c>, ADR-016 D10),
     /// never silently re-read under the new rule.
     /// </para>
+    ///
+    /// <para>
+    /// <b>v3 (S148 / TASK-14811, QUAL-236)</b>, replacing v2: the classification gains the
+    /// child's call-home day (<c>CHILD_SICK_CALL_HOME</c>), credited toward the norm like the
+    /// child's sick days, so a period holding call-home hours closes differently than v2 would
+    /// close it. A manifest recorded under v2 is therefore refused on replay
+    /// (<c>replay-evaluation-model-changed</c>, ADR-016 D10). Nothing else in the arithmetic
+    /// changed with v3.
+    /// </para>
     /// </summary>
-    public const string EvaluationModel = "weekly-timeline-v2";
+    public const string EvaluationModel = "weekly-timeline-v3";
 
     public static TimelineCoreResult Evaluate(TimelineCoreInput input)
     {
