@@ -867,7 +867,7 @@ static IResult PayrollFourEyesRefused(ILoggerFactory loggerFactory, Guid periodI
 // A blank employee id cannot hold stored entries, so it is left to the route's own outcome. 422 because the request is
 // well formed but the month's data cannot be paid. The body is FIXED: no employee id, no date, no row data (ADR-040 D7);
 // the server log names the employee, the period and the refused rows' event ids and types.
-// shortcut(pending): a month holding a stored typed row has no in-product remedy (no route removes or re-types a stored
+// shortcut(QUAL-BF-003): a month holding a stored typed row has no in-product remedy (no route removes or re-types a stored
 // entry), so it stays refused; upgrade when a database holding typed rows is carried forward instead of reseeded.
 static async Task<IResult?> RefuseTypedEntriesAsync(
     IRecordedHoursReader hoursReader,

@@ -779,7 +779,7 @@ public sealed class HrFollowUpApprovalReadRepository
 
         // The prefetch loads the read's scope: every organisation for a GlobalAdmin (the empty
         // prefix), otherwise each home organisation the population holds — three reads apiece.
-        // shortcut(pending): an HR scope of several organisations costs three prefetch reads per
+        // shortcut(QUAL-BF-002): an HR scope of several organisations costs three prefetch reads per
         // organisation, because the prefetch takes one path prefix; upgrade when an HR scope spans
         // many organisations and this roll-up measures slow (a prefetch keyed on an org-id set).
         IReadOnlyCollection<string> orgPathPrefixes = accessibleOrgIds is null ? new[] { "" } : homeOrgPaths;

@@ -1787,7 +1787,7 @@ public static class SkemaEndpoints
             // Why at the save rather than in payroll: the employee is told at once, before anything is
             // saved, and no engine arithmetic changes (ADR-043 D2). A wrong cell can be changed but
             // never emptied, and a full-day-only care or senior day cannot even be lowered:
-            // shortcut(pending): an absence or project cell cannot be cleared (SPRINT-72 R17), so a mistaken full-day absence blocks work on that day; upgrade when cell clearing ships
+            // shortcut(QUAL-248): an absence or project cell cannot be cleared (SPRINT-72 R17), so a mistaken full-day absence blocks work on that day; upgrade when cell clearing ships
             // It runs twice. Here, after every other pre-transaction refusal, as the cheap advisory
             // 422 on unlocked reads: every refusal decided before the transaction keeps today's
             // answer, and on a date both refuse the all-types cap answers first. Two refusals decided
@@ -1872,7 +1872,7 @@ public static class SkemaEndpoints
 
                     var workedHours = Math.Max(projectHours, intervalHours);
 
-                    // shortcut(pending): the paid-absence bound reads the § 7 nr. 2 per-day norm
+                    // shortcut(QUAL-BF-001): the paid-absence bound reads the § 7 nr. 2 per-day norm
                     // (FullDayHoursAsync), not the configured credit basis; upgrade when stage 1 serves
                     // the one planned-hours figure (ADR-043 D2, S1-5)
                     if (!basisByDate.TryGetValue(date, out var fullDayHours))
