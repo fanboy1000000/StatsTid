@@ -35,9 +35,9 @@ public class ChildSickEntitlementConfigTests
     private static readonly string[] CompiledAgreements = { "AC", "HK", "PROSA" };
     private static readonly string[] ProvisionalAgreements = { "AC", "AC_RESEARCH", "AC_TEACHING" };
 
-    // One CHILD_SICK seed row per line: ('CHILD_SICK', '<agreement>', '<OK version>', <days>, 'IMMEDIATE', ..., '<description>', ...
+    // One CHILD_SICK seed row per line: ('CHILD_SICK', '<agreement>', '<OK version>', <days>, 'IMMEDIATE', ..., '<description>', '0001-01-01', ...
     private static readonly Regex SeedRow = new(
-        @"^\s*\('CHILD_SICK',\s*'(?<agreement>[A-Z_]+)',\s*'(?<ok>OK\d+)',\s*(?<days>\d+),\s*'IMMEDIATE'.*?'(?<description>Barns sygedag[^']*)'",
+        @"^\s*\('CHILD_SICK',\s*'(?<agreement>[A-Z_]+)',\s*'(?<ok>OK\d+)',\s*(?<days>\d+),\s*'IMMEDIATE'.*?'(?<description>[^']*)',\s*'0001-01-01'",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private sealed record Seed(int Days, string Description);
