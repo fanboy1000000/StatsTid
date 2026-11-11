@@ -779,3 +779,8 @@ One fact corrected along the way: A9's `cref` premise does not hold. No project 
   - The column drop and the event-member removal are consistent across schema, serializer, producer and consumers.
   - No `shortcut(` or TODO was added, so merge-checklist item 8 has nothing to register.
 - **Merged** (the 14809 → 14809-T → REGEN → 14810 stack, `--no-ff` from `8e085742`). The same commit carries O-7: `db-schema.md` regenerated from `init.sql` (the `manual_hours` row removed), so the docs job stays green.
+- **GATE after the 14809 stack, on master `540ac9a9`: green.**
+  - Build `-m:2`: 0 errors, 143 warnings (cap 144), CA2100 113 (cap 114).
+  - Unit 1716, DemoSeed 170, Regression `Category!=Docker` 140.
+  - Frontend: tsc, lint, e2e typecheck and build all green; vitest 85 files / 1088 tests.
+  - The Docker facts, including AC-S0-5b, the key-set pins and the C5 row, are CI-W2's.
