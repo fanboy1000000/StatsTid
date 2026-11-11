@@ -223,7 +223,7 @@ public sealed class PaidAbsenceDayBoundTests : IAsyncLifetime
         if (workTime is { } w)
             request["workTime"] = new[]
             {
-                new { date = d, intervals = new[] { new { start = w.Start, end = w.End } }, manualHours = 0m },
+                new { date = d, intervals = new[] { new { start = w.Start, end = w.End } } },
             };
         if (entryHours is { } h)
             request["entries"] = new[] { new { date = d, projectCode = "S148P", hours = h } };

@@ -181,12 +181,12 @@ public sealed class YearOverviewTests : IAsyncLifetime
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// <b>Cross-seam drift-proof (marquee).</b> Seed a single work_time_projection row for emp001
-    /// in a PAST month (Feb 2025) and assert that the year-overview <c>months[1].diff</c>
+    /// <b>Cross-seam drift-proof (marquee).</b> Seed a work_time_projection row for each of the 20
+    /// weekdays of a PAST month (Feb 2025), each 08:00-15:30 (7,5 h; 150 h in all), for emp001 and assert that the year-overview <c>months[1].diff</c>
     /// (February) equals the diff RECONSTRUCTED from the SEPARATE Skema endpoint
     /// (GET /api/skema/{id}/month?year=2025&amp;month=2). The Skema <c>/month</c> response does not
     /// emit a per-day <c>diff</c> directly (the FE computes it) — it exposes the raw
-    /// <c>workTime</c> rows (intervals + manualHours) and the <c>dailyNorm</c> array, both produced
+    /// <c>workTime</c> rows (intervals) and the <c>dailyNorm</c> array, both produced
     /// by the SAME shared <see cref="StatsTid.Backend.Api.Services.DailyNormCalculator"/> +
     /// interval-sum the year-overview uses. We sum the Skema seam's own worked hours and per-day
     /// norms and assert the year-overview's month diff matches. This is a genuine cross-seam
@@ -198,7 +198,13 @@ public sealed class YearOverviewTests : IAsyncLifetime
     {
         // Seed emp001 with a work_time_projection row for Feb 2025 (a fully-past month).
         // Feb 2025: 20 weekdays × 7.4 h/day = 148 h norm; we seed 150 h worked.
-        await SeedWorkTimeRowAsync(Emp001, new DateOnly(2025, 2, 1), manualHours: 150m);
+        // S148 S0-5: manual hours are retired and 150 h cannot be one day of clock time, so the 150 h
+        // is the 20 weekdays of February 2025 (Mon 3 - Fri 28 Feb), each 08:00-15:30 (7,5 h).
+        for (var day = new DateOnly(2025, 2, 3); day.Month == 2; day = day.AddDays(1))
+        {
+            if (day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) continue;
+            await SeedWorkTimeRowAsync(Emp001, day, "08:00", "15:30");
+        }
 
         // today = 2026-06-15, year under test = 2025 (a fully past year → diff always non-null).
         var client = MakeFixedTodayClient(EmployeeBearerToken(Emp001, Emp001OrgId));
@@ -217,13 +223,11 @@ public sealed class YearOverviewTests : IAsyncLifetime
         //    int year + int month query params, EmployeeOrAbove). ──
         var skemaMonth = await GetSkemaMonthAsync(client, Emp001, 2025, 2);
 
-        // Skema worked = Σ over workTime rows of (Σ positive-duration interval hours + manualHours),
-        // then rounded to 2dp — byte-identical to BalanceEndpoints.cs:639-640
-        // (SumIntervalHours + ManualHours). Our seed has no intervals, so this is the 150 manual.
+        // Skema worked = Σ over workTime rows of the positive-duration interval hours, then rounded to
+        // 2dp, the same sum the year overview takes. Our seed is 20 days × 7,5 h = 150 h.
         var skemaWorked = Math.Round(
             skemaMonth.GetProperty("workTime").EnumerateArray()
-                .Sum(w => SumSkemaIntervalHours(w.GetProperty("intervals"))
-                          + w.GetProperty("manualHours").GetDecimal()),
+                .Sum(w => SumSkemaIntervalHours(w.GetProperty("intervals"))),
             2);
 
         // Skema norm = Σ over the dailyNorm array of each day's hours (weekends 0; any null day would
@@ -2131,29 +2135,28 @@ public sealed class YearOverviewTests : IAsyncLifetime
 
     /// <summary>
     /// Inserts (or upserts) a single row into <c>work_time_projection</c> for the given employee
-    /// / date. Only manual_hours is seeded (no intervals). Citation: work_time_projection schema
-    /// at tests/StatsTid.Tests.Regression/Outbox/ProjectionSchemaTestFixture.cs:68-83.
+    /// / date, holding one clock interval (start-end). Schema: <c>init.sql</c> (the test copy is
+    /// tests/StatsTid.Tests.Regression/Outbox/ProjectionSchemaTestFixture.cs:109-125).
     /// </summary>
     private async Task SeedWorkTimeRowAsync(
-        string employeeId, DateOnly date, decimal manualHours)
+        string employeeId, DateOnly date, string start, string end)
     {
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
 
-        // Citation: work_time_projection schema at ProjectionSchemaTestFixture.cs:68-83.
         // Primary key is (employee_id, date) → ON CONFLICT upsert.
         await using var cmd = new NpgsqlCommand(
             """
             INSERT INTO work_time_projection
-                (employee_id, date, intervals, manual_hours, occurred_at, actor_id, actor_role, outbox_id)
+                (employee_id, date, intervals, occurred_at, actor_id, actor_role, outbox_id)
             VALUES
-                (@emp, @date, '[]'::jsonb, @manual, NOW(), 'test-seed', 'Employee', -1)
+                (@emp, @date, @intervals::jsonb, NOW(), 'test-seed', 'Employee', -1)
             ON CONFLICT (employee_id, date)
-                DO UPDATE SET manual_hours = EXCLUDED.manual_hours
+                DO UPDATE SET intervals = EXCLUDED.intervals
             """, conn);
         cmd.Parameters.AddWithValue("emp", employeeId);
         cmd.Parameters.AddWithValue("date", date);
-        cmd.Parameters.AddWithValue("manual", manualHours);
+        cmd.Parameters.AddWithValue("intervals", $$"""[{"start":"{{start}}","end":"{{end}}"}]""");
         await cmd.ExecuteNonQueryAsync();
     }
 

@@ -139,7 +139,9 @@ public sealed class WorkTimeBackfillTests : IAsyncLifetime
 
         var rows = await _workTimeRepo.GetByEmployeeAndDateRangeAsync(employeeId, date, date);
         var row = Assert.Single(rows);
-        Assert.Equal("09:00", Assert.Single(row.Intervals).Start);
+        var standing = Assert.Single(row.Intervals);
+        Assert.Equal("09:00", standing.Start);
+        Assert.Equal("17:00", standing.End); // S148 S0-5: the interval alone discriminates now that manual hours are gone
     }
 
     /// <summary>

@@ -115,7 +115,6 @@ internal static class ProjectionSchemaTestFixture
             employee_id     TEXT            NOT NULL,
             date            DATE            NOT NULL,
             intervals       JSONB           NOT NULL DEFAULT '[]'::jsonb,
-            manual_hours    NUMERIC(8,4)    NOT NULL DEFAULT 0,
             occurred_at     TIMESTAMPTZ     NOT NULL,
             actor_id        TEXT,
             actor_role      TEXT,

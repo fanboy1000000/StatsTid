@@ -440,7 +440,6 @@ public sealed class SkemaFullDayOnlyGuardTests : IAsyncLifetime
                 {
                     date = Monday.ToString("yyyy-MM-dd"),
                     intervals = new[] { new { start = "08:00", end = "12:00" } },
-                    manualHours = 0m,
                 },
             },
         };

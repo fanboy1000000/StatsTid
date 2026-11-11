@@ -185,7 +185,7 @@ public abstract class SendCommandMatrixTestBase
     /// in the shape the real writer produces. Upsert: one row per (employee, date). Note: a
     /// work_time_projection row does NOT satisfy coverage (coverage reads time-entries + absences).</summary>
     protected async Task WorkedAsync(
-        string employeeId, DateOnly date, (string Start, string End)[]? intervals = null, decimal manualHours = 0m)
+        string employeeId, DateOnly date, (string Start, string End)[]? intervals = null)
     {
         var @event = new WorkTimeRegistered
         {

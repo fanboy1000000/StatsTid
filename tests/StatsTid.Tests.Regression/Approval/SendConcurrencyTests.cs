@@ -179,7 +179,7 @@ public abstract class SendConcurrencyTestBase
         HttpClient client, string employeeId, DateOnly date, string start, string end,
         int year = MarchYear, int month = MarchMonth)
         => client.PostAsJsonAsync($"/api/skema/{employeeId}/save",
-            new { year, month, workTime = new[] { new { date, intervals = new[] { new { start, end } }, manualHours = 0m } } });
+            new { year, month, workTime = new[] { new { date, intervals = new[] { new { start, end } } } } });
 
     // ── Clients / tokens ──────────────────────────────────────────────────────────────────────────
 

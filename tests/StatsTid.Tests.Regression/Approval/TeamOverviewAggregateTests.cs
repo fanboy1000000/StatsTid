@@ -299,19 +299,22 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
-    private async Task InsertWorkTimeAsync(string employeeId, DateOnly date, decimal manualHours)
+    // S148 S0-5: manual hours are retired; the day's worked hours are seeded as one clock interval
+    // from 08:00 (so workedHours must be at most 16). Same hours as before for the 7,4 / 2,0 callers.
+    private async Task InsertWorkTimeAsync(string employeeId, DateOnly date, decimal workedHours)
     {
+        var end = (TimeSpan.FromHours(8) + TimeSpan.FromSeconds((double)(workedHours * 3600m))).ToString(@"hh\:mm\:ss");
         await using var conn = new NpgsqlConnection(_harness.ConnectionString);
         await conn.OpenAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            INSERT INTO work_time_projection (employee_id, date, intervals, manual_hours, occurred_at, outbox_id)
-            VALUES (@emp, @date, '[]'::jsonb, @manual, NOW(), @outbox)
-            ON CONFLICT (employee_id, date) DO UPDATE SET manual_hours = @manual
+            INSERT INTO work_time_projection (employee_id, date, intervals, occurred_at, outbox_id)
+            VALUES (@emp, @date, @intervals::jsonb, NOW(), @outbox)
+            ON CONFLICT (employee_id, date) DO UPDATE SET intervals = @intervals::jsonb
             """, conn);
         cmd.Parameters.AddWithValue("emp", employeeId);
         cmd.Parameters.AddWithValue("date", date);
-        cmd.Parameters.AddWithValue("manual", manualHours);
+        cmd.Parameters.AddWithValue("intervals", $$"""[{"start":"08:00:00","end":"{{end}}"}]""");
         cmd.Parameters.AddWithValue("outbox", _outboxSeq++);
         await cmd.ExecuteNonQueryAsync();
     }
@@ -504,7 +507,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
         // 40 h registered + a deliberate worked/allocated imbalance that WOULD raise hasWarning.
         await InsertPeriodAsync(Emp, "STY02", "DRAFT");
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
-        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 8m); // S148 S0-5: one day holds at most 24 h of clock time; 08:00-16:00 beside the 40 h time entry (a real imbalance)
         await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
         await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: was a FlexBalanceUpdated event
 
@@ -555,7 +558,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     {
         await InsertPeriodAsync(Emp, "STY02", status);
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
-        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 8m); // S148 S0-5: one day holds at most 24 h of clock time; 08:00-16:00 beside the 40 h time entry (a real imbalance)
         await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: the latest recorded closing (a released row shows it)
 
         var row = (await GetTeamOverviewAsync(Mgr, 2026, 5)).Single(r => EmployeeId(r) == Emp);
@@ -590,7 +593,7 @@ public sealed class TeamOverviewAggregateTests : IAsyncLifetime
     {
         await InsertPeriodAsync(Emp, "STY02", "REJECTED", rejectionReason: "rettelser nødvendige");
         await InsertTimeEntryAsync(Emp, new DateOnly(2026, 5, 4), 40m);
-        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 40m);
+        await InsertWorkTimeAsync(Emp, new DateOnly(2026, 5, 4), 8m); // S148 S0-5: one day holds at most 24 h of clock time; 08:00-16:00 beside the 40 h time entry (a real imbalance)
         await SetVacationBalanceAsync(Emp, 2025, used: 7m, totalQuota: 25m);
         await InsertLedgerRecordAsync(Emp, LedgerApr, 3.5m); // S146 R-7: was a FlexBalanceUpdated event
 

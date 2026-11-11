@@ -15,7 +15,7 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// — the focus is the persistence contract, not the HTTP surface.
 ///
 /// <para>
-/// Covers: (1) save → GET round-trip (intervals + manualHours survive); (2)
+/// Covers: (1) save → GET round-trip (intervals survive); (2)
 /// re-save same day emits a superseding <see cref="WorkTimeRegistered"/> event
 /// and the latest-wins <c>outbox_id&lt;=</c> guard keeps the NEWEST row; (3) the
 /// approval-survival regression — save work time, then run the approval
@@ -46,7 +46,7 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
 
     /// <summary>
     /// Save (enqueue WorkTimeRegistered in-tx then upsert projection) → GET via
-    /// the date-range read. Intervals AND manual_hours survive the JSONB
+    /// the date-range read. Intervals survive the JSONB
     /// round-trip; read-your-write holds (the projection committed in the same
     /// tx as the event).
     /// </summary>
@@ -58,7 +58,7 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         var date = new DateOnly(2026, 3, 5);
 
         await SaveWorkTimeAsync(employeeId, streamId, date,
-            new[] { ("08:00", "12:00"), ("12:30", "16:00") }, manualHours: 0.5m);
+            new[] { ("08:00", "12:00"), ("12:30", "16:00") });
 
         var rows = await _workTimeRepo.GetByEmployeeAndDateRangeAsync(
             employeeId, date, date);
@@ -85,9 +85,9 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         var date = new DateOnly(2026, 3, 6);
 
         await SaveWorkTimeAsync(employeeId, streamId, date,
-            new[] { ("08:00", "12:00") }, manualHours: 0m);
+            new[] { ("08:00", "12:00") });
         await SaveWorkTimeAsync(employeeId, streamId, date,
-            new[] { ("09:00", "17:00") }, manualHours: 1.25m);
+            new[] { ("09:00", "17:00") });
 
         var rows = await _workTimeRepo.GetByEmployeeAndDateRangeAsync(
             employeeId, date, date);
@@ -166,7 +166,7 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         var date = new DateOnly(2026, 3, 12);
 
         await SaveWorkTimeAsync(employeeId, streamId, date,
-            new[] { ("08:00", "16:00") }, manualHours: 0m);
+            new[] { ("08:00", "16:00") });
 
         // Run the approval write path (state transition + deadlines + audit) the
         // way the employee-approve endpoint does — a separate tx that does NOT
@@ -208,7 +208,7 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
     /// </summary>
     private async Task SaveWorkTimeAsync(
         string employeeId, string streamId, DateOnly date,
-        (string Start, string End)[] intervals, decimal manualHours)
+        (string Start, string End)[] intervals)
     {
         var @event = new WorkTimeRegistered
         {

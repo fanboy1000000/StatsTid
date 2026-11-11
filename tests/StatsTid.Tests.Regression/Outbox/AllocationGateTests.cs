@@ -57,7 +57,7 @@ public sealed class AllocationGateFixture : IAsyncLifetime
 /// <para><b>What the gate is.</b> A month cannot be sent to the manager unless, for every day in it,
 /// the hours recorded as time at work equal the hours distributed onto projects:</para>
 /// <list type="bullet">
-///   <item><b>worked</b> = Σ work-interval hours + <c>manual_hours</c>, from
+///   <item><b>worked</b> = Σ work-interval hours, from
 ///     <c>work_time_projection</c>. No row for the day ⇒ 0.</item>
 ///   <item><b>allocated</b> = Σ hours of <c>time_entries_projection</c> rows with
 ///     <c>activity_type = 'NORMAL'</c> AND a non-null <c>task_id</c>. Absence-type rows and ordinary
@@ -144,14 +144,15 @@ public sealed class AllocationGateTests : IClassFixture<AllocationGateFixture>
     }
 
     /// <summary>
-    /// The tolerance's ONLY job: representation noise. 7.40 (a <c>manual_hours</c> NUMERIC) and 7.4
-    /// (an hours NUMERIC of a different scale) are the same VALUE and must not block a send.
+    /// The tolerance's ONLY job: representation noise. S148 S0-5: worked is 26 640 s ÷ 3600 = 7.4 (computed
+    /// from the interval; no stored worked column remains) against a NUMERIC(8,4) 7.4 allocated: the same
+    /// VALUE at a different scale, which must not block a send.
     /// </summary>
     [Fact]
     public async Task SameValueAtDifferentScale_IsSent()
     {
         var emp = await SeedMonthAsync("scale", coverageGap: WeekDay);
-        await WorkedAsync(emp, WeekDay, manualHours: 7.40m);
+        await WorkedAsync(emp, WeekDay, intervals: new[] { ("08:00", "15:24") });   // 7.4h (26 640 s ÷ 3600)
         await AllocatedAsync(emp, WeekDay, 7.4m, "NORMAL", "PROJ-1");
 
         var rsp = await SendAsync(emp);
@@ -220,7 +221,7 @@ public sealed class AllocationGateTests : IClassFixture<AllocationGateFixture>
     public async Task OneOereShort_IsRefused()
     {
         var emp = await SeedMonthAsync("oere", coverageGap: WeekDay);
-        await WorkedAsync(emp, WeekDay, manualHours: 7.40m);
+        await WorkedAsync(emp, WeekDay, intervals: new[] { ("08:00", "15:24") });   // 7.4h (26 640 s ÷ 3600)
         await AllocatedAsync(emp, WeekDay, 7.39m, "NORMAL", "PROJ-1");
 
         var rsp = await SendAsync(emp);
@@ -410,8 +411,7 @@ public sealed class AllocationGateTests : IClassFixture<AllocationGateFixture>
     /// the projection shape the real writer produces rather than a hand-rolled INSERT's guess at it.
     /// </summary>
     private async Task WorkedAsync(
-        string employeeId, DateOnly date, (string Start, string End)[]? intervals = null,
-        decimal manualHours = 0m)
+        string employeeId, DateOnly date, (string Start, string End)[]? intervals = null)
     {
         var @event = new WorkTimeRegistered
         {

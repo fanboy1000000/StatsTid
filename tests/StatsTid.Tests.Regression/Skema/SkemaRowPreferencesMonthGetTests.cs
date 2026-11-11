@@ -324,17 +324,21 @@ public sealed class SkemaRowPreferencesMonthGetTests : IAsyncLifetime
         var orgId = NewOrgId();
         var emp = await SeedEmployeeAsync(orgId);
         // Viewing 2025-05: boundaries are 2025-04-30 and 2025-06-01.
-        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 4, 29), "08:00", "16:00", 0m, outboxId: 1); // noise
-        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 4, 30), "09:00", "17:00", 0.5m, outboxId: 2);
-        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 6, 1), "10:00", "18:00", 0m, outboxId: 3);
-        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 6, 2), "08:00", "12:00", 0m, outboxId: 4); // noise
+        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 4, 29), "08:00", "16:00", outboxId: 1); // noise
+        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 4, 30), "09:00", "17:00", outboxId: 2);
+        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 6, 1), "10:00", "18:00", outboxId: 3);
+        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 6, 2), "08:00", "12:00", outboxId: 4); // noise
 
         var body = await GetMonthAsync(emp, orgId, 2025, 5);
 
         var boundary = body.GetProperty("boundaryWorkTime").EnumerateArray().ToList();
         Assert.Equal(2, boundary.Count);
         Assert.Equal("2025-04-30", boundary[0].GetProperty("date").GetString());
-        Assert.Equal(0.5m, boundary[0].GetProperty("manualHours").GetDecimal());
+        // S148 S0-5 (kind F, CI): the boundary row is exactly {date, intervals}; manualHours is retired.
+        // Red condition: the served row still carries a third member, manualHours, until
+        // SkemaWorkTimeDayRow drops it.
+        Assert.Equal(new[] { "date", "intervals" },
+            boundary[0].EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal).ToArray());
         var interval = boundary[0].GetProperty("intervals").EnumerateArray().Single();
         Assert.Equal("09:00", interval.GetProperty("start").GetString());
         Assert.Equal("17:00", interval.GetProperty("end").GetString());
@@ -350,8 +354,8 @@ public sealed class SkemaRowPreferencesMonthGetTests : IAsyncLifetime
     {
         var orgId = NewOrgId();
         var emp = await SeedEmployeeAsync(orgId);
-        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 12, 31), "08:00", "16:00", 0m, outboxId: 1);
-        await InsertWorkTimeRowAsync(emp, new DateOnly(2026, 2, 1), "10:00", "14:00", 0m, outboxId: 2);
+        await InsertWorkTimeRowAsync(emp, new DateOnly(2025, 12, 31), "08:00", "16:00", outboxId: 1);
+        await InsertWorkTimeRowAsync(emp, new DateOnly(2026, 2, 1), "10:00", "14:00", outboxId: 2);
 
         var body = await GetMonthAsync(emp, orgId, 2026, 1);
 
@@ -510,12 +514,12 @@ public sealed class SkemaRowPreferencesMonthGetTests : IAsyncLifetime
             """, employeeId, date, absenceType, hours, (object?)feriedage ?? DBNull.Value, outboxId);
 
     private Task InsertWorkTimeRowAsync(
-        string employeeId, DateOnly date, string start, string end, decimal manualHours, long outboxId)
+        string employeeId, DateOnly date, string start, string end, long outboxId)
         => ExecAsync(
             """
-            INSERT INTO work_time_projection (employee_id, date, intervals, manual_hours, occurred_at, outbox_id)
-            VALUES (@p0, @p1, @p2::jsonb, @p3, NOW(), @p4)
-            """, employeeId, date, $$"""[{"start":"{{start}}","end":"{{end}}"}]""", manualHours, outboxId);
+            INSERT INTO work_time_projection (employee_id, date, intervals, occurred_at, outbox_id)
+            VALUES (@p0, @p1, @p2::jsonb, NOW(), @p3)
+            """, employeeId, date, $$"""[{"start":"{{start}}","end":"{{end}}"}]""", outboxId);
 
     private async Task ExecAsync(string sql, params object[] args)
     {

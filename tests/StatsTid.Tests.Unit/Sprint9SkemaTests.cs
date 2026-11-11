@@ -269,8 +269,8 @@ public class Sprint9SkemaTests
 
     /// <summary>
     /// S56 / TASK-5603: WorkTimeRegistered round-trips through the
-    /// EventSerializer — the interval list (start/end strings) and the
-    /// manual-hours scalar survive serialize → deserialize. This is the event
+    /// EventSerializer — the interval list (start/end strings) survives
+    /// serialize → deserialize. This is the event
     /// the Skema save path enqueues and the backfill replays into
     /// work_time_projection, so its fidelity is load-bearing.
     /// </summary>
