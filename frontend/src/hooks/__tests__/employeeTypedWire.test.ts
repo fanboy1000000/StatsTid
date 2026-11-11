@@ -164,7 +164,7 @@ describe('useBalanceSummary / useYearOverview — typed reads, exact legacy URLs
       header: { employeeName: 'Anna Berg', agreementCode: 'AC', okVersion: 'OK26', weeklyNormHours: 37 },
       tiles: {
         flexBalance: null, flexBalanceMonth: null, ferieRemaining: null, careDayRemaining: null, seniorDayRemaining: null,
-        sickDaysYtd: 0, childSickRemaining: null, childSickEligible: false, seniorDayEligible: false,
+        sickDaysYtd: 0, childSickDaysPerIllness: null, childSickCallHomeDay: false, childSickEligible: false, seniorDayEligible: false,
       },
       months: [],
       categories: [

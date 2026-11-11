@@ -117,7 +117,14 @@ function buildTiles(data: YearOverview): TileSpec[] {
   }
   tiles.push({ label: 'Sygedage', value: t.sickDaysYtd, kind: 'daysOnly', sub: 'i år' })
   if (t.childSickEligible) {
-    tiles.push({ label: BALANCE_LABELS.CHILD_SICK, value: t.childSickRemaining, kind: 'hoursFirstDays', sub: 'saldo' })
+    // The child's sick days are counted per illness with no yearly cap (QUAL-236): the server's
+    // allowance, never a remainder. The call-home day is the rest of the day the child fell ill.
+    tiles.push({
+      label: BALANCE_LABELS.CHILD_SICK,
+      value: t.childSickDaysPerIllness,
+      kind: 'daysOnly',
+      sub: t.childSickCallHomeDay ? 'pr. sygdomsforløb + hjemkaldelsesdag' : 'pr. sygdomsforløb',
+    })
   }
   return tiles
 }

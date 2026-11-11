@@ -6976,8 +6976,9 @@ export interface components {
             seniorDayRemaining: number | null;
             /** Format: int32 */
             sickDaysYtd: number;
-            /** Format: double */
-            childSickRemaining: number | null;
+            /** Format: int32 */
+            childSickDaysPerIllness: number | null;
+            childSickCallHomeDay: boolean;
             childSickEligible: boolean;
             seniorDayEligible: boolean;
         };
