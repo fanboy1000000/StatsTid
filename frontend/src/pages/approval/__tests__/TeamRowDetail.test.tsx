@@ -124,7 +124,7 @@ const cleanSkemaMonth = {
     { date: '2026-03-04', absenceType: 'VACATION', hours: 7.4, feriedage: 1 },
   ],
   workTime: [
-    { date: '2026-03-02', intervals: [{ start: '08:00', end: '15:24' }], manualHours: 0 },
+    { date: '2026-03-02', intervals: [{ start: '08:00', end: '15:24' }] },
   ],
   dailyNorm: [
     { date: '2026-03-02', hours: 7.4 },

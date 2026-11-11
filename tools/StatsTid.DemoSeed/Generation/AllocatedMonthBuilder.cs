@@ -13,8 +13,8 @@ namespace StatsTid.Tools.DemoSeed.Generation;
 ///     <c>danish_public_holidays</c> row) must carry at least one time entry OR one absence.
 ///     Satisfied by registering a work day on every expected workday the generator did not already
 ///     spend on an absence.</item>
-///   <item><b>Allocation</b> — for EVERY day, <c>work_time_projection</c> hours (interval hours +
-///     manual hours) must equal the summed <c>NORMAL</c> non-null-<c>TaskId</c> time-entry hours,
+///   <item><b>Allocation</b> — for EVERY day, <c>work_time_projection</c> hours (interval hours
+///     alone) must equal the summed <c>NORMAL</c> non-null-<c>TaskId</c> time-entry hours,
 ///     within 0.005 after 2-decimal rounding. Satisfied by construction: the day's allocation rows
 ///     are derived FROM the day's work-time total and are exact 2-decimal splits of it, so the
 ///     difference is exactly 0.00 — never a value that leans on the tolerance.</item>

@@ -374,8 +374,7 @@ public static class SkemaEndpoints
             var workTime = workTimeRows
                 .Select(w => new SkemaWorkTimeDayRow(
                     Date: w.Date,
-                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList(),
-                    ManualHours: w.ManualHours))
+                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList()))
                 .ToList();
 
             // ── TASK-5603 per-day norm (dailyNorm) — S65 / TASK-6502 extraction ──
@@ -487,8 +486,7 @@ public static class SkemaEndpoints
             var boundaryWorkTime = prevBoundaryRows.Concat(nextBoundaryRows)
                 .Select(w => new SkemaWorkTimeDayRow(
                     Date: w.Date,
-                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList(),
-                    ManualHours: w.ManualHours))
+                    Intervals: w.Intervals.Select(i => new SkemaWorkIntervalRow(i.Start, i.End)).ToList()))
                 .ToList();
 
             // ── S72 / TASK-7201 — R10 fullDayNormAtMonthEnd scalar ──
@@ -892,24 +890,14 @@ public static class SkemaEndpoints
                     // Authoritative guard mirroring the inline absence "exceed norm day"
                     // cap below: a physical input invariant (24h/day), NOT an agreement/OK
                     // rule, so it stays in the Backend endpoint — no rule-engine hop.
-                    // Three checks, in order: (1) manual hours cannot be negative — without
-                    // this, large interval hours could net under 24 via a negative manual
-                    // value while still persisting >24 worked hours; (2) intervals on a day
-                    // cannot overlap (each interval would otherwise double-count); (3) the
-                    // day's total worked time (interval hours + manual hours) cannot exceed
-                    // 24h. Exactly 24,0 t is allowed. Interval-hour computation mirrors the
+                    // A day's worked time is its clock periods alone (ADR-043 D10, D-2.4), so
+                    // two checks, in order: (2) intervals on a day cannot overlap (each
+                    // interval would otherwise double-count); (3) the day's interval hours
+                    // cannot exceed 24h. Exactly 24,0 t is allowed. There is no check (1):
+                    // it guarded manual hours, which are retired; the labels are kept so
+                    // existing cites stay valid. Interval-hour computation mirrors the
                     // frontend calcIntervalHours (positive end>start diffs, total seconds
                     // rounded to 2 decimals) so UI and server agree.
-
-                    // (1) Negative manual hours.
-                    if (day.ManualHours < 0m)
-                        return Results.Json(new
-                        {
-                            error = "work_time_negative_manual_hours",
-                            date = day.Date,
-                            manualHours = day.ManualHours,
-                            message = $"Manuelt registrerede timer for {day.Date:dd-MM-yyyy} kan ikke være negative."
-                        }, statusCode: 422);
 
                     // Parse to (startSec, endSec) keeping only positive-duration intervals,
                     // matching the frontend's `if (diff > 0)` filter.
@@ -938,10 +926,13 @@ public static class SkemaEndpoints
                             }, statusCode: 422);
                     }
 
-                    // (3) Total worked hours > 24.
+                    // (3) Total worked hours > 24, on interval hours alone. A backstop that no
+                    // input and no test reaches today: TryParseTimeToSeconds accepts hours 0-23
+                    // only and check (2) refuses overlaps first, so a day's intervals top out at
+                    // 86 399 s, which rounds to 24,00. It guards the 24-hour rule in case the
+                    // interval parser changes (TASK-14814's work across midnight).
                     var intervalSeconds = parsedIntervals.Sum(p => p.End - p.Start);
-                    var periodHours = Math.Round(intervalSeconds / 3600m, 2);
-                    var totalHours = Math.Round(periodHours + day.ManualHours, 2);
+                    var totalHours = Math.Round(intervalSeconds / 3600m, 2);
                     if (totalHours > 24m)
                         return Results.Json(new
                         {
@@ -1778,8 +1769,7 @@ public static class SkemaEndpoints
             //   • Worked: the larger of the day's project hours (entries) and its interval hours, so
             //     the check holds whichever of the two the employee fills in first. Interval hours
             //     follow the work-time check above (positive-duration intervals, seconds to hours at
-            //     2 dp) and add the day's manual hours, as every current reader of a day's work time
-            //     does (ApprovalEndpoints, BalanceEndpoints) until TASK-14809 retires that term.
+            //     2 dp); a day's clock periods are its only work-time record (ADR-043 D10, D-2.4).
             //   • Planned: the per-day amount the all-types cap uses (FullDayHoursAsync; 0 on a
             //     zero-norm day), compared through RoundBasis like both caps, so an exact rounded full
             //     day stays bookable. A null basis (no dated profile covers the day) is not bounded,
@@ -1864,11 +1854,10 @@ public static class SkemaEndpoints
                     var postedDay = postedWorkTime.LastOrDefault(d => d.Date == date);
                     var intervalHours = postedDay is not null
                         ? WorkTimeDayHours(
-                            (postedDay.Intervals ?? Array.Empty<SkemaWorkInterval>()).Select(i => (i.Start, i.End)),
-                            postedDay.ManualHours)
+                            (postedDay.Intervals ?? Array.Empty<SkemaWorkInterval>()).Select(i => (i.Start, i.End)))
                         : storedWorkTime
                             .Where(w => w.Date == date)
-                            .Sum(w => WorkTimeDayHours(w.Intervals.Select(i => (i.Start, i.End)), w.ManualHours));
+                            .Sum(w => WorkTimeDayHours(w.Intervals.Select(i => (i.Start, i.End))));
 
                     var workedHours = Math.Max(projectHours, intervalHours);
 
@@ -1899,9 +1888,8 @@ public static class SkemaEndpoints
             }
 
             // One work-time day's hours by the work-time check's convention above (positive-duration
-            // intervals only, seconds to hours at 2 dp) plus its manual hours, rounded as that check's
-            // 24-hour total is.
-            static decimal WorkTimeDayHours(IEnumerable<(string Start, string End)> intervals, decimal manualHours)
+            // intervals only, seconds to hours at 2 dp), rounded as that check's 24-hour total is.
+            static decimal WorkTimeDayHours(IEnumerable<(string Start, string End)> intervals)
             {
                 var seconds = 0;
                 foreach (var (start, end) in intervals)
@@ -1911,7 +1899,7 @@ public static class SkemaEndpoints
                         && endSec > startSec)
                         seconds += endSec - startSec;
                 }
-                return Math.Round(Math.Round(seconds / 3600m, 2) + manualHours, 2);
+                return Math.Round(seconds / 3600m, 2);
             }
 
             var advisoryBoundBreach = await FindPaidAbsenceDayBoundBreachAsync(
@@ -2362,7 +2350,6 @@ public static class SkemaEndpoints
                                 EmployeeId = employeeId,
                                 Date = day.Date,
                                 Intervals = intervals,
-                                ManualHours = day.ManualHours,
                                 ActorId = actor.ActorId,
                                 ActorRole = actor.ActorRole,
                                 CorrelationId = actor.CorrelationId
@@ -2976,14 +2963,14 @@ public static class SkemaEndpoints
     }
 
     // TASK-5603 — one day's self-recorded work time: a list of wall-clock
-    // intervals plus a manual daily-hours scalar. Mirrors the
+    // intervals, the day's only work-time record (ADR-043 D10, D-2.4). A body
+    // member beyond these two is ignored by the binder, not refused. Mirrors the
     // WorkTimeRegistered event shape (EmployeeId is taken from the route, not
     // the body, so it cannot be spoofed).
     private sealed class SkemaWorkTimeDay
     {
         public required DateOnly Date { get; init; }
         public SkemaWorkInterval[]? Intervals { get; init; }
-        public decimal ManualHours { get; init; }
     }
 
     private sealed class SkemaWorkInterval

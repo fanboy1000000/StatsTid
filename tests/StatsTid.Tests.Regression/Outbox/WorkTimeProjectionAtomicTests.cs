@@ -15,7 +15,7 @@ namespace StatsTid.Tests.Regression.Outbox;
 /// — the focus is the persistence contract, not the HTTP surface.
 ///
 /// <para>
-/// Covers: (1) save → GET round-trip (intervals + manualHours survive); (2)
+/// Covers: (1) save → GET round-trip (intervals survive); (2)
 /// re-save same day emits a superseding <see cref="WorkTimeRegistered"/> event
 /// and the latest-wins <c>outbox_id&lt;=</c> guard keeps the NEWEST row; (3) the
 /// approval-survival regression — save work time, then run the approval
@@ -46,7 +46,7 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
 
     /// <summary>
     /// Save (enqueue WorkTimeRegistered in-tx then upsert projection) → GET via
-    /// the date-range read. Intervals AND manual_hours survive the JSONB
+    /// the date-range read. Intervals survive the JSONB
     /// round-trip; read-your-write holds (the projection committed in the same
     /// tx as the event).
     /// </summary>
@@ -58,14 +58,13 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         var date = new DateOnly(2026, 3, 5);
 
         await SaveWorkTimeAsync(employeeId, streamId, date,
-            new[] { ("08:00", "12:00"), ("12:30", "16:00") }, manualHours: 0.5m);
+            new[] { ("08:00", "12:00"), ("12:30", "16:00") });
 
         var rows = await _workTimeRepo.GetByEmployeeAndDateRangeAsync(
             employeeId, date, date);
 
         var row = Assert.Single(rows);
         Assert.Equal(date, row.Date);
-        Assert.Equal(0.5m, row.ManualHours);
         Assert.Collection(row.Intervals,
             iv => { Assert.Equal("08:00", iv.Start); Assert.Equal("12:00", iv.End); },
             iv => { Assert.Equal("12:30", iv.Start); Assert.Equal("16:00", iv.End); });
@@ -86,15 +85,14 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         var date = new DateOnly(2026, 3, 6);
 
         await SaveWorkTimeAsync(employeeId, streamId, date,
-            new[] { ("08:00", "12:00") }, manualHours: 0m);
+            new[] { ("08:00", "12:00") });
         await SaveWorkTimeAsync(employeeId, streamId, date,
-            new[] { ("09:00", "17:00") }, manualHours: 1.25m);
+            new[] { ("09:00", "17:00") });
 
         var rows = await _workTimeRepo.GetByEmployeeAndDateRangeAsync(
             employeeId, date, date);
 
         var row = Assert.Single(rows); // PK (employee_id, date) → one row
-        Assert.Equal(1.25m, row.ManualHours);
         var iv = Assert.Single(row.Intervals);
         Assert.Equal("09:00", iv.Start);
         Assert.Equal("17:00", iv.End);
@@ -126,13 +124,11 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         {
             EmployeeId = employeeId, Date = date,
             Intervals = new[] { new WorkInterval { Start = "09:00", End = "17:00" } },
-            ManualHours = 2m,
         };
         var stale = new WorkTimeRegistered
         {
             EmployeeId = employeeId, Date = date,
             Intervals = new[] { new WorkInterval { Start = "00:00", End = "01:00" } },
-            ManualHours = 99m,
         };
 
         await using (var conn = _harness.Factory.Create())
@@ -152,7 +148,6 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
 
         var rows = await _workTimeRepo.GetByEmployeeAndDateRangeAsync(employeeId, date, date);
         var row = Assert.Single(rows);
-        Assert.Equal(2m, row.ManualHours); // newer row stands
         Assert.Equal("09:00", Assert.Single(row.Intervals).Start);
     }
 
@@ -171,7 +166,7 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         var date = new DateOnly(2026, 3, 12);
 
         await SaveWorkTimeAsync(employeeId, streamId, date,
-            new[] { ("08:00", "16:00") }, manualHours: 0m);
+            new[] { ("08:00", "16:00") });
 
         // Run the approval write path (state transition + deadlines + audit) the
         // way the employee-approve endpoint does — a separate tx that does NOT
@@ -204,7 +199,6 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         var row = Assert.Single(rows);
         Assert.Equal("08:00", Assert.Single(row.Intervals).Start);
         Assert.Equal("16:00", Assert.Single(row.Intervals).End);
-        Assert.Equal(0m, row.ManualHours);
     }
 
     /// <summary>
@@ -214,7 +208,7 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
     /// </summary>
     private async Task SaveWorkTimeAsync(
         string employeeId, string streamId, DateOnly date,
-        (string Start, string End)[] intervals, decimal manualHours)
+        (string Start, string End)[] intervals)
     {
         var @event = new WorkTimeRegistered
         {
@@ -223,7 +217,6 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
             Intervals = intervals
                 .Select(t => new WorkInterval { Start = t.Start, End = t.End })
                 .ToList(),
-            ManualHours = manualHours,
         };
 
         await using var conn = _harness.Factory.Create();

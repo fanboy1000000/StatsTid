@@ -291,7 +291,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
             month = 3,
             workTime = new[]
             {
-                new { date = DayBeforeStart, intervals = new[] { new { start = "08:00", end = "16:00" } }, manualHours = 0m },
+                new { date = DayBeforeStart, intervals = new[] { new { start = "08:00", end = "16:00" } } },
             },
         });
 
@@ -315,7 +315,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
             month = 3,
             entries = new[] { new { date = WindowStart, projectCode = "PROJ-S136-POS", hours = 7.4m } },
             absences = new[] { new { date = new DateOnly(2026, 3, 6), absenceType = "SICK_DAY", hours = 7.4m } },
-            workTime = new[] { new { date = WindowEnd, intervals = new[] { new { start = "08:00", end = "15:24" } }, manualHours = 0m } },
+            workTime = new[] { new { date = WindowEnd, intervals = new[] { new { start = "08:00", end = "15:24" } } } },
         });
 
         var raw = await rsp.Content.ReadAsStringAsync();
@@ -341,7 +341,7 @@ public sealed class EmploymentWindowRegistrationGateTests : SendCommandMatrixTes
             month = 3,
             entries = new[] { new { date = new DateOnly(2026, 3, 10), projectCode = "PROJ-S136-WNL", hours = 7.4m } },
             absences = new[] { new { date = new DateOnly(2026, 3, 6), absenceType = "SICK_DAY", hours = 7.4m } },
-            workTime = new[] { new { date = new DateOnly(2026, 3, 9), intervals = new[] { new { start = "08:00", end = "15:24" } }, manualHours = 0m } },
+            workTime = new[] { new { date = new DateOnly(2026, 3, 9), intervals = new[] { new { start = "08:00", end = "15:24" } } } },
         });
 
         var raw = await rsp.Content.ReadAsStringAsync();

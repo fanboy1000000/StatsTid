@@ -2,7 +2,7 @@
 // solA.jsx DayPanel) rendered inside the kit Drawer. The panel is fully CONTROLLED
 // (SPRINT-72 R16): all data arrives via props and every mutation leaves via a
 // callback — NO fetching, NO save plumbing (the page owns day-state + the debounced
-// save; the useSkema module owns the payload builder and the R7 manualHours pin).
+// save; the useSkema module owns the payload builder).
 //
 // Pinned rules implemented here:
 //   R5  — the "Alt fordelt ✓" Resterende mirror uses the backend allocation gate's
@@ -18,9 +18,8 @@
 //         on invalid/reversed/overlapping periods; NO absence section, NO
 //         clock-in/out; the step-2 header carries the "Administrer projekter" link
 //         (exposed as onOpenManager — wired by 7205).
-//   D-B — the manual lump-hours ENTRY UI is dropped; an existing manualHours value
-//         renders read-only ("Manuelt registreret: X t") and keeps counting in the
-//         day's worked total.
+//   D-B — the manual lump-hours entry UI and the manual-hours value are retired
+//         (ADR-028, ADR-043 D10): the day total is the clock periods alone.
 //   S58 — the relocated validation mirrors (7202 deleted the old dialog): overlap
 //         flagging + the 24h day cap, ADVISORY only — the backend 422 stays
 //         authoritative (R5/R17: the save contract is frozen).
@@ -31,9 +30,9 @@ import { Button } from './ui/Button'
 import { Input } from './ui/Input'
 import {
   analyzeRestPeriods,
-  dayWorkedHours,
   overlappingPeriodIndices,
   periodHours,
+  periodsTotalHours,
   LONG_DAY_WARNING_HOURS,
   MAX_DAY_HOURS,
   type ClockPeriod,
@@ -62,8 +61,6 @@ interface SkemaDayPanelProps {
   date: string
   /** The day's clock periods (step 1), raw text. Empty → one blank row renders. */
   periods: DayPanelPeriod[]
-  /** The day's EXISTING manual hours (D-B: read-only line, no entry UI). */
-  manualHours: number
   /** The VISIBLE project rows (R4 preference order) — step 2 renders one FIXED
       row per entry (no add/remove; membership is the manager modal's job). */
   projectRows: DayPanelProjectRow[]
@@ -134,7 +131,6 @@ export function SkemaDayPanel({
   open,
   date,
   periods,
-  manualHours,
   projectRows,
   allocations,
   dailyNorm,
@@ -164,7 +160,7 @@ export function SkemaDayPanel({
     onPeriodsChange(date, list.filter((_, i) => i !== index))
 
   // ── Derived (exact 2-decimal arithmetic; display rounds to 0,1 — R5) ──
-  const worked = dayWorkedHours(list, manualHours)
+  const worked = periodsTotalHours(list)
   const overlapping = overlappingPeriodIndices(list)
 
   // Allocated = Σ over ALL served allocations for the day (R3 — includes
@@ -185,11 +181,10 @@ export function SkemaDayPanel({
     const overlayDay: WorkTimeDay = {
       date,
       intervals: list.map((p) => ({ start: p.from, end: p.to })),
-      manualHours,
     }
     const overlay = [...monthWorkTime.filter((wt) => wt.date !== date), overlayDay]
     return analyzeRestPeriods(overlay, boundaryWorkTime, date)
-  }, [monthWorkTime, boundaryWorkTime, date, list, manualHours])
+  }, [monthWorkTime, boundaryWorkTime, date, list])
 
   // S58 advisory mirrors (backend 422 authoritative).
   const hasOverlap = overlapping.size > 0
@@ -328,11 +323,6 @@ export function SkemaDayPanel({
             <button type="button" className={styles.addRow} onClick={addPeriod}>
               + Tilføj periode
             </button>
-            {manualHours > 0 && (
-              <p className={styles.manualLine}>
-                Manuelt registreret: {formatDanishNumber(manualHours, 1)} t
-              </p>
-            )}
             <div className={styles.workTotal}>
               <span>Arbejdstid i alt</span>
               <span className={styles.strong}>{formatDanishNumber(worked, 1)} t</span>

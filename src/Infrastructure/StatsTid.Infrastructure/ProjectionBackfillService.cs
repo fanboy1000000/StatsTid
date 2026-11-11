@@ -217,15 +217,14 @@ public sealed class ProjectionBackfillService
     // re-applies the same values; a newer live row is never clobbered by an older replayed event).
     private const string UpsertWorkTimeSql = @"
         INSERT INTO work_time_projection (
-            employee_id, date, intervals, manual_hours,
+            employee_id, date, intervals,
             occurred_at, actor_id, actor_role, correlation_id, outbox_id
         ) VALUES (
-            @employeeId, @date, @intervals, @manualHours,
+            @employeeId, @date, @intervals,
             @occurredAt, @actorId, @actorRole, @correlationId, @outboxId
         )
         ON CONFLICT (employee_id, date) DO UPDATE SET
             intervals = EXCLUDED.intervals,
-            manual_hours = EXCLUDED.manual_hours,
             occurred_at = EXCLUDED.occurred_at,
             actor_id = EXCLUDED.actor_id,
             actor_role = EXCLUDED.actor_role,
@@ -321,7 +320,6 @@ public sealed class ProjectionBackfillService
         upsertWorkTimeCmd.Parameters.Add("employeeId", NpgsqlDbType.Text);
         upsertWorkTimeCmd.Parameters.Add("date", NpgsqlDbType.Date);
         upsertWorkTimeCmd.Parameters.Add("intervals", NpgsqlDbType.Jsonb);
-        upsertWorkTimeCmd.Parameters.Add("manualHours", NpgsqlDbType.Numeric);
         upsertWorkTimeCmd.Parameters.Add("occurredAt", NpgsqlDbType.TimestampTz);
         upsertWorkTimeCmd.Parameters.Add("actorId", NpgsqlDbType.Text);
         upsertWorkTimeCmd.Parameters.Add("actorRole", NpgsqlDbType.Text);
@@ -499,7 +497,6 @@ public sealed class ProjectionBackfillService
                 upsertWorkTimeCmd.Parameters["date"].Value = wt.Date;
                 upsertWorkTimeCmd.Parameters["intervals"].Value =
                     JsonSerializer.Serialize(wt.Intervals, IntervalsJsonOptions);
-                upsertWorkTimeCmd.Parameters["manualHours"].Value = wt.ManualHours;
                 upsertWorkTimeCmd.Parameters["occurredAt"].Value = wt.OccurredAt.Kind == DateTimeKind.Utc
                     ? wt.OccurredAt
                     : DateTime.SpecifyKind(wt.OccurredAt, DateTimeKind.Utc);

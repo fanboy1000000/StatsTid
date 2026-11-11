@@ -143,7 +143,7 @@ public static class EventSerializer
         ["ManagerVikarEnded"] = typeof(ManagerVikarEnded),
         // Sprint 49: Approval delegation fallback traversal warning (Phase 5 ADR-027 D5)
         ["FallbackTraversalWarning"] = typeof(FallbackTraversalWarning),
-        // Sprint 56: Self-recorded work-time state per (employee, date) — intervals + manual hours.
+        // Sprint 56: Self-recorded work-time state per (employee, date) — its work intervals.
         // Latest-wins superseding event; projection resolves latest (TASK-5601).
         ["WorkTimeRegistered"] = typeof(WorkTimeRegistered),
         // Sprint 59: Per-employee entitlement eligibility (CHILD_SICK) — ADR-029.

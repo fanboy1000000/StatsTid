@@ -96,13 +96,11 @@ public sealed class SkemaWorkTimeDateRangeGuardTests : IAsyncLifetime
                 {
                     date = inRangeDate.ToString("yyyy-MM-dd"),
                     intervals = new[] { new { start = "08:00", end = "16:00" } },
-                    manualHours = 0m,
                 },
                 new
                 {
                     date = outOfRangeDate.ToString("yyyy-MM-dd"),
                     intervals = new[] { new { start = "09:00", end = "17:00" } },
-                    manualHours = 0m,
                 },
             },
         };
@@ -147,7 +145,6 @@ public sealed class SkemaWorkTimeDateRangeGuardTests : IAsyncLifetime
                 {
                     date = inRangeDate.ToString("yyyy-MM-dd"),
                     intervals = new[] { new { start = "08:00", end = "16:00" } },
-                    manualHours = 0m,
                 },
             },
         };

@@ -893,7 +893,6 @@
 | employee_id | TEXT | No |  |  |
 | date | DATE | No |  |  |
 | intervals | JSONB | No |  | '[]'::jsonb |
-| manual_hours | NUMERIC(8,4) | No |  | 0 |
 | occurred_at | TIMESTAMPTZ | No |  |  |
 | actor_id | TEXT | Yes |  |  |
 | actor_role | TEXT | Yes |  |  |

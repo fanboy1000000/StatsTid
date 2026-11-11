@@ -723,3 +723,59 @@ One fact corrected along the way: A9's `cref` premise does not hold. No project 
 - The docs job confirms the four `shortcut(pending)` registrations of `76c6da46`; build-and-test, smoke, E2E, frontend-build, lizard and gitleaks are green.
 - **The regression step ran ~120 minutes** (13:18 → 15:18 UTC) under `--blame-hang-timeout 15m`, and no hang dump was produced. So the slow step is steady, not a hang: it is container start-up for the new Docker test classes. This confirms the CI-time F-series row owed at close.
 - Wave-1 evidence is complete; wave-2 merges are unblocked.
+
+**Wave 2 — TASK-14809** (`backend-infrastructure`, Opus 5.5; branch `worktree-agent-a2cc6517b09822064`, tip `b1fe3f7e`, one commit on `57624e6c`; report `.claude/reviews/S148-TASK-14809-report.md`).
+- **What changed, in plain words:** "manual hours" (a bare daily total with no clock times, which no screen has created since S72) are gone from the backend: the database column, the event field, and the Skema request and response fields. Every "worked hours" sum now counts clock periods only. Payroll never read manual hours, so no pay can move (PIN-1). A caller that still sends the field is not refused; the field is ignored.
+- 17 files, +54 / −92, all authorized, including the three comment-only files and the 15 compile-only test-line deletions ruled in the adjudication. The source grep for the column and the field finds 0 lines (AC-S0-5a, backend half).
+- **Local gate:** build 0 errors, 143 warnings, CA2100 113; Unit 1716, DemoSeed 170, Regression non-Docker 140, all green. The Docker facts it expects to go red (the retired refusal, the contract pin, SQL seeders naming the dropped column, and two allocation facts whose work existed only as manual hours) are 14809-T's census.
+- **Found, not fixed:** two stale line pointers in DemoSeed comments (Low, for the comment sweep at close).
+- **Harness note:** the agent's isolated worktree started at the last *pushed* commit, not at local master, because S148 is unpushed until close. The agent fast-forwarded to `57624e6c`. From now on every wave-2 dispatch names its exact base SHA and fast-forwards to it first.
+- **TASK-14809-T** (`test-qa`; tip `0570aa71` on `b1fe3f7e`; report `.claude/reviews/S148-TASK-14809-T-report.md`):
+  - 24 test files, +342 / −169, tests only. Every test that seeded worked time as manual hours now seeds the same hours as clock intervals, with assertions unchanged.
+  - Three bounds facts are retired (the negative check is gone; 24 h cannot be exceeded by same-day intervals). `Save_Exactly24Hours` stays as R.
+  - New AC-S0-5b fact `SendCheckIntervalOnlyTests.SendCheck_ComparesIntervalHoursWithProjectHours` (F, CI): a stray `manualHours` member is ignored, so the send check compares clock hours with project hours.
+  - The C5 row is re-pinned at 26 695 s; its raw-sum equality holds untouched.
+  - Local gate green (143 warnings, CA2100 113; Unit 1716, DemoSeed 170, non-Docker 140).
+  - **Found, not fixed:** the schema-copy drift guard does not compare `work_time_projection` (`HarnessDdlMatchesInitSqlTests`), so drift in that copy is invisible to CI. Both 14809 and 14809-T flagged it; it is a register candidate at merge.
+- **REGEN** (`80b23b69`, on 14809-T's branch): `openapi.json` drops `manualHours` from `SkemaWorkTimeDayRow` and `SkemaWorkTimeDay`; nothing else drifts, exactly as predicted.
+- Dispatched in parallel from `80b23b69`: TASK-14810 (`ux`), the 5a Fable review and the 5a Codex review (high-risk: schema) of `57624e6c..80b23b69`.
+- **5a on `57624e6c..80b23b69` (14809 + 14809-T + REGEN):**
+  - **Codex: APPROVED**, 0 B / 0 W / 3 N (`S148-TASK-14809-5a-codex.md`). It confirms that old events still carrying `manualHours` load with the value ignored, that every reader sums clock time alone with unchanged rounding, that payroll is untouched, and that AC-S0-5b is red on the base.
+  - **Fable 5.2: APPROVED-WITH-WARNINGS**, 0 B / 1 W / 5 N (`S148-TASK-14809-5a-reviewer.md`). No code change is asked.
+  - **W-1 (the test report's census figures were wrong).** The Orchestrator re-ran the census at `80b23b69`. `git grep -n -i -e manual_hours -e manualhours -- tests` returns **13 lines in 3 files**:
+    - `S120SkemaSpecRuntimeTests.cs:71,73` (2 lines);
+    - `SendCheckIntervalOnlyTests.cs` (9 lines);
+    - `SkemaRowPreferencesMonthGetTests.cs:337,338` (2 lines).
+    
+    Each is a deliberate F-fact label or the fact's stray member. The 14809-T report's "15 lines, 8 files" and "0 further hits" are superseded by this line.
+  - **Notes carried:**
+    - O-7: `db-schema.md` is regenerated in the stack's merge, so the docs job stays green.
+    - The bounds test docstring numbers the checks (1)/(2) where production keeps (2)/(3); align it in the close-time comment sweep.
+    - The one-line history in the `SkemaEndpoints.cs:896-898` comment is for TASK-14814, which owns those lines, to drop when it renumbers.
+    - Three test tidiness items go to the comment sweep. One of them cites the ADR-028 D4 amendment owed at close.
+    - The C5 row's exact decimal round-trip is settled by CI-W2. If it is red, STOP; do not loosen it.
+- **TASK-14810** (`ux`; tip `7ea1b263` on `80b23b69`; report `.claude/reviews/S148-TASK-14810-report.md`):
+  - **What the employee sees:** the "Manuelt registreret" line is gone. Every worked total on the Skema screens comes from clock periods alone: the day panel, the grid's work row, "Diff. fra normtid", the flex card's month figure, and the manager's read-only grid. Every save sends `{ date, intervals }`.
+  - **The alert (AC-S0-7g):** a refused paid-absence save now gives the precise Danish alert in its three ruled cases, naming the planned and worked hours, instead of the old, wrong "overstiger normtiden (0 t)".
+  - 14 files under `frontend/src/`, +268 / −287. The AC-S0-5a grep over `src tools frontend/src init.sql` is empty.
+  - **Frontend gate green:** tsc, lint, the e2e typecheck, the build, and vitest at 85 files / 1088 tests (1090 → 1088: five retired facts, three added).
+  - Two things beyond the brief, put to the 5a review:
+    - the fixture's 1,5 t moved into the clock interval (end 16:00 → 17:30 in three assertions);
+    - one extra companion fact for the planned = 0 sentence.
+  - **Found, not fixed:** the grid's advisory cap counts absence only, so the grid does not warn before the server's bound refuses a save. This is the roadmap row already owed.
+- Dispatched in parallel: 5a Fable on `80b23b69..7ea1b263`, and 5α over the union `57624e6c..7ea1b263`.
+- **5a Fable on TASK-14810: APPROVED**, 0 B / 0 W / 6 N (`S148-TASK-14810-5a-reviewer.md`). It re-ran tsc and the touched vitest files (316 tests green).
+  - Both things beyond the brief are legitimate. The 16:00 → 17:30 change is the forced consequence of moving the fixture's 1,5 t into its clock interval; the same 9,5 h is worked and every assertion still discriminates. The planned = 0 companion fact covers a case the change reaches.
+  - The test delta is −6 / +4 (net −2, 1090 → 1088), not the report's "−5 / +3".
+  - **The Orchestrator fixed four notes before the merge** (`8e085742`, comment and label only, under the small-tasks exception; tsc and the two touched files green, 107 tests):
+    - the companion fact is labelled F;
+    - a describe title no longer names the deleted `dayWorkedHours`;
+    - two test comments are made true-now;
+    - the alert's page comment names the paid-absence day bound.
+  - The unreachable "bound body without its two figures" note is left (the only emitter always sends both).
+- **5α over the union `57624e6c..7ea1b263`: PASS** (`S148-TASK-14809-14810-5alpha.md`).
+  - Every commit stayed in its scope.
+  - The only `docs/**` change is the Orchestrator's REGEN.
+  - The column drop and the event-member removal are consistent across schema, serializer, producer and consumers.
+  - No `shortcut(` or TODO was added, so merge-checklist item 8 has nothing to register.
+- **Merged** (the 14809 → 14809-T → REGEN → 14810 stack, `--no-ff` from `8e085742`). The same commit carries O-7: `db-schema.md` regenerated from `init.sql` (the `manual_hours` row removed), so the docs job stays green.

@@ -254,14 +254,16 @@ public sealed class RejectedMonthVisibilityTests : IAsyncLifetime
 
         await using (var cmd = new NpgsqlCommand(
             """
-            INSERT INTO work_time_projection (employee_id, date, intervals, manual_hours, occurred_at, outbox_id)
-            VALUES (@emp, @date, '[]'::jsonb, @manual, NOW(), @outbox)
-            ON CONFLICT (employee_id, date) DO UPDATE SET manual_hours = @manual
+            INSERT INTO work_time_projection (employee_id, date, intervals, occurred_at, outbox_id)
+            VALUES (@emp, @date, @intervals::jsonb, NOW(), @outbox)
+            ON CONFLICT (employee_id, date) DO UPDATE SET intervals = @intervals::jsonb
             """, conn))
         {
             cmd.Parameters.AddWithValue("emp", Emp);
             cmd.Parameters.AddWithValue("date", RegDay);
-            cmd.Parameters.AddWithValue("manual", WorkedSentinel);
+            // S148 S0-5: manual hours are retired; WorkedSentinel (6,5 h) is now one interval 08:00-14:30,
+            // the same worked hours as clock time.
+            cmd.Parameters.AddWithValue("intervals", """[{"start":"08:00","end":"14:30"}]""");
             cmd.Parameters.AddWithValue("outbox", _outboxSeq++);
             await cmd.ExecuteNonQueryAsync();
         }

@@ -123,12 +123,10 @@ describe('SkemaGrid — structure', () => {
     expect(trs[8].querySelector('td')?.textContent).toBe('I alt')
   })
 
-  it('accepts the legacy page props (workIntervals/manualHours change handlers) without rendering the retired Tilføj periode / Tilføj timer rows', () => {
+  it('accepts the legacy page props (the workIntervals change handler) without rendering the retired Tilføj periode / Tilføj timer rows', () => {
     const { container } = renderGrid({
-      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '12:00' }]]]),
+      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '14:00' }]]]),
       onWorkIntervalsChange: vi.fn(),
-      manualHours: new Map([['2026-03-02', 2]]),
-      onManualHoursChange: vi.fn(),
       // no onOpenDay — the pre-7205 page; the interactive row renders as data
     })
     expect(screen.queryByText(/Tilføj periode/)).toBeNull()
@@ -136,7 +134,7 @@ describe('SkemaGrid — structure', () => {
     // Without onOpenDay the work row has no click targets.
     const workRow = rowByLabel(container, 'Reg. Arbejdstid')
     expect(workRow.querySelectorAll('button').length).toBe(0)
-    // The legacy-supplied work time still feeds the arithmetic: 4h + 2h worked,
+    // The legacy-supplied work time still feeds the arithmetic: 6h worked,
     // nothing allocated → under-allocated remainder "6,0" on Mar 2.
     expect(dayCell(workRow, 2).textContent).toBe('6,0')
   })
@@ -178,17 +176,16 @@ describe('SkemaGrid — Diff. fra normtid (R2/R1 pins)', () => {
   it('R1/R15 pin: a null-norm day (academic ANNUAL_ACTIVITY) renders blank even when work time is registered', () => {
     const { container } = renderGrid({
       dailyNorm: new Map([['2026-03-02', null]]),
-      manualHours: new Map([['2026-03-02', 6]]),
+      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '14:00' }]]]),
     })
     expect(dayCell(rowByLabel(container, 'Diff. fra normtid'), 2).textContent).toBe('')
   })
 
-  it('computes diff = (interval hours + manual hours + absence hours) − served norm, green ≥ 0 / red < 0', () => {
+  it('computes diff = (interval hours + absence hours) − served norm, green ≥ 0 / red < 0', () => {
     const { container } = renderGrid({
-      workIntervals: new Map([['2026-03-03', [{ start: '08:00', end: '12:00' }]]]), // 4h
-      manualHours: new Map([
-        ['2026-03-03', 2], // Mar 3: 4 + 2 + 2 = 8 → +0,6
-        ['2026-03-04', 4], // Mar 4: 4 − 7,4 = −3,4
+      workIntervals: new Map([
+        ['2026-03-03', [{ start: '08:00', end: '14:00' }]], // Mar 3: 6 + 2 = 8 → +0,6
+        ['2026-03-04', [{ start: '08:00', end: '12:00' }]], // Mar 4: 4 − 7,4 = −3,4
       ]),
       cellValues: new Map([['VACATION:2026-03-03', 2]]),
       dailyNorm: new Map([
@@ -207,9 +204,9 @@ describe('SkemaGrid — Diff. fra normtid (R2/R1 pins)', () => {
 
   it('R2 pin: the trailing Diff total sums the RENDERED values only (blank days contribute nothing)', () => {
     const { container } = renderGrid({
-      manualHours: new Map([
-        ['2026-03-03', 8], // +0,6
-        ['2026-03-04', 4], // −3,4
+      workIntervals: new Map([
+        ['2026-03-03', [{ start: '08:00', end: '16:00' }]], // +0,6
+        ['2026-03-04', [{ start: '08:00', end: '12:00' }]], // −3,4
       ]),
       // Mar 2 has a norm but NO registration → blank → NOT counted as −7,4.
       dailyNorm: new Map([
@@ -229,7 +226,7 @@ describe('SkemaGrid — visibility-independence (R3 pins)', () => {
     ['DRIFT:2026-03-02', 4.4],
     ['PROJ-2:2026-03-02', 1.0],
   ])
-  const r3Manual = new Map([['2026-03-02', 7.4]])
+  const r3Work = new Map([['2026-03-02', [{ start: '08:00', end: '15:24' }]]])
   const r3Norm = new Map<string, number | null>([['2026-03-02', 7.4]])
 
   function assertArithmetic(container: HTMLElement) {
@@ -246,7 +243,7 @@ describe('SkemaGrid — visibility-independence (R3 pins)', () => {
   it('R3 pin: Diff / remainder / I alt / grand total are IDENTICAL with a populated project hidden vs visible', () => {
     const visible = renderGrid({
       cellValues: r3CellValues,
-      manualHours: r3Manual,
+      workIntervals: r3Work,
       dailyNorm: r3Norm,
       rowPreferences: prefsAll,
     })
@@ -256,7 +253,7 @@ describe('SkemaGrid — visibility-independence (R3 pins)', () => {
 
     const hidden = renderGrid({
       cellValues: r3CellValues,
-      manualHours: r3Manual,
+      workIntervals: r3Work,
       dailyNorm: r3Norm,
       rowPreferences: prefsHideDrift,
     })
@@ -325,10 +322,10 @@ describe('SkemaGrid — visibility-independence (R3 pins)', () => {
 describe('SkemaGrid — Reg. Arbejdstid (interactive row)', () => {
   it('classifies ✓ / amber / over at the gate tolerance (R5: 2dp rounding, |Δ| < 0,005)', () => {
     const { container } = renderGrid({
-      manualHours: new Map([
-        ['2026-03-02', 7.4],
-        ['2026-03-03', 7.4],
-        ['2026-03-04', 7.4],
+      workIntervals: new Map([
+        ['2026-03-02', [{ start: '08:00', end: '15:24' }]],
+        ['2026-03-03', [{ start: '08:00', end: '15:24' }]],
+        ['2026-03-04', [{ start: '08:00', end: '15:24' }]],
       ]),
       cellValues: new Map([
         ['DRIFT:2026-03-02', 7.398], // rounds to 7,4 → inside the gate tolerance → ✓
@@ -372,7 +369,7 @@ describe('SkemaGrid — Reg. Arbejdstid (interactive row)', () => {
     const { container } = renderGrid({
       readOnly: true,
       onOpenDay,
-      manualHours: new Map([['2026-03-02', 7.4]]),
+      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '15:24' }]]]),
       cellValues: new Map([['DRIFT:2026-03-02', 7.4]]),
     })
     const workRow = rowByLabel(container, 'Arbejdstid')
@@ -392,10 +389,10 @@ describe('SkemaGrid — Reg. Arbejdstid (interactive row)', () => {
 
   it('the trailing Sum totals ONLY the amber (under-allocated) hours — over-allocated days never net against it', () => {
     const { container } = renderGrid({
-      manualHours: new Map([
-        ['2026-03-02', 7.4],
-        ['2026-03-03', 7.4],
-        ['2026-03-04', 7.4],
+      workIntervals: new Map([
+        ['2026-03-02', [{ start: '08:00', end: '15:24' }]],
+        ['2026-03-03', [{ start: '08:00', end: '15:24' }]],
+        ['2026-03-04', [{ start: '08:00', end: '15:24' }]],
       ]),
       cellValues: new Map([
         ['DRIFT:2026-03-02', 5.4], // under 2,0
@@ -917,14 +914,15 @@ describe('SkemaGrid — absence daily-norm cap (S123)', () => {
     expect(screen.getByLabelText('Ferie dag 2').getAttribute('aria-invalid')).toBeNull()
   })
 
-  it('is ABSENCE-ONLY: work time is NOT included in the cap (4h work + 4h ferie on a 7,4 day is legal)', () => {
+  it("is ABSENCE-ONLY: the grid's advisory cap counts absence alone; the server's paid-absence bound (planned − worked) is not mirrored here", () => {
     renderGrid({
       rows: twoAbsenceRows,
       cellValues: new Map([['VACATION:2026-03-02', 4]]), // 4h absence
-      manualHours: new Map([['2026-03-02', 4]]), // 4h WORK — separate, must NOT trip the cap
+      workIntervals: new Map([['2026-03-02', [{ start: '08:00', end: '12:00' }]]]), // 4h WORK — separate, must NOT trip the advisory flag
       dailyNorm: new Map([['2026-03-02', 7.4]]),
     })
-    // Absence alone (4) ≤ norm (7,4) → NOT flagged, even though absence+work = 8 > 7,4.
+    // Absence alone (4) ≤ norm (7,4) → NOT flagged, even though absence+work = 8 > 7,4
+    // (the server refuses that day, 4 > 7,4 − 4; the grid does not warn before the save).
     expect(screen.getByLabelText('Ferie dag 2').getAttribute('aria-invalid')).toBeNull()
   })
 })

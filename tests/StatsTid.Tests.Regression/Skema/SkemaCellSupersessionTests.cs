@@ -483,7 +483,7 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
     private async Task SaveEntryCellTwiceAsync(string emp, bool recordWorkTime = true)
     {
         if (recordWorkTime)
-            await SaveOkAsync(emp, Payload(Day, workTime: new[] { (Day, 8.0m) }), "work time 8.0 h");
+            await SaveOkAsync(emp, Payload(Day, workTime: new[] { (Day, "08:00", "16:00") }), "work time 8.0 h");
         await SaveOkAsync(emp, Payload(Day, entries: new[] { (Day, Project, 7.4m) }), "entry 7.4 h");
         await SaveOkAsync(emp, Payload(Day, entries: new[] { (Day, Project, 8.0m) }), "entry re-save 8.0 h");
     }
@@ -496,13 +496,13 @@ public sealed class SkemaCellSupersessionTests : IClassFixture<SkemaCellSuperses
         DateOnly monthOf,
         (DateOnly Date, string Project, decimal Hours)[]? entries = null,
         (DateOnly Date, string Type, decimal Hours)[]? absences = null,
-        (DateOnly Date, decimal Manual)[]? workTime = null) => new
+        (DateOnly Date, string Start, string End)[]? workTime = null) => new
     {
         year = monthOf.Year,
         month = monthOf.Month,
         entries = entries?.Select(e => new { date = e.Date.ToString("yyyy-MM-dd"), projectCode = e.Project, hours = e.Hours }).ToArray(),
         absences = absences?.Select(a => new { date = a.Date.ToString("yyyy-MM-dd"), absenceType = a.Type, hours = a.Hours }).ToArray(),
-        workTime = workTime?.Select(w => new { date = w.Date.ToString("yyyy-MM-dd"), intervals = Array.Empty<object>(), manualHours = w.Manual }).ToArray(),
+        workTime = workTime?.Select(w => new { date = w.Date.ToString("yyyy-MM-dd"), intervals = new[] { new { start = w.Start, end = w.End } } }).ToArray(), // S148 S0-5: one clock interval (manual hours retired)
     };
 
     private Task<HttpResponseMessage> PostSaveAsync(string emp, object payload)

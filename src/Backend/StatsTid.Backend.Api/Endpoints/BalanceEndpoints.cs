@@ -857,8 +857,8 @@ public static class BalanceEndpoints
                     .Sum(a => a.DayEquivalents);
 
             // ── Months: workedHours + normHours + diff ──
-            // workedHours = Σ work_time_projection (intervals + manual) in the calendar month
-            // (ADR-028). normHours = Σ DailyNormCalculator per-day norms; null if ANY norm-bearing
+            // workedHours = Σ work_time_projection interval hours in the calendar month
+            // (ADR-028; intervals alone, ADR-043 D10, D-2.4). normHours = Σ DailyNormCalculator per-day norms; null if ANY norm-bearing
             // day resolves null. diff = worked − norm for months ≤ today's month; null for future.
             var months = new List<YearOverviewMonth>(12); // S120 / TASK-12000 — typed rows
             for (var m = 1; m <= 12; m++)
@@ -870,7 +870,7 @@ public static class BalanceEndpoints
                 var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
                     employeeId, monthStart, monthEnd, ct);
                 var workedHours = Math.Round(
-                    workTimeRows.Sum(w => SumIntervalHours(w.Intervals) + w.ManualHours), 2);
+                    workTimeRows.Sum(w => SumIntervalHours(w.Intervals)), 2);
 
                 var normEntries = await dailyNormCalculator.ComputeRangeAsync(
                     employeeId, monthStart, monthEnd, user.PrimaryOrgId, ct);

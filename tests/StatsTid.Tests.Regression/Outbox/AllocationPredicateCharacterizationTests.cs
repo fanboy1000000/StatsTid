@@ -82,7 +82,7 @@ public sealed class AllocationPredicateCharacterizationFixture : IAsyncLifetime
 /// written out from this statement of the rule, not read back off the implementation:</para>
 /// <list type="bullet">
 ///   <item><c>worked(day)</c> = the hours the employee recorded as time at work = Σ(interval end −
-///     interval start) + manually added hours, from <c>work_time_projection</c>. No row for the day
+///     interval start), from <c>work_time_projection</c>. No row for the day
 ///     ⇒ 0.</item>
 ///   <item><c>distributed(day)</c> = Σ hours of ordinary-work registrations that name a project =
 ///     <c>time_entries_projection</c> rows with <c>activity_type = 'NORMAL'</c> AND
@@ -103,17 +103,17 @@ public sealed class AllocationPredicateCharacterizationFixture : IAsyncLifetime
 /// <code>
 ///  #  case id                       worked (raw)          distributed (raw)                 w₂     d₂    |Δ₂|   verdict     dir
 ///  ─  ────────────────────────────  ────────────────────  ────────────────────────────────  ─────  ─────  ─────  ──────────  ─────
-///  1  C1_exact_match                manual 7.4000         NORMAL 7.4000 @project            7.40   7.40   0.00   BALANCED    —
-///  2  C2_one_oere_short             manual 7.4000         NORMAL 7.3900 @project            7.40   7.39   0.01   IMBALANCED  under
-///  3  C3_one_oere_over              manual 7.4000         NORMAL 7.4100 @project            7.40   7.41   0.01   IMBALANCED  over
+///  1  C1_exact_match                intervals 08:00-15:24 NORMAL 7.4000 @project            7.40   7.40   0.00   BALANCED    —
+///  2  C2_one_oere_short             intervals 08:00-15:24 NORMAL 7.3900 @project            7.40   7.39   0.01   IMBALANCED  under
+///  3  C3_one_oere_over              intervals 08:00-15:24 NORMAL 7.4100 @project            7.40   7.41   0.01   IMBALANCED  over
 ///  4  C4_interval_7point4_vs_7point40
 ///                                   intervals 08:00-15:24 NORMAL 7.4000 @project            7.40   7.40   0.00   BALANCED    —
 ///                                   (26 640 s ⇒ 7.4)      (stored NUMERIC(8,4) ⇒ 7.4000)
-///  5  C5_sub_oere_noise             manual 7.4151         NORMAL 7.4249 @project            7.42   7.42   0.00   BALANCED    —
-///  6  C6_no_project_named           manual 7.4000         NORMAL 7.4000, task_id NULL       7.40   0.00   7.40   IMBALANCED  under
+///  5  C5_sub_oere_noise             26 695 s interval     NORMAL 7.4249 @project            7.42   7.42   0.00   BALANCED    —
+///  6  C6_no_project_named           intervals 08:00-15:24 NORMAL 7.4000, task_id NULL       7.40   0.00   7.40   IMBALANCED  under
 ///  7  C7_distributed_without_work   (no work_time row)    NORMAL 5.0000 @project            0.00   5.00   5.00   IMBALANCED  over
 ///  8  C8_absence_row_not_distributed
-///                                   manual 7.4000         NORMAL 3.0000 @project +          7.40   3.00   4.40   IMBALANCED  under
+///                                   intervals 08:00-15:24 NORMAL 3.0000 @project +          7.40   3.00   4.40   IMBALANCED  under
 ///                                                         VACATION 4.4000 @project
 /// </code>
 ///
@@ -125,9 +125,9 @@ public sealed class AllocationPredicateCharacterizationFixture : IAsyncLifetime
 ///     (scale 1), distributed is read from a <c>NUMERIC(8,4)</c> column as <c>7.4000</c> (scale 4).
 ///     They are the same VALUE, so the day is balanced.</item>
 ///   <item><b>#5 is the case that proves the rounding happens BEFORE the comparison.</b> The raw
-///     values differ by <c>0.0098</c>, which is nearly twice the 0.005 tolerance — a naive
+///     values differ by <c>0.0096</c>, which is nearly twice the 0.005 tolerance — a naive
 ///     compare-then-tolerate would call this day imbalanced on all three surfaces. It is balanced
-///     only because 7.4151 and 7.4249 both round to 7.42 first. If the collapse in TASK-12705 drops
+///     only because 7.41527 (26 695 s) and 7.4249 both round to 7.42 first. If the collapse in TASK-12705 drops
 ///     the <c>Math.Round(…, 2)</c>, this row goes red on all three encodings. #5 is also the ONLY
 ///     row where the rounded totals differ from the raw ones — which is how it caught, at capture
 ///     time, that the allocation-breakdown reports its month-level <c>worked</c> / <c>allocated</c>
@@ -225,7 +225,6 @@ public sealed class AllocationPredicateCharacterizationTests
     /// </summary>
     public sealed record Row(
         string Description,
-        decimal? ManualHours,
         string? Intervals,
         Entry[] Entries,
         decimal ExpectedWorked,
@@ -239,7 +238,7 @@ public sealed class AllocationPredicateCharacterizationTests
     {
         ["C1_exact_match"] = new(
             "worked and distributed are the same value — the ordinary balanced day",
-            ManualHours: 7.4000m, Intervals: null,
+            Intervals: """[{"start":"08:00","end":"15:24"}]""",
             Entries: new[] { new Entry(7.4000m, "NORMAL", NamesProject: true) },
             ExpectedWorked: 7.40m, ExpectedDistributed: 7.40m,
             RawWorked: 7.4000m, RawDistributed: 7.4000m,
@@ -247,7 +246,7 @@ public sealed class AllocationPredicateCharacterizationTests
 
         ["C2_one_oere_short"] = new(
             "one hundredth of an hour LESS distributed than worked — the smallest real mismatch",
-            ManualHours: 7.4000m, Intervals: null,
+            Intervals: """[{"start":"08:00","end":"15:24"}]""",
             Entries: new[] { new Entry(7.3900m, "NORMAL", NamesProject: true) },
             ExpectedWorked: 7.40m, ExpectedDistributed: 7.39m,
             RawWorked: 7.4000m, RawDistributed: 7.3900m,
@@ -255,7 +254,7 @@ public sealed class AllocationPredicateCharacterizationTests
 
         ["C3_one_oere_over"] = new(
             "one hundredth MORE distributed than worked — the same magnitude, other direction",
-            ManualHours: 7.4000m, Intervals: null,
+            Intervals: """[{"start":"08:00","end":"15:24"}]""",
             Entries: new[] { new Entry(7.4100m, "NORMAL", NamesProject: true) },
             ExpectedWorked: 7.40m, ExpectedDistributed: 7.41m,
             RawWorked: 7.4000m, RawDistributed: 7.4100m,
@@ -264,25 +263,25 @@ public sealed class AllocationPredicateCharacterizationTests
         ["C4_interval_7point4_vs_7point40"] = new(
             "same value, different route and different decimal scale: 26 640 s ÷ 3600 = 7.4 worked "
             + "against a NUMERIC(8,4) 7.4000 distributed",
-            ManualHours: null, Intervals: """[{"start":"08:00","end":"15:24"}]""",
+            Intervals: """[{"start":"08:00","end":"15:24"}]""",
             Entries: new[] { new Entry(7.4000m, "NORMAL", NamesProject: true) },
             ExpectedWorked: 7.40m, ExpectedDistributed: 7.40m,
             RawWorked: 7.4m, RawDistributed: 7.4000m,
             ExpectedBalanced: true, ExpectedDirection: null),
 
         ["C5_sub_oere_noise"] = new(
-            "raw values 0.0098 apart — nearly TWICE the tolerance — but both round to 7.42, so the "
+            "raw values 0.0096 apart — nearly TWICE the tolerance — but both round to 7.42, so the "
             + "day is balanced. This row fails if the rounding stops preceding the comparison",
-            ManualHours: 7.4151m, Intervals: null,
+            Intervals: """[{"start":"08:00:00","end":"15:24:55"}]""", // S148 S0-5: 26 695 s; 7,4151 h has no whole-second form
             Entries: new[] { new Entry(7.4249m, "NORMAL", NamesProject: true) },
             ExpectedWorked: 7.42m, ExpectedDistributed: 7.42m,
-            RawWorked: 7.4151m, RawDistributed: 7.4249m,
+            RawWorked: 26695m / 3600m, RawDistributed: 7.4249m, // S148 S0-5: 7,41527… (was 7,4151 as manual hours)
             ExpectedBalanced: true, ExpectedDirection: null),
 
         ["C6_no_project_named"] = new(
             "an ordinary registration that names NO project is not distributed hours — it satisfies "
             + "workday coverage and contributes nothing (the reachable 'distributed nothing' case)",
-            ManualHours: 7.4000m, Intervals: null,
+            Intervals: """[{"start":"08:00","end":"15:24"}]""",
             Entries: new[] { new Entry(7.4000m, "NORMAL", NamesProject: false) },
             ExpectedWorked: 7.40m, ExpectedDistributed: 0.00m,
             RawWorked: 7.4000m, RawDistributed: 0m,
@@ -291,7 +290,7 @@ public sealed class AllocationPredicateCharacterizationTests
         ["C7_distributed_without_work"] = new(
             "project hours on a day with no recorded work time at all — worked is 0 and the day "
             + "enters the comparison through the distributed side",
-            ManualHours: null, Intervals: null,
+            Intervals: null,
             Entries: new[] { new Entry(5.0000m, "NORMAL", NamesProject: true) },
             ExpectedWorked: 0.00m, ExpectedDistributed: 5.00m,
             RawWorked: 0m, RawDistributed: 5.0000m,
@@ -300,7 +299,7 @@ public sealed class AllocationPredicateCharacterizationTests
         ["C8_absence_row_not_distributed"] = new(
             "an absence-type registration is not distributed hours even when it names a project — "
             + "only the 3.00 NORMAL row counts against 7.40 worked",
-            ManualHours: 7.4000m, Intervals: null,
+            Intervals: """[{"start":"08:00","end":"15:24"}]""",
             Entries: new[]
             {
                 new Entry(3.0000m, "NORMAL", NamesProject: true),
@@ -394,7 +393,7 @@ public sealed class AllocationPredicateCharacterizationTests
         // of the month is covered exactly as every table row covers it.
         var row = new Row(
             "worked hours, no registration of any kind on the case day",
-            ManualHours: 7.4000m, Intervals: null,
+            Intervals: """[{"start":"08:00","end":"15:24"}]""",
             Entries: Array.Empty<Entry>(),
             ExpectedWorked: 7.40m, ExpectedDistributed: 0.00m,
             RawWorked: 7.4000m, RawDistributed: 0m,
@@ -566,18 +565,17 @@ public sealed class AllocationPredicateCharacterizationTests
         }
 
         // The case day itself.
-        if (row.ManualHours is not null || row.Intervals is not null)
+        if (row.Intervals is not null)
         {
             await using var cmd = new NpgsqlCommand(
                 """
                 INSERT INTO work_time_projection
-                    (employee_id, date, intervals, manual_hours, occurred_at, outbox_id)
-                VALUES (@emp, @date, @intervals::jsonb, @manual, NOW(), @seq)
+                    (employee_id, date, intervals, occurred_at, outbox_id)
+                VALUES (@emp, @date, @intervals::jsonb, NOW(), @seq)
                 """, conn);
             cmd.Parameters.AddWithValue("emp", emp);
             cmd.Parameters.AddWithValue("date", CaseDay);
-            cmd.Parameters.AddWithValue("intervals", row.Intervals ?? "[]");
-            cmd.Parameters.AddWithValue("manual", row.ManualHours ?? 0m);
+            cmd.Parameters.AddWithValue("intervals", row.Intervals);
             cmd.Parameters.AddWithValue("seq", NextOutboxId());
             await cmd.ExecuteNonQueryAsync();
         }
