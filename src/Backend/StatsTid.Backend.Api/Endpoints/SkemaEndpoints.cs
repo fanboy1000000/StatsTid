@@ -1006,9 +1006,10 @@ public static class SkemaEndpoints
                 //   • ANNUAL_ACTIVITY (academic) ⇒ 7.4 × fraction (calculator fallback) — vacation
                 //     stays bookable;
                 //   • weekend (norm == 0) ⇒ entitlement-consuming rows are rejected (you cannot
-                //     consume a feriedag on a non-working day); NON-entitlement rows keep today's
-                //     legacy flat-7.4 behavior (a sick/leave hour on a Saturday is not gated by an
-                //     entitlement);
+                //     consume a feriedag on a non-working day); NON-entitlement rows are capped here
+                //     at the legacy flat 7.4 only (a sick/leave hour on a Saturday is not gated by an
+                //     entitlement) — the paid-absence day bound below then refuses every credit-class
+                //     hour on a zero-norm day (QUAL-240), so of these only unpaid leave is saved;
                 //   • no dated profile covering the day (null) ⇒ NOT enforced here — the existing
                 //     anchor-422 family below (employment_profile_missing) owns that rejection;
                 //     do NOT relax it.
@@ -1018,6 +1019,13 @@ public static class SkemaEndpoints
                 // folded into the lock) so the common reject path stays a cheap pre-tx 422,
                 // coherent with the sibling duplicate-type / day-norm / eligibility guards already
                 // here; no coherence is lost because the in-lock path is the source of truth.
+                // BESIDE this cap, not inside it, sits the paid-absence day bound (ADR-043 D2;
+                // FindPaidAbsenceDayBoundBreachAsync, after the quota pre-check): this cap sums only
+                // the request's own absences, of every type; the bound judges the day as it will
+                // stand after the save (stored rows plus posted ones) for credit-class absence
+                // against planned minus worked, on every date the save touches, absences or not.
+                // Both stay: the cap still guards the types the bound does not cover. The bound runs
+                // after every refusal here, so on a date both refuse this cap's body answers first.
                 {
                     var absencesByDate = request.Absences.GroupBy(a => a.Date);
                     foreach (var dayGroup in absencesByDate)
@@ -1752,6 +1760,166 @@ public static class SkemaEndpoints
                 }
             }
 
+            // ── The paid-absence day bound (ADR-043 D2; QUAL-237, QUAL-240, QUAL-231's residual) ──
+            // A day of paid absence is worth the hours the person would have worked that day, and
+            // payroll credits paid absence as worked time; a day holding more would add flex hours
+            // nobody worked. So for EVERY date this save touches (a date of any posted entry, absence
+            // or work-time day) the day as it will stand after the save must hold
+            //     credit-class paid-absence hours <= max(0, planned - worked).
+            // "As it will stand" = the day's stored current rows that the save does not replace, plus
+            // the posted rows. A posted absence replaces the current Skema row of its (date, type), a
+            // posted entry that of its (date, task), a posted work-time day the stored day (the
+            // writes below apply cells in posted order, so a cell posted twice ends at its later
+            // value); TIME_POST rows are never replaced, so they always count (the repositories'
+            // MarkSupersededSkemaCellSql). A replaced cell is never counted beside its replacement,
+            // so re-saving one cell keeps passing.
+            //   • Credit class: AbsenceClassification.IsCredit. Unpaid leave reduces the norm instead;
+            //     it is outside the bound and stays under the all-types cap above.
+            //   • Worked: the larger of the day's project hours (entries) and its interval hours, so
+            //     the check holds whichever of the two the employee fills in first. Interval hours
+            //     follow the work-time check above (positive-duration intervals, seconds to hours at
+            //     2 dp) and add the day's manual hours, as every current reader of a day's work time
+            //     does (ApprovalEndpoints, BalanceEndpoints) until TASK-14809 retires that term.
+            //   • Planned: the per-day amount the all-types cap uses (FullDayHoursAsync; 0 on a
+            //     zero-norm day), compared through RoundBasis like both caps, so an exact rounded full
+            //     day stays bookable. A null basis (no dated profile covers the day) is not bounded,
+            //     as both caps skip it.
+            // Why at the save rather than in payroll: the employee is told at once, before anything is
+            // saved, and no engine arithmetic changes (ADR-043 D2). A wrong cell can be changed but
+            // never emptied, and a full-day-only care or senior day cannot even be lowered:
+            // shortcut(pending): an absence or project cell cannot be cleared (SPRINT-72 R17), so a mistaken full-day absence blocks work on that day; upgrade when cell clearing ships
+            // It runs twice. Here, after every other pre-transaction refusal, as the cheap advisory
+            // 422 on unlocked reads: every refusal decided before the transaction keeps today's
+            // answer, and on a date both refuse the all-types cap answers first. Two refusals decided
+            // only inside the lock do not take precedence over the bound: the employment-window gate
+            // and the authoritative quota guard. That is chosen, as for the month lock at the
+            // employment-window gate's comment in the transaction below: all of them refuse
+            // fail-closed, nothing is written either way, and the bound's body carries no employment
+            // date. Then AUTHORITATIVELY inside the per-employee lock, before any write, where two
+            // concurrent saves can no longer each judge the day without the other. The refusal keeps
+            // the all-types cap's error string and shape, so the grid still shows its absence alert,
+            // and adds kind = "paid-absence-day-bound", plannedHours and workedHours; its date is the
+            // request's own registration date (ADR-040 D7). Returns null when every touched date
+            // holds, else that 422 body. `basisAlreadyRead` lets the in-lock call reuse the per-date
+            // basis its authoritative consumption read under the same lock, instead of reading it twice.
+            async Task<object?> FindPaidAbsenceDayBoundBreachAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx,
+                IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption> basisAlreadyRead)
+            {
+                var postedEntries = request.Entries ?? Array.Empty<SkemaEntry>();
+                var postedAbsences = request.Absences ?? Array.Empty<SkemaAbsence>();
+                var postedWorkTime = request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>();
+                var touchedDates = new SortedSet<DateOnly>(
+                    postedEntries.Select(e => e.Date)
+                        .Concat(postedAbsences.Select(a => a.Date))
+                        .Concat(postedWorkTime.Select(d => d.Date)));
+                if (touchedDates.Count == 0)
+                    return null;
+
+                // Inside the lock the absence and entry rows are read on the save's own (conn, tx);
+                // before the transaction on pooled connections (advisory only). Work time has only a
+                // self-connecting read: inside the lock it still sees every committed day, because
+                // every writer of work_time_projection but the offline backfill is this save, under
+                // this same lock (the ADR-032 D4 separate-connection rationale).
+                var storedAbsences = conn is not null
+                    ? await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        conn, tx!, employeeId, touchedDates.Min, touchedDates.Max, ct)
+                    : await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        employeeId, touchedDates.Min, touchedDates.Max, ct);
+                var storedEntries = conn is not null
+                    ? await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        conn, tx!, employeeId, touchedDates.Min, touchedDates.Max, ct)
+                    : await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        employeeId, touchedDates.Min, touchedDates.Max, ct);
+                var storedWorkTime = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, touchedDates.Min, touchedDates.Max, ct);
+
+                var basisByDate = new Dictionary<DateOnly, decimal?>();
+                foreach (var consumption in basisAlreadyRead)
+                    basisByDate[consumption.Date] = consumption.FullDayHours;
+
+                foreach (var date in touchedDates)
+                {
+                    var postedAbsencesOfDay = postedAbsences.Where(a => a.Date == date).ToList();
+                    var paidAbsenceHours =
+                        postedAbsencesOfDay.Where(a => AbsenceClassification.IsCredit(a.AbsenceType)).Sum(a => a.Hours)
+                        + storedAbsences
+                            .Where(r => r.Date == date && AbsenceClassification.IsCredit(r.AbsenceType))
+                            .Where(r => !(r.Source == HoursSource.Skema
+                                && postedAbsencesOfDay.Any(a => a.AbsenceType == r.AbsenceType)))
+                            .Sum(r => r.Hours);
+                    if (paidAbsenceHours <= 0m)
+                        continue; // no paid absence on the day: nothing to bound.
+
+                    var postedHoursByTask = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                    foreach (var entry in postedEntries.Where(e => e.Date == date))
+                        postedHoursByTask[entry.ProjectCode] = entry.Hours;
+                    var projectHours = postedHoursByTask.Values.Sum()
+                        + storedEntries
+                            .Where(r => r.Date == date)
+                            .Where(r => !(r.Source == HoursSource.Skema
+                                && r.TaskId is not null && postedHoursByTask.ContainsKey(r.TaskId)))
+                            .Sum(r => r.Hours);
+
+                    var postedDay = postedWorkTime.LastOrDefault(d => d.Date == date);
+                    var intervalHours = postedDay is not null
+                        ? WorkTimeDayHours(
+                            (postedDay.Intervals ?? Array.Empty<SkemaWorkInterval>()).Select(i => (i.Start, i.End)),
+                            postedDay.ManualHours)
+                        : storedWorkTime
+                            .Where(w => w.Date == date)
+                            .Sum(w => WorkTimeDayHours(w.Intervals.Select(i => (i.Start, i.End)), w.ManualHours));
+
+                    var workedHours = Math.Max(projectHours, intervalHours);
+
+                    // shortcut(pending): the paid-absence bound reads the § 7 nr. 2 per-day norm
+                    // (FullDayHoursAsync), not the configured credit basis; upgrade when stage 1 serves
+                    // the one planned-hours figure (ADR-043 D2, S1-5)
+                    if (!basisByDate.TryGetValue(date, out var fullDayHours))
+                        fullDayHours = await consumptionCalculator.FullDayHoursAsync(
+                            employeeId, date, user.PrimaryOrgId, ct);
+                    if (fullDayHours is null)
+                        continue; // no dated profile covers the day: not bounded, as both caps skip it.
+
+                    var plannedHours = RoundBasis(fullDayHours)!.Value;
+                    var maxHours = Math.Max(0m, plannedHours - workedHours);
+                    if (paidAbsenceHours > maxHours)
+                        return new
+                        {
+                            error = "Total absence hours exceed norm day",
+                            date,
+                            totalHours = paidAbsenceHours,
+                            maxHours,
+                            kind = "paid-absence-day-bound",
+                            plannedHours,
+                            workedHours,
+                        };
+                }
+                return null;
+            }
+
+            // One work-time day's hours by the work-time check's convention above (positive-duration
+            // intervals only, seconds to hours at 2 dp) plus its manual hours, rounded as that check's
+            // 24-hour total is.
+            static decimal WorkTimeDayHours(IEnumerable<(string Start, string End)> intervals, decimal manualHours)
+            {
+                var seconds = 0;
+                foreach (var (start, end) in intervals)
+                {
+                    if (TryParseTimeToSeconds(start, out var startSec)
+                        && TryParseTimeToSeconds(end, out var endSec)
+                        && endSec > startSec)
+                        seconds += endSec - startSec;
+                }
+                return Math.Round(Math.Round(seconds / 3600m, 2) + manualHours, 2);
+            }
+
+            var advisoryBoundBreach = await FindPaidAbsenceDayBoundBreachAsync(
+                conn: null, tx: null,
+                basisAlreadyRead: Array.Empty<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption>());
+            if (advisoryBoundBreach is not null)
+                return Results.Json(advisoryBoundBreach, statusCode: 422);
+
             var streamId = $"employee-{employeeId}";
             var savedCount = 0;
 
@@ -2015,6 +2183,11 @@ public static class SkemaEndpoints
                         // by B1 above, and a null on a purely non-entitlement date defers to the pre-tx
                         // anchor family (no in-lock cap to apply). fullDayHours is constant per date (cached
                         // in ComputeAsync), so the first row's value represents the date.
+                        // The in-lock paid-absence day bound (ADR-043 D2) runs after this block, outside
+                        // it, so it also judges saves with no absences; on a date both refuse, this cap's
+                        // body answers first. Of the non-entitlement rows the weekend branch admits up to
+                        // the flat 7.4, only unpaid leave is then saved: the bound refuses every
+                        // credit-class hour on a zero-norm day.
                         var authByDate = request.Absences
                             .Select((a, i) => (a.Date, a.AbsenceType, a.Hours, authoritativeConsumption[i].FullDayHours))
                             .GroupBy(r => r.Date);
@@ -2113,6 +2286,23 @@ public static class SkemaEndpoints
                             }
                         }
                     }
+
+                    // ── The paid-absence day bound, AUTHORITATIVE (ADR-043 D2) ──
+                    // The same rule as the advisory check before the transaction
+                    // (FindPaidAbsenceDayBoundBreachAsync), judged here on the day as committed while
+                    // this save holds the per-employee lock: a save of the same employee that committed
+                    // while we waited is visible (the ReadCommitted pin above), and none of our own rows
+                    // is written yet, so the replaced-cell exclusion sees exactly the rows this save
+                    // will replace. Outside the absences block, so a save with no absences (work added
+                    // to a day holding paid absence) is judged too; after B1-B3, so on a date both
+                    // refuse the all-types cap answers first. Planned reuses the basis the authoritative
+                    // consumption read under this lock. A breach throws, the catch below rolls the
+                    // whole save back, and the answer is the advisory check's 422 body. The bound is
+                    // judged before the writes, so it answers before the quota guard that runs with them.
+                    var lockedBoundBreach = await FindPaidAbsenceDayBoundBreachAsync(
+                        conn, tx, authoritativeConsumption);
+                    if (lockedBoundBreach is not null)
+                        throw new SkemaConsumptionValidationException(lockedBoundBreach);
 
                     // Save time entries (outbox enqueue + projection INSERT inside outer tx).
                     //
@@ -2365,10 +2555,14 @@ public static class SkemaEndpoints
             }
             catch (SkemaConsumptionValidationException ex)
             {
-                // S66 / TASK-6603 FIX-FORWARD — in-lock D2/D3 re-check failure (B1 profile-missing /
-                // B2 norm cap) after a racing profile-PUT. The throw site already shaped the body to
-                // match its pre-tx sibling guard byte-for-byte; surface it unchanged so the racing-save
-                // loser gets a clean validation 422 (never a 500) and the frontend contract holds.
+                // One of the four in-lock re-checks refused the save before any write, and the inner
+                // catch has rolled the transaction back: B1 (employment profile missing), B2 (the
+                // all-types cap) or B3 (full-day-only), each re-run because a profile change can race
+                // the save (ADR-032 D2/D3); or the paid-absence day bound (ADR-043 D2), refused mostly
+                // because another save of the same employee committed while this one waited for the
+                // lock. The throw site already shaped the body to match its pre-tx sibling
+                // byte-for-byte; surface it unchanged so the race loser gets a clean validation 422
+                // (never a 500) and the frontend contract holds.
                 return Results.Json(ex.Body, statusCode: 422);
             }
 

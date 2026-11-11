@@ -233,22 +233,29 @@ public sealed class Adr032ConsumptionPinTests : IAsyncLifetime
         Assert.Equal(0, await CountAbsenceRowsAsync(employeeId, HalfTimeSaturday));
     }
 
-    /// <summary>ADR-032 D3: a SICK_DAY (NON-entitlement) row on a weekend keeps the legacy
-    /// behaviour — allowed under the flat-7.4 cap (a sick hour on a Saturday is not entitlement-
-    /// gated). Persists with NULL feriedage (consumes no entitlement).</summary>
+    /// <summary>ADR-043 D2 (S0-7, QUAL-240): a SICK_DAY row is credit-class paid absence, so on a
+    /// zero-norm Saturday (planned 0, nothing worked) it breaks the paid-absence day bound
+    /// (paid absence ≤ max(0, planned − worked)) ⇒ 422 with <c>kind</c> "paid-absence-day-bound".
+    /// Nothing persists. (ADR-032 D3's flat-7.4 weekend branch no longer admits it.)
+    ///
+    /// <para>Kind: F. Red conditions: on the base code the zero-norm branch admits a non-entitlement
+    /// row up to a flat 7,4 h (<c>SkemaEndpoints.cs</c> pre-transaction cap, weekend branch), so the
+    /// save answers 200 and the 422 assertion trips.</para></summary>
     [Fact]
-    public async Task Guard_WeekendSickDay_Allowed_LegacyBehavior()
+    public async Task Guard_WeekendSickDay_Rejected422_PaidAbsenceDayBound()
     {
         var httpClient = CreateRuleStubbedClient();
         var employeeId = await SeedHalfTimeEmployeeAsync();
         var client = CreateEmployeeClient(employeeId, httpClient);
 
+        // S148 S0-7 (QUAL-240): was 200 + one row + null feriedage (the legacy flat-7.4 weekend allowance).
         var rsp = await PostAbsencesAsync(client, employeeId, HalfTimeSaturday.Year, HalfTimeSaturday.Month,
             new[] { (HalfTimeSaturday, "SICK_DAY", 7.4m) });
 
-        Assert.Equal(HttpStatusCode.OK, rsp.StatusCode);
-        Assert.Equal(1, await CountAbsenceRowsAsync(employeeId, HalfTimeSaturday));
-        Assert.Null(await ReadFeriedageNullableAsync(employeeId, HalfTimeSaturday)); // no entitlement consumed
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, rsp.StatusCode);
+        var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("paid-absence-day-bound", body.GetProperty("kind").GetString());
+        Assert.Equal(0, await CountAbsenceRowsAsync(employeeId, HalfTimeSaturday));
     }
 
     /// <summary>ADR-032 D3: a MIXED weekend day (VACATION + SICK_DAY on the same Saturday) ⇒ 422
