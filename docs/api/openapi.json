@@ -10158,8 +10158,7 @@
       "StatsTid.Backend.Api.Contracts.SkemaWorkTimeDayRow": {
         "required": [
           "date",
-          "intervals",
-          "manualHours"
+          "intervals"
         ],
         "type": "object",
         "properties": {
@@ -10172,10 +10171,6 @@
             "items": {
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Contracts.SkemaWorkIntervalRow"
             }
-          },
-          "manualHours": {
-            "type": "number",
-            "format": "double"
           }
         },
         "additionalProperties": false
@@ -12798,10 +12793,6 @@
               "$ref": "#/components/schemas/StatsTid.Backend.Api.Endpoints.SkemaEndpoints.SkemaWorkInterval"
             },
             "nullable": true
-          },
-          "manualHours": {
-            "type": "number",
-            "format": "double"
           }
         },
         "additionalProperties": false
