@@ -370,7 +370,7 @@ public sealed class ReplayFrozenInputsTests : IAsyncLifetime
 
     /// <summary>
     /// <b>RP8.</b> As RP7 for the evaluation-model marker: the replay PCS's engine answers
-    /// <c>weekly-timeline-v2</c> (today's marker) against the recorded <c>weekly-timeline-v1</c> (a manifest
+    /// <c>weekly-timeline-v3</c> (today's marker) against the recorded <c>weekly-timeline-v1</c> (a manifest
     /// recorded before S147 / TASK-14708 moved the marker). Replay must be
     /// refused with <c>replay-evaluation-model-changed</c>. S147 T3 (QUAL-231), kind R (a regression pin, re-pinned):
     /// before S147 the "changed" marker was a made-up v2; it is now the REAL pair, the v1 recording refused under v2.

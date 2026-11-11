@@ -142,6 +142,8 @@ public sealed class SkemaEntitlementEligibilityGuardTests : IAsyncLifetime
         var body = await rsp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("absence_type_not_eligible", body.GetProperty("error").GetString());
         Assert.Equal("CHILD_SICK", body.GetProperty("entitlementType").GetString());
+        // S148 S0-2 (QUAL-236): kind R. The opt-in refusal carries no `kind` member (the two child-sick refusals do), so it stays distinguishable.
+        Assert.False(body.TryGetProperty("kind", out _));
         Assert.Equal(0, await CountAbsenceRowsAsync(Emp001, date));
     }
 

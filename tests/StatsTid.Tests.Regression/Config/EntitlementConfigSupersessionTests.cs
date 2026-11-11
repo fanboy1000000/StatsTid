@@ -350,7 +350,7 @@ public sealed class EntitlementConfigSupersessionTests : IAsyncLifetime
     [Fact]
     public async Task SeedIdempotency_AfterSoftDelete_ReApplyDoesNotResurrectSoftDeletedRow()
     {
-        // Pick a seed: CHILD_SICK / AC / OK26, annual_quota=1, effective_from='0001-01-01'.
+        // Pick a seed: CHILD_SICK / AC / OK26, annual_quota=3 (OK26, days per illness), effective_from='0001-01-01'.
         const string EntitlementType = "CHILD_SICK";
         const string AgreementCode = "AC";
         const string OkVersion = "OK26";
