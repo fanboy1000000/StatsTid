@@ -48,7 +48,7 @@ describe('buildWorkTimePayload — the clock-time-only payload shape', () => {
   })
 })
 
-describe('periodHours / periodsTotalHours / dayWorkedHours — R5 exact arithmetic', () => {
+describe('periodHours / periodsTotalHours — R5 exact arithmetic', () => {
   it('computes single-period hours at exact 2 decimals (10:27–13:03 = 2.6)', () => {
     expect(periodHours({ from: '10:27', to: '13:03' })).toBe(2.6)
   })

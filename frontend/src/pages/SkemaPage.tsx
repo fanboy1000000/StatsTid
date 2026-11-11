@@ -1398,7 +1398,8 @@ export function SkemaPage() {
 
       {/* S123 — daily-norm ABSENCE cap 422 (shape-discriminated, not the generic
           swallow). The cell reverted to server truth (all-422 revert path); this
-          alert explains why the day's summed absence exceeded the norm. */}
+          alert explains why the day's summed absence exceeded the norm, or why it broke
+          the paid-absence day bound (ADR-043 D2). */}
       {absenceCapError && (
         <Alert variant="error" onDismiss={clearAbsenceCapError}>
           {formatAbsenceCapError(absenceCapError)}

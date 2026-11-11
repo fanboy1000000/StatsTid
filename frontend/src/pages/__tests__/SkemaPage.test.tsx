@@ -835,7 +835,7 @@ describe('SkemaPage — R16 day-panel save paths', () => {
     // S147 / QUAL-241 — the 'Udvikling' row appears in the FIRST commit with data. Before the
     // QUAL-241 fix the page's local state was copied from that data by effects a render LATER,
     // so clicking the day trigger on that first commit opened a panel with no periods
-    // ("Arbejdstid i alt 1,5 t" against 9,5 t allocated → "Overfordelt"): this test's
+    // (no worked time against 9,5 t allocated → "Overfordelt"): this test's
     // "documented flake" (S121 flake-watch, 1 in 32 under parallel load) was that product race,
     // not test noise. The race is now closed in the page and pinned deterministically by the
     // QUAL-241 tests below. This test no longer relies on timing at all: the barrier is the
@@ -1986,7 +1986,7 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     expect(screen.queryByText(/overstiger normtiden/)).not.toBeInTheDocument()
   })
 
-  // Kind R-style companion to AC-S0-7g: sentence 1 (planned 0). Red condition: the pre-change
+  // Kind F (vitest), companion to AC-S0-7g: sentence 1 (planned 0). Red condition: the pre-change
   // formatter shows "…overstiger normtiden (0 t)…" instead.
   it("S0-7: the paid-absence bound's 422 on a day with no planned hours says so (sentence 1)", async () => {
     await renderLoaded()
@@ -2152,7 +2152,7 @@ describe('SkemaPage — R4 rejected-save honesty', () => {
     saveResponder = () =>
       jsonResponse({ error: 'absence_full_day_only', message: 'work-time rejected' }, 422)
 
-    // Open Mar 2 (server truth: 08:00–17:30) and push the end to 17:00.
+    // Open Mar 2 (server truth: 08:00–17:30) and set the end to 17:00.
     fireEvent.click(screen.getByRole('button', { name: 'Registrér arbejdstid 2026-03-02' }))
     let drawer = await screen.findByRole('dialog')
     vi.useFakeTimers()
