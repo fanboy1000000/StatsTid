@@ -27,6 +27,11 @@ namespace StatsTid.Backend.Api.Endpoints;
 ///     committed while this one waited for the lock (two saves that each saw the day without the
 ///     other), or a racing PUT lowered the basis. Surfaces as the SAME 422 the pre-tx bound check
 ///     returns (<c>kind = "paid-absence-day-bound"</c>).</description></item>
+///   <item><description><b>child's-sick illness chain</b>: a child's 2nd or 3rd sick day whose
+///     earlier days of the same illness are missing on the absence rows as committed while the lock
+///     is held (a day with no planned hours needs none), or which the OK version of the illness's
+///     first day does not give (QUAL-236). Surfaces as the SAME 422 the pre-tx chain check returns
+///     (<c>kind = "child-sick-chain"</c>).</description></item>
 /// </list>
 /// </para>
 ///

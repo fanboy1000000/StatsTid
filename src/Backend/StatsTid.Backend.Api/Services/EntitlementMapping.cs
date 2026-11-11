@@ -11,8 +11,8 @@ namespace StatsTid.Backend.Api.Services;
 ///
 /// <para>
 /// <b>Why the map matters for year-overview <c>afholdt</c> (Step-0b Codex W1).</b> The
-/// <c>absences_projection</c> rows carry the ABSENCE type (e.g. <c>SPECIAL_HOLIDAY_ALLOWANCE</c>,
-/// the three <c>CHILD_SICK_DAY*</c> variants), NOT the entitlement type. Aggregating
+/// <c>absences_projection</c> rows carry the ABSENCE type (e.g. <c>SPECIAL_HOLIDAY_ALLOWANCE</c>),
+/// NOT the entitlement type. Aggregating
 /// <c>afholdt</c> by filtering the projection's <c>absence_type</c> directly against an
 /// entitlement-type string (e.g. <c>"SPECIAL_HOLIDAY"</c>) would silently zero the Feriefridage
 /// row. The aggregation MUST resolve each row's <c>absence_type</c> THROUGH
@@ -58,9 +58,15 @@ internal static class EntitlementMapping
         {
             [AbsenceTypes.Vacation] = "VACATION",
             [AbsenceTypes.CareDay] = "CARE_DAY",
-            [AbsenceTypes.ChildSick1] = "CHILD_SICK",
-            [AbsenceTypes.ChildSick2] = "CHILD_SICK",
-            [AbsenceTypes.ChildSick3] = "CHILD_SICK",
+            // The child's sick days and the call-home day map to null: they are counted per
+            // illness, never against a yearly quota, so no quota check, balance or consumption
+            // reads them (QUAL-236). Their HR opt-in finds them through
+            // DefaultEntitlementConfigs.ChildSickCodes, and which of them a date offers comes from
+            // the dated CHILD_SICK config (DefaultEntitlementConfigs.ChildSickCodesOffered).
+            [AbsenceTypes.ChildSick1] = null,
+            [AbsenceTypes.ChildSick2] = null,
+            [AbsenceTypes.ChildSick3] = null,
+            [AbsenceTypes.ChildSickCallHome] = null,
             [AbsenceTypes.ParentalLeave] = null,
             [AbsenceTypes.SeniorDay] = "SENIOR_DAY",
             [AbsenceTypes.SpecialHolidayAllowance] = "SPECIAL_HOLIDAY",

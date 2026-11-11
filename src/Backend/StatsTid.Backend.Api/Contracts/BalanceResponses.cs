@@ -148,7 +148,14 @@ public sealed record YearOverviewHeader(
 /// employee's latest RECORDED flex closing and <paramref name="FlexBalanceMonth"/> its month as
 /// <c>"YYYY-MM"</c> (the same read as <c>/summary</c>). Both are null together, meaning "no settled
 /// month" ("ingen afregnet måned") — never a made-up 0; null has no other meaning on this
-/// tile.</para></summary>
+/// tile.</para>
+/// <para>The child's-sick tile is an allowance PER ILLNESS, not a yearly remainder (there is no
+/// yearly cap; QUAL-236): <paramref name="ChildSickDaysPerIllness"/> is the whole sick days one
+/// illness gives and <paramref name="ChildSickCallHomeDay"/> whether the call-home day applies, both
+/// at today's agreement and OK version, from the same dated CHILD_SICK config the Skema save reads
+/// (OK24: 2 and false; OK26: 3 and true). <paramref name="ChildSickDaysPerIllness"/> is null when
+/// the employee is ineligible or no CHILD_SICK config is dated at today, and
+/// <paramref name="ChildSickCallHomeDay"/> is then false.</para></summary>
 public sealed record YearOverviewTiles(
     decimal? FlexBalance,
     string? FlexBalanceMonth,
@@ -156,7 +163,8 @@ public sealed record YearOverviewTiles(
     decimal? CareDayRemaining,
     decimal? SeniorDayRemaining,
     int SickDaysYtd,
-    decimal? ChildSickRemaining,
+    int? ChildSickDaysPerIllness,
+    bool ChildSickCallHomeDay,
     bool ChildSickEligible,
     bool SeniorDayEligible);
 
