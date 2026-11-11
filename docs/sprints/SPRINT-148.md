@@ -662,3 +662,64 @@ One fact corrected along the way: A9's `cref` premise does not hold. No project 
   - The order in wave 2: 14809 stack → 14811 stack → 14842 → 14840 stack.
   - Size: 44 AC ids; 65 facts (F 47, R 17, N 1); 69 agent tasks; M-18 … M-21 in CI-M2.
 - **Owed before wave 2 dispatch:** the 14811 and 14811-T briefs must carry the AC-S0-2j move to 14840-T, and the corrected `EntitlementMapping.cs` path.
+
+**CI-W1** (run 43011040973, draft PR #55, at `59231338`).
+- **Tests: green.** `build-and-test` passed.
+  - Unit 1716, DemoSeed 170, and Regression 2458 of 2458, Docker included.
+  - Every wave-1 fact passed by name:
+    - AC7d (ruling B9's condition);
+    - both PIN-1 worlds, so pay is unchanged;
+    - PIN-2;
+    - all `OrphanCoverageTests`, including the shape-F fact;
+    - the paid-absence bound and race facts;
+    - the four-eyes admission and race theories;
+    - the compensate race;
+    - the typed-entry refusal facts;
+    - the restored month-lock matrix and uniform-refusal pins;
+    - the special-holiday pins;
+    - the route-retirement pin;
+    - the S106 cost guard `Roster_IsOneScopedLoad…`, still at ≤ 5 commands.
+  - Smoke, E2E, the frontend build, lizard and gitleaks are green.
+- **Red: the docs job only.** Four `shortcut(pending)` comments had not been registered at their merges, so merge-checklist item 8 was missed for 14802, 14804 and 14806.
+  - They are now registered in `76c6da46` as QUAL-248 (Medium) and QUAL-BF-001 … 003, with comment-only tag edits. The local `check_docs.py` passes.
+- **The regression step took 117 minutes**, against the usual 75. The tests themselves add up to 554 s; the rest is container start-up from the new Docker test classes. No test hung.
+  - A diagnostic run, CI-W1b (draft PR #56, `ci/s148-w1b`), was started before this was known. It is master `76c6da46` plus one evidence-only commit adding `--blame-hang-timeout 15m`, and it exists only on that throwaway branch.
+  - CI-W1b is kept as the green evidence for the full tip, including the docs fix.
+  - The CI-time growth is noted for the F-series register at close.
+
+**Wave-2 dispatch briefs: adjudication** (`.claude/reviews/S148-wave2-briefs-adjudication.md`, Fable 5.2, at `76c6da46`; verdict RULED).
+- **What happened:** three planners drafted the eleven wave-2 briefs; each ended with the places where the plan and today's code disagree, or where a task would need a file it is not authorized for. One adjudicator pass ruled on all of them. None needed the owner.
+- **The rulings that change what gets built:**
+  - **Manual hours (14809, 14810):** the old 24-hour check stays as a backstop; it cannot fire today, because the interval parser stops at 23:59, but it will guard the rule if the midnight work in 14814 changes the parser. The alert for a refused paid-absence day now has fixed Danish wording in three cases (no planned hours; the day already full; room for at most M hours), so the test's expected text comes from the brief rather than the implementer.
+  - **Child's sick days (14811, 14812):** the dated CHILD_SICK config gives the number of day codes offered (day 1 up to min(quota, 3)). Whether the call-home day exists is a small per-OK-version table in SharedKernel (OK24 no, OK26 yes; an unnamed version gets none). That table is a registered shortcut, because the config cannot yet carry per-illness extras. The call-home code gets one wage-type mapping row per agreement (five), not one; a single row would have dropped the call-home hours from payroll for four of the five agreements, because an unmapped line is skipped. The yearly remainder shown to the employee is on the Årsoversigt tile, not the balance summary.
+  - **Missing balance record (14842):** the balance writers keep their signatures, the five production call sites pass the seed inputs explicitly, and the carryover's "zero-state" remarks are rewritten to be true.
+  - **Cell clearing (14840, 14841):** one error code for an out-of-month date on every cleared array (`skema_cell_date_out_of_range`), pinned by AC-CL-10 as a Theory. The `shortcut(QUAL-248)` line is deleted and QUAL-248 closes in 14840's merge. The removal announcement gets its own screen-reader live region, so the existing "Gemmer…" region cannot overwrite it.
+  - **Test passes:** two more mutations, M-22 and M-23, one for each half of the call-home day, credit and export. Two more facts: the five mapping rows, and the served allowance. Each AC fact's kind (F = fails on today's code, R = regression pin) is set row by row, following Block A's rule.
+- **Comment-only and compile-only edits outside a task's own files** are authorized on the wave-1 precedents (A4, A8, A9): 15 test lines in 5 files for 14809; three comments each for 14809 and 14840; three comment lines for 14811.
+- **Four things the owner should know** (no decision needed):
+  1. An admin who edits the CHILD_SICK config's day count now changes which day codes the Skema offers.
+  2. The call-home day's availability per OK version is in code for now, as a registered shortcut.
+  3. The grid does not warn about the paid-absence bound before saving; the employee learns from the alert, which now says exactly why.
+  4. The two AC variants (research and teaching) are labelled "provisional", the same as AC, which they inherit.
+- **Owed at close:** an ADR-026 D2 amendment note (the audit mapper's real shape); register rows for the `/summary` CHILD_SICK row that no screen reads, the dead writer `AdjustUsedAsync`, the grid mirror of the bound (roadmap), and the call-home shortcut.
+- **Applying the rulings** (plan "final + 6"; addendum "FINAL (draft 1.3.2)", bookkeeping only, design unchanged; all eleven briefs at draft 2). The planners found four things the adjudication had not settled, which the Orchestrator ruled:
+  - **CI-M2b (a new mutation evidence run).** A mutation is a deliberate break used to prove that a test notices it, and the mutations in one run must not mask each other. M-8 removes the call-home code's classification row, so the save refuses the code before either payroll check is reached, and M-22 and M-23 would hide each other while credit and export sat in one test. Ruled on the NR-P15 precedent:
+    - AC-S0-2e's payroll fact splits into a credit fact and an export fact;
+    - M-22 and M-23 run apart from M-8, in CI-M2b;
+    - 14811-T shows locally, under each mutation alone, that the two reds are independent.
+    - Mutation evidence runs go from 4 to 5.
+  - **The call-home code without a CHILD_SICK row:** offered only where day 1 is offered. This follows from the adjudication's fail-closed reading: a missing config row offers nothing.
+  - **Two cites corrected against the code.**
+    - S119's absence-type count moves in two places (`S119ConfigSpecRuntimeTests.cs:174`, 11 → 12, and `:225`, 10 → 11), as S147 moved both.
+    - `HoursDigest.cs` is a payroll file, so AC-CL-21 ("no payroll file changes but comments") now names its comment beside `ProjectionHoursReader.cs`'s.
+  - **The QUAL-248 register row's closing pointer** is corrected from O-28 to addendum O-24.
+  - **Counts:**
+    - plan AC ids 115 → 116 (AC-S0-7g, the precise alert, owner 14810);
+    - Docker mutations 9 → 11;
+    - agent tasks unchanged at 69;
+    - addendum unchanged (44 ids; 65 facts).
+
+**CI-W1b** (run 43027618243, draft PR #56, closed unmerged): **green, all seven jobs.**
+- The docs job confirms the four `shortcut(pending)` registrations of `76c6da46`; build-and-test, smoke, E2E, frontend-build, lizard and gitleaks are green.
+- **The regression step ran ~120 minutes** (13:18 → 15:18 UTC) under `--blame-hang-timeout 15m`, and no hang dump was produced. So the slow step is steady, not a hang: it is container start-up for the new Docker test classes. This confirms the CI-time F-series row owed at close.
+- Wave-1 evidence is complete; wave-2 merges are unblocked.
