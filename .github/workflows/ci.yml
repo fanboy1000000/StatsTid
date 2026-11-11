@@ -185,7 +185,8 @@ jobs:
         run: psql "host=localhost port=5432 dbname=statstid user=statstid" -v ON_ERROR_STOP=1 -q -f docker/postgres/init.sql
 
       - name: Run regression tests
-        run: dotnet test tests/StatsTid.Tests.Regression --no-build -c Release --logger "trx"
+        # EVIDENCE-ONLY (S148 CI-W1b, throwaway branch, never master): name a hanging test.
+        run: dotnet test tests/StatsTid.Tests.Regression --no-build -c Release --logger "trx" --logger "console;verbosity=normal" --blame-hang-timeout 15m --blame-hang-dump-type none
 
       - name: Collect coverage (baseline-recording only — no ≥X% gate this sprint)
         run: |
