@@ -618,3 +618,47 @@ One fact corrected along the way: A9's `cref` premise does not hold. No project 
   - The from-empty rebuild gap is registered.
 - **Draft 1.1** is being written by a `planner` run: the adjudication's 17 edits, plus 14842, plus the main-plan "final + 3". Cycle 2 of Step 0b follows.
 - **GATE after 14804** (`72f286fe`): green. Build 0 errors / 143 warnings / CA2100 113; Unit 1716; DemoSeed 170; Regression non-Docker 140. **All of wave 1 is merged on local master**: 14801, 14802 (+ 14803 stack), 14804, 14805, 14806, 14807 and 14808, each with its paired pass where it has one. **CI-W1 next**, on a throwaway branch and draft PR (owner "go ahead" for evidence runs, 2026-11-10).
+
+**Cell-clearing addendum A1: Step 0b, cycles 2–5** (`.claude/plans/s148/ADDENDUM-A1-cell-clearing.md`, now **FINAL (draft 1.3.1)**; main plan "final + 5").
+
+- **Cycle 2, on draft 1.1** (the cycle-1 adjudication plus owner Q3):
+  - Fable: READY-WITH-WARNINGS, 0 B / 2 W / 6 N (`ADDENDUM-A1-reviewer-c2.md`). The mark design closes B-1; Fable found no way left to bring a cleared day back.
+  - Codex: CHANGES-REQUIRED, 0 B / 2 W / 3 N (`ADDENDUM-A1-codex-c2.md`).
+  - The new warnings:
+    - the seed test could not catch a year window that is too long;
+    - no fact caught the replayed clear losing its guard;
+    - the revaluation's seed-plus-delta was wrong for a row with NULL feriedage;
+    - the revaluation seeds `total_quota = 0`.
+  - **Ruled by the Orchestrator.** Both lenses agreed on every item, and the one scope question went to the owner:
+    - the per-type year window, with fixture rows that catch an over-long one;
+    - AC-CL-38 and M-21 for the replay guard;
+    - the revaluation result is the sum read after the overwrite;
+    - the quota exemption applies to the net change per type (AC-CL-37);
+    - OA-1: four writers; OA-2: keep AC-CL-36; OA-4: F with explicit expectations.
+- **Owner Q4 (2026-11-11), "Include it (Recommended)":** every writer that creates a missing holiday balance gives it the applicable annual entitlement, pro-rated where the agreement says so. Before this, the revaluation path created such a balance with an entitlement of 0, and the team overview then showed "X of 0 days" for good. This is folded into TASK-14842.
+- **Cycle 3, on draft 1.2:**
+  - Fable: READY-WITH-WARNINGS, 0 B / 2 W / 2 N. Codex: READY-WITH-WARNINGS, 0 B / 1 W / 3 N.
+  - Both found that the year-end carryover seeded the closing year's entitlement.
+  - Fable also found that the revaluation test could not tell the year-start configuration from the live one.
+  - **Ruled the complete fix:**
+    - the carryover seeds the new year's own year-start entitlement, at both call sites;
+    - the revaluation's source is named as the year-start key;
+    - AC-BS-3 gains cases (c) and (d), and AC-BS-4 becomes a Theory.
+  - The planner's open items were ruled as leaned:
+    - OA-5: with no config for the new year, fall back to the closing year's total, log it, and register a residual;
+    - OA-6: no part-time fraction on VACATION, which is flat by law;
+    - OA-7: keep the rescue-route case.
+- **Cycle 4, on draft 1.3:**
+  - Fable: READY-WITH-WARNINGS, 0 B / 2 W / 2 N. Codex: READY-WITH-WARNINGS, 0 B / 1 W / 3 N.
+  - The warnings: O-25 did not carry the OA-5 residual, and the carryover cases could not catch a live-row seed.
+  - The Orchestrator fixed both in draft 1.3.1:
+    - O-25 records the residual;
+    - AC-BS-4 gains a second supersession, so the settled-year seed (25), the live seed (27) and the right seed (26) all differ;
+    - the plan row is reworded.
+  - The cycle-4 internal review was saved late, after it had been acted on, and is marked so.
+- **Cycle 5, on draft 1.3.1:** **READY on both lenses.** Fable: READY, 0 B / 0 W / 3 bookkeeping N. Codex: READY.
+- **The result:**
+  - TASK-14840 + 14840-T + 14841 build cell clearing, and TASK-14842 + 14842-T fix the missing balance record and its entitlement, all in wave 2.
+  - The order in wave 2: 14809 stack → 14811 stack → 14842 → 14840 stack.
+  - Size: 44 AC ids; 65 facts (F 47, R 17, N 1); 69 agent tasks; M-18 … M-21 in CI-M2.
+- **Owed before wave 2 dispatch:** the 14811 and 14811-T briefs must carry the AC-S0-2j move to 14840-T, and the corrected `EntitlementMapping.cs` path.
