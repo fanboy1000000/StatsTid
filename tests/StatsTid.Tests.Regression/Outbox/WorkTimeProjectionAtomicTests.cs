@@ -65,7 +65,6 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
 
         var row = Assert.Single(rows);
         Assert.Equal(date, row.Date);
-        Assert.Equal(0.5m, row.ManualHours);
         Assert.Collection(row.Intervals,
             iv => { Assert.Equal("08:00", iv.Start); Assert.Equal("12:00", iv.End); },
             iv => { Assert.Equal("12:30", iv.Start); Assert.Equal("16:00", iv.End); });
@@ -94,7 +93,6 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
             employeeId, date, date);
 
         var row = Assert.Single(rows); // PK (employee_id, date) → one row
-        Assert.Equal(1.25m, row.ManualHours);
         var iv = Assert.Single(row.Intervals);
         Assert.Equal("09:00", iv.Start);
         Assert.Equal("17:00", iv.End);
@@ -126,13 +124,11 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         {
             EmployeeId = employeeId, Date = date,
             Intervals = new[] { new WorkInterval { Start = "09:00", End = "17:00" } },
-            ManualHours = 2m,
         };
         var stale = new WorkTimeRegistered
         {
             EmployeeId = employeeId, Date = date,
             Intervals = new[] { new WorkInterval { Start = "00:00", End = "01:00" } },
-            ManualHours = 99m,
         };
 
         await using (var conn = _harness.Factory.Create())
@@ -152,7 +148,6 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
 
         var rows = await _workTimeRepo.GetByEmployeeAndDateRangeAsync(employeeId, date, date);
         var row = Assert.Single(rows);
-        Assert.Equal(2m, row.ManualHours); // newer row stands
         Assert.Equal("09:00", Assert.Single(row.Intervals).Start);
     }
 
@@ -204,7 +199,6 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
         var row = Assert.Single(rows);
         Assert.Equal("08:00", Assert.Single(row.Intervals).Start);
         Assert.Equal("16:00", Assert.Single(row.Intervals).End);
-        Assert.Equal(0m, row.ManualHours);
     }
 
     /// <summary>
@@ -223,7 +217,6 @@ public sealed class WorkTimeProjectionAtomicTests : IAsyncLifetime
             Intervals = intervals
                 .Select(t => new WorkInterval { Start = t.Start, End = t.End })
                 .ToList(),
-            ManualHours = manualHours,
         };
 
         await using var conn = _harness.Factory.Create();

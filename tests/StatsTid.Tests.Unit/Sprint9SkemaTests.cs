@@ -288,7 +288,6 @@ public class Sprint9SkemaTests
                 new WorkInterval { Start = "08:00", End = "12:00" },
                 new WorkInterval { Start = "12:30", End = "16:00" },
             },
-            ManualHours = 0.5m,
             ActorId = "EMP001",
             ActorRole = "Employee",
         };
@@ -302,7 +301,6 @@ public class Sprint9SkemaTests
         Assert.Equal(original.EventId, rt.EventId);
         Assert.Equal("EMP001", rt.EmployeeId);
         Assert.Equal(new DateOnly(2026, 3, 5), rt.Date);
-        Assert.Equal(0.5m, rt.ManualHours);
         Assert.Collection(rt.Intervals,
             iv => { Assert.Equal("08:00", iv.Start); Assert.Equal("12:00", iv.End); },
             iv => { Assert.Equal("12:30", iv.Start); Assert.Equal("16:00", iv.End); });

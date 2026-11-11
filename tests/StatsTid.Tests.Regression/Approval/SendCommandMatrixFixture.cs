@@ -193,7 +193,6 @@ public abstract class SendCommandMatrixTestBase
             Date = date,
             Intervals = (intervals ?? Array.Empty<(string, string)>())
                 .Select(t => new WorkInterval { Start = t.Start, End = t.End }).ToList(),
-            ManualHours = manualHours,
         };
         await using var conn = Fx.Db.Create();
         await conn.OpenAsync();

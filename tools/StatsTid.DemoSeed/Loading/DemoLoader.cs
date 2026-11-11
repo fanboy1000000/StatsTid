@@ -667,14 +667,13 @@ public sealed class DemoLoader
                                 hours = al.Hours,
                             }).ToList<object>()
                             : new List<object>(),
-                        // The worked side of the gate: interval hours + manual hours. Intervals
-                        // only, so the persisted total is exactly the interval duration.
+                        // The worked side of the gate: interval hours alone, so the persisted
+                        // total is exactly the interval duration.
                         workTime = sendWorkDays
                             ? workDays.Select(w => new
                             {
                                 date = w.Date,
                                 intervals = new[] { new { start = w.Start, end = w.End } },
-                                manualHours = 0m,
                             }).ToList<object>()
                             : new List<object>(),
                     }, ct);

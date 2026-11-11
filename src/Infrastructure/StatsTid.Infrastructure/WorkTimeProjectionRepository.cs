@@ -9,8 +9,8 @@ namespace StatsTid.Infrastructure;
 /// <summary>
 /// Immutable read-result row for the <c>work_time_projection</c> table
 /// (TASK-5603 / S56 phase 2). One row per (employee, date) holding the latest
-/// self-recorded work-time state: the list of work intervals plus the manual
-/// daily-hours scalar. Returned by
+/// self-recorded work-time state: the list of work intervals, a day's only
+/// work-time record (ADR-043 D10, D-2.4). Returned by
 /// <see cref="WorkTimeProjectionRepository.GetByEmployeeAndDateRangeAsync"/>
 /// to back the Skema month GET <c>workTime</c> field.
 /// </summary>
@@ -19,7 +19,6 @@ public sealed class WorkTimeProjectionRow
     public required string EmployeeId { get; init; }
     public required DateOnly Date { get; init; }
     public required IReadOnlyList<WorkInterval> Intervals { get; init; }
-    public required decimal ManualHours { get; init; }
 }
 
 /// <summary>
@@ -84,15 +83,14 @@ public sealed class WorkTimeProjectionRepository
 
         await using var cmd = new NpgsqlCommand(
             @"INSERT INTO work_time_projection (
-                  employee_id, date, intervals, manual_hours,
+                  employee_id, date, intervals,
                   occurred_at, actor_id, actor_role, correlation_id, outbox_id
               ) VALUES (
-                  @employeeId, @date, @intervals, @manualHours,
+                  @employeeId, @date, @intervals,
                   @occurredAt, @actorId, @actorRole, @correlationId, @outboxId
               )
               ON CONFLICT (employee_id, date) DO UPDATE SET
                   intervals = EXCLUDED.intervals,
-                  manual_hours = EXCLUDED.manual_hours,
                   occurred_at = EXCLUDED.occurred_at,
                   actor_id = EXCLUDED.actor_id,
                   actor_role = EXCLUDED.actor_role,
@@ -103,7 +101,6 @@ public sealed class WorkTimeProjectionRepository
         cmd.Parameters.AddWithValue("employeeId", @event.EmployeeId);
         cmd.Parameters.AddWithValue("date", @event.Date);
         cmd.Parameters.Add("intervals", NpgsqlDbType.Jsonb).Value = intervalsJson;
-        cmd.Parameters.AddWithValue("manualHours", @event.ManualHours);
         cmd.Parameters.AddWithValue("occurredAt", occurredAt);
         cmd.Parameters.AddWithValue("actorId", (object?)@event.ActorId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("actorRole", (object?)@event.ActorRole ?? DBNull.Value);
@@ -126,7 +123,7 @@ public sealed class WorkTimeProjectionRepository
         await using var conn = _connectionFactory.Create();
         await conn.OpenAsync(ct);
         await using var cmd = new NpgsqlCommand(
-            @"SELECT employee_id, date, intervals, manual_hours
+            @"SELECT employee_id, date, intervals
               FROM work_time_projection
               WHERE employee_id = @employeeId AND date >= @start AND date <= @end
               ORDER BY date ASC",
@@ -147,7 +144,6 @@ public sealed class WorkTimeProjectionRepository
                 EmployeeId = reader.GetString(reader.GetOrdinal("employee_id")),
                 Date = DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("date"))),
                 Intervals = intervals,
-                ManualHours = reader.GetDecimal(reader.GetOrdinal("manual_hours")),
             });
         }
         return rows;
