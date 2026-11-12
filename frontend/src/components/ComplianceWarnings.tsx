@@ -43,11 +43,10 @@ const VIOLATION_TYPE_LABELS: Record<number, string> = {
 }
 
 /**
- * S147 / TASK-14707 (QUAL-234 interim) — the one month-level notice for days the
- * 11-hour rest check could not measure (Skema days carry hours but no clock times).
- * Returns null when the list is empty or absent. Shared with Teamoversigt so both
- * screens say exactly the same thing. Retires when the rest check reads Skema's
- * intervals (S148 stage 0).
+ * The one month-level notice for days the 11-hour rest check could not measure (days whose
+ * hours are not all on the clock; a fully clocked day is checked). Returns null when the list
+ * is empty or absent. Shared with Teamoversigt so both screens say exactly the same thing.
+ * It stays as information, not a breach (owner ruling R-22; QUAL-234).
  */
 export function restNotCheckedNotice(result: ComplianceCheckResult | null | undefined): string | null {
   const n = result?.restNotCheckedDays?.length ?? 0
@@ -81,9 +80,19 @@ function ViolationItem({ item }: { item: ComplianceViolation }) {
   )
 }
 
-export function ComplianceWarnings({ result, loading, hideTitle = false }: ComplianceWarningsProps) {
-  if (loading || !result) return null
+/**
+ * One polite live region: role="status" on the outermost element, none on items. It is always
+ * mounted and empty while loading or when there is nothing to show, because a region that mounts
+ * with its content is often not announced; the month's fetch fills it in place.
+ */
+export function ComplianceWarnings(props: ComplianceWarningsProps) {
+  return <div role="status">{!props.loading && props.result && <WarningsPanel {...props} result={props.result} />}</div>
+}
 
+function WarningsPanel({
+  result,
+  hideTitle = false,
+}: ComplianceWarningsProps & { result: ComplianceCheckResult }) {
   const hasIssues = result.violations.length > 0 || result.warnings.length > 0
   const notCheckedNotice = restNotCheckedNotice(result)
   if (!hasIssues && !notCheckedNotice) return null
@@ -107,7 +116,7 @@ export function ComplianceWarnings({ result, loading, hideTitle = false }: Compl
       )}
       {notCheckedNotice && (
         <div className={styles.section}>
-          <div className={`${styles.item} ${styles.warning}`} role="status">
+          <div className={`${styles.item} ${styles.info}`}>
             <p className={styles.message}>{notCheckedNotice}</p>
           </div>
         </div>

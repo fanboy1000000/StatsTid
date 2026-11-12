@@ -33,6 +33,11 @@
   background: color-mix(in srgb, var(--color-warning) 5%, transparent);
 }
 
+.info {
+  border-color: var(--color-info);
+  background: color-mix(in srgb, var(--color-info) 5%, transparent);
+}
+
 .itemHeader {
   display: flex;
   align-items: center;

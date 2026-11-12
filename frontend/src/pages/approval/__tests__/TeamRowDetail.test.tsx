@@ -456,6 +456,10 @@ describe('TeamRowDetail — compliance Advarsel + fault isolation', () => {
     renderPage()
     await expandFirstRow(user)
     await waitFor(() => expect(screen.getByText('Hviletid ikke kontrolleret for 2 dage')).toBeInTheDocument())
+    // S148 14b (BC-7), kind F: the same sentence is informational here too. Red before: the line carries detailAlertWarn.
+    const notice = screen.getByText('Hviletid ikke kontrolleret for 2 dage')
+    expect(notice).toHaveClass('detailAlertInfo')
+    expect(notice).not.toHaveClass('detailAlertWarn')
   })
 
   it('S147 boundary pin — holds today: an empty list shows no notice (compliance read landed)', async () => {
