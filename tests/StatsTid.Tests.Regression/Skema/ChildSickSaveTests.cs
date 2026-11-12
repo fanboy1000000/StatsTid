@@ -197,6 +197,51 @@ internal sealed class ChildSickHost : IAsyncDisposable
         return await _client.SendAsync(request);
     }
 
+    /// <summary>
+    /// One Skema save of one month with absences, work-time days (intervals "HH:mm") and project-hour entries; any may be omitted.
+    /// All dates must lie in the month of <paramref name="month"/>.
+    /// </summary>
+    internal async Task<HttpResponseMessage> SaveRawAsync(
+        string emp, string agreement, DateOnly month,
+        (string Type, decimal Hours, DateOnly Date)[]? absences = null,
+        (DateOnly Date, (string Start, string End)[] Intervals)[]? workTime = null,
+        (DateOnly Date, decimal Hours)[]? entries = null)
+    {
+        var body = new Dictionary<string, object> { ["year"] = month.Year, ["month"] = month.Month };
+        if (absences is not null)
+            body["absences"] = absences.Select(a => new { date = a.Date.ToString("yyyy-MM-dd"), absenceType = a.Type, hours = a.Hours }).ToArray();
+        if (workTime is not null)
+            body["workTime"] = workTime.Select(w => new
+            {
+                date = w.Date.ToString("yyyy-MM-dd"),
+                intervals = w.Intervals.Select(i => new { start = i.Start, end = i.End }).ToArray(),
+            }).ToArray();
+        if (entries is not null)
+            body["entries"] = entries.Select(e => new { date = e.Date.ToString("yyyy-MM-dd"), projectCode = "S148P", hours = e.Hours }).ToArray();
+        var request = new HttpRequestMessage(HttpMethod.Post, $"/api/skema/{emp}/save") { Content = JsonContent.Create(body) };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token(emp, agreement));
+        return await _client.SendAsync(request);
+    }
+
+    /// <summary>The employee's stored work-time days as (date, "start-end;..." of the intervals), ordered by date.</summary>
+    internal async Task<(DateOnly Date, string Intervals)[]> ReadWorkTimeAsync(string emp)
+    {
+        await using var conn = new NpgsqlConnection(_harness.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT date, COALESCE((SELECT string_agg((i->>'start') || '-' || (i->>'end'), ';' ORDER BY ord)
+                                   FROM jsonb_array_elements(intervals) WITH ORDINALITY AS t(i, ord)), '')
+            FROM work_time_projection WHERE employee_id = @e ORDER BY date
+            """, conn);
+        cmd.Parameters.AddWithValue("e", emp);
+        var rows = new List<(DateOnly, string)>();
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+            rows.Add((r.GetFieldValue<DateOnly>(0), r.GetString(1)));
+        return rows.ToArray();
+    }
+
     /// <summary>The month view (the catalogue and the grid), as the employee.</summary>
     internal async Task<JsonElement> GetMonthAsync(string emp, string agreement, int year, int month)
     {
@@ -230,7 +275,7 @@ internal sealed class ChildSickHost : IAsyncDisposable
     /// The refusal every new child's-sick fact asserts: 422, the <c>absence_type_not_eligible</c> shape, the refusal's
     /// own <c>kind</c> (never the opt-in's, which carries none), the refused code and the dependent date.
     /// </summary>
-    internal static async Task AssertRefusalAsync(HttpResponseMessage rsp, string kind, string absenceType, DateOnly date)
+    internal static async Task AssertRefusalAsync(HttpResponseMessage rsp, string kind, string absenceType, DateOnly date, string? message = null)
     {
         var text = await rsp.Content.ReadAsStringAsync();
         Assert.True(rsp.StatusCode == HttpStatusCode.UnprocessableEntity, $"expected 422, got {(int)rsp.StatusCode}: {text}");
@@ -239,7 +284,8 @@ internal sealed class ChildSickHost : IAsyncDisposable
             () => Assert.Equal("absence_type_not_eligible", body.GetProperty("error").GetString()),
             () => Assert.Equal(kind, body.GetProperty("kind").GetString()),
             () => Assert.Equal(absenceType, body.GetProperty("absenceType").GetString()),
-            () => Assert.Equal(date.ToString("yyyy-MM-dd"), body.GetProperty("date").GetString()));
+            () => Assert.Equal(date.ToString("yyyy-MM-dd"), body.GetProperty("date").GetString()),
+            () => { if (message is not null) Assert.Equal(message, body.GetProperty("message").GetString()); });
     }
 
     internal static async Task AssertOkAsync(HttpResponseMessage rsp)
