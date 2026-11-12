@@ -784,3 +784,159 @@ One fact corrected along the way: A9's `cref` premise does not hold. No project 
   - Unit 1716, DemoSeed 170, Regression `Category!=Docker` 140.
   - Frontend: tsc, lint, e2e typecheck and build all green; vitest 85 files / 1088 tests.
   - The Docker facts, including AC-S0-5b, the key-set pins and the C5 row, are CI-W2's.
+
+**Wave 2 — TASK-14811** (`backend-infrastructure`; branch `worktree-agent-abcbe641097cf0bb8`, tip `162da27c`, two commits on `6ec6a111`, marker commit `575315e9`; report `.claude/reviews/S148-TASK-14811-report.md`).
+
+**What changed, in plain words.** Before, StatsTid gave AC staff 1 child's sick day, HK 2 and PROSA 3, counted against a yearly limit, and had no way to register the "call-home" hours. Now:
+- **Days per illness.** The dated CHILD_SICK setting says how many days one illness gives: 2 under OK24 and 3 under OK26, for all five agreements. An administrator who edits that number changes which day codes are offered.
+- **The call-home day.** A new code, `CHILD_SICK_CALL_HOME`, is offered from OK26 only. A small table in code decides that (a registered shortcut).
+- **Consecutive days.** Day 2 must follow day 1, and day 3 must follow day 2, unless the missing day had no planned hours (a weekend). An illness keeps the OK version of its first day.
+- **No yearly limit.** The HR opt-in that allows child's sick days at all is unchanged.
+
+**Pay.** The call-home hours are credited like a sick day. That is the sprint's one change to the pay arithmetic, so the engine's version marker moves to `weekly-timeline-v3` in the same commit as the classification change. A pay result recorded under the old rules is then refused at replay rather than silently recalculated (ADR-016 D10). Payroll exports the hours under `SLS_0530` (provisional), with one mapping row per agreement.
+
+**The change.**
+- 12 files. The chain is the fifth in-lock refusal, judged advisory and then authoritatively right after the paid-absence bound.
+- The new refusal bodies reuse `absence_type_not_eligible` with `kind` `child-sick-not-offered` or `child-sick-chain`. The opt-in refusal is byte for byte unchanged.
+- The year-overview tile trades `childSickRemaining` for `childSickDaysPerIllness` and `childSickCallHomeDay`.
+- Four `shortcut(pending)` comments to register at merge:
+  - the other parent is not modelled (M);
+  - `SLS_0530` is provisional (M);
+  - AC's OK26 rule is provisional (L);
+  - the call-home table lives in code (L).
+
+**Local gate.** Build 0 errors, 143 warnings, CA2100 113. Unit 1711 of 1716: exactly the five predicted reds, which 14811-T re-pins. DemoSeed 170, non-Docker 140. PIN-1 is argued: the demo draws no child's-sick code.
+
+**Orchestrator rulings on its § 12** (accepted; 5a judges them too):
+- The chain judges posted-absence dates only. Clock time and project hours cannot break a chain, and judging them would refuse an unrelated save over stored data.
+- The catalogue lists the child codes together, call-home first.
+- A child's-sick row on a weekend now gets the paid-absence bound's accurate "no planned hours" refusal instead of the old "non-working day" one.
+- A one-line comment fix outside the brief's lines.
+
+**Found, not fixed** (register at merge or close):
+- the `/summary` CHILD_SICK row;
+- the rule engine's unreachable per-episode branch;
+- three stale comments.
+
+TASK-14811-T dispatched on `162da27c`.
+- **TASK-14811-T** (`test-qa`; tip `17269f7c`, two commits on `162da27c`; report `.claude/reviews/S148-TASK-14811-T-report.md`).
+  - **Scope:** 21 test files (7 new), +1017 / −45, tests only.
+  - **New facts:**
+    - the seeds and compiled defaults agree for all five agreements (Unit F, red on base);
+    - the catalogue per OK version;
+    - the per-code refusal;
+    - five chain facts, including the 30 March → 1 April case, where the illness keeps OK24's two days;
+    - the call-home credit and export as two N facts (CI-M2b ruling);
+    - the five mapping rows (F);
+    - the tile's served allowance (F);
+    - the opt-in body's missing `kind` (R).
+  - **Re-pins:**
+    - the nine payroll rows, now each a legal OK26 illness: three F (AC `_2`, AC `_3`, HK `_3`), six R;
+    - the S119 counts, 12 and 11;
+    - the marker moved to v3 in every stub.
+  - **Rulings:** neither the weekend-refusal ruling nor the catalogue-order ruling forced any re-pin.
+  - **Local mutation censuses:**
+    - M-8 reddens the two classification Unit facts. Both payroll Docker facts are argued red at the save's vocabulary gate.
+    - M-22 alone reddens one Unit row. Only the credit fact is argued red in Docker.
+    - M-23 alone reddens nothing locally. Only the export fact and the mapping fact are argued red in Docker.
+    - **Independence holds:** neither frozen list relies on a fact the other reddens. M-8 and M-22 share one Unit row, but they run in different CI runs.
+  - **Local gate:** green (143 warnings, CA2100 113; Unit 1719, DemoSeed 170, non-Docker 140).
+- **REGEN** (`a3063fbc`, on 14811-T's branch): `YearOverviewTiles` drops `childSickRemaining` and gains `childSickDaysPerIllness` and `childSickCallHomeDay`. Nothing else drifts, as predicted.
+- **Dispatched in parallel from `a3063fbc`:**
+  - TASK-14812 (`ux`);
+  - the 5a Fable review of `6ec6a111..a3063fbc`;
+  - the 5a Codex review of the same range (high-risk: legal rule logic, payroll export, schema seeds).
+- **5a on `6ec6a111..a3063fbc` (14811 + 14811-T + REGEN):**
+  - **Codex: APPROVED**, 0 B / 0 W / 2 N (`S148-TASK-14811-5a-codex.md`). It found no save interleaving that builds an illegal chain, and no write path that admits an OK24 call-home row. It also showed that the seeded worked hours do reach the bound, settling the test report's "(unproven)". Its note on the `/summary` CHILD_SICK row is sharper than ours: no screen reads it, but other API callers get a misleading yearly figure, so its register row is not "harmless".
+  - **Fable 5.2: APPROVED-WITH-WARNINGS**, 0 B / 2 W / 4 N (`S148-TASK-14811-5a-reviewer.md`). It accepts the Orchestrator's four § 12 rulings.
+    - **W-1:** nothing pins that the call-home code is in the child's-sick code set, which is what puts it behind the HR opt-in and the OK24 refusal.
+    - **W-2:** the per-illness limit binds only the day-2 and day-3 codes. "Barns 1. sygedag" five days running gives five paid days, and a call-home day needs no work.
+- **W-1 fixed** (14811-T fix-up 1, tip `ba247730`; `S148-TASK-14811-T-c2-report.md`):
+  - a Unit fact that the set is exactly the four codes;
+  - two Docker facts, the call-home code refused in OK24 for an opted-in employee, and refused with the opt-in body for one without the opt-in.
+  
+  A mutation that drops the code from the set reddens the Unit fact locally; the Docker facts are argued red. Two stale docstrings were fixed. Gate green (Unit 1720).
+- **Owner Q5 (2026-11-12), "Build both rules (Recommended)", on W-2.**
+  - **The question.** The system cannot see when a child's illness starts or ends; it trusts the day code chosen. The circular's own definitions (`sick-day-credit-and-agreement-texts-research.md:196-197`: day 2 *is* the calendar day after day 1; the call-home day is the day the child fell ill *after the employee met at work*) support two rules.
+  - **The rules:**
+    - **(A)** A new illness (day 1, or a call-home day) cannot start on the calendar day right after a child's-sick day. Day 1 directly after a call-home day is the normal case and is allowed.
+    - **(B)** A call-home day needs registered work the same day.
+  - **What it gives up:** a genuinely new illness starting the very day after a covered day is refused. The text arguably counts it as the same illness.
+  - The remaining limit, an illness whose middle days fall on days off, is registered as a shortcut.
+  - **Being built** as 14811 fix-up 1, on `ba247730`, with new refusal kinds `child-sick-illness-start` and `child-sick-call-home-without-work`.
+- **TASK-14812** (`ux`; tip `f3ce1535` on `a3063fbc`; report `.claude/reviews/S148-TASK-14812-report.md`).
+  - **The change:** the Årsoversigt tile now shows the allowance per illness ("3 dage, pr. sygdomsforløb + hjemkaldelsesdag" under OK26, "2 dage" under OK24) instead of a yearly remainder. No Skema change is owed, because the screen leads with the server's message for these refusals.
+  - **Gate:** green, with vitest at 86 files / 1091 tests (+1 file / +3 tests on 1088; the report's "baseline 1090" is wrong). The RED was shown on the unchanged page after `gen:api`, not in a scratch worktree.
+  - **5a Fable:** dispatched.
+- **5a Fable on TASK-14812: APPROVED-WITH-WARNINGS**, 0 B / 1 W / 5 N (`S148-TASK-14812-5a-reviewer.md`).
+  - **W-1:** the new test checks that the tile contains "3 dage", which the old hours-first display "22,2 t (3 dage)" also contains, so a regression to it would pass.
+  - **Notes:** a stale tile-kind comment; the not-opted-in case is R, not F; the eligible-but-no-config dash is unpinned; a hook test for the refusal shape is missing; and the report's baseline was wrong.
+  - It confirmed the two pending refusal kinds need no frontend change, as long as they keep the `absence_type_not_eligible` + `message` shape.
+  - **Fix-up 1 dispatched to the `ux` agent:**
+    - pin the whole tile text, and show the hours-first mutation turns it red;
+    - the comment;
+    - the kind label;
+    - the dash case;
+    - a hook test for all four child's-sick kinds.
+- **TASK-14811 fix-up 1: the owner's two rules built** (tip `53a981ac` on `ba247730`; `S148-TASK-14811-c2-report.md`).
+  - **Rule A** (`child-sick-illness-start`) and **Rule B** (`child-sick-call-home-without-work`) are in the child's-sick judge after the chain, both advisory and in-lock, still the fifth refusal family.
+  - **Rule B's worked figure** is the paid-absence bound's own: its reads and its formula moved into two shared helpers, so there is still one calculation.
+  - **Declared deviation, accepted by the Orchestrator:** the move touches TASK-14804's bound code. The instruction "reuse, do not duplicate" could not be met otherwise. The bound's behaviour must be unchanged, and both 5a lenses check it; its CI facts pin it.
+  - **A brief contradiction, settled:** a save can post a work-time day with empty intervals today, bringing worked to 0. On a call-home day, Rule B now refuses that.
+  - **Shortcuts:** a fifth `shortcut(pending)` is added (an illness whose middle days fall on days off is told apart only by the code chosen), and the AC_TEACHING seed row is tagged.
+  - **Gate:** green (Unit 1720). No existing fact is expected red.
+  - 14811-T fix-up 2 (the eight rule facts, M-A and M-B) dispatched.
+- **TASK-14812 fix-up 1** (tip `3f3625cd`; `S148-TASK-14812-c2-report.md`):
+  - **The tile test** now pins the whole tile text. A mutation back to the hours-first display turns both allowance cases red.
+  - **Comments and kind labels** are made true.
+  - **A new F case:** opted in with no day configured today.
+  - **A new R hook test:** all four child's-sick refusal kinds pass the server's message through, not the quota branch.
+  - **vitest:** 87 files / 1096 tests (master 85 / 1088 → +2 files / +8 tests).
+- **5a Fable cycle 2 on 14812: APPROVED**, 0 B / 0 W / 1 N (`S148-TASK-14812-5a-reviewer-c2.md`). All six cycle-1 findings are closed. The one note, a stale red-condition line in the test header, was fixed by the Orchestrator (`28ac4e89`, comment only).
+- **TASK-14811-T fix-up 2** (tip `d64559ef` on `53a981ac`; `S148-TASK-14811-T-c3-report.md`): eight Docker facts for the owner's rules, in `ChildSickIllnessStartTests.cs`.
+  - **Rule A:**
+    - consecutive day-1 rows: the second is refused (F);
+    - call-home then day 1: accepted (R);
+    - day 1 then call-home: refused (F);
+    - a day 1 posted before a stored day 1: the stored date is refused (F).
+  - **Rule B:**
+    - call-home with clock hours: accepted (R);
+    - call-home with no work: refused (F);
+    - call-home with project hours only: accepted (R);
+    - empty intervals posted onto a stored call-home day: refused (F).
+  - **The R facts** guard against a rule reaching too far.
+  - **The bound-refactor census:** the seven existing bound facts reach the bound only over HTTP and compile unchanged; they pin it in CI.
+  - **Local mutations:** M-A (Rule A's day-1 arm off) is argued red at facts 1 and 4; M-B (Rule B never refuses) at facts 6 and 8. Neither reddens anything locally, because all the facts are Docker.
+  - **Gate:** green.
+- **Dispatched:** 5a cycle 2, on both lenses, over `a3063fbc..d64559ef`.
+- **5a cycle 2 on `a3063fbc..d64559ef`** (14811 fix-up 1 + 14811-T fix-ups 1 and 2):
+  - **Codex: APPROVED**, 0 B / 0 W / 1 N (`S148-TASK-14811-5a-codex-c2.md`).
+    - The bound extraction preserves behaviour.
+    - Rule A catches batched and reverse-order adjacency across month ends.
+    - Rule B judges the resulting state for every save shape, and the employee lock serializes concurrent saves.
+  - **Fable 5.2: APPROVED-WITH-WARNINGS**, 0 B / 1 W / 5 N (`S148-TASK-14811-5a-reviewer-c2.md`). All cycle-1 findings closed; the bound refactor is unchanged in behaviour.
+    - **W-1:** two of Rule A's refusal pairs are untested (day 1 after day 2 or 3; call-home after call-home). A narrowing mutation would let the 1-2-1-2-1 pattern through with every test green.
+    - **Notes:**
+      - no fact reaches the in-lock judge;
+      - the W-1 docstrings became untrue after Rule B;
+      - the refusal for a day 1 posted before a stored day 1 names the stored day;
+      - the fifth shortcut's wording is narrower than the limit (gap days on weekdays too);
+      - the grid's entry order for a call-home day is unproven.
+  - **Disposition:**
+    - W-1, the race note and the docstring note go to 14811-T fix-up 3: two pair facts, one race fact, and the docstrings with work posted.
+    - The shortcut wording is broadened at registration, with its code comment reworded at merge.
+    - Two roadmap lines owed at close: the stored-day message wording (Low, rare, safe) and the call-home entry order (an e2e check).
+- **5α over Branch A `6ec6a111..d64559ef` and Branch B `a3063fbc..28ac4e89`: PASS** (`S148-TASK-14811-14812-5alpha.md`).
+  - Every commit is in scope; the bound refactor is the accepted deviation.
+  - The marker and the classification are in one commit.
+  - Five distinct `shortcut(pending)` comments across nine spots, to register at merge.
+- **TASK-14811-T fix-up 3** (tip `58c7bad8`; `S148-TASK-14811-T-c4-report.md`):
+  - **Two pair facts** close Fable's W-1. Day 1 after day 2 is refused, and so is call-home after call-home. Each goes red under its narrowing mutation (X, Y).
+  - **A race fact** covers the in-lock judge. Two concurrent day-1 saves on consecutive days: exactly one commits, using the bound's lock-holding technique. It goes red under M-L, when the in-lock call is skipped.
+  - **The W-1 facts** now post work, so only their intended gate can refuse.
+- **5a cycle 3 on `d64559ef..58c7bad8`:**
+  - **Codex: APPROVED** (`S148-TASK-14811-5a-codex-c3.md`). The race forces both saves past the advisory check; either grant order gives the required refusal; and it cannot pass vacuously.
+  - **Fable 5.2: APPROVED**, 0 B / 0 W / 2 N (`S148-TASK-14811-5a-reviewer-c3.md`). All three answered findings are closed.
+  - **Both notes fixed by the Orchestrator** (`72fa5c23`, tests only; the Regression project builds):
+    - the race fact also pins the refused date;
+    - two colliding fact labels are renumbered.
