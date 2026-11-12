@@ -180,6 +180,62 @@ describe('SkemaPage — work-time removal vs half-typed day (AC-CL-28, F)', () =
     expect(saveBodies).toHaveLength(0)
   })
 
+  it('a pending valid edit is withdrawn when the day goes half-typed: nothing is posted and the grid keeps the stored day', async () => {
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '09:00' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+    vi.useRealTimers()
+    await settle()
+    expect(saveBodies).toHaveLength(0)
+    // Reopening seeds from the grid's local day: the stored 08:00-16:00, not 09:00-16:00.
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Luk' }))
+    const reopened = await openDay('2026-03-02')
+    expect((within(reopened).getByLabelText('Fra') as HTMLInputElement).value).toBe('08:00')
+    expect((within(reopened).getByLabelText('Til') as HTMLInputElement).value).toBe('16:00')
+  })
+
+  it('a pending valid edit is withdrawn at month navigation too: nothing is posted', async () => {
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '09:00' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
+    await settle()
+    expect(saveBodies).toHaveLength(0)
+  })
+
+  it('half-typing AFTER the removal was sent leaves the in-flight save to decide: the grid does not show the removed day', async () => {
+    let posted = 0
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const base = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/api/skema/emp001/save')) {
+        posted++
+        await gate
+      }
+      return base(url, init)
+    })
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    vi.useFakeTimers()
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '' } })
+    fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) }) // the removal leaves; its answer is held
+    vi.useRealTimers()
+    await waitFor(() => expect(posted).toBe(1))
+    fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '09' } })
+    release()
+    await waitFor(() => expect(screen.getByTestId('removal-announcement').textContent).toContain('Registreringen er fjernet'))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Luk' }))
+    const reopened = await openDay('2026-03-02')
+    expect((within(reopened).getByLabelText('Fra') as HTMLInputElement).value).toBe('')
+    expect((within(reopened).getByLabelText('Til') as HTMLInputElement).value).toBe('')
+  })
+
   it('month navigation before the autosave: a removed day posts cleared.workTime', async () => {
     await renderLoaded()
     const drawer = await openDay('2026-03-02')

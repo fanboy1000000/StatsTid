@@ -1031,8 +1031,8 @@ export function SkemaPage() {
       the refs as they are at this instant, each under the month on screen (its envelope and
       classification). Month navigation and unmount call it BEFORE the month changes: the
       debounce timers would otherwise fire after the next month hydrated, build the old day's
-      payload from refs that no longer hold it — a day the refs no longer hold would be read as
-      removed or as nothing, never as the stored times. (Unlike the flushes this does not first
+      payload from refs that no longer hold it — hydration clears the removed set, so such a day
+      would be read as nothing, never as the stored times. (Unlike the flushes this does not first
       await the in-flight POSTs: the awaits are what let the month change slip in before the
       read.) */
   const firePendingNow = useCallback(() => {
@@ -1085,14 +1085,22 @@ export function SkemaPage() {
   const [panelPeriods, setPanelPeriods] = useState<DayPanelPeriod[]>([])
   const panelIdRef = useRef(0)
   // A work-time save the server refused reverts the day to server truth; the open panel's rows
-  // are separate state, so they are re-seeded from the restored intervals too.
+  // are separate state, so they are re-seeded from the restored intervals too. The open day is read
+  // from a ref (never a stale closure), and rows keep their ids by position so keyboard focus
+  // stays in the drawer. A half-typed extra row is replaced too (accepted: two characters next to
+  // the refusal message).
+  const openDayRef = useRef<string | null>(null)
+  openDayRef.current = openDayDate
   useEffect(() => {
     reseedPanelRef.current = (dates) => {
-      if (openDayDate === null || !dates.includes(openDayDate)) return
-      const truth = serverWorkIntervalsRef.current.get(openDayDate) ?? []
-      setPanelPeriods(truth.map((iv) => ({ id: `srv-${++panelIdRef.current}`, from: iv.start, to: iv.end })))
+      const open = openDayRef.current
+      if (open === null || !dates.includes(open)) return
+      const truth = serverWorkIntervalsRef.current.get(open) ?? []
+      setPanelPeriods((prev) =>
+        truth.map((iv, i) => ({ id: prev[i]?.id ?? `srv-${++panelIdRef.current}`, from: iv.start, to: iv.end })),
+      )
     }
-  })
+  }, [])
 
   const handleOpenDay = useCallback((date: string) => {
     // S147 / QUAL-241 — seed from the committed STATE (which the render-time hydration
@@ -1130,12 +1138,13 @@ export function SkemaPage() {
       // No valid period: either the day holds no typed row at all (the panel always shows one
       // blank row, so "every period removed" is rows that are all blank) — an explicit removal —
       // or some row holds half-typed text, which sends NOTHING: the stored day stands until a
-      // valid set or a removal. The server refuses an empty posted day. A removal still pending
-      // from an earlier blank state is withdrawn: the day goes back to server truth and is no
-      // longer dirty, so the timer posts nothing.
+      // valid set or a removal. The server refuses an empty posted day. A change still UNSENT
+      // (the day is dirty: a removal or a valid edit) is withdrawn: the day goes back to server
+      // truth and is no longer dirty, so the timer posts nothing. A change already sent is left
+      // alone — its answer decides, and the grid must not show what the server just removed.
       if (intervals.length === 0 && periods.some((p) => p.from !== '' || p.to !== '')) {
-        if (workTimeRemovedRef.current.delete(date)) {
-          workTimeDirtyRef.current.delete(date)
+        if (workTimeDirtyRef.current.delete(date)) {
+          workTimeRemovedRef.current.delete(date)
           const truth = serverWorkIntervalsRef.current.get(date)
           setLocalWorkIntervals((prev) => {
             const next = new Map(prev)
@@ -1440,7 +1449,7 @@ export function SkemaPage() {
           </span>
           {/* The removal announcement: its own always-mounted polite region, because the one above
               speaks "Gemmer…" while a save runs and would overwrite it. */}
-          <span aria-live="polite" aria-atomic="true" data-testid="removal-announcement" className="visually-hidden">
+          <span aria-live="polite" aria-atomic="true" data-testid="removal-announcement" className={styles.srOnly}>
             {removalAnnouncements === 0 ? '' : `Registreringen er fjernet${removalAnnouncements % 2 === 0 ? ' ' : ''}`}
           </span>
           <Button variant="ghost" size="sm" onClick={goToNextMonth}>

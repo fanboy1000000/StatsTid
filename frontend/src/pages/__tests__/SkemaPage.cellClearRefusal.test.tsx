@@ -171,6 +171,7 @@ describe('SkemaPage — a refused clear restores the value (AC-CL-29 (1), F)', (
     })
     await renderLoaded()
     const drawer = await openDay('2026-03-02')
+    act(() => within(drawer).getByLabelText('Fra').focus())
     vi.useFakeTimers()
     fireEvent.change(within(drawer).getByLabelText('Fra'), { target: { value: '' } })
     fireEvent.change(within(drawer).getByLabelText('Til'), { target: { value: '' } })
@@ -183,5 +184,46 @@ describe('SkemaPage — a refused clear restores the value (AC-CL-29 (1), F)', (
     expect(await screen.findByText(/Arbejdet kan ikke fjernes/)).toBeInTheDocument()
     await waitFor(() => expect((within(drawer).getByLabelText('Fra') as HTMLInputElement).value).toBe('08:00'))
     expect((within(drawer).getByLabelText('Til') as HTMLInputElement).value).toBe('16:00')
+    // Keyboard focus stays on the same input in the drawer (rows keep their ids by position).
+    expect(document.activeElement).toBe(within(drawer).getByLabelText('Fra'))
+  })
+
+  // No blur anywhere below: the typing overlay of the still-focused input must show the restored
+  // value (kind F: before the overlay reset, the blank stayed visible until blur).
+  it('a refused removal shows the restored value in a grid cell that is still focused', async () => {
+    saveAnswer = () => ({
+      status: 422,
+      body: { error: 'absence_type_not_eligible', absenceType: 'VACATION', date: '2026-03-06', message: 'Kan ikke fjernes.' },
+    })
+    await renderLoaded()
+    const input = screen.getByLabelText('Ferie dag 6') as HTMLInputElement
+    act(() => input.focus())
+    vi.useFakeTimers()
+    fireEvent.change(input, { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await screen.findByText(/Kan ikke fjernes/)
+    await waitFor(() => expect(input.value).toBe('7,4'))
+    expect(document.activeElement).toBe(input)
+  })
+
+  it('a refused removal shows the restored value in a day-panel allocation input that is still focused', async () => {
+    saveAnswer = () => ({
+      status: 422,
+      body: { error: 'absence_type_not_eligible', absenceType: 'DRIFT', date: '2026-03-02', message: 'Kan ikke fjernes.' },
+    })
+    monthData = makeMonth({ entries: [{ date: '2026-03-02', projectCode: 'DRIFT', hours: 3 }] })
+    await renderLoaded()
+    const drawer = await openDay('2026-03-02')
+    const alloc = within(drawer).getByLabelText('Drift & support') as HTMLInputElement
+    expect(alloc.value).toBe('3')
+    act(() => alloc.focus())
+    vi.useFakeTimers()
+    fireEvent.change(alloc, { target: { value: '' } })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+    vi.useRealTimers()
+    await screen.findByText(/Kan ikke fjernes/)
+    await waitFor(() => expect(alloc.value).toBe('3'))
+    expect(document.activeElement).toBe(alloc)
   })
 })

@@ -249,6 +249,28 @@ export function SkemaGrid({
   // ── Cell editing state: raw typed text while focused (decimal comma survives) ──
   const [editing, setEditing] = useState<{ key: string; raw: string; initial: string } | null>(null)
 
+  // The typing overlay must not outlive a value the PAGE changed under it (a refused removal
+  // restores the stored value while the input is still focused). When the focused cell's value
+  // changes and it is not what the typing itself propagated (blank/0 = absent, a number = that
+  // number), the overlay is reset to the page's value. The person's own typing never trips this:
+  // it changes the value to exactly what the overlay parses to.
+  const lastSeenRef = useRef<{ key: string; value: number | undefined } | null>(null)
+  useEffect(() => {
+    if (!editing) {
+      lastSeenRef.current = null
+      return
+    }
+    const value = cellValues.get(editing.key)
+    const seen = lastSeenRef.current
+    lastSeenRef.current = { key: editing.key, value }
+    if (!seen || seen.key !== editing.key || seen.value === value) return
+    const n = editing.raw === '' ? NaN : parseDanishNumber(editing.raw)
+    const typed = Number.isNaN(n) || n === 0 ? undefined : n
+    if (typed === value) return
+    const fmt = value != null && value !== 0 ? formatCell(value) : ''
+    setEditing({ key: editing.key, raw: fmt, initial: fmt })
+  }, [cellValues, editing])
+
   // S123 — a full_day_only cell whose day has NO resolvable full-day basis: the
   // on-input fill-to-norm cannot snap, so we BLOCK the entry (emit no partial that
   // would 422) and flag the cell inline. Ephemeral (only one cell is edited at a

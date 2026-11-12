@@ -23,7 +23,7 @@
 //   S58 — the relocated validation mirrors (7202 deleted the old dialog): overlap
 //         flagging + the 24h day cap, ADVISORY only — the backend 422 stays
 //         authoritative (R5: the save contract is frozen).
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Drawer } from './ui/Drawer'
 import { Alert } from './ui/Alert'
 import { Button } from './ui/Button'
@@ -195,6 +195,25 @@ export function SkemaDayPanel({
   // ── Step-2 raw-text editing overlay (decimal comma survives mid-typing;
   // committed values live in the page's state via onAllocationChange) ──
   const [editingAlloc, setEditingAlloc] = useState<{ key: string; raw: string } | null>(null)
+
+  // The overlay must not outlive a value the PAGE changed under it (a refused removal restores the
+  // stored allocation while the input is still focused): when the focused allocation changes to
+  // something other than what the typing itself propagated, reset the overlay to the page's value.
+  const lastAllocSeenRef = useRef<{ key: string; value: number | undefined } | null>(null)
+  useEffect(() => {
+    if (!editingAlloc) {
+      lastAllocSeenRef.current = null
+      return
+    }
+    const value = allocations.get(editingAlloc.key)
+    const seen = lastAllocSeenRef.current
+    lastAllocSeenRef.current = { key: editingAlloc.key, value }
+    if (!seen || seen.key !== editingAlloc.key || seen.value === value) return
+    const n = editingAlloc.raw === '' ? NaN : parseDanishNumber(editingAlloc.raw)
+    const typed = Number.isNaN(n) || n === 0 ? undefined : n
+    if (typed === value) return
+    setEditingAlloc({ key: editingAlloc.key, raw: value != null && value !== 0 ? formatDanishNumber(value, 1) : '' })
+  }, [allocations, editingAlloc])
 
   const allocDisplay = (key: string): string => {
     if (editingAlloc && editingAlloc.key === key) return editingAlloc.raw

@@ -10,6 +10,13 @@ import { screen, waitFor, fireEvent, act, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { renderWithCalendar } from '../../test/renderWithCalendar'
 import { SkemaPage } from '../SkemaPage'
+import styles from '../SkemaPage.module.css'
+
+// vitest does not apply CSS, and its CSS plugin hands back an empty module even for `?raw`, so the
+// stylesheet's source is read from disk (vitest runs from `frontend/`; the project has no node types).
+type NodeFs = { readFileSync(path: string, encoding: 'utf8'): string }
+const { readFileSync } = (await import(/* @vite-ignore */ 'node:fs' as string)) as unknown as NodeFs
+const srOnlyCss = readFileSync('src/pages/SkemaPage.module.css', 'utf8')
 import type { SkemaMonthData } from '../../types'
 
 vi.mock('../../contexts/AuthContext', () => ({
@@ -186,7 +193,16 @@ describe('SkemaPage — the removal is announced once (AC-CL-30, F)', () => {
         : base(url, init),
     )
     await renderLoaded()
-    expect(announcement()).toHaveClass('visually-hidden')
+    // Pin the OUTCOME, not a class name: vitest does not apply CSS, so the module's own source is
+    // read and the rule behind the span's class must be the screen-reader-only clip pattern.
+    expect(styles.srOnly).toBeTruthy()
+    expect(announcement().className).toContain(styles.srOnly)
+    const rule = srOnlyCss.match(/\.srOnly\s*\{([^}]*)\}/)?.[1] ?? ''
+    expect(rule).toMatch(/position:\s*absolute/)
+    expect(rule).toMatch(/width:\s*1px/)
+    expect(rule).toMatch(/height:\s*1px/)
+    expect(rule).toMatch(/overflow:\s*hidden/)
+    expect(rule).toMatch(/clip:\s*rect\(0,\s*0,\s*0,\s*0\)/)
     await editCell('Drift & support dag 5', '')
     await waitFor(() => expect(spoken()).toBe(TEXT))
     fireEvent.click(screen.getByRole('button', { name: /Næste/ }))
