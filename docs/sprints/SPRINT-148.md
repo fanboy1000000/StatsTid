@@ -1362,3 +1362,23 @@ TASK-14842-T dispatched.
     - Teamoversigt's per-line live regions;
     - the two month-edge limits: a chain starting before the read window is dated at the first day read; April's notice does not name an unclocked 31 March.
 - **Dispatch** waits for CI-W2 green (TASK-14813's prerequisite) and for CI-M2 and CI-M2b to match their frozen lists.
+
+**CI-W2** (run 43233683529, draft PR #57, at `03bde472`, headSha confirmed): **green, all seven jobs.**
+- **What it shows:** every Docker fact that wave 2 wrote or re-pinned ran for the first time, and all of them passed. Until now they had only been argued. Read from the run's trx files, by name, not from the job colour.
+- **Tests:**
+  - Unit 1721, DemoSeed 170, and Regression 2555 of 2555, Docker included (CI-W1b had 2458).
+  - Nothing failed and nothing was skipped.
+- **Facts seen passing, by name:**
+  - the child's-sick facts: 42 Regression and 10 Unit, including Rules A and B (`DayOneThenCallHome_CallHomeRefused`, `CallHomeWithoutWork_Refused`);
+  - the call-home credit and export facts (`…_Credited`, `…_ExportedUnderSls0530`);
+  - the five-row mapping fact `EveryAgreement_HasAnOk26Sls0530Row`;
+  - the cell-clearing facts: 46 `SkemaCellClear*` and 9 `ProjectionBackfillClearTests`, including the race facts AC-CL-34/35 and the rebuild facts AC-CL-33 (1) and AC-CL-38;
+  - `AwayToday_False_AfterTodaysAbsenceCleared` (AC-CL-24);
+  - the balance-seed facts;
+  - the paid-absence bound facts;
+  - both PIN-1 worlds (`World20260115_December2025_EqualsGolden`, `World20260715_June2026_EqualsGolden`), so pay is unchanged by wave 2;
+  - `ConfigSeedParityTests` and `DemoPinSeedSelectionTests`.
+- **The other jobs:** smoke, E2E, the frontend build, docs, lizard and gitleaks are all green.
+- **Run time:** about 100 minutes in all (14:05 to 15:45 UTC).
+- **Status change:** wave 2's Docker facts move from "CI-pending" to "CI-verified" (run 43233683529). PR #57 is closed unmerged and `ci/s148-w2` deleted.
+- **Wave 3 dispatch is unblocked** (TASK-14813's prerequisite). No wave-3 merge happens before CI-M2 and CI-M2b are judged against their frozen lists (`PLAN:119`).
