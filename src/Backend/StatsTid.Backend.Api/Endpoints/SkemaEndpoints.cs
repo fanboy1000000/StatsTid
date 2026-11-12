@@ -1858,23 +1858,16 @@ public static class SkemaEndpoints
                 if (touchedDates.Count == 0)
                     return null;
 
-                // Inside the lock the absence and entry rows are read on the save's own (conn, tx);
-                // before the transaction on pooled connections (advisory only). Work time has only a
-                // self-connecting read: inside the lock it still sees every committed day, because
-                // every writer of work_time_projection but the offline backfill is this save, under
-                // this same lock (the ADR-032 D4 separate-connection rationale).
+                // Inside the lock the absence rows are read on the save's own (conn, tx); before the
+                // transaction on a pooled connection (advisory only). The entries and work time come
+                // from ReadStoredWorkAsync, on the same two paths.
                 var storedAbsences = conn is not null
                     ? await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
                         conn, tx!, employeeId, touchedDates.Min, touchedDates.Max, ct)
                     : await absenceProjectionRepo.GetByEmployeeAndDateRangeAsync(
                         employeeId, touchedDates.Min, touchedDates.Max, ct);
-                var storedEntries = conn is not null
-                    ? await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                        conn, tx!, employeeId, touchedDates.Min, touchedDates.Max, ct)
-                    : await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                        employeeId, touchedDates.Min, touchedDates.Max, ct);
-                var storedWorkTime = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
-                    employeeId, touchedDates.Min, touchedDates.Max, ct);
+                var (storedEntries, storedWorkTime) = await ReadStoredWorkAsync(
+                    conn, tx, touchedDates.Min, touchedDates.Max);
 
                 var basisByDate = new Dictionary<DateOnly, decimal?>();
                 foreach (var consumption in basisAlreadyRead)
@@ -1893,25 +1886,7 @@ public static class SkemaEndpoints
                     if (paidAbsenceHours <= 0m)
                         continue; // no paid absence on the day: nothing to bound.
 
-                    var postedHoursByTask = new Dictionary<string, decimal>(StringComparer.Ordinal);
-                    foreach (var entry in postedEntries.Where(e => e.Date == date))
-                        postedHoursByTask[entry.ProjectCode] = entry.Hours;
-                    var projectHours = postedHoursByTask.Values.Sum()
-                        + storedEntries
-                            .Where(r => r.Date == date)
-                            .Where(r => !(r.Source == HoursSource.Skema
-                                && r.TaskId is not null && postedHoursByTask.ContainsKey(r.TaskId)))
-                            .Sum(r => r.Hours);
-
-                    var postedDay = postedWorkTime.LastOrDefault(d => d.Date == date);
-                    var intervalHours = postedDay is not null
-                        ? WorkTimeDayHours(
-                            (postedDay.Intervals ?? Array.Empty<SkemaWorkInterval>()).Select(i => (i.Start, i.End)))
-                        : storedWorkTime
-                            .Where(w => w.Date == date)
-                            .Sum(w => WorkTimeDayHours(w.Intervals.Select(i => (i.Start, i.End))));
-
-                    var workedHours = Math.Max(projectHours, intervalHours);
+                    var workedHours = WorkedHoursOnDay(date, storedEntries, storedWorkTime);
 
                     // shortcut(QUAL-BF-001): the paid-absence bound reads the § 7 nr. 2 per-day norm
                     // (FullDayHoursAsync), not the configured credit basis; upgrade when stage 1 serves
@@ -1954,6 +1929,57 @@ public static class SkemaEndpoints
                 return Math.Round(seconds / 3600m, 2);
             }
 
+            // The stored project entries and work-time days of [from, to] that the save's worked figure
+            // reads. Inside the lock the entries are read on the save's own (conn, tx); before the
+            // transaction on a pooled connection (advisory only). Work time has only a self-connecting
+            // read: inside the lock it still sees every committed day, because every writer of
+            // work_time_projection but the offline backfill is this save, under this same lock (the
+            // ADR-032 D4 separate-connection rationale).
+            async Task<(IReadOnlyList<TimeEntryProjectionRow> Entries, IReadOnlyList<WorkTimeProjectionRow> WorkTime)> ReadStoredWorkAsync(
+                NpgsqlConnection? conn, NpgsqlTransaction? tx, DateOnly from, DateOnly to)
+            {
+                var storedEntries = conn is not null
+                    ? await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        conn, tx!, employeeId, from, to, ct)
+                    : await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                        employeeId, from, to, ct);
+                var storedWorkTime = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(
+                    employeeId, from, to, ct);
+                return (storedEntries, storedWorkTime);
+            }
+
+            // The hours worked on one date as the day will stand after this save: the one worked figure
+            // of the save, read by the paid-absence day bound and the call-home rule alike. It is the
+            // larger of the day's project hours and its interval hours, so a check holds whichever of
+            // the two the employee fills in first. Project hours: the posted entries (a cell posted twice
+            // ends at its later value) plus the stored entries no posted cell replaces (a posted entry
+            // replaces the current Skema row of its (date, task); TIME_POST rows always count). Interval
+            // hours: the posted work-time day, else the stored one, by WorkTimeDayHours's convention.
+            decimal WorkedHoursOnDay(
+                DateOnly date, IReadOnlyList<TimeEntryProjectionRow> storedEntries,
+                IReadOnlyList<WorkTimeProjectionRow> storedWorkTime)
+            {
+                var postedHoursByTask = new Dictionary<string, decimal>(StringComparer.Ordinal);
+                foreach (var entry in (request.Entries ?? Array.Empty<SkemaEntry>()).Where(e => e.Date == date))
+                    postedHoursByTask[entry.ProjectCode] = entry.Hours;
+                var projectHours = postedHoursByTask.Values.Sum()
+                    + storedEntries
+                        .Where(r => r.Date == date)
+                        .Where(r => !(r.Source == HoursSource.Skema
+                            && r.TaskId is not null && postedHoursByTask.ContainsKey(r.TaskId)))
+                        .Sum(r => r.Hours);
+
+                var postedDay = (request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>()).LastOrDefault(d => d.Date == date);
+                var intervalHours = postedDay is not null
+                    ? WorkTimeDayHours(
+                        (postedDay.Intervals ?? Array.Empty<SkemaWorkInterval>()).Select(i => (i.Start, i.End)))
+                    : storedWorkTime
+                        .Where(w => w.Date == date)
+                        .Sum(w => WorkTimeDayHours(w.Intervals.Select(i => (i.Start, i.End))));
+
+                return Math.Max(projectHours, intervalHours);
+            }
+
             // ── The illness chain's resulting state (QUAL-236, R-3) ──
             // The absence rows of [from, to] as they will stand after this save: the stored current
             // rows the save does not replace, plus the posted rows, built exactly as the paid-absence
@@ -1979,7 +2005,13 @@ public static class SkemaEndpoints
                 return rows;
             }
 
-            // ── The illness chain (QUAL-236; R-3, R-12) ──
+            // ── The child's-sick judge: the illness chain, then rule A, then rule B (QUAL-236) ──
+            // Three rules on the same resulting state (ChildSickChainResultingRowsAsync), each refusing
+            // with the opt-in refusal's error and shape plus its own kind, naming a registration date
+            // (never an employment date, ADR-040 D7). They run in this order: on a save more than one
+            // refuses, the chain answers first, then rule A, then rule B.
+            //
+            // THE ILLNESS CHAIN (R-3, R-12; kind "child-sick-chain").
             // A child's sick days are counted per illness, in calendar days from the first whole sick
             // day: day 2 is the calendar day after day 1 and day 3 the one after day 2, working day or
             // not (021-26, 020-26 and 027-26 § 14 remarks). So a CHILD_SICK_DAY_n on date x (n = 2, 3)
@@ -1997,18 +2029,46 @@ public static class SkemaEndpoints
             // calendar days after one (the dates whose chain this save can change), on the resulting
             // state, read across a month boundary (the stored rows of 30 and 31 March judge a 1 April
             // save). Entries and work time change no input of the chain, so their dates are not judged.
+            // The refusal names the dependent date (the day-n row's date).
+            //
+            // RULE A: AN ILLNESS DOES NOT START ON THE DAY AFTER A CHILD'S SICK DAY (owner ruling Q5,
+            // 2026-11-12; kind "child-sick-illness-start"). The circular defines day 1 as the first whole
+            // sick day and day 2 as the calendar day straight after it, and the call-home day as the day
+            // the child falls ill after the parent met for work (research :196-197). So a day directly
+            // after a child's sick day belongs to the same illness: a CHILD_SICK_DAY on date d is
+            // refused when d − 1 holds CHILD_SICK_DAY, _2 or _3 (day 1 straight after a call-home day is
+            // how an illness goes on, and is accepted), and a CHILD_SICK_CALL_HOME on d is refused when
+            // d − 1 holds any child's-sick code. Plain adjacency: no planned-hours exception here.
+            // Judged on the chain's dates, so a child row posted on d − 1 before a stored day 1 on d is
+            // caught when d is judged. Without it, day 1 registered on five days in a row would pay five.
+            //
+            // RULE B: A CALL-HOME DAY NEEDS REGISTERED WORK THE SAME DAY (owner ruling Q5; kind
+            // "child-sick-call-home-without-work"). The call-home day is the day the parent met for work
+            // and was called home, so a CHILD_SICK_CALL_HOME on date d is refused unless the hours worked
+            // on d, as the day will stand after the save (WorkedHoursOnDay, the paid-absence bound's own
+            // figure), are above 0. Judged on every date the save touches whose resulting state holds a
+            // call-home row: a posted absence, entry or work-time day, because entries and work time are
+            // this rule's inputs. Today a save brings a day's work to 0 only by posting its work-time day
+            // with no intervals (a project cell is always above 0); cell clearing (TASK-14840) must add its
+            // cleared dates to the dates judged here.
+            //
             // Runs like the paid-absence bound: advisory before the transaction, authoritatively inside
-            // the per-employee lock, each right after the bound (on a date both refuse, the bound
-            // answers first). Returns null when every chain holds, else the 422 body: the opt-in
-            // refusal's error and shape with kind = "child-sick-chain", naming the dependent date (the
-            // day-n row's own registration date, never an employment date, ADR-040 D7).
+            // the per-employee lock, each right after the bound (on a date both refuse, the bound answers
+            // first). Returns null when every rule holds, else the first 422 body.
             // shortcut(pending): the illness chain reads this employee's rows only; the other parent's child's sick days are not modelled; upgrade when Phase B rules how the two parents' days combine (A-16, QUAL-236)
+            // shortcut(pending): illnesses whose middle days fall on days off are told apart only by the day code chosen (an implicit weekend day is not checked against an earlier illness); upgrade when Phase B rules how an illness is identified
             async Task<object?> FindChildSickChainBreachAsync(
                 NpgsqlConnection? conn, NpgsqlTransaction? tx,
                 IReadOnlyList<StatsTid.Backend.Api.Services.ConsumptionCalculator.Consumption> basisAlreadyRead)
             {
-                var touchedDates = new SortedSet<DateOnly>(
+                // The chain and rule A judge the posted-absence dates and the two days after each; rule B
+                // every date the save touches.
+                var postedAbsenceDates = new SortedSet<DateOnly>(
                     (request.Absences ?? Array.Empty<SkemaAbsence>()).Select(a => a.Date));
+                var touchedDates = new SortedSet<DateOnly>(
+                    (request.Entries ?? Array.Empty<SkemaEntry>()).Select(e => e.Date)
+                        .Concat(postedAbsenceDates)
+                        .Concat((request.WorkTime ?? Array.Empty<SkemaWorkTimeDay>()).Select(d => d.Date)));
                 if (touchedDates.Count == 0)
                     return null;
 
@@ -2016,7 +2076,7 @@ public static class SkemaEndpoints
                         conn, tx, touchedDates.Min.AddDays(-2), touchedDates.Max.AddDays(2)))
                     .ToHashSet();
                 var judgedDates = new SortedSet<DateOnly>(
-                    touchedDates.SelectMany(d => new[] { d, d.AddDays(1), d.AddDays(2) }));
+                    postedAbsenceDates.SelectMany(d => new[] { d, d.AddDays(1), d.AddDays(2) }));
 
                 var plannedByDate = new Dictionary<DateOnly, decimal?>();
                 foreach (var consumption in basisAlreadyRead)
@@ -2068,6 +2128,53 @@ public static class SkemaEndpoints
                                 message = $"{AbsenceTypeLabels.LabelFor(dayNCode)} den {date:dd-MM-yyyy} kan ikke registreres: sygdomsforløbet begyndte den {dayOne:dd-MM-yyyy}, og overenskomsten gav på den dato ikke ret til den.",
                                 kind = "child-sick-chain",
                             };
+                    }
+                }
+
+                // Rule A: no day 1 and no call-home day directly after a child's sick day.
+                foreach (var date in judgedDates)
+                {
+                    var dayBefore = date.AddDays(-1);
+                    if (held.Contains((date, AbsenceTypes.ChildSick1))
+                        && dayCodes.Any(code => held.Contains((dayBefore, code))))
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSick1,
+                            date,
+                            message = $"Barns 1. sygedag den {date:dd-MM-yyyy} kan ikke registreres: dagen før ({dayBefore:dd-MM-yyyy}) er registreret som barns sygdom, så dagen hører til samme sygdomsforløb.",
+                            kind = "child-sick-illness-start",
+                        };
+                    if (held.Contains((date, AbsenceTypes.ChildSickCallHome))
+                        && StatsTid.SharedKernel.Config.DefaultEntitlementConfigs.ChildSickCodes.Any(code => held.Contains((dayBefore, code))))
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSickCallHome,
+                            date,
+                            message = $"Hjemkaldelsesdagen den {date:dd-MM-yyyy} kan ikke registreres: dagen før ({dayBefore:dd-MM-yyyy}) er registreret som barns sygdom, så dagen hører til samme sygdomsforløb.",
+                            kind = "child-sick-illness-start",
+                        };
+                }
+
+                // Rule B: a call-home day needs work above 0 the same day, on the save's worked figure.
+                var callHomeDates = touchedDates.Where(d => held.Contains((d, AbsenceTypes.ChildSickCallHome))).ToList();
+                if (callHomeDates.Count > 0)
+                {
+                    var (storedEntries, storedWorkTime) = await ReadStoredWorkAsync(
+                        conn, tx, callHomeDates[0], callHomeDates[^1]);
+                    foreach (var date in callHomeDates)
+                    {
+                        if (WorkedHoursOnDay(date, storedEntries, storedWorkTime) > 0m)
+                            continue;
+                        return new
+                        {
+                            error = "absence_type_not_eligible",
+                            absenceType = AbsenceTypes.ChildSickCallHome,
+                            date,
+                            message = $"Hjemkaldelsesdagen den {date:dd-MM-yyyy} kræver registreret arbejde samme dag: det er dagen, hvor barnet blev sygt, efter at du var mødt på arbejde.",
+                            kind = "child-sick-call-home-without-work",
+                        };
                     }
                 }
                 return null;
@@ -2469,12 +2576,13 @@ public static class SkemaEndpoints
                     if (lockedBoundBreach is not null)
                         throw new SkemaConsumptionValidationException(lockedBoundBreach);
 
-                    // ── The illness chain, AUTHORITATIVE (QUAL-236; FindChildSickChainBreachAsync) ──
-                    // The same chain as the advisory check, judged on the absence rows as committed
-                    // while this save holds the per-employee lock, before any write, right after the
-                    // bound (so on a date both refuse, the bound answers first). Planned hours reuse the
-                    // basis the authoritative consumption read under this lock. A breach throws, the
-                    // catch below rolls the save back, and the answer is the advisory check's 422 body.
+                    // ── The child's-sick judge, AUTHORITATIVE (QUAL-236; FindChildSickChainBreachAsync) ──
+                    // The same illness chain, rule A and rule B as the advisory check, judged on the
+                    // absence, entry and work-time rows as committed while this save holds the
+                    // per-employee lock, before any write, right after the bound (so on a date both
+                    // refuse, the bound answers first). Planned hours reuse the basis the authoritative
+                    // consumption read under this lock. A breach throws, the catch below rolls the save
+                    // back, and the answer is the advisory check's 422 body.
                     var lockedChainBreach = await FindChildSickChainBreachAsync(
                         conn, tx, authoritativeConsumption);
                     if (lockedChainBreach is not null)
@@ -2735,8 +2843,9 @@ public static class SkemaEndpoints
                 // all-types cap) or B3 (full-day-only), each re-run because a profile change can race
                 // the save (ADR-032 D2/D3); the paid-absence day bound (ADR-043 D2), refused mostly
                 // because another save of the same employee committed while this one waited for the
-                // lock; or the child's-sick illness chain (QUAL-236), judged on the absence rows as
-                // committed under the lock. The throw site already shaped the body to match its pre-tx sibling
+                // lock; or the child's-sick judge (QUAL-236: the illness chain, rule A on where an illness
+                // starts, rule B on the call-home day's work), judged on the rows as committed under the
+                // lock. The throw site already shaped the body to match its pre-tx sibling
                 // byte-for-byte; surface it unchanged so the race loser gets a clean validation 422
                 // (never a 500) and the frontend contract holds.
                 return Results.Json(ex.Body, statusCode: 422);

@@ -1852,6 +1852,7 @@ INSERT INTO entitlement_configs (entitlement_type, agreement_code, ok_version, a
     -- shortcut(pending): AC's OK26 child's-sick rule (3 days plus the call-home day) is agreed but its circular is pending; upgrade when the circular is issued (QUAL-236)
     ('CHILD_SICK',      'AC_RESEARCH', 'OK26',  3, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barns sygedag – 3 dage pr. sygdomsforløb (foreløbig)', '0001-01-01', false),
     ('CHILD_SICK',      'AC_TEACHING', 'OK24',  2, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barns sygedag – 2 dage pr. sygdomsforløb', '0001-01-01', false),
+    -- shortcut(pending): AC's OK26 child's-sick rule (3 days plus the call-home day) is agreed but its circular is pending; upgrade when the circular is issued (QUAL-236)
     ('CHILD_SICK',      'AC_TEACHING', 'OK26',  3, 'IMMEDIATE', 1, 0, false, true,  NULL, 'Barns sygedag – 3 dage pr. sygdomsforløb (foreløbig)', '0001-01-01', false),
     ('SENIOR_DAY',      'AC_RESEARCH', 'OK24',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true),
     ('SENIOR_DAY',      'AC_RESEARCH', 'OK26',  2, 'IMMEDIATE', 1, 0, false, false, 62,   'Seniordage – kræver alder 62+',    '0001-01-01', true),
