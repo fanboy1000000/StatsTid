@@ -120,24 +120,6 @@ public class RestPeriodNotCheckedTests
     }
 
     /// <summary>
-    /// Kind <b>N</b>. Red conditions: the positive <c>[Mon2, Tue3]</c> from the single daily-rest
-    /// entry point (<see cref="RestPeriodRule.EvaluateDailyRest"/>, the registry's per-check path)
-    /// fails under the "empty list" mutation. EvaluateWeeklyRest keeps an empty list (a different
-    /// check; the implementer's report) - asserted as the contrast.
-    /// </summary>
-    [Fact]
-    public void EvaluateDailyRest_FillsTheList_EvaluateWeeklyRest_KeepsItEmpty()
-    {
-        var entries = TwoHoursOnlyTwoTimedEightHourGap();
-
-        var daily = RestPeriodRule.EvaluateDailyRest(Profile(), entries, PeriodStart, PeriodEnd, Config());
-        var weekly = RestPeriodRule.EvaluateWeeklyRest(Profile(), entries, PeriodStart, PeriodEnd, Config());
-
-        Assert.Equal(new[] { Mon2, Tue3 }, daily.RestNotCheckedDays);
-        Assert.Empty(weekly.RestNotCheckedDays);
-    }
-
-    /// <summary>
     /// Kind <b>N</b>. Red conditions: <c>Assert.Equal([Tue3], ...)</c> fails under the "empty list"
     /// mutation. A fully timed period reports none (the negative half) while Tue 3, a lone
     /// hours-only day added to it, is reported (the discriminating half).

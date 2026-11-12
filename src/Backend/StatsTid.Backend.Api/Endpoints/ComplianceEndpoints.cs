@@ -46,6 +46,8 @@ public static class ComplianceEndpoints
             UserRepository userRepo,
             IHttpClientFactory httpClientFactory,
             TimeEntryProjectionRepository timeEntryProjectionRepo,
+            // The clock intervals typed in Skema: the rest checks' input (ADR-043 D10).
+            WorkTimeProjectionRepository workTimeProjectionRepo,
             IEmploymentProfileResolver profileResolver,
             // S137 / ADR-040 D7/D10 — the employment-window fact, read server-side (never on the wire).
             IEmploymentWindowResolver windowResolver,
@@ -165,16 +167,16 @@ public static class ComplianceEndpoints
             }
 
             // Fetch time entries from projection (sync-in-tx with the POST that wrote them — read-your-write per ADR-018 D12).
-            // ADR-039 D5b (GAP-B, no dropped hours at a period edge): widen the read's LOWER bound
-            // by one day. A midnight-crossing shift filed on the LAST day of the PREVIOUS month
-            // (e.g. 31-Mar 23:00→02:00) carries post-midnight hours that belong (by wall clock +
-            // ADR-003) to THIS month's first day; without the extra day the source row is never
-            // fetched and those OK-correct hours are lost from BOTH months' compliance view. We
-            // read [monthStart-1 .. monthEnd], THEN normalize (splitting each crossing into a
-            // day-D + day-D+1 half), and RestPeriodRule's own period filter [monthStart..monthEnd]
-            // then keeps exactly the halves that belong to this month — the prev-month pre-half is
-            // dropped there, and a crossing on monthEnd yields a next-month post-half the filter
-            // drops here (the NEXT month picks it up via ITS OWN widened read — no double count).
+            // ADR-039 D5b (GAP-B, no dropped hours at a period edge): both reads below — the time
+            // entries and the work intervals — start one day before the month, [monthStart-1 .. monthEnd].
+            // For the hours checks: a midnight-crossing entry filed on the LAST day of the PREVIOUS
+            // month (e.g. 31-Mar 23:00→02:00) carries post-midnight hours that belong (by wall clock
+            // + ADR-003) to THIS month's first day; the read fetches it, the normalizer splits it into
+            // a day-D + day-D+1 half, and RestPeriodRule's own period filter [monthStart..monthEnd]
+            // keeps exactly the halves that belong to this month (a crossing on monthEnd yields a
+            // next-month half the NEXT month picks up via ITS OWN widened read — no double count).
+            // For the rest checks: the day before the month supplies the work before a rest that
+            // ends on the 1st, which this month judges (a rest is judged in the month it ends).
             var readStart = monthStart.AddDays(-1);
             var timeEntryRows = await timeEntryProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, readStart, monthEnd, ct);
             var timeEntries = timeEntryRows
@@ -190,22 +192,49 @@ public static class ComplianceEndpoints
                     AgreementCode = r.AgreementCode,
                     OkVersion = r.OkVersion,
                     VoluntaryUnsocialHours = r.VoluntaryUnsocialHours,
-                    // ADR-039 D4 — continuity link from the immutable source event id, so a
-                    // midnight-crossing shift's two normalized halves (below) share one stint
-                    // identity and a rest check can rejoin them as ONE continuous work period.
+                    // ADR-039 D4 — the immutable source event id, which the normalizer below gives
+                    // both halves of a midnight-crossing entry as their shared id. No rest check
+                    // reads it: the rest checks measure the work intervals read below (ADR-043 D10).
                     SourceStintId = r.EventId,
                 })
                 .ToList();
 
-            // ADR-039 (S132 TASK-132-1b-1) — normalize midnight-crossing entries on the
-            // COMPLIANCE INPUT (before shipping to the rule engine), so post-midnight hours are
-            // attributed to the correct calendar day / OK-version (D3) and the per-day hours
-            // checks count them on D+1. Same pure, shared implementation as the payroll calc
-            // path (D6). The projection rows above are DISPLAY-faithful and untouched (D5a) —
-            // this transform derives the calc view only. A crossing shift on the last day of the
-            // queried month yields a D+1 half in the next month; RestPeriodRule's own period
-            // filter drops it here (those hours belong to the next period — see TASK-1b-3 contract).
+            // ADR-039 — normalize midnight-crossing entries on the COMPLIANCE INPUT (before
+            // shipping to the rule engine), so post-midnight hours are attributed to the correct
+            // calendar day / OK-version (D3) and the per-day hours checks count them on D+1. Same
+            // pure, shared implementation as the payroll calc path (D6). The projection rows above
+            // are DISPLAY-faithful and untouched (D5a) — this transform derives the hours checks'
+            // view only. A crossing shift on the last day of the queried month yields a D+1 half in
+            // the next month; RestPeriodRule's own period filter drops it here (those hours belong
+            // to the next period).
             var normalizedEntries = MidnightCrossingNormalizer.Normalize(timeEntries);
+
+            // The rest checks' input (ADR-043 D10, QUAL-234): the clock intervals the employee typed
+            // in Skema, current days only, over the same widened dates as the entries. Read after
+            // the access, month and employment-window gates above, so a refused or windowless
+            // request reads none. Each interval is kept by Skema's own positive-duration rule —
+            // both ends parse as a clock time and the end is after the start, the rule the Skema
+            // save applies — and is sent on the date it was entered on (ADR-039's per-day rule);
+            // the rule engine joins a night shift's two halves at midnight itself.
+            var workTimeRows = await workTimeProjectionRepo.GetByEmployeeAndDateRangeAsync(employeeId, readStart, monthEnd, ct);
+            var workIntervals = new List<object>();
+            foreach (var row in workTimeRows)
+            {
+                foreach (var iv in row.Intervals)
+                {
+                    if (TryParseTimeToSeconds(iv.Start, out var startSec)
+                        && TryParseTimeToSeconds(iv.End, out var endSec)
+                        && endSec > startSec)
+                    {
+                        workIntervals.Add(new
+                        {
+                            date = row.Date,
+                            start = new TimeOnly(startSec * TimeSpan.TicksPerSecond),
+                            end = new TimeOnly(endSec * TimeSpan.TicksPerSecond),
+                        });
+                    }
+                }
+            }
 
             // Call Rule Engine via HTTP (PAT-005).
             // S73 / TASK-7300 (R1): the NAMED rule-engine client — BaseAddress +
@@ -315,6 +344,7 @@ public static class ComplianceEndpoints
                 entries = normalizedEntries,
                 periodStart = monthStart,
                 periodEnd = monthEnd,
+                workIntervals,
             };
 
             var response = await httpClient.PostAsJsonAsync(
@@ -376,5 +406,23 @@ public static class ComplianceEndpoints
         .Produces<IEnumerable<CompensatoryRestItem>>(StatusCodes.Status200OK); // S120 / TASK-12000
 
         return app;
+    }
+
+    // Skema's clock-time parse, the same code as SkemaEndpoints' (private there; BalanceEndpoints
+    // holds the same copy): "HH:mm" or "HH:mm:ss", hours 0-23, minutes and seconds 0-59, to
+    // seconds since midnight. Returns false for anything else, so the compliance read drops such
+    // an interval exactly as the Skema save and the screen do.
+    private static bool TryParseTimeToSeconds(string? value, out int seconds)
+    {
+        seconds = 0;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var parts = value.Split(':');
+        if (parts.Length < 2) return false;
+        if (!int.TryParse(parts[0], out var h) || !int.TryParse(parts[1], out var m)) return false;
+        var s = 0;
+        if (parts.Length >= 3 && !int.TryParse(parts[2], out s)) return false;
+        if (h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) return false;
+        seconds = h * 3600 + m * 60 + s;
+        return true;
     }
 }
