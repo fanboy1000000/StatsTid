@@ -258,8 +258,7 @@ public sealed class ProjectionBackfillClearTests : SkemaCellClearTestBase, IAsyn
     /// current (its intervals 09:00-13:00, its <c>outbox_id</c> the re-registration's, served by the month GET). Both unpublished
     /// rows are asserted <c>published_at IS NULL</c> first.
     ///
-    /// <para>Kind R (a kept behaviour: the replay of the registration must not undo the later facts). Red conditions: none
-    /// on base, where the second registration simply replaces the first; fails if the rebuild resurrects the cleared state
+    /// <para>Kind R (a kept behaviour: the replay of the registration must not undo the later facts). It reads only columns that exist on base (row count, <c>outbox_id</c>, the month GET), so it is green on base, where the second registration simply replaces the first; fails if the rebuild resurrects the cleared state
     /// over the re-registration (the day not served, or the registration's outbox id replaced).</para>
     /// </summary>
     [Fact]
@@ -277,10 +276,13 @@ public sealed class ProjectionBackfillClearTests : SkemaCellClearTestBase, IAsyn
 
         await RebuildAsync();
 
-        var day = Assert.Single(await WorkAsync(emp));
-        Assert.Equal(("09:00-13:00", again.OutboxId), (day.Intervals, day.OutboxId));
+        // Base-compatible reads (no cleared_by_outbox_id): the row count, its outbox_id, and the served intervals.
+        Assert.Equal(1L, await ScalarLongAsync("SELECT COUNT(*) FROM work_time_projection WHERE employee_id = @e", ("e", emp)));
+        Assert.Equal(again.OutboxId, await ScalarLongAsync("SELECT outbox_id FROM work_time_projection WHERE employee_id = @e", ("e", emp)));
         var served = Assert.Single((await MonthAsync(emp)).GetProperty("workTime").EnumerateArray());
         Assert.Equal(D(Thu11), served.GetProperty("date").GetString());
+        var interval = Assert.Single(served.GetProperty("intervals").EnumerateArray());
+        Assert.Equal(("09:00", "13:00"), (interval.GetProperty("start").GetString(), interval.GetProperty("end").GetString()));
     }
 
     /// <summary>
@@ -378,16 +380,14 @@ public sealed class ProjectionBackfillClearTests : SkemaCellClearTestBase, IAsyn
     /// registration and the published clear over a row whose registration is newer than the clear: the day is current
     /// (<c>cleared_by_outbox_id</c> null) with <c>outbox_id</c> equal to the re-registration's, and the month GET serves it.
     ///
-    /// <para>Kind R (a kept behaviour; on base the clear is ignored, so the day is never cleared). Its red evidence is the
+    /// <para>Kind R in intent (a kept behaviour). On base it is red even earlier than the rebuild: the <c>Assert.Single</c> on the nonexistent <c>WorkTimeCleared</c> outbox row trips, and the marker column read would error; it is "red with the column present and the clear ignored". Its red evidence for the guard is the
     /// mutation <b>M-21</b> (CI-M2; argued, not run locally): the replayed work-time clear's <c>outbox_id &lt;= @clear</c>
     /// guard removed from <c>ClearDaySql</c>. The saves answer 200 and the preconditions hold (the clear is published, the
     /// re-registration is not). The rebuild replays the published clear over the row of the NEWER, unpublished
     /// re-registration: without the guard it marks the row cleared and rewinds its <c>outbox_id</c> to the clear's, so the
     /// first assertion to trip is the <c>Assert.Equal</c> on <c>(intervals, outbox_id, marker)</c>, the row's "must trip"
     /// cell (the served-day assertion would trip next). M-18, M-19 and M-20 leave this fact green (under M-20 the guard
-    /// still blocks the replayed clear, because the re-registration's id is larger). (Reading <c>cleared_by_outbox_id</c>
-    /// makes the fact error on base, which has no such column; the ledger's "green on base" is read as "green with the
-    /// column present and the clear ignored".)</para>
+    /// still blocks the replayed clear, because the re-registration's id is larger).</para>
     /// </summary>
     [Fact]
     public async Task PublishedClear_UnpublishedReRegistration_StaysCurrent()

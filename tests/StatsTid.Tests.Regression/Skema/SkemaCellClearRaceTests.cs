@@ -156,6 +156,57 @@ public sealed class SkemaCellClearRaceTests : SkemaCellClearTestBase
     }
 
     /// <summary>
+    /// Rollback after the clear was written (Fable 5a W-1). An HK employee (employed since before 1 September 2025,
+    /// <c>VACATION</c> cap 25,0) has <c>VACATION</c> on Friday 12 June and <c>used</c> 24,0. With the lock held, one request
+    /// is queued that clears Friday and posts <c>VACATION</c> on Wednesday 10 and Thursday 11 June (a net of +1,0, so the
+    /// pre-transaction quota check, seeing 24,0, passes). While it is queued, <c>used</c> is set to 25,0 by SQL, as a
+    /// concurrent booking would; the lock is released. Inside the lock the clear is written first and the quota guard then
+    /// refuses the +1,0: 422, and the WHOLE save rolls back: no <c>AbsenceCleared</c> outbox row, no audit row, Friday's row
+    /// still current, no row on Wednesday or Thursday, <c>used</c> still 25,0.
+    ///
+    /// <para>Kind R (the atomicity of a save that fails after its clear ran). On base the clear is ignored and the request's
+    /// two posted days are refused earlier or in the lock, so it is green there too; the evidence it can fail is the
+    /// mutation <b>"the clear's audit row or event is written outside the save's transaction"</b> (argued, CI-M2 candidate):
+    /// the quota breach then rolls back the projection writes but not the separately committed event or audit row, so the
+    /// <c>AbsenceCleared</c> and audit-count assertions (the first after the 422) trip. If the event is written on the
+    /// transaction but the row mark is not, the "still current" assertion trips.</para>
+    /// </summary>
+    [Fact]
+    public async Task ClearThenInLockQuotaRefusal_RollsBackTheClear()
+    {
+        var emp = await SeedEmployeeAsync("HK", employmentStart: new DateOnly(2024, 1, 1));
+        var client = EmployeeClient(emp, "HK");
+        await SaveOkAsync(emp, Save(absences: new[] { (Fri12, "VACATION", 7.4m) }), "VACATION Friday", client);
+        await ExecAsync("UPDATE entitlement_balances SET used = 24.0 WHERE employee_id = @e AND entitlement_type = 'VACATION'", ("e", emp));
+        var (conn, tx) = await HoldEmployeeLockAsync(emp);
+        HttpResponseMessage rsp;
+        try
+        {
+            var request = Task.Run(() => PostSaveAsync(client, emp, Save(
+                absences: new[] { (Wed10, "VACATION", 7.4m), (Thu11, "VACATION", 7.4m) },
+                clearAbsences: new[] { (Fri12, "VACATION") })));
+            await WaitForWaitersAsync(emp, 1);
+            await ExecAsync("UPDATE entitlement_balances SET used = 25.0 WHERE employee_id = @e AND entitlement_type = 'VACATION'", ("e", emp));
+            await tx.CommitAsync();
+            rsp = await request;
+        }
+        finally
+        {
+            await tx.DisposeAsync();
+            await conn.DisposeAsync();
+        }
+
+        var raw = await rsp.Content.ReadAsStringAsync();
+        Assert.True(rsp.StatusCode == HttpStatusCode.UnprocessableEntity, $"expected the in-lock quota 422, got {(int)rsp.StatusCode}: {raw}");
+        Assert.Empty(await OutboxAsync(emp, "AbsenceCleared"));
+        Assert.Equal(0L, await AuditCountAsync(emp, "AbsenceCleared"));
+        var rows = await AbsencesAsync(emp);
+        Assert.Null(Assert.Single(rows).SupersededBy);
+        Assert.Equal(Fri12, rows[0].Date);
+        Assert.Equal(25.0m, await UsedAsync(emp, "VACATION"));
+    }
+
+    /// <summary>
     /// AC-CL-35. A re-save queued behind a clear of the same cell. The same fixture, the order reversed: the clear is
     /// queued first, then the re-save to 3,7; both answer 200. One current row exists (3,7 h; 0,5 day); <c>used</c> ends
     /// at 0,5 (1,0 given back, 0,5 booked); the <c>AbsenceCleared</c> names the ORIGINAL registration.

@@ -502,8 +502,8 @@ public sealed class SkemaCellClearTests : SkemaCellClearTestBase
     /// SUBMITTED period is inserted for each read and deleted before the next write (the save and the send refuse a
     /// locked month).</para>
     ///
-    /// <para>Kind F. Red conditions: on base the day is never marked, so <c>Assert.Single</c> on the
-    /// <c>WorkTimeCleared</c> event trips first. Mutations M-19-style, one reader's filter removed, trip that reader's
+    /// <para>Kind F. Red conditions: the fact is red with the column present and the clear ignored (its setup reads the new <c>cleared_by_outbox_id</c> column, so on the literal base it errors there first); the first assertion that trips is <c>Assert.Single</c> on the
+    /// <c>WorkTimeCleared</c> event. Mutations M-19-style, one reader's filter removed, trip that reader's
     /// assertion only.</para>
     /// </summary>
     [Fact]
@@ -589,7 +589,7 @@ public sealed class SkemaCellClearTests : SkemaCellClearTestBase
     /// (<c>SICK_DAY</c>) carries no <c>clearedFeriedage</c> (event JSON omits nulls). Cells: <c>SICK_DAY</c> 7,4 Monday 8
     /// June, PRJ-1 3,0 Tuesday 9 June, work time 08:00-15:24 Wednesday 10 June.
     ///
-    /// <para>Kind F. Red conditions: on base no clear event exists, so the first <c>Assert.Single</c> trips.</para>
+    /// <para>Kind F. Red conditions: red with the column present and the clear ignored (the setup reads <c>cleared_by_outbox_id</c>, which base lacks, so on the literal base it errors there first); then the first <c>Assert.Single</c> on a clear event trips.</para>
     /// </summary>
     [Fact]
     public async Task ClearEachKind_OneEventOnTheEmployeeStream_WithActorAndClearedEventId()
