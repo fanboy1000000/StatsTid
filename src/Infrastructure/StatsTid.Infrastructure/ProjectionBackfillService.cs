@@ -436,7 +436,7 @@ public sealed class ProjectionBackfillService
             catch (InvalidOperationException ex)
             {
                 // Should be impossible given the WHERE clause restricts to
-                // two known types, but if EventSerializer's map drifts we
+                // known types, but if EventSerializer's map drifts we
                 // want a clear signal rather than a swallowed error.
                 unknownEventTypes++;
                 _logger.LogWarning(
