@@ -64,7 +64,8 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
     private static readonly DateOnly F = new(2026, 6, 15);
 
     private static readonly DateOnly NextYearStart = new(2025, 9, 1);  // Mon; year N+1's start key is OK24
-    private static readonly DateOnly SecondRaise = new(2025, 12, 1);   // Mon
+    private static readonly DateOnly MidYearRaise = new(2025, 3, 3);   // Mon; inside settled year 2024
+    private static readonly DateOnly SecondRaise =new(2025, 12, 1);   // Mon
     private static readonly DateOnly SettledYearAnchor = new(2024, 9, 1);
     private static readonly DateOnly Wed10 = new(2026, 6, 10);
     private static readonly DateOnly PreviousFerieaarDay = new(2025, 8, 29); // Fri; VACATION year 2024
@@ -125,10 +126,14 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
     /// that fails).
     /// <b>(f) kind F:</b> (d) through the §22 rescue (carryover_in 10; no capture runs); red for the same
     /// reason.
-    /// <b>(e) kind R:</b> the OA-5 companion: the original row is closed ON Mon 1 Sep 2025 (half-open
+    /// <b>(e) kind R:</b> the OA-5 companion and the same-day boundary pin. (VACATION, HK, OK24) is
+    /// superseded 25 to 26 on Mon 3 Mar 2025 (inside settled year 2024, so the 1 Sep 2024 anchor and the
+    /// snapshot <c>annualQuota</c> still read 25) and the 26 row is closed ON Mon 1 Sep 2025 (half-open
     /// interval: not in force that day), so no row is in force at year N+1's start and the seed falls back to
     /// the settled year's 25 (same OK26 employee and capture path as (d)). The old code also gave 25 here, so
-    /// it is green before and after; it fails if the fallback is lost (0, or a throw).</para>
+    /// it is green before and after; it fails if the fallback is lost (0, or a throw) and under an inclusive
+    /// boundary (<c>effective_to &gt;= date</c>, <c>EntitlementConfigRepository.cs:139-140</c>), where the dated
+    /// read at 1 Sep 2025 finds the 26 row and the seed is 26.</para>
     ///
     /// <para><b>Red conditions (Docker; argued).</b> On the base <c>87b26453</c> the carryover creates the
     /// missing row with <c>used = 0</c> and <c>total_quota = seedQuota</c> where the YEAR_END close passes the
@@ -196,7 +201,12 @@ public sealed class CarryoverBalanceSeedTests : IAsyncLifetime
             // No row in force on 1 Sep 2025 at all: the original row is closed ON that day, and the interval
             // is half-open (a row closed on the year's first day is not in force that day). The settled
             // year's anchor, 1 Sep 2024, still reads 25.
+            // A 26 row sits inside settled year 2024 (Mon 3 Mar 2025) and is the one closed on 1 Sep 2025, so an
+            // inclusive boundary (effective_to >= date) would find it that day and give 26, not the fallback 25.
+            Assert.Equal(DayOfWeek.Monday, MidYearRaise.DayOfWeek);
+            await SupersedeVacationQuotaAsync("HK", "OK24", MidYearRaise, 26m);
             await CloseOpenRowAsync("HK", "OK24", NextYearStart);
+            Assert.Equal(26m, await DatedQuotaAsync("HK", "OK24", MidYearRaise));
             Assert.False(await HasOpenRowAsync("HK", "OK24"), "premise: the key has no open row.");
             Assert.Null(await DatedQuotaOrNullAsync("HK", "OK24", NextYearStart));
             Assert.Equal(25m, await DatedQuotaAsync("HK", "OK24", SettledYearAnchor));
